@@ -1120,6 +1120,14 @@ func deCatalog(key string) string {
 		return "Keine Assistenten-Antwort zum Neu generieren."
 
 	// --- Branch ---
+	case "rewind.bad_arg":
+		return "Verwendung: /rewind [N], wobei N >= 1 die Anzahl der zurueckzuspulenden Nutzer-Runden ist."
+	case "rewind.revert_failed":
+		return "Datei-Rollback abgelehnt, Rewind abgebrochen (nichts geaendert): %v"
+	case "rewind.success":
+		return "%d Runde(n) zurueckgespult; Dateibearbeitungen zurueckgenommen (%s). Fortsetzung in Sitzung %s - Original bleibt erhalten."
+	case "rewind.success_no_edits":
+		return "%d Runde(n) zurueckgespult; die zurueckgespulten Runden hatten keine verfolgten Dateibearbeitungen. Fortsetzung in Sitzung %s - Original bleibt erhalten."
 	case "branch.busy":
 		return "Abzweigen nicht möglich, während der Agent läuft. Zuerst Ctrl+C drücken zum Abbrechen."
 	case "branch.no_session":

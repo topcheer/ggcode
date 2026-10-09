@@ -98,7 +98,7 @@ type Manager struct {
 
 	// journal persists every mutation to an append-only JSONL file so undo
 	// history survives a process restart (see journal.go). nil for plain
-	// NewManager Managers — journalAppendLocked is then a no-op, making the
+	// NewManager Managers - journalAppendLocked is then a no-op, making the
 	// journal strictly opt-in. Only touched while holding mu.
 	journal *journalWriter
 }
@@ -184,8 +184,8 @@ func (m *Manager) applySaveLocked(cp Checkpoint) {
 	}
 
 	// Evict oldest if over limit. Prefer evicting entries that do NOT
-	// belong to the active run, so the tail run segment — and with it the
-	// pre-run baseline UndoRun relies on — stays intact as long as possible
+	// belong to the active run, so the tail run segment - and with it the
+	// pre-run baseline UndoRun relies on - stays intact as long as possible
 	// (issue #517). When every entry belongs to the active run, eviction is
 	// unavoidable; the run is then flagged so UndoRun can refuse instead of
 	// silently rolling back to a mid-run state.
@@ -227,7 +227,7 @@ func (m *Manager) Undo(source string) (*Checkpoint, error) {
 	cp := m.checkpoints[len(m.checkpoints)-1]
 
 	// Restore the pre-edit state. A checkpoint with existed=false captured a
-	// file creation, so the restored state is "file missing" — remove it;
+	// file creation, so the restored state is "file missing" - remove it;
 	// writing "" back would leave a stray 0-byte file (issue #554 B).
 	if err := restoreCheckpointState(cp.FilePath, cp.OldContent, cp.Existed); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
@@ -335,11 +335,11 @@ func (m *Manager) revertWithFiles(id, source string) (*Checkpoint, []string, err
 	// Write every file's revert-moment state back to disk BEFORE truncating
 	// history: only when all writes succeed does disk match the pre-idx
 	// moment. On failure the checkpoint list is left intact so the caller can
-	// retry or fall back to single-step Undo — a partial truncation would
+	// retry or fall back to single-step Undo - a partial truncation would
 	// strand the not-yet-restored files exactly like #678.
 	//
 	// #685: iterate in deterministic checkpoint order (first-touch order)
-	// instead of Go's randomized map order — which files got restored before
+	// instead of Go's randomized map order - which files got restored before
 	// a write failed used to differ run to run, with zero disclosure. On
 	// failure the error now lists exactly which files WERE restored and which
 	// remain pending, mirroring writeBaselines' disclosure policy.
@@ -355,13 +355,13 @@ func (m *Manager) revertWithFiles(id, source string) (*Checkpoint, []string, err
 	files := make([]string, 0, len(order))
 	for _, f := range order {
 		st := targets[f]
-		// #696: seam for the #685 regression tests — swap to record write order
+		// #696: seam for the #685 regression tests - swap to record write order
 		// and inject per-path failures deterministically.
 		if err := restoreFile(f, st.content, st.existed); err != nil {
 			if len(files) == 0 {
 				return nil, nil, fmt.Errorf("failed to revert %s: %w", f, err)
 			}
-			return nil, nil, fmt.Errorf("failed to revert %s: %w (partial state: restored %v; still pending %v — history kept, retry or use single-step Undo)",
+			return nil, nil, fmt.Errorf("failed to revert %s: %w (partial state: restored %v; still pending %v - history kept, retry or use single-step Undo)",
 				f, err, files, order[len(files):])
 		}
 		files = append(files, f)
@@ -392,7 +392,7 @@ func (m *Manager) revertWithFiles(id, source string) (*Checkpoint, []string, err
 
 // restoreCheckpointState writes oldContent back to path. When the checkpoint
 // recorded a file creation (file absent before the edit), the pre-edit state
-// is "missing", so the file is removed instead — a write would leave a stray
+// is "missing", so the file is removed instead - a write would leave a stray
 // 0-byte file (issue #554 B). Removal tolerates an already-gone file so undo
 // stays idempotent.
 func restoreCheckpointState(path, oldContent string, existed bool) error {
@@ -473,7 +473,7 @@ func (m *Manager) firstExisted(path string) bool {
 // on success. If no checkpoints exist, returns an error.
 //
 // Files are reverted to their state at the FIRST checkpoint of the run for
-// each unique file path — this is the pre-run baseline.
+// each unique file path - this is the pre-run baseline.
 func (m *Manager) UndoRun() ([]Checkpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -507,7 +507,7 @@ func (m *Manager) UndoRun() ([]Checkpoint, error) {
 	// of the same run BEFORE that boundary (a mid-list segment, left behind
 	// e.g. by writeBaselines' partial-failure cleanup removing only some
 	// files' entries) are invisible to it. Undoing only the tail segment would
-	// restore a mid-run state as if it were the pre-run baseline — the same
+	// restore a mid-run state as if it were the pre-run baseline - the same
 	// silent corruption #517 guards against. Refuse instead.
 	tailStart := runIndices[len(runIndices)-1] // earliest index in the tail segment
 	for i := 0; i < tailStart; i++ {
@@ -543,6 +543,59 @@ func (m *Manager) UndoRun() ([]Checkpoint, error) {
 	return reverted, nil
 }
 
+// RevertRecentRuns reverts the last count DISTINCT runs (in newest-to-oldest
+// order), where a "run" is a contiguous checkpoint segment sharing one RunID
+// - i.e. only runs that actually have file edits participate. It is the
+// coordinated-restore half of /rewind (Claude Code checkpoint semantics):
+// the caller drops the last N conversation turns and calls this with N to
+// roll disk state back in lockstep.
+//
+// Each iteration consumes the tail run via UndoRun, inheriting its guards
+// (eviction refusal #517, split-segment refusal #554 D) and pushing every
+// reverted checkpoint onto the redo stack so Redo() can restore them one at
+// a time. If checkpoints run out before count iterations, it stops early —
+// the earlier turns simply had no file edits.
+//
+// Returns all reverted checkpoints. When a refusal fires mid-way, the runs
+// reverted so far are returned together with the error, so the caller can
+// report the partial rollback honestly; disk is never left mid-run because
+// each UndoRun is an atomic per-run batch.
+func (m *Manager) RevertRecentRuns(count int) ([]Checkpoint, error) {
+	if count <= 0 {
+		return nil, nil
+	}
+	var all []Checkpoint
+	for i := 0; i < count; i++ {
+		if m.Last() == nil {
+			// Checkpoints exhausted. If evictedRuns still has entries, some
+			// of the remaining turns DID have edits whose pre-run baselines
+			// were dropped by the FIFO limit (#517): silently skipping them
+			// would make the caller believe disk is N turns back when it is
+			// not. Surface it; the runs reverted so far stay reverted.
+			m.mu.Lock()
+			evicted := len(m.evictedRuns)
+			m.mu.Unlock()
+			if evicted > 0 {
+				return all, fmt.Errorf(
+					"reverted %d run(s), but %d earlier run(s) with edits have evicted baselines "+
+						"(FIFO checkpoint limit) and cannot be rolled back; their file changes remain on disk - "+
+						"use git or single-step Undo inspection to reconcile",
+					i, evicted)
+			}
+			break // remaining turns simply had no file edits
+		}
+		cps, err := m.UndoRun()
+		if err != nil {
+			if len(all) > 0 {
+				return all, fmt.Errorf("reverted %d run(s) before refusing: %w", i, err)
+			}
+			return nil, err
+		}
+		all = append(all, cps...)
+	}
+	return all, nil
+}
+
 // runSegmentIndices returns the indices of checkpoints belonging to runID,
 // collected from the end backward (last-to-first). Must hold m.mu.
 func (m *Manager) runSegmentIndices(runID string) []int {
@@ -557,7 +610,7 @@ func (m *Manager) runSegmentIndices(runID string) []int {
 }
 
 // preRunBaselines maps each unique file path in the run to the baseline of
-// its FIRST checkpoint — the pre-run state. runIndices is in reverse order
+// its FIRST checkpoint - the pre-run state. runIndices is in reverse order
 // (last first), so the first occurrence in forward order gives the earliest
 // checkpoint per file. Must hold m.mu.
 func (m *Manager) preRunBaselines(runIndices []int) map[string]baselineState {
@@ -581,9 +634,9 @@ type baselineState struct {
 // writeBaselines writes each unique file's pre-run baseline to disk, once
 // per file, iterating runIndices last-to-first. On the first write failure it
 // removes ALL checkpoints of the already-reverted files in this run (not just
-// one per file) to keep metadata consistent with disk state — leaving
+// one per file) to keep metadata consistent with disk state - leaving
 // mid-run entries behind would let a later single-step Undo re-apply a
-// mid-run state on top of the rolled-back baseline (issue #517 Bug A) — and
+// mid-run state on top of the rolled-back baseline (issue #517 Bug A) - and
 // returns the partially reverted checkpoints plus the error. Must hold m.mu.
 func (m *Manager) writeBaselines(runIndices []int, baselines map[string]baselineState, runID string) ([]Checkpoint, error) {
 	var reverted []Checkpoint

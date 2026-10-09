@@ -1020,6 +1020,14 @@ func frCatalog(key string) string {
 		return "Gestionnaire de contexte non disponible."
 	case "regenerate.no_response":
 		return "Aucune réponse de l'assistant a regénérer."
+	case "rewind.bad_arg":
+		return "Usage : /rewind [N] ou N >= 1 est le nombre de tours utilisateur a rembobiner."
+	case "rewind.revert_failed":
+		return "Rollback des fichiers refuse, rembobinage annule (rien n'a change) : %v"
+	case "rewind.success":
+		return "%d tour(s) rembobine(s) ; modifications de fichiers annulees (%s). Reprise dans la session %s - l'originale est conservee."
+	case "rewind.success_no_edits":
+		return "%d tour(s) rembobine(s) ; les tours rembobines n'avaient aucune modification de fichier suivie. Reprise dans la session %s - l'originale est conservee."
 	case "branch.busy":
 		return "Impossible de bifurquér pendant que l'agent s'exécute. Appuyez sur Ctrl+C pour annulér d'abord."
 	case "branch.no_session":
