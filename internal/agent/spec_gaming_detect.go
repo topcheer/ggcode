@@ -82,7 +82,10 @@ var testFileSuffixes = []string{
 	".spec.js",  // JavaScript (Jest/Mocha)
 	".spec.jsx", // JavaScript React
 	"_test.rb",  // Ruby
-	"Test.java", // Java
+	"test.java", // Java - specGamingIsTestFile lowercases the path before
+	// HasSuffix (#3609); the mixed-case "Test.java" entry could never
+	// match, so FooTest.java landed in sourceFiles and Pattern 1
+	// (test-weakening) missed it.
 	"_test.rs",  // Rust
 	"_test.c",   // C
 	"_test.cpp", // C++
@@ -141,6 +144,11 @@ func stripTestSuffix(path string) string {
 	lower := strings.ToLower(path)
 	for _, suffix := range testFileSuffixes {
 		if strings.HasSuffix(lower, suffix) {
+			// Whole-name edge (#588 Bug4): a file named exactly "Test.java"
+			// must not strip to an empty base.
+			if len(path) == len(suffix) {
+				return path
+			}
 			// Remove the test-specific portion and reconstruct
 			base := path[:len(path)-len(suffix)]
 			// For Go: _test.go -> .go
