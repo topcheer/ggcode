@@ -1311,6 +1311,15 @@ func (c *stdioClient) write(msg rpcEnvelope) error {
 	return err
 }
 
+// maxRPCContentLength caps a single LSP RPC body accepted from the server.
+// LSP servers are independent third-party binaries whose stdout is external
+// input: a crashing/hung server can emit garbage that parses as
+// `Content-Length: 4000000000`, and the old unbounded make() either
+// allocated gigabytes or panicked (`makeslice: len out of range`) inside the
+// readLoop goroutine (#3731). Real LSP messages are orders of magnitude
+// smaller; anything beyond this cap is treated as a protocol error.
+const maxRPCContentLength = 64 << 20 // 64 MiB
+
 func readRPCMessage(r *bufio.Reader) (rpcEnvelope, error) {
 	var msg rpcEnvelope
 	contentLength := 0
@@ -1333,6 +1342,9 @@ func readRPCMessage(r *bufio.Reader) (rpcEnvelope, error) {
 	}
 	if contentLength <= 0 {
 		return msg, fmt.Errorf("missing content length")
+	}
+	if contentLength > maxRPCContentLength {
+		return msg, fmt.Errorf("lsp: content length %d exceeds cap %d (server misbehaving?)", contentLength, maxRPCContentLength)
 	}
 	body := make([]byte, contentLength)
 	if _, err := io.ReadFull(r, body); err != nil {
