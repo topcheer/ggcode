@@ -150,17 +150,28 @@ const similarityBaseDuplicateThreshold = 0.6
 // score 1.0, so the CJK gate is raised to 0.75.
 const similarityCJKDuplicateThreshold = 0.75
 
-// cjkDominantFingerprint reports whether fp contains any wide-script (CJK)
-// token produced by the run-based tokenizer.
+// cjkDominantFingerprint reports whether the CJK-script tokens DOMINATE fp
+// - at least half of the tokens carry a wide-script rune (#3676).
+// The old contains-any shape fired on a single full-width punctuation mark
+// (e.g. one U+FF0C comma an English desc routinely picks up from Chinese
+// LLM output), silently raising the duplicate gate to 0.75 and letting
+// real duplicates in the [0.6,0.75) band through. Dominance restores the
+// intent: the #3637 strict gate is for same-family CHINESE fingerprints,
+// whose tokens are near-entirely wide-script.
 func cjkDominantFingerprint(fp map[string]struct{}) bool {
+	if len(fp) == 0 {
+		return false
+	}
+	cjk := 0
 	for tok := range fp {
 		for _, r := range tok {
 			if isWideRuneForSimilarity(r) {
-				return true
+				cjk++
+				break // one wide rune qualifies the token
 			}
 		}
 	}
-	return false
+	return cjk*2 >= len(fp)
 }
 
 // similarityDuplicateThreshold returns the jaccard score at which a candidate
@@ -171,6 +182,25 @@ func similarityDuplicateThreshold(fp map[string]struct{}) float64 {
 		return similarityCJKDuplicateThreshold
 	}
 	return similarityBaseDuplicateThreshold
+}
+
+// duplicateThresholdForPair returns the duplicate gate for comparing two
+// fingerprints: the LESS strict side's threshold (#3676). The #3637 strict
+// 0.75 gate exists for same-family CHINESE fingerprints (bigram density
+// puts same-prefix families at 0.55-0.60 without being duplicates) - that
+// class has BOTH sides CJK-dominant, so min() keeps their guard. A
+// mixed-script pair (one English, one Chinese fingerprint) is exactly the
+// case the empirical 0.6 was calibrated for; the old candidate-side-only
+// lookup made the gate direction-dependent (same pair 0.6 one way, 0.75
+// the other) and leaked [0.6,0.75) duplicates whenever the candidate
+// happened to carry the wide script.
+func duplicateThresholdForPair(a, b map[string]struct{}) float64 {
+	ta := similarityDuplicateThreshold(a)
+	tb := similarityDuplicateThreshold(b)
+	if ta < tb {
+		return ta
+	}
+	return tb
 }
 
 // skillSimilarityFingerprint extracts a token set from a skill's identifying
