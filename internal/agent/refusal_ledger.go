@@ -303,7 +303,14 @@ func (l *refusalLedger) checkBlocked(tool string, args string) string {
 	if l == nil || !refusalWriteTools[tool] {
 		return ""
 	}
-	lower := strings.ToLower(args)
+	// #3717: match against write TARGETS, not the raw args JSON. Content
+	// fields (old_text/new_text/text/...) routinely MENTION a refused file
+	// ("config.yaml supports several options" in a docs edit) while writing
+	// an unrelated file - matching the whole JSON cross-file false-blocks
+	// legitimate edits with a hard persistent refusal. Known content fields
+	// are stripped; everything else (paths, flags, commands) stays matchable
+	// so unknown tool shapes keep the pre-#3717 fail-closed behavior.
+	lower := strings.ToLower(refusalMatchDomain(args))
 	// #3469 (note): read-only run_command shapes never mutate the refusal
 	// target, so they are exempt from the write-class block.
 	// #3484: the prefix match alone is NOT proof of read-only-ness - shell
@@ -341,6 +348,49 @@ func (l *refusalLedger) checkBlocked(tool string, args string) string {
 		}
 	}
 	return ""
+}
+
+// refusalContentFields are JSON keys carrying payload TEXT rather than
+// write targets. A refusal target named inside them is a mention, not a
+// mutation, so they are excluded from the match domain (#3717).
+var refusalContentFields = map[string]bool{
+	"old_text": true, "new_text": true, "content": true, "text": true,
+	"body": true, "prompt": true, "message": true, "comment": true,
+	"notes": true, "description": true, "replacement": true, "pattern": true,
+	"source_text": true,
+}
+
+// refusalMatchDomain extracts the blockable match domain from tool args:
+// all string values in the JSON tree EXCEPT content fields. Unparseable
+// args (non-JSON) fall back to the raw string - unknown shape stays
+// fail-closed like pre-#3717.
+func refusalMatchDomain(args string) string {
+	var tree any
+	if err := json.Unmarshal([]byte(args), &tree); err != nil {
+		return args
+	}
+	var sb strings.Builder
+	var walk func(key string, v any)
+	walk = func(key string, v any) {
+		if refusalContentFields[key] {
+			return
+		}
+		switch t := v.(type) {
+		case string:
+			sb.WriteString(t)
+			sb.WriteByte(' ')
+		case map[string]any:
+			for k, vv := range t {
+				walk(k, vv)
+			}
+		case []any:
+			for _, vv := range t {
+				walk(key, vv)
+			}
+		}
+	}
+	walk("", tree)
+	return sb.String()
 }
 
 func refusalAgeWords(secs int64) string {
