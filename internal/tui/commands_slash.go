@@ -132,9 +132,21 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 	}
 
 	// Check if the previous run in this session was interrupted by a crash.
-	// If so, display a recovery message to the user via the chat list.
+	// If so, show the recovery message to the user AND inject it into the
+	// agent context (G8-1, sa-158): FormatCrashRecoveryMessage's contract
+	// always said "the agent can inject as context", but only the chat list
+	// ever consumed it - so after a crash the model resumed blind to the
+	// half-finished workspace state while a Ctrl+C user (r445 CheckContinuation
+	// below) got the structured injection. Mutual exclusion with the
+	// interrupted path is structural: a crashed journal (State=running + dead
+	// PID) was consumed and deleted by CheckCrashedRun, so CheckContinuation
+	// below sees no snapshot; an interrupted run stamped State=completed, so
+	// CheckCrashedRun returned nil. Only one of the two can ever fire.
 	if recoveryMsg := agentruntime.CheckCrashRecovery(ses.ID); recoveryMsg != "" {
 		m.chatWrite(chat.NewSystemItem("crash-recovery", recoveryMsg, m.chatStyles))
+		if m.agent != nil {
+			m.agent.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: recoveryMsg}}})
+		}
 		// Crash-restore idempotency window: pre-crash successful mutating
 		// calls are re-seeded into the dedup ledger so the recovery-prompted
 		// replay (double push / double IM send) is suppressed with an
