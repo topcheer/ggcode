@@ -136,5 +136,14 @@ func (am *AutoMemory) EffectiveInlineBudget() int {
 	if rate < budgetFloorRatio {
 		rate = budgetFloorRatio
 	}
+	// #3601: Consumed and Uses are recorded under independent debounce
+	// keys and consumption can be counted per-injection while uses lag,
+	// so the ratio can exceed 1.0 and the budget silently grew past
+	// maxTotalInlineBytes - contradicting the documented clamp window.
+	// Cap it at 1.0: the adaptive budget may shrink, never inflate past
+	// the ceiling.
+	if rate > 1.0 {
+		rate = 1.0
+	}
 	return int(float64(maxTotalInlineBytes) * rate)
 }
