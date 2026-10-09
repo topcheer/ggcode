@@ -262,6 +262,14 @@ func hasMakefileTampering(path string) bool {
 // arguments still produce no verification).
 var makefileNoOpPrefixes = []string{"echo", "true", "exit 0", "exit", ":", "pass", "printf", "@echo", "@true", "@exit", "@pass", "@printf", "@:", "-echo", "-true", "-exit", "-pass", "-printf"}
 
+// isIndentedLine reports whether ln begins with a run of leading whitespace
+// (tab or spaces) followed by non-space content - the shape of a recipe
+// line, strict (tab) or lenient (spaces) (#3595).
+func isIndentedLine(ln string) bool {
+	trimmed := strings.TrimLeft(ln, " \t")
+	return trimmed != "" && trimmed != ln
+}
+
 // hasMakefileTamperingContent implements the Makefile analysis over raw
 // content (split from the path-taking wrapper so tests can exercise the
 // logic directly).
@@ -272,7 +280,13 @@ func hasMakefileTamperingContent(content string) bool {
 	cur := ""
 	for _, ln := range lines {
 		switch {
-		case strings.HasPrefix(ln, "\t") && cur != "":
+		case isIndentedLine(ln) && cur != "":
+			// #3595: recipes are tab-indented in strict make, but agents and
+			// editor users often write 4-space-indented recipes. Such lines
+			// fell to the rule-head default (no colon -> cur reset), leaving
+			// the target with zero commands and misreporting innocent files
+			// as tampered ("target exists with no commands"). Commands present
+			// with wrong indentation are a make lint problem, not sabotage.
 			targets[cur] = append(targets[cur], strings.TrimSpace(ln))
 		case strings.HasPrefix(ln, "#") || strings.TrimSpace(ln) == "":
 			// comments/blank lines — a commented-out "#test:" is absence
