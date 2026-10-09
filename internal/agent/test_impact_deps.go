@@ -319,11 +319,13 @@ func appendNonEmpty(dst []string, src []string) []string {
 // tests should also run because they are affected by the change to util via
 // the intermediate dependency.
 //
-// Returns nil if the import graph can't be built or no importers are found.
-func transitiveImporters(workingDir string, changedDirs []string) []string {
+// Returns nil if no importers are found. The second return value is false
+// when the import graph itself could not be built (buildImportGraph returned
+// nil), letting callers annotate the degradation (#3648).
+func transitiveImporters(workingDir string, changedDirs []string) ([]string, bool) {
 	graph, modPath := buildImportGraph(workingDir)
 	if graph == nil || len(changedDirs) == 0 {
-		return nil
+		return nil, graph != nil
 	}
 
 	// Build initial target set: modPath/dir for each changed dir.
@@ -376,7 +378,7 @@ func transitiveImporters(workingDir string, changedDirs []string) []string {
 	debug.Log("test-impact", "transitiveImporters: BFS complete, seen=%d packages", len(seen))
 
 	if len(seen) == 0 {
-		return nil
+		return nil, true
 	}
 
 	// Collect importers in sorted order for determinism.
@@ -393,7 +395,7 @@ func transitiveImporters(workingDir string, changedDirs []string) []string {
 	}
 	sort.Strings(importers)
 	debug.Log("test-impact", "transitiveImporters: result=%v", importers)
-	return importers
+	return importers, true
 }
 
 // impactScopedTestCommandWithDeps builds a `go test` command that covers all
@@ -407,7 +409,10 @@ func transitiveImporters(workingDir string, changedDirs []string) []string {
 // occurs, the suffix indicates how many importers were omitted (e.g., "# +5
 // importers omitted").
 //
-// Falls back to impactScopedTestCommand if the import graph can't be built.
+// #3648: if the import graph can't be built (cold cache, go list failure),
+// the command degrades to changed-packages-only and is annotated "#
+// import graph unavailable, importers not included" so the agent can tell
+// degradation apart from "no importers exist".
 func impactScopedTestCommandWithDeps(workingDir string) string {
 	if workingDir == "" {
 		return ""
@@ -421,8 +426,10 @@ func impactScopedTestCommandWithDeps(workingDir string) string {
 		return ""
 	}
 
-	// Find downstream consumers.
-	importerDirs := transitiveImporters(workingDir, changedDirs)
+	// Find downstream consumers. graphOK=false means the import graph
+	// could not be built (cold cache, go list failure/timeout) - #1296
+	// keeps this non-fatal, but the degradation must be visible.
+	importerDirs, graphOK := transitiveImporters(workingDir, changedDirs)
 
 	// Merge changed dirs and importer dirs, deduplicating.
 	allDirs := make(map[string]bool, len(changedDirs)+len(importerDirs))
@@ -434,7 +441,7 @@ func impactScopedTestCommandWithDeps(workingDir string) string {
 	}
 
 	if len(allDirs) == 0 {
-		return impactScopedTestCommand(workingDir)
+		return "" // unreachable in practice (changedDirs non-empty) but stay safe
 	}
 
 	// Build changedSet for quick lookup.
@@ -488,7 +495,7 @@ func impactScopedTestCommandWithDeps(workingDir string) string {
 
 	parts := make([]string, len(finalList))
 	for i, d := range finalList {
-		parts[i] = "./" + d + "/"
+		parts[i] = goPkgArg(d)
 	}
 	// #1296: keep go list and go test tag semantics symmetric - a project
 	// gated by build tags (e.g. goolm across the whole tree) made the bare
@@ -500,6 +507,9 @@ func impactScopedTestCommandWithDeps(workingDir string) string {
 	cmd += " " + strings.Join(parts, " ")
 	if omitted > 0 {
 		cmd += fmt.Sprintf(" # +%d packages omitted", omitted)
+	}
+	if !graphOK {
+		cmd += " # import graph unavailable, importers not included"
 	}
 
 	if len(importerDirs) > 0 {
