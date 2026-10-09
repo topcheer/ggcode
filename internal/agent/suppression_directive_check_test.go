@@ -251,3 +251,116 @@ func TestCheckSuppressionDirectives_VueSfcCovered(t *testing.T) {
 		t.Fatal(".vue <script> eslint-disable must be detected")
 	}
 }
+
+// #3607: prose-in-comment false positives. A policy comment that FORBIDS the
+// directive is the correct thing for an agent to write, yet the old
+// matchRidesComment gate passed it (the comment marker is exactly what makes
+// the gate pass) and isBareSuppression returned true unconditionally for
+// requiresRule=false JS/markup patterns. The prose-tail check must skip these.
+func TestCheckSuppressionDirectives_ProseInComment3607(t *testing.T) {
+	tests := []struct {
+		name    string
+		fp      string
+		newCont string
+		want    bool // wantWarn: whether a suppression warning is expected
+		reason  string
+	}{
+		{
+			// #3607 scenario A: JS block comment policy statement.
+			name:    "js policy block comment",
+			fp:      "src/policy.js",
+			newCont: "/* do not use eslint-disable in this repo */\nconst x = 1;\n",
+			want:    false,
+			reason:  "policy comment must not be flagged as adding a suppression",
+		},
+		{
+			// #3607 scenario C: HTML comment prose mention.
+			name:    "html comment prose",
+			fp:      "index.html",
+			newCont: "<!-- we avoid eslint-disable here -->\n<div>x</div>\n",
+			want:    false,
+			reason:  "prose mention in HTML comment must not be flagged",
+		},
+		{
+			// Regression: real bare directive still fires.
+			name:    "js real bare directive",
+			fp:      "src/a.js",
+			newCont: "/* eslint-disable */\nconst x = 1;\n",
+			want:    true,
+			reason:  "bare eslint-disable must still be flagged",
+		},
+		{
+			// Regression: scoped rule list still fires (flag-all for requiresRule=false).
+			name:    "js scoped rule list",
+			fp:      "src/a.js",
+			newCont: "/* eslint-disable no-console, no-alert */\nconsole.log(1);\n",
+			want:    true,
+			reason:  "scoped eslint-disable is still a block-level blanket suppression",
+		},
+		{
+			// Regression: -next-line variant suffix still fires.
+			name:    "js next-line variant",
+			fp:      "src/a.ts",
+			newCont: "// eslint-disable-next-line no-console\nconsole.log(1);\n",
+			want:    true,
+			reason:  "variant suffix must still be flagged",
+		},
+		{
+			// Regression guard: Go/Python prose-tail unaffected (their comment
+			// markers are part of the pattern itself; proseTailCheck is off).
+			name:    "go real revive directive",
+			fp:      "a.go",
+			newCont: "package a\n\nfunc f() {} // revive:disable\n",
+			want:    true,
+			reason:  "real Go revive:disable must still be flagged",
+		},
+		{
+			// Known residual (#3607 scenario B), pinned deliberately: the same
+			// text in a REAL comment is a bare noqa for flake8, so this stays
+			// flagged until lexical docstring/string detection exists.
+			name:    "py docstring noqa prose (residual)",
+			fp:      "m.py",
+			newCont: "def f():\n    \"\"\"Use # noqa only as last resort.\"\"\"\n    pass\n",
+			want:    true,
+			reason:  "accepted residual per #3607: indistinguishable from a real bare noqa without lexical parsing",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			warnings := checkSuppressionDirectives(tc.fp, "", tc.newCont)
+			if tc.want && len(warnings) == 0 {
+				t.Fatalf("expected warning (%s), got none", tc.reason)
+			}
+			if !tc.want && len(warnings) > 0 {
+				t.Fatalf("expected NO warning (%s), got: %v", tc.reason, warnings)
+			}
+		})
+	}
+}
+
+// suppressionProseTail unit coverage for the #3607 tail classifier.
+func TestSuppressionProseTail(t *testing.T) {
+	cases := []struct {
+		line    string
+		matched string
+		prose   bool
+	}{
+		{"/* eslint-disable */", "eslint-disable", false},
+		{"/* eslint-disable no-console */", "eslint-disable", false},
+		{"/* eslint-disable no-console, no-alert */", "eslint-disable", false},
+		{"// eslint-disable-next-line no-console", "eslint-disable", false},
+		{"// eslint-disable-line", "eslint-disable", false},
+		{"/* do not use eslint-disable in this repo */", "eslint-disable", true},
+		{"<!-- we avoid eslint-disable here -->", "eslint-disable", true},
+		{"<!-- do not add stylelint-disable -->", "stylelint-disable", true},
+		{"<!-- do not add eslint-disable -->", "eslint-disable", true}, // prose precedes keyword
+		{"// above all, never eslint-disable", "eslint-disable", true}, // prose precedes, line-comment form
+		{"/* eslint-disable In This Repo */", "eslint-disable", true},
+		{"/* eslint-disable eqeqeq */", "eslint-disable", true}, // documented trade-off: hyphenless rule code reads as prose
+	}
+	for _, c := range cases {
+		if got := suppressionProseTail(c.line, c.matched); got != c.prose {
+			t.Errorf("suppressionProseTail(%q, %q) = %v, want %v", c.line, c.matched, got, c.prose)
+		}
+	}
+}

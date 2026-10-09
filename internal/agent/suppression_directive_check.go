@@ -37,6 +37,7 @@ type suppressionDirective struct {
 	languages       []Language // empty = any language
 	requiresRule    bool       // true = require specific rule code (scoped), false = bare only
 	checkLinePrefix bool       // true = check for line comment prefix (for prose detection)
+	proseTailCheck  bool       // true = also require the post-match tail to read as a directive, not prose (#3607)
 }
 
 // compileSuppressionDirectives returns the list of suppression patterns.
@@ -56,12 +57,19 @@ var suppressionDirectives = func() []suppressionDirective {
 		{pattern: regexp.MustCompile(`(?m)#\s*pylint:\s*disable`), description: "# pylint: disable suppresses pylint warnings", languages: []Language{LangPython}, requiresRule: false, checkLinePrefix: true},
 
 		// --- JS/TS lint suppressions (NOT @ts-* which are in jsts_antipattern) ---
-		{pattern: regexp.MustCompile(`(?i)eslint-disable`), description: "eslint-disable suppresses ESLint warnings", languages: []Language{LangJSTS, LangMarkup}, requiresRule: false, checkLinePrefix: true},
+		// proseTailCheck (#3607): these keyword patterns match prose that merely
+		// MENTIONS the directive ("/* do not use eslint-disable here */",
+		// "<!-- we avoid stylelint-disable -->") because matchRidesComment's
+		// comment gate passes by definition inside comments. The tail check
+		// distinguishes directive tails from prose tails. Go/Python markers
+		// (//, #) are part of the pattern itself, so their prose forms differ
+		// and are NOT switched on here (residual: Python docstrings, see #3607 B).
+		{pattern: regexp.MustCompile(`(?i)eslint-disable`), description: "eslint-disable suppresses ESLint warnings", languages: []Language{LangJSTS, LangMarkup}, requiresRule: false, checkLinePrefix: true, proseTailCheck: true},
 		// #1778 case 4: .vue/.svelte single-file components carry ESLint
 		// directives inside their <script> block and stylelint ones in
 		// <style> - .vue is stylelint's HOME turf. Both map to LangMarkup,
 		// which excluded them entirely.
-		{pattern: regexp.MustCompile(`(?i)stylelint-disable`), description: "stylelint-disable suppresses Stylelint warnings", languages: []Language{LangJSTS, LangMarkup}, requiresRule: false, checkLinePrefix: true},
+		{pattern: regexp.MustCompile(`(?i)stylelint-disable`), description: "stylelint-disable suppresses Stylelint warnings", languages: []Language{LangJSTS, LangMarkup}, requiresRule: false, checkLinePrefix: true, proseTailCheck: true},
 
 		// --- Ruby suppressions (only for .rb files, NOT unknown extensions) ---
 		{pattern: regexp.MustCompile(`(?m)#\s*rubocop:disable`), description: "# rubocop:disable suppresses RuboCop warnings", languages: []Language{LangRuby}, requiresRule: false, checkLinePrefix: true},
@@ -111,7 +119,7 @@ func checkSuppressionDirectives(fp, oldContent, newContent string) []string {
 		}
 
 		// Find line numbers of the newly added instances for actionable feedback
-		lines := findAddedSuppressionLines(newContent, oldContent, sd.pattern, sd.requiresRule, sd.checkLinePrefix)
+		lines := findAddedSuppressionLines(newContent, oldContent, &sd)
 		excerpt := ""
 		if len(lines) > 0 {
 			excerpt = fmt.Sprintf(" (line %d)", lines[0])
@@ -153,6 +161,14 @@ func countBareMatches(content string, sd *suppressionDirective) int {
 		if sd.checkLinePrefix && !matchRidesComment(line, matched) {
 			continue
 		}
+		// #3607: prose-IN-comment guard. matchRidesComment passes anything
+		// inside a comment, but the most natural place to DISCUSS suppression
+		// directives is exactly a comment/docstring ("/* do not use
+		// eslint-disable in this repo */"). For keyword-style patterns the
+		// post-match tail separates real directives from prose mentions.
+		if sd.proseTailCheck && suppressionProseTail(line, matched) {
+			continue
+		}
 		if isBareSuppression(line, matched, sd.requiresRule) {
 			count++
 		}
@@ -170,6 +186,62 @@ func matchRidesComment(line, matched string) bool {
 		}
 	}
 	return false
+}
+
+// suppressionProseTail reports whether the text following a JS/markup
+// suppression keyword (eslint-disable, stylelint-disable) reads as PROSE
+// rather than the tail of a real directive (#3607). A real directive's
+// tail is: empty ("/* eslint-disable */"), a hyphenated variant suffix
+// ("-next-line", "-report-unused-disabled-directives"), or a rule-code
+// list where every comma/space-separated token is kebab-case
+// ("no-console, no-alert"). Prose mentions carry plain words
+// ("in this repo", "here", "In This Repo") and are skipped.
+//
+// Trade-off documented in #3607: a scoped rule code without a hyphen
+// (eslint's "eqeqeq") is indistinguishable from a plain word and will be
+// skipped; under-warning one scoped directive is strictly safer than
+// flagging policy comments that forbid the directive (the original
+// false-positive direction punished agents for doing the right thing).
+func suppressionProseTail(line, matched string) bool {
+	idx := strings.LastIndex(line, matched)
+	if idx < 0 {
+		return false
+	}
+	rest := strings.TrimSpace(line[idx+len(matched):])
+	// Strip trailing comment closers so "... in this repo */" and
+	// "... here -->" reduce to their prose text.
+	for _, closer := range []string{"*/", "-->"} {
+		if strings.HasSuffix(rest, closer) {
+			rest = strings.TrimSpace(strings.TrimSuffix(rest, closer))
+		}
+	}
+	if rest == "" {
+		// Empty tail: a real bare directive ("/* eslint-disable */") has
+		// nothing but the comment opener before the keyword, while prose
+		// can also PRECEDE the mention ("<!-- do not add eslint-disable -->").
+		// Strip openers; any surviving text means the match rides prose.
+		pre := strings.TrimSpace(line[:idx])
+		for _, opener := range []string{"<!--", "//", "/*", "*", "#", "--"} {
+			pre = strings.TrimSpace(strings.TrimPrefix(pre, opener))
+		}
+		return pre != ""
+	}
+	if strings.HasPrefix(rest, "-") {
+		return false // variant suffix: -next-line, -previous-line, -line
+	}
+	for _, tok := range strings.FieldsFunc(rest, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t'
+	}) {
+		if !strings.Contains(tok, "-") {
+			return true // plain word ("here", "repo") - prose
+		}
+		for _, r := range tok {
+			if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+				return true // uppercase/punctuation word - prose
+			}
+		}
+	}
+	return false // every token is kebab-case - reads as a rule-code list
 }
 
 // containsLang checks if a language is in a list.
@@ -258,7 +330,8 @@ func isBareSuppression(line, matched string, requiresRule bool) bool {
 
 // findAddedSuppressionLines returns line numbers of suppression directives
 // that appear in newContent but not in oldContent.
-func findAddedSuppressionLines(newContent, oldContent string, re *regexp.Regexp, requiresRule, checkLinePrefix bool) []int {
+func findAddedSuppressionLines(newContent, oldContent string, sd *suppressionDirective) []int {
+	re := sd.pattern
 	newLines := strings.Split(newContent, "\n")
 	var oldLineSet map[string]bool
 	if oldContent != "" {
@@ -277,22 +350,26 @@ func findAddedSuppressionLines(newContent, oldContent string, re *regexp.Regexp,
 
 		// For line-comment based patterns, verify this is actually in a comment context
 		// to avoid matching prose in Markdown/unknown files
-		if checkLinePrefix {
-			trimmed := strings.TrimSpace(ln)
-			// Check if line starts with comment prefix (//, #, --)
-			if !strings.HasPrefix(trimmed, "//") &&
-				!strings.HasPrefix(trimmed, "#") &&
-				!strings.HasPrefix(trimmed, "--") &&
-				!strings.Contains(trimmed, "/*") &&
-				!strings.Contains(trimmed, "*") {
-				// This is prose, not a comment - skip it
-				continue
-			}
+		trimmed := strings.TrimSpace(ln)
+		if !sd.checkLinePrefix || strings.HasPrefix(trimmed, "//") ||
+			strings.HasPrefix(trimmed, "#") ||
+			strings.HasPrefix(trimmed, "--") ||
+			strings.Contains(trimmed, "/*") ||
+			strings.Contains(trimmed, "*") {
+			// Line starts with a comment marker (or check disabled) - continue checks
+		} else {
+			// This is prose, not a comment - skip it
+			continue
 		}
 
 		// Check if this is a bare (problematic) vs scoped (legitimate) suppression
 		matched := re.FindString(ln)
-		if !isBareSuppression(ln, matched, requiresRule) {
+		// #3607 prose-in-comment guard, same as in countBareMatches so the
+		// count differential and the line finder agree on what counts.
+		if sd.proseTailCheck && suppressionProseTail(ln, matched) {
+			continue
+		}
+		if !isBareSuppression(ln, matched, sd.requiresRule) {
 			// Scoped form with rule code - not a problem
 			continue
 		}
