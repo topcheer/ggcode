@@ -4096,7 +4096,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// sweep plus 2 read_file's scored as 2 files and triggered a
 			// bogus "broaden exploration" warning.
 			if searchResultTools[tc.Name] && !result.IsError {
-				for _, p := range extractSearchResultPaths(result.Content) {
+				for _, p := range extractSearchResultPaths(tc.Name, result.Content) {
 					a.tunnelVision.recordSearched(p)
 				}
 			}
