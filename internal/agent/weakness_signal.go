@@ -38,7 +38,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -111,6 +113,59 @@ type runSignal struct {
 	evidence    string
 }
 
+// testFailLineRE matches `go test` verbose failure lines. One line per failed
+// test (subtests carry a slash - kept verbatim, they are distinct tests).
+var testFailLineRE = regexp.MustCompile(`^--- FAIL: (\S+)`)
+
+// testFailCollector accumulates per-run go-test failure counts keyed by
+// test name (r17: test signals drive evolution, arXiv 2608.03392 signals
+// dimension - test failures are the strongest code-specific failure
+// semantic, yet were absent from the fingerprint set).
+type testFailCollector struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func newTestFailCollector() *testFailCollector {
+	return &testFailCollector{counts: map[string]int{}}
+}
+
+// record parses run_command output for go-test failure lines. Called for
+// every run_command result regardless of IsError: agents often suffix
+// `|| true` and the tool then reports success while tests failed.
+func (c *testFailCollector) record(output string) {
+	if !strings.Contains(output, "--- FAIL:") {
+		return // fast path: most commands are not test runs
+	}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(output, "\n") {
+		m := testFailLineRE.FindStringSubmatch(strings.TrimSpace(line))
+		if m == nil || seen[m[1]] {
+			continue // one sighting per test per output (dedup reruns inside)
+		}
+		seen[m[1]] = true
+		c.counts[m[1]]++
+	}
+}
+
+// snapshot returns the per-test counts for run-end signal collection.
+func (c *testFailCollector) snapshot() map[string]int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]int, len(c.counts))
+	for k, v := range c.counts {
+		out[k] = v
+	}
+	return out
+}
+
+// reset clears per-run counts (called after routeWeaknessSignals snapshots).
+func (c *testFailCollector) reset() {
+	c.mu.Lock()
+	c.counts = map[string]int{}
+	c.mu.Unlock()
+}
+
 // collectWeaknessSignals snapshots the run's detector states into signals.
 // Runs on the agent loop goroutine at run end, after all tool execution,
 // but takes the mutex-guarded snapshots anyway: parallel tool batches and
@@ -143,6 +198,22 @@ func (a *Agent) collectWeaknessSignals() []runSignal {
 		for _, name := range a.errorClassifier.firedCategories() {
 			out = append(out, runSignal{"errcat:" + name, WeakBoundary,
 				"classified error category fired this run"})
+		}
+	}
+	// r17: go-test failure signals. Two sightings in ONE run (the agent
+	// reran and the test still fails) is WeakForgetting - it was told. One
+	// sighting starts WeakRare; cross-run recurrence matures through the
+	// store's Count++ path like every other fingerprint.
+	if a.testFails != nil {
+		for name, n := range a.testFails.snapshot() {
+			fp := "test-fail:" + name
+			if n >= 2 {
+				out = append(out, runSignal{fp, WeakForgetting,
+					fmt.Sprintf("go test failure rerun in one run (%d sightings)", n)})
+			} else {
+				out = append(out, runSignal{fp, WeakRare,
+					"go test failure observed"})
+			}
 		}
 	}
 	return out
@@ -197,6 +268,9 @@ func (a *Agent) routeWeaknessSignals() {
 		return
 	}
 	routeMatureSignals(wd, store)
+	if a.testFails != nil {
+		a.testFails.reset()
+	}
 }
 
 // routeMatureSignals writes one line per mature-and-unrouted signal into

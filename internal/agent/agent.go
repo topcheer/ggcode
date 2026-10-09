@@ -173,6 +173,7 @@ type Agent struct {
 	reflectionFunc               ReflectionFunc             // called after each run with accumulated stats
 	loopDetector                 loopDetector               // tracks consecutive identical tool calls to detect stuck loops
 	errorClassifier              *ErrorClassifier           // immediate type-specific guidance on tool errors (AgentDebug-inspired)
+	testFails                    *testFailCollector         // r17: per-run go-test failure counts feeding weakness signals (arXiv 2608.03392 signals dimension)
 	overseer                     *overseerState             // deterministic async-overseer: trajectory analysis for stuck/drift/spam
 	repetition                   *repetitionTracker         // semantic-level repetition detection for failed edit clusters
 	speculator                   *speculator                // pattern-aware speculative tool execution (PASTE-inspired)
@@ -273,6 +274,7 @@ type Agent struct {
 	cfDep                        *cfDepState                // counterfactual dependency detection (dependent tool calls in same batch)
 	guidanceBudget               guidanceBudget             // per-turn guidance injection limiter (caps context pollution from detector alerts)
 	guidanceStats                guidanceRunStats           // r402: per-run detector guidance fire/suppress counts (observability for harness tuning)
+	guidanceHints                map[string]guidanceHintRec // r15: tag → last delivered hint text (drill-down source for /guidance <tag>)
 	reasoningRedund              *reasoningRedundancyState  // reasoning redundancy detection (consecutive text-only overthinking)
 	queryConverge                *queryConvergeState        // query convergence failure detection (repeated similar searches without action)
 	serialRead                   *serialReadState           // sequential read serialization detection (cross-turn single-read batching opportunity)
@@ -436,6 +438,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		effectLedger:           newEffectLedger(),
 		toolSearch:             newToolSearchState(),
 		errorClassifier:        NewErrorClassifier(),
+		testFails:              newTestFailCollector(),
 		planner:                newPlanState(),
 		todoStaleness:          newTodoStalenessState(),
 		todoDrop:               newTodoDropState(),
@@ -484,7 +487,8 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		diffSummary:            newDiffSummaryState(),
 		oversightTriage:        newOversightTriageState(),
 		autonomyDial:           newAutonomyDialState(),
-		guidanceStats:          guidanceRunStats{}, // r402: also reset per-run in runPrompt
+		guidanceStats:          guidanceRunStats{},           // r402: also reset per-run in runPrompt
+		guidanceHints:          map[string]guidanceHintRec{}, // r15: also reset per-run in runPrompt
 		commitHint:             newCommitHintState(),
 		draftPRHint:            newDraftPRHintState(),
 		verifyRegression:       newVerifyRegressionState(),
@@ -4638,6 +4642,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					g := fmt.Sprintf("[Error guidance: %s] %s", catGuidance.Name, catGuidance.Guidance)
 					a.appendGuidance(&result, g)
 				}
+			}
+			// r17: test signals drive evolution. Record go-test failures from
+			// run_command output regardless of IsError - `|| true` suffixes make
+			// the tool report success while tests failed.
+			if tc.Name == "run_command" && a.testFails != nil {
+				a.testFails.record(result.Content)
 			}
 			// Tool error fallback chain: on tool failure, inject actionable
 			// alternative strategy suggestions. Fires once per tool per run.

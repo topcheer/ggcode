@@ -193,3 +193,53 @@ func TestHarnessTuningInjectGuidanceHonorsOverride(t *testing.T) {
 		t.Fatal("non-overridden tags must pass through untouched")
 	}
 }
+
+// r16: manual override channel (/guidance suppress|reset). Manual entries
+// pin Model:"manual" so they never count against the per-model auto
+// budget, take effect immediately on the injectGuidance hot path, and a
+// reset reports false rather than pretending a no-op succeeded.
+func TestSetHarnessSuppressedManualEntry(t *testing.T) {
+	_, overridesPath := tuningSetup(t)
+
+	if err := SetHarnessSuppressed("## Manual Case"); err != nil {
+		t.Fatalf("SetHarnessSuppressed: %v", err)
+	}
+	cur := loadHarnessOverrides(overridesPath)
+	ov, ok := cur["## Manual Case"]
+	if !ok || ov.Tier != tuningSuppressTier || ov.Model != "manual" {
+		t.Fatalf("expected manual tier-0 entry, got %+v", ov)
+	}
+	if !harnessOverrideSuppresses("## Manual Case") {
+		t.Error("manual suppress must take effect on the hot path immediately")
+	}
+	if harnessOverrideSuppresses("## Unrelated") {
+		t.Error("unrelated tags must stay unaffected")
+	}
+}
+
+func TestClearHarnessOverrideRoundTrip(t *testing.T) {
+	_, overridesPath := tuningSetup(t)
+
+	if err := SetHarnessSuppressed("ACT NOW: verify"); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := ClearHarnessOverride("ACT NOW: verify")
+	if err != nil || !cleared {
+		t.Fatalf("clear of existing override: cleared=%v err=%v", cleared, err)
+	}
+	if harnessOverrideSuppresses("ACT NOW: verify") {
+		t.Error("suppression must lift after clear")
+	}
+	if len(loadHarnessOverrides(overridesPath)) != 0 {
+		t.Error("store should be empty after the only override is cleared")
+	}
+	// Clearing something never overridden reports false, not an error.
+	cleared, err = ClearHarnessOverride("ACT NOW: verify")
+	if err != nil || cleared {
+		t.Errorf("no-op clear must return (false, nil), got (%v, %v)", cleared, err)
+	}
+	// Empty tag is rejected outright.
+	if err := SetHarnessSuppressed(""); err == nil {
+		t.Error("empty tag must error")
+	}
+}
