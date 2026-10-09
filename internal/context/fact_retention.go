@@ -16,6 +16,7 @@ import (
 	"unicode"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 // constraintMarkers: lines carrying an imperative/restriction signal.
@@ -38,18 +39,45 @@ const (
 	maxRetentionChars = 800
 )
 
-// stripSpeakerPrefix removes transcript speaker tags so a constraint
-// extracted as "User: don't X" matches a summary line "don't X".
-var speakerPrefixRe = regexp.MustCompile(`(?i)^(?:user|assistant|system|tool|human|ai)\s*[>:]\s*`)
+// userConstraintSource collects text from user-role messages only -
+// the sole source binding constraints may be extracted from (#3675).
+// Assistant reasoning ("we must not touch X") and tool_result echoes
+// (code comments, compiler errors) used to be lifted verbatim into the
+// "treat as binding" section and then self-perpetuated across compactions,
+// locking the agent to its own past self-talk. Truncation is deliberately
+// absent: constraints already pass through the 200-char line cap in
+// extractConstraintLines and the section-wide maxRetentionChars budget.
+func userConstraintSource(msgs []provider.Message) string {
+	var b strings.Builder
+	for _, msg := range msgs {
+		if msg.Role != "user" {
+			continue
+		}
+		for _, block := range msg.Content {
+			if block.Type != "text" {
+				continue
+			}
+			text := strings.TrimSpace(block.Text)
+			if text == "" {
+				continue
+			}
+			b.WriteString(text)
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
 
 // extractConstraintLines pulls short lines carrying constraint markers
-// from the pre-compaction payload. Line-granular (not sentence) on
-// purpose: transcript text is already line-structured.
+// from user-sourced text. Line-granular (not sentence) on purpose:
+// transcript text is already line-structured. NOTE: input must be
+// user-role text only (see userConstraintSource); no role filtering
+// happens here by design - the caller owns provenance (#3675).
 func extractConstraintLines(payload string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, raw := range strings.Split(payload, "\n") {
-		line := strings.TrimSpace(speakerPrefixRe.ReplaceAllString(strings.TrimSpace(raw), ""))
+		line := strings.TrimSpace(raw)
 		if line == "" || len(line) > 200 || seen[line] {
 			continue
 		}
@@ -122,13 +150,18 @@ func normForContain(s string) string {
 // applyFactRetention appends an "Auto-preserved Facts" section carrying
 // constraint lines and recurring paths the summary dropped. No-op when
 // the summary preserved everything (or there was nothing to preserve).
-func applyFactRetention(summary, payload string) string {
+// #3675: constraint lines are extracted from userSrc (user-role text
+// only, see userConstraintSource) — assistant reasoning and tool_result
+// echoes must never be crowned "treat as binding" user constraints.
+// Recurring paths still scan the full payload: file paths surface via
+// tool activity, which is exactly their provenance.
+func applyFactRetention(summary, payload, userSrc string) string {
 	if summary == "" || payload == "" {
 		return summary
 	}
 	summaryNorm := normForContain(summary)
 	var facts []string
-	for _, line := range extractConstraintLines(payload) {
+	for _, line := range extractConstraintLines(userSrc) {
 		if !strings.Contains(summaryNorm, normForContain(line)) {
 			facts = append(facts, line)
 		}
