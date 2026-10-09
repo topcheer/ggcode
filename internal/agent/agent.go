@@ -4606,12 +4606,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				if cmd != "" {
 					// Verification scope narrowing: detect progressively narrowing
 					// test/build commands that mask failures (command-level spec gaming).
-					if narrowMsg := a.scopeNarrow.recordVerificationCommand(tc.Name, cmd, result.Content, result.IsError); narrowMsg != "" {
-						a.contextManager.Add(provider.Message{
-							Role:    "user",
-							Content: []provider.ContentBlock{{Type: "text", Text: narrowMsg}},
-						})
-						msgs = a.contextManager.Messages()
+					// #3682: start_command is EXCLUDED - its exit status only
+					// reflects "job started", not the test result, so a
+					// background `start_command "go test ./..."` would poison
+					// the narrowing history with a fake pass entry (same
+					// exclusion rationale as correctionSpiral below).
+					if tc.Name == "run_command" {
+						if narrowMsg := a.scopeNarrow.recordVerificationCommand(tc.Name, cmd, result.Content, result.IsError); narrowMsg != "" {
+							a.contextManager.Add(provider.Message{
+								Role:    "user",
+								Content: []provider.ContentBlock{{Type: "text", Text: narrowMsg}},
+							})
+							msgs = a.contextManager.Messages()
+						}
 					}
 					// Trajectory→asset distillation: track verified-successful
 					// commands so the post-run distiller can persist them as
