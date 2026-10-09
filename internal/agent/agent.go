@@ -173,6 +173,7 @@ type Agent struct {
 	reflectionFunc               ReflectionFunc             // called after each run with accumulated stats
 	loopDetector                 loopDetector               // tracks consecutive identical tool calls to detect stuck loops
 	errorClassifier              *ErrorClassifier           // immediate type-specific guidance on tool errors (AgentDebug-inspired)
+	recoveryBudget               *recoveryBudget            // per-tool consecutive-failure budget → recovery action escalation (r21)
 	overseer                     *overseerState             // deterministic async-overseer: trajectory analysis for stuck/drift/spam
 	repetition                   *repetitionTracker         // semantic-level repetition detection for failed edit clusters
 	speculator                   *speculator                // pattern-aware speculative tool execution (PASTE-inspired)
@@ -436,6 +437,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		effectLedger:           newEffectLedger(),
 		toolSearch:             newToolSearchState(),
 		errorClassifier:        NewErrorClassifier(),
+		recoveryBudget:         newRecoveryBudget(),
 		planner:                newPlanState(),
 		todoStaleness:          newTodoStalenessState(),
 		todoDrop:               newTodoDropState(),
@@ -4636,8 +4638,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if result.IsError {
 				if catGuidance := a.errorClassifier.classifyToolError(tc.Name, result.Content); catGuidance.Name != "" {
 					g := fmt.Sprintf("[Error guidance: %s] %s", catGuidance.Name, catGuidance.Guidance)
+					if catGuidance.Action != "" {
+						g = fmt.Sprintf("[Error guidance: %s, recovery: %s] %s", catGuidance.Name, catGuidance.Action, catGuidance.Guidance)
+					}
 					a.appendGuidance(&result, g)
 				}
+				// r21 recovery budget: consecutive-failure escalation ladder.
+				// Retry-class guidance stops being injected after the tool has
+				// failed repeatedly — the cheapest action is exhausted, escalate.
+				if budgetHint := a.recoveryBudget.observeFailure(tc.Name); budgetHint != "" {
+					a.appendGuidance(&result, budgetHint)
+				}
+			} else {
+				a.recoveryBudget.observeSuccess(tc.Name)
 			}
 			// Tool error fallback chain: on tool failure, inject actionable
 			// alternative strategy suggestions. Fires once per tool per run.

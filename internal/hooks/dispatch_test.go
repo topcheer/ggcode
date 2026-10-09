@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -414,5 +415,32 @@ func TestHook_HasType_HTTPRequiresExplicitType(t *testing.T) {
 	// URL alone does NOT infer http type — user must set type: http explicitly
 	if h.HasType() != HookTypeCommand {
 		t.Error("hook with URL but no type should default to command")
+	}
+}
+
+// r21 on_failure filter: post_tool_use hooks narrowed to the failure branch.
+func TestDispatch_PostToolUse_OnFailureFilter(t *testing.T) {
+	tmp := t.TempDir() + "/marker"
+	cfg := HookConfig{PostToolUse: []Hook{{Match: "*", Command: "touch " + tmp, OnFailure: true}}}
+
+	// Success: OnFailure hook must be skipped.
+	Dispatch(cfg, HookEnv{Event: EventPostToolUse, ToolName: "write_file", ToolSuccess: true})
+	if _, err := os.Stat(tmp); err == nil {
+		t.Fatalf("OnFailure hook fired on success")
+	}
+
+	// Failure: hook runs.
+	Dispatch(cfg, HookEnv{Event: EventPostToolUse, ToolName: "write_file", ToolSuccess: false})
+	Dispatch(cfg, HookEnv{Event: EventPostToolUse, ToolName: "write_file", ToolSuccess: false})
+	if _, err := os.Stat(tmp); err != nil {
+		t.Fatalf("OnFailure hook did not run on failed tool call: %v", err)
+	}
+
+	// Default (no OnFailure): fires on both branches - backward compat.
+	tmp2 := t.TempDir() + "/marker2"
+	cfg = HookConfig{PostToolUse: []Hook{{Match: "*", Command: "touch " + tmp2}}}
+	Dispatch(cfg, HookEnv{Event: EventPostToolUse, ToolName: "write_file", ToolSuccess: true})
+	if _, err := os.Stat(tmp2); err != nil {
+		t.Fatalf("default hook must still fire on success: %v", err)
 	}
 }

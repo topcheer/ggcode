@@ -99,6 +99,13 @@ func runSync(hooksList []Hook, env HookEnv) HookResult {
 		if !matchAny(h.MatchMode, h.Match, env.ToolName, env.RawInput) {
 			continue
 		}
+		// r21 on_failure filter: subscription narrowed to the failure branch.
+		// Only meaningful for post_tool_use (the sole event carrying a tool
+		// outcome); other events never set ToolSuccess=false so the filter is
+		// a no-op there.
+		if h.OnFailure && env.Event == EventPostToolUse && env.ToolSuccess {
+			continue
+		}
 		result := executeHook(h, env, payload)
 		if !result.Allowed && isBlockingEvent(env.Event) {
 			// Only blocking events short-circuit on a block. post_tool_use

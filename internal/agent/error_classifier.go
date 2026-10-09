@@ -40,6 +40,35 @@ type ErrorClassifier struct {
 type ErrorCategory struct {
 	Name     string
 	Guidance string
+	// Action is the recommended recovery action class (r21 self-healing
+	// orchestration, arXiv:2606.01416 seven-class/eight-action taxonomy):
+	// "retry" | "arg_repair" | "substitute" | "refresh" | "escalate".
+	// Empty for unclassified. It steers the recovery-budget escalation
+	// ladder (recovery_budget.go) and gives downstream mechanical recovery
+	// (tool-call rewrite) a stable vocabulary to consume.
+	Action string
+}
+
+// actionForCategory maps classifier categories to the cheapest plausible
+// recovery action (cost-ordered: retry < arg_repair < substitute < refresh <
+// escalate). A malformed argument will fail identically on retry — it needs
+// repair; wrong-tool and exhausted-retry classes need substitution or
+// refresh; "do not retry" classes escalate. Default for unmapped: retry.
+func actionForCategory(name string) string {
+	switch name {
+	case "edit_anchor_mismatch", "import_error", "type_error":
+		return "arg_repair"
+	case "file_not_found", "test_failure", "stale_context":
+		return "refresh"
+	case "permission_denied", "auth_error", "nil_pointer":
+		return "escalate"
+	case "timeout_network":
+		return "retry"
+	case "build_error", "syntax_error", "git_lock_contention":
+		return "refresh"
+	default:
+		return "retry"
+	}
 }
 
 func NewErrorClassifier() *ErrorClassifier {
@@ -86,6 +115,7 @@ func (ec *ErrorClassifier) classifyToolError(toolName, resultContent string) Err
 		return ErrorCategory{}
 	}
 	ec.fired[cat.Name] = true
+	cat.Action = actionForCategory(cat.Name)
 
 	return cat
 }

@@ -27,6 +27,7 @@ type Hook struct {
 	Timeout      string            `yaml:"timeout" json:"timeout"`             // timeout duration, e.g. "10s" (type=http). Default 10s.
 	Secret       string            `yaml:"secret" json:"secret"`               // HMAC-SHA256 signing key (type=http)
 	InjectOutput bool              `yaml:"inject_output" json:"inject_output"` // (post_tool_use only) inject stdout/response body into tool result
+	OnFailure    bool              `yaml:"on_failure" json:"on_failure"`       // (post_tool_use only) fire ONLY on failed tool calls (r21)
 }
 
 // HasType returns the effective type, defaulting to command for backward compatibility.
@@ -54,11 +55,19 @@ const (
 	EventPreCompact = "pre_compact"
 
 	// Session lifecycle events (Claude Code hooks parity, 2025/2026 frontier:
-	// external code observes session boundaries — preload context at start,
-	// flush state at end — https://code.claude.com/docs/en/hooks).
+	// external code observes session boundaries - preload context at start,
+	// flush state at end - https://code.claude.com/docs/en/hooks).
 	EventOnSessionStart = "on_session_start"
 	EventOnSessionEnd   = "on_session_end"
 )
+
+// Hook OnFailure semantics (r21, self-healing orchestration): post_tool_use
+// fires on BOTH success and failure paths and the payload carries
+// tool.success / tool.error (agent_tool.go). OnFailure=true narrows a hook to
+// the failure branch only - the self-healing recovery subscription pattern
+// (arXiv:2606.01416; Codex CLI issue #24907 asks for the same as a separate
+// event). Matching stays tool-name-based; hooks that want all calls simply
+// omit on_failure (bit-for-bit backward compatible).
 
 // HookConfig holds all hooks from configuration, keyed by event.
 type HookConfig struct {
@@ -80,7 +89,7 @@ type HookResult struct {
 	Err     error
 	// PolicyNotice carries a policy verdict (exit 2 / HTTP 403) from a
 	// NON-blocking event. #684: post_tool_use cannot honor the block, but the
-	// hook author's stderr reason still matters — and every consumer of post
+	// hook author's stderr reason still matters - and every consumer of post
 	// hook results reads only Output. runSync folds this into the returned
 	// Output so the reason reaches the model instead of vanishing.
 	PolicyNotice string
