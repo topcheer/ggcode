@@ -1088,7 +1088,12 @@ func changedDirsForLang(files []string, lang string) []string {
 			continue
 		}
 		dir := filepath.ToSlash(filepath.Dir(f))
-		if dir == "." || dir == "" {
+		// #3664 (mirrors the Go path's #3648 fix): keep "." - the module
+		// root. npm/pytest projects with root-level index.ts / main.py are
+		// a common shape; dropping the root dir left dirs empty and the
+		// suggested test command degraded to the bare full-suite runner.
+		// Renderers accept "." (e.g. `pytest .` = explicit root scope).
+		if dir == "" {
 			continue
 		}
 		if !seen[dir] {
