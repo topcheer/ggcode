@@ -14,7 +14,7 @@ func rawFp(name string, args []byte) string {
 func TestNormalizeArgs_KeyOrder(t *testing.T) {
 	a := []byte(`{"pattern":"foo","path":"/x"}`)
 	b := []byte(`{"path":"/x","pattern":"foo"}`)
-	if normalizeArgs(a) != normalizeArgs(b) {
+	if normalizeArgs("read_file", a) != normalizeArgs("read_file", b) {
 		t.Errorf("normalized forms should match for reordered keys")
 	}
 }
@@ -22,15 +22,15 @@ func TestNormalizeArgs_KeyOrder(t *testing.T) {
 func TestNormalizeArgs_VolatileFields(t *testing.T) {
 	a := []byte(`{"pattern":"foo","trace_id":"abc","timestamp":"2024-01-01"}`)
 	b := []byte(`{"pattern":"foo"}`)
-	if normalizeArgs(a) != normalizeArgs(b) {
-		t.Errorf("volatile fields should be stripped: %q vs %q", normalizeArgs(a), normalizeArgs(b))
+	if normalizeArgs("read_file", a) != normalizeArgs("read_file", b) {
+		t.Errorf("volatile fields should be stripped: %q vs %q", normalizeArgs("read_file", a), normalizeArgs("read_file", b))
 	}
 }
 
 func TestNormalizeArgs_NestedObjects(t *testing.T) {
 	a := []byte(`{"b":{"y":2,"x":1},"a":3}`)
 	b := []byte(`{"a":3,"b":{"x":1,"y":2}}`)
-	if normalizeArgs(a) != normalizeArgs(b) {
+	if normalizeArgs("read_file", a) != normalizeArgs("read_file", b) {
 		t.Errorf("nested object key ordering should be normalized")
 	}
 }
@@ -38,21 +38,21 @@ func TestNormalizeArgs_NestedObjects(t *testing.T) {
 func TestNormalizeArgs_DifferentValues(t *testing.T) {
 	a := []byte(`{"pattern":"foo"}`)
 	b := []byte(`{"pattern":"bar"}`)
-	if normalizeArgs(a) == normalizeArgs(b) {
+	if normalizeArgs("read_file", a) == normalizeArgs("read_file", b) {
 		t.Errorf("different values should produce different normalized forms")
 	}
 }
 
 func TestNormalizeArgs_InvalidJSON(t *testing.T) {
 	raw := []byte(`not json at all`)
-	result := normalizeArgs(raw)
+	result := normalizeArgs("read_file", raw)
 	if result != string(raw) {
 		t.Errorf("invalid JSON should fall back to raw string, got %q", result)
 	}
 }
 
 func TestNormalizeArgs_Empty(t *testing.T) {
-	if normalizeArgs(nil) != "" {
+	if normalizeArgs("read_file", nil) != "" {
 		t.Errorf("empty args should produce empty string")
 	}
 }

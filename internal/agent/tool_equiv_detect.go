@@ -38,6 +38,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -48,6 +49,14 @@ const (
 // volatileFields are stripped during normalization because they do not affect
 // the semantic result of the tool call. They are metadata/tracing fields that
 // vary per invocation even when the actual parameters are identical.
+//
+// #3631: stripping is scoped to builtin (non-MCP) tools only. MCP tools
+// frequently use names like "timestamp" as *semantic* parameters (log time
+// ranges, DB query windows, monitoring intervals) where the value carries
+// meaning. Their schema is not knowable here, so we err on the side of NOT
+// stripping: a missed advisory (false negative) is cheap, while a false
+// "results will be identical" assertion can trick the agent into skipping a
+// genuinely needed query for a different time window.
 var volatileFields = map[string]bool{
 	"trace_id":       true,
 	"request_id":     true,
@@ -92,10 +101,23 @@ func (s *toolEquivDetectState) markExactMatch(rawFp string) {
 	_ = rawFp
 }
 
-// normalizeArgs parses JSON arguments, strips volatile fields, sorts keys,
-// and returns a canonical string representation. If args is not valid JSON,
-// returns the raw string (fallback — don't crash on malformed input).
-func normalizeArgs(args []byte) string {
+// mcpToolNamePrefix mirrors internal/tool's MCP adapter naming
+// (mcp__server__tool). MCP tool argument semantics are unknowable to builtin
+// detectors, so volatile-field stripping is disabled for them (#3631).
+const mcpToolNamePrefix = "mcp__"
+
+// stripVolatileForTool reports whether volatile-field stripping should apply
+// to the given tool. Only builtin tools (whose parameter schemas are known to
+// lack timestamp-style semantic fields) are stripped; MCP tools are not.
+func stripVolatileForTool(toolName string) bool {
+	return !strings.HasPrefix(toolName, mcpToolNamePrefix)
+}
+
+// normalizeArgs parses JSON arguments, sorts keys, and — for builtin tools
+// only (#3631) — strips volatile fields, returning a canonical string
+// representation. If args is not valid JSON, returns the raw string
+// (fallback — don't crash on malformed input).
+func normalizeArgs(toolName string, args []byte) string {
 	if len(args) == 0 {
 		return ""
 	}
@@ -104,7 +126,7 @@ func normalizeArgs(args []byte) string {
 		// Not valid JSON — use raw bytes as fallback
 		return string(args)
 	}
-	normalized := normalizeValue(parsed)
+	normalized := normalizeValue(parsed, stripVolatileForTool(toolName))
 	// json.Marshal of a map produces sorted keys in Go
 	out, err := json.Marshal(normalized)
 	if err != nil {
@@ -113,24 +135,25 @@ func normalizeArgs(args []byte) string {
 	return string(out)
 }
 
-// normalizeValue recursively strips volatile fields from maps and ensures
-// deterministic structure. Go's json.Marshal already sorts map keys, so we
-// just need to remove volatile fields and recurse.
-func normalizeValue(v interface{}) interface{} {
+// normalizeValue recursively normalizes the parsed value, stripping volatile
+// fields from maps (when stripVolatile is set) and ensuring deterministic
+// structure. Go's json.Marshal already sorts map keys, so we just need to
+// remove volatile fields and recurse.
+func normalizeValue(v interface{}, stripVolatile bool) interface{} {
 	switch val := v.(type) {
 	case map[string]interface{}:
 		result := make(map[string]interface{})
 		for k, vv := range val {
-			if volatileFields[k] {
+			if stripVolatile && volatileFields[k] {
 				continue
 			}
-			result[k] = normalizeValue(vv)
+			result[k] = normalizeValue(vv, stripVolatile)
 		}
 		return result
 	case []interface{}:
 		result := make([]interface{}, len(val))
 		for i, item := range val {
-			result[i] = normalizeValue(item)
+			result[i] = normalizeValue(item, stripVolatile)
 		}
 		return result
 	default:
@@ -148,7 +171,7 @@ func (s *toolEquivDetectState) recordCall(toolName string, args []byte, rawFp st
 		return ""
 	}
 
-	normalized := normalizeArgs(args)
+	normalized := normalizeArgs(toolName, args)
 	normFp := normalizedFingerprint(toolName, normalized)
 
 	s.normalizedCounts[normFp]++
@@ -172,12 +195,16 @@ func (s *toolEquivDetectState) recordCall(toolName string, args []byte, rawFp st
 
 	if count == equivWarnThreshold && !s.rawSeen[normFp] {
 		s.warnings++
+		// #3631: uncertain wording — normalization can miss semantics
+		// (e.g. volatile fields that DO carry meaning), so never assert
+		// that results are identical; only that they may be.
 		return fmt.Sprintf(
-			"Semantic duplicate: You called %s %d times with equivalent arguments "+
+			"Semantic duplicate: You called %s %d times with possibly equivalent arguments "+
 				"(same parameters after normalizing key order and volatile fields). "+
-				"The results will be identical — unless context compaction has trimmed "+
-				"earlier results, you already have this information in context - "+
-				"avoid re-invoking with slightly different argument formatting.",
+				"Results may still differ if volatile fields (e.g. timestamp) carry meaning — "+
+				"if you intentionally changed a parameter, keep going; otherwise, unless "+
+				"context compaction has trimmed earlier results, you likely already have "+
+				"this information in context.",
 			toolName, count,
 		)
 	}
@@ -198,7 +225,7 @@ func (s *toolEquivDetectState) recordCall(toolName string, args []byte, rawFp st
 // fingerprintToolCallNormalized produces a normalized fingerprint for
 // cross-referencing. Used externally if needed.
 func fingerprintToolCallNormalized(name string, args []byte) string {
-	normalized := normalizeArgs(args)
+	normalized := normalizeArgs(name, args)
 	return normalizedFingerprint(name, normalized)
 }
 
