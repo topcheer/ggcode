@@ -485,6 +485,11 @@ var readOnlySearchVerbs = map[string]bool{
 // isReadOnlySearchCommand returns true when the shell command's effective
 // verb is a read-only search/read tool. Leading environment assignments
 // (FOO=bar cmd) are skipped so they cannot disguise the verb.
+// #3669: a search verb is NOT read-only when the command carries a
+// downstream mutation carrier - `find -exec sed -i`, `-ok`, a pipe into
+// xargs/sed, a redirect, or a chained command. The verb lookup alone
+// exempted `find . -name '*.go' -exec sed -i "s/t.Skip(//"` wholesale,
+// silently passing a real skip-marker tamper.
 func isReadOnlySearchCommand(cmd string) bool {
 	fields := strings.Fields(cmd)
 	idx := 0
@@ -493,6 +498,9 @@ func isReadOnlySearchCommand(cmd string) bool {
 		idx++
 	}
 	if idx >= len(fields) {
+		return false
+	}
+	if carriesSearchDownstreamMutation(cmd, fields[idx:]) {
 		return false
 	}
 	verb := filepath.Base(fields[idx])
@@ -518,6 +526,23 @@ func isReadOnlySearchCommand(cmd string) bool {
 		}
 	}
 	return false
+}
+
+// carriesSearchDownstreamMutation reports whether a command whose effective
+// verb is a search tool still carries a downstream MUTATION (#3669): find's
+// -exec/-execdir/-ok/-okdir run an arbitrary child command (and `;`/`+`
+// terminate it), a pipe or redirect can feed a rewriter, and `&&`/`;`/newline
+// chain a second command. Conservative by design: a false positive merely
+// drops the read-only EXEMPTION (the normal detection path still judges the
+// command), while a false negative silently passes tampering.
+func carriesSearchDownstreamMutation(cmd string, tail []string) bool {
+	for _, t := range tail {
+		switch t {
+		case "-exec", "-execdir", "-ok", "-okdir", "xargs":
+			return true
+		}
+	}
+	return strings.ContainsAny(cmd, "|>;\n") || strings.Contains(cmd, "&&")
 }
 
 // isTestWritingTask returns true when the user's prompt indicates the task
