@@ -802,6 +802,30 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 			plans[i].Existed = true
 		}
 	}
+	// #3690: the refresh above mirrors the single-file leg's #1786 handling,
+	// but that leg also RE-RUNS its dry-run gate on the refreshed baseline
+	// (a drifted file must not slip a guaranteed-failure write through the
+	// gate that only validated the pre-pause pair). Same asymmetry fixed
+	// here: rebuild the batch from the refreshed baselines and re-validate.
+	refreshedBatch := make([]fileEditPlan, 0, len(plans))
+	for _, p := range plans {
+		if diff.HasChanges(p.OldContent, p.NewContent) {
+			refreshedBatch = append(refreshedBatch, fileEditPlan{
+				Path:       p.Path,
+				OldContent: p.OldContent,
+				NewContent: p.NewContent,
+			})
+		}
+	}
+	if blockers := dryRunValidateBatch(refreshedBatch); len(blockers) > 0 {
+		var b strings.Builder
+		b.WriteString("[Multi-file edit blocked by post-refresh validation]\n")
+		b.WriteString("File content drifted during the confirmation pause and now has fatal issues. NO files were modified.\n\n")
+		for path, msg := range blockers {
+			b.WriteString(fmt.Sprintf("File: %s\n%s\n\n", path, msg))
+		}
+		return tool.Result{Content: strings.TrimRight(b.String(), "\n"), IsError: true}
+	}
 
 	multiStart := time.Now()
 	result, err := a.safeExecute(t, ctx, tc.Arguments)
