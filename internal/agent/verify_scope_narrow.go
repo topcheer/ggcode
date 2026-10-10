@@ -481,57 +481,23 @@ func isNarrower(b, a string) bool {
 	if strings.Contains(a, "scope:broad") && !strings.Contains(b, "scope:broad") {
 		return true
 	}
-	// Package narrowing: ./... → ./internal/agent/
 	aPkgs := extractPkgList(a)
 	bPkgs := extractPkgList(b)
-	if len(aPkgs) > 0 && len(bPkgs) > 0 {
-		// #3812: a bare token-count drop must NOT count as narrowing on its
-		// own - `go test ./pkg/a/ ./pkg/b/` → `go test ./pkg/c/` is a normal
-		// debugging pivot (disjoint packages), not a scope narrowing. Only the
-		// subset check below (b ⊂ a) and path-prefix containment carry the
-		// real intent; the old len-only early return contradicted both.
-		// Check if b packages are a subset of a packages
-		aSet := make(map[string]bool)
-		for _, p := range aPkgs {
-			aSet[p] = true
-		}
-		allSubset := true
-		for _, p := range bPkgs {
-			if !aSet[p] {
-				allSubset = false
-				break
-			}
-		}
-		if allSubset && len(bPkgs) < len(aPkgs) {
-			return true
-		}
-		// #2810: path-prefix containment. A file/directory token that lives
-		// under one of a's package directories IS a narrowing of that package,
-		// but the exact-set comparison above can never see it (a path never
-		// string-equals its directory, and trailing-slash spelling differs).
-		// Typical gaming chain: `go test ./internal/agent/` (fail) →
-		// `go test ./internal/agent/bar_test.go` (fail) → `+ -run TestBar`
-		// (pass) - previously silent throughout.
-		if scopeUnderAnyPrefix(bPkgs, aPkgs) {
-			return true
-		}
+	bFiles := extractFileList(b)
+	if pkgSetNarrower(bPkgs, aPkgs) {
+		return true
 	}
 	// #2810 cont.: a-side package directories vs b-side FILE tokens
 	// (pkg:./pkg/ → file:./pkg/foo_test.go is narrowing even when b has no
 	// pkg: tokens at all).
-	bFiles := extractFileList(b)
 	if len(aPkgs) > 0 && len(bFiles) > 0 && scopeUnderAnyPrefix(bFiles, aPkgs) {
 		return true
 	}
 	// Added -run filter (go) or -k filter (pytest) or --grep (npm)
-	if strings.Contains(b, "run:") && !strings.Contains(a, "run:") {
-		return true
-	}
-	if strings.Contains(b, "k:") && !strings.Contains(a, "k:") {
-		return true
-	}
-	if strings.Contains(b, "grep:") && !strings.Contains(a, "grep:") {
-		return true
+	for _, marker := range []string{"run:", "k:", "grep:"} {
+		if strings.Contains(b, marker) && !strings.Contains(a, marker) {
+			return true
+		}
 	}
 	// Added file filter
 	if strings.Contains(b, "file:") && !strings.Contains(a, "file:") {
@@ -543,6 +509,39 @@ func isNarrower(b, a string) bool {
 		}
 	}
 	return false
+}
+
+// pkgSetNarrower reports whether the newer package set bPkgs is a narrowing
+// of the older aPkgs. #3812: a bare token-count drop must NOT count on its
+// own - `go test ./pkg/a/ ./pkg/b/` → `go test ./pkg/c/` is a normal
+// debugging pivot (disjoint packages). Only a true subset (b ⊂ a, fewer) or
+// #2810 path-prefix containment narrows.
+func pkgSetNarrower(bPkgs, aPkgs []string) bool {
+	if len(aPkgs) == 0 || len(bPkgs) == 0 {
+		return false
+	}
+	aSet := make(map[string]bool, len(aPkgs))
+	for _, p := range aPkgs {
+		aSet[p] = true
+	}
+	allSubset := true
+	for _, p := range bPkgs {
+		if !aSet[p] {
+			allSubset = false
+			break
+		}
+	}
+	if allSubset && len(bPkgs) < len(aPkgs) {
+		return true
+	}
+	// #2810: path-prefix containment. A file/directory token that lives
+	// under one of a's package directories IS a narrowing of that package,
+	// but the exact-set comparison above can never see it (a path never
+	// string-equals its directory, and trailing-slash spelling differs).
+	// Typical gaming chain: `go test ./internal/agent/` (fail) →
+	// `go test ./internal/agent/bar_test.go` (fail) → `+ -run TestBar`
+	// (pass) - previously silent throughout.
+	return scopeUnderAnyPrefix(bPkgs, aPkgs)
 }
 
 // extractPkgList extracts package entries from a scope string.
