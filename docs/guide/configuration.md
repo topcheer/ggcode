@@ -387,6 +387,8 @@ IM adapters (QQ, Telegram, Discord, Slack, DingTalk, Feishu, etc.) are configure
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `OPENAI_API_KEY` | OpenAI API key |
 | `GGCODE_DEBUG` | Enable debug logging (`1` to enable) |
+| `GGCODE_TOOL_TAPE` | Deterministic tool-call cassette: `record:<path>` or `replay:<path>` (JSONL). Replay misses fail closed — never a silent live call |
+| `GGCODE_LLM_TAPE` | LLM response cassette: `record:<path>` or `replay:<path>` (JSONL). Set together with `GGCODE_TOOL_TAPE` to reproduce a full trajectory offline with zero network calls |
 | `${ENV_VAR}` | Expansion syntax used throughout YAML config |
 
 > API keys in `keys.env` are referenced via `${VAR}` expansion in the YAML - they are never stored directly in `ggcode.yaml`.
