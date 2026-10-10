@@ -1578,6 +1578,23 @@ func (m *Manager) TruncateOldestGroupForRetry() bool {
 // discard the agent's last response so it can be re-generated. Returns the
 // text of the last remaining user message, or "" if no regeneration is
 // possible (no assistant message found or no preceding user message).
+// isToolResultCarrier reports whether a Role:"user" message is actually a
+// tool_result carrier inserted by ReconcileToolCalls rather than a real user
+// prompt: all its blocks are tool outputs (#3745).
+func isToolResultCarrier(msg provider.Message) bool {
+	hasToolResult := false
+	for _, b := range msg.Content {
+		if b.Type == "tool_result" {
+			hasToolResult = true
+			continue
+		}
+		if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+			return false // real prompt text present
+		}
+	}
+	return hasToolResult
+}
+
 func (m *Manager) RemoveLastAssistantGroup() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1595,13 +1612,23 @@ func (m *Manager) RemoveLastAssistantGroup() string {
 	if lastAsstIdx < 0 {
 		return ""
 	}
-	// Find the last user message before the assistant message.
+	// Find the last REAL user message before the assistant message.
+	// #3745: ReconcileToolCalls inserts tool_result carriers with
+	// Role:"user" (L598); stopping the reverse scan on one truncates at the
+	// carrier, deleting the trailing assistant while keeping the earlier
+	// assistant(tool_use) - the next API call then fails with unpaired
+	// tool_use. Skip carriers: a user message whose blocks are (only)
+	// tool_result outputs is not a prompt.
 	lastUserIdx := -1
 	for i := lastAsstIdx - 1; i >= 0; i-- {
-		if m.messages[i].Role == "user" {
-			lastUserIdx = i
-			break
+		if m.messages[i].Role != "user" {
+			continue
 		}
+		if isToolResultCarrier(m.messages[i]) {
+			continue
+		}
+		lastUserIdx = i
+		break
 	}
 	if lastUserIdx < 0 {
 		return ""
@@ -1613,6 +1640,14 @@ func (m *Manager) RemoveLastAssistantGroup() string {
 			userText = b.Text
 			break
 		}
+	}
+	// #3745: an empty userText (image-only input, or a carrier that slipped
+	// through) means there is nothing to re-submit. The contract treats "" as
+	// "cannot regenerate" and the caller gives up - but the truncation below
+	// used to run FIRST, irreversibly deleting the assistant reply with no
+	// undo path. Fail safe: no recoverable text, no deletion.
+	if userText == "" {
+		return ""
 	}
 	// Truncate: keep everything up to and including the last user message,
 	// discard the assistant response and any trailing tool messages.
