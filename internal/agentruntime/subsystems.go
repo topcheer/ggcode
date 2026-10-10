@@ -221,6 +221,8 @@ func NewSwarmManager(
 		_ = registry.Register(tool.SwarmTaskListTool{Manager: mgr})
 		_ = registry.Register(tool.SwarmTaskClaimTool{Manager: mgr})
 		_ = registry.Register(tool.SwarmTaskCompleteTool{Manager: mgr})
+		_ = registry.Register(tool.TeamReviewDigestTool{Manager: mgr})
+		_ = registry.Register(tool.TeamReviewDecideTool{Manager: mgr})
 	}
 	return mgr
 }
