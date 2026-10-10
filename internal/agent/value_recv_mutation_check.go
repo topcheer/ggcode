@@ -215,6 +215,33 @@ func vrmReceiverTypeShort(expr ast.Expr) string {
 // into nested function literals) looking for assignments or inc/dec on
 // receiver fields. Returns mutations found.
 func vrmFindReceiverMutations(body *ast.BlockStmt, recvName string) []vrmMutation {
+	// #3758-B: a `recvName := ...` inside the body re-binds the NAME -
+	// later mutations of it hit the shadow, not the receiver. Collect the
+	// rebind positions first; position-ordered comparison is conservative
+	// (may skip a genuine mutation after a rebind in a sibling scope),
+	// matching this detector's keep-false-positives-low contract.
+	var rebinds []token.Pos
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, isFuncLit := n.(*ast.FuncLit); isFuncLit {
+			return false
+		}
+		if as, ok := n.(*ast.AssignStmt); ok && as.Tok == token.DEFINE {
+			for _, lhs := range as.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && id.Name == recvName {
+					rebinds = append(rebinds, as.Pos())
+				}
+			}
+		}
+		return true
+	})
+	isShadowed := func(p token.Pos) bool {
+		for _, r := range rebinds {
+			if r < p {
+				return true
+			}
+		}
+		return false
+	}
 	var results []vrmMutation
 	ast.Inspect(body, func(n ast.Node) bool {
 		if n == nil {
@@ -229,6 +256,9 @@ func vrmFindReceiverMutations(body *ast.BlockStmt, recvName string) []vrmMutatio
 		case *ast.AssignStmt:
 			for _, lhs := range stmt.Lhs {
 				if field := vrmExtractRecvField(lhs, recvName); field != "" {
+					if isShadowed(stmt.Pos()) {
+						continue
+					}
 					results = append(results, vrmMutation{
 						pos:   lhs.Pos(),
 						field: field,
@@ -237,10 +267,12 @@ func vrmFindReceiverMutations(body *ast.BlockStmt, recvName string) []vrmMutatio
 			}
 		case *ast.IncDecStmt:
 			if field := vrmExtractRecvField(stmt.X, recvName); field != "" {
-				results = append(results, vrmMutation{
-					pos:   stmt.X.Pos(),
-					field: field,
-				})
+				if !isShadowed(stmt.Pos()) {
+					results = append(results, vrmMutation{
+						pos:   stmt.X.Pos(),
+						field: field,
+					})
+				}
 			}
 		}
 		return true
