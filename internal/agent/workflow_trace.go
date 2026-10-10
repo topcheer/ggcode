@@ -59,62 +59,82 @@ func (e *workflowEngine) recordAttempt(toolName string, args json.RawMessage, re
 	e.loadWorkflowSpec()
 	e.mu.RLock()
 	command, _ := parseRunCommandArgs(args)
-	stepID, hasGlob := "", false
+	// #3780 C: attribute the attempt to EVERY matching step, not just the
+	// first. The old first-match break made the write path (recordCompletion
+	// walks all steps) and the trace path asymmetric: with overlapping
+	// OnCommands (A=`go test*`, B=`go test -run Build*`), executing B's
+	// command recorded an attempt only under A; when B later became a
+	// rejected prerequisite, wfAttemptAttribution asserted "step B was
+	// never executed" about a command that had just run, and B's
+	// ProducedArtifact flag was decided by A's artifact_glob.
+	var hits []string
+	grounded := map[string]bool{}
 	if command != "" {
 		for _, id := range e.order {
 			st := e.steps[id]
-			if commandMatches(st.OnCommands, command) {
-				stepID, hasGlob = id, st.ArtifactGlob != ""
-				break
+			if !commandMatches(st.OnCommands, command) {
+				continue
+			}
+			hits = append(hits, id)
+			// Artifact grounding reuses the #3414 safety-net probe (walk is
+			// done under RLock, same precedent as checkPreconditions -> groundIfFresh).
+			if st.ArtifactGlob != "" && !res.IsError {
+				grounded[id] = e.groundIfFresh(id)
 			}
 		}
 	}
-	// Artifact grounding reuses the #3414 safety-net probe (walk is done
-	// under RLock, same precedent as checkPreconditions -> groundIfFresh).
-	grounded := false
-	if stepID != "" && hasGlob && !res.IsError {
-		grounded = e.groundIfFresh(stepID)
-	}
 	e.mu.RUnlock()
-	if stepID == "" {
+	if len(hits) == 0 {
 		return // command belongs to no guarded step: nothing to attribute
 	}
 	snip := res.Content
 	if len(snip) > wfErrSnippetMax {
 		snip = snip[:wfErrSnippetMax]
 	}
-	a := StepAttempt{
-		StepID:           stepID,
-		Command:          command,
-		IsError:          res.IsError,
-		ErrSnippet:       snip,
-		ProducedArtifact: grounded,
-		At:               time.Now(),
-	}
+	now := time.Now()
 	e.traceMu.Lock()
-	e.trace = append(e.trace, a)
+	for _, id := range hits {
+		e.trace = append(e.trace, StepAttempt{
+			StepID:           id,
+			Command:          command,
+			IsError:          res.IsError,
+			ErrSnippet:       snip,
+			ProducedArtifact: grounded[id],
+			At:               now,
+		})
+	}
 	if len(e.trace) > wfTraceWindow {
 		e.trace = e.trace[len(e.trace)-wfTraceWindow:]
 	}
 	e.traceMu.Unlock()
 }
 
-// recentAttempts returns up to n attempts recorded for stepID (oldest
-// first). Uses a dedicated lock so it is safe to call while holding e.mu.
+// recentAttempts returns up to n NEWEST attempts recorded for stepID
+// (oldest first, so callers taking att[len(att)-1] get the truly latest).
+// Uses a dedicated lock so it is safe to call while holding e.mu.
+// #3780 B: the old forward iteration broke at n=3, returning the OLDEST
+// 3 attempts of the window - the violation's "last ran ... which FAILED"
+// attribution then described the 3rd-oldest attempt (e.g. an old failure
+// while the newest run succeeded without artifact), sending repair down
+// the wrong path. Walk backwards, then restore oldest-first order.
 func (e *workflowEngine) recentAttempts(stepID string, n int) []StepAttempt {
 	if e == nil || stepID == "" || n <= 0 {
 		return nil
 	}
 	e.traceMu.Lock()
 	defer e.traceMu.Unlock()
-	var out []StepAttempt
-	for _, a := range e.trace {
-		if a.StepID == stepID {
-			out = append(out, a)
-			if len(out) >= n {
-				break
-			}
+	var rev []StepAttempt
+	for i := len(e.trace) - 1; i >= 0 && len(rev) < n; i-- {
+		if e.trace[i].StepID == stepID {
+			rev = append(rev, e.trace[i])
 		}
+	}
+	if len(rev) == 0 {
+		return nil
+	}
+	out := make([]StepAttempt, len(rev))
+	for i, a := range rev {
+		out[len(rev)-1-i] = a
 	}
 	return out
 }
