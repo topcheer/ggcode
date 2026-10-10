@@ -3448,8 +3448,25 @@ func (b *ChatBridge) SetPermissionMode(modeStr string) {
 	store := b.sessionStore
 	b.mu.Unlock()
 	if agent != nil {
-		policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode)
-		agent.SetPermissionPolicy(policy)
+		// #3944: prefer the IN-PLACE mode switch (the no-UI fallback shape
+		// switch_mode uses, switch_mode.go SetMode) over rebuilding the
+		// policy. NewConfigPolicyWithMode(nil, ...) discarded every
+		// runtime-built layer on the live policy: session-approved
+		// always_allow patterns (RespondApproval / mobile tunnel) and
+		// overrides lived only in memory on the OLD instance, so a mode
+		// switch silently dropped them. Rebuild remains only as the
+		// no-existing-policy bootstrap fallback.
+		if cur := agent.PermissionPolicy(); cur != nil {
+			if ms, ok := cur.(interface {
+				SetMode(permission.PermissionMode)
+			}); ok {
+				ms.SetMode(mode)
+			} else {
+				agent.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode))
+			}
+		} else {
+			agent.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode))
+		}
 		// Update system prompt to include current mode, overriding any stale
 		// autopilot continue instructions that may still be in context.
 		b.refreshSystemPrompt()
