@@ -12,6 +12,9 @@ import (
 
 func TestIssue2752BareGitDiffDoesNotDischarge(t *testing.T) {
 	s := newReproducerLifecycleState()
+	// #3795 intent gate: establishment requires a same-iteration intent stamp
+	// (this pre-existing family was missed when the gate landed; 0b678aa28).
+	s.observeText(1, "Let me build a reproducer for this.", false, "")
 	// Iter 1: establish reproducer.
 	s.observeToolCalls(1, []string{"run_command"}, []string{"python3 repro.py"})
 	if !s.hasReproducer {
@@ -36,6 +39,9 @@ func TestIssue2752BareGitDiffDoesNotDischarge(t *testing.T) {
 
 func TestIssue2752LsEchoDoNotDischarge(t *testing.T) {
 	s := newReproducerLifecycleState()
+	// #3795 intent gate: establishment requires a same-iteration intent stamp
+	// (this pre-existing family was missed when the gate landed; 0b678aa28).
+	s.observeText(1, "Let me build a reproducer for this.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{"node crash.js"})
 	s.observeToolCalls(2, []string{"write_file"}, []string{"internal/foo.go"})
 	for _, cmd := range []string{"ls -la", "echo done", "cat internal/foo.go"} {
@@ -48,6 +54,9 @@ func TestIssue2752LsEchoDoNotDischarge(t *testing.T) {
 
 func TestIssue2752ActualRerunDischarges(t *testing.T) {
 	s := newReproducerLifecycleState()
+	// #3795 intent gate: establishment requires a same-iteration intent stamp
+	// (this pre-existing family was missed when the gate landed; 0b678aa28).
+	s.observeText(1, "Let me build a reproducer for this.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{"python3 repro.py"})
 	s.observeToolCalls(2, []string{"edit_file"}, []string{"src/main.go"})
 	// Re-run the same reproducer script (matches reproducerCommandRe).
@@ -62,6 +71,9 @@ func TestIssue2752ActualRerunDischarges(t *testing.T) {
 
 func TestIssue2752StartCommandValidatedToo(t *testing.T) {
 	s := newReproducerLifecycleState()
+	// #3795 intent gate: establishment requires a same-iteration intent stamp
+	// (this pre-existing family was missed when the gate landed; 0b678aa28).
+	s.observeText(1, "Let me build a reproducer for this.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{"python3 repro.py"})
 	s.observeToolCalls(2, []string{"edit_file"}, []string{"src/main.go"})
 	// start_command with unrelated content must not discharge.
@@ -78,6 +90,9 @@ func TestIssue2752StartCommandValidatedToo(t *testing.T) {
 
 func TestIssue2752SnippetOverlapFallback(t *testing.T) {
 	s := newReproducerLifecycleState()
+	// #3795 intent gate: establishment requires a same-iteration intent stamp
+	// (this pre-existing family was missed when the gate landed; 0b678aa28).
+	s.observeText(1, "Let me build a reproducer for this.", false, "")
 	// Reproducer established via script shape.
 	s.observeToolCalls(1, []string{"run_command"}, []string{"go run ./cmd/reprogo/main.go"})
 	s.observeToolCalls(2, []string{"edit_file"}, []string{"main.go"})
@@ -91,6 +106,9 @@ func TestIssue2752SnippetOverlapFallback(t *testing.T) {
 
 func TestIssue2752GracePeriodUnchanged(t *testing.T) {
 	s := newReproducerLifecycleState()
+	// #3795 intent gate: establishment requires a same-iteration intent stamp
+	// (this pre-existing family was missed when the gate landed; 0b678aa28).
+	s.observeText(1, "Let me build a reproducer for this.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{"python3 repro.py"})
 	s.observeToolCalls(2, []string{"edit_file"}, []string{"src/main.go"})
 	// iteration - editIteration == 1 < grace(2): no warning yet.
