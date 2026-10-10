@@ -185,7 +185,10 @@ func TestCoverageExtractVerifyScope(t *testing.T) {
 		{"cargo test", ""},
 		{"pytest tests/unit/test_x.py", ""}, // file arg is not a package scope (#354)
 		{"ls -la", ""},
-		{"go vet ./internal/...", "ALL"},
+		// #3749: a subtree wildcard covers the subtree, not the whole
+		// module - ALL here permanently marked cross-package edits
+		// verified and swallowed exactly the gaps this detector hunts.
+		{"go vet ./internal/...", "internal"},
 		{"go test github.com/topcheer/ggcode/internal/agent", ""}, // fully-qualified path unextractable (#354)
 		{"git commit -m 'make test pass'", ""},                    // commit message is not a verify run (#354)
 	}
