@@ -337,6 +337,12 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 			if !res.IsError {
 				a.appendCrashSidecar(tc.Name, string(tc.Arguments))
 			}
+			// #3859 B: ground before returning - this branch used to skip the
+			// shared grounding block entirely, so a command that BOTH hit a
+			// warn guard AND was a step's ground command left that step
+			// un-grounded forever (commands-only soft deadlock), and
+			// warn-matching commands never probed for produced artifacts.
+			a.groundWorkflowAfterTool(tc, res)
 			res.Content += "\n\n" + msg
 			return res
 		}
@@ -360,6 +366,10 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 			}
 			res.Content += fmt.Sprintf("\n\n[invariant:%s] %s (target: %q) - warn-mode invariant matched; proceed carefully.", v.Inv.ID, v.Inv.Message, v.Target)
 			auditInvariantWarn(tc.Name, v.Inv.ID)
+			// #3859 B: same grounding gap as the workflow-warn branch - a
+			// warn-matching invariant must not forfeit artifact probing and
+			// step grounding for commands that succeeded.
+			a.groundWorkflowAfterTool(tc, res)
 			return res
 		}
 	}
@@ -381,22 +391,28 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		}
 	}
 	// r26: same products ground workflow-step completion (artifact_glob).
-	if wf := a.workflowEngineLazy(); wf != nil && !res.IsError {
-		for _, ot := range invariantOpTargets(tc.Name, tc.Arguments) {
-			if ot.Op == "write" || ot.Op == "mkdir" || ot.Op == "move" {
-				wf.recordCompletion(ot.Target)
-			}
-		}
-		// #3414: successful commands often produce the declared artifacts
-		// themselves (go test -coverprofile=..., make bin/*). Exec products
-		// never flow through invariantOpTargets, so block mode deadlocked
-		// the flagship spec shape on a step that had actually completed.
-		// Probe the disk for fresh artifacts after every command success.
-		if tc.Name == "run_command" {
-			wf.probeArtifactsOnDisk()
+	a.groundWorkflowAfterTool(tc, res)
+	return res
+}
+
+// groundWorkflowAfterTool is the shared post-success grounding pass for
+// every executed tool call (normal path and both warn branches, #3859):
+// write-class targets complete steps directly, and successful command
+// executions (run_command AND start_command) probe the disk for declared
+// step artifacts (#3414).
+func (a *Agent) groundWorkflowAfterTool(tc provider.ToolCallDelta, res tool.Result) {
+	wf := a.workflowEngineLazy()
+	if wf == nil || res.IsError {
+		return
+	}
+	for _, ot := range invariantOpTargets(tc.Name, tc.Arguments) {
+		if ot.Op == "write" || ot.Op == "mkdir" || ot.Op == "move" {
+			wf.recordCompletion(ot.Target)
 		}
 	}
-	return res
+	if isCommandExecTool(tc.Name) {
+		wf.probeArtifactsOnDisk()
+	}
 }
 
 // invariantEngineLazy builds the engine on first use, anchored to the
