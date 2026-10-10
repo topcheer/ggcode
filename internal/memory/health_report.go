@@ -23,10 +23,11 @@ type HealthReport struct {
 	Default    int
 
 	// Budget usage
-	InlineEntries int
-	IndexEntries  int
-	InlineBytes   int
-	BudgetPercent int // percentage of maxTotalInlineBytes used
+	InlineEntries        int
+	IndexEntries         int
+	InlineBytes          int
+	EffectiveBudgetBytes int // effective inline budget in bytes (LIMBO-scaled denominator, #3872)
+	BudgetPercent        int // percentage of EffectiveBudgetBytes used
 
 	// Staleness signals
 	StaleBrokenPaths int
@@ -77,9 +78,17 @@ func (am *AutoMemory) HealthReport(workingDir string) HealthReport {
 	for _, e := range inline {
 		report.InlineBytes += len(e.Content)
 	}
-	if maxTotalInlineBytes > 0 {
-		report.BudgetPercent = report.InlineBytes * 100 / maxTotalInlineBytes
+	// #3872: the denominator must be the EFFECTIVE inline budget, not the
+	// ceiling constant. EffectiveInlineBudget scales down to 25% of the
+	// ceiling once consumption samples accumulate (sa-147 LIMBO), so a
+	// store can be 100% saturated against its actual budget while the
+	// ceiling-based percentage reads 25% - understating saturation 4x and
+	// masking the right curation moment.
+	budget := am.EffectiveInlineBudget()
+	if budget > 0 {
+		report.BudgetPercent = report.InlineBytes * 100 / budget
 	}
+	report.EffectiveBudgetBytes = budget
 
 	// Age range.
 	report.OldestDays, report.NewestDays = computeAgeRange(active, now)
@@ -120,9 +129,12 @@ func (r HealthReport) FormatHealthReport() string {
 	sb.WriteString(fmt.Sprintf("  Categories: %d persistent, %d evolving, %d transient, %d default\n",
 		r.Persistent, r.Evolving, r.Transient, r.Default))
 
-	// Budget
-	sb.WriteString(fmt.Sprintf("  Context budget: %d/%d entries inline (%d%% of %d token budget)\n",
-		r.InlineEntries, r.InlineEntries+r.IndexEntries, r.BudgetPercent, maxTotalInlineBytes/4))
+	// Budget (#3872: percentage is against the effective inline budget and
+	// both numerator and denominator are BYTES - the old label said "token
+	// budget" while dividing byte counts, and used the ceiling constant as
+	// the denominator).
+	sb.WriteString(fmt.Sprintf("  Context budget: %d/%d entries inline (%d%% of %d-byte effective inline budget)\n",
+		r.InlineEntries, r.InlineEntries+r.IndexEntries, r.BudgetPercent, r.EffectiveBudgetBytes))
 
 	// Age
 	if r.OldestDays > 0 {
