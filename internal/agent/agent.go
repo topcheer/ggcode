@@ -5498,6 +5498,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Register read-only tool results for in-turn deduplication.
 			if speculativeSafeTools[tc.Name] && !result.IsError {
 				seenReadOnly[dedupK] = len(toolResults) - 1
+			} else if !speculativeSafeTools[tc.Name] && !result.IsError {
+				// #3851: a successful WRITE invalidates every cached
+				// read-only result in this batch. Without this, a
+				// read(f) → edit(f) → read(f) sequence served the
+				// pre-edit snapshot for the second read - a silent
+				// correctness bug (the model verifies against stale
+				// content). Clearing the whole map is the conservative
+				// choice: precise per-path invalidation would miss
+				// cross-file effects (grep over an edited dir, LSP
+				// diagnostics on an edited import) and duplicates are
+				// re-executed at trivial cost.
+				if len(seenReadOnly) > 0 {
+					debug.Log("agent", "in-turn dedup invalidated: %s mutated state, %d cached read-only results dropped", tc.Name, len(seenReadOnly))
+					seenReadOnly = make(map[dedupKey]int)
+				}
 			}
 			// Token waste budget tracking (AgentDiet arXiv:2509.23586):
 			// record each tool result's estimated token cost and waste category.
