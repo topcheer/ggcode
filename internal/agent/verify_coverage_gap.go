@@ -368,7 +368,12 @@ func coverageExtractVerifyScopes(cmd string) []string {
 		return nil
 	}
 
-	fields := strings.Fields(lc)
+	// #3906: strip env-assignment prefixes BEFORE tokenizing, mirroring
+	// coverageIsVerifyCommand (L493). Otherwise a bare `GOFLAGS=... go test`
+	// passes recognition but fields[0] is the assignment token, so the
+	// bare-Go "." fallback at the tail never fires and the cwd package
+	// loses its verify credit (later false UNVERIFIED warnings).
+	fields := strings.Fields(stripEnvAssignments(lc))
 
 	// Collect every package-scope token (#1784 case 3: ./ prefix is
 	// OPTIONAL - "go test internal/agent/ internal/config/" is legal Go

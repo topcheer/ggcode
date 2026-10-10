@@ -17,7 +17,7 @@ package agent
 //   - Aider: supports `--lint` flag for pre/post-edit linting
 //
 // Design: lint runs AFTER build passes, not before. Build errors are higher
-// priority and must be fixed first. Lint warnings are advisory — they don't
+// priority and must be fixed first. Lint warnings are advisory - they don't
 // block the agent from completing, but they are injected into context so the
 // agent can fix them in the same turn (sync) or next turn (async).
 
@@ -59,7 +59,7 @@ func detectLintCommand(workingDir string) string {
 		return ""
 	}
 
-	// 1. Makefile with a lint target — the project's authoritative lint config.
+	// 1. Makefile with a lint target - the project's authoritative lint config.
 	// This is preferred because it includes build tags, env vars, and excludes.
 	for _, mf := range []string{"Makefile", "makefile", "GNUmakefile"} {
 		path := filepath.Join(workingDir, mf)
@@ -93,7 +93,7 @@ func detectLintCommand(workingDir string) string {
 	}
 	if fileExists(filepath.Join(workingDir, "pyproject.toml")) ||
 		fileExists(filepath.Join(workingDir, "setup.py")) {
-		// Best effort — ruff may not be installed
+		// Best effort - ruff may not be installed
 		return "ruff check ."
 	}
 	// JS/TS: eslint if config exists
@@ -210,12 +210,19 @@ func extractLintWarnings(output string) []string {
 		}
 		lower := strings.ToLower(trimmed)
 
-		// Skip lines that are clearly not warnings/errors
-		if strings.HasPrefix(lower, "checking") ||
-			strings.HasPrefix(lower, "running") ||
-			strings.HasPrefix(lower, "ok") ||
-			strings.HasPrefix(lower, "pass") ||
-			strings.HasPrefix(lower, "compiling") ||
+		// #3905: file:line warning lines must bypass the bare-prefix noise
+		// filter - linter output starts with a RELATIVE file path, and files
+		// named ok*/pass* (okhttp.go, password.go) match the bare "ok"/"pass"
+		// prefixes and were silently swallowed, flipping the run to
+		// false-clean. Only plain-status lines (no file:line pattern) are
+		// subject to the prefix filter.
+		hasFileLine := containsFileLine(trimmed) || hasRuffPattern(trimmed)
+		if !hasFileLine &&
+			(strings.HasPrefix(lower, "checking") ||
+				strings.HasPrefix(lower, "running") ||
+				strings.HasPrefix(lower, "ok") ||
+				strings.HasPrefix(lower, "pass") ||
+				strings.HasPrefix(lower, "compiling")) ||
 			isCompileErrorMessage(lower) ||
 			!looksLikeLintWarning(lower, trimmed) {
 			continue
@@ -270,7 +277,7 @@ func isCompileErrorMessage(lower string) bool {
 // looksLikeLintWarning heuristically determines if a line is a lint warning.
 func looksLikeLintWarning(lower, trimmed string) bool {
 	// go vet / compiler-style: "path/file.go:42: ..."
-	// Any file:line formatted line from lint output is a warning — the noise
+	// Any file:line formatted line from lint output is a warning - the noise
 	// filter (checking/compiling/ok) already ran in extractLintWarnings.
 	if containsFileLine(trimmed) {
 		return true
