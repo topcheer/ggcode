@@ -216,7 +216,12 @@ func buildVerifyContext(workingDir string) string {
 		content := string(data)
 		var targets []string
 		for _, t := range []string{"test", "verify", "check", "lint", "ci", "build"} {
-			if strings.Contains(content, t+":") {
+			// #3801 A: bare strings.Contains(t+":") matches LONGER targets'
+			// prefixes (Makefile with only "unit-test:" claimed a phantom
+			// `test` target) and variable assignments. detectBuildSystem's
+			// hasMakeTarget already anchors at line start, skips comments
+			// and `=`/`:=` assignments - reuse it instead of a weaker copy.
+			if hasMakeTarget(content, t) {
 				targets = append(targets, t)
 			}
 		}
@@ -410,6 +415,25 @@ func (a *Agent) llmDecideVerifyCommand(ctx context.Context, changedFiles []strin
 // Passed=true, AND bypassed the deterministic fallback (a non-empty string
 // was returned). Now, whenever a fence opener appears ANYWHERE, the command
 // is the content of the LAST fenced block - prose before it is discarded.
+// isFirstTokenLangTag reports whether s's first whitespace-delimited token
+// is a Markdown code-fence language tag rather than a command verb (#3801 B).
+// "go" is deliberately ABSENT: in a single-line fence like ```go test ./x/`
+// it is the compiler command, not the Go language tag.
+func isFirstTokenLangTag(s string) bool {
+	sp := strings.IndexAny(s, " \t")
+	if sp < 0 {
+		return false
+	}
+	switch strings.ToLower(s[:sp]) {
+	case "bash", "sh", "shell", "zsh", "console", "shell-session",
+		"python", "python3", "py", "ruby", "node", "js", "javascript",
+		"typescript", "ts", "java", "rust", "c", "cpp", "sql", "yaml",
+		"json", "makefile", "dockerfile":
+		return true
+	}
+	return false
+}
+
 func stripCodeFence(s string) string {
 	t := strings.TrimSpace(s)
 	// Collect every fence marker; fences pair left-to-right (opener, closer).
@@ -442,6 +466,16 @@ func stripCodeFence(s string) string {
 		}
 		if nl := strings.IndexByte(block, '\n'); nl >= 0 {
 			block = block[nl+1:] // drop the language-tag line
+		} else if sp := strings.IndexAny(block, " \t"); sp >= 0 {
+			// #3801 B: single-LINE fence (```go test ./x/```): there is no
+			// language-tag LINE. If the first token is a known tag, strip
+			// it and the remainder IS the command; if not (```go test ./x/`
+			// - "go" is also a command verb), the whole content is the
+			// command. Blank it and the oracle's scoped command silently
+			// fell back to whole-repo verification.
+			if isFirstTokenLangTag(block) {
+				block = strings.TrimSpace(block[sp+1:])
+			}
 		} else {
 			block = "" // lang-only / trailing fence: no command, use fallback
 		}
