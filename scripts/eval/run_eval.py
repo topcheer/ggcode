@@ -1167,6 +1167,19 @@ def main():
     except ImportError:
         pass
 
+    # r15 pr-replay: merged-fix-PR task synthesis (Change2Task-style supply).
+    # Offline JSON is prefetched by the main session via
+    # `pr_task_replay.py prefetch`; absent file = set simply not offered.
+    try:
+        from pr_task_replay import load_prefetch
+        _pr_json = Path(__file__).parent / "pr_replay_tasks.json"
+        if _pr_json.exists():
+            _pr_tasks = load_prefetch(_pr_json)
+            if _pr_tasks:
+                template_sets["pr-replay"] = _pr_tasks
+    except Exception as exc:  # noqa: BLE001 - eval harness must not die on one set
+        print(f"warning: pr-replay set unavailable: {exc}", file=sys.stderr)
+
     all_templates = template_sets.get(args.templates, TASKS)
 
     # r442: registry-backed selection - version pinning, date-based rotation,
