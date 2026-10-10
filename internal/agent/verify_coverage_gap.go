@@ -412,6 +412,17 @@ func coverageExtractVerifyScopes(cmd string) []string {
 		if !isRel && !strings.HasSuffix(f, "/") && !strings.Contains(f, "/") {
 			continue
 		}
+		// #3800: bare relative subtree `go test internal/agent/...` is
+		// legal Go and common oracle output, but it skips the ./-anchored
+		// wildcard branch above and TrimRight("/") below can't strip the
+		// trailing `...` - the scope stayed the LITERAL
+		// `internal/agent/...`, so coveragePkgInScope's equality and
+		// subtree-prefix matches all failed and explicitly verified
+		// packages got UNVERIFIED false positives. Strip the wildcard
+		// here so bare and ./-prefixed subtrees normalize identically.
+		if strings.HasSuffix(f, "...") {
+			f = strings.TrimSuffix(strings.TrimSuffix(f, "..."), "/")
+		}
 		r := strings.TrimRight(f, "/")
 		r = strings.TrimPrefix(r, "./")
 		if r != "" && r != "." {
