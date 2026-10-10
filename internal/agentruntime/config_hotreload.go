@@ -175,6 +175,7 @@ func (w *ConfigHotReload) applyFreshConfig(fresh *config.Config) {
 	old.KnightConfig = fresh.KnightConfig
 	old.MaxIterations = fresh.MaxIterations
 	old.SessionTokenBudget = fresh.SessionTokenBudget
+	old.SessionCostLimitUSD = fresh.SessionCostLimitUSD
 	old.ToolCallBudget = fresh.ToolCallBudget
 	// #1482 case D: snapshot the log fields under the same lock the
 	// setFallbacks* writers now hold - the old post-Unlock read raced
@@ -189,6 +190,7 @@ func (w *ConfigHotReload) applyFreshConfig(fresh *config.Config) {
 	// Re-apply turn-scoped budgets so the next turn picks them up.
 	if a.agentInst != nil {
 		ApplySessionTokenBudget(a.agentInst, old)
+		ApplySessionCostLimit(a.agentInst, old)
 		ApplySessionTimeBudget(a.agentInst, old)
 		ApplyToolCallBudget(a.agentInst, old)
 		ApplySessionTimeout(a.agentInst, old, false)

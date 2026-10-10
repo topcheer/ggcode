@@ -364,21 +364,25 @@ type Config struct {
 	// for auxiliary LLM calls (compaction summarization, autopilot strategist,
 	// health check). Task-tier model routing; see internal/agent/model_routing.go.
 	// Empty (default) routes all calls through Model.
-	AuxModel           string                    `yaml:"aux_model,omitempty" json:"aux_model,omitempty"`
-	Language           string                    `yaml:"language" json:"language"`
-	UI                 UIConfig                  `yaml:"ui,omitempty" json:"ui,omitempty"`
-	IM                 IMConfig                  `yaml:"im,omitempty" json:"im,omitempty"`
-	ExtraPrompt        string                    `yaml:"extra_prompt" json:"extra_prompt"`
-	Vendors            map[string]VendorConfig   `yaml:"vendors" json:"vendors"`
-	AllowedDirs        []string                  `yaml:"allowed_dirs" json:"allowed_dirs"`
-	MaxIterations      int                       `yaml:"max_iterations" json:"max_iterations"`
-	SessionTimeout     time.Duration             `yaml:"session_timeout,omitempty" json:"session_timeout,omitempty"`
-	SessionTokenBudget int64                     `yaml:"session_token_budget,omitempty" json:"session_token_budget,omitempty"`
-	SessionTimeBudget  time.Duration             `yaml:"session_time_budget,omitempty" json:"session_time_budget,omitempty"`
-	ToolCallBudget     int                       `yaml:"tool_call_budget,omitempty" json:"tool_call_budget,omitempty"`
-	ToolPerms          map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
-	Plugins            []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
-	MCPServers         []MCPServerConfig         `yaml:"mcp_servers" json:"mcp_servers"`
+	AuxModel           string                  `yaml:"aux_model,omitempty" json:"aux_model,omitempty"`
+	Language           string                  `yaml:"language" json:"language"`
+	UI                 UIConfig                `yaml:"ui,omitempty" json:"ui,omitempty"`
+	IM                 IMConfig                `yaml:"im,omitempty" json:"im,omitempty"`
+	ExtraPrompt        string                  `yaml:"extra_prompt" json:"extra_prompt"`
+	Vendors            map[string]VendorConfig `yaml:"vendors" json:"vendors"`
+	AllowedDirs        []string                `yaml:"allowed_dirs" json:"allowed_dirs"`
+	MaxIterations      int                     `yaml:"max_iterations" json:"max_iterations"`
+	SessionTimeout     time.Duration           `yaml:"session_timeout,omitempty" json:"session_timeout,omitempty"`
+	SessionTokenBudget int64                   `yaml:"session_token_budget,omitempty" json:"session_token_budget,omitempty"`
+	// SessionCostLimitUSD caps the priced USD spend of a single agent run
+	// (80%/95%/100% ladder: guidance, urgent finalize, hard stop). Only
+	// metered models with known pricing accumulate; see session_cost_limit.go.
+	SessionCostLimitUSD float64                   `yaml:"session_cost_limit_usd,omitempty" json:"session_cost_limit_usd,omitempty"`
+	SessionTimeBudget   time.Duration             `yaml:"session_time_budget,omitempty" json:"session_time_budget,omitempty"`
+	ToolCallBudget      int                       `yaml:"tool_call_budget,omitempty" json:"tool_call_budget,omitempty"`
+	ToolPerms           map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
+	Plugins             []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
+	MCPServers          []MCPServerConfig         `yaml:"mcp_servers" json:"mcp_servers"`
 	// MCPSamplingDisabled (#1484-D) turns the MCP sampling handler off
 	// entirely - sampling is the only LLM-consumption path with no gate:
 	// a buggy/malicious server could loop sampling requests and burn the
@@ -1722,6 +1726,9 @@ func (c *Config) Validate() error {
 	}
 	if c.SessionTokenBudget < 0 {
 		return fmt.Errorf("session_token_budget must not be negative")
+	}
+	if c.SessionCostLimitUSD < 0 {
+		return fmt.Errorf("session_cost_limit_usd must not be negative")
 	}
 	if c.SessionTimeBudget < 0 {
 		return fmt.Errorf("session_time_budget must not be negative")

@@ -886,6 +886,7 @@ func (a *Agent) Close() {
 	// token) release together.
 	agentSessionTimeBudgets.Delete(a)
 	agentSessionTokenBudgets.Delete(a)
+	agentSessionCostLimits.Delete(a)
 	if a.shutdownCancel != nil {
 		a.shutdownCancel()
 	}
@@ -2619,6 +2620,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				onEvent(provider.StreamEvent{
 					Type: provider.StreamEventSystem,
 					Text: "[Session token budget fully consumed — winding down. Summarize the state so the user can resume with a fresh budget.] ",
+				})
+			}
+		}
+		// sa-56: session USD cost limit - same accumulation site as the token
+		// budget above; rates are applied by ApplySessionCostLimit from the
+		// pricing table (unknown/subscription pricing accumulates $0).
+		if msg, stop := a.RecordSessionCostUsage(resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheRead, resp.Usage.CacheWrite); msg != "" {
+			a.crossDetectorConsensus.recordFiring("Session Cost Limit", i+1)
+			a.injectGuidance(msg)
+			debug.Log("session-cost-limit", "threshold crossed at iteration %d stop=%v", i+1, stop)
+			if stop {
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventSystem,
+					Text: "[Session spend limit fully consumed - winding down. Summarize the state so the user can resume with a fresh budget.] ",
 				})
 			}
 		}
