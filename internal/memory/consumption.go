@@ -73,7 +73,7 @@ func boundaryRune(text string, i int) bool {
 	}
 	c := text[i]
 	switch {
-	case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-':
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
 		return false
 	}
 	return true
