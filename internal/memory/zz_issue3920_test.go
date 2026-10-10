@@ -29,4 +29,12 @@ func TestIssue3920_UnderscoreSiblingDoesNotConsumeShorterKey(t *testing.T) {
 	if containsStandaloneKey("See release-process-v2 now.", "release-process") {
 		t.Fatal("dash sibling must stay excluded (#3827)")
 	}
+	// CamelCase sibling (review correction): sanitizeKey's whitelist keeps
+	// A-Z, so the extending charset must cover it too.
+	if containsStandaloneKey("See ReleaseProcessV2 for details.", "ReleaseProcess") {
+		t.Fatal("CamelCase sibling must not count (sanitizeKey whitelist keeps A-Z)")
+	}
+	if !containsStandaloneKey("see ReleaseProcess for details", "ReleaseProcess") {
+		t.Fatal("exact CamelCase key must count")
+	}
 }
