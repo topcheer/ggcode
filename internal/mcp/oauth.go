@@ -64,6 +64,10 @@ type AuthorizationServerMetadata struct {
 	ResponseTypesSupported            []string `json:"response_types_supported,omitempty"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported,omitempty"`
 	RevocationEndpoint                string   `json:"revocation_endpoint,omitempty"`
+	// DeviceAuthorizationEndpoint is RFC 8628 §4's advertisement of the
+	// device authorization endpoint; presence means device flow is
+	// supported (#3791 B).
+	DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint,omitempty"`
 }
 
 // ClientRegistration represents RFC 7591 dynamic client registration response.
@@ -652,6 +656,12 @@ func (h *OAuthHandler) prepareCallbackServer() error {
 	}
 
 	h.mu.Lock()
+	if h.state == nil {
+		// Defensive lazy-init (same pattern as every other h.state
+		// writer): callers normally run discovery first, but a direct
+		// prepare on a fresh handler must not nil-deref here (#3791).
+		h.state = &oauthState{}
+	}
 	h.state.state = state
 	h.state.callbackPort = port
 	h.state.redirectURI = fmt.Sprintf("http://localhost:%d/callback", port)
@@ -1194,10 +1204,24 @@ func (h *OAuthHandler) HealthCheckStatus() string {
 	return h.healthCheckStatus
 }
 
-// Close cleans up the callback server.
+// Close cleans up the callback server and clears the stale callback
+// wiring so a SECOND OAuth attempt on the same handler rebuilds it.
+// #3791 A: previously Close only Shutdown the http.Server, leaving
+// h.callbackSrv non-nil - prepareCallbackServer's "already running"
+// check then short-circuited, the CSRF state was reused, and the port no
+// longer listened; the browser callback had no receiver and `<-h.callbackCh`
+// blocked forever (producer goroutine died with the server). Retry-login
+// after auth failure/timeout deadlocked on every attempt.
 func (h *OAuthHandler) Close() {
 	h.mu.Lock()
 	srv := h.callbackSrv
+	h.callbackSrv = nil
+	h.callbackCh = nil // recreated by prepareCallbackServer -> startCallbackServer
+	if h.state != nil {
+		// Drop the spent CSRF state; metadata/token fields stay cached -
+		// only the per-flow nonce must never be reused across flows.
+		h.state.state = ""
+	}
 	h.mu.Unlock()
 	if srv != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -1230,8 +1254,12 @@ func (h *OAuthHandler) SupportsDeviceFlow() bool {
 	if _, ok := wellKnownDeviceEndpoints[issuer]; ok {
 		return true
 	}
-	// RFC 8628: check device_authorization_endpoint in server metadata
-	return false
+	// RFC 8628 §4: a server advertising device_authorization_endpoint in
+	// its RFC 8414 metadata supports the device flow. The comment claimed
+	// this check but the metadata struct had no such field, so every
+	// non-GitHub server was judged unsupported (#3791 B) and headless/
+	// remote users lost the device-flow fallback.
+	return h.state.authorizationServerMeta.DeviceAuthorizationEndpoint != ""
 }
 
 // StartDeviceFlow initiates a device authorization flow (RFC 8628).
@@ -1252,8 +1280,15 @@ func (h *OAuthHandler) StartDeviceFlow(ctx context.Context, scopes []string) (*D
 		return nil, fmt.Errorf("no client_id for device flow")
 	}
 
-	// Find device code endpoint
+	// Find device code endpoint: hardcoded well-known map first, then the
+	// server's own RFC 8414 metadata advertisement (#3791 B - without this
+	// fallback, SupportsDeviceFlow could answer true while StartDeviceFlow
+	// still failed with "no device code endpoint" for metadata-only servers).
 	deviceEndpoint, ok := wellKnownDeviceEndpoints[issuer]
+	if !ok && h.state != nil && h.state.authorizationServerMeta != nil {
+		deviceEndpoint = h.state.authorizationServerMeta.DeviceAuthorizationEndpoint
+		ok = deviceEndpoint != ""
+	}
 	if !ok {
 		return nil, fmt.Errorf("no device code endpoint for issuer %s", issuer)
 	}
