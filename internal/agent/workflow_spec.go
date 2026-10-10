@@ -210,7 +210,18 @@ func (e *workflowEngine) globFreshOnDisk(pattern string) bool {
 			return nil
 		}
 		rel, relErr := filepath.Rel(base, p)
-		if relErr != nil || !invariantGlobMatch(pattern, filepath.ToSlash(rel)) {
+		// #3780 A: absolute patterns are used AS-IS (the comment contract
+		// above and the write path's recordCompletion match absolute tool
+		// paths directly). The old code always matched against the RELATIVE
+		// path, so an absolute artifact_glob compiled to a leading-"/"
+		// literal regex that a relative path can never satisfy - probe and
+		// groundIfFresh silently dead for absolute specs, and block mode
+		// rejected already-completed steps.
+		cand := filepath.ToSlash(rel)
+		if filepath.IsAbs(pattern) {
+			cand = filepath.ToSlash(p)
+		}
+		if relErr != nil || !invariantGlobMatch(pattern, cand) {
 			return nil
 		}
 		info, infoErr := d.Info()
