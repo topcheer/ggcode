@@ -44,7 +44,15 @@ type tapeEvent struct {
 	Err               string      `json:"er,omitempty"`
 	Truncated         bool        `json:"cut,omitempty"`
 	PolicyBlocked     bool        `json:"pb,omitempty"`
-	Extra             string      `json:"x,omitempty"` // reserved
+	// #3938: the five business fields the projection used to drop on
+	// record (and zero-fill on replay). All optional so OLD tapes load
+	// unchanged; new tapes round-trip the full StreamEvent.
+	Confidence     *float64      `json:"cf,omitempty"`  // Done: logprob confidence (low-confidence alert)
+	Block          *ContentBlock `json:"blk,omitempty"` // ServerTool verbatim echo-back block
+	ToolServerTool bool          `json:"tsv,omitempty"` // server-tool flag (diagnostics attribution)
+	ToolThoughtSig string        `json:"tts,omitempty"` // #1610-A Gemini functionRe response echo-back
+	ToolCallerRaw  string        `json:"tcr,omitempty"` // PTC caller (anthropic code_execution)
+	Extra          string        `json:"x,omitempty"`   // reserved
 }
 
 type llmTapeEntry struct {
@@ -254,6 +262,15 @@ func fromStreamEvent(ev StreamEvent) tapeEvent {
 		ToolArgs: string(ev.Tool.Arguments),
 		Result:   ev.Result, IsError: ev.IsError, Usage: ev.Usage,
 		Truncated: ev.Truncated, PolicyBlocked: ev.PolicyBlocked,
+		// #3938: carry the five business fields through the tape.
+		Confidence:     ev.Confidence,
+		ToolServerTool: ev.Tool.ServerTool,
+		ToolThoughtSig: string(ev.Tool.ThoughtSignature),
+		ToolCallerRaw:  string(ev.Tool.Caller),
+	}
+	if ev.Block.Type != "" || len(ev.Block.Raw) > 0 {
+		blk := ev.Block
+		te.Block = &blk
 	}
 	if ev.Error != nil {
 		te.Err = ev.Error.Error()
@@ -268,12 +285,20 @@ func (te tapeEvent) toStreamEvent() StreamEvent {
 		Tool: ToolCallDelta{
 			ID: te.ToolID, Index: te.ToolIndex, Name: te.ToolName,
 			Arguments: json.RawMessage(te.ToolArgs),
+			// #3938: restore the dropped fields on replay.
+			ServerTool:       te.ToolServerTool,
+			ThoughtSignature: []byte(te.ToolThoughtSig),
+			Caller:           json.RawMessage(te.ToolCallerRaw),
 		},
-		Result: te.Result, IsError: te.IsError, Usage: te.Usage,
+		Confidence: te.Confidence,
+		Result:     te.Result, IsError: te.IsError, Usage: te.Usage,
 		Truncated: te.Truncated, PolicyBlocked: te.PolicyBlocked,
 	}
 	if te.Err != "" {
 		ev.Error = errors.New(te.Err)
+	}
+	if te.Block != nil {
+		ev.Block = *te.Block // #3938: verbatim server-tool echo-back block
 	}
 	return ev
 }
