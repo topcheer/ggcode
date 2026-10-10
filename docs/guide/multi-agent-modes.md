@@ -178,8 +178,8 @@ Boundaries:
 
 - **Persistent**: Teammate runs an idle loop and handles multiple tasks over its lifetime (subagent handles one task then exits)
 - **Shared registry**: Gets live MCP tool updates; subagent gets a frozen snapshot
-- **No event recording**: Teammate only collects final output text, no per-turn event stream
-- **No follow panel**: Teammate execution is not observable in real-time (only status events)
+- **Event recording**: Teammate tool calls/results are streamed as `teammate_tool_call` events (tool name, args, result, error flag) and surface in the subagent panel
+- **Follow panel**: Teammate execution is observable in real-time via the follow panel (`/agent` follow), same as subagents
 
 ---
 

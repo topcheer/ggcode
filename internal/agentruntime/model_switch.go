@@ -6,6 +6,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -134,6 +135,40 @@ func ApplySessionTokenBudget(agentInst *agent.Agent, cfg *config.Config) {
 	// always-call semantics ApplyToolCallBudget adopted for the sibling
 	// #543 bug (SetSessionTokenBudget(0) clears the explicit budget).
 	agentInst.SetSessionTokenBudget(cfg.SessionTokenBudget)
+}
+
+// ApplySessionCostLimit propagates the configured per-run USD spend cap
+// to the agent, resolving the active model's per-million rates from the
+// cost pricing table (sa-56). Call after agent creation, config reload,
+// or model switch — rates are per-model so a switch must re-apply.
+// Subscription/bundled/free and unknown-pricing models yield zero rates:
+// the limit is a no-op for them and session_token_budget remains the
+// effective ceiling (documented in session_cost_limit.go).
+func ApplySessionCostLimit(agentInst *agent.Agent, cfg *config.Config) {
+	if agentInst == nil || cfg == nil {
+		return
+	}
+	limit := cfg.SessionCostLimitUSD
+	var in, out, cr, cw float64
+	if limit > 0 {
+		// Same resolution order as the TUI /cost breakdown
+		// (commands_slash_info.go resolveRate) so both agree on the bill.
+		pt := cost.DefaultPricingTable()
+		var rate cost.ModelRate
+		if r, ok := pt.Get(cfg.Vendor, cfg.Model); ok {
+			rate = r
+		} else if cost.IsCodingPlanEndpoint(cfg.Endpoint) {
+			rate = cost.ModelRate{Type: cost.PricingSubscription, Plan: "Coding Plan"}
+		} else if plan := cost.IsSubscriptionVendor(cfg.Vendor); plan != "" {
+			rate = cost.ModelRate{Type: cost.PricingSubscription, Plan: plan}
+		}
+		if rate.IsMetered() {
+			in, out, cr, cw = rate.InputPerM, rate.OutputPerM, rate.CacheReadPerM, rate.CacheWritePerM
+		} else {
+			debug.Log("session-cost-limit", "limit set but model %s/%s is %s — accumulating $0", cfg.Vendor, cfg.Model, rate.Type)
+		}
+	}
+	agentInst.SetSessionCostLimit(limit, in, out, cr, cw)
 }
 
 // ApplySessionTimeBudget propagates the configured session-level wall-clock
