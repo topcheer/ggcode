@@ -212,21 +212,33 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 		if filepath.Base(fields[idx]) != "git" || idx+1 >= len(fields) {
 			continue
 		}
-		sub := strings.ToLower(fields[idx+1])
+		// #3782-B: git accepts global flags before the subcommand
+		// (`git -C /other/repo status`, `git --no-pager diff`, `git -c
+		// core.autocrlf=false log`). The old fields[idx+1] grab treated the
+		// flag as the subcommand, fell to the default branch, and classified
+		// every -C-form invocation as mutating - a false "tree mutated"
+		// warning that burned the maxWTInvalidationWarnings budget in
+		// multi-repo workflows. Skip known global flags (and their values)
+		// before reading the subcommand.
+		subIdx := skipGitGlobalFlags(fields, idx+1)
+		if subIdx >= len(fields) {
+			return false, true // flags but no subcommand: treat as mutating (conservative)
+		}
+		sub := strings.ToLower(fields[subIdx])
 		switch {
 		case sub == "stash":
 			found = true
-			if idx+2 >= len(fields) {
+			if subIdx+1 >= len(fields) {
 				return false, true // bare `git stash` defaults to push (mutating)
 			}
-			if !readOnlyStashActions[strings.ToLower(fields[idx+2])] {
+			if !readOnlyStashActions[strings.ToLower(fields[subIdx+1])] {
 				readOnly = false
 			}
 		case sub == "branch":
 			// `git branch` lists; -d/-D/--delete/-m/--move mutate refs
 			// (conservative classification preserved from #544).
 			found = true
-			for _, f := range fields[idx+2:] {
+			for _, f := range fields[subIdx+1:] {
 				if gitBranchMutatingFlags[f] {
 					readOnly = false
 				}
@@ -238,6 +250,26 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 		}
 	}
 	return readOnly, found
+}
+
+// skipGitGlobalFlags returns the index of the first token after `git` that
+// is not a known global flag (or a value consumed by a value-taking flag).
+func skipGitGlobalFlags(fields []string, start int) int {
+	i := start
+	for i < len(fields) {
+		f := fields[i]
+		switch {
+		case f == "-C" || f == "-c" || f == "--git-dir" || f == "--work-tree":
+			i += 2 // flag + its value
+		case f == "--no-pager" || f == "--no-optional-locks" || f == "--literal-pathspecs":
+			i++ // boolean global flag
+		case strings.HasPrefix(f, "--git-dir=") || strings.HasPrefix(f, "--work-tree=") || strings.HasPrefix(f, "-C") && f != "-C":
+			i++ // inline-value form
+		default:
+			return i
+		}
+	}
+	return i
 }
 
 func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
@@ -254,8 +286,15 @@ func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
 	// to mention a git verb), so "检查 git log 后执行 reset" matched the
 	// read-only `log` token FIRST and the real reset's invalidation
 	// warning was swallowed; likewise a stash description mentioning
-	// `list` bypassed the action=push classification. The loop was also
-	// map-iteration-order dependent across multiple string fields.
+	// `list` bypassed the action=push classification.
+	// #3782-A: the old loop returned on the FIRST field containing a git
+	// command, so with A="git log" (read-only) and B="git reset --hard"
+	// the result depended on map iteration order - half the runs swallowed
+	// the reset's invalidation warning. Aggregate instead: a field with a
+	// git command that is NOT read-only disqualifies the whole invocation,
+	// no matter which field it sits in (same AND semantics the sa-31
+	// compound-command fix applied inside classifyGitCommandLine).
+	anyFound := false
 	for k, v := range m {
 		if k == "description" {
 			continue
@@ -265,8 +304,14 @@ func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
 			continue
 		}
 		if readOnly, found := classifyGitCommandLine(s); found {
-			return readOnly
+			anyFound = true
+			if !readOnly {
+				return false
+			}
 		}
+	}
+	if anyFound {
+		return true
 	}
 
 	// No git command found in any string field: for git_stash, fall back to
