@@ -146,6 +146,13 @@ func wfAttemptAttribution(v *WorkflowViolation) string {
 	if v == nil || v.Missing == "" {
 		return ""
 	}
+	if v.UnknownRequires {
+		// #3822: the prerequisite step does not exist in the merged
+		// spec. isComplete/groundIfFresh can never succeed - block mode
+		// would reject the guarded commands forever while the generic
+		// renderer claimed "the prerequisite was never executed".
+		return fmt.Sprintf(" Attribution: step %q does not exist in the workflow spec (requires typo?) - the requirement can never be satisfied. Local repair: fix the requires entry in workflow-spec.json to reference a declared step ID.", v.Missing)
+	}
 	last := v.LastAttempt
 	switch {
 	case last == nil:

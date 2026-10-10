@@ -57,6 +57,10 @@ type WorkflowViolation struct {
 	// say where execution broke (never ran / failed / no artifact).
 	Attempts    []StepAttempt
 	LastAttempt *StepAttempt
+	// #3822: set when Missing references a step ID that does not exist
+	// in the merged spec (typo) - the requirement is unsatisfiable and
+	// the violation must say so instead of rendering "never attempted".
+	UnknownRequires bool
 }
 
 // workflowSpecFileDoc is the user-facing contract (mirrors invariantFile).
@@ -74,6 +78,9 @@ type workflowEngine struct {
 	loadDir   string    // dir whose .ggcode/workflow-spec.json to read
 	startedAt time.Time // #3414: freshness anchor for on-disk artifact probing
 	completed sync.Map  // step ID -> struct{} (grounded by artifact this run)
+	// #3822: declaring step ID -> requires entries that reference no
+	// declared step (typo) - populated at spec merge time for diagnostics.
+	unknownReq map[string][]string
 	// sa-85 failure ledger: outcomes of executed guarded commands, kept on a
 	// dedicated lock (never taken while holding traceMu) so attribution reads
 	// stay safe inside checkPreconditions' e.mu critical section.
@@ -128,6 +135,24 @@ func (e *workflowEngine) loadWorkflowSpec() {
 				e.order = append(e.order, st.ID)
 			}
 			e.steps[st.ID] = st // project scope runs last: overrides user
+		}
+	}
+	// #3822: every Requires entry must reference a declared step ID.
+	// A typo (requires:"tests" vs id:"test") makes isComplete/
+	// groundIfFresh permanently false: block mode rejects the guarded
+	// commands forever with an attribution of "never attempted" - the
+	// most common spec error was the least debuggable one. Detect at
+	// merge time and mark the declaring steps.
+	e.unknownReq = nil
+	for _, st := range e.steps {
+		for _, req := range st.Requires {
+			if _, ok := e.steps[req]; ok {
+				continue
+			}
+			if e.unknownReq == nil {
+				e.unknownReq = make(map[string][]string)
+			}
+			e.unknownReq[st.ID] = append(e.unknownReq[st.ID], req)
 		}
 	}
 }
@@ -360,10 +385,11 @@ func (e *workflowEngine) checkPreconditions(toolName string, args json.RawMessag
 				continue
 			}
 			want := ""
+			_, knownReq := e.steps[req]
 			if rs, ok := e.steps[req]; ok {
 				want = rs.ArtifactGlob
 			}
-			v := &WorkflowViolation{Step: st, Missing: req, WantGlob: want, Command: command}
+			v := &WorkflowViolation{Step: st, Missing: req, WantGlob: want, Command: command, UnknownRequires: !knownReq}
 			if att := e.recentAttempts(req, wfTraceMaxPerViolation); len(att) > 0 {
 				v.Attempts = att
 				last := att[len(att)-1]
