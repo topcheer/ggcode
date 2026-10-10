@@ -101,6 +101,10 @@ func ApplyProviderToAgent(agentInst *agent.Agent, prov provider.Provider, resolv
 	if agentInst == nil || prov == nil || resolved == nil {
 		return
 	}
+	// sa-44 LLM cassette: wrap the provider per GGCODE_LLM_TAPE before it
+	// reaches the agent. Both the daemon bootstrap paths and the config
+	// hot-swap funnel through here, so this is the single choke point.
+	prov = provider.WrapLLMTapeFromEnv(prov)
 	agentInst.SetProvider(prov)
 	ApplyResolvedLimitsToAgent(agentInst, resolved)
 	agentInst.SetSupportsVision(resolved.SupportsVision)
