@@ -125,6 +125,15 @@ func (am *AutoMemory) ReadMemoryAsOf(key string, asOf time.Time) (content string
 	if info, statErr := os.Stat(path); statErr == nil {
 		versions = append(versions, snap{modTime: info.ModTime(), path: path})
 	}
+	// #3880: a tombstone (written by DeleteMemory) marks the deletion
+	// instant. An as_of at or after it must find nothing - the pre-delete
+	// interval ends there. (The tombstone has no .md suffix, so
+	// historyVersions never lists it as a content version.)
+	tombPath := filepath.Join(am.dir, historyDirName, safe+".tombstone")
+	if tInfo, tErr := os.Stat(tombPath); tErr == nil && !tInfo.ModTime().After(asOf) {
+		debug.Log("memory", "as_of %s is at/after the deletion of %q", asOf.Format(time.RFC3339), key)
+		return "", time.Time{}, false, nil
+	}
 	if len(versions) == 0 {
 		return "", time.Time{}, false, nil
 	}
