@@ -100,16 +100,89 @@ var (
 	npmTestGrepRe = regexp.MustCompile(`--grep(?:\s+|=)\s*(\S+)`)
 )
 
-// isGoSubcommand returns true if cmd starts with "go <sub>" as a word.
-// This avoids false positives like "cargo test" containing "go test" substring.
+// splitShellSegments (in command_cache.go) splits on shell separators and
+// strips leading `cd` clauses; isGoSubcommand/isHeadCommand head-scan each
+// segment independently (#3812).
+
+// isGoSubcommand returns true if the command's INVOKED binary is "go <sub>".
+// #3812: the old loop matched "go <sub>" as an adjacent word pair ANYWHERE in
+// the command, so `git commit -m "go test passed"` or `echo go build ok` were
+// classified as verification commands and injected a bogus passed entry into
+// the verification history - a gaming vector (a harmless command carrying the
+// magic words counts as "verified") and a diluter for real chains. Now "go"
+// must be at the head of a shell segment, optionally preceded by a bounded
+// set of wrapper prefixes (sudo/time/nice/env VAR=v/timeout 10s). Quoted
+// strings and arguments after a non-wrapper token end the head scan.
 func isGoSubcommand(cmd, sub string) bool {
-	fields := strings.Fields(cmd)
-	if len(fields) >= 2 && fields[0] == "go" && fields[1] == sub {
-		return true
+	for _, seg := range splitShellSegments(cmd) {
+		if segmentInvokesGo(strings.Fields(seg), sub) {
+			return true
+		}
 	}
-	// Also handle "time go test" or "sudo go test" prefixes
-	for i := 0; i+2 < len(fields); i++ {
-		if fields[i+1] == "go" && fields[i+2] == sub {
+	return false
+}
+
+// segmentInvokesGo head-scans ONE shell segment. The default arm MUST
+// return: a bare `break` inside the switch only exits the switch, not the
+// enclosing loop, leaving i unchanged on a non-go head - an infinite loop
+// (first live input: `git commit -m "go test passed"`).
+func segmentInvokesGo(fields []string, sub string) bool {
+	i := 0
+	for i < len(fields) {
+		switch fields[i] {
+		case "sudo", "time", "nice":
+			i++
+		case "env":
+			i++
+			// skip VAR=value assignments following env
+			for i < len(fields) && strings.Contains(fields[i], "=") {
+				i++
+			}
+		case "timeout":
+			i += 2 // timeout <duration> <cmd>
+		default:
+			return fields[i] == "go" && i+1 < len(fields) && fields[i+1] == sub
+		}
+	}
+	return false
+}
+
+// isHeadCommand reports whether cmd's invoked command line starts with the
+// given head words (#3812): after stripping wrapper prefixes (sudo/time/nice
+// and "env VAR=v" runs) at the head of any shell segment, fields must begin
+// with exactly the head sequence. A bare substring match misclassified e.g.
+// `pip install pytest` as a test run.
+func isHeadCommand(cmd string, head []string) bool {
+	for _, seg := range splitShellSegments(cmd) {
+		if segmentMatchesHead(strings.Fields(seg), head) {
+			return true
+		}
+	}
+	return false
+}
+
+// segmentMatchesHead head-scans ONE shell segment; the default arm returns
+// (see segmentInvokesGo for the break-in-switch infinite-loop pitfall).
+func segmentMatchesHead(fields, head []string) bool {
+	i := 0
+	for i < len(fields) {
+		switch fields[i] {
+		case "sudo", "time", "nice":
+			i++
+		case "env":
+			i++
+			for i < len(fields) && strings.Contains(fields[i], "=") {
+				i++
+			}
+		default:
+			if len(fields)-i < len(head) {
+				return false
+			}
+			for j, w := range head {
+				if fields[i+j] != w {
+					return false
+				}
+			}
 			return true
 		}
 	}
@@ -144,8 +217,9 @@ func classifyVerificationCommand(cmd string) (category, scope string) {
 		return
 	}
 
-	// pytest / python -m pytest
-	if strings.Contains(cmd, "pytest") || strings.Contains(cmd, "python -m pytest") {
+	// pytest / python -m pytest — head-of-command word match, not a bare
+	// substring: `pip install pytest` is not a test run (#3812 B-sibling).
+	if isHeadCommand(cmd, []string{"pytest"}) || isHeadCommand(cmd, []string{"python", "-m", "pytest"}) {
 		category = "pytest"
 		scope = extractPytestScope(cmd)
 		return
@@ -407,55 +481,23 @@ func isNarrower(b, a string) bool {
 	if strings.Contains(a, "scope:broad") && !strings.Contains(b, "scope:broad") {
 		return true
 	}
-	// Package narrowing: ./... → ./internal/agent/
 	aPkgs := extractPkgList(a)
 	bPkgs := extractPkgList(b)
-	if len(aPkgs) > 0 && len(bPkgs) > 0 {
-		if len(bPkgs) < len(aPkgs) {
-			return true
-		}
-		// Check if b packages are a subset of a packages
-		aSet := make(map[string]bool)
-		for _, p := range aPkgs {
-			aSet[p] = true
-		}
-		allSubset := true
-		for _, p := range bPkgs {
-			if !aSet[p] {
-				allSubset = false
-				break
-			}
-		}
-		if allSubset && len(bPkgs) < len(aPkgs) {
-			return true
-		}
-		// #2810: path-prefix containment. A file/directory token that lives
-		// under one of a's package directories IS a narrowing of that package,
-		// but the exact-set comparison above can never see it (a path never
-		// string-equals its directory, and trailing-slash spelling differs).
-		// Typical gaming chain: `go test ./internal/agent/` (fail) →
-		// `go test ./internal/agent/bar_test.go` (fail) → `+ -run TestBar`
-		// (pass) - previously silent throughout.
-		if scopeUnderAnyPrefix(bPkgs, aPkgs) {
-			return true
-		}
+	bFiles := extractFileList(b)
+	if pkgSetNarrower(bPkgs, aPkgs) {
+		return true
 	}
 	// #2810 cont.: a-side package directories vs b-side FILE tokens
 	// (pkg:./pkg/ → file:./pkg/foo_test.go is narrowing even when b has no
 	// pkg: tokens at all).
-	bFiles := extractFileList(b)
 	if len(aPkgs) > 0 && len(bFiles) > 0 && scopeUnderAnyPrefix(bFiles, aPkgs) {
 		return true
 	}
 	// Added -run filter (go) or -k filter (pytest) or --grep (npm)
-	if strings.Contains(b, "run:") && !strings.Contains(a, "run:") {
-		return true
-	}
-	if strings.Contains(b, "k:") && !strings.Contains(a, "k:") {
-		return true
-	}
-	if strings.Contains(b, "grep:") && !strings.Contains(a, "grep:") {
-		return true
+	for _, marker := range []string{"run:", "k:", "grep:"} {
+		if strings.Contains(b, marker) && !strings.Contains(a, marker) {
+			return true
+		}
 	}
 	// Added file filter
 	if strings.Contains(b, "file:") && !strings.Contains(a, "file:") {
@@ -467,6 +509,39 @@ func isNarrower(b, a string) bool {
 		}
 	}
 	return false
+}
+
+// pkgSetNarrower reports whether the newer package set bPkgs is a narrowing
+// of the older aPkgs. #3812: a bare token-count drop must NOT count on its
+// own - `go test ./pkg/a/ ./pkg/b/` → `go test ./pkg/c/` is a normal
+// debugging pivot (disjoint packages). Only a true subset (b ⊂ a, fewer) or
+// #2810 path-prefix containment narrows.
+func pkgSetNarrower(bPkgs, aPkgs []string) bool {
+	if len(aPkgs) == 0 || len(bPkgs) == 0 {
+		return false
+	}
+	aSet := make(map[string]bool, len(aPkgs))
+	for _, p := range aPkgs {
+		aSet[p] = true
+	}
+	allSubset := true
+	for _, p := range bPkgs {
+		if !aSet[p] {
+			allSubset = false
+			break
+		}
+	}
+	if allSubset && len(bPkgs) < len(aPkgs) {
+		return true
+	}
+	// #2810: path-prefix containment. A file/directory token that lives
+	// under one of a's package directories IS a narrowing of that package,
+	// but the exact-set comparison above can never see it (a path never
+	// string-equals its directory, and trailing-slash spelling differs).
+	// Typical gaming chain: `go test ./internal/agent/` (fail) →
+	// `go test ./internal/agent/bar_test.go` (fail) → `+ -run TestBar`
+	// (pass) - previously silent throughout.
+	return scopeUnderAnyPrefix(bPkgs, aPkgs)
 }
 
 // extractPkgList extracts package entries from a scope string.
