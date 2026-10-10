@@ -2137,7 +2137,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 	// Sycophancy detection: capture candidate factual premises from the user
 	// message so the agent's response can be checked for unverified agreement.
-	sessionTimedOut := false // set when the loop breaks due to session wall-clock timeout (#611)
+	sessionTimedOut := false  // set when the loop breaks due to session wall-clock timeout (#611)
+	guidanceAtBudget := false // #3778: mid-run guidance landed on the final iteration
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
 		if err := ctx.Err(); err != nil {
@@ -2178,6 +2179,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		if injected, kind := a.injectPendingInterruptions(); injected {
 			a.recordIntervention(i + 1)
+			// #3778: guidance injected on the final iteration is persisted in
+			// context but can never reach an LLM call in THIS run - flag it so
+			// the post-loop block reports the truth instead of the generic
+			// max-iterations sentinel.
+			if a.maxIter > 0 && i == a.maxIter-1 {
+				guidanceAtBudget = true
+			}
 			// Retraction-stop: the user withdrew the task. Abort the run
 			// without another LLM call; returning context.Canceled rides the
 			// r445 isCancelled path so the InterruptSnapshot is stamped for
@@ -3094,6 +3102,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			if injected, kind := a.injectPendingInterruptions(); injected {
 				a.recordIntervention(i + 1)
+				// #3778: mirror the Run-loop flag here (same function scope,
+				// same post-loop block consumes it).
+				if a.maxIter > 0 && i == a.maxIter-1 {
+					guidanceAtBudget = true
+				}
 				// Retraction-stop aborts the run; see the Run loop site for the
 				// full rationale (context.Canceled rides the r445 snapshot path).
 				if kind == InterruptionRetractStop {
@@ -5682,6 +5695,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		})
 		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ErrSessionTimeout})
 		return ErrSessionTimeout
+	}
+	// #3778: guidance that landed on the final iteration was persisted but
+	// never consumed in-run. Report the real reason - NOT the generic
+	// max-iterations sentinel, which errors.Is callers would classify as
+	// spin-out and retry/escalate wrongly. The message is safely stored;
+	// the next run consumes it first.
+	if guidanceAtBudget {
+		runStats.finalize(nil)
+		onEvent(provider.StreamEvent{
+			Type: provider.StreamEventText,
+			Text: fmt.Sprintf("\nMid-run guidance arrived on the final iteration and was saved to context, but this run had no budget left to act on it. It will be consumed first on the next run. Summary: %s.", runStats.Summary()),
+		})
+		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ErrGuidanceAtBudget})
+		return ErrGuidanceAtBudget
 	}
 	if a.maxIter > 0 {
 		// Emit a summary of what was accomplished before the error, so the

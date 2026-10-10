@@ -15,6 +15,14 @@ import (
 // reached"), and context cancellation (#611).
 var ErrSessionTimeout = errors.New("session wall-clock timeout exceeded")
 
+// ErrGuidanceAtBudget is returned when mid-run user guidance arrived on
+// the FINAL iteration (#3778): the message is persisted in context and the
+// next run consumes it first, but this run had no budget left to act on
+// it. Callers using errors.Is must not classify this as iteration
+// exhaustion (the run did not spin out - it received new direction) nor as
+// normal completion.
+var ErrGuidanceAtBudget = errors.New("mid-run guidance arrived at iteration budget: not consumed this run, will be consumed next run")
+
 // Session Wall-Clock Timeout
 //
 // Research basis: While ggcode has iteration limits (maxIter), tool call budgets,
