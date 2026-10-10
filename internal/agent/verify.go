@@ -149,7 +149,7 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 	}
 	errorSummary += "\nFix these issues and ensure the build passes."
 	if a.verifyRegression != nil {
-		transition, regressionSummary := a.verifyRegression.classifyErrorsWithTransition(result.Errors)
+		transition, regressionSummary := a.verifyRegression.classifyErrorsWithTransition(result.Errors, cmd)
 		errorSummary += regressionSummary
 
 		// Feed the per-round transition into the self-correction stability gate.
@@ -810,7 +810,7 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 	}
 	errorSummary += "\nFix these issues and ensure the build passes."
 	if a.verifyRegression != nil {
-		transition, regressionSummary := a.verifyRegression.classifyErrorsWithTransition(result.Errors)
+		transition, regressionSummary := a.verifyRegression.classifyErrorsWithTransition(result.Errors, cmd)
 		errorSummary += regressionSummary
 
 		// Feed the per-round transition into the self-correction stability gate.
