@@ -74,9 +74,14 @@ func (c *Client) ListResourceTemplates(ctx context.Context) ([]ResourceTemplate,
 	return all, nil
 }
 
-// ExpandURITemplate expands an RFC 6570 URI Template against vars. Supported:
-// simple {var} and reserved {+var} expansion with comma-separated
-// multi-values (level 1-2, the form MCP servers use in practice). Unknown or
+// ExpandURITemplate expands an RFC 6570 URI Template against vars.
+// Supported: simple {var} and reserved {+var} scalar expansion (level
+// 1-2, the form MCP servers use in practice). Values are treated as
+// SCALARS per RFC 6570 section 3.2.1: a literal comma inside a value is
+// part of the value - simple expansion pct-encodes it (%2C), reserved
+// expansion emits it raw (comma is in the reserved set) (#3809). This
+// string-typed API has no list-valued expression; callers needing
+// multi-value joins must pre-join and use reserved expansion. Unknown or
 // empty variables are an error so a stale template expansion fails loudly
 // instead of producing a half-substituted URI.
 func ExpandURITemplate(tmpl string, vars map[string]string) (string, error) {
@@ -111,17 +116,18 @@ func ExpandURITemplate(tmpl string, vars map[string]string) (string, error) {
 		if !ok || strings.TrimSpace(val) == "" {
 			return "", fmt.Errorf("uri template %q: missing value for variable %q", tmpl, expr)
 		}
-		for j, part := range strings.Split(val, ",") {
-			if j > 0 {
-				b.WriteByte(',')
-			}
-			if reserved {
-				b.WriteString(part)
-			} else {
-				// pct-encode reserved characters; QueryEscape turns spaces
-				// into '+' which is form-encoding, not URI — fix that up.
-				b.WriteString(strings.ReplaceAll(url.QueryEscape(part), "+", "%20"))
-			}
+		if reserved {
+			// Reserved expansion: value emitted as-is (comma is in the
+			// RFC 6570 reserved set, allowed literally).
+			b.WriteString(val)
+		} else {
+			// Simple expansion: pct-encode reserved characters INCLUDING the
+			// literal comma - splitting on ',' would make a scalar containing
+			// a comma (file name "a,b.txt") indistinguishable from a
+			// multi-value join and break server-side parsing (#3809).
+			// QueryEscape turns spaces into '+' which is form-encoding, not
+			// URI - fix that up.
+			b.WriteString(strings.ReplaceAll(url.QueryEscape(val), "+", "%20"))
 		}
 	}
 	return b.String(), nil
