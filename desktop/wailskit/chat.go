@@ -712,6 +712,12 @@ func (b *ChatBridge) finishRun(err error) {
 		return
 	}
 	b.finished = true
+	// #3771: a run ending while a tool was mid-execution leaves its
+	// Streaming flag set forever (ToolResult never arrives on
+	// cancel/preempt/supersede) - the frontend tool card spins until the
+	// session is rebuilt. Clear every tool entry now, before the first
+	// persist snapshot reads liveHistory-derived session state.
+	b.finalizeStreamingToolsLocked()
 	// #550 E1: if the run this finisher belongs to was superseded (session
 	// cleared / newer run started), its outward emissions would cross
 	// generations — run_done would clear the NEW run's frontend busy state
@@ -2689,6 +2695,20 @@ func (b *ChatBridge) finalizeLiveReasoningLocked() {
 func (b *ChatBridge) finalizeStreamingAssistantLocked() {
 	if n := len(b.liveHistory); n > 0 && b.liveHistory[n-1].Role == "assistant" && b.liveHistory[n-1].Streaming {
 		b.liveHistory[n-1].Streaming = false
+	}
+}
+
+// finalizeStreamingToolsLocked clears the Streaming flag of ALL tool-role
+// entries (#3771). The only other clear point is ToolResult matching by
+// ToolID; when a run is cancelled/preempted/superseded mid-tool-execution,
+// ToolResult never arrives and the tool entry spins forever in the frontend
+// until the session is rebuilt. Walk the whole history - parallel tools put
+// entries at non-tail positions.
+func (b *ChatBridge) finalizeStreamingToolsLocked() {
+	for i := range b.liveHistory {
+		if b.liveHistory[i].Role == "tool" && b.liveHistory[i].Streaming {
+			b.liveHistory[i].Streaming = false
+		}
 	}
 }
 
