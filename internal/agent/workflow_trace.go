@@ -22,6 +22,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/provider"
@@ -98,10 +99,16 @@ func (e *workflowEngine) recordAttempt(toolName string, args json.RawMessage, re
 	if len(hits) == 0 {
 		return // command belongs to no guarded step: nothing to attribute
 	}
+	// #3865 C: take the TAIL, not the head. Build failures bury the actual
+	// error (undefined symbol, test assertion) below the command echo and
+	// compiler banner - a head slice quoted "which FAILED (...)" with the
+	// echo, making "fix that command" point at nothing actionable. The tail
+	// is also sanitized: byte slicing can split a UTF-8 rune in half.
 	snip := res.Content
 	if len(snip) > wfErrSnippetMax {
-		snip = snip[:wfErrSnippetMax]
+		snip = snip[len(snip)-wfErrSnippetMax:]
 	}
+	snip = strings.ToValidUTF8(snip, "?")
 	now := time.Now()
 	e.traceMu.Lock()
 	if e.attemptCounts == nil {
