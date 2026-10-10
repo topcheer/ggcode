@@ -78,15 +78,26 @@ func (s *scopeNarrowState) reset() {
 var (
 	// go test patterns: capture package path and -run filter
 	goTestScopeRe = regexp.MustCompile(`go\s+test\s+(?:-tags\s+\S+\s+)?(.*)`)
-	goTestRunRe   = regexp.MustCompile(`-run\s+(\S+)`)
-	goTestPkgRe   = regexp.MustCompile(`(?:^|\s)(\./\S*|internal/\S*|cmd/\S*|\.\.\.)`)
+	// #3759 B: -run accepts both "-run TestX" and "-run=TestX" (flag
+	// package syntax); the equals form previously produced no run: token.
+	goTestRunRe = regexp.MustCompile(`-run(?:\s+|=)\s*(\S+)`)
+	// #3759 A: package paths come in two spellings - relative (./pkg,
+	// ./...) and the FULL import path (github.com/x/y/internal/agent).
+	// The domain form is the most common cross-package narrowing
+	// spelling and previously matched no branch, silently classifying
+	// the whole chain as scope:broad. The domain branch requires a
+	// letter TLD so bare versions ("go1.27.1") and flag values don't
+	// match; the (?:^|\s) anchor keeps mid-token dots out.
+	goTestPkgRe = regexp.MustCompile(`(?:^|\s)(\./\S*|internal/\S*|cmd/\S*|\.\.\.|[a-zA-Z0-9][a-zA-Z0-9.-]*\.[a-zA-Z]{2,}(?:/\S*)?)`)
 
 	// pytest: -k filter and file/path argument
 	pytestScopeRe = regexp.MustCompile(`pytest\s+(.*)`)
-	pytestKRe     = regexp.MustCompile(`-k\s+(\S+)`)
+	// #3759 B: -k likewise accepts "pytest -k name" and "pytest -k=name".
+	pytestKRe = regexp.MustCompile(`-k(?:\s+|=)\s*(\S+)`)
 
 	// npm/yarn test: --grep or specific file
-	npmTestGrepRe = regexp.MustCompile(`--grep\s+(\S+)`)
+	// #3759 B: --grep likewise accepts both forms.
+	npmTestGrepRe = regexp.MustCompile(`--grep(?:\s+|=)\s*(\S+)`)
 )
 
 // isGoSubcommand returns true if cmd starts with "go <sub>" as a word.
