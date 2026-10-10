@@ -50,3 +50,13 @@ func TestIssue3764_StringEnumStillParses(t *testing.T) {
 		t.Fatalf("legacy string enum = %q", got)
 	}
 }
+
+func TestIssue3764_UppercaseLocalhostHostAccepted(t *testing.T) {
+	// #3764-B: host is case-insensitive (RFC 3986 6.2.2.1).
+	if err := ValidateElicitationURL("http://LOCALHOST:3000/x"); err != nil {
+		t.Fatalf("uppercase localhost host must be accepted as local, got: %v", err)
+	}
+	if err := ValidateElicitationURL("http://LocalHost:3000/x"); err != nil {
+		t.Fatalf("mixed-case localhost host must be accepted, got: %v", err)
+	}
+}

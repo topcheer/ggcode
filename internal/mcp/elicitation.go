@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 )
 
 // Elicitation support — MCP protocol 2025-06-18+.
@@ -131,7 +132,10 @@ func ValidateElicitationURL(raw string) error {
 		return nil
 	case "http":
 		host := u.Hostname()
-		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		// #3764-B: host is case-insensitive (RFC 3986 §6.2.2.1) -
+		// url.Parse normalizes the scheme but not the host, so
+		// http://LOCALHOST:3000/x was rejected as a non-local host.
+		if strings.EqualFold(host, "localhost") || host == "127.0.0.1" || host == "::1" {
 			return nil // local development servers
 		}
 		return fmt.Errorf("url must use https for non-local host %q", host)
