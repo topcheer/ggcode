@@ -300,6 +300,13 @@ func hasRuffPattern(s string) bool {
 	if len(parts) < 4 {
 		return false
 	}
+	// #3862 B: anchor on a path-like first segment. A ruff line is
+	// "path/to/file.py:12:5: CODE msg"; timing lines like "duration: 0:00:05"
+	// or "total: 12:34:56" share the numeric shape but their first token is a
+	// bare word with no '/' or '.' - exclude those.
+	if !strings.ContainsAny(parts[0], "/.") {
+		return false
+	}
 	// Check if parts[1] and parts[2] are numeric (line:col)
 	for _, p := range []string{parts[1], parts[2]} {
 		p = strings.TrimSpace(p)
@@ -351,9 +358,15 @@ func lintCommandAvailable(workingDir, cmd string) bool {
 		return false
 	}
 
-	// `make` is assumed available if a Makefile exists
+	// #3862 A: `make` was unconditionally available when a Makefile exists,
+	// but detectLintCommand only READS the Makefile text - zero exec. In a
+	// minimal container without make, the lint run then failed with
+	// "not found" and the #3813 branch synthesized an environment-shaped
+	// warning that the #3752 intent explicitly wanted excluded from the
+	// lint-warning category. Probe PATH for the real binary.
 	if parts[0] == "make" {
-		return true
+		_, err := exec.LookPath("make")
+		return err == nil
 	}
 
 	// `npx` is assumed available if node_modules/.bin exists or npx is in PATH

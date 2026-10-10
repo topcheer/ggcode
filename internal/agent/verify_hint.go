@@ -1107,7 +1107,10 @@ var makeRunnerNoopTargets = map[string]bool{
 // isRealTestSegment classifies one shell segment (already lowercased,
 // trimmed, env-stripped).
 func isRealTestSegment(seg string) bool {
-	if strings.Contains(seg, "--help") || strings.Contains(seg, " --list") ||
+	// #3862 C: `go test ./... -list .` (the official single-dash spelling)
+	// only LISTS test names and exits 0 - it must not count as a real test
+	// execution any more than the double-dash form.
+	if strings.Contains(seg, "--help") || strings.Contains(seg, " -list") || strings.Contains(seg, " --list") ||
 		strings.Contains(seg, "help") && strings.HasPrefix(seg, "make ") {
 		return false
 	}
