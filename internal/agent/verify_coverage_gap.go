@@ -53,6 +53,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -368,7 +369,21 @@ func coverageExtractVerifyScopes(cmd string) []string {
 	var scopes []string
 	for _, f := range fields {
 		if strings.Contains(f, "...") && (strings.HasPrefix(f, "./") || strings.HasPrefix(f, "../")) {
-			return []string{"ALL"}
+			// #3749: `./internal/agent/...` covers a SUBTREE, not the whole
+			// module. Old shape returned ALL and permanently marked every
+			// edited package verified (cumulative #417), silently swallowing
+			// cross-package gaps - the exact case this detector exists to
+			// catch. Strip the wildcard to a prefix scope and let
+			// coveragePkgInScope do its subtree-prefix matching; only a
+			// bare-root `./...` (empty prefix) means ALL.
+			prefix := strings.TrimSuffix(f, "...")
+			prefix = strings.TrimSuffix(prefix, "/")
+			prefix = strings.TrimPrefix(prefix, "./")
+			if prefix == "" || prefix == "." {
+				return []string{"ALL"}
+			}
+			scopes = append(scopes, prefix)
+			continue
 		}
 		// #2773: `go test` accepts file-list args (./pkg/a.go); the file
 		// belongs to its package directory - map the token to that dir
@@ -504,6 +519,13 @@ func coveragePackagesFromFileSet(files map[string]bool) []string {
 func coverageFileToPackage(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
+		return ""
+	}
+	// #3750: only Go source files are verification targets. Docs, YAML,
+	// scripts and friends generated package entries like "docs/design"
+	// that then warned UNVERIFIED and suggested `go test` on directories
+	// no go test can ever cover, burning the warning budget.
+	if filepath.Ext(path) != ".go" {
 		return ""
 	}
 	dir := path
