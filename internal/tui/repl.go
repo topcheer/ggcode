@@ -853,7 +853,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		Tools:               tools,
 		AgentFactory:        factory,
 		WorkingDir:          r.model.agent.WorkingDir(),
-		OnUsage:             func(usage provider.TokenUsage) { r.recordSessionUsage(usage, "subagent") },
+		OnUsage:             func(usage provider.TokenUsage) { r.recordDelegatedUsage(usage) },
 		OnMetric:            r.metricCollector.Emit,
 		SystemPromptBuilder: r.systemPromptBuilder,
 	}
@@ -910,7 +910,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		Tools:               tools,
 		AgentFactory:        factory,
 		WorkingDir:          r.model.agent.WorkingDir(),
-		OnUsage:             func(usage provider.TokenUsage) { r.recordSessionUsage(usage, "subagent") },
+		OnUsage:             func(usage provider.TokenUsage) { r.recordDelegatedUsage(usage) },
 		SystemPromptBuilder: r.systemPromptBuilder,
 	})
 
