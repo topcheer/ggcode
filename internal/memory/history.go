@@ -131,8 +131,21 @@ func (am *AutoMemory) ReadMemoryAsOf(key string, asOf time.Time) (content string
 	// historyVersions never lists it as a content version.)
 	tombPath := filepath.Join(am.dir, historyDirName, safe+".tombstone")
 	if tInfo, tErr := os.Stat(tombPath); tErr == nil && !tInfo.ModTime().After(asOf) {
-		debug.Log("memory", "as_of %s is at/after the deletion of %q", asOf.Format(time.RFC3339), key)
-		return "", time.Time{}, false, nil
+		// #3924: the tombstone stays on disk across a recreate (a later
+		// DeleteMemory overwrites it with a newer deletion instant), but a
+		// live file whose mtime <= asOf means the key was RECREATED at or
+		// before this instant - the key is alive again from the recreate,
+		// so fall through to version selection (the live file carries the
+		// newest interval start and wins). Only a missing live file, or one
+		// recreated strictly after asOf, keeps the not-found verdict.
+		revived := false
+		if info, statErr := os.Stat(path); statErr == nil && !info.ModTime().After(asOf) {
+			revived = true
+		}
+		if !revived {
+			debug.Log("memory", "as_of %s is at/after the deletion of %q", asOf.Format(time.RFC3339), key)
+			return "", time.Time{}, false, nil
+		}
 	}
 	if len(versions) == 0 {
 		return "", time.Time{}, false, nil
