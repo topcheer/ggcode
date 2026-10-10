@@ -238,6 +238,12 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		return err
 	}
 
+	// Agent-defined parametrized tools (r13): macro step DSL + params
+	// schema, called as first-class parameterized tools.
+	if err := registry.Register(&DefineTool{WorkingDir: workingDir, Registry: registry}); err != nil {
+		return err
+	}
+
 	return nil
 }
 
