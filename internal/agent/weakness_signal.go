@@ -117,6 +117,13 @@ type runSignal struct {
 // test (subtests carry a slash - kept verbatim, they are distinct tests).
 var testFailLineRE = regexp.MustCompile(`^--- FAIL: (\S+)`)
 
+// testPkgFailRE matches `go test` per-package failure summary lines
+// (`FAIL	pkg/path	0.42s`). #3781: the package path is the only reliable
+// package context for the `--- FAIL` lines that preceded it in the same
+// package block, so fingerprints become pkg-qualified and same-named tests
+// in different packages no longer collide into one count.
+var testPkgFailRE = regexp.MustCompile("^FAIL\t(\\S+)")
+
 // testFailCollector accumulates per-run go-test failure counts keyed by
 // test name (r17: test signals drive evolution, arXiv 2608.03392 signals
 // dimension - test failures are the strongest code-specific failure
@@ -133,19 +140,57 @@ func newTestFailCollector() *testFailCollector {
 // record parses run_command output for go-test failure lines. Called for
 // every run_command result regardless of IsError: agents often suffix
 // `|| true` and the tool then reports success while tests failed.
-func (c *testFailCollector) record(output string) {
-	if !strings.Contains(output, "--- FAIL:") {
-		return // fast path: most commands are not test runs
+func (c *testFailCollector) record(cmd, output string) {
+	// #3781 fix 2: only go-test runs count. A bare tool-name filter let
+	// `cat`ing a log or `grep`ing a build artifact feed fake failure lines
+	// into the weakness store. The command string (which wrapped/piped
+	// invocations still carry verbatim) must mention go test.
+	if !strings.Contains(cmd, "go test") {
+		return // cat/grep over stale logs never counts (#3781)
 	}
+	if !strings.Contains(output, "--- FAIL:") {
+		return // fast path: package-level failures without -v carry no test names
+	}
+	// #3781 fix 1: resolve package context for each `--- FAIL` line. go test
+	// emits a package block (test lines) followed by its `FAIL\tpkg`
+	// summary, so pending failures attach to the next package summary line.
+	// No package info (e.g. -run output stripped through a pipe) falls back
+	// to the bare test name - the pre-#3781 key, a degraded fingerprint.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var pending []string
 	seen := map[string]bool{}
+	flush := func(pkg string) {
+		for _, name := range pending {
+			key := name
+			if pkg != "" {
+				key = pkg + "." + name
+			}
+			c.counts[key]++
+		}
+		pending = nil
+		// A new package block starts: the same test name may legitimately
+		// fail in it too (#3781 cross-package collision).
+		seen = map[string]bool{}
+	}
 	for _, line := range strings.Split(output, "\n") {
-		m := testFailLineRE.FindStringSubmatch(strings.TrimSpace(line))
-		if m == nil || seen[m[1]] {
+		line = strings.TrimSpace(line)
+		if m := testPkgFailRE.FindStringSubmatch(line); m != nil {
+			flush(m[1])
+			continue
+		}
+		m := testFailLineRE.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		key := m[1]
+		if seen[key] {
 			continue // one sighting per test per output (dedup reruns inside)
 		}
-		seen[m[1]] = true
-		c.counts[m[1]]++
+		seen[key] = true
+		pending = append(pending, m[1])
 	}
+	flush("") // trailing failures with no package summary: degraded fallback
 }
 
 // snapshot returns the per-test counts for run-end signal collection.
@@ -262,15 +307,18 @@ func (a *Agent) routeWeaknessSignals() {
 	if !changed {
 		return
 	}
+	// #3781 fix 3: reset the per-run collector BEFORE persisting. Collection
+	// and persistence are decoupled: a failed save (read-only dir, disk full)
+	// must not leave the run's counts in place to be double-counted next run.
+	if a.testFails != nil {
+		a.testFails.reset()
+	}
 	evictWeaknessStore(store, weaknessMaxEntries)
 	if err := saveWeaknessStore(filepath.Join(wd, ".ggcode", weaknessStoreFile), store); err != nil {
 		debug.Log("weakness", "store save failed: %v", err)
 		return
 	}
 	routeMatureSignals(wd, store)
-	if a.testFails != nil {
-		a.testFails.reset()
-	}
 }
 
 // routeMatureSignals writes one line per mature-and-unrouted signal into

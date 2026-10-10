@@ -173,7 +173,7 @@ func TestTestFailSightingClassification(t *testing.T) {
 	out := "--- PASS: TestOther (0.00s)\n--- FAIL: TestWidget (0.01s)\nFAIL\n"
 	a, dir := weaknessTestAgent(t)
 	a.testFails = newTestFailCollector()
-	a.testFails.record(out) // single sighting
+	a.testFails.record("go test ./...", out) // single sighting
 	a.routeWeaknessSignals()
 	store := loadWeaknessStore(weaknessStorePath(dir))
 	if rec := store["test-fail:TestWidget"]; rec.Count != 1 || rec.Class != WeakRare {
@@ -184,8 +184,8 @@ func TestTestFailSightingClassification(t *testing.T) {
 		t.Fatalf("collector not reset after route: %d entries", n)
 	}
 	// Rerun in one run: same test fails again -> WeakForgetting + enforce line.
-	a.testFails.record(out)
-	a.testFails.record(out)
+	a.testFails.record("go test ./...", out)
+	a.testFails.record("go test ./...", out)
 	a.routeWeaknessSignals()
 	store = loadWeaknessStore(weaknessStorePath(dir))
 	rec := store["test-fail:TestWidget"]
