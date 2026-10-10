@@ -283,9 +283,10 @@ type Model struct {
 	autoCompleteItems   []string
 	autoCompleteIndex   int
 	autoCompleteActive  bool
-	autoCompleteKind    string // "slash" or "mention"
-	autoCompleteWorkDir string // working directory for mention completion
-	inputHint           string // placeholder hint shown after cursor (e.g. "<subcommand>")
+	autoCompleteKind    string    // "slash" or "mention"
+	autoCompleteWorkDir string    // working directory for mention completion
+	inputHint           string    // placeholder hint shown after cursor (e.g. "<subcommand>")
+	hintsShownAt        time.Time // TUI creation time; static composer hints auto-hide 5min after this
 	startedAt           time.Time
 	inputDrainUntil     time.Time // suppress all KeyPressMsg until this time (after setProgramMsg)
 	inputReady          bool      // true after setProgramMsg + drain completes; before that, all KeyPress is discarded
@@ -587,6 +588,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		viewport:               NewViewportModel(80, 20),
 		mode:                   policyMode(policy),
 		startedAt:              time.Time{}, // set on first WindowSizeMsg
+		hintsShownAt:           time.Now(),  // composer onboarding hints auto-hide 5min after startup
 		sidebarVisible:         false,
 		activeMCPTools:         make(map[string]ToolStatusMsg),
 		clipboardLoader:        loadClipboardImage,
