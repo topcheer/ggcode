@@ -1314,14 +1314,17 @@ func (c *stdioClient) write(msg rpcEnvelope) error {
 	defer c.writeMu.Unlock()
 	type writeResult struct{ err error }
 	done := make(chan writeResult, 1)
-	go func() {
+	// safego.Go per the goroutine-protection gate: this goroutine may
+	// legitimately outlive the timeout path (it unblocks only when the
+	// pipe is closed and Write fails with EPIPE) - see #3746 comment below.
+	safego.Go("lsp.writeTimeout", func() {
 		if _, err := fmt.Fprintf(c.stdin, "Content-Length: %d\r\n\r\n", len(body)); err != nil {
 			done <- writeResult{err}
 			return
 		}
 		_, err := c.stdin.Write(body)
 		done <- writeResult{err}
-	}()
+	})
 	select {
 	case r := <-done:
 		return r.err
