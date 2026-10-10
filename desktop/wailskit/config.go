@@ -101,10 +101,28 @@ func syncCfgFileLocked() {
 	if globalCfg == nil {
 		return
 	}
-	if fresh, lerr := config.Load(path); lerr == nil && fresh != nil {
+	// #3769: keep the MERGED view. Startup initializes via LoadWithInstance;
+	// reloading with plain Load here replaced the merged config with the raw
+	// global file, silently dropping instance-scoped overrides (vendor /
+	// language / defaultMode), and the lost HasInstanceConfigAttached() also
+	// broke the instance-writeback on subsequent saves - self-reinforcing
+	// until restart. Reload through the same merge path when an instance
+	// workspace is attached.
+	fresh, lerr := loadCfgMergedWithInstance(path, globalCfg)
+	if lerr == nil && fresh != nil {
 		globalCfg = fresh
-		debug.Log("desktop", "config file changed externally; global config refreshed (#1847)")
+		debug.Log("desktop", "config file changed externally; global config refreshed (#1847, merged view #3769)")
 	}
+}
+
+// loadCfgMergedWithInstance mirrors startup initialization: LoadWithInstance
+// when the runtime config has an instance workspace attached, plain Load
+// otherwise (#3769).
+func loadCfgMergedWithInstance(path string, runtime *config.Config) (*config.Config, error) {
+	if runtime != nil && runtime.HasInstanceConfigAttached() {
+		return config.LoadWithInstance(path, runtime.InstanceWorkspace())
+	}
+	return config.Load(path)
 }
 
 // noteConfigFileSaved records the mtime right after OUR OWN save, so the
@@ -532,6 +550,10 @@ func saveWithInstanceWriteback(cfg *config.Config, vendor string) error {
 	if err := cfg.Save(); err != nil {
 		return err
 	}
+	// #3769: our own write advances the mtime; without recording it the 2s
+	// poller treated the save as an external change and reloaded the
+	// UNMERGED global file over the runtime view.
+	noteConfigFileSaved()
 	if !cfg.HasInstanceConfigAttached() {
 		return nil
 	}
@@ -1209,6 +1231,9 @@ func GetEndpointDetails(vendor, endpoint string) *EndpointDetails {
 // directory no one parses — the edit was lost on restart (#532). Fall back to
 // the global Save(), the same no-instance path saveWithInstanceWriteback uses.
 func persistLimitChange(cfg *config.Config) error {
+	// #3769: record our own write so the poller does not fire a reload on
+	// it (same rationale as saveWithInstanceWriteback).
+	defer noteConfigFileSaved()
 	if cfg.HasInstanceConfigAttached() {
 		return cfg.SaveInstanceScoped(cfg.InstanceWorkspace())
 	}
