@@ -316,8 +316,19 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	// workflow ordering is the coarser contract).
 	if wf := a.workflowEngineLazy(); wf != nil {
 		if wv := wf.checkPreconditions(tc.Name, tc.Arguments); wv != nil {
-			msg := fmt.Sprintf("[workflow:%s %s] %q is guarded by step %q which requires step %q first, and no artifact matching %q was produced this run. Complete the prerequisite (or fix the workflow spec) before running this command.",
-				wv.Step.ID, strings.ToUpper(wv.Step.Mode), wv.Command, wv.Step.ID, wv.Missing, wv.WantGlob)
+			// #3860 B: a block step with no ArtifactGlob renders
+			// `no artifact matching ""` - pointing at an artifact contract that
+			// does not exist. Commands-only prerequisites speak in "command was
+			// never executed" terms instead, matching wfAttemptAttribution's
+			// last==nil semantics.
+			var msg string
+			if wv.WantGlob == "" {
+				msg = fmt.Sprintf("[workflow:%s %s] %q is guarded by step %q which requires step %q first, and the guarded command for that prerequisite was not executed this run. Complete the prerequisite (or fix the workflow spec) before running this command.",
+					wv.Step.ID, strings.ToUpper(wv.Step.Mode), wv.Command, wv.Step.ID, wv.Missing)
+			} else {
+				msg = fmt.Sprintf("[workflow:%s %s] %q is guarded by step %q which requires step %q first, and no artifact matching %q was produced this run. Complete the prerequisite (or fix the workflow spec) before running this command.",
+					wv.Step.ID, strings.ToUpper(wv.Step.Mode), wv.Command, wv.Step.ID, wv.Missing, wv.WantGlob)
+			}
 			msg += wfAttemptAttribution(wv)
 			if wv.Step.Message != "" {
 				msg += " Note: " + wv.Step.Message
