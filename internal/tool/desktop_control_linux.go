@@ -53,7 +53,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	switch p.Action {
 	// ── Mouse ──
 	case "click":
-		// Move to coordinates first, then click — matching macOS behavior.
+		// Move to coordinates first, then click - matching macOS behavior.
 		// #1665: honor p.Button (xdotool button codes: 1=left 2=middle 3=right).
 		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", x11ButtonCode(p.Button))
 	case "double_click":
@@ -80,11 +80,13 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "move":
 		return xdotoolResult(ctx, "mousemove", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y))
 	case "drag":
-		// Move to start position, mouse down, move to target, mouse up
-		_, _ = exec.CommandContext(ctx, "xdotool", "mousemove", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y)).Output()
-		_, _ = exec.CommandContext(ctx, "xdotool", "mousedown", "1").Output()
-		_, _ = exec.CommandContext(ctx, "xdotool", "mousemove", fmt.Sprintf("%d", p.ToX), fmt.Sprintf("%d", p.ToY)).Output()
-		return xdotoolResult(ctx, "mouseup", "1")
+		// Chain the full gesture in ONE xdotool invocation with --sync so a
+		// mid-sequence failure surfaces - the old form dropped the first three
+		// steps' errors and only mouseup's exit status was visible, reporting
+		// OK for a drag that never happened - and each move is consumed by the
+		// server before the next event fires (#3881). Same shape as
+		// modifier_click (#216).
+		return xdotoolResult(ctx, x11DragArgs(p.X, p.Y, p.ToX, p.ToY)...)
 	case "scroll":
 		btn := "4" // up
 		if p.Direction == "down" {
@@ -99,7 +101,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		if err != nil {
 			return Result{}, err
 		}
-		// xdotool click takes no modifier syntax (atoi(argv[0]) only —
+		// xdotool click takes no modifier syntax (atoi(argv[0]) only -
 		// "ctrl+1" parses as button 0). Chain keydown/click/keyup in a
 		// single xdotool invocation instead (#216). fn has no X mapping;
 		// error explicitly like the Wayland path does.
@@ -149,7 +151,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return xdotoolResult(ctx, "search", "--onlyvisible", "--name", ".")
 	case "focus_window", "close_window", "minimize_window":
 		// Guard: an empty pattern matches ALL windows and %@ applies the action
-		// to every search hit — close_window would close the entire desktop.
+		// to every search hit - close_window would close the entire desktop.
 		// Erroring is safer than an active-window fallback for destructive ops (#349).
 		if strings.TrimSpace(p.Text) == "" {
 			return Result{}, fmt.Errorf("%s requires 'text' (window title); refusing to run: empty pattern matches ALL windows", p.Action)
@@ -199,7 +201,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return xdotoolResult(ctx, "getactivewindow", "getwindowname")
 
 	// UI-tree actions use AT-SPI (the Linux desktop accessibility API) via
-	// python3-gi — works on both X11 and Wayland. display_info has no
+	// python3-gi - works on both X11 and Wayland. display_info has no
 	// xdotool equivalent; menu_select needs a menu-bar accessibility walk
 	// (deferred).
 	case "snapshot_ui":
@@ -348,11 +350,12 @@ func atspiLocate(ctx context.Context, p desktopParams) (Result, error) {
 			// Click via the session's own backend: X11 xdotool, Wayland ydotool.
 			var clickErr error
 			if isWaylandSession() {
-				cmds := [][]string{ydoMoveArgs(cx, cy), {"ydotool", "click", "0xC0"}}
+				// #3881: honor p.Button instead of hardcoding BTN_LEFT.
+				cmds := append([][]string{ydoMoveArgs(cx, cy)}, ydoClickArgs(p.Button, 1)...)
 				clickErr = runArgvSeq(ctx, cmds)
 			} else {
 				_, clickErr = exec.CommandContext(ctx, "xdotool", "mousemove", "--sync",
-					fmt.Sprintf("%d", cx), fmt.Sprintf("%d", cy), "click", "1").Output()
+					fmt.Sprintf("%d", cx), fmt.Sprintf("%d", cy), "click", x11ButtonCode(p.Button)).Output()
 			}
 			if clickErr != nil {
 				return Result{}, fmt.Errorf("found element at (%d,%d) but click failed: %w", cx, cy, clickErr)
@@ -381,7 +384,7 @@ func retrySuffix(action string) string {
 // Wayland sessions. Mouse move/click/drag, typing, and key combos work;
 // scroll has no ydotool equivalent (REL_WHEEL is not a BTN event, so the
 // click subcommand cannot send it) and window management has no protocol
-// for external clients — both report clear messages instead of failing
+// for external clients - both report clear messages instead of failing
 // cryptically.
 // ydoModifierClick holds normalized modifiers while clicking via ydotool.
 func ydoModifierClick(ctx context.Context, x, y int, modifierSpec string) (Result, error) {
@@ -480,7 +483,7 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 			return Result{}, fmt.Errorf("hold_key requires 'text' (key or combo)")
 		}
 		// Build press list from modifier tokens; sleeps go between press and
-		// release. Non-modifier keys have no evdev mapping here — rejected
+		// release. Non-modifier keys have no evdev mapping here - rejected
 		// explicitly (see ydoModifierKeyArgs).
 		var pressCmds [][]string
 		var releaseCmds [][]string
@@ -500,7 +503,7 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 			return Result{}, fmt.Errorf("hold_key requires at least one key")
 		}
 		all := append([][]string{}, pressCmds...)
-		// coreutils sleep accepts fractional seconds — integer division
+		// coreutils sleep accepts fractional seconds - integer division
 		// turned 500ms into an instant tap (#192).
 		all = append(all, []string{"sleep", fmt.Sprintf("%.3f", float64(duration)/1000)})
 		all = append(all, releaseCmds...)
@@ -536,7 +539,7 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 		return Result{}, fmt.Errorf("desktop_control: action %q is not yet supported on Wayland (only modifier-based actions are wired to ydotool); run the target under XWayland for X11 key injection", p.Action)
 
 	default:
-		// App launching is display-server independent — delegate to the
+		// App launching is display-server independent - delegate to the
 		// shared path below.
 		break
 	}
@@ -573,6 +576,21 @@ func x11ButtonCode(button string) string {
 		return "2"
 	default:
 		return "1"
+	}
+}
+
+// x11DragArgs chains the full drag gesture in one xdotool invocation. Both
+// moves use --sync so (a) any step's failure is visible in the single exit
+// status - the pre-#3881 form swallowed the first three steps' errors and
+// reported OK when only the final mouseup succeeded - and (b) each pointer
+// move is consumed before the next event is injected, avoiding a release
+// landing at a midpoint coordinate (#3881).
+func x11DragArgs(x, y, toX, toY int) []string {
+	return []string{
+		"mousemove", "--sync", fmt.Sprintf("%d", x), fmt.Sprintf("%d", y),
+		"mousedown", "1",
+		"mousemove", "--sync", fmt.Sprintf("%d", toX), fmt.Sprintf("%d", toY),
+		"mouseup", "1",
 	}
 }
 
