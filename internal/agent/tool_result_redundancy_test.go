@@ -1,11 +1,84 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
 	"testing"
 )
+
+// TestToolResultRedundancy_VerifyRerunExempt (#3698): re-running build/test
+// commands in a fix loop is verification work — near-identical output is the
+// decision signal, not redundancy. The "use existing context" nudge must not
+// fire for it, while non-verify overlap detection keeps working.
+func TestToolResultRedundancy_VerifyRerunExempt(t *testing.T) {
+	verifyOut := func(residualErrs int) string {
+		var b strings.Builder
+		b.WriteString("=== RUN TestFixLoop\n")
+		for i := 0; i < residualErrs; i++ {
+			fmt.Fprintf(&b, "--- FAIL: TestFixLoop case %d: assertion mismatch\n", i)
+			fmt.Fprintf(&b, "    expected value 42, got 41\n")
+		}
+		b.WriteString("FAIL\n")
+		b.WriteString("exit status 1\n")
+		return b.String()
+	}
+	goTestArgs := json.RawMessage(`{"command":"go test ./internal/agent/"}`)
+
+	s := newToolResultRedundancyState()
+	// iter 1: first run — no prior entry, no warning.
+	if msg := s.recordToolCall("run_command", goTestArgs, verifyOut(15), 1); msg != "" {
+		t.Fatalf("first verify run should not warn, got: %s", msg)
+	}
+	// iter 3: rerun after fixing 1 of 15 errors — output 99% identical, but
+	// the rerun is legitimate verification and must be exempt (#3698).
+	if msg := s.recordToolCall("run_command", goTestArgs, verifyOut(14), 3); msg != "" {
+		t.Fatalf("verify rerun must be exempt from redundancy warning, got: %s", msg)
+	}
+	// iter 5: third rerun — still exempt (budget must not be consumed either).
+	if msg := s.recordToolCall("run_command", goTestArgs, verifyOut(13), 5); msg != "" {
+		t.Fatalf("repeated verify reruns must stay exempt, got: %s", msg)
+	}
+
+	// Control: the same overlap pattern via a non-verify path still warns —
+	// the exemption must not blunt the detector for genuine redundancy.
+	c := newToolResultRedundancyState()
+	if msg := c.recordToolCall("read_file", json.RawMessage(`{"path":"/a/b.go"}`), verifyOut(15), 1); msg != "" {
+		t.Fatalf("first read should not warn, got: %s", msg)
+	}
+	if msg := c.recordToolCall("read_file", json.RawMessage(`{"path":"/a/b.go"}`), verifyOut(14), 3); msg == "" {
+		t.Fatal("non-verify overlapping results should still warn")
+	}
+}
+
+// TestToolResultRedundancy_VerifyRerunExemptCommandForms: the exemption keys
+// off isVerifyCommand — env-prefixed and compound verify commands are covered.
+func TestToolResultRedundancy_VerifyRerunExemptCommandForms(t *testing.T) {
+	out := "building module...\nrunning tests...\nall packages compiled\n4 tests run\n1 failed\n"
+	for name, args := range map[string]json.RawMessage{
+		"plain":     json.RawMessage(`{"command":"make test"}`),
+		"envPrefix": json.RawMessage(`{"command":"GOFLAGS=-p=1 make verify-ci"}`),
+		"compound":  json.RawMessage(`{"command":"cd /app && go build ./... && go test ./..."}`),
+	} {
+		s := newToolResultRedundancyState()
+		if msg := s.recordToolCall("run_command", args, out, 1); msg != "" {
+			t.Fatalf("%s: first run should not warn, got: %s", name, msg)
+		}
+		if msg := s.recordToolCall("run_command", args, out, 3); msg != "" {
+			t.Fatalf("%s: verify rerun should be exempt, got: %s", name, msg)
+		}
+	}
+	// Non-verify run_command output overlap is still detected.
+	s := newToolResultRedundancyState()
+	args := json.RawMessage(`{"command":"echo deployment step one && echo deployment step two"}`)
+	if msg := s.recordToolCall("run_command", args, out, 1); msg != "" {
+		t.Fatalf("first run should not warn, got: %s", msg)
+	}
+	if msg := s.recordToolCall("run_command", args, out, 3); msg == "" {
+		t.Fatal("non-verify run_command overlap should still warn")
+	}
+}
 
 func TestToolResultRedundancy_BasicOverlap(t *testing.T) {
 	s := newToolResultRedundancyState()

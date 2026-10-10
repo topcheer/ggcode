@@ -1852,7 +1852,12 @@ func (k *Knight) stageSkillRevision(ctx context.Context, skill *SkillEntry, task
 	staging, err := k.index.StagingSkills()
 	if err == nil {
 		for _, candidate := range staging {
-			if candidate.Name == skill.Name {
+			// #3691: same-name skills in different scopes are a legal layout
+			// (skill_validator.go CheckDuplicate). Dedup must match scope+name,
+			// otherwise a project:foo staging entry silently suppresses every
+			// global:foo revision (infinite silent-drop loop per tick).
+			if candidate.Name == skill.Name && candidate.Scope == skill.Scope {
+				debug.Log("knight", "staging entry for %s:%s already pending review, skip", skill.Scope, skill.Name)
 				return
 			}
 		}
