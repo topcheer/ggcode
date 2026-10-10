@@ -101,6 +101,11 @@ func (m *Model) handleRewindCommand(parts []string) tea.Cmd {
 	rewound.CostJSON = append([]byte(nil), oldSes.CostJSON...)
 	rewound.PermissionMode = oldSes.PermissionMode
 	rewound.TasksJSON = append([]byte(nil), oldSes.TasksJSON...)
+	// #3792: the workspace fingerprint is snapshot alongside the board
+	// (snapshotTasksInto writes BOTH). Without it the fork session resumes
+	// with an EMPTY fingerprint, decodeEnvFingerprint fail-opens, and the
+	// resume reconciliation note silently never fires on workspace drift.
+	rewound.TasksEnvJSON = append([]byte(nil), oldSes.TasksEnvJSON...)
 	if oldSes.SidebarVisible != nil {
 		val := *oldSes.SidebarVisible
 		rewound.SidebarVisible = &val
