@@ -72,6 +72,15 @@ func detectLintCommand(workingDir string) string {
 
 	// 2. Language-specific defaults.
 	if fileExists(filepath.Join(workingDir, "go.mod")) {
+		// #3752: carry the detected build tags into go vet. Without them,
+		// tag-gated code fails to compile under vet and those COMPILE errors
+		// were extracted as lint warnings, sending the agent chasing phantom
+		// lint issues right after a green build. detectGoBuildTags reads the
+		// Makefile's -tags flag (with variable expansion); projects without
+		// a Makefile have no known tags and keep the plain command.
+		if tags := detectGoBuildTags(workingDir); len(tags) > 0 {
+			return "go vet -tags " + strings.Join(tags, ",") + " ./..."
+		}
 		return "go vet ./..."
 	}
 	if fileExists(filepath.Join(workingDir, "Cargo.toml")) {
@@ -182,6 +191,7 @@ func extractLintWarnings(output string) []string {
 			strings.HasPrefix(lower, "ok") ||
 			strings.HasPrefix(lower, "pass") ||
 			strings.HasPrefix(lower, "compiling") ||
+			isCompileErrorMessage(lower) ||
 			!looksLikeLintWarning(lower, trimmed) {
 			continue
 		}
@@ -192,6 +202,34 @@ func extractLintWarnings(output string) []string {
 	}
 
 	return warnings
+}
+
+// isCompileErrorMessage reports whether a `file:line: message` line is a
+// COMPILER error rather than a lint finding. When go vet runs without the
+// project's build tags (#3752), every tag-gated file fails to compile and
+// lines like `foo.go:381: undefined: x` were misclassified as lint
+// warnings and injected as "fix these lint issues" - an environment
+// problem the agent cannot fix by editing style. Compile errors surface
+// properly through the build/verify steps; the lint pass must stay silent
+// about them. Markers are kept deliberately narrow: broad fragments like
+// "type " or "unexpected " would also match real vet findings.
+func isCompileErrorMessage(lower string) bool {
+	for _, marker := range []string{
+		"undefined:",            // unresolved symbol (tag-gated code)
+		"build failed",          // vet build phase failure banner
+		"cannot find package",   // missing import path
+		"undeclared name",       // go/types phrasing variant
+		"missing return",        // compile-time control-flow error
+		"imported and not used", // compile-time unused import
+		"declared and not used", // compile-time unused variable
+		"expected declaration",  // syntax-class error
+		"syntax error",          // parser failure
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // looksLikeLintWarning heuristically determines if a line is a lint warning.
