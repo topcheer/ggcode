@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
 )
@@ -88,10 +89,29 @@ func (e *workflowEngine) recordAttempt(toolName string, args json.RawMessage, re
 				continue
 			}
 			hits = append(hits, id)
+			if res.IsError {
+				continue // failed attempts ground nothing
+			}
 			// Artifact grounding reuses the #3414 safety-net probe (walk is
 			// done under RLock, same precedent as checkPreconditions -> groundIfFresh).
-			if st.ArtifactGlob != "" && !res.IsError {
+			if st.ArtifactGlob != "" {
 				grounded[id] = e.groundIfFresh(id)
+				continue
+			}
+			// #3835: commands-only step (on_commands, no artifact_glob) has no
+			// artifact to probe and every artifact completion path
+			// (recordCompletion, probeArtifactsOnDisk, groundIfFresh) bails on
+			// the empty glob, so such a step could never enter completed and
+			// any step listing it in Requires deadlocked block mode on an
+			// unsatisfiable spec. For a commands-only step the successful
+			// guarded command IS the product - ground it here, inside the same
+			// multi-step attribution walk (#3780 C), instead of a separate
+			// wiring point, so hybrid steps keep artifact precedence via
+			// groundIfFresh and the attribution/grounding semantics stay in
+			// one place.
+			if _, done := e.completed.Load(id); !done {
+				e.completed.Store(id, struct{}{})
+				debug.Log("agent", "[workflow-spec] step %s complete (guarded command succeeded: %q)", id, command)
 			}
 		}
 	}
