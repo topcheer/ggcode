@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -240,6 +241,15 @@ func parseInstallOptions(args []string) ([]string, installOptions, error) {
 	var opts installOptions
 	for i := 0; i < len(args); i++ {
 		token := strings.TrimSpace(args[i])
+		// #3765: installer flags after the server NAME may belong to the
+		// COMMAND the user is wrapping (`docker run --env FOO=bar myimage`
+		// without `--`). The greedy parse must keep supporting the canonical
+		// interleaved shapes (name ... flags ... URL ... flags), so we cannot
+		// simply stop at the first positional - but swallowing silently rewrote
+		// BOTH semantics with zero signal. Keep the parse, WARN loudly whenever
+		// a token is consumed as an installer flag while the command region has
+		// already started, telling the user to quote the command with `--`.
+		warnFlagSwallowedInCommandRegion(token, len(positionals) > 1)
 		switch token {
 		case "--env":
 			if i+1 >= len(args) {
@@ -286,6 +296,24 @@ func parseInstallOptions(args []string) ([]string, installOptions, error) {
 		}
 	}
 	return positionals, opts, nil
+}
+
+// warnFlagSwallowedInCommandRegion fires when an installer flag token is
+// consumed while the command region has already started (more than one
+// positional seen). Such a token may be the WRAPPED COMMAND's own flag -
+// the user should quote the command with `--` (#3765). Returns whether a
+// warning was emitted (pure function of the inputs; kept as a func so
+// probes can pin the trigger condition).
+func warnFlagSwallowedInCommandRegion(token string, inCommandRegion bool) bool {
+	if !inCommandRegion {
+		return false
+	}
+	switch token {
+	case "--env", "--header", "-t", "--transport":
+		debug.Log("mcp", "#3765 WARNING: %s after the command tokens was parsed as an INSTALLER flag; if it belongs to the wrapped command, re-run with `--` before the command: `gg mcp install <name> [installer-flags] -- <command...>`", token)
+		return true
+	}
+	return false
 }
 
 func parseInstallMapValue(raw, flag string) (string, string, error) {
@@ -405,6 +433,13 @@ func inferURLServerName(raw string) string {
 	host := parsed.Hostname()
 	if host == "" {
 		return ""
+	}
+	// #3765-B: an IP host must not be truncated to its first octet -
+	// 192.168.1.5 and 192.168.1.6 both inferred "192" and silently
+	// overwrote each other's config (Name is the yaml key). Use the full
+	// IP (colons omitted by Hostname) as the inferred name.
+	if net.ParseIP(host) != nil {
+		return host
 	}
 	parts := strings.Split(host, ".")
 	if len(parts) > 0 {
