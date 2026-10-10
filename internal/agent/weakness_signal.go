@@ -45,6 +45,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/memory"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // WeaknessClass is the CoEvolve signal taxonomy.
@@ -353,6 +354,16 @@ func (a *Agent) routeWeaknessSignals() {
 // fingerprint prefix so re-routing after a manual memory edit still cannot
 // duplicate a line.
 func routeMatureSignals(workingDir string, store weaknessSignalStore) {
+	// #3837 B: the store is shared across processes (TUI + desktop in one
+	// workspace is common); an unlocked load-modify-save loses one side's
+	// Count increments to last-writer-wins. Hold the same flock the memory
+	// package uses (memory/auto.go #1752/#775) across the whole mutation.
+	unlock, lockErr := util.FileLock(filepath.Join(workingDir, ".ggcode", weaknessStoreFile) + ".lock")
+	if lockErr != nil {
+		debug.Log("weakness", "store lock unavailable, proceeding unlocked: %v", lockErr)
+	} else {
+		defer unlock()
+	}
 	auto := memory.NewProjectAutoMemory(workingDir)
 	if auto == nil {
 		return
@@ -381,10 +392,20 @@ func routeMatureSignals(workingDir string, store weaknessSignalStore) {
 		return
 	}
 	for _, l := range lines {
-		if strings.Contains(existing, l) {
-			continue
+		// #3837 A: dedupe by FINGERPRINT PREFIX, not the whole line - the
+		// routed line embeds the live Count, so a later run with a different
+		// Count (memory save failure, eviction+recurrence, manual edit) never
+		// re-matched the old line and rules accumulated. A newer count
+		// REPLACES the stale line instead of appending a duplicate.
+		fp := routedFingerprint(l)
+		if fp != "" {
+			existing = replaceRoutedLine(existing, fp, l)
+		} else {
+			if strings.Contains(existing, l) {
+				continue
+			}
+			existing = strings.TrimRight(existing, "\n") + "\n" + l
 		}
-		existing = strings.TrimRight(existing, "\n") + "\n" + l
 	}
 	if err := auto.SaveMemoryWithSource(weaknessMemoryKey, strings.TrimLeft(existing, "\n"), "weakness-router"); err != nil {
 		debug.Log("weakness", "memory save failed: %v", err)
@@ -393,6 +414,37 @@ func routeMatureSignals(workingDir string, store weaknessSignalStore) {
 	// Persist the Routed flags so the lines are not re-emitted next run.
 	_ = saveWeaknessStore(filepath.Join(workingDir, ".ggcode", weaknessStoreFile), store)
 	debug.Log("weakness", "routed %d mature signal(s) to project memory", len(lines))
+}
+
+// routedFingerprint extracts the fingerprint token from a routed line
+// ("enforce: <fp> (N runs) - ..." / "boundary: <fp> (N runs) - ...").
+// Empty when the line does not match the routed shapes.
+func routedFingerprint(line string) string {
+	rest, ok := strings.CutPrefix(line, "enforce: ")
+	if !ok {
+		rest, ok = strings.CutPrefix(line, "boundary: ")
+		if !ok {
+			return ""
+		}
+	}
+	if idx := strings.Index(rest, " ("); idx > 0 {
+		return rest[:idx]
+	}
+	return ""
+}
+
+// replaceRoutedLine swaps any existing routed line carrying the same
+// fingerprint for the new line (in place), or appends when none exists.
+func replaceRoutedLine(existing, fp, newLine string) string {
+	marker := " " + fp + " ("
+	lines := strings.Split(existing, "\n")
+	for i, ln := range lines {
+		if strings.Contains(ln, marker) && (strings.HasPrefix(ln, "enforce: ") || strings.HasPrefix(ln, "boundary: ")) {
+			lines[i] = newLine
+			return strings.Join(lines, "\n")
+		}
+	}
+	return strings.TrimRight(existing, "\n") + "\n" + newLine
 }
 
 // loadWeaknessStore reads the persistent store; missing or corrupt file
