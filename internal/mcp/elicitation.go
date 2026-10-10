@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 )
 
 // Elicitation support — MCP protocol 2025-06-18+.
@@ -36,7 +37,19 @@ type ElicitationFieldSchema struct {
 	// Optional constraints for string fields
 	Format string `json:"format,omitempty"` // e.g. "email", "uri", "date-time"
 	// Optional enum for constrained choices
-	Enum []string `json:"enum,omitempty"`
+	Enum []any `json:"enum,omitempty"`
+}
+
+// FormatEnumValue renders one enum entry for display/selection IDs. A
+// JSON Schema enum may legally mix strings, numbers and booleans
+// ({"type":"integer","enum":[1,2,3]}); the old []string field made such
+// requests fail at UNMARSHAL time with a raw Go type error, before any
+// validation or user prompt (#3764).
+func FormatEnumValue(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 // ElicitationSchema is the schema sent by the server to describe what input
@@ -119,7 +132,10 @@ func ValidateElicitationURL(raw string) error {
 		return nil
 	case "http":
 		host := u.Hostname()
-		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		// #3764-B: host is case-insensitive (RFC 3986 §6.2.2.1) -
+		// url.Parse normalizes the scheme but not the host, so
+		// http://LOCALHOST:3000/x was rejected as a non-local host.
+		if strings.EqualFold(host, "localhost") || host == "127.0.0.1" || host == "::1" {
 			return nil // local development servers
 		}
 		return fmt.Errorf("url must use https for non-local host %q", host)

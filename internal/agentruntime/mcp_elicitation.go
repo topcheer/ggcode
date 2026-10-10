@@ -109,7 +109,10 @@ func buildElicitationAskUser(id string, params mcp.ElicitationParams) toolpkg.As
 		if len(field.Enum) > 0 {
 			kind = toolpkg.AskUserKindSingle
 			for _, opt := range field.Enum {
-				choices = append(choices, toolpkg.AskUserChoice{ID: opt, Label: opt})
+				// #3764: enum entries may be numbers/booleans; format for
+				// display instead of assuming strings.
+				label := mcp.FormatEnumValue(opt)
+				choices = append(choices, toolpkg.AskUserChoice{ID: label, Label: label})
 			}
 			allowFreeform = false
 		} else if field.Type == "boolean" {
