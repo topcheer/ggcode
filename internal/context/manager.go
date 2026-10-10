@@ -1651,13 +1651,18 @@ func (m *Manager) RemoveLastAssistantGroup() string {
 	}
 	// Truncate: keep everything up to and including the last user message,
 	// discard the assistant response and any trailing tool messages.
+	// #3797: compute removed BEFORE the slice assignment - after it,
+	// len(m.messages) == lastUserIdx+1 and the old expression evaluated to
+	// a constant 1 (plus a meaningless +1 counting the KEPT user message),
+	// misreporting every regenerate in the debug log.
+	removed := len(m.messages) - lastUserIdx - 1
 	m.messages = m.messages[:lastUserIdx+1]
 	m.markBenignRemoval() // #663: retry/regenerate truncation — no semantic loss
 	m.version++
 	m.nonTailMutSeq++
 	m.recalcTokens()
 	debug.Log("ctx", "RemoveLastAssistantGroup: removed %d messages from index %d, remaining=%d tokens=%d",
-		len(m.messages)-lastUserIdx-1+1, lastAsstIdx, len(m.messages), m.tokenCountLocked())
+		removed, lastAsstIdx, len(m.messages), m.tokenCountLocked())
 	return userText
 }
 
