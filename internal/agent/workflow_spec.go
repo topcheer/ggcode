@@ -326,10 +326,38 @@ func (e *workflowEngine) groundIfFresh(id string) bool {
 // commandMatches reports whether cmd matches any OnCommands glob of the
 // step. Globs use the same semantics as invariant tool matching: a leading
 // or trailing "*" (prefix/suffix match); a bare "*" matches everything.
+//
+// #3860 A: the raw command string is preprocessed exactly like the
+// verify_hint gate family (#2122 compound split, #3751 env-assignment
+// strip) - same package helpers, no duplicated logic. Without this,
+// `cd pkg && go test ./...` and `GOFLAGS=-p=1 go test ./...` both bypassed
+// every guarded `go test*` pattern: no precondition check, no attempt
+// accounting, no grounding, while the step's verification silently never
+// ran. Each compound segment is matched independently, so the guarded verb
+// is seen wherever it appears in the pipeline.
+//
+// #3860 A (infix tightening): a `*x*` glob previously matched any string
+// merely CONTAINING x, so `echo push done` grounded a `*push*` step.
+// Infix globs now require the core to appear as an EXACT word of the
+// segment (`go test ./...` still matches `*test*`) and skip segments
+// whose verb only talks about work (echo/printf/true/false/:) instead
+// of doing it.
+// benignReportVerbs list commands that merely TALK about a thing instead
+// of doing it. An infix `*x*` glob must not let `echo push done` ground a
+// `*push*` step (#3860 A): the core appears as a word, but the verb makes
+// the segment a no-op statement.
+var benignReportVerbs = map[string]bool{
+	"echo": true, "printf": true, "true": true, "false": true, ":": true, "#": true,
+}
+
 func commandMatches(patterns []string, cmd string) bool {
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
 		return false
+	}
+	segments := splitCompoundCommand(cmd)
+	if len(segments) == 0 {
+		segments = []string{cmd}
 	}
 	for _, p := range patterns {
 		p = strings.TrimSpace(p)
@@ -339,22 +367,39 @@ func commandMatches(patterns []string, cmd string) bool {
 		if p == "*" {
 			return true
 		}
-		switch {
-		case strings.HasPrefix(p, "*") && strings.HasSuffix(p, "*"):
-			if strings.Contains(cmd, strings.Trim(p, "*")) {
-				return true
+		for _, segRaw := range segments {
+			seg := strings.TrimSpace(stripEnvAssignments(segRaw))
+			if seg == "" {
+				continue
 			}
-		case strings.HasPrefix(p, "*"):
-			if strings.HasSuffix(cmd, strings.TrimPrefix(p, "*")) {
-				return true
-			}
-		case strings.HasSuffix(p, "*"):
-			if strings.HasPrefix(cmd, strings.TrimSuffix(p, "*")) {
-				return true
-			}
-		default:
-			if cmd == p {
-				return true
+			switch {
+			case strings.HasPrefix(p, "*") && strings.HasSuffix(p, "*"):
+				// #3860 A (infix tightening): was contains-anywhere, so
+				// `echo push done` completed a `*push*` step. Now the core
+				// must appear as an exact word of the segment AND the verb
+				// must not be a report-only builtin (`go test ./...` keeps
+				// matching `*test*`; `pushy-comment` no longer does).
+				if benignReportVerbs[strings.Fields(seg)[0]] {
+					continue
+				}
+				core := strings.Trim(p, "*")
+				for _, f := range strings.Fields(seg) {
+					if f == core {
+						return true
+					}
+				}
+			case strings.HasPrefix(p, "*"):
+				if strings.HasSuffix(seg, strings.TrimPrefix(p, "*")) {
+					return true
+				}
+			case strings.HasSuffix(p, "*"):
+				if strings.HasPrefix(seg, strings.TrimSuffix(p, "*")) {
+					return true
+				}
+			default:
+				if seg == p {
+					return true
+				}
 			}
 		}
 	}
