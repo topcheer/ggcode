@@ -143,7 +143,8 @@ func TestExpandURITemplate(t *testing.T) {
 		{"simple", "db://tables/{name}", map[string]string{"name": "users"}, "db://tables/users"},
 		{"pct-encoding", "db://rows/{id}", map[string]string{"id": "a b/c"}, "db://rows/a%20b%2Fc"},
 		{"reserved keeps separators", "file:///{+path}", map[string]string{"path": "a/b"}, "file:///a/b"},
-		{"multi-value comma join", "db://keys/{k}", map[string]string{"k": "a,b"}, "db://keys/a,b"},
+		{"scalar comma pct-encoded (RFC 6570 §3.2.1, #3809)", "db://keys/{k}", map[string]string{"k": "a,b"}, "db://keys/a%2Cb"},
+		{"reserved keeps literal comma (#3809)", "file:///{+path}", map[string]string{"path": "a,b.txt"}, "file:///a,b.txt"},
 		{"literal passthrough", "scheme://host/{v}/tail", map[string]string{"v": "x"}, "scheme://host/x/tail"},
 	}
 	for _, tc := range cases {
