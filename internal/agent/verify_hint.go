@@ -943,14 +943,21 @@ func (a *Agent) maybeResetVerifyOnCommand(toolName string, args json.RawMessage,
 	a.postEditVerify.buildOrTestRunThisRun = true
 	// #3045 B1: the final-turn evidence gate demands compile/test evidence;
 	// pure formatters (gofmt -l, prettier) exit 0 without proving anything.
+	// Deliberately kept for start_command launches too (#3796): spawn +
+	// read-back is a legitimate verification pattern, and excluding it made
+	// the final-turn gate accuse verified agents.
 	if isRealTestExecution(cmd) {
 		a.postEditVerify.realBuildOrTestRunThisRun = true
 	}
-	// #1841 case 3: only a REAL test/build execution may update the
-	// failure flag. `make help`, `task --list`, `gofmt -l` (all exit 0)
-	// used to unconditionally clear lastBuildFailed after a FAILED go
-	// test, so the "(which FAILED)" urgency hint could never appear.
-	if isRealTestExecution(cmd) {
+	// #3840: for start_command the resultErr is the LAUNCH outcome, not the
+	// test outcome - a successful launch proves nothing about the background
+	// run (read back via read_command_output, excluded at the top of this
+	// function). Writing the launch error into lastBuildFailed recorded a
+	// failed background test as success ('(which FAILED)' could never
+	// appear). Registration is not a result - the same semantics the
+	// premature-success side already applies to background jobs - so the
+	// failure flag may only be written by a COMPLETED execution.
+	if isRealTestExecution(cmd) && toolName == "run_command" {
 		a.postEditVerify.lastBuildFailed = resultErr
 	}
 
