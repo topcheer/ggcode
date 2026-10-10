@@ -84,6 +84,12 @@ type reproducerLifecycleState struct {
 	reranAfterEdit bool
 	// warned: whether we've already injected a warning this run.
 	warned bool
+	// intentSeenIter: latest iteration whose assistant text matched
+	// reproducerIntentRe (#3795-3). The command-establishment path requires
+	// intent in the same iteration so one-shot scripts (setup.py,
+	// version_sync.sh) without any reproduce wording no longer count as
+	// "establishing a reproducer". 0 = no intent seen yet.
+	intentSeenIter int
 }
 
 func newReproducerLifecycleState() *reproducerLifecycleState {
@@ -98,6 +104,7 @@ func (s *reproducerLifecycleState) reset() {
 	s.reproducerSnippet = ""
 	s.editedAfterReproducer = false
 	s.editIteration = 0
+	s.intentSeenIter = 0
 	s.reranAfterEdit = false
 	s.warned = false
 }
@@ -152,7 +159,10 @@ func reproducerRerunMatches(inp, snippet string) bool {
 		return false
 	}
 	if snippet == "" {
-		return reproducerCommandRe.MatchString(inp)
+		// #3795-2: text-established reproducers whose command shape is a
+		// test runner (`go test ./... -run TestX`, #2805's exact case) also
+		// land here; the script-only fallback could never discharge them.
+		return reproducerCommandRe.MatchString(inp) || reproducerTestRunnerRe.MatchString(inp)
 	}
 	return reproCommandTokenOverlap(inp, snippet)
 }
@@ -263,7 +273,16 @@ func (s *reproducerLifecycleState) observeToolCalls(iteration int, toolNames []s
 
 		// Phase 1: detect reproducer establishment.
 		if !s.hasReproducer {
-			if reproducerRunToolNames[tn] && reproducerCommandRe.MatchString(inp) {
+			// #3795-3: intent gate. The command shape alone classified ANY
+			// script execution - `python setup.py`, `bash scripts/version_sync.sh`
+			// (this repo's own release flow!) - as "established a reproducer",
+			// and any later source edit + no re-run of that one-shot script
+			// produced a systematic false "Re-run: bash scripts/version_sync.sh"
+			// warning. Require reproducer intent in the SAME iteration's text
+			// (observeText runs before observeToolCalls each iteration and
+			// stamps s.intentSeenIter) - mirroring the text path, which was
+			// already intent-gated by construction.
+			if reproducerRunToolNames[tn] && s.intentSeenIter == iteration && reproducerCommandRe.MatchString(inp) {
 				s.hasReproducer = true
 				s.reproducerIteration = iteration
 				s.reproducerSnippet = firstLine(inp)
@@ -301,6 +320,12 @@ func (s *reproducerLifecycleState) observeToolCalls(iteration int, toolNames []s
 func (s *reproducerLifecycleState) observeText(iteration int, text string, hasRunTool bool, runInput string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// #3795-3: stamp intent regardless of establishment state so the command
+	// path in observeToolCalls (same iteration) can require it.
+	if reproducerIntentRe.MatchString(text) {
+		s.intentSeenIter = iteration
+	}
 
 	if !s.hasReproducer && reproducerIntentRe.MatchString(text) && hasRunTool {
 		s.hasReproducer = true
@@ -362,14 +387,22 @@ func extractToolNamesAndInputs(toolCalls []provider.ToolCallDelta) ([]string, []
 	return names, inputs
 }
 
-// firstLine returns the first line of a (possibly multi-line) string, trimmed.
+// firstLine returns the first line of a (possibly multi-line) string that
+// is not blank and not a `#` comment, trimmed. #3795-1: run_command inputs
+// routinely start with a `# purpose` line (the #2244 convention that
+// causal_attribution already follows); returning that comment as the
+// snippet made the "Re-run:" hint show a bare comment and broke rerun token
+// overlap (comment words share no token with the actual command).
 func firstLine(s string) string {
-	s = strings.TrimSpace(s)
-	if pos := strings.IndexByte(s, '\n'); pos >= 0 {
-		s = s[:pos]
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if len(line) > 80 {
+			line = line[:77] + "..."
+		}
+		return line
 	}
-	if len(s) > 80 {
-		s = s[:77] + "..."
-	}
-	return s
+	return ""
 }

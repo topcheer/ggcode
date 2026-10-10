@@ -22,6 +22,8 @@ func TestReproducerLifecycleFullCycle(t *testing.T) {
 	s := newReproducerLifecycleState()
 
 	// Iter 1: agent runs reproducer script
+	s.observeText(1, "Writing a script to reproduce the bug.", true, "")
+	s.observeText(1, "Writing a script to reproduce the bug.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{`{"command":"python3 reproduce_bug.py"}`})
 	if !s.hasReproducer {
 		t.Fatal("expected hasReproducer=true after running script")
@@ -50,6 +52,8 @@ func TestReproducerLifecycleMissingRerun(t *testing.T) {
 	s := newReproducerLifecycleState()
 
 	// Iter 1: reproducer established
+	s.observeText(1, "Writing a script to reproduce the bug.", true, "")
+	s.observeText(1, "Writing a script to reproduce the bug.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{`{"command":"python3 reproduce_bug.py"}`})
 
 	// Iter 2: edit after reproducer
@@ -75,6 +79,8 @@ func TestReproducerLifecycleNoReproducerEstablished(t *testing.T) {
 
 func TestReproducerLifecycleWarnsOnlyOnce(t *testing.T) {
 	s := newReproducerLifecycleState()
+	s.observeText(1, "Writing a script to reproduce the bug.", true, "")
+	s.observeText(1, "Reproducing the crash now.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{`{"command":"python3 reproduce.py"}`})
 	s.observeToolCalls(2, []string{"edit_file"}, []string{`{"file_path":"main.go"}`})
 
@@ -111,6 +117,8 @@ func TestReproducerLifecycleNoFalseTriggerOnReadTools(t *testing.T) {
 
 func TestReproducerLifecycleNodeReproducer(t *testing.T) {
 	s := newReproducerLifecycleState()
+	s.observeText(1, "Reproducing the crash now.", true, "")
+	s.observeText(1, "Reproducing the crash now.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{`{"command":"node test_bug.js"}`})
 	if !s.hasReproducer {
 		t.Fatal("node script should establish reproducer")
@@ -119,6 +127,8 @@ func TestReproducerLifecycleNodeReproducer(t *testing.T) {
 
 func TestReproducerLifecycleGoRunReproducer(t *testing.T) {
 	s := newReproducerLifecycleState()
+	s.observeText(1, "Reproducing the bug now.", true, "")
+	s.observeText(1, "Reproducing the bug now.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{`{"command":"go run repro.go"}`})
 	if !s.hasReproducer {
 		t.Fatal("go run script should establish reproducer")
@@ -127,6 +137,8 @@ func TestReproducerLifecycleGoRunReproducer(t *testing.T) {
 
 func TestReproducerLifecycleGracePeriod(t *testing.T) {
 	s := newReproducerLifecycleState()
+	s.observeText(1, "Reproducing the bug now.", true, "")
+	s.observeText(1, "Reproducing the bug now.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{`{"command":"python3 repro.py"}`})
 	s.observeToolCalls(2, []string{"edit_file"}, []string{`{"file_path":"main.go"}`})
 	// Only 1 iteration gap -- should NOT warn yet (grace period)
@@ -172,6 +184,7 @@ func TestReproducerRerunUnrelatedScriptNotDischarged(t *testing.T) {
 	s := newReproducerLifecycleState()
 
 	// Iter 1: reproducer established via command (snippet recorded)
+	s.observeText(1, "Writing a script to reproduce the bug.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{`{"command":"python3 repro_bug.py"}`})
 	if !s.hasReproducer {
 		t.Fatal("expected hasReproducer=true after running script")
@@ -200,6 +213,7 @@ func TestReproducerRerunUnrelatedScriptNotDischarged(t *testing.T) {
 // discharges the obligation.
 func TestReproducerRerunSameScriptDischarged(t *testing.T) {
 	s := newReproducerLifecycleState()
+	s.observeText(1, "Writing a script to reproduce the bug.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{`{"command":"python3 repro_bug.py"}`})
 	s.observeToolCalls(2, []string{"edit_file"}, []string{`{"file_path":"src/main.go"}`})
 
