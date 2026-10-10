@@ -3,7 +3,10 @@ package agentruntime
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/url"
+	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -183,13 +186,30 @@ func buildElicitationContent(schema mcp.ElicitationSchema, resp toolpkg.AskUserR
 		if val == "" {
 			continue
 		}
+		// #3868 A: an enum field only accepts a MEMBER. The choice path is
+		// naturally in-enum, but AllowFreeform=false is enforced per surface
+		// (TUI/IM/desktop) - a violating surface fed arbitrary freeform text
+		// straight to the server. Reject non-members; a required field then
+		// surfaces via missingRequiredFields instead of shipping garbage.
+		if len(field.Enum) > 0 {
+			if entry, ok := enumEntryForLabel(field, val); ok {
+				// #3868 C: restore the native enum type (numeric enums must
+				// not be sent back as strings).
+				content[ans.ID] = entry
+			}
+			continue
+		}
 		switch field.Type {
 		case "boolean":
 			if b, err := parseBool(val); err == nil {
 				content[ans.ID] = b
 			}
-		case "number", "integer":
+		case "number":
 			if f, err := parseFloat(val); err == nil {
+				content[ans.ID] = f
+			}
+		case "integer":
+			if f, err := parseIntAnswer(val); err == nil {
 				content[ans.ID] = f
 			}
 		default:
@@ -232,9 +252,38 @@ func parseBool(s string) (bool, error) {
 }
 
 func parseFloat(s string) (float64, error) {
-	var f float64
-	_, err := fmt.Sscanf(s, "%g", &f)
-	return f, err
+	// #3868 B: Sscanf("%g") accepts trailing garbage ("12 months" parsed
+	// as 12 with n=1, err=nil) and silently truncated the user's answer on
+	// the way back to the server. Parse the WHOLE trimmed string.
+	return strconv.ParseFloat(strings.TrimSpace(s), 64)
+}
+
+// parseIntAnswer validates an integer-typed answer: whole-string parse
+// plus integrality ("12.7" must not ride through an integer field,
+// #3868 B).
+func parseIntAnswer(s string) (float64, error) {
+	f, err := parseFloat(s)
+	if err != nil {
+		return 0, err
+	}
+	if f != math.Trunc(f) {
+		return 0, fmt.Errorf("not an integer: %s", s)
+	}
+	return f, nil
+}
+
+// enumEntryForLabel finds the original enum entry whose formatted label
+// matches the selected value, so the ACCEPTED content carries the native
+// type (float64/bool) the server's schema expects instead of the display
+// string (#3868 C). Mixed enums with identical labels resolve to the
+// first entry - the schema itself is ambiguous there.
+func enumEntryForLabel(field mcp.ElicitationFieldSchema, label string) (any, bool) {
+	for _, opt := range field.Enum {
+		if mcp.FormatEnumValue(opt) == label {
+			return opt, true
+		}
+	}
+	return nil, false
 }
 
 var elicitationCounter int64

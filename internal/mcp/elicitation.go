@@ -221,6 +221,15 @@ func ValidateElicitationSchema(s ElicitationSchema) error {
 		if !allowedTypes[field.Type] {
 			return fmt.Errorf("elicitation field %q has unsupported type %q (allowed: string, number, integer, boolean)", name, field.Type)
 		}
+		// #3868 D: an empty-string enum member generates an empty choice ID;
+		// selecting it produces SelectedChoices=[""] which the answer
+		// extraction treats as unanswered - the user cannot ever satisfy a
+		// required field. Reject it at the schema layer.
+		for _, opt := range field.Enum {
+			if s, isStr := opt.(string); isStr && s == "" {
+				return fmt.Errorf("elicitation field %q has an empty-string enum member", name)
+			}
+		}
 	}
 
 	// Verify all required fields exist in properties.
