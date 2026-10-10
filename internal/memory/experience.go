@@ -296,16 +296,25 @@ func formatScoredExperiences(scored []ScoredExperience) string {
 	return b.String()
 }
 
-// evictLocked trims the store to MaxExperienceCases, oldest Created first.
+// evictLocked trims the store to MaxExperienceCases, oldest Updated first.
+// Eviction must key on Updated, not Created: Record's reconsolidation
+// preserves the original Created and only refreshes Updated, so an early
+// case that is still being strengthened by repeated evidence has the oldest
+// Created but the freshest knowledge — evicting by Created would discard
+// exactly the cases the reconsolidation semantics exist to protect (#3873).
 // Caller must hold es.mu.
 func (es *ExperienceStore) evictLocked() {
 	cases, err := es.List()
 	if err != nil || len(cases) <= MaxExperienceCases {
 		return
 	}
-	excess := len(cases) - MaxExperienceCases
+	// List returns Created-ascending; re-sort for eviction by Updated.
+	byUpdated := make([]Experience, len(cases))
+	copy(byUpdated, cases)
+	sort.Slice(byUpdated, func(i, j int) bool { return byUpdated[i].Updated.Before(byUpdated[j].Updated) })
+	excess := len(byUpdated) - MaxExperienceCases
 	for i := 0; i < excess; i++ {
-		_ = os.Remove(filepath.Join(es.dir, cases[i].ID+".md"))
+		_ = os.Remove(filepath.Join(es.dir, byUpdated[i].ID+".md"))
 	}
 }
 
