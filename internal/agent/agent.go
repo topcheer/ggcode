@@ -5305,7 +5305,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Working-tree invalidation: detect cross-file stale reads after git mutations
 			// #1527 case C: run_command carrying a mutating git command is
 			// fed through the same invalidation path as the git_* tools.
-			if (isWTMutatingTool(tc.Name) || (tc.Name == "run_command" && runCommandMutatesTree(string(tc.Arguments)))) && !result.IsError {
+			// #3864 A: start_command takes the same `command` field - a
+			// backgrounded `git checkout main && go test` must not slip the
+			// gate either (the command text is fixed at launch; no need to
+			// also gate the later read_command_output).
+			if (isWTMutatingTool(tc.Name) ||
+				((tc.Name == "run_command" || tc.Name == "start_command") && runCommandMutatesTree(string(tc.Arguments)))) && !result.IsError {
 				if wtMsg := a.wtInvalidation.checkMutation(tc.Name, string(tc.Arguments)); wtMsg != "" {
 					debug.Log("agent", "Iteration %d: working-tree invalidation detector triggered", i+1)
 					a.appendGuidance(&result, wtMsg)
