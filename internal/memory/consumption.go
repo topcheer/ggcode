@@ -47,6 +47,38 @@ const (
 	scanFingerprintMax = 64
 )
 
+// containsStandaloneKey reports whether key appears in text with a token
+// boundary on both sides: the runes immediately before and after (if any)
+// must not be alphanumeric or '-', the characters that extend a memory key
+// into a longer sibling key ("release-process" vs "release-process-impl").
+func containsStandaloneKey(text, key string) bool {
+	for from := 0; ; {
+		i := strings.Index(text[from:], key)
+		if i < 0 {
+			return false
+		}
+		i += from
+		if boundaryRune(text, i-1) && boundaryRune(text, i+len(key)) {
+			return true
+		}
+		from = i + 1
+	}
+}
+
+// boundaryRune reports whether the byte at index i is a token boundary
+// (start/end of text, or anything that is not a key-extending character).
+func boundaryRune(text string, i int) bool {
+	if i < 0 || i >= len(text) {
+		return true
+	}
+	c := text[i]
+	switch {
+	case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-':
+		return false
+	}
+	return true
+}
+
 // ScanConsumption scans one run's assistant text corpus for evidence that
 // injected memories were actually consumed: either the entry KEY appears
 // verbatim (agents cite keys like "release-always-read-memory-first"), or
@@ -73,7 +105,10 @@ func (am *AutoMemory) ScanConsumption(text string) int {
 	var matched []string
 	fpReads := 0
 	for _, key := range keys {
-		if len(key) >= scanKeyMinLen && strings.Contains(lower, strings.ToLower(key)) {
+		// #3827: word-boundary match. Bare strings.Contains made
+		// "release-process" hit inside "release-process-impl" - the longer
+		// sibling key's citation inflated THIS entry's Consumed count.
+		if len(key) >= scanKeyMinLen && containsStandaloneKey(lower, strings.ToLower(key)) {
 			matched = append(matched, key)
 			continue
 		}
