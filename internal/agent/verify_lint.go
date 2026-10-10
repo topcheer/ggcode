@@ -156,6 +156,20 @@ func (a *Agent) runLintCheck(ctx context.Context, workingDir string) *LintResult
 		Passed:   err == nil && len(warnings) == 0,
 	}
 
+	// #3813: a non-zero exit with ZERO parsed warnings means the linter
+	// failed in a shape we do not recognize (custom linter output, linter
+	// crash, timeout kill). Swallowing it made a real lint failure
+	// indistinguishable from a clean run - not even the err (including
+	// timeout context) reached the hint. Inject one synthesized warning
+	// carrying the exit status and a truncated tail of the raw output so
+	// the advisory path degrades loudly instead of silently.
+	if err != nil && len(result.Warnings) == 0 {
+		result.Warnings = []string{fmt.Sprintf(
+			"lint command %q failed with %v (no recognized warnings; raw output tail: %s)",
+			cmd, err, truncateRunesForLint(output, 200),
+		)}
+	}
+
 	if !result.Passed {
 		debug.Log("verify-lint", "found %d warnings", len(warnings))
 	} else {
@@ -213,6 +227,16 @@ func extractLintWarnings(output string) []string {
 // properly through the build/verify steps; the lint pass must stay silent
 // about them. Markers are kept deliberately narrow: broad fragments like
 // "type " or "unexpected " would also match real vet findings.
+// truncateRunesForLint bounds a raw-output tail to n runes for the #3813
+// synthesized warning (linter failure with unrecognized output shape).
+func truncateRunesForLint(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return "..." + string(r[len(r)-n:])
+}
+
 func isCompileErrorMessage(lower string) bool {
 	for _, marker := range []string{
 		"undefined:",            // unresolved symbol (tag-gated code)
