@@ -1030,9 +1030,37 @@ func splitCompoundCommand(cmd string) []string {
 	// #2122: without it, `cd /app && go test` stayed ONE segment whose
 	// first word is cd (a shell builtin with no Linux binary), so the
 	// preflight never reached the real command after it.
-	return strings.FieldsFunc(cmd, func(r rune) bool {
-		return r == ';' || r == '|' || r == '&'
-	})
+	// #3908: quote-aware. `git commit -m "fix && go test ./..."` had the
+	// quoted && split as a real separator, and the bogus segment then
+	// satisfied isVerifyCommandSegment / isRealTestSegment - a pure commit
+	// was credited as test evidence (final-turn gate weakened). Separators
+	// inside single/double-quoted literals no longer split.
+	var segs []string
+	var cur []rune
+	quote := rune(0) // 0 = unquoted, else the open quote rune
+	for _, r := range cmd {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+			cur = append(cur, r)
+		case r == '\'' || r == '"':
+			quote = r
+			cur = append(cur, r)
+		case r == ';' || r == '|' || r == '&':
+			if len(cur) > 0 {
+				segs = append(segs, string(cur))
+				cur = nil
+			}
+		default:
+			cur = append(cur, r)
+		}
+	}
+	if len(cur) > 0 {
+		segs = append(segs, string(cur))
+	}
+	return segs
 }
 
 // isVerifyCommandSegment reports whether a single shell segment (env
