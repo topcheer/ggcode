@@ -32,6 +32,17 @@ import (
 // without unbounded memory on long runs).
 const wfTraceWindow = 30
 
+// isCommandExecTool reports whether the tool executes a shell command whose
+// args carry a "command" field both the precondition check and the attempt
+// ledger must see. run_command is the foreground path; start_command runs
+// the same command in the background (#3836 A: gating on run_command alone
+// let a guarded command skip block prechecks and the ledger entirely just
+// by being launched in the background - the step then reported
+// "never attempted" about a command that had actually run).
+func isCommandExecTool(toolName string) bool {
+	return toolName == "run_command" || toolName == "start_command"
+}
+
 // wfTraceMaxPerViolation caps attempts attached to one violation message.
 const wfTraceMaxPerViolation = 3
 
@@ -53,7 +64,7 @@ type StepAttempt struct {
 // step. Called once per executed command (never for blocked calls - those
 // never ran, so they are not attempts).
 func (e *workflowEngine) recordAttempt(toolName string, args json.RawMessage, res tool.Result) {
-	if e == nil || toolName != "run_command" {
+	if e == nil || !isCommandExecTool(toolName) {
 		return
 	}
 	e.loadWorkflowSpec()
@@ -93,7 +104,11 @@ func (e *workflowEngine) recordAttempt(toolName string, args json.RawMessage, re
 	}
 	now := time.Now()
 	e.traceMu.Lock()
+	if e.attemptCounts == nil {
+		e.attemptCounts = make(map[string]int)
+	}
 	for _, id := range hits {
+		e.attemptCounts[id]++
 		e.trace = append(e.trace, StepAttempt{
 			StepID:           id,
 			Command:          command,
@@ -139,6 +154,19 @@ func (e *workflowEngine) recentAttempts(stepID string, n int) []StepAttempt {
 	return out
 }
 
+// stepAttemptedEver reports whether any command matching stepID ran this
+// session, per the non-evicting lifetime count (#3836 B). Safe to call
+// while holding e.mu: takes traceMu only (same discipline as
+// recentAttempts).
+func (e *workflowEngine) stepAttemptedEver(stepID string) bool {
+	if e == nil || stepID == "" {
+		return false
+	}
+	e.traceMu.Lock()
+	defer e.traceMu.Unlock()
+	return e.attemptCounts[stepID] > 0
+}
+
 // wfAttemptAttribution renders the structural WHERE-it-broke diagnosis for
 // a violation's counterexample step: never-attempted vs failed vs
 // completed-without-artifact, each with its local repair.
@@ -155,6 +183,14 @@ func wfAttemptAttribution(v *WorkflowViolation) string {
 	}
 	last := v.LastAttempt
 	switch {
+	case last == nil && v.AttemptedEver:
+		// #3836 B: the per-step lifetime count says the step DID run this
+		// session; its trace entry simply fell out of the shared 30-slot
+		// sliding window (high-frequency sibling steps evicted it). The old
+		// wording asserted "never executed" - factually wrong and pointing
+		// repair at re-running instead of at the real issue (the artifact
+		// never grounded).
+		return fmt.Sprintf(" Attribution: step %q was attempted earlier this run, but its attempt record fell out of the recent trace window. Local repair: re-run the step %q command to re-ground its artifact (%q).", v.Missing, v.Missing, v.WantGlob)
 	case last == nil:
 		return fmt.Sprintf(" Attribution: no command matching step %q was attempted this run - the prerequisite was never executed. Local repair: run the step %q command first.", v.Missing, v.Missing)
 	case last.IsError:
