@@ -129,9 +129,16 @@ func TestDepFindingsInjectedIntoClaimPrompt(t *testing.T) {
 	}
 }
 
-// TestDepFindingsSkipsFailedAndEmptyDeps pins exclusion semantics: deps
-// that completed without a persisted result (e.g. parked with
-// permanent_error) contribute no findings section.
+// TestDepFindingsSkipsFailedAndEmptyDeps pins exclusion semantics.
+//
+// #2786 interaction: a dep completed WITH a permanent_error metadata key
+// is PARKED, not delivered - allBlockersComplete keeps its dependents
+// blocked until a human intervenes, so a mixed-dep dependent is NOT
+// claimable at all (that is the #2786 rule, not a findings question).
+// What this test pins instead:
+//  1. a dependent whose deps all completed WITHOUT persisted results
+//     (empty deps) IS claimed, and no findings section is opened;
+//  2. a dependent with a parked dep stays unclaimed (0 prompts).
 func TestDepFindingsSkipsFailedAndEmptyDeps(t *testing.T) {
 	mgr, board, tm := newClaimHarness(t)
 	failed := board.Create("poison task", "d", "", nil)
@@ -146,17 +153,27 @@ func TestDepFindingsSkipsFailedAndEmptyDeps(t *testing.T) {
 	if _, err := board.Update(empty.ID, task.UpdateOptions{Status: &completed}); err != nil {
 		t.Fatalf("complete dep: %v", err)
 	}
-	blocked := board.Create("after mixed deps", "d", "", nil)
-	if _, err := board.Update(blocked.ID, task.UpdateOptions{AddBlockedBy: []string{failed.ID, empty.ID}}); err != nil {
-		t.Fatalf("add deps: %v", err)
+	parkedBlocked := board.Create("after parked dep", "d", "", nil)
+	if _, err := board.Update(parkedBlocked.ID, task.UpdateOptions{AddBlockedBy: []string{failed.ID}}); err != nil {
+		t.Fatalf("add parked dep: %v", err)
+	}
+	emptyBlocked := board.Create("after silent dep", "d", "", nil)
+	if _, err := board.Update(emptyBlocked.ID, task.UpdateOptions{AddBlockedBy: []string{empty.ID}}); err != nil {
+		t.Fatalf("add empty dep: %v", err)
 	}
 
 	agent := &countingAgent{}
 	tryClaimPendingTask(context.Background(), tm, teamOf(mgr, t), agent, mgr, nil, time.Second)
 
 	prompts := agent.getPrompts()
+	// Only the empty-dep dependent is claimable; the parked-dep one stays
+	// blocked (#2786). Exactly one claim happens, and it must be the
+	// empty-dep task with NO findings section (no persisted results).
 	if len(prompts) != 1 {
-		t.Fatalf("expected claim of the dependent task, got %d prompts", len(prompts))
+		t.Fatalf("expected exactly 1 claim (empty-dep dependent only; parked-dep dependent must stay blocked), got %d prompts", len(prompts))
+	}
+	if !strings.Contains(prompts[0], "after silent dep") {
+		t.Fatalf("expected the empty-dep dependent to be the claimed task:\n%s", prompts[0])
 	}
 	if strings.Contains(prompts[0], "Findings from completed dependency tasks") {
 		t.Fatalf("deps without persisted results must not open a findings section:\n%s", prompts[0])
