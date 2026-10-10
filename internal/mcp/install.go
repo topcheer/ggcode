@@ -240,6 +240,15 @@ func parseInstallOptions(args []string) ([]string, installOptions, error) {
 	var opts installOptions
 	for i := 0; i < len(args); i++ {
 		token := strings.TrimSpace(args[i])
+		// #3765: installer flags after the server NAME may belong to the
+		// COMMAND the user is wrapping (`docker run --env FOO=bar myimage`
+		// without `--`). The greedy parse must keep supporting the canonical
+		// interleaved shapes (name ... flags ... URL ... flags), so we cannot
+		// simply stop at the first positional - but swallowing silently rewrote
+		// BOTH semantics with zero signal. Keep the parse, WARN loudly whenever
+		// a token is consumed as an installer flag while the command region has
+		// already started, telling the user to quote the command with `--`.
+		warnFlagSwallowedInCommandRegion(token, len(positionals) > 1)
 		switch token {
 		case "--env":
 			if i+1 >= len(args) {
@@ -286,6 +295,24 @@ func parseInstallOptions(args []string) ([]string, installOptions, error) {
 		}
 	}
 	return positionals, opts, nil
+}
+
+// warnFlagSwallowedInCommandRegion fires when an installer flag token is
+// consumed while the command region has already started (more than one
+// positional seen). Such a token may be the WRAPPED COMMAND's own flag -
+// the user should quote the command with `--` (#3765). Returns whether a
+// warning was emitted (pure function of the inputs; kept as a func so
+// probes can pin the trigger condition).
+func warnFlagSwallowedInCommandRegion(token string, inCommandRegion bool) bool {
+	if !inCommandRegion {
+		return false
+	}
+	switch token {
+	case "--env", "--header", "-t", "--transport":
+		debug.Log("mcp", "#3765 WARNING: %s after the command tokens was parsed as an INSTALLER flag; if it belongs to the wrapped command, re-run with `--` before the command: `gg mcp install <name> [installer-flags] -- <command...>`", token)
+		return true
+	}
+	return false
 }
 
 func parseInstallMapValue(raw, flag string) (string, string, error) {
