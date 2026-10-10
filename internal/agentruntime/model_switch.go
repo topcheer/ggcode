@@ -104,7 +104,14 @@ func ApplyProviderToAgent(agentInst *agent.Agent, prov provider.Provider, resolv
 	// sa-44 LLM cassette: wrap the provider per GGCODE_LLM_TAPE before it
 	// reaches the agent. Both the daemon bootstrap paths and the config
 	// hot-swap funnel through here, so this is the single choke point.
-	prov = provider.WrapLLMTapeFromEnv(prov)
+	// #3917: idempotent. Every hot model switch re-entered this wrap, so a
+	// record-mode session leaked a fresh O_APPEND fd per switch and a
+	// replay-mode session rebuilt the tape from cursor 0 (stale entries
+	// replayed / premature exhausted). An already-wrapped provider keeps
+	// its tape: one fd, one cursor, for the session's lifetime.
+	if _, alreadyWrapped := prov.(*provider.TapeProvider); !alreadyWrapped {
+		prov = provider.WrapLLMTapeFromEnv(prov)
+	}
 	agentInst.SetProvider(prov)
 	ApplyResolvedLimitsToAgent(agentInst, resolved)
 	agentInst.SetSupportsVision(resolved.SupportsVision)
