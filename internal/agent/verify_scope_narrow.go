@@ -100,16 +100,89 @@ var (
 	npmTestGrepRe = regexp.MustCompile(`--grep(?:\s+|=)\s*(\S+)`)
 )
 
-// isGoSubcommand returns true if cmd starts with "go <sub>" as a word.
-// This avoids false positives like "cargo test" containing "go test" substring.
+// splitShellSegments (in command_cache.go) splits on shell separators and
+// strips leading `cd` clauses; isGoSubcommand/isHeadCommand head-scan each
+// segment independently (#3812).
+
+// isGoSubcommand returns true if the command's INVOKED binary is "go <sub>".
+// #3812: the old loop matched "go <sub>" as an adjacent word pair ANYWHERE in
+// the command, so `git commit -m "go test passed"` or `echo go build ok` were
+// classified as verification commands and injected a bogus passed entry into
+// the verification history - a gaming vector (a harmless command carrying the
+// magic words counts as "verified") and a diluter for real chains. Now "go"
+// must be at the head of a shell segment, optionally preceded by a bounded
+// set of wrapper prefixes (sudo/time/nice/env VAR=v/timeout 10s). Quoted
+// strings and arguments after a non-wrapper token end the head scan.
 func isGoSubcommand(cmd, sub string) bool {
-	fields := strings.Fields(cmd)
-	if len(fields) >= 2 && fields[0] == "go" && fields[1] == sub {
-		return true
+	for _, seg := range splitShellSegments(cmd) {
+		if segmentInvokesGo(strings.Fields(seg), sub) {
+			return true
+		}
 	}
-	// Also handle "time go test" or "sudo go test" prefixes
-	for i := 0; i+2 < len(fields); i++ {
-		if fields[i+1] == "go" && fields[i+2] == sub {
+	return false
+}
+
+// segmentInvokesGo head-scans ONE shell segment. The default arm MUST
+// return: a bare `break` inside the switch only exits the switch, not the
+// enclosing loop, leaving i unchanged on a non-go head - an infinite loop
+// (first live input: `git commit -m "go test passed"`).
+func segmentInvokesGo(fields []string, sub string) bool {
+	i := 0
+	for i < len(fields) {
+		switch fields[i] {
+		case "sudo", "time", "nice":
+			i++
+		case "env":
+			i++
+			// skip VAR=value assignments following env
+			for i < len(fields) && strings.Contains(fields[i], "=") {
+				i++
+			}
+		case "timeout":
+			i += 2 // timeout <duration> <cmd>
+		default:
+			return fields[i] == "go" && i+1 < len(fields) && fields[i+1] == sub
+		}
+	}
+	return false
+}
+
+// isHeadCommand reports whether cmd's invoked command line starts with the
+// given head words (#3812): after stripping wrapper prefixes (sudo/time/nice
+// and "env VAR=v" runs) at the head of any shell segment, fields must begin
+// with exactly the head sequence. A bare substring match misclassified e.g.
+// `pip install pytest` as a test run.
+func isHeadCommand(cmd string, head []string) bool {
+	for _, seg := range splitShellSegments(cmd) {
+		if segmentMatchesHead(strings.Fields(seg), head) {
+			return true
+		}
+	}
+	return false
+}
+
+// segmentMatchesHead head-scans ONE shell segment; the default arm returns
+// (see segmentInvokesGo for the break-in-switch infinite-loop pitfall).
+func segmentMatchesHead(fields, head []string) bool {
+	i := 0
+	for i < len(fields) {
+		switch fields[i] {
+		case "sudo", "time", "nice":
+			i++
+		case "env":
+			i++
+			for i < len(fields) && strings.Contains(fields[i], "=") {
+				i++
+			}
+		default:
+			if len(fields)-i < len(head) {
+				return false
+			}
+			for j, w := range head {
+				if fields[i+j] != w {
+					return false
+				}
+			}
 			return true
 		}
 	}
@@ -144,8 +217,9 @@ func classifyVerificationCommand(cmd string) (category, scope string) {
 		return
 	}
 
-	// pytest / python -m pytest
-	if strings.Contains(cmd, "pytest") || strings.Contains(cmd, "python -m pytest") {
+	// pytest / python -m pytest — head-of-command word match, not a bare
+	// substring: `pip install pytest` is not a test run (#3812 B-sibling).
+	if isHeadCommand(cmd, []string{"pytest"}) || isHeadCommand(cmd, []string{"python", "-m", "pytest"}) {
 		category = "pytest"
 		scope = extractPytestScope(cmd)
 		return
@@ -411,9 +485,11 @@ func isNarrower(b, a string) bool {
 	aPkgs := extractPkgList(a)
 	bPkgs := extractPkgList(b)
 	if len(aPkgs) > 0 && len(bPkgs) > 0 {
-		if len(bPkgs) < len(aPkgs) {
-			return true
-		}
+		// #3812: a bare token-count drop must NOT count as narrowing on its
+		// own - `go test ./pkg/a/ ./pkg/b/` → `go test ./pkg/c/` is a normal
+		// debugging pivot (disjoint packages), not a scope narrowing. Only the
+		// subset check below (b ⊂ a) and path-prefix containment carry the
+		// real intent; the old len-only early return contradicted both.
 		// Check if b packages are a subset of a packages
 		aSet := make(map[string]bool)
 		for _, p := range aPkgs {
