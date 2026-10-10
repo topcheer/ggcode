@@ -411,14 +411,19 @@ func UpdateConfig(values map[string]interface{}) error {
 				}
 			}
 		}
+		// #3852 B: CustomVersion must be written BEFORE
+		// SetActiveImpersonation below - the old order activated the
+		// runtime with the stale version while persisting the new one to
+		// disk, so impersonated header version numbers stayed wrong until
+		// the next unrelated config change.
+		if cv, ok := values["impersonateCustomVersion"].(string); ok {
+			cfg.Impersonation.CustomVersion = cv
+		}
 		// Preserve CustomHeaders/CustomVersion already in cfg; version falls
 		// back to the persisted one so SetActiveImpersonation sees the same
 		// state the next cold init would rebuild from.
 		provider.SetActiveImpersonation(preset, cfg.Impersonation.CustomVersion, cfg.Impersonation.CustomHeaders)
 		cfg.Impersonation.Preset = v
-	}
-	if v, ok := values["impersonateCustomVersion"].(string); ok {
-		cfg.Impersonation.CustomVersion = v
 	}
 	if v, ok := values["streamEncoder"].(string); ok {
 		cfg.Stream.HardwareEncoder = v
@@ -810,6 +815,18 @@ func applyImpersonationLocked(presetID, version string, customHeaders map[string
 		return err
 	}
 	noteConfigFileSaved()
+	// #3852 A / #282 family: cfg.Save() strips instance-sourced keys from
+	// the global file. When the instance carries an impersonation section,
+	// impersonation fields are registered instance fields - without the
+	// write-back below the change is silently reverted by the instance
+	// merge on the next restart (persistTouchedInstanceFields itself no-ops
+	// when impersonation is not instance-sourced on this workspace).
+	if err := persistTouchedInstanceFields(cfg, map[string]interface{}{
+		"impersonatePreset":        presetID,
+		"impersonateCustomVersion": version,
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 
