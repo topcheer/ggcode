@@ -120,6 +120,15 @@ func makefileTargets(path string) map[string]bool {
 	targets := make(map[string]bool)
 	for _, line := range strings.Split(string(data), "\n") {
 		if m := makefileTargetLine.FindStringSubmatch(line); m != nil {
+			// #3825: special make directives (.PHONY:, .DEFAULT_GOAL:,
+			// .SUFFIXES:, pattern rules "%.o:") are not real targets. Without
+			// this guard, an include-only Makefile (real targets live in an
+			// included .mk) carrying a ".PHONY: build" line pollutes the map,
+			// re-enabling the #3049-C2 false positive: every fenced `make X`
+			// would be flagged as referencing an undefined target.
+			if strings.HasPrefix(m[1], ".") || strings.HasPrefix(m[1], "%") {
+				continue
+			}
 			targets[m[1]] = true
 		}
 	}
