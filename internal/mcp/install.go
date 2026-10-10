@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -432,6 +433,13 @@ func inferURLServerName(raw string) string {
 	host := parsed.Hostname()
 	if host == "" {
 		return ""
+	}
+	// #3765-B: an IP host must not be truncated to its first octet -
+	// 192.168.1.5 and 192.168.1.6 both inferred "192" and silently
+	// overwrote each other's config (Name is the yaml key). Use the full
+	// IP (colons omitted by Hostname) as the inferred name.
+	if net.ParseIP(host) != nil {
+		return host
 	}
 	parts := strings.Split(host, ".")
 	if len(parts) > 0 {

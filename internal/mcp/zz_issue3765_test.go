@@ -84,3 +84,19 @@ func TestIssue3765_SeparatorStillWorks(t *testing.T) {
 		t.Fatalf("pre-separator installer env lost: %v", server.Env)
 	}
 }
+
+func TestIssue3765_IPHostInferredFullName(t *testing.T) {
+	// #3765-B: IP hosts must not be truncated to the first octet -
+	// 192.168.1.5 and 192.168.1.6 would both infer "192" and silently
+	// overwrite each other in the yaml.
+	if got := inferURLServerName("http://192.168.1.5:8080/mcp"); got != "192.168.1.5" {
+		t.Fatalf("IP host inferred name = %q, want full IP", got)
+	}
+	if got := inferURLServerName("http://192.168.1.6:8080/mcp"); got != "192.168.1.6" {
+		t.Fatalf("neighbor IP inferred name = %q, want full IP (no collision)", got)
+	}
+	// Domain hosts keep the first-label inference.
+	if got := inferURLServerName("https://api.example.com/mcp"); got != "api" {
+		t.Fatalf("domain inference changed: %q", got)
+	}
+}
