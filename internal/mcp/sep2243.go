@@ -57,6 +57,10 @@ type headerAnnotation struct {
 
 // collectHeaderAnnotations walks schema (descending through "properties"
 // and "items" at any nesting depth) collecting x-mcp-header annotations.
+// Annotations located INSIDE array items are rejected with a violation
+// (#3808): their path skips the array dimension and is unresolvable at
+// runtime - previously they were collected but silently dropped by
+// lookupPath with zero violations.
 // When violations is non-nil, spec violations found along the way are
 // appended there; the returned slice always contains only annotations
 // that passed every constraint. Duplicate x-mcp-header values are
@@ -71,8 +75,8 @@ func collectHeaderAnnotations(schema json.RawMessage, violations *[]string) []he
 	}
 	var out []headerAnnotation
 	seen := make(map[string]bool)
-	var walk func(node interface{}, path []string)
-	walk = func(node interface{}, path []string) {
+	var walk func(node interface{}, path []string, underArray bool)
+	walk = func(node interface{}, path []string, underArray bool) {
 		obj, ok := node.(map[string]interface{})
 		if !ok {
 			return
@@ -97,6 +101,13 @@ func collectHeaderAnnotations(schema json.RawMessage, violations *[]string) []he
 					violate(violations, "property %q: duplicate x-mcp-header %q (case-insensitive)", name, header)
 				default:
 					seen[strings.ToLower(header)] = true
+					if underArray {
+						// #3808: unreachable at runtime - lookupPath cannot
+						// descend the array dimension, so the header would
+						// silently vanish. Flag it here instead.
+						violate(violations, "property %q: x-mcp-header inside array items is not supported (array element has no single value)", name)
+						continue
+					}
 					out = append(out, headerAnnotation{Header: mcpParamHeaderPrefix + header, Path: childPath})
 				}
 				// Type constraint: annotations are only permitted on
@@ -106,13 +117,21 @@ func collectHeaderAnnotations(schema json.RawMessage, violations *[]string) []he
 					violate(violations, "property %q: x-mcp-header requires a primitive parameter type (integer, string, boolean)", name)
 				}
 			}
-			walk(prop, childPath)
+			walk(prop, childPath, underArray)
 		}
 		if items, ok := obj["items"]; ok {
-			walk(items, path)
+			// #3808: an annotation anywhere inside array items collects a
+			// Path that skips the array dimension (args[name][0][field]),
+			// which lookupPath can never resolve - the header silently
+			// vanished with zero violations, contradicting the "any nesting
+			// depth" contract. SEP-2243 header parameters are primitives;
+			// an array element has no single value to encode. Reject the
+			// form loudly at collection time instead of dropping it
+			// silently at runtime.
+			walk(items, path, true)
 		}
 	}
-	walk(root, nil)
+	walk(root, nil, false)
 	return out
 }
 
