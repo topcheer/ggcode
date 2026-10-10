@@ -922,7 +922,12 @@ func isVerifyCommand(cmd string) bool {
 //
 // Thread-safety: caller must NOT hold a.mu (this method acquires it).
 func (a *Agent) maybeResetVerifyOnCommand(toolName string, args json.RawMessage, resultErr bool) {
-	if toolName != "run_command" {
+	// #3796-A: background verification counts too. Long test suites are
+	// routinely started via start_command and read back with
+	// read_command_output; excluding them here left
+	// realBuildOrTestRunThisRun unset, so the final-turn gate accused the
+	// agent of never having verified - the opposite of the truth.
+	if toolName != "run_command" && toolName != "start_command" {
 		return
 	}
 
