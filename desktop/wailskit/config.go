@@ -283,9 +283,10 @@ func UpdateConfig(values map[string]interface{}) error {
 		return fmt.Errorf("config not initialized")
 	}
 
-	// #740: validate before mutate. Four checks inside the mutation chain
+	// #740: validate before mutate. Five checks inside the mutation chain
 	// below can fail and return mid-way (vendor/endpoint existence for
-	// baseURL, duration parsing for the two timeouts), leaving fields that
+	// baseURL, duration parsing for the two timeouts, preset lookup for
+	// impersonatePreset #3770), leaving fields that
 	// were already written resident in the shared in-memory cfg — reported by
 	// GetFullConfig, picked up by the next chat session without Save, and
 	// silently persisted by the next successful save through any of the four
@@ -324,6 +325,18 @@ func UpdateConfig(values map[string]interface{}) error {
 			if _, ok := vc.Endpoints[endpoint]; !ok {
 				return fmt.Errorf("endpoint %q not found in vendor %q", endpoint, vendor)
 			}
+		}
+	}
+
+	// #3770: impersonatePreset lookup is fallible (unknown preset id), so it
+	// belongs in this pre-validation block — validating it after the nine
+	// field writes above left a rejected request half-applied (e.g.
+	// {"model":"x","impersonatePreset":"bogus"} reported an error while
+	// cfg.Model had already been changed in place) and the next successful
+	// save silently persisted the mutation. Same #206/#740 failure shape.
+	if v, ok := values["impersonatePreset"].(string); ok {
+		if v != "none" && v != "" && provider.FindPresetByID(v) == nil {
+			return fmt.Errorf("unknown impersonation preset %q", v)
 		}
 	}
 
@@ -381,9 +394,8 @@ func UpdateConfig(values map[string]interface{}) error {
 		// App.UpdateConfig triggers still baked the OLD headers into the new
 		// provider; and an unknown preset id persisted silently and died at
 		// next init (#614's guard only covered the ApplyImpersonation path).
-		if v != "none" && v != "" && provider.FindPresetByID(v) == nil {
-			return fmt.Errorf("unknown impersonation preset %q", v)
-		}
+		// Preset existence is pre-validated above (#3770) so this branch
+		// cannot fail after earlier fields were written.
 		var preset *provider.ImpersonationPreset
 		if v != "none" && v != "" {
 			for _, p := range provider.DefaultImpersonationPresets() {
