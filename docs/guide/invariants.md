@@ -104,8 +104,9 @@ ggcode audit report --path /path/to/audit.jsonl   # 事后重构该 run
 
 - **前置门**：执行匹配某步骤 `on_commands` 的 `run_command` 时检查 `requires`；未满足则 block/warn，消息含**反例步**（"release 需要 run-tests，但尚无产物匹配 ..."）
 - **产物锚定完成**：写类调用成功后按 `artifact_glob` 自动登记完成——不信任口头"这步做完了"
+- **命令锚定完成**（#3835）：无 `artifact_glob` 的纯门控节点（vet/lint/check 形态）在其受保护命令**成功执行**时即登记完成——命令本身就是该步骤的产物；声明了 `artifact_glob` 的步骤仍以文件系统产物为准（证据更强）
 - **收尾核对**：agent 声明任务完成前，未产生产物的声明步骤会被列出并要求核实（与 fulfillment gate 同点注入）
 - 双作用域合并（`~/.ggcode/` + 项目 `.ggcode/`）、坏 JSON 降级惰性、无文件零行为变化——均与不变式一致
 - block 级拒绝以 `workflow:<step_id>` 作为 `invariant_id` 入审计链
 
-纯门控节点（无 `artifact_glob`，如上例 `run-tests`）永不单独"完成"——它只作为被依赖方时要求配 `artifact_glob`，或仅用于把警示挂在命令前。定理证明级形式验证（Lean/TLA+）不在本层范围。
+纯门控节点（无 `artifact_glob`，如上例 `run-tests`）由命令锚定完成（见上）；可被 `requires` 引用而不死锁——命令跑成功即满足。定理证明级形式验证（Lean/TLA+）不在本层范围。

@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
 )
@@ -92,6 +93,20 @@ func (e *workflowEngine) recordAttempt(toolName string, args json.RawMessage, re
 			// done under RLock, same precedent as checkPreconditions -> groundIfFresh).
 			if st.ArtifactGlob != "" && !res.IsError {
 				grounded[id] = e.groundIfFresh(id)
+			} else if st.ArtifactGlob == "" && !res.IsError {
+				// #3835: commands-only steps (guarded commands, no
+				// artifact_glob) have no other completion path - every
+				// completed.Store site requires a non-empty glob, so a
+				// Requires edge to such a step deadlocked block mode
+				// forever. The successful execution of the guarded command
+				// IS the step's product; ground it here. Steps with a glob
+				// keep artifact precedence (filesystem-grounded proof).
+				// sync.Map Store is safe under e.mu.RLock.
+				if _, done := e.completed.Load(id); !done {
+					e.completed.Store(id, struct{}{})
+					debug.Log("agent", "[workflow-spec] step %s complete (guarded command succeeded: %q)", id, command)
+				}
+				grounded[id] = true
 			}
 		}
 	}
@@ -201,6 +216,12 @@ func wfAttemptAttribution(v *WorkflowViolation) string {
 	case last == nil:
 		return fmt.Sprintf(" Attribution: no command matching step %q was attempted this run - the prerequisite was never executed. Local repair: run the step %q command first.", v.Missing, v.Missing)
 	case last.IsError:
+		if v.WantGlob == "" {
+			// #3835: commands-only step - a successful re-run of the guarded
+			// command itself completes it; quoting an "expected artifact"
+			// of "" would point repair at a nonexistent spec field.
+			return fmt.Sprintf(" Attribution: step %q last ran %q which FAILED (%s) at %s. Local repair: fix that command and re-run it - a successful run completes the step.", v.Missing, last.Command, last.ErrSnippet, last.At.Format("15:04:05"))
+		}
 		return fmt.Sprintf(" Attribution: step %q last ran %q which FAILED (%s) at %s. Local repair: fix that command and re-run it (expected artifact %q), or fix the workflow spec.", v.Missing, last.Command, last.ErrSnippet, last.At.Format("15:04:05"), v.WantGlob)
 	case !last.ProducedArtifact:
 		return fmt.Sprintf(" Attribution: step %q last ran %q successfully at %s but it produced no artifact matching %q. Local repair: adjust the command to emit the expected artifact, or fix the spec's artifact_glob.", v.Missing, last.Command, last.At.Format("15:04:05"), v.WantGlob)
