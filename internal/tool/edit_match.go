@@ -3,6 +3,7 @@ package tool
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -248,7 +249,12 @@ func adjustNewText(content, newText string, mr matchResult) string {
 		}
 	}
 	if strings.Contains(mr.transform, "line-numbers-stripped") {
-		out = stripAllLineNumberPrefixes(out)
+		// #3854: strip only readFileRange-shaped prefixes - at least ONE
+		// leading space before the digits (readFileRange right-aligns line
+		// numbers, so a real pasted prefix always has padding). The old
+		// unconditional strip also removed column-0 digit+TAB content
+		// (TSV rows like "123\tvalue"), silently corrupting data files.
+		out = stripPaddedLineNumberPrefixes(out, content)
 	}
 	if strings.Contains(mr.transform, "indent-normalized") {
 		out = normalizeIndentation(content, out)
@@ -313,6 +319,43 @@ func stripAllLineNumberPrefixes(text string) string {
 			continue
 		}
 		lines[i] = lineNumberPrefixRE.ReplaceAllString(l, "")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// paddedLineNumberPrefixRE is the readFileRange output shape with at least
+// one leading space - the padding the reader always emits when
+// right-aligning line numbers (#3854).
+var paddedLineNumberPrefixRE = regexp.MustCompile(`^\s{1,12}\d+\t`)
+
+// bareLineNumberPrefixRE matches the width-1 readFileRange shape with no
+// leading padding (small files, #3854).
+var bareLineNumberPrefixRE = regexp.MustCompile(`^(\d+)\t`)
+
+// stripPaddedLineNumberPrefixes strips reader-artifact number prefixes
+// from new_text (#3854). A padded prefix (>=1 leading space) is always a
+// reader artifact. A column-0 digit+TAB line is ambiguous: readFileRange
+// emits width-1 numbers with NO padding for small files (pinned by
+// TestIssue601_W1), while TSV rows also start at column 0 - so a column-0
+// prefix strips only when the number is a PLAUSIBLE line number of the
+// file being edited (<= its line count).
+func stripPaddedLineNumberPrefixes(text, content string) string {
+	maxLine := strings.Count(content, "\n") + 1
+	lines := trimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
+	for i, l := range lines {
+		if readFileLineNumberOnlyRE.MatchString(l) {
+			lines[i] = ""
+			continue
+		}
+		if paddedLineNumberPrefixRE.MatchString(l) {
+			lines[i] = paddedLineNumberPrefixRE.ReplaceAllString(l, "")
+			continue
+		}
+		if m := bareLineNumberPrefixRE.FindStringSubmatch(l); m != nil {
+			if n, err := strconv.Atoi(m[1]); err == nil && n >= 1 && n <= maxLine {
+				lines[i] = bareLineNumberPrefixRE.ReplaceAllString(l, "")
+			}
+		}
 	}
 	return strings.Join(lines, "\n")
 }

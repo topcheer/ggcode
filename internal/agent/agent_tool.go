@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"regexp"
 	runtimedebug "runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1551,7 +1552,8 @@ func simAdjustNewText(content, newText string, mr simMatchResult) string {
 		}
 	}
 	if strings.Contains(mr.transform, "line-numbers-stripped") {
-		out = simStripAllLineNumberPrefixes(out)
+		// #3854: padded-prefix strip, mirroring tool.adjustNewText.
+		out = simStripPaddedLineNumberPrefixes(out, content)
 	}
 	if strings.Contains(mr.transform, "indent-normalized") {
 		out = simNormalizeIndentation(content, out)
@@ -1596,6 +1598,36 @@ func simStripLineNumberPrefix(text string) string {
 		out[i] = simLineNumberPrefixRE.ReplaceAllString(l, "")
 	}
 	return strings.Join(out, "\n")
+}
+
+// simPaddedLineNumberPrefixRE mirrors tool.paddedLineNumberPrefixRE
+// (#3854): at least one leading space before the digits.
+var simPaddedLineNumberPrefixRE = regexp.MustCompile(`^\s{1,12}\d+\t`)
+var simBareLineNumberPrefixRE = regexp.MustCompile(`^(\d+)\t`)
+
+// simStripPaddedLineNumberPrefixes mirrors
+// tool.stripPaddedLineNumberPrefixes (#3854): padded prefixes always
+// strip; column-0 digit+TAB strips only when the number is a plausible
+// line number of the file (readFileRange width-1 form, TestIssue601_W1).
+func simStripPaddedLineNumberPrefixes(text, content string) string {
+	maxLine := strings.Count(content, "\n") + 1
+	lines := simTrimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
+	for i, l := range lines {
+		if simReadFileLineNumberOnlyRE.MatchString(l) {
+			lines[i] = ""
+			continue
+		}
+		if simPaddedLineNumberPrefixRE.MatchString(l) {
+			lines[i] = simPaddedLineNumberPrefixRE.ReplaceAllString(l, "")
+			continue
+		}
+		if m := simBareLineNumberPrefixRE.FindStringSubmatch(l); m != nil {
+			if n, err := strconv.Atoi(m[1]); err == nil && n >= 1 && n <= maxLine {
+				lines[i] = simBareLineNumberPrefixRE.ReplaceAllString(l, "")
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func simStripAllLineNumberPrefixes(text string) string {
