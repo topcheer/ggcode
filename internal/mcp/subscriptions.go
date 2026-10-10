@@ -296,6 +296,24 @@ func (c *Client) EnableModernSubscriptions(ctx context.Context) bool {
 		return false
 	}
 	c.subMu.Lock()
+	// #3869 A: check-then-act race. The early read above released subMu
+	// before the slow ListenSubscriptions call (ack wait up to 15s), so two
+	// concurrent callers both saw existing==nil, both subscribed, and the
+	// unconditional overwrite here orphaned the first subscription (still
+	// registered in c.subs, watch goroutine running, server-side stream
+	// leaked - nothing cancels it until close). Re-read under the lock and
+	// cancel the LOSER (the new one) instead.
+	if cur := c.modernSub; cur != nil {
+		select {
+		case <-cur.done:
+			// previous stream finished - replace it below
+		default:
+			c.subMu.Unlock()
+			sub.Cancel(fmt.Errorf("subscriptions/listen lost the concurrent-enable race (#3869)"))
+			debug.Log("mcp-subs", "server=%s concurrent subscriptions/listen lost the race; cancelling the new one", c.name)
+			return true
+		}
+	}
 	c.modernSub = sub
 	c.subMu.Unlock()
 	c.subListenState.Store(subStateSupported)

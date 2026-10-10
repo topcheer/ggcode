@@ -126,6 +126,18 @@ func parseLegacyInstallArgs(args []string) (config.MCPServerConfig, error) {
 	return server, nil
 }
 
+// looksLikeURLScheme reports whether the token starts with a URL scheme
+// (http://, https://, ws://, wss://) - such a first argument in a
+// multi-arg install is a URL, not a server name (#3869 B).
+func looksLikeURLScheme(s string) bool {
+	for _, p := range []string{"http://", "https://", "ws://", "wss://"} {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func parseOptionTransportInstallArgs(args []string, transport string) (config.MCPServerConfig, error) {
 	if len(args) == 0 {
 		return config.MCPServerConfig{}, fmt.Errorf("missing install target for transport %s", transport)
@@ -162,6 +174,15 @@ func parseOptionTransportInstallArgs(args []string, transport string) (config.MC
 			name = inferCommandServerName(server.Command, server.Args)
 		}
 	case "http", "ws":
+		// #3869 B: `mcp install -t http https://a.com https://b.com` used
+		// to swallow a.com as the SERVER NAME and keep b.com as the URL -
+		// zero-error, and the user's intended endpoint silently became a
+		// config key. The target-count check below validated the post-strip
+		// slice, not the raw args. If the first raw arg looks like a URL
+		// there is no name at all - fail loudly like the legacy path does.
+		if len(args) > 1 && looksLikeURLScheme(strings.TrimSpace(args[0])) {
+			return config.MCPServerConfig{}, fmt.Errorf("%s install expects a single URL (got %d args, and %q looks like a URL, not a server name)", transport, len(args), args[0])
+		}
 		if len(target) != 1 {
 			return config.MCPServerConfig{}, fmt.Errorf("%s install expects a single URL", transport)
 		}
