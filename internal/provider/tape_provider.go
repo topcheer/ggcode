@@ -44,7 +44,12 @@ type tapeEvent struct {
 	Err               string      `json:"er,omitempty"`
 	Truncated         bool        `json:"cut,omitempty"`
 	PolicyBlocked     bool        `json:"pb,omitempty"`
-	Extra             string      `json:"x,omitempty"` // reserved
+	Confidence        *float64    `json:"cf,omitempty"`   // Done: mean token logprob (replay fidelity, #3938)
+	Block             *string     `json:"blk,omitempty"`  // ServerTool: verbatim server-side block JSON (#3938)
+	ToolServerTool    bool        `json:"tst,omitempty"`  // ToolCallDelta.ServerTool marker (#3938)
+	ToolThoughtSig    []byte      `json:"tsig,omitempty"` // ToolCallDelta.ThoughtSignature - Gemini echo-back (#3938)
+	ToolCaller        string      `json:"tcal,omitempty"` // ToolCallDelta.Caller - PTC echo-back (#3938)
+	Extra             string      `json:"x,omitempty"`    // reserved
 }
 
 type llmTapeEntry struct {
@@ -280,9 +285,21 @@ func fromStreamEvent(ev StreamEvent) tapeEvent {
 		ToolArgs: string(ev.Tool.Arguments),
 		Result:   ev.Result, IsError: ev.IsError, Usage: ev.Usage,
 		Truncated: ev.Truncated, PolicyBlocked: ev.PolicyBlocked,
+		Confidence:     ev.Confidence,
+		ToolServerTool: ev.Tool.ServerTool,
+		ToolThoughtSig: ev.Tool.ThoughtSignature,
+		ToolCaller:     string(ev.Tool.Caller),
 	}
 	if ev.Error != nil {
 		te.Err = ev.Error.Error()
+	}
+	// ServerTool events carry the verbatim server-side block; persist it as
+	// JSON so replay reconstructs the exact block for echo-back (#3938).
+	if ev.Type == StreamEventServerTool {
+		if raw, err := json.Marshal(ev.Block); err == nil {
+			s := string(raw)
+			te.Block = &s
+		}
 	}
 	return te
 }
@@ -293,13 +310,28 @@ func (te tapeEvent) toStreamEvent() StreamEvent {
 		ThinkingSignature: te.ThinkingSignature,
 		Tool: ToolCallDelta{
 			ID: te.ToolID, Index: te.ToolIndex, Name: te.ToolName,
-			Arguments: json.RawMessage(te.ToolArgs),
+			Arguments:        json.RawMessage(te.ToolArgs),
+			ServerTool:       te.ToolServerTool,
+			ThoughtSignature: te.ToolThoughtSig,
 		},
 		Result: te.Result, IsError: te.IsError, Usage: te.Usage,
 		Truncated: te.Truncated, PolicyBlocked: te.PolicyBlocked,
+		Confidence: te.Confidence,
+	}
+	// Keep nil-vs-empty semantics: an absent Caller on old tapes must stay
+	// nil (json.RawMessage("") is non-nil and would diverge from recorded
+	// events in reflect.DeepEqual comparisons and echo-back logic).
+	if te.ToolCaller != "" {
+		ev.Tool.Caller = json.RawMessage(te.ToolCaller)
 	}
 	if te.Err != "" {
 		ev.Error = errors.New(te.Err)
+	}
+	if te.Block != nil {
+		var blk ContentBlock
+		if err := json.Unmarshal([]byte(*te.Block), &blk); err == nil {
+			ev.Block = blk
+		}
 	}
 	return ev
 }
