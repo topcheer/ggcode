@@ -110,6 +110,15 @@ func vrmCheckFunc(fn *ast.FuncDecl, fset *token.FileSet, filePath string, issues
 		return
 	}
 
+	// #3758-A: the "return the new value" idiom (time.Time.Add et al.)
+	// mutates the copy ON PURPOSE and hands it back to the caller - nothing
+	// is lost, and the pointer-receiver advice would actively damage a
+	// correct immutable API. Exempt any function that returns the receiver
+	// (or one of its fields).
+	if vrmReturnsReceiver(fn.Body, recvName) {
+		return
+	}
+
 	// Check if this function already had mutations in oldContent
 	typeName := vrmReceiverTypeShort(fn.Recv.List[0].Type)
 	sig := typeName + "." + fn.Name.Name
@@ -199,6 +208,33 @@ func vrmReceiverTypeShort(expr ast.Expr) string {
 // into nested function literals) looking for assignments or inc/dec on
 // receiver fields. Returns mutations found.
 func vrmFindReceiverMutations(body *ast.BlockStmt, recvName string) []vrmMutation {
+	// #3758-B: a `recvName := ...` inside the body re-binds the NAME -
+	// later mutations of it hit the shadow, not the receiver. Collect the
+	// rebind positions first; position-ordered comparison is conservative
+	// (may skip a genuine mutation after a rebind in a sibling scope), which
+	// matches this detector's keep-false-positives-low contract.
+	var rebinds []token.Pos
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, isFuncLit := n.(*ast.FuncLit); isFuncLit {
+			return false
+		}
+		if as, ok := n.(*ast.AssignStmt); ok && as.Tok == token.DEFINE {
+			for _, lhs := range as.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && id.Name == recvName {
+					rebinds = append(rebinds, as.Pos())
+				}
+			}
+		}
+		return true
+	})
+	isShadowed := func(p token.Pos) bool {
+		for _, r := range rebinds {
+			if r < p {
+				return true
+			}
+		}
+		return false
+	}
 	var results []vrmMutation
 	ast.Inspect(body, func(n ast.Node) bool {
 		if n == nil {
@@ -213,6 +249,9 @@ func vrmFindReceiverMutations(body *ast.BlockStmt, recvName string) []vrmMutatio
 		case *ast.AssignStmt:
 			for _, lhs := range stmt.Lhs {
 				if field := vrmExtractRecvField(lhs, recvName); field != "" {
+					if isShadowed(stmt.Pos()) {
+						continue
+					}
 					results = append(results, vrmMutation{
 						pos:   lhs.Pos(),
 						field: field,
@@ -221,15 +260,49 @@ func vrmFindReceiverMutations(body *ast.BlockStmt, recvName string) []vrmMutatio
 			}
 		case *ast.IncDecStmt:
 			if field := vrmExtractRecvField(stmt.X, recvName); field != "" {
-				results = append(results, vrmMutation{
-					pos:   stmt.X.Pos(),
-					field: field,
-				})
+				if !isShadowed(stmt.Pos()) {
+					results = append(results, vrmMutation{
+						pos:   stmt.X.Pos(),
+						field: field,
+					})
+				}
 			}
 		}
 		return true
 	})
 	return results
+}
+
+// vrmReturnsReceiver reports whether the function returns the receiver
+// itself (or one of its fields) from any top-level return statement - the
+// "return the new value" idiom that makes value-receiver mutation
+// intentional (#3758-A). FuncLit returns are ignored: they return from the
+// closure, not from this method.
+func vrmReturnsReceiver(body *ast.BlockStmt, recvName string) bool {
+	returns := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, isFuncLit := n.(*ast.FuncLit); isFuncLit {
+			return false
+		}
+		rs, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+		for _, res := range rs.Results {
+			switch e := res.(type) {
+			case *ast.Ident:
+				if e.Name == recvName {
+					returns = true
+				}
+			case *ast.SelectorExpr:
+				if id, ok := e.X.(*ast.Ident); ok && id.Name == recvName {
+					returns = true
+				}
+			}
+		}
+		return true
+	})
+	return returns
 }
 
 // vrmExtractRecvField checks if an expression is a field selection on the
