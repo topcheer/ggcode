@@ -560,6 +560,13 @@ func (p *OpenAIResponsesProvider) pollBackground(ctx context.Context, payload *r
 		next, err := p.get(ctx, payload.ID)
 		if err != nil {
 			if ctx.Err() != nil {
+				// #3894: when ctx.Done and the delay timer are BOTH ready
+				// the select may pick the timer, and this get then fails on
+				// the canceled context - this early return used to skip the
+				// best-effort server-side cancel the Done branch performs,
+				// so the /cancel endpoint was never hit (flaky
+				// TestBackgroundChatCancelOnContextCancel under -race).
+				p.cancelResponse(payload.ID)
 				return nil, ctx.Err()
 			}
 			errStreak++
