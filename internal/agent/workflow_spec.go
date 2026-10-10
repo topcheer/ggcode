@@ -98,6 +98,9 @@ type workflowEngine struct {
 	// attribution can distinguish "never attempted" from "attempt record
 	// fell out of the recent window".
 	attemptCounts map[string]int
+	// #3850: fire-once latch for the end-of-run outstanding-steps audit.
+	// Guarded by mu; see outstandingMessageOnce.
+	auditFired bool
 }
 
 const workflowSpecFileName = "workflow-spec.json"
@@ -452,6 +455,28 @@ func (e *workflowEngine) outstandingMessage() string {
 		ids[i] = st.ID + " (expects " + st.ArtifactGlob + ")"
 	}
 	return fmt.Sprintf("[workflow-spec] Declared steps with no produced artifacts yet this run: %s. If you are about to declare the task complete, verify these steps actually happened or state which ones were skipped.", strings.Join(ids, "; "))
+}
+
+// outstandingMessageOnce wraps outstandingMessage with a fire-once latch
+// (#3850): the end-of-run audit is computed on EVERY stop attempt; without
+// the latch the caller's `continue` would re-inject the same reminder every
+// iteration for the rest of the run. First non-empty message wins and arms
+// the latch; subsequent calls return "".
+func (e *workflowEngine) outstandingMessageOnce() string {
+	if e == nil {
+		return ""
+	}
+	m := e.outstandingMessage()
+	if m == "" {
+		return ""
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.auditFired {
+		return ""
+	}
+	e.auditFired = true
+	return m
 }
 
 // workflowEngineLazy mirrors invariantEngineLazy: anchored to the agent's

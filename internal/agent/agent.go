@@ -3287,7 +3287,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// declared steps against their grounded artifacts before the run
 			// finishes - "steps 1-4 done" is checked, not trusted.
 			if wf := a.workflowEngineLazy(); wf != nil {
-				if wfMsg := wf.outstandingMessage(); wfMsg != "" {
+				if wfMsg := wf.outstandingMessageOnce(); wfMsg != "" {
+					debug.Log("agent", "Iteration %d: workflow-spec audit injected", i+1)
 					a.contextManager.Add(provider.Message{
 						Role: "user",
 						Content: []provider.ContentBlock{{
@@ -3295,6 +3296,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 							Text: wfMsg,
 						}},
 					})
+					// #3850: like every sibling gate above, the injected
+					// audit needs a fresh model turn to be consumed. The
+					// old fall-through made the message a dead letter when
+					// this was the only gate hit, leaving an orphaned user
+					// message in the history and disabling the audit in
+					// exactly the scenario it exists for.
+					continue
 				}
 			}
 			// r392 (AREX constraint-wise audit): listed multi-requirement
