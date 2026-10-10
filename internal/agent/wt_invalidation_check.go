@@ -430,9 +430,13 @@ func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
 	// structured fields as bare tokens like "true"/"soft" and never finds
 	// a git subcommand):
 	// git_checkout create=true only adds and switches a ref - tracked
-	// content untouched.
+	// content untouched. #3929: with a start_point the checkout lands on
+	// that revspec's content (validateRevspec-confirmed), so it mutates.
 	if toolName == "git_checkout" {
 		if create, ok := m["create"].(bool); ok && create {
+			if sp, ok := m["start_point"].(string); ok && sp != "" {
+				return false // create-from-start-point rewrites the tree (#3929)
+			}
 			return true
 		}
 		return false

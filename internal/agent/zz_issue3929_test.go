@@ -28,3 +28,14 @@ func TestIssue3929_StartPointFormIsMutating(t *testing.T) {
 		}
 	}
 }
+
+// The structured git_checkout tool: create=true stays read-only only
+// WITHOUT a start_point (#3929 second path).
+func TestIssue3929_StructuredCheckoutStartPointMutating(t *testing.T) {
+	if !isReadOnlyGitInvocation("git_checkout", `{"branch":"fix","create":true}`) {
+		t.Fatal("create from HEAD stays read-only (#3864 B)")
+	}
+	if isReadOnlyGitInvocation("git_checkout", `{"branch":"fix","create":true,"start_point":"origin/main"}`) {
+		t.Fatal("create from start_point rewrites the tree - must be mutating (#3929)")
+	}
+}
