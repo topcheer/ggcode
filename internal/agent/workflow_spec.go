@@ -196,6 +196,37 @@ func (e *workflowEngine) recordCompletion(path string) {
 // while keeping pre-run artifacts (minutes old) correctly stale.
 const wfClockSkew = 2 * time.Second
 
+// recordCommandGrounding completes COMMANDS-ONLY steps: steps that guard
+// commands but declare no artifact_glob (#3835). Every artifact-based
+// completion path (recordCompletion, probeArtifactsOnDisk, groundIfFresh)
+// bails on an empty glob, so such a step was permanently incomplete and any
+// step listing it in Requires deadlocked block mode on a spec that could
+// never be satisfied. For a commands-only step the successful execution of
+// a guarded command IS the step's product - record it after each successful
+// run_command. Steps with an artifact_glob keep artifact precedence (the
+// glob is the stronger, filesystem-grounded proof).
+func (e *workflowEngine) recordCommandGrounding(command string) {
+	if command == "" {
+		return
+	}
+	e.loadWorkflowSpec()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for _, id := range e.order {
+		st := e.steps[id]
+		if st.ArtifactGlob != "" {
+			continue
+		}
+		if _, done := e.completed.Load(id); done {
+			continue
+		}
+		if commandMatches(st.OnCommands, command) {
+			e.completed.Store(id, struct{}{})
+			debug.Log("agent", "[workflow-spec] step %s complete (guarded command succeeded: %q)", id, command)
+		}
+	}
+}
+
 // globFreshOnDisk reports whether pattern resolves to at least one file
 // on disk whose mtime is at or after the engine's freshness anchor (#3414),
 // modulo the wfClockSkew wall-clock tolerance.

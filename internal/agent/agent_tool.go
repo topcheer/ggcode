@@ -394,6 +394,12 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		// Probe the disk for fresh artifacts after every command success.
 		if tc.Name == "run_command" {
 			wf.probeArtifactsOnDisk()
+			// #3835: commands-only steps (on_commands, no artifact_glob)
+			// have no artifact to probe - the successful guarded command
+			// itself grounds them, otherwise requires deadlocks block mode.
+			if cmd, _ := parseRunCommandArgs(tc.Arguments); cmd != "" {
+				wf.recordCommandGrounding(cmd)
+			}
 		}
 	}
 	return res
