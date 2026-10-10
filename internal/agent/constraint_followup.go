@@ -104,6 +104,12 @@ func parseUnmetItems(assistantText string) ([]unmetItem, bool) {
 // numberedVerdictPrefix extracts the leading item number, if any, from a
 // matched verdict line. Returns 0 for unnumbered lines.
 func numberedVerdictPrefix(_, matchedLine string) int {
+	// #3799 A: the match includes the `^\s*` indentation - markdown
+	// indented list replies (`  1. [not done] ...`) started parsing at a
+	// space, broke immediately, and silently lost the constraint number,
+	// degrading the follow-up prompt to quoting verdict-tail text instead
+	// of the audited constraint line. Skip leading whitespace first.
+	matchedLine = strings.TrimLeft(matchedLine, " \t")
 	n := 0
 	for _, r := range matchedLine {
 		if r >= '0' && r <= '9' {
