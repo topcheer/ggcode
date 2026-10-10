@@ -191,7 +191,16 @@ func (s *editCoverageState) checkCoverage(toolName, rawArgs string) string {
 			}
 		}
 		if covered {
-			s.verifiedPkgs[pkg] = true // remember for subsequent runs (#417)
+			// #3861 A: permanent coverage credit requires a COMPLETED execution
+			// (run_command). recordToolCall runs in the PRE-execution loop, so
+			// for start_command the background run has not even started - its
+			// outcome (a FAILED go test) arrives via read_command_output, which
+			// never reaches this state machine, and a failed verification would
+			// have been credited forever. Registration is not a result, the
+			// same semantics #3840 applied to verify_hint.
+			if toolName == "run_command" {
+				s.verifiedPkgs[pkg] = true // remember for subsequent runs (#417)
+			}
 			continue
 		}
 		uncovered = append(uncovered, pkg)
@@ -477,6 +486,11 @@ func coverageExtractVerifyScopes(cmd string) []string {
 // Lexical (token-prefix) matching: substring Contains matched inside commit
 // messages ("git commit -m 'make test pass'") and other noise (#354).
 func coverageIsVerifyCommand(lc string) bool {
+	// #3861 B: strip leading env-var assignments (GOFLAGS="-p=1" go test ...)
+	// before tokenizing - the first token was the assignment, so the command
+	// was not recognized as a verify run and edited packages warned UNVERIFIED
+	// although a full `go test ./...` had just run.
+	lc = stripEnvAssignments(lc)
 	fields := strings.Fields(lc)
 	if len(fields) == 0 {
 		return false
