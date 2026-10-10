@@ -334,6 +334,19 @@ func (a *Agent) routeWeaknessSignals() {
 		return
 	}
 	signals := a.collectWeaknessSignals()
+	// #3925: hold the cross-process flock across the WHOLE mutation -
+	// load, Count++, and save. #3837 B placed the lock in
+	// routeMatureSignals only, so the main load-modify-save stage ran
+	// unlocked and two processes sharing a workspace still lost one side's
+	// increments to last-writer-wins (the comment overpromised). The lock
+	// is non-blocking-with-timeout; on failure we proceed unlocked
+	// (same availability-over-mutexality tradeoff as #1752/#775).
+	unlock, lockErr := util.FileLock(filepath.Join(wd, ".ggcode", weaknessStoreFile) + ".lock")
+	if lockErr != nil {
+		debug.Log("weakness", "store lock unavailable, proceeding unlocked: %v", lockErr)
+	} else {
+		defer unlock()
+	}
 	store := loadWeaknessStore(filepath.Join(wd, ".ggcode", weaknessStoreFile))
 	changed := false
 	now := time.Now()
@@ -386,24 +399,32 @@ func (a *Agent) routeWeaknessSignals() {
 		debug.Log("weakness", "store save failed: %v", err)
 		return
 	}
-	routeMatureSignals(wd, store)
+	routeMatureSignalsLocked(wd, store)
 }
 
-// routeMatureSignals writes one line per mature-and-unrouted signal into
-// project memory (key weakness-signals). Existing lines are deduped by
-// fingerprint prefix so re-routing after a manual memory edit still cannot
-// duplicate a line.
+// routeMatureSignals is the standalone entry (tests, future callers): it
+// acquires the store flock itself, then runs the locked body. Production
+// flow calls routeMatureSignalsLocked directly - routeWeaknessSignals
+// already holds the lock (#3925), and the non-blocking flock on a second
+// fd of the same process would time out against itself.
 func routeMatureSignals(workingDir string, store weaknessSignalStore) {
-	// #3837 B: the store is shared across processes (TUI + desktop in one
-	// workspace is common); an unlocked load-modify-save loses one side's
-	// Count increments to last-writer-wins. Hold the same flock the memory
-	// package uses (memory/auto.go #1752/#775) across the whole mutation.
 	unlock, lockErr := util.FileLock(filepath.Join(workingDir, ".ggcode", weaknessStoreFile) + ".lock")
 	if lockErr != nil {
 		debug.Log("weakness", "store lock unavailable, proceeding unlocked: %v", lockErr)
 	} else {
 		defer unlock()
 	}
+	routeMatureSignalsLocked(workingDir, store)
+}
+
+// routeMatureSignalsLocked is the flock-held body: it writes one line per
+// mature-and-unrouted signal into project memory (key weakness-signals).
+// Existing lines are deduped by fingerprint prefix so re-routing after a
+// manual memory edit still cannot duplicate a line. Caller holds the store
+// flock (#3925).
+func routeMatureSignalsLocked(workingDir string, store weaknessSignalStore) {
+	// #3837 B heritage note: the lock used to live HERE, covering only the
+	// memory-routing tail while the caller's load/Count++/save ran unlocked.
 	auto := memory.NewProjectAutoMemory(workingDir)
 	if auto == nil {
 		return
