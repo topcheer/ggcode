@@ -737,6 +737,9 @@ func (m *Model) handleBranchCommand(parts []string) tea.Cmd {
 	// the task board too.
 	m.snapshotTasksInto(oldSes)
 	branched.TasksJSON = append([]byte(nil), oldSes.TasksJSON...)
+	// #3792: same fingerprint gap as /rewind - the branch inherits the
+	// workspace fingerprint so resume reconciliation survives.
+	branched.TasksEnvJSON = append([]byte(nil), oldSes.TasksEnvJSON...)
 	if oldSes.SidebarVisible != nil {
 		val := *oldSes.SidebarVisible
 		branched.SidebarVisible = &val
