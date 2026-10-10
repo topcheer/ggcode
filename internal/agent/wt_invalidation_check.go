@@ -297,15 +297,27 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 			// target checkout (diff content) or a -- boundary stays mutating.
 			found = true
 			creating := false
+			positionals := 0
 			for _, f := range fields[subIdx+1:] {
 				if isShellBoundaryToken(f) || f == "--" {
 					break
 				}
 				if f == "-b" || f == "-B" || (sub == "switch" && (f == "-c" || f == "-C")) {
 					creating = true
+					continue
 				}
+				if strings.HasPrefix(f, "-") {
+					continue // other flags carry no positional meaning here
+				}
+				positionals++
 			}
-			if !creating {
+			// #3929: the -b/-c exemption only holds when the new branch is
+			// cut from HEAD. A start-point positional (branch/tag/revspec)
+			// makes it `git branch <new> <start-point>` + checkout - tracked
+			// content IS rewritten when start-point != HEAD. Count positionals
+			// across the whole form (git accepts `checkout <start> -b <new>`),
+			// so 2 positionals = explicit start-point = mutating.
+			if !creating || (creating && positionals >= 2) {
 				readOnly = false
 			}
 		case sub == "reset":
@@ -419,6 +431,12 @@ func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
 	// content untouched.
 	if toolName == "git_checkout" {
 		if create, ok := m["create"].(bool); ok && create {
+			// #3929: start_point != HEAD rewrites tracked content (branch
+			// <new> <start-point> + checkout semantics) - not tree-preserving.
+			sp, _ := m["start_point"].(string)
+			if sp = strings.TrimSpace(sp); sp != "" && sp != "HEAD" {
+				return false
+			}
 			return true
 		}
 		return false
