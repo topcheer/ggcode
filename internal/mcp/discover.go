@@ -371,7 +371,19 @@ func (c *Client) probeModern(ctx context.Context) (*InitializeResult, error) {
 		}
 		retry, rerr := c.Discover(ctx)
 		if rerr != nil {
-			return nil, u
+			// #3763: the negotiation itself succeeded (the server spoke
+			// -32022 and we picked a mutual version) - a retry failure is a
+			// transport/lifecycle problem (stdio EOF, network drop), NOT
+			// version incompatibility. Swallowing rerr sent users chasing
+			// version phantoms while the server was simply dead. Join all
+			// three layers: retry context first (the actionable diagnosis),
+			// the real cause, and the typed negotiation error last - keeping
+			// the typed error in the chain stops Initialize's dual-era
+			// fallback from attempting a pointless legacy handshake against
+			// a server that already proved itself modern.
+			return nil, errors.Join(
+				fmt.Errorf("mcp[%s]: discover retry after -32022 negotiation with %s failed", c.name, v),
+				rerr, u)
 		}
 		res = retry
 	}
