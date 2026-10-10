@@ -288,6 +288,49 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 			if subIdx+1 >= len(fields) || !treePreservingWorktreeSubs[strings.ToLower(fields[subIdx+1])] {
 				readOnly = false
 			}
+		case sub == "checkout" || sub == "switch":
+			// #3864 B: `git checkout -b <new>` / `git switch -c <new>` create a
+			// branch from HEAD and switch - tracked content is untouched, a
+			// pure ref operation like the already-exempted add/commit. Two
+			// false "tree mutated" warnings here exhaust the budget and the
+			// NEXT, real checkout goes unwarned. Branch creation only; a
+			// target checkout (diff content) or a -- boundary stays mutating.
+			found = true
+			creating := false
+			for _, f := range fields[subIdx+1:] {
+				if isShellBoundaryToken(f) || f == "--" {
+					break
+				}
+				if f == "-b" || f == "-B" || (sub == "switch" && (f == "-c" || f == "-C")) {
+					creating = true
+				}
+			}
+			if !creating {
+				readOnly = false
+			}
+		case sub == "reset":
+			// #3864 C: --soft moves HEAD only; --mixed (the default when no
+			// mode is given) additionally resets the index - neither touches
+			// working-tree files. --hard rewrites the tree; a `-- pathspec`
+			// form resets file content. Only the tree-touching forms warn.
+			found = true
+			softMixed := true
+			sawBoundary := false
+			for _, f := range fields[subIdx+1:] {
+				if f == "--" {
+					sawBoundary = true
+					break
+				}
+				if isShellBoundaryToken(f) {
+					break
+				}
+				if f == "--hard" {
+					softMixed = false
+				}
+			}
+			if !softMixed || sawBoundary {
+				readOnly = false
+			}
 		case readOnlyGitSubcommands[sub], treePreservingGitSubcommands[sub]:
 			found = true // cannot make cached reads stale
 		default:
@@ -308,6 +351,8 @@ func skipGitGlobalFlags(fields []string, start int) int {
 			i += 2 // flag + its value
 		case f == "--no-pager" || f == "--no-optional-locks" || f == "--literal-pathspecs":
 			i++ // boolean global flag
+		case f == "--no-replace-objects" || f == "--bare" || f == "--paginate" || f == "--no-paginate":
+			i++ // boolean global flag (#3864 D: unlisted flags were read as the subcommand)
 		case strings.HasPrefix(f, "--git-dir=") || strings.HasPrefix(f, "--work-tree=") || strings.HasPrefix(f, "-C") && f != "-C":
 			i++ // inline-value form
 		default:
@@ -366,6 +411,28 @@ func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
 		if action, ok := m["action"].(string); ok {
 			return readOnlyStashActions[strings.ToLower(strings.TrimSpace(action))]
 		}
+	}
+	// #3864 B/C structured-field exemptions (the string scan above sees
+	// structured fields as bare tokens like "true"/"soft" and never finds
+	// a git subcommand):
+	// git_checkout create=true only adds and switches a ref - tracked
+	// content untouched.
+	if toolName == "git_checkout" {
+		if create, ok := m["create"].(bool); ok && create {
+			return true
+		}
+		return false
+	}
+	// git_reset mode soft/mixed: ref/index only (same semantics as the
+	// command-line classifier above); hard (schema default) rewrites files.
+	if toolName == "git_reset" {
+		if mode, ok := m["mode"].(string); ok {
+			switch strings.ToLower(strings.TrimSpace(mode)) {
+			case "soft", "mixed":
+				return true
+			}
+		}
+		return false
 	}
 	return false
 }
