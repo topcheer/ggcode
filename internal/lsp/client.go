@@ -1297,6 +1297,14 @@ func (c *stdioClient) notify(ctx context.Context, method string, params any) err
 	}
 }
 
+// writeTimeout bounds a single JSON-RPC write to the server's stdin
+// (#3746). os.Pipe supports no SetDeadline, and a half-dead server (process
+// alive, stopped reading) fills the ~64KB pipe buffer, after which Write
+// blocks FOREVER while holding writeMu - ctx timeouts only guard the
+// response select in call(), and close()'s Process.Kill() fallback runs
+// behind the same blocked write path, so nothing ever unblocks.
+const writeTimeout = 10 * time.Second
+
 func (c *stdioClient) write(msg rpcEnvelope) error {
 	body, err := json.Marshal(msg)
 	if err != nil {
@@ -1304,11 +1312,32 @@ func (c *stdioClient) write(msg rpcEnvelope) error {
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if _, err := fmt.Fprintf(c.stdin, "Content-Length: %d\r\n\r\n", len(body)); err != nil {
-		return err
+	type writeResult struct{ err error }
+	done := make(chan writeResult, 1)
+	go func() {
+		if _, err := fmt.Fprintf(c.stdin, "Content-Length: %d\r\n\r\n", len(body)); err != nil {
+			done <- writeResult{err}
+			return
+		}
+		_, err := c.stdin.Write(body)
+		done <- writeResult{err}
+	}()
+	select {
+	case r := <-done:
+		return r.err
+	case <-time.After(writeTimeout):
+		// The server stopped draining stdin. Mark the session failed and
+		// close the pipe: the blocked goroutine unblocks with EPIPE (its
+		// result is discarded - the session is dead anyway) and writeMu is
+		// released, so callers fail fast instead of hanging behind the lock.
+		c.failMu.Lock()
+		if !c.failed {
+			c.failed = true
+		}
+		c.failMu.Unlock()
+		_ = c.stdin.Close()
+		return fmt.Errorf("lsp: write to %s timed out after %v (server not draining stdin)", c.resolved.Binary, writeTimeout)
 	}
-	_, err = c.stdin.Write(body)
-	return err
 }
 
 // maxRPCContentLength caps a single LSP RPC body accepted from the server.
