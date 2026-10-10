@@ -138,10 +138,21 @@ func (am *AutoMemory) SaveMemoryWithSourceActor(key, content, source, actor stri
 	// outgoing version into .history/ before the rename below destroys it.
 	// Fail-open per #3120 precedent - a save must not block on archive
 	// faults - but the potential loss stays observable via debug.Log.
-	if err := am.archiveVersion(safe, path); err != nil {
-		debug.Log("memory", "history archive failed for %q (continuing overwrite): %v", safe, err)
+	archived, archErr := am.archiveVersion(safe, path)
+	if archErr != nil {
+		debug.Log("memory", "history archive failed for %q (continuing overwrite): %v", safe, archErr)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
+		// #3818: archiveVersion already MOVED the live file away; a failed
+		// swap-in used to leave both gone (old only in .history, new content
+		// deleted below) - the key vanished from prompts until the next
+		// successful save. Roll the archived version back into place first;
+		// the tmp file is then cleaned up as before.
+		if archived != "" {
+			if rbErr := os.Rename(archived, path); rbErr != nil {
+				debug.Log("memory", "history rollback failed for %q (live file lost, archived copy at %s): %v", safe, archived, rbErr)
+			}
+		}
 		os.Remove(tmpName)
 		return err
 	}

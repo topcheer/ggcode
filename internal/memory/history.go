@@ -33,16 +33,16 @@ const (
 // write). Errors are reported, never fatal: callers fail open (#3120
 // precedent - memory writes must not block on archive faults) but log via
 // debug so the loss is observable.
-func (am *AutoMemory) archiveVersion(safe, path string) error {
+func (am *AutoMemory) archiveVersion(safe, path string) (string, error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			return nil // first write, nothing to archive
+			return "", nil // first write, nothing to archive
 		}
-		return err
+		return "", err
 	}
 	hdir := filepath.Join(am.dir, historyDirName)
 	if err := os.MkdirAll(hdir, 0755); err != nil {
-		return err
+		return "", err
 	}
 	stamp := time.Now().UTC().Format(historyTSFormat)
 	dst := filepath.Join(hdir, safe+"."+stamp+".md")
@@ -52,7 +52,10 @@ func (am *AutoMemory) archiveVersion(safe, path string) error {
 	if _, err := os.Stat(dst); err == nil {
 		dst = filepath.Join(hdir, fmt.Sprintf("%s.%s.%d.md", safe, stamp, os.Getpid()))
 	}
-	return os.Rename(path, dst)
+	if err := os.Rename(path, dst); err != nil {
+		return "", err
+	}
+	return dst, nil // #3818: caller rolls back from dst if the swap-in fails
 }
 
 // MemoryVersion is one archived (or current) snapshot of a memory key.
