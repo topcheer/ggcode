@@ -219,6 +219,7 @@ type Agent struct {
 	artifactGuard                *generatedArtifactState    // generated artifact / lock file edit warning
 	fulfillmentGate              *fulfillmentGateState      // pre-completion coverage verification (request-vs-work match)
 	constraintAudit              *constraintAuditState      // per-item requirement audit for listed multi-part tasks (r392)
+	constraintFollowup           *constraintFollowupState   // AREX closed loop: unmet verdict items drive targeted follow-up (r492)
 	ambiguityPoint               *ambiguityPointState       // pre-run intent disambiguation (ambiguity detection in user request)
 	companionGuard               *companionGuardState       // companion test file coverage check (unedited paired tests)
 	specGaming                   *specGamingState           // specification gaming detection (reward hacking / verification tampering)
@@ -473,6 +474,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		perfBaseline:           newPerfBaselineState(),
 		fulfillmentGate:        newFulfillmentGateState(),
 		constraintAudit:        newConstraintAuditState(),
+		constraintFollowup:     newConstraintFollowupState(),
 		ambiguityPoint:         newAmbiguityPointState(),
 		planDrift:              newPlanDriftState(),
 		unverifiedClaim:        newUnverifiedClaimState(),
@@ -1994,6 +1996,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// flush so final detector states are visible.
 	defer a.routeWeaknessSignals()
 	a.constraintAudit.reset()
+	a.constraintFollowup.reset()
 	a.ambiguityPoint.reset()
 	a.planDrift.reset()
 	a.unverifiedClaim.reset()
@@ -3304,6 +3307,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: auditMsg,
+					}},
+				})
+				continue
+			}
+			// r492 (AREX closed loop): once the audit has fired, parse the
+			// assistant's verdict reply; [not done] items drive a bounded
+			// targeted follow-up (then explicit-gap disclosure), not a
+			// silently-dropped requirement list.
+			if fuMsg := a.constraintFollowup.checkAndInject(textBuf, a.constraintAudit); fuMsg != "" {
+				debug.Log("agent", "Iteration %d: constraint followup injected (round %d)", i+1, a.constraintFollowup.currentRound())
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: fuMsg,
 					}},
 				})
 				continue
