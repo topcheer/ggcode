@@ -543,6 +543,7 @@ max_iterations: 0
 
 # Maximum total tokens (input + output) per agent run (0 = unlimited)
 # Progressive warnings at 80% and 95%, hard stop at 100%.
+# Sub-agent spend (spawn_agent / use_namedagent) counts toward this budget.
 # session_token_budget: 0
 
 # Per-run wall-clock soft budget (e.g. 10m, 1h; 0 = unlimited). Unlike
