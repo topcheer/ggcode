@@ -931,12 +931,17 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 			// write-time formatting so mismatch means REAL drift here too.
 			mirrored := mirrorWriteTimeGoFormat(path, newContent)
 			return checkWriteIntegrity(path, oldContent, mirrored)
-		})
+		}, writtenSet)
 	}
 
 	// Post-write missing test companion detection for multi-file edits.
-	if !result.IsError {
-		a.runPostWriteWarnings(&result, plans, CheckMissingTestCompanionWithFS)
+	// #3853: mirror the #2143 P1/P2 filters - a dry-run preview writes
+	// nothing, and in partial_success mode only written_paths actually
+	// landed. Unwritten plans used to emit companion warnings and eat the
+	// shared per-turn guidance budget (#1864 case 2), crowding out real
+	// warnings elsewhere in the turn.
+	if !result.IsError && !isDryRun {
+		a.runPostWriteWarnings(&result, plans, CheckMissingTestCompanionWithFS, writtenSet)
 	}
 
 	// Post-write hardcoded credential detection for multi-file edits
@@ -946,8 +951,8 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	// registry copy respects the maxIntegrityWarnings cap).
 
 	// Post-write debug statement detection for multi-file edits.
-	if !result.IsError {
-		a.runPostWriteWarnings(&result, plans, checkDebugStmts)
+	if !result.IsError && !isDryRun {
+		a.runPostWriteWarnings(&result, plans, checkDebugStmts, writtenSet)
 	}
 
 	postEnv := env
@@ -969,12 +974,15 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 // non-empty warnings to the result via appendGuidance - the shared per-turn
 // budget path (#1864 case 2: the direct += appends let N plans stack 3N
 // warning blocks that neither charged the count cap nor the 2048-byte pool).
-func (a *Agent) runPostWriteWarnings(result *tool.Result, plans []tool.PlannedFileEdit, checker func(path, oldContent, newContent string) string) {
+func (a *Agent) runPostWriteWarnings(result *tool.Result, plans []tool.PlannedFileEdit, checker func(path, oldContent, newContent string) string, writtenSet map[string]bool) {
 	if len(plans) == 0 {
 		return
 	}
 	var warnings []string
 	for _, plan := range plans {
+		if writtenSet != nil && !writtenSet[plan.Path] {
+			continue // #3853: not actually written (failed/skipped in partial mode)
+		}
 		if diff.HasChanges(plan.OldContent, plan.NewContent) {
 			if w := checker(plan.Path, plan.OldContent, plan.NewContent); w != "" {
 				warnings = append(warnings, w)
