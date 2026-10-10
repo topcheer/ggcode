@@ -138,6 +138,20 @@ type testFailCollector struct {
 	degraded map[string]bool
 }
 
+// goTestInvokedAsTokens reports whether the command invokes go test as
+// adjacent whitespace-separated tokens ("... go test ..."). Quoted
+// embeddings (awk '/go test/{...}', rg 'go test') glue the words into a
+// single non-matching token, so log-reading commands are rejected (#3863 A).
+func goTestInvokedAsTokens(cmd string) bool {
+	fields := strings.Fields(cmd)
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] == "go" && fields[i+1] == "test" {
+			return true
+		}
+	}
+	return false
+}
+
 func newTestFailCollector() *testFailCollector {
 	return &testFailCollector{counts: map[string]int{}, degraded: map[string]bool{}}
 }
@@ -148,10 +162,14 @@ func newTestFailCollector() *testFailCollector {
 func (c *testFailCollector) record(cmd, output string) {
 	// #3781 fix 2: only go-test runs count. A bare tool-name filter let
 	// `cat`ing a log or `grep`ing a build artifact feed fake failure lines
-	// into the weakness store. The command string (which wrapped/piped
-	// invocations still carry verbatim) must mention go test.
-	if !strings.Contains(cmd, "go test") {
-		return // cat/grep over stale logs never counts (#3781)
+	// into the weakness store.
+	// #3863 A: a substring test still let read-log commands EMBED the words
+	// in a quoted pattern (`awk '/go test/{f=1} f' ci.log`, `rg 'go test'`)
+	// pass the gate and pipe archived FAIL lines in. Require adjacent
+	// whitespace-separated TOKENS exactly "go" "test" - quoting the words
+	// into a regex/argument glues them into one non-matching token.
+	if !goTestInvokedAsTokens(cmd) {
+		return // cat/grep/awk/rg over stale logs never counts (#3781, #3863)
 	}
 	if !strings.Contains(output, "--- FAIL:") {
 		return // fast path: package-level failures without -v carry no test names
@@ -165,7 +183,15 @@ func (c *testFailCollector) record(cmd, output string) {
 	defer c.mu.Unlock()
 	var pending []string
 	seen := map[string]bool{}
+	// #3863 C: remember the last resolved package; a truncated tail that
+	// lost its own `FAIL\t<pkg>` summary falls back to it instead of
+	// splitting the same failing test into pkg-qualified and bare keys
+	// (diluted counts + duplicate enforce lines).
+	lastPkg := ""
 	flush := func(pkg string) {
+		if pkg == "" {
+			pkg = lastPkg
+		}
 		for _, name := range pending {
 			key := name
 			if pkg != "" {
@@ -177,6 +203,8 @@ func (c *testFailCollector) record(cmd, output string) {
 			for _, name := range pending {
 				c.degraded[name] = true
 			}
+		} else {
+			lastPkg = pkg
 		}
 		pending = nil
 		// A new package block starts: the same test name may legitimately
@@ -311,19 +339,31 @@ func (a *Agent) routeWeaknessSignals() {
 	now := time.Now()
 	for _, s := range signals {
 		rec := store[s.fingerprint]
-		if rec.Count == 0 || now.Sub(rec.LastTS) > weaknessAge {
-			// First sighting, or stale enough to restart the count:
-			// the class is re-seeded by this run's observation.
+		// #3863 D: the old `now.Sub(rec.LastTS) > weaknessAge` restart arm
+		// here was dead code - loadWeaknessStore already deletes entries
+		// older than weaknessAge, so a surviving rec is never stale.
+		if rec.Count == 0 {
+			// First sighting: the class is seeded by this run's observation.
 			rec = weaknessRecord{Class: s.class, Evidence: s.evidence, LastTS: now, Count: 1}
 		} else {
 			rec.Count++
 			rec.LastTS = now
 			// Rare upgrades to the class its fingerprint implies once it
 			// repeats (a rare failure that recurs is no longer rare).
+			// #3863 B: an IN-RUN signal already carries the strong class
+			// when the agent reran and still failed (n>=2 emits
+			// WeakForgetting directly) - adopt it. But a cross-run
+			// recurrence of a bare test-fail sighting must NOT upgrade:
+			// environment flakes have no agent-actionable semantics and a
+			// standing "enforce" rule for them is pure prompt noise.
 			if rec.Class == WeakRare {
 				switch {
+				case s.class == WeakForgetting:
+					rec.Class = WeakForgetting
 				case strings.HasPrefix(s.fingerprint, "errcat:"):
 					rec.Class = WeakBoundary
+				case strings.HasPrefix(s.fingerprint, "test-fail:"):
+					// stay Rare (#3863 B)
 				default:
 					rec.Class = WeakForgetting
 				}
