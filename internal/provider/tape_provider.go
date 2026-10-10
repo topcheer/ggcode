@@ -170,9 +170,14 @@ func (t *TapeProvider) ChatStream(ctx context.Context, messages []Message, tools
 			evs = append(evs, fromStreamEvent(ev))
 			out <- ev
 		}
-		if len(evs) > 0 {
-			t.append(&llmTapeEntry{Key: key, Kind: "stream", Events: evs})
-		}
+		// #3933: record a placeholder for ZERO-event streams too. A zero-
+		// event turn (ctx cancelled before the first event landed - the
+		// sendEvent drop path is reachable, `emitted=false` in logs) left a
+		// HOLE in the tape; replay then FIFO-fed the NEXT turn's response to
+		// this key - one round of silent misalignment before the hard error.
+		// A placeholder keeps key alignment; replaying it yields an empty
+		// stream, faithful to what was recorded.
+		t.append(&llmTapeEntry{Key: key, Kind: "stream", Events: evs})
 	}()
 	return out, nil
 }
@@ -184,10 +189,22 @@ func (t *TapeProvider) ChatStream(ctx context.Context, messages []Message, tools
 func (t *TapeProvider) take(key string) *llmTapeEntry {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// #3933: a key match at i > cursor must NOT advance the cursor past
+	// unconsumed middle entries. The old `cursor = i + 1` made recorded
+	// [A, B, A] replayed as [A, A] skip B forever (later take(B) hit the
+	// hard exhaustion error while B sat unconsumed). Consume the matched
+	// entry by splicing it out; the cursor stays put, so skipped entries
+	// remain reachable - and the FIFO fallback below still serves the
+	// earliest unconsumed entry when the key never recurs.
 	for i := t.cursor; i < len(t.order); i++ {
 		if t.order[i].Key == key {
-			t.cursor = i + 1
-			return t.order[i]
+			matched := t.order[i]
+			t.order = append(t.order[:i], t.order[i+1:]...)
+			// Head match (i == cursor): the splice pulled the next entry
+			// INTO the cursor slot - keep the cursor put. Match beyond the
+			// cursor: nothing before i moved - keep the cursor put. Either
+			// way the cursor lands on the earliest unconsumed entry.
+			return matched
 		}
 	}
 	if t.cursor < len(t.order) {
