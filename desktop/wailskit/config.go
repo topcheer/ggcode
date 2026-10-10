@@ -324,7 +324,18 @@ func UpdateConfig(values map[string]interface{}) error {
 		}
 		_ = d
 	}
-	if v, ok := values["baseURL"].(string); ok && v != "" {
+	// #3855: vendor/endpoint existence is validated whenever this batch
+	// touches vendor, endpoint, or baseURL - previously the whole check was
+	// gated on a non-empty baseURL in the SAME map, so the onboarding path
+	// (CompleteOnboard commits {vendor,endpoint,model} without baseURL)
+	// skipped validation entirely and a typo'd vendor/endpoint was written
+	// into the resident cfg before Save() had a chance to reject it. Failed
+	// updates then poisoned every in-session ResolveActiveEndpoint call
+	// until restart, violating the #740 contract above.
+	_, hasBaseURL := values["baseURL"].(string)
+	_, hasVendor := values["vendor"].(string)
+	_, hasEndpoint := values["endpoint"].(string)
+	if hasBaseURL || hasVendor || hasEndpoint {
 		// Mirror the effective vendor/endpoint the mutation chain will use:
 		// vendor/endpoint values in the same map take precedence over cfg.
 		vendor, endpoint := cfg.Vendor, cfg.Endpoint
@@ -339,8 +350,16 @@ func UpdateConfig(values map[string]interface{}) error {
 			if !ok {
 				return fmt.Errorf("vendor %q not found", vendor)
 			}
-			if _, ok := vc.Endpoints[endpoint]; !ok {
+			ep, ok := vc.Endpoints[endpoint]
+			if !ok {
 				return fmt.Errorf("endpoint %q not found in vendor %q", endpoint, vendor)
+			}
+			// Mirror internal/config Validate(): an endpoint without a
+			// protocol would pass the existence check but make Save()
+			// fail AFTER the resident cfg was already mutated - the exact
+			// in-memory pollution #3855 closes.
+			if strings.TrimSpace(ep.Protocol) == "" {
+				return fmt.Errorf("endpoint %q for vendor %q must declare a protocol", endpoint, vendor)
 			}
 		}
 	}
