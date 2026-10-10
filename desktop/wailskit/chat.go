@@ -4372,11 +4372,30 @@ func (b *ChatBridge) SetSessionLimits(contextWindow, maxTokens int) error {
 
 	// Apply to running agent immediately
 	if agent != nil {
-		if contextWindow > 0 {
-			agent.ContextManager().SetContextWindow(contextWindow)
+		// #3918: a value of 0 means "auto" - the running agent must fall
+		// back to the endpoint/per-model resolution, not silently keep the
+		// stale override (UI shows auto while the agent kept the old limit
+		// until restart). Same priority as the model-panel apply path:
+		// explicit value > resolved endpoint > leave unset.
+		cw, mt := contextWindow, maxTokens
+		if cw == 0 || mt == 0 {
+			b.mu.Lock()
+			resolved := b.resolved
+			b.mu.Unlock()
+			if resolved != nil {
+				if cw == 0 {
+					cw = resolved.ContextWindow
+				}
+				if mt == 0 {
+					mt = resolved.MaxTokens
+				}
+			}
 		}
-		if maxTokens > 0 {
-			agent.ContextManager().SetOutputReserve(maxTokens)
+		if cw > 0 {
+			agent.ContextManager().SetContextWindow(cw)
+		}
+		if mt > 0 {
+			agent.ContextManager().SetOutputReserve(mt)
 		}
 	}
 
