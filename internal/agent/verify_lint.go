@@ -163,11 +163,22 @@ func (a *Agent) runLintCheck(ctx context.Context, workingDir string) *LintResult
 	// timeout context) reached the hint. Inject one synthesized warning
 	// carrying the exit status and a truncated tail of the raw output so
 	// the advisory path degrades loudly instead of silently.
+	// #3842: the phrasing is "did not complete" so the hint template can
+	// tell an environment/timeout failure from real lint findings and stop
+	// advising "fix these lint issues" for a killed go vet.
 	if err != nil && len(result.Warnings) == 0 {
 		result.Warnings = []string{fmt.Sprintf(
-			"lint command %q failed with %v (no recognized warnings; raw output tail: %s)",
+			"lint did not complete: command %q failed with %v (no recognized warnings; raw output tail: %s)",
 			cmd, err, truncateRunesForLint(output, 200),
 		)}
+	} else if err != nil {
+		// #3842: partial warnings + non-zero exit - the linter printed some
+		// findings and then died (crash, timeout kill). The parsed set may be
+		// truncated; mark it so the hint does not present it as complete.
+		result.Warnings = append(result.Warnings, fmt.Sprintf(
+			"lint did not complete: exit status %v after the warnings above - the warning list may be truncated (raw output tail: %s)",
+			err, truncateRunesForLint(output, 200),
+		))
 	}
 
 	if !result.Passed {
@@ -385,10 +396,23 @@ func (a *Agent) runLintAfterBuild(ctx context.Context, workingDir string) bool {
 	// Build advisory message for the agent
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Lint check (`%s`) found %d warning(s) after successful build:\n\n", result.Command, len(result.Warnings)))
+	incomplete := false
 	for _, w := range result.Warnings {
+		if strings.HasPrefix(w, "lint did not complete") {
+			incomplete = true
+		}
 		sb.WriteString(fmt.Sprintf("- %s\n", w))
 	}
-	sb.WriteString("\nFix these lint issues to improve code quality. They are not blocking, but addressing them now avoids tech debt.")
+	// #3842: when the run did not complete (timeout kill, missing linter,
+	// crash), the closing line must NOT say "fix these lint issues" - the
+	// problem is the lint command/environment, and the list may even be
+	// truncated. Keep the actionable quality-debt closing only for a
+	// completed run.
+	if incomplete {
+		sb.WriteString("\nThe lint run did not complete (timeout, missing linter, or crash). The warning list above may be truncated - investigate the lint command and environment instead of only fixing the listed issues.")
+	} else {
+		sb.WriteString("\nFix these lint issues to improve code quality. They are not blocking, but addressing them now avoids tech debt.")
+	}
 
 	// Inject into context for the agent to see
 	a.contextManager.Add(provider.Message{
