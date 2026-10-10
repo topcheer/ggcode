@@ -131,10 +131,14 @@ var testPkgFailRE = regexp.MustCompile("^FAIL\t(\\S+)")
 type testFailCollector struct {
 	mu     sync.Mutex
 	counts map[string]int
+	// degraded marks fingerprints whose package context could not be
+	// resolved (no `FAIL\t<pkg>` summary in the output): they fall back to
+	// the pre-#3781 bare-test-name key and are flagged as such (#3781).
+	degraded map[string]bool
 }
 
 func newTestFailCollector() *testFailCollector {
-	return &testFailCollector{counts: map[string]int{}}
+	return &testFailCollector{counts: map[string]int{}, degraded: map[string]bool{}}
 }
 
 // record parses run_command output for go-test failure lines. Called for
@@ -168,6 +172,11 @@ func (c *testFailCollector) record(cmd, output string) {
 			}
 			c.counts[key]++
 		}
+		if pkg == "" {
+			for _, name := range pending {
+				c.degraded[name] = true
+			}
+		}
 		pending = nil
 		// A new package block starts: the same test name may legitimately
 		// fail in it too (#3781 cross-package collision).
@@ -199,6 +208,17 @@ func (c *testFailCollector) snapshot() map[string]int {
 	defer c.mu.Unlock()
 	out := make(map[string]int, len(c.counts))
 	for k, v := range c.counts {
+		out[k] = v
+	}
+	return out
+}
+
+// degradedSnapshot returns the keys collected without package context.
+func (c *testFailCollector) degradedSnapshot() map[string]bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]bool, len(c.degraded))
+	for k, v := range c.degraded {
 		out[k] = v
 	}
 	return out
@@ -250,14 +270,21 @@ func (a *Agent) collectWeaknessSignals() []runSignal {
 	// sighting starts WeakRare; cross-run recurrence matures through the
 	// store's Count++ path like every other fingerprint.
 	if a.testFails != nil {
+		degraded := a.testFails.degradedSnapshot()
 		for name, n := range a.testFails.snapshot() {
 			fp := "test-fail:" + name
+			// #3781 degraded fallback: package context unavailable, the
+			// fingerprint is the pre-#3781 bare test name.
+			suffix := ""
+			if degraded[name] {
+				suffix = " [pkg context unavailable: degraded fingerprint]"
+			}
 			if n >= 2 {
 				out = append(out, runSignal{fp, WeakForgetting,
-					fmt.Sprintf("go test failure rerun in one run (%d sightings)", n)})
+					fmt.Sprintf("go test failure rerun in one run (%d sightings)%s", n, suffix)})
 			} else {
 				out = append(out, runSignal{fp, WeakRare,
-					"go test failure observed"})
+					"go test failure observed" + suffix})
 			}
 		}
 	}

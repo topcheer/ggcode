@@ -8,6 +8,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -86,5 +87,27 @@ func Test3781SameTestTwiceStillForgetting(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("same-pkg same-test rerun must be WeakForgetting")
+	}
+}
+
+func Test3781DegradedFallbackMarked(t *testing.T) {
+	c := newTestFailCollector()
+	// -run output stripped through a pipe: no FAIL\t<pkg> summary line.
+	c.record("go test ./... -v | tee out.log", "--- FAIL: TestX (0.00s)\nFAIL\n")
+	if c.snapshot()["TestX"] != 1 {
+		t.Fatalf("fallback must keep pre-#3781 bare-name key: %v", c.snapshot())
+	}
+	if !c.degradedSnapshot()["TestX"] {
+		t.Fatal("fallback fingerprint must be marked degraded")
+	}
+	a := &Agent{testFails: c}
+	found := false
+	for _, s := range a.collectWeaknessSignals() {
+		if s.fingerprint == "test-fail:TestX" && strings.Contains(s.evidence, "degraded") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("signal evidence must carry the degraded marker")
 	}
 }
