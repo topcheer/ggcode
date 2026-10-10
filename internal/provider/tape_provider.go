@@ -66,6 +66,49 @@ type TapeProvider struct {
 	order  []*llmTapeEntry // global FIFO fallback (replay)
 }
 
+// LLMTapeEnv returns the raw GGCODE_LLM_TAPE spec, for the hot-swap choke
+// point's idempotence check (#3917).
+func LLMTapeEnv() string { return os.Getenv(llmTapeEnv) }
+
+// TapeProviderSpec returns the "mode:path" spec this wrapper was built
+// from, or "" if not a TapeProvider. Used by the hot-swap choke point to
+// detect a re-wrap with an unchanged spec (#3917).
+func TapeProviderSpec(p Provider) string {
+	if tp, ok := p.(*TapeProvider); ok && tp != nil {
+		return tp.mode + ":" + tp.path
+	}
+	return ""
+}
+
+// Rebase swaps the wrapped inner provider while keeping tape state (record
+// fd, replay cursor, loaded order) - the hot-swap path rebuilds the base
+// provider on every config change, but the cassette must survive it
+// (#3917: replay cursor reset = stale responses; record re-open = fd leak).
+func (t *TapeProvider) Rebase(inner Provider) {
+	if t == nil || inner == nil {
+		return
+	}
+	t.mu.Lock()
+	t.inner = inner
+	t.mu.Unlock()
+}
+
+// Close releases the record file handle. Replay tapes hold no fd (load
+// reads once). Safe to call multiple times.
+func (t *TapeProvider) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.file != nil {
+		err := t.file.Close()
+		t.file = nil
+		return err
+	}
+	return nil
+}
+
 // WrapLLMTapeFromEnv wraps p per GGCODE_LLM_TAPE=record:<path>|replay:<path>.
 // Unset or malformed values return p unchanged (fail-open to live calls,
 // symmetric with tool tape); replay of a missing file is a hard error.

@@ -104,7 +104,28 @@ func ApplyProviderToAgent(agentInst *agent.Agent, prov provider.Provider, resolv
 	// sa-44 LLM cassette: wrap the provider per GGCODE_LLM_TAPE before it
 	// reaches the agent. Both the daemon bootstrap paths and the config
 	// hot-swap funnel through here, so this is the single choke point.
-	prov = provider.WrapLLMTapeFromEnv(prov)
+	// #3917: hot swaps rebuild the base provider each time; re-wrapping a
+	// fresh TapeProvider would leak the old record fd and reset the replay
+	// cursor to 0 (stale responses / premature exhaustion). When the agent
+	// already holds a TapeProvider with an unchanged env spec, rebase its
+	// inner instead; a changed spec closes the old tape and wraps fresh.
+	if prev := agentInst.Provider(); prev != nil {
+		if prevSpec := provider.TapeProviderSpec(prev); prevSpec != "" {
+			if env := provider.LLMTapeEnv(); env == prevSpec {
+				if tp, ok := prev.(*provider.TapeProvider); ok {
+					tp.Rebase(prov)
+					prov = tp
+				}
+			} else if tp, ok := prev.(*provider.TapeProvider); ok {
+				_ = tp.Close()
+				prov = provider.WrapLLMTapeFromEnv(prov)
+			}
+		} else {
+			prov = provider.WrapLLMTapeFromEnv(prov)
+		}
+	} else {
+		prov = provider.WrapLLMTapeFromEnv(prov)
+	}
 	agentInst.SetProvider(prov)
 	ApplyResolvedLimitsToAgent(agentInst, resolved)
 	agentInst.SetSupportsVision(resolved.SupportsVision)
