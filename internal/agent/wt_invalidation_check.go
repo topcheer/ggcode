@@ -211,6 +211,18 @@ var gitBranchMutatingFlags = map[string]bool{
 	"-d": true, "-D": true, "--delete": true, "-m": true, "--move": true,
 }
 
+// isShellBoundaryToken reports whether a whitespace-split token separates
+// two commands in a shell line (`&&`, `||`, `;`, `|`). Flag scans for one
+// subcommand must stop here: a later command's `-m` (e.g. `git log -m`)
+// belongs to that command, not to `git branch` (#3841).
+func isShellBoundaryToken(tok string) bool {
+	switch tok {
+	case "&&", "||", ";", "|":
+		return true
+	}
+	return false
+}
+
 // classifyGitCommandLine classifies one candidate command line. It scans
 // EVERY `git` invocation on the line and reports the line as read-only only
 // when every classified git command preserves the working tree. Compound
@@ -252,7 +264,17 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 			// `git branch` lists; -d/-D/--delete/-m/--move mutate refs
 			// (conservative classification preserved from #544).
 			found = true
+			// #3841: stop at the first compound-command boundary token.
+			// Scanning to end-of-line made `git branch && git log -m` (the
+			// merge-diff flag) or `git branch -a && echo "use -m to move"`
+			// classify as mutating - a read-only chain burned the
+			// maxWTInvalidationWarnings budget so real mutations went
+			// unwarned. Every other branch inspects at most one or two
+			// tokens; this was the only scan-to-EOL path.
 			for _, f := range fields[subIdx+1:] {
+				if isShellBoundaryToken(f) {
+					break
+				}
 				if gitBranchMutatingFlags[f] {
 					readOnly = false
 				}
