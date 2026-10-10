@@ -111,7 +111,13 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 			}
 			args = append(args, "keydown", xd)
 		}
-		args = append(args, "click", "1")
+		// #3876: honor the schema button contract ("right" was silently
+		// left-clicked, same breach as #1665 fixed for plain click).
+		clickBtn := "1"
+		if p.Button == "right" {
+			clickBtn = "3"
+		}
+		args = append(args, "click", clickBtn)
 		for i := len(mods) - 1; i >= 0; i-- {
 			xd, _ := xdModifierName(mods[i])
 			args = append(args, "keyup", xd)
@@ -384,10 +390,15 @@ func retrySuffix(action string) string {
 // for external clients — both report clear messages instead of failing
 // cryptically.
 // ydoModifierClick holds normalized modifiers while clicking via ydotool.
-func ydoModifierClick(ctx context.Context, x, y int, modifierSpec string) (Result, error) {
+func ydoModifierClick(ctx context.Context, x, y int, modifierSpec, button string) (Result, error) {
 	mods, err := normalizeModifiers(modifierSpec)
 	if err != nil {
 		return Result{}, err
+	}
+	// #3876: 0xC0=BTN_LEFT, 0xC1=BTN_RIGHT in ydotool's linux/uapi codes.
+	clickCode := "0xC0"
+	if button == "right" {
+		clickCode = "0xC1"
 	}
 	cmds := [][]string{ydoMoveArgs(x, y)}
 	for _, m := range mods {
@@ -397,7 +408,7 @@ func ydoModifierClick(ctx context.Context, x, y int, modifierSpec string) (Resul
 		}
 		cmds = append(cmds, press)
 	}
-	cmds = append(cmds, []string{"ydotool", "click", "0xC0"})
+	cmds = append(cmds, []string{"ydotool", "click", clickCode})
 	for i := len(mods) - 1; i >= 0; i-- {
 		_, release, _ := ydoModifierKeyArgs(mods[i])
 		cmds = append(cmds, release)
@@ -436,7 +447,7 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 		}
 		return Result{Content: "OK"}, nil
 	case "modifier_click":
-		return ydoModifierClick(ctx, p.X, p.Y, p.Text)
+		return ydoModifierClick(ctx, p.X, p.Y, p.Text, p.Button)
 	case "drag":
 		if err := runArgvSeq(ctx, ydoDragArgs(p.X, p.Y, p.ToX, p.ToY)); err != nil {
 			return Result{}, err
