@@ -189,6 +189,26 @@ func segmentMatchesHead(fields, head []string) bool {
 	return false
 }
 
+// isNpmTestCommand reports whether cmd invokes an npm-family test runner
+// as its head command: `npm test`, `yarn test`, `pnpm test`, or the
+// `npm run test` script form. Env prefixes were already stripped by the
+// caller.
+func isNpmTestCommand(cmd string) bool {
+	fields := strings.Fields(cmd)
+	if len(fields) < 2 {
+		return false
+	}
+	switch fields[0] {
+	case "npm", "yarn", "pnpm", "bun":
+		if fields[1] == "test" {
+			return true
+		}
+		// "npm run test" / "yarn run test"
+		return len(fields) > 2 && fields[1] == "run" && fields[2] == "test"
+	}
+	return false
+}
+
 // classifyVerificationCommand returns (category, scope) if the command is a
 // test/build verification command, or ("", "") otherwise.
 func classifyVerificationCommand(cmd string) (category, scope string) {
@@ -225,26 +245,37 @@ func classifyVerificationCommand(cmd string) (category, scope string) {
 		return
 	}
 
-	// npm/yarn/pnpm test
-	for _, t := range []string{"npm test", "yarn test", "pnpm test", "npm run test"} {
-		if strings.Contains(cmd, t) {
-			category = "npm-test"
-			scope = extractNpmTestScope(cmd)
+	// npm/yarn/pnpm test — #3941: head-scan, not substring. `git commit -m
+	// "npm test passing"` must not classify (same gaming vector #3812 fixed
+	// for go).
+	if isNpmTestCommand(cmd) {
+		category = "npm-test"
+		scope = extractNpmTestScope(cmd)
+		return
+	}
+
+	// cargo test — #3941: head-scan ("echo cargo test ok" must not classify).
+	if isHeadCommand(cmd, []string{"cargo"}) {
+		if fields := strings.Fields(cmd); len(fields) > 1 && fields[1] == "test" {
+			category = "cargo-test"
+			scope = extractAfterKeyword(cmd, "cargo test")
 			return
 		}
 	}
 
-	// cargo test
-	if strings.Contains(cmd, "cargo test") {
-		category = "cargo-test"
-		scope = extractAfterKeyword(cmd, "cargo test")
-		return
-	}
-
-	// make test / make check
-	if strings.Contains(cmd, "make test") || strings.Contains(cmd, "make check") || strings.Contains(cmd, "make verify") {
-		category = "make-test"
-		return
+	// make test/check/verify — #3941: head-scan ("grep -rn 'make verify'
+	// docs/" must not classify). Hyphenated targets of the same verbs
+	// (make verify-ci, make test-unit, make check-fast) are real make
+	// verification targets, so they still classify.
+	if isHeadCommand(cmd, []string{"make"}) {
+		if fields := strings.Fields(cmd); len(fields) > 1 {
+			for _, verb := range []string{"test", "check", "verify"} {
+				if fields[1] == verb || strings.HasPrefix(fields[1], verb+"-") {
+					category = "make-test"
+					return
+				}
+			}
+		}
 	}
 
 	return "", ""
