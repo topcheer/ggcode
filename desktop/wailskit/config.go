@@ -959,11 +959,21 @@ func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 	if cfg == nil {
 		return fmt.Errorf("config not initialized")
 	}
+	// #3838 A: fail fast on an empty endpoint name BEFORE anything mutates.
+	// An empty name used to persist a degenerate Endpoints[""] key with no
+	// display name into vendors.yaml (and derive a PreferredEndpointAPIKey
+	// for the empty name when an apiKey was set).
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("endpoint name must not be empty")
+	}
 
 	vc, ok := cfg.Vendors[vendor]
 	if !ok {
 		vc = config.VendorConfig{Endpoints: make(map[string]config.EndpointConfig)}
-		cfg.Vendors[vendor] = vc
+		// #3838 B: do NOT insert the vendor shell into cfg.Vendors yet - a
+		// later failure (keys.env write below) used to leave the empty shell
+		// in memory, and any subsequent successful Save persisted it.
+		// Insertion now happens only after every fallible step succeeded.
 	}
 
 	// Load existing config and patch only provided fields
@@ -1004,9 +1014,11 @@ func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 	// clearing here would wipe keys on unrelated edits. Legacy plaintext keys
 	// already on disk are migrated to keys.env by Save() via
 	// MigrateVendorsFilePlaintextAPIKeys.
-	if name != "" {
-		ep.DisplayName = name
-	}
+	ep.DisplayName = name
+	// #3838 B (commit phase): all fallible side effects above succeeded -
+	// now (and only now) mutate the in-memory config and persist. If the
+	// final save fails, keys.env may retain an orphan key for this endpoint,
+	// but it is inert: no endpoint references it, so it resolves nowhere.
 	vc.Endpoints[name] = ep
 	cfg.Vendors[vendor] = vc
 	return saveWithInstanceWriteback(cfg, vendor)
