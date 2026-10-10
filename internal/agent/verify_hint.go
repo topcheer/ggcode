@@ -469,6 +469,14 @@ func verifyCommandAvailable(command string) bool {
 	// builtin with no Linux binary - probe the first segment that does
 	// real work instead of failing the preflight on it.
 	for _, seg := range splitCompoundCommand(command) {
+		// #3751: env prefixes must be stripped per-segment, not only at the
+		// start of the whole command - `cd /app && GOFLAGS=-p=1 go test ./...`
+		// otherwise probes LookPath("GOFLAGS=-p=1"), fails, and the whole
+		// verification is silently skipped while reporting Passed=true.
+		// TrimSpace first: splitCompoundCommand leaves the separator's
+		// surrounding whitespace in the segment, and the ^-anchored regex
+		// will not match " GOFLAGS=...".
+		seg = stripEnvAssignments(strings.TrimSpace(seg))
 		segFields := strings.Fields(seg)
 		if len(segFields) == 0 || segFields[0] == "cd" {
 			continue
@@ -983,8 +991,11 @@ func stripLeadingShellComment(s string) string {
 }
 
 // envAssignPrefix matches a leading environment-variable assignment such as
-// "GOFLAGS=-p=1 " or "CGO_ENABLED=0 " (#950).
-var envAssignPrefix = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=\S*\s+`)
+// "GOFLAGS=-p=1 " or "CGO_ENABLED=0 " (#950). #3751: quoted values with
+// spaces (GREETING="hello world") must be consumed whole - \S* alone cannot
+// cross the inner space, leaving the assignment unstripped so LookPath sees
+// `GREETING="hello` and fails.
+var envAssignPrefix = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+`)
 
 // stripEnvAssignments removes leading env-var assignment prefixes from a
 // command string so prefix-anchored verify matchers see the actual command
