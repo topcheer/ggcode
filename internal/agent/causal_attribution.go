@@ -118,7 +118,7 @@ var causalVerifyRe = regexp.MustCompile(`(?i)(go\s+(build|test|vet)|make\s+\w+|n
 // the #2099 widening. The class now admits both separators and drive
 // letters, and the tsc paren form `path(12,3):` is accepted alongside
 // `path:12:`.
-var causalErrorFileRe = regexp.MustCompile("(?:^|\\s)((?:[\\w\\-./\\\\:]+)\\.(?:go|ts|tsx|js|jsx|mjs|py|rs|java|rb|kt|swift|c|cc|cpp|h|hpp))(?::(?:\\d+)?:|\\(\\d+,\\d+\\):)")
+var causalErrorFileRe = regexp.MustCompile("(?:^|\\s)((?:[\\w\\-./\\\\:]+)\\.(?:go|ts|tsx|js|jsx|mjs|py|rs|java|rb|kt|swift|c|cc|cpp|h|hpp))(?::\\d+:|\\(\\d+,\\d+\\):)")
 
 // recordEdit logs a mutation step.
 func (s *causalAttributionState) recordEdit(toolName, filePath string, iteration int) {
@@ -210,7 +210,7 @@ func normalizeCausalPath(p string) string {
 // computeCRS computes the Causal Responsibility Score for an edit step
 // given the error files extracted from the failure output.
 func computeCRS(edit causalEditStep, errorFiles []string, recencyRank int) int {
-	score, _ := computeCRSDetail(edit, errorFiles, recencyRank, nil)
+	score, _, _ := computeCRSDetail(edit, errorFiles, recencyRank, nil)
 	return score
 }
 
@@ -219,9 +219,15 @@ func computeCRS(edit causalEditStep, errorFiles []string, recencyRank int) int {
 // score (#1771: recency alone reaches 10x10=100 >= 50, so a total-score
 // gate asserted "error output references this file" for edits with ZERO
 // file-match evidence, sending the agent to fix an unrelated recent edit).
-func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int, bareAmbiguous map[string]bool) (int, bool) {
+func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int, bareAmbiguous map[string]bool) (int, bool, bool) {
 	score := 0
 	fileMatch := false
+	// #3794-B: track whether THIS edit matched any error reference at all
+	// (any tier), and whether the match was dir/package-level rather than
+	// file-level, so the recency bonus and the guidance wording both rest
+	// on evidence that actually exists.
+	evidenceHit := false
+	dirMatch := false
 
 	for _, ef := range errorFiles {
 		efN := normalizeCausalPath(ef)
@@ -230,6 +236,7 @@ func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int,
 		if efN == editN {
 			score += causalWtErrorFileMatch
 			fileMatch = true
+			evidenceHit = true
 			continue
 		}
 		// #2171 gap 2: tier the suffix match by path evidence. A suffix
@@ -273,7 +280,9 @@ func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int,
 				fileMatch = true
 			} else {
 				score += causalWtSameDir
+				dirMatch = true
 			}
+			evidenceHit = true
 			continue
 		}
 		if hit, strong := suffixTier2(efN, editN, efN); hit {
@@ -282,7 +291,9 @@ func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int,
 				fileMatch = true
 			} else {
 				score += causalWtSameDir
+				dirMatch = true
 			}
+			evidenceHit = true
 			continue
 		}
 
@@ -292,6 +303,8 @@ func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int,
 		tp := goPackageOf(editN)
 		if ep != "" && tp != "" && ep == tp {
 			score += causalWtSamePackage
+			evidenceHit = true
+			dirMatch = true
 			continue
 		}
 
@@ -299,6 +312,8 @@ func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int,
 		ed := dirOfFile(efN)
 		if ed != "" && ed == normalizeCausalPath(edit.dirPath) {
 			score += causalWtSameDir
+			evidenceHit = true
+			dirMatch = true
 		}
 	}
 
@@ -310,11 +325,16 @@ func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int,
 	// "error output references this file" for outputs containing NO file
 	// (git push rejections, missing tools) and blaming innocent recent
 	// edits. Zero evidence -> zero score.
-	if len(errorFiles) > 0 {
+	// #3794-B: len(errorFiles)>0 still let a DISJOINT edit (no file/dir/
+	// package overlap with any error reference) take the full recency
+	// bonus and clear the threshold on zero evidence. The bonus now
+	// requires this edit to have actually matched at least one error
+	// reference at the file, package, or directory tier.
+	if evidenceHit {
 		score += recencyRank * causalWtRecency
 	}
 
-	return score, fileMatch
+	return score, fileMatch, dirMatch
 }
 
 // bareAmbiguousNames (#2171 gap 2, #2218 case A) precomputes which
@@ -480,7 +500,7 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 		strings.Contains(output, "undefined:") ||
 		strings.Contains(output, "build failed") ||
 		strings.Contains(output, "vet:")
-	if !looksVerify && !(looksFail && looksLikeCmdOutput) {
+	if !looksFail || (!looksVerify && !looksLikeCmdOutput) {
 		return ""
 	}
 
@@ -498,14 +518,15 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 		score     int
 		rank      int
 		fileMatch bool // #1771: an error file actually matched this edit
+		dirMatch  bool // #3794-B: dir/package-tier match (wording evidence)
 	}
 
 	var results []scored
 	for i, edit := range recent {
 		// Recency rank: most recent edit gets highest rank (i+1)
 		recencyRank := i + 1
-		score, matched := computeCRSDetail(edit, errorFiles, recencyRank, bareAmbiguousNames(s.edits, errorFiles))
-		results = append(results, scored{step: edit, score: score, rank: i, fileMatch: matched})
+		score, matched, dirHit := computeCRSDetail(edit, errorFiles, recencyRank, bareAmbiguousNames(s.edits, errorFiles))
+		results = append(results, scored{step: edit, score: score, rank: i, fileMatch: matched, dirMatch: dirHit})
 	}
 
 	if len(results) == 0 {
@@ -541,8 +562,11 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 	if best.fileMatch { // #1771: evidence type, never the total score
 		sb.WriteString(fmt.Sprintf("Build/test failure likely caused by your %s to %s (step %d, CRS=%d — error output references this file). ",
 			best.step.toolName, best.step.filePath, best.step.iteration, best.score))
-	} else {
+	} else if best.dirMatch { // #3794-B: wording tracks the tier that actually hit
 		sb.WriteString(fmt.Sprintf("Build/test failure most likely originated from your %s to %s (step %d, CRS=%d — same package/directory as error). ",
+			best.step.toolName, best.step.filePath, best.step.iteration, best.score))
+	} else {
+		sb.WriteString(fmt.Sprintf("Build/test failure most likely originated from your %s to %s (step %d, CRS=%d — error-file overlap). ",
 			best.step.toolName, best.step.filePath, best.step.iteration, best.score))
 	}
 	sb.WriteString("Review that change first before attempting a blind fix. ")
