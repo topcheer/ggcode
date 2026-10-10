@@ -17,11 +17,29 @@ func TestIssue3796_StartCommandCountsAsVerification(t *testing.T) {
 	// Background test launch: start_command result is the spawn result.
 	args := json.RawMessage(`{"command":"go test ./..."}`)
 	a.maybeResetVerifyOnCommand("start_command", args, false)
-	if !a.postEditVerify.realBuildOrTestRunThisRun {
-		t.Fatal("start_command running a test suite must set realBuildOrTestRunThisRun")
+	// #3840: the launch alone is soft evidence only - the spawn succeeding
+	// says nothing about the test outcome, so realBuildOrTestRunThisRun and
+	// lastBuildFailed must stay untouched until the terminal backfill.
+	if a.postEditVerify.realBuildOrTestRunThisRun {
+		t.Fatal("#3840: launch-only result must not count as real test evidence")
+	}
+	if a.postEditVerify.lastBuildFailed {
+		t.Fatal("launch must not set the failure flag")
+	}
+	if !a.postEditVerify.buildOrTestRunThisRun {
+		t.Fatal("launch still counts as build/test activity (#3796 soft evidence)")
 	}
 	if a.postEditVerify.sourceEditsSinceHint != 0 {
 		t.Fatal("verification must reset the edit counter")
+	}
+	// The terminal outcome is the real evidence: a passed background test
+	// now satisfies the final-turn gate's demand (#3796 intent, corrected).
+	a.recordBgVerifyOutcome("go test ./...", true)
+	if !a.postEditVerify.realBuildOrTestRunThisRun {
+		t.Fatal("terminal PASS of a background test must set realBuildOrTestRunThisRun")
+	}
+	if a.postEditVerify.lastBuildFailed {
+		t.Fatal("terminal PASS must clear the failure flag")
 	}
 }
 

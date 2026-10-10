@@ -5026,6 +5026,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// alignment).
 					if terminal, passed := psTerminalVerifyOutcome(psParseJobStatus(result.Content)); terminal {
 						a.bgVerifyJobs.remove(bgVerifyExtractJobID(tc.Arguments))
+						// #3840: the background test's real outcome is the
+						// post-edit verify evidence - the launch alone proved
+						// nothing (maybeResetVerifyOnCommand records soft
+						// counters only for start_command).
+						a.recordBgVerifyOutcome(cmd, passed)
 						// #3685-B: strategyFixation's real verification event for a
 						// background job is its TERMINAL outcome, not the launch -
 						// mirroring the clears below closes the #2992 gap that left it

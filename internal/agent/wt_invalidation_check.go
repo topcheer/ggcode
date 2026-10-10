@@ -251,8 +251,16 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 		case sub == "branch":
 			// `git branch` lists; -d/-D/--delete/-m/--move mutate refs
 			// (conservative classification preserved from #544).
+			// #3841: the flag scan must stop at a shell operator - in a
+			// compound line (`git branch && git log -m`) the later command's
+			// flags belong to that command, not to this branch invocation;
+			// scanning to end-of-line misjudged the read-only branch list as
+			// mutating and burned the invalidation warning budget.
 			found = true
 			for _, f := range fields[subIdx+1:] {
+				if isShellOperatorToken(f) {
+					break
+				}
 				if gitBranchMutatingFlags[f] {
 					readOnly = false
 				}
@@ -273,6 +281,17 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 		}
 	}
 	return readOnly, found
+}
+
+// isShellOperatorToken reports whether a whitespace-split command token is
+// a compound-command separator or redirection (#3841): tokens after it
+// belong to a different (or redirected) invocation.
+func isShellOperatorToken(f string) bool {
+	switch f {
+	case "&&", "||", ";", "|", "&", ">", ">>", "<":
+		return true
+	}
+	return false
 }
 
 // skipGitGlobalFlags returns the index of the first token after `git` that

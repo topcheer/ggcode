@@ -939,6 +939,21 @@ func (a *Agent) maybeResetVerifyOnCommand(toolName string, args json.RawMessage,
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	// #3840: for start_command, resultErr is the LAUNCH outcome, not the test
+	// outcome. Treating a successful launch as a passed test cleared
+	// lastBuildFailed and set realBuildOrTestRunThisRun, so a background test
+	// that later failed was recorded as green evidence and the final-turn
+	// gate accepted it. The launch only proves intent: reset the soft
+	// counters here; the real result is backfilled when the job reaches a
+	// terminal status on read_command_output/wait_command
+	// (recordBgVerifyOutcome, mirroring the #2992 bgVerifyJobs shape).
+	if toolName == "start_command" {
+		a.postEditVerify.sourceEditsSinceHint = 0
+		a.postEditVerify.buildOrTestRunThisRun = true
+		debug.Log("agent", "verify hint counters reset (launch only): background command %q started", cmd)
+		return
+	}
+
 	a.postEditVerify.sourceEditsSinceHint = 0
 	a.postEditVerify.buildOrTestRunThisRun = true
 	// #3045 B1: the final-turn evidence gate demands compile/test evidence;
@@ -955,6 +970,25 @@ func (a *Agent) maybeResetVerifyOnCommand(toolName string, args json.RawMessage,
 	}
 
 	debug.Log("agent", "verify hint counter reset: agent ran build command %q (failed=%v)", cmd, resultErr)
+}
+
+// recordBgVerifyOutcome backfills the post-edit verify state from a
+// background job's TERMINAL outcome (#3840). maybeResetVerifyOnCommand
+// deliberately records launch-only soft evidence for start_command; when
+// read_command_output/wait_command later observes the job finished, this
+// applies the real result: a passed real test is genuine evidence, a failed
+// one re-arms the "(which FAILED)" urgency hint. Caller must NOT hold a.mu.
+func (a *Agent) recordBgVerifyOutcome(cmd string, passed bool) {
+	if cmd == "" || !isRealTestExecution(cmd) {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.postEditVerify.sourceEditsSinceHint = 0
+	a.postEditVerify.buildOrTestRunThisRun = true
+	a.postEditVerify.realBuildOrTestRunThisRun = true
+	a.postEditVerify.lastBuildFailed = !passed
+	debug.Log("agent", "verify state backfilled from background job: %q passed=%v", cmd, passed)
 }
 
 // extractCommandFromArgs extracts the "command" field from run_command args.
