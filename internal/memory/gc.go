@@ -96,7 +96,25 @@ func (am *AutoMemory) DeleteMemory(key string) error {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return fmt.Errorf("memory %q not found", key)
 	}
-	if err := os.Remove(path); err != nil {
+	// #3880: make the deletion visible to the as_of interval model.
+	// Archive the live version (rename preserves its mtime, so pre-delete
+	// as_of reads still resolve to it) and write a tombstone whose mtime is
+	// the deletion instant; ReadMemoryAsOf returns found=false from that
+	// moment. Without it, delete left only older archived versions and any
+	// as_of AFTER the deletion time-traveled back to stale content -
+	// breaking the "exact version that held at that instant" contract.
+	if _, err := am.archiveVersion(safe, path); err != nil {
+		return err
+	}
+	hdir := filepath.Join(am.dir, historyDirName)
+	if err := os.MkdirAll(hdir, 0755); err != nil {
+		return err
+	}
+	tomb := filepath.Join(hdir, safe+".tombstone")
+	if err := os.WriteFile(tomb, []byte(key+"\n"), 0o644); err != nil {
+		return err
+	}
+	if err := os.Chtimes(tomb, time.Now(), time.Now()); err != nil {
 		return err
 	}
 	// sa-85: drop the provenance/usage record so deleted keys do not
