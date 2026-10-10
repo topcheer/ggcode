@@ -57,6 +57,10 @@ type WorkflowViolation struct {
 	// say where execution broke (never ran / failed / no artifact).
 	Attempts    []StepAttempt
 	LastAttempt *StepAttempt
+	// #3836 B: lifetime (non-evicting) per-step count says the step ran at
+	// least once this session, even when the sliding trace window no longer
+	// holds its entry. Drives the downgraded attribution wording.
+	AttemptedEver bool
 	// #3822: set when Missing references a step ID that does not exist
 	// in the merged spec (typo) - the requirement is unsatisfiable and
 	// the violation must say so instead of rendering "never attempted".
@@ -86,6 +90,14 @@ type workflowEngine struct {
 	// stay safe inside checkPreconditions' e.mu critical section.
 	traceMu sync.Mutex
 	trace   []StepAttempt
+	// #3836 B: per-step lifetime attempt counts. The trace is a shared
+	// 30-entry sliding window; a low-frequency prerequisite (run once) is
+	// evicted once ~30 later attempts land, after which recentAttempts
+	// returns nil and wfAttemptAttribution wrongly asserted "never
+	// attempted" about a step that DID run. This map never evicts, so
+	// attribution can distinguish "never attempted" from "attempt record
+	// fell out of the recent window".
+	attemptCounts map[string]int
 }
 
 const workflowSpecFileName = "workflow-spec.json"
@@ -353,7 +365,7 @@ func commandMatches(patterns []string, cmd string) bool {
 // and the artifact that would prove it (debuggable violation, not a bare
 // denial).
 func (e *workflowEngine) checkPreconditions(toolName string, args json.RawMessage) *WorkflowViolation {
-	if toolName != "run_command" {
+	if !isCommandExecTool(toolName) {
 		return nil
 	}
 	e.loadWorkflowSpec()
@@ -395,6 +407,7 @@ func (e *workflowEngine) checkPreconditions(toolName string, args json.RawMessag
 				last := att[len(att)-1]
 				v.LastAttempt = &last
 			}
+			v.AttemptedEver = e.stepAttemptedEver(req)
 			if st.Mode == "block" {
 				return v
 			}
