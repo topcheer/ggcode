@@ -36,7 +36,19 @@ type ElicitationFieldSchema struct {
 	// Optional constraints for string fields
 	Format string `json:"format,omitempty"` // e.g. "email", "uri", "date-time"
 	// Optional enum for constrained choices
-	Enum []string `json:"enum,omitempty"`
+	Enum []any `json:"enum,omitempty"`
+}
+
+// FormatEnumValue renders one enum entry for display/selection IDs. A
+// JSON Schema enum may legally mix strings, numbers and booleans
+// ({"type":"integer","enum":[1,2,3]}); the old []string field made such
+// requests fail at UNMARSHAL time with a raw Go type error, before any
+// validation or user prompt (#3764).
+func FormatEnumValue(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 // ElicitationSchema is the schema sent by the server to describe what input
