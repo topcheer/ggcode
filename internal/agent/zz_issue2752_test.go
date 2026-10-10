@@ -12,7 +12,8 @@ import (
 
 func TestIssue2752BareGitDiffDoesNotDischarge(t *testing.T) {
 	s := newReproducerLifecycleState()
-	// Iter 1: establish reproducer.
+	// Iter 1: establish reproducer (intent text + script run, #3795 contract).
+	s.observeText(1, "Writing a script to reproduce the bug.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{"python3 repro.py"})
 	if !s.hasReproducer {
 		t.Fatal("reproducer should be established")
@@ -36,6 +37,7 @@ func TestIssue2752BareGitDiffDoesNotDischarge(t *testing.T) {
 
 func TestIssue2752LsEchoDoNotDischarge(t *testing.T) {
 	s := newReproducerLifecycleState()
+	s.observeText(1, "Reproducing the crash now.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{"node crash.js"})
 	s.observeToolCalls(2, []string{"write_file"}, []string{"internal/foo.go"})
 	for _, cmd := range []string{"ls -la", "echo done", "cat internal/foo.go"} {
@@ -48,6 +50,7 @@ func TestIssue2752LsEchoDoNotDischarge(t *testing.T) {
 
 func TestIssue2752ActualRerunDischarges(t *testing.T) {
 	s := newReproducerLifecycleState()
+	s.observeText(1, "Writing a script to reproduce the bug.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{"python3 repro.py"})
 	s.observeToolCalls(2, []string{"edit_file"}, []string{"src/main.go"})
 	// Re-run the same reproducer script (matches reproducerCommandRe).
@@ -62,6 +65,7 @@ func TestIssue2752ActualRerunDischarges(t *testing.T) {
 
 func TestIssue2752StartCommandValidatedToo(t *testing.T) {
 	s := newReproducerLifecycleState()
+	s.observeText(1, "Writing a script to reproduce the bug.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{"python3 repro.py"})
 	s.observeToolCalls(2, []string{"edit_file"}, []string{"src/main.go"})
 	// start_command with unrelated content must not discharge.
@@ -78,7 +82,8 @@ func TestIssue2752StartCommandValidatedToo(t *testing.T) {
 
 func TestIssue2752SnippetOverlapFallback(t *testing.T) {
 	s := newReproducerLifecycleState()
-	// Reproducer established via script shape.
+	// Reproducer established via script shape (intent + run, #3795).
+	s.observeText(1, "Reproducing the bug now.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{"go run ./cmd/reprogo/main.go"})
 	s.observeToolCalls(2, []string{"edit_file"}, []string{"main.go"})
 	// Re-run that doesn't match reproducerCommandRe exactly (no file ext)
@@ -91,6 +96,7 @@ func TestIssue2752SnippetOverlapFallback(t *testing.T) {
 
 func TestIssue2752GracePeriodUnchanged(t *testing.T) {
 	s := newReproducerLifecycleState()
+	s.observeText(1, "Writing a script to reproduce the bug.", false, "")
 	s.observeToolCalls(1, []string{"run_command"}, []string{"python3 repro.py"})
 	s.observeToolCalls(2, []string{"edit_file"}, []string{"src/main.go"})
 	// iteration - editIteration == 1 < grace(2): no warning yet.
