@@ -347,6 +347,17 @@ func (c *Client) ListenSubscriptions(ctx context.Context, filter SubscriptionFil
 	}
 	sub.cancelCtx, sub.cancelFunc = context.WithCancel(context.Background())
 
+	// Register the subscription BEFORE the write (#3817): the stdio
+	// server is an independent process and can flush its
+	// `notifications/subscriptions/acknowledged` ack the instant the write
+	// returns; the read loop correlates acks via c.subs[key], so with
+	// addSubscription AFTER the write the ack hit "unknown subscription
+	// dropped" (unreplayable) and ackCh hung until the 15s timeout, or the
+	// caller's own deadline (2s in mcp_loader) fired first. Same
+	// register-before-write ordering guarantee as the waiter above (#994);
+	// a failed write rolls the registration back.
+	c.addSubscription(subscriptionIDKey(reqID), sub)
+
 	// stdio: register the waiter BEFORE the write (same ordering guarantee
 	// as #994) so the shared read loop can never drop the eventual response
 	// as unknown-ID traffic. HTTP: the watch goroutine owns the roundtrip
@@ -360,11 +371,10 @@ func (c *Client) ListenSubscriptions(ctx context.Context, filter SubscriptionFil
 		c.mu.Unlock()
 		if err != nil {
 			c.unregisterWaiter(reqID, waiter)
+			c.removeSubscription(subscriptionIDKey(reqID), sub)
 			return nil, fmt.Errorf("mcp[%s]: write subscriptions/listen: %w", c.name, err)
 		}
 	}
-
-	c.addSubscription(subscriptionIDKey(reqID), sub)
 
 	safego.Go("mcp.subs.watch", func() {
 		defer sub.end(nil)
