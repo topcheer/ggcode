@@ -4701,7 +4701,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// run_command output regardless of IsError - `|| true` suffixes make
 			// the tool report success while tests failed.
 			if tc.Name == "run_command" && a.testFails != nil {
-				a.testFails.record(result.Content)
+				// #3781: pass the command so record can gate out non-go-test
+				// commands (cat/grep over stale logs) before parsing.
+				a.testFails.record(extractCommandFromToolCall(tc.Arguments), result.Content)
 			}
 			// Tool error fallback chain: on tool failure, inject actionable
 			// alternative strategy suggestions. Fires once per tool per run.
