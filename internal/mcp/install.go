@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -138,6 +139,19 @@ func looksLikeURLScheme(s string) bool {
 	return false
 }
 
+// looksLikeExecutable reports whether the token names a runnable command
+// in PATH (#3916). Used to disambiguate `mcp install -t stdio docker run
+// ...` (docker = command) from `mcp install -t stdio my-server docker
+// run ...` (my-server = name; a genuine server name never resolves on
+// PATH).
+func looksLikeExecutable(token string) bool {
+	if token == "" || strings.ContainsAny(token, "/\\ \t") {
+		return false
+	}
+	_, err := exec.LookPath(token)
+	return err == nil
+}
+
 func parseOptionTransportInstallArgs(args []string, transport string) (config.MCPServerConfig, error) {
 	if len(args) == 0 {
 		return config.MCPServerConfig{}, fmt.Errorf("missing install target for transport %s", transport)
@@ -163,6 +177,18 @@ func parseOptionTransportInstallArgs(args []string, transport string) (config.MC
 		// solve). If the leading token is a known runner, the whole arg
 		// list is the command line.
 		if len(args) > 1 && isKnownRunnerCommand(strings.TrimSpace(args[0])) {
+			name = ""
+			target = args
+		}
+		// #3916: a non-runner FIRST TOKEN that is an actual executable on
+		// PATH (docker run -i --rm mcp/weather - the MCP docs' mainstream
+		// container form; podman/go/gradlew same shape) was taken as the
+		// server NAME: Name="docker", Command="run" landed in the yaml
+		// silently and every later call failed with "exec: run: not
+		// found". Disambiguate by PATH: a genuine name is not an
+		// executable, an executable is not a name. Runner whitelist stays
+		// first (no PATH probe for the common forms).
+		if len(args) > 1 && name != "" && looksLikeExecutable(strings.TrimSpace(args[0])) {
 			name = ""
 			target = args
 		}
