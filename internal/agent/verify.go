@@ -424,10 +424,15 @@ func stripCodeFence(s string) string {
 	}
 	if n := len(fences); n > 0 {
 		var block string
+		// Fences pair sequentially: f0/f1, f2/f3, ... (opener, closer).
+		// Use the LAST COMPLETE pair: a trailing ODD fence is stray noise
+		// (prose mentioning ``` or an unclosed aside), not a block
+		// boundary; pairing it with the preceding closer leaked
+		// inter-block prose (#3743 review follow-up).
 		if n >= 2 {
-			// Last block = between the final opener/closer pair.
-			opener, closer := fences[n-2], fences[n-1]
-			block = t[opener+3 : closer]
+			closerIdx := n - 1 - n%2 // n even -> n-1; n odd -> n-2
+			openerIdx := closerIdx - 1
+			block = t[fences[openerIdx]+3 : fences[closerIdx]]
 		} else {
 			// Single fence: an opener with unterminated content (prose
 			// before it, command after - the #3743 shape), or trailing

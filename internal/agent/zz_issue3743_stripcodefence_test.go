@@ -54,3 +54,33 @@ func TestIssue3743ProseDoesNotReachCommandPipeline(t *testing.T) {
 		t.Fatalf("recovered command %q must be a runnable command shape", got)
 	}
 }
+
+// #3743 review follow-up: odd fence count + trailing prose that itself
+// mentions a fence. The old (n-2,n-1) pairing matched the COMPLETE block's
+// closer with the stray prose fence and leaked the inter-block prose as
+// the command. Now the last COMPLETE pair wins; the stray trailing fence
+// is treated as noise.
+func TestIssue3743OddFenceTrailingProseNoLeak(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{
+			"trailing prose mentions fence (zh)",
+			"建议运行：\n```bash\ngo test ./internal/agent/ -count=1\n```\n注意：上文的 ``` 内代码先修复再跑",
+			"go test ./internal/agent/ -count=1",
+		},
+		{
+			"trailing prose mentions fence (en)",
+			"Run this:\n```bash\ngo build ./...\n```\nsee the ``` block above for details",
+			"go build ./...",
+		},
+		{
+			"odd count via unclosed aside after complete block",
+			"```bash\ngo vet ./...\n```\nnote ```go\n// aside",
+			"go vet ./...",
+		},
+	}
+	for _, c := range cases {
+		if got := stripCodeFence(c.in); got != c.want {
+			t.Errorf("%s: stripCodeFence = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
