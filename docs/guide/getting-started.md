@@ -77,6 +77,12 @@ tool (Context-as-Tool): it runs a cheap mechanical pass immediately and, at
 or above the auto-compact threshold, schedules background summarization that
 applies at the next turn boundary.
 
+Auto-compaction is cache-aware: while the prompt cache hit ratio is warm
+(>= 0.50 over the recent window) and token usage stays within 15% above the
+threshold, compaction is deferred one more turn — compaction rewrites the
+prefix and invalidates the cache, so a warm cache is worth keeping. Past
+that 1.15x ceiling compaction fires immediately regardless of cache state.
+
 ## 5. Next Steps
 
 - [Configuration](./configuration.md) — Full config reference
