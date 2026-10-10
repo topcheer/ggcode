@@ -34,6 +34,13 @@ func (c Config) Clone() (Config, error) { c.name = "clone"; return c, nil }
 }
 
 func TestIssue3742NestedFieldMutationFlagged(t *testing.T) {
+	// #3799 B supersedes the FLAG expectation: this true-positive shape
+	// (value inner field) is AST-indistinguishable from the pointer-field
+	// form (c.state.ready with `state *State`), which is a LEGAL visible
+	// mutation the old flag mislabeled "lost with the copy". The untyped
+	// checker cannot tell them apart, so the whole nested-selector class
+	// is conservatively exempt - this true positive is an accepted miss
+	// (issue #3799's explicit tradeoff: miss over false accusation).
 	src := `package p
 
 type Inner struct{ f int }
@@ -42,14 +49,10 @@ type Holder struct{ inner Inner }
 func (h Holder) SetInner(v int) { h.inner.f = v }
 `
 	issues := checkValueRecvMutation("holder.go", "", src)
-	found := false
 	for _, msg := range issues {
 		if strings.Contains(msg, "SetInner") && strings.Contains(msg, "VALUE receiver") {
-			found = true
+			t.Fatalf("nested selector chains must be exempt (pointer-field ambiguity, #3799); got: %s", msg)
 		}
-	}
-	if !found {
-		t.Fatalf("nested field mutation h.inner.f not flagged, issues: %v", issues)
 	}
 }
 

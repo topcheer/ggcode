@@ -304,17 +304,18 @@ func vrmExtractRecvField(expr ast.Expr, recvName string) string {
 	if !ok {
 		return ""
 	}
-	// Unwrap nested field selectors: for c.inner.f the chain's base is c.
-	// Mutating c.inner.f through a value receiver is lost with the copy just
-	// like a top-level field.
-	base := sel.X
-	for {
-		inner, isSel := base.(*ast.SelectorExpr)
-		if !isSel {
-			break
-		}
-		base = inner.X
+	// #3799 B: NESTED selector chains are conservatively exempt. Pure AST
+	// cannot know whether an intermediate field is a POINTER (`state
+	// *State`): through a pointer field the value-receiver copy still
+	// reaches the shared target, and `func (c Client) Init() {
+	// c.state.ready = true }` is a legal, visible mutation - claiming
+	// "lost with the copy" there was a systematic false positive. Same
+	// tradeoff as the #3742 index-expression exemption: accept a miss over
+	// a false accusation (typed detection needs go/types).
+	if _, isSel := sel.X.(*ast.SelectorExpr); isSel {
+		return ""
 	}
+	base := sel.X
 	ident, ok := base.(*ast.Ident)
 	if !ok || ident.Name != recvName {
 		return ""
