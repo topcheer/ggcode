@@ -55,6 +55,7 @@
 - Browser automation: `browser` (CDP-based, no Node.js dependency)
 - Session management: `task_create`, `task_list`, `task_update`
 - Memory: `save_memory`, `delete_memory`, `knowledge_graph`
+- Long-horizon goals: `goal_graph` (durable goal -> milestone -> task hierarchy with cross-session resume)
 - MCP: `list_mcp_capabilities`, `get_mcp_prompt`, `read_mcp_resource`
 - And 30+ more (see `internal/tool/builtin.go`) |
 | **Tool Registry** | Dynamic runtime registration with `Registry` type (thread-safe) |
