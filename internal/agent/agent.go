@@ -2137,9 +2137,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 	// Sycophancy detection: capture candidate factual premises from the user
 	// message so the agent's response can be checked for unverified agreement.
-	sessionTimedOut := false  // set when the loop breaks due to session wall-clock timeout (#611)
-	guidanceAtBudget := false // #3778: mid-run guidance landed on the final iteration
+	sessionTimedOut := false   // set when the loop breaks due to session wall-clock timeout (#611)
+	guidanceAtBudget := false  // #3778: mid-run guidance landed on the final iteration
+	sessionBudgetStop := false // #3945: hard-stop gate armed by RecordSessionToken/TimeUsage stop=true
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
+		// #3945: the winding-down summary was requested via the injected
+		// System event + guidance; this run makes no further LLM calls. The
+		// break sits at the loop TOP so the arming iteration's tool calls
+		// complete first (no stranded tool_use).
+		if sessionBudgetStop {
+			runStats.finalize(nil)
+			debug.Log("session-token-budget", "winding down: no further LLM calls (budget stop gate)")
+			return nil
+		}
 		runStats.Iterations = i + 1
 		if err := ctx.Err(); err != nil {
 			return err
@@ -2624,6 +2634,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.injectGuidance(msg)
 			debug.Log("session-token-budget", "threshold crossed at iteration %d stop=%v", i+1, stop)
 			if stop {
+				sessionBudgetStop = true // #3945: arm the loop-top gate
 				onEvent(provider.StreamEvent{
 					Type: provider.StreamEventSystem,
 					Text: "[Session token budget fully consumed — winding down. Summarize the state so the user can resume with a fresh budget.] ",
@@ -2637,6 +2648,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.injectGuidance(msg)
 			debug.Log("session-time-budget", "threshold crossed at iteration %d stop=%v", i+1, stop)
 			if stop {
+				sessionBudgetStop = true // #3945: arm the loop-top gate
 				onEvent(provider.StreamEvent{
 					Type: provider.StreamEventSystem,
 					Text: "[Session time budget fully elapsed — winding down. Summarize the state so the user can resume with a fresh budget.] ",
