@@ -140,11 +140,13 @@ var readOnlyStashActions = map[string]bool{
 }
 
 // treePreservingGitSubcommands are git subcommands whose MUTATING forms
-// still never alter working-tree tracked content (sa-31). fetch/push and
-// ls-remote only update remote-tracking refs; tag, remote and reflog stay
-// inside .git metadata; rev-parse, blame, ls-files, describe, cat-file and
-// fsck inspect; config writes repo config, not tracked files; worktree
-// add/remove touches other worktrees. None of them can make a cached read
+// still never alter working-tree tracked content (sa-31, #3823-A).
+// fetch/push and ls-remote only update remote-tracking refs; tag,
+// remote, reflog, add (index only) and commit (creates a ref, never
+// checked-out content) stay inside .git metadata; init/clone touch no
+// tracked file; rev-parse, blame, ls-files, describe, cat-file and fsck
+// inspect; config writes repo config, not tracked files; worktree is
+// deliberately NOT a blanket entry - see treePreservingWorktreeSubs. None of them can make a cached read
 // stale, so they must not trigger the invalidation warning. First-hand FP:
 // the pre-task `git fetch origin main` fired the warning on every run that
 // had already read two or more files.
@@ -161,8 +163,20 @@ var treePreservingGitSubcommands = map[string]bool{
 	"cat-file":  true,
 	"config":    true,
 	"reflog":    true,
-	"worktree":  true,
+	"add":       true, // staging: index-only, never tracked content
+	"commit":    true, // creates a ref; checked-out content untouched
+	"init":      true,
+	"clone":     true,
 	"fsck":      true,
+}
+
+// treePreservingWorktreeSubs are the `git worktree` subcommands that do
+// not remove directories (#3823-B). add creates a new worktree (metadata
+// plus a new dir); list is bookkeeping; remove deletes a whole directory
+// and is deliberately absent, so `git worktree remove` still warns.
+var treePreservingWorktreeSubs = map[string]bool{
+	"list": true,
+	"add":  true,
 }
 
 // wtArgFields unmarshals the tool-arguments JSON object (best-effort;
@@ -242,6 +256,15 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 				if gitBranchMutatingFlags[f] {
 					readOnly = false
 				}
+			}
+		case sub == "worktree":
+			// #3823-B: second-level token decides. list/add preserve every
+			// directory; remove/prune/... delete or lock directories whose
+			// files the agent may have cached reads for (cross-worktree
+			// collaboration is the norm in this repo).
+			found = true
+			if subIdx+1 >= len(fields) || !treePreservingWorktreeSubs[strings.ToLower(fields[subIdx+1])] {
+				readOnly = false
 			}
 		case readOnlyGitSubcommands[sub], treePreservingGitSubcommands[sub]:
 			found = true // cannot make cached reads stale
