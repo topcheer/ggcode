@@ -295,17 +295,31 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 			// false "tree mutated" warnings here exhaust the budget and the
 			// NEXT, real checkout goes unwarned. Branch creation only; a
 			// target checkout (diff content) or a -- boundary stays mutating.
+			// #3929: the exemption holds ONLY for the no-start-point form.
+			// `checkout -b <new> <start-point>` == branch <new> <sp> +
+			// checkout <new> - when start-point != HEAD the tracked content IS
+			// replaced (git-tested in the issue), and the flag-only check
+			// exempted it - a silent miss on the common
+			// 'checkout -b fix origin/main' catch-up flow. Positional args
+			// after the create flag: exactly one (the name) = HEAD-anchored
+			// exemption; two or more (name + start-point) = mutating.
 			found = true
 			creating := false
+			positionals := 0
 			for _, f := range fields[subIdx+1:] {
 				if isShellBoundaryToken(f) || f == "--" {
 					break
 				}
 				if f == "-b" || f == "-B" || (sub == "switch" && (f == "-c" || f == "-C")) {
 					creating = true
+					continue
 				}
+				if strings.HasPrefix(f, "-") {
+					continue // other flags (e.g. --track) carry no positional
+				}
+				positionals++
 			}
-			if !creating {
+			if !creating || positionals > 1 {
 				readOnly = false
 			}
 		case sub == "reset":
