@@ -88,6 +88,12 @@ func Aggregate(sessions []SessionReport) AggregateReport {
 		a.OverheadTokens += r.OverheadTokens
 		a.TotalTokens += r.TotalTokens
 
+		// #3962: a session's duplicate groups are keyed by callKey{tool,
+		// canonical input}, so one session commonly contributes several
+		// groups for the same tool. Sessions must count DISTINCT sessions
+		// ("sessions that had at least one duplicate group for it", struct
+		// doc) - increment only on the session's first group for the tool.
+		countedTools := make(map[string]bool)
 		for _, g := range r.DuplicateGroups {
 			agg, ok := toolRepeats[g.Tool]
 			if !ok {
@@ -95,7 +101,10 @@ func Aggregate(sessions []SessionReport) AggregateReport {
 				toolRepeats[g.Tool] = agg
 			}
 			agg.Repeats += g.Repeats
-			agg.Sessions++
+			if !countedTools[g.Tool] {
+				countedTools[g.Tool] = true
+				agg.Sessions++
+			}
 		}
 
 		a.WorstSessions = append(a.WorstSessions, SessionWorst{
