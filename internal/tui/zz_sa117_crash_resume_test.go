@@ -1,6 +1,9 @@
 package tui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // sa-117: /continue-task confirm-to-resume for crashed runs. The handler is
 // deliberately modeled on /retry (three-state guard), with two semantic
@@ -46,6 +49,15 @@ func TestContinueTaskDispatchOneShot(t *testing.T) {
 func TestContinueTaskInSlashCommandList(t *testing.T) {
 	for _, c := range SlashCommands {
 		if c == "/continue-task" {
+			if !strings.Contains(SlashCommandDescriptions["/continue-task"], "crash") {
+				t.Fatalf("/continue-task description missing 'crash': %q", SlashCommandDescriptions["/continue-task"])
+			}
+			// Empty placeholder = Tab completion triggers the command
+			// immediately (same as /reflect, /rules) - /continue-task takes
+			// no arguments by design.
+			if ph, ok := SlashCommandPlaceholders["/continue-task"]; !ok || ph != "" {
+				t.Fatalf("/continue-task placeholder must exist and be empty (no-arg command), got %q ok=%v", ph, ok)
+			}
 			return
 		}
 	}
