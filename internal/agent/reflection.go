@@ -396,6 +396,52 @@ func extractPathsFromToolCall(toolName string, rawArgs json.RawMessage, s *RunSt
 		if cmd, ok := args["command"].(string); ok {
 			s.recordCommand(cmd)
 		}
+	case "file_ops":
+		// #3969: file_ops move/delete/mkdir mutate the tree but were absent
+		// from the work corpus, so a plan item done purely via a rename
+		// ("rename utils.go to helpers.go") left the destination keyword out
+		// of buildPlanWorkCorpus and plan drift flagged it unaddressed.
+		recordFileOpsPaths(args, s)
+	case "batch_replace":
+		// #3969: batch_replace rewrites files across the tree; its files[]
+		// entries are edited paths and belong in the work corpus.
+		recordBatchReplacePaths(args, s)
+	}
+}
+
+// recordFileOpsPaths records operations[].source and destination as edited
+// paths. delete/mkdir carry source only; a move carries both halves as
+// evidence (see #3969 note in extractPathsFromToolCall).
+func recordFileOpsPaths(args map[string]any, s *RunStats) {
+	ops, ok := args["operations"].([]any)
+	if !ok {
+		return
+	}
+	for _, op := range ops {
+		om, ok := op.(map[string]any)
+		if !ok {
+			continue
+		}
+		if p, ok := om["source"].(string); ok && p != "" {
+			s.recordFileEdit(p)
+		}
+		if p, ok := om["destination"].(string); ok && p != "" {
+			s.recordFileEdit(p)
+		}
+	}
+}
+
+// recordBatchReplacePaths records the files[] entries of a batch_replace
+// codemod as edited paths (see #3969 note in extractPathsFromToolCall).
+func recordBatchReplacePaths(args map[string]any, s *RunStats) {
+	files, ok := args["files"].([]any)
+	if !ok {
+		return
+	}
+	for _, f := range files {
+		if p, ok := f.(string); ok && p != "" {
+			s.recordFileEdit(p)
+		}
 	}
 }
 

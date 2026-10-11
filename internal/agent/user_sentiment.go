@@ -47,6 +47,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -191,7 +192,13 @@ func detectNegativeFeedback(message string) string {
 	}
 
 	lower := strings.ToLower(firstLine)
-	isShort := len(firstLine) < 100
+	// #3968: rune count, not byte length - UTF-8 CJK runs 3 bytes/char, so
+	// `len() < 100` classified every Chinese message over ~33 chars as long,
+	// silently skipping rejection/frustration hits and resetting the
+	// escalation counter mid-sequence (exactly what #3739's CJK keywords
+	// were added to prevent). Rune count keeps the threshold semantics
+	// identical for ASCII (1 byte = 1 rune).
+	isShort := utf8.RuneCountInString(firstLine) < 100
 
 	// Positive-phrase masking (#1223, refined by #1227): whitelist phrases
 	// like "no problem" / "not bad" contain bare rejection words but express
@@ -222,7 +229,12 @@ func detectNegativeFeedback(message string) string {
 					return group.category
 				}
 				if group.category == negCatRedirection {
-					if idx := strings.Index(scanText, pat); idx >= 0 && idx < 40 {
+					// #3968: strings.Index is a BYTE index; comparing it against 40
+					// gave CJK openers only ~13 chars of window. Measure the rune
+					// count of the prefix instead so an opener is the first 40
+					// CHARACTERS in any script. ASCII behavior is unchanged
+					// (byte index == rune count when the prefix is pure ASCII).
+					if idx := strings.Index(scanText, pat); idx >= 0 && utf8.RuneCountInString(scanText[:idx]) < 40 {
 						return group.category
 					}
 				}
