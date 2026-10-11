@@ -46,7 +46,7 @@ func (t EditFile) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "Optional. Brief activity label shown in the UI in the user's language (e.g. 'Updating retry policy', '更新缩进')."
+			"description": "Optional. Brief activity label shown in the UI."
 		}
 	},
 	"required": [
