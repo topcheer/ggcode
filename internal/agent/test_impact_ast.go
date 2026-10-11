@@ -224,6 +224,20 @@ func untestedExportedFuncs(workingDir, goFile string) []string {
 		if dirTestFilesReferenceSymbol(filepath.Dir(abs), f.DisplayName) {
 			continue
 		}
+		// #3662 defect 2: a METHOD's DisplayName is recvType_Method
+		// ("Foo_Bar"), but tests invoke the method ("x.Bar()") - the
+		// underscore form never appears in test code, so the reference
+		// scan above never matches a method's call sites. Scan the bare
+		// method name too (unconditional, mirroring the #3649 scan above).
+		if f.IsMethod {
+			if idx := strings.LastIndex(f.DisplayName, "_"); idx >= 0 {
+				if bare := f.DisplayName[idx+1:]; len(bare) >= 3 {
+					if dirTestFilesReferenceSymbol(filepath.Dir(abs), bare) {
+						continue
+					}
+				}
+			}
+		}
 		// #3649 (defect 2): with a parse-failed sibling we can't trust the
 		// exact-name miss - suppress rather than misreport (advisory hint,
 		// false negatives are cheaper than false positives here).
