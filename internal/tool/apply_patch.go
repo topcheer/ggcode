@@ -137,6 +137,19 @@ func (t ApplyPatch) Execute(ctx context.Context, input json.RawMessage) (Result,
 		return Result{IsError: true, Content: "Error: " + err.Error()}, nil
 	}
 
+	// #3951: a "Move to:" relocation target must pass the same sandbox gate
+	// as the primary path. The check uses the EXACT target formula that
+	// applyV4ASection uses to write (Clean(Join(Dir(root), moveTo))) so the
+	// validated path and the written path can never drift apart — checking
+	// the raw moveTo string would allow "../../" forms to pass a naive
+	// substring check while the joined form still escapes.
+	if sec.moveTo != "" && sec.moveTo != sec.path {
+		moveTarget := filepath.Clean(filepath.Join(filepath.Dir(resolved), sec.moveTo))
+		if t.SandboxCheck != nil && !t.SandboxCheck(moveTarget) {
+			return Result{IsError: true, Content: fmt.Sprintf("Error: move-to target %q is outside the allowed sandbox", sec.moveTo)}, nil
+		}
+	}
+
 	summary, err := applyV4ASection(resolved, sec)
 	if err != nil {
 		return Result{IsError: true, Content: "Error: " + err.Error()}, nil
@@ -272,7 +285,9 @@ type v4aHunk struct {
 }
 
 // applyV4ASection applies one parsed section to disk. root is the resolved
-// target path from the operation (already sandbox-checked by Execute).
+// target path from the operation. Both root and any "Move to:" target are
+// sandbox-checked by Execute (#3951: the move target with the exact same
+// Clean(Join(Dir(root), moveTo)) formula used below).
 func applyV4ASection(root string, sec v4aSection) (string, error) {
 	switch sec.kind {
 	case "add":
