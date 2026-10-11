@@ -27,8 +27,9 @@ func TestIssue3945_StopGateWired(t *testing.T) {
 		}
 	}
 	// Exactly one arming site per budget dimension.
-	if got := strings.Count(src, "sessionBudgetStop = true"); got != 2 {
-		t.Fatalf("want 2 arming sites (token + time), got %d", got)
+	// #3959 added the cost twin: token + time + cost = 3 arming sites.
+	if got := strings.Count(src, "sessionBudgetStop = true"); got != 3 {
+		t.Fatalf("want 3 arming sites (token + time + cost), got %d", got)
 	}
 	// The gate must precede the next LLM call: it sits at the loop top.
 	gateIdx := strings.Index(src, "if sessionBudgetStop {")
