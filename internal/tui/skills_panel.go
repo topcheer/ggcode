@@ -64,7 +64,7 @@ func (m Model) renderSkillsPanel() string {
 	}
 	skills := m.listSkills()
 	if len(skills) == 0 {
-		body := " No skills found.\n Create skills in .agents/skills/, .ggcode/skills/, ~/.ggcode/skills/, or ~/.agents/skills/."
+		body := " No skills found.\n Create skills in .agents/skills/, .ggcode/skills/, ~/.ggcode/skills/, ~/.agents/skills/, or .agent-plugins/*/skills/ (Agent Plugins)."
 		return m.renderContextBox("/skills", body, lipgloss.Color("12"))
 	}
 	pageCount := skillsPageCount(len(skills))

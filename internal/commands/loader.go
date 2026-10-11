@@ -51,16 +51,20 @@ type Loader struct {
 }
 
 // NewLoader creates a loader scanning global and project-local skills and commands.
+// Agent Plugins (agent-plugins.org, sa-114) ship skills in
+// <project>/.agent-plugins/<dir>/skills/; they are prepended so every native
+// directory overrides plugin skills of the same name.
 func NewLoader(projectDir string) *Loader {
 	home := config.HomeDir()
-	targets := dedupeLoadTargets([]loadTarget{
+	native := []loadTarget{
 		{Dir: filepath.Join(home, ".agents", "skills"), Source: SourceUser, LoadedFrom: LoadedFromSkills},
 		{Dir: filepath.Join(home, ".ggcode", "skills"), Source: SourceUser, LoadedFrom: LoadedFromSkills},
 		{Dir: filepath.Join(home, ".ggcode", "commands"), Source: SourceUser, LoadedFrom: LoadedFromCommands},
 		{Dir: filepath.Join(projectDir, ".agents", "skills"), Source: SourceProject, LoadedFrom: LoadedFromSkills},
 		{Dir: filepath.Join(projectDir, ".ggcode", "skills"), Source: SourceProject, LoadedFrom: LoadedFromSkills},
 		{Dir: filepath.Join(projectDir, ".ggcode", "commands"), Source: SourceProject, LoadedFrom: LoadedFromCommands},
-	})
+	}
+	targets := dedupeLoadTargets(append(agentPluginSkillTargets(projectDir), native...))
 	return &Loader{
 		targets: targets,
 	}
