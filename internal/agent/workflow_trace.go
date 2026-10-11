@@ -22,8 +22,10 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
 )
@@ -31,6 +33,17 @@ import (
 // wfTraceWindow caps retained attempts (sliding; enough for attribution
 // without unbounded memory on long runs).
 const wfTraceWindow = 30
+
+// isCommandExecTool reports whether the tool executes a shell command whose
+// args carry a "command" field both the precondition check and the attempt
+// ledger must see. run_command is the foreground path; start_command runs
+// the same command in the background (#3836 A: gating on run_command alone
+// let a guarded command skip block prechecks and the ledger entirely just
+// by being launched in the background - the step then reported
+// "never attempted" about a command that had actually run).
+func isCommandExecTool(toolName string) bool {
+	return toolName == "run_command" || toolName == "start_command"
+}
 
 // wfTraceMaxPerViolation caps attempts attached to one violation message.
 const wfTraceMaxPerViolation = 3
@@ -53,70 +66,132 @@ type StepAttempt struct {
 // step. Called once per executed command (never for blocked calls - those
 // never ran, so they are not attempts).
 func (e *workflowEngine) recordAttempt(toolName string, args json.RawMessage, res tool.Result) {
-	if e == nil || toolName != "run_command" {
+	if e == nil || !isCommandExecTool(toolName) {
 		return
 	}
 	e.loadWorkflowSpec()
 	e.mu.RLock()
 	command, _ := parseRunCommandArgs(args)
-	stepID, hasGlob := "", false
+	// #3780 C: attribute the attempt to EVERY matching step, not just the
+	// first. The old first-match break made the write path (recordCompletion
+	// walks all steps) and the trace path asymmetric: with overlapping
+	// OnCommands (A=`go test*`, B=`go test -run Build*`), executing B's
+	// command recorded an attempt only under A; when B later became a
+	// rejected prerequisite, wfAttemptAttribution asserted "step B was
+	// never executed" about a command that had just run, and B's
+	// ProducedArtifact flag was decided by A's artifact_glob.
+	var hits []string
+	grounded := map[string]bool{}
 	if command != "" {
 		for _, id := range e.order {
 			st := e.steps[id]
-			if commandMatches(st.OnCommands, command) {
-				stepID, hasGlob = id, st.ArtifactGlob != ""
-				break
+			if !commandMatches(st.OnCommands, command) {
+				continue
+			}
+			hits = append(hits, id)
+			if res.IsError {
+				continue // failed attempts ground nothing
+			}
+			// Artifact grounding reuses the #3414 safety-net probe (walk is
+			// done under RLock, same precedent as checkPreconditions -> groundIfFresh).
+			if st.ArtifactGlob != "" {
+				grounded[id] = e.groundIfFresh(id)
+				continue
+			}
+			// #3835: commands-only step (on_commands, no artifact_glob) has no
+			// artifact to probe and every artifact completion path
+			// (recordCompletion, probeArtifactsOnDisk, groundIfFresh) bails on
+			// the empty glob, so such a step could never enter completed and
+			// any step listing it in Requires deadlocked block mode on an
+			// unsatisfiable spec. For a commands-only step the successful
+			// guarded command IS the product - ground it here, inside the same
+			// multi-step attribution walk (#3780 C), instead of a separate
+			// wiring point, so hybrid steps keep artifact precedence via
+			// groundIfFresh and the attribution/grounding semantics stay in
+			// one place.
+			if _, done := e.completed.Load(id); !done {
+				e.completed.Store(id, struct{}{})
+				debug.Log("agent", "[workflow-spec] step %s complete (guarded command succeeded: %q)", id, command)
 			}
 		}
 	}
-	// Artifact grounding reuses the #3414 safety-net probe (walk is done
-	// under RLock, same precedent as checkPreconditions -> groundIfFresh).
-	grounded := false
-	if stepID != "" && hasGlob && !res.IsError {
-		grounded = e.groundIfFresh(stepID)
-	}
 	e.mu.RUnlock()
-	if stepID == "" {
+	if len(hits) == 0 {
 		return // command belongs to no guarded step: nothing to attribute
 	}
+	// #3865 C: take the TAIL, not the head. Build failures bury the actual
+	// error (undefined symbol, test assertion) below the command echo and
+	// compiler banner - a head slice quoted "which FAILED (...)" with the
+	// echo, making "fix that command" point at nothing actionable. The tail
+	// is also sanitized: byte slicing can split a UTF-8 rune in half.
 	snip := res.Content
 	if len(snip) > wfErrSnippetMax {
-		snip = snip[:wfErrSnippetMax]
+		snip = snip[len(snip)-wfErrSnippetMax:]
 	}
-	a := StepAttempt{
-		StepID:           stepID,
-		Command:          command,
-		IsError:          res.IsError,
-		ErrSnippet:       snip,
-		ProducedArtifact: grounded,
-		At:               time.Now(),
-	}
+	snip = strings.ToValidUTF8(snip, "?")
+	now := time.Now()
 	e.traceMu.Lock()
-	e.trace = append(e.trace, a)
+	if e.attemptCounts == nil {
+		e.attemptCounts = make(map[string]int)
+	}
+	for _, id := range hits {
+		e.attemptCounts[id]++
+		e.trace = append(e.trace, StepAttempt{
+			StepID:           id,
+			Command:          command,
+			IsError:          res.IsError,
+			ErrSnippet:       snip,
+			ProducedArtifact: grounded[id],
+			At:               now,
+		})
+	}
 	if len(e.trace) > wfTraceWindow {
 		e.trace = e.trace[len(e.trace)-wfTraceWindow:]
 	}
 	e.traceMu.Unlock()
 }
 
-// recentAttempts returns up to n attempts recorded for stepID (oldest
-// first). Uses a dedicated lock so it is safe to call while holding e.mu.
+// recentAttempts returns up to n NEWEST attempts recorded for stepID
+// (oldest first, so callers taking att[len(att)-1] get the truly latest).
+// Uses a dedicated lock so it is safe to call while holding e.mu.
+// #3780 B: the old forward iteration broke at n=3, returning the OLDEST
+// 3 attempts of the window - the violation's "last ran ... which FAILED"
+// attribution then described the 3rd-oldest attempt (e.g. an old failure
+// while the newest run succeeded without artifact), sending repair down
+// the wrong path. Walk backwards, then restore oldest-first order.
 func (e *workflowEngine) recentAttempts(stepID string, n int) []StepAttempt {
 	if e == nil || stepID == "" || n <= 0 {
 		return nil
 	}
 	e.traceMu.Lock()
 	defer e.traceMu.Unlock()
-	var out []StepAttempt
-	for _, a := range e.trace {
-		if a.StepID == stepID {
-			out = append(out, a)
-			if len(out) >= n {
-				break
-			}
+	var rev []StepAttempt
+	for i := len(e.trace) - 1; i >= 0 && len(rev) < n; i-- {
+		if e.trace[i].StepID == stepID {
+			rev = append(rev, e.trace[i])
 		}
 	}
+	if len(rev) == 0 {
+		return nil
+	}
+	out := make([]StepAttempt, len(rev))
+	for i, a := range rev {
+		out[len(rev)-1-i] = a
+	}
 	return out
+}
+
+// stepAttemptedEver reports whether any command matching stepID ran this
+// session, per the non-evicting lifetime count (#3836 B). Safe to call
+// while holding e.mu: takes traceMu only (same discipline as
+// recentAttempts).
+func (e *workflowEngine) stepAttemptedEver(stepID string) bool {
+	if e == nil || stepID == "" {
+		return false
+	}
+	e.traceMu.Lock()
+	defer e.traceMu.Unlock()
+	return e.attemptCounts[stepID] > 0
 }
 
 // wfAttemptAttribution renders the structural WHERE-it-broke diagnosis for
@@ -126,8 +201,23 @@ func wfAttemptAttribution(v *WorkflowViolation) string {
 	if v == nil || v.Missing == "" {
 		return ""
 	}
+	if v.UnknownRequires {
+		// #3822: the prerequisite step does not exist in the merged
+		// spec. isComplete/groundIfFresh can never succeed - block mode
+		// would reject the guarded commands forever while the generic
+		// renderer claimed "the prerequisite was never executed".
+		return fmt.Sprintf(" Attribution: step %q does not exist in the workflow spec (requires typo?) - the requirement can never be satisfied. Local repair: fix the requires entry in workflow-spec.json to reference a declared step ID.", v.Missing)
+	}
 	last := v.LastAttempt
 	switch {
+	case last == nil && v.AttemptedEver:
+		// #3836 B: the per-step lifetime count says the step DID run this
+		// session; its trace entry simply fell out of the shared 30-slot
+		// sliding window (high-frequency sibling steps evicted it). The old
+		// wording asserted "never executed" - factually wrong and pointing
+		// repair at re-running instead of at the real issue (the artifact
+		// never grounded).
+		return fmt.Sprintf(" Attribution: step %q was attempted earlier this run, but its attempt record fell out of the recent trace window. Local repair: re-run the step %q command to re-ground its artifact (%q).", v.Missing, v.Missing, v.WantGlob)
 	case last == nil:
 		return fmt.Sprintf(" Attribution: no command matching step %q was attempted this run - the prerequisite was never executed. Local repair: run the step %q command first.", v.Missing, v.Missing)
 	case last.IsError:

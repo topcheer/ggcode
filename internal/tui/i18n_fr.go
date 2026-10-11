@@ -604,6 +604,20 @@ func frCatalog(key string) string {
 		return "Erreur lors du nettoyâge des mémoires: %v\n\n"
 	case "memory.cleared":
 		return "Toutes les mémoires automatiques supprimées.\n\n"
+	case "memory.forget_usage":
+		return "Usage: /memory forget <key> | /memory restore <key> | /memory forgotten\n\n"
+	case "memory.forgot":
+		return "Memory %q forgotten (restorable via /memory restore until next GC).\n\n"
+	case "memory.forget_failed":
+		return "Error forgetting memory: %v\n\n"
+	case "memory.forgotten_empty":
+		return "No forgotten memories.\n\n"
+	case "memory.forgotten_title":
+		return "Forgotten memories:\n"
+	case "memory.restored":
+		return "Memory %q restored to prompt injection.\n\n"
+	case "memory.restore_failed":
+		return "Error restoring memory: %v\n\n"
 	case "memory.title":
 		return "Mémoire:\n"
 	case "memory.project":
@@ -1020,6 +1034,14 @@ func frCatalog(key string) string {
 		return "Gestionnaire de contexte non disponible."
 	case "regenerate.no_response":
 		return "Aucune réponse de l'assistant a regénérer."
+	case "rewind.bad_arg":
+		return "Usage : /rewind [N] ou N >= 1 est le nombre de tours utilisateur a rembobiner."
+	case "rewind.revert_failed":
+		return "Rollback des fichiers refuse, rembobinage annule (rien n'a change) : %v"
+	case "rewind.success":
+		return "%d tour(s) rembobine(s) ; modifications de fichiers annulees (%s). Reprise dans la session %s - l'originale est conservee."
+	case "rewind.success_no_edits":
+		return "%d tour(s) rembobine(s) ; les tours rembobines n'avaient aucune modification de fichier suivie. Reprise dans la session %s - l'originale est conservee."
 	case "branch.busy":
 		return "Impossible de bifurquér pendant que l'agent s'exécute. Appuyez sur Ctrl+C pour annulér d'abord."
 	case "branch.no_session":

@@ -68,6 +68,14 @@ type verifyRegressionState struct {
 	// hasBaseline is true after the first verification run completes.
 	// Before this, all errors are "pre-existing" and we don't categorize.
 	hasBaseline bool
+
+	// prevScope is the command scope of the run that set the baseline
+	// (#3757). Fingerprints carry no scope dimension, so comparing runs of
+	// DIFFERENT commands misreads pure scope changes: narrowing
+	// `go test ./...` → `go test ./internal/agent/` labeled the dropped
+	// wide-scope errors RESOLVED (rewarding narrowed verification), and
+	// alternating packages manufactured REGRESSION noise.
+	prevScope string
 }
 
 func newVerifyRegressionState() *verifyRegressionState {
@@ -98,7 +106,7 @@ type errorTransition struct {
 // message injected into the agent's context. When no baseline exists (first run),
 // it returns empty string and simply records the baseline.
 func (v *verifyRegressionState) classifyErrors(errors []string) string {
-	_, summary := v.classifyErrorsWithTransition(errors)
+	_, summary := v.classifyErrorsWithTransition(errors, "")
 	return summary
 }
 
@@ -106,11 +114,20 @@ func (v *verifyRegressionState) classifyErrors(errors []string) string {
 // the structured per-round transition data (new/persistent/resolved counts).
 // This enables the self-correction stability gate to compute EIR/ECR without
 // re-parsing the summary text.
-func (v *verifyRegressionState) classifyErrorsWithTransition(errors []string) (errorTransition, string) {
+func (v *verifyRegressionState) classifyErrorsWithTransition(errors []string, scope string) (errorTransition, string) {
 	var tr errorTransition
 	if v == nil {
 		return tr, ""
 	}
+	// #3757: a baseline set by a DIFFERENT command says nothing about this
+	// run - reseed instead of comparing (no fake RESOLVED on narrowing, no
+	// fake NEW/REGRESSION on package alternation).
+	if v.hasBaseline && scope != v.prevScope {
+		debug.Log("verify", "regression baseline reseeded: scope changed (%q -> %q)", v.prevScope, scope)
+		v.prevErrors = make(map[string]bool)
+		v.hasBaseline = false
+	}
+	v.prevScope = scope
 	if len(errors) == 0 {
 		// Verification passed — reset to "no baseline" so the next failure
 		// starts fresh rather than comparing against a stale empty set.

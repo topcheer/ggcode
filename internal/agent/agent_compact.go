@@ -388,12 +388,6 @@ func (a *Agent) maybeSaveCheckpoint(lastMsgID ...string) {
 	a.mu.Unlock()
 }
 
-// SaveCheckpoint persists the current context as a checkpoint.  Called
-// externally (e.g. by slash /compact) after synchronous compaction.
-func (a *Agent) SaveCheckpoint() {
-	a.maybeSaveCheckpoint()
-}
-
 // SaveCheckpointWithLastMsgID persists a checkpoint with an explicit lastMsgID.
 // Use this when the caller knows the last message ID before compaction
 // (e.g. slash /compact captures it before calling Summarize).

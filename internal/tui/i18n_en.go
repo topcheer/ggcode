@@ -737,6 +737,20 @@ func enCatalog(key string) string {
 		return "Error clearing memories: %v\n\n"
 	case "memory.cleared":
 		return "All auto memories cleared.\n\n"
+	case "memory.forget_usage":
+		return "Usage: /memory forget <key> | /memory restore <key> | /memory forgotten\n\n"
+	case "memory.forgot":
+		return "Memory %q forgotten (restorable via /memory restore until next GC).\n\n"
+	case "memory.forget_failed":
+		return "Error forgetting memory: %v\n\n"
+	case "memory.forgotten_empty":
+		return "No forgotten memories.\n\n"
+	case "memory.forgotten_title":
+		return "Forgotten memories:\n"
+	case "memory.restored":
+		return "Memory %q restored to prompt injection.\n\n"
+	case "memory.restore_failed":
+		return "Error restoring memory: %v\n\n"
 	case "memory.title":
 		return "Memory:\n"
 	case "memory.project":
@@ -1239,6 +1253,14 @@ func enCatalog(key string) string {
 		return "Context manager not available."
 	case "regenerate.no_response":
 		return "No assistant response to regenerate."
+	case "rewind.bad_arg":
+		return "Usage: /rewind [N] where N >= 1 is the number of user turns to rewind."
+	case "rewind.revert_failed":
+		return "File rollback refused, rewind aborted (nothing changed): %v"
+	case "rewind.success":
+		return "Rewound %d turn(s); reverted file edits (%s). Continuing in session %s - original preserved."
+	case "rewind.success_no_edits":
+		return "Rewound %d turn(s); the rewound turns made no tracked file edits. Continuing in session %s - original preserved."
 	case "branch.busy":
 		return "Cannot branch while the agent is running. Press Ctrl+C to cancel first."
 	case "branch.no_session":

@@ -666,6 +666,20 @@ func deCatalog(key string) string {
 		return "Fehler beim Löschen der Erinnerungen: %v\n\n"
 	case "memory.cleared":
 		return "Alle Auto-Erinnerungen gelöscht.\n\n"
+	case "memory.forget_usage":
+		return "Usage: /memory forget <key> | /memory restore <key> | /memory forgotten\n\n"
+	case "memory.forgot":
+		return "Memory %q forgotten (restorable via /memory restore until next GC).\n\n"
+	case "memory.forget_failed":
+		return "Error forgetting memory: %v\n\n"
+	case "memory.forgotten_empty":
+		return "No forgotten memories.\n\n"
+	case "memory.forgotten_title":
+		return "Forgotten memories:\n"
+	case "memory.restored":
+		return "Memory %q restored to prompt injection.\n\n"
+	case "memory.restore_failed":
+		return "Error restoring memory: %v\n\n"
 	case "memory.title":
 		return "Memory:\n"
 	case "memory.project":
@@ -1120,6 +1134,14 @@ func deCatalog(key string) string {
 		return "Keine Assistenten-Antwort zum Neu generieren."
 
 	// --- Branch ---
+	case "rewind.bad_arg":
+		return "Verwendung: /rewind [N], wobei N >= 1 die Anzahl der zurueckzuspulenden Nutzer-Runden ist."
+	case "rewind.revert_failed":
+		return "Datei-Rollback abgelehnt, Rewind abgebrochen (nichts geaendert): %v"
+	case "rewind.success":
+		return "%d Runde(n) zurueckgespult; Dateibearbeitungen zurueckgenommen (%s). Fortsetzung in Sitzung %s - Original bleibt erhalten."
+	case "rewind.success_no_edits":
+		return "%d Runde(n) zurueckgespult; die zurueckgespulten Runden hatten keine verfolgten Dateibearbeitungen. Fortsetzung in Sitzung %s - Original bleibt erhalten."
 	case "branch.busy":
 		return "Abzweigen nicht möglich, während der Agent läuft. Zuerst Ctrl+C drücken zum Abbrechen."
 	case "branch.no_session":

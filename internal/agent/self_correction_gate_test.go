@@ -146,7 +146,7 @@ func TestClassifyErrorsWithTransition_Structure(t *testing.T) {
 	v := newVerifyRegressionState()
 
 	// Round 1: establish baseline with errors A, B.
-	tr1, msg1 := v.classifyErrorsWithTransition([]string{"error A in foo.go", "error B in bar.go"})
+	tr1, msg1 := v.classifyErrorsWithTransition([]string{"error A in foo.go", "error B in bar.go"}, "go test ./...")
 	if msg1 != "" {
 		t.Fatalf("first round should return empty summary (baseline), got: %s", msg1)
 	}
@@ -155,7 +155,7 @@ func TestClassifyErrorsWithTransition_Structure(t *testing.T) {
 	}
 
 	// Round 2: A persists, B resolved, C is new.
-	tr2, msg2 := v.classifyErrorsWithTransition([]string{"error A in foo.go", "error C in baz.go"})
+	tr2, msg2 := v.classifyErrorsWithTransition([]string{"error A in foo.go", "error C in baz.go"}, "go test ./...")
 	if msg2 == "" {
 		t.Fatal("second round should return non-empty summary")
 	}

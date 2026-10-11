@@ -551,7 +551,7 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		case "/redo":
 			return m.handleRedoCommand()
 		case "/runreport":
-			return m.handleRunReportCommand()
+			return m.handleRunReportCommand(parts[1:])
 		case "/traj":
 			return m.handleTrajCommand(parts)
 		case "/export-training":
@@ -574,6 +574,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleRegenerateCommand()
 		case "/branch", "/fork":
 			return m.handleBranchCommand(parts)
+		case "/rewind":
+			return m.handleRewindCommand(parts)
 		case "/branches":
 			return m.handleBranchesCommand(parts)
 		case "/branch-switch":

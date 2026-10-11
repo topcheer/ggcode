@@ -172,7 +172,7 @@ func (t SwarmTaskListTool) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [
@@ -253,7 +253,7 @@ func (t SwarmTaskClaimTool) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [
@@ -338,7 +338,7 @@ func (t SwarmTaskCompleteTool) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [

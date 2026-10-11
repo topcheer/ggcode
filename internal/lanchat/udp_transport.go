@@ -26,6 +26,18 @@ type udpHandler interface {
 // maxFragmentEntries caps the fragment reassembly map to prevent unbounded growth.
 const maxFragmentEntries = 256
 
+// maxFragmentTotal caps the declared total fragments of one message (#3732):
+// FragmentTotal is packet input, and an authenticated hostile peer could
+// otherwise declare a huge total and grow the received map unchecked for the
+// full timeout window. A real message is at most a few dozen fragments.
+const maxFragmentTotal = 4096
+
+// maxAssemblyBytes caps the accumulated payload of ONE fragment assembly
+// (#3732): chunks are ~31.5KB each (udpMaxPayload-512), so 16MB is two orders
+// beyond any legitimate chat payload; a hostile peer flooding an assembly
+// gets it evicted rather than buffered.
+const maxAssemblyBytes = 16 << 20 // 16 MiB
+
 // maxUDPDecompressed caps the decompressed size of any UDP payload. LAN chat
 // messages are small; without a cap a ~60KB high-ratio gzip datagram can expand
 // to GBs of memory before the auth gate ever sees the envelope — a no-key LAN
@@ -69,6 +81,7 @@ type fragmentAssembly struct {
 	deadline time.Time
 	envType  string
 	fromNode string
+	bytes    int // accumulated payload bytes (#3732 per-assembly cap)
 }
 
 // NewUDPTransport creates a UDP listener bound to the given port.
@@ -518,6 +531,15 @@ func (t *UDPTransport) handleFragment(env udpEnvelope, remoteAddr *net.UDPAddr, 
 
 	assembly, exists := t.fragments[env.FragmentID]
 	if !exists {
+		// #3732: FragmentTotal is attacker-controlled packet input (an
+		// authenticated-but-hostile LAN peer can declare a huge total and
+		// grow the received map for the full 60s timeout window). Reject
+		// absurd totals outright; a real message of maxFragmentTotal chunks
+		// (~31.5KB each) is still far beyond any chat payload.
+		if env.FragmentTotal <= 0 || env.FragmentTotal > maxFragmentTotal {
+			debug.Log("lanchat-udp", "fragment assembly rejected: total=%d out of range (id=%s from=%s)", env.FragmentTotal, env.FragmentID, env.FromNode)
+			return
+		}
 		assembly = &fragmentAssembly{
 			id:       env.FragmentID,
 			total:    env.FragmentTotal,
@@ -535,7 +557,24 @@ func (t *UDPTransport) handleFragment(env udpEnvelope, remoteAddr *net.UDPAddr, 
 		debug.Log("lanchat-udp", "fragment payload parse error: %v", err)
 		return
 	}
-	assembly.received[env.FragmentSeq] = []byte(chunkStr)
+	// #3732: seq must be inside the declared total, and the accumulated
+	// payload is capped - repeated/duplicated chunks from a hostile peer
+	// must not grow one assembly beyond maxAssemblyBytes (evict on breach
+	// instead of silently dropping, so the abuse cannot resume quietly).
+	if env.FragmentSeq < 0 || env.FragmentSeq >= assembly.total {
+		debug.Log("lanchat-udp", "fragment seq %d out of range [0,%d) dropped (id=%s)", env.FragmentSeq, assembly.total, env.FragmentID)
+		return
+	}
+	chunk := []byte(chunkStr)
+	if assembly.bytes+len(chunk) > maxAssemblyBytes {
+		debug.Log("lanchat-udp", "fragment assembly %s exceeded %d bytes; evicting", env.FragmentID, maxAssemblyBytes)
+		delete(t.fragments, env.FragmentID)
+		return
+	}
+	if _, dup := assembly.received[env.FragmentSeq]; !dup {
+		assembly.bytes += len(chunk)
+	}
+	assembly.received[env.FragmentSeq] = chunk
 
 	// Send per-fragment ACK for unicast
 	if source == "unicast" {

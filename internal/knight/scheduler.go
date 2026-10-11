@@ -137,27 +137,27 @@ func (k *Knight) Start(ctx context.Context) error {
 	}
 
 	// Acquire cross-process lock — only one Knight per project directory.
+	// #3657: keep the acquired lock in a LOCAL variable until the k.mu
+	// section below. Assigning k.lock here (unlocked, like every error
+	// path below releasing it) raced Stop/Status reading k.lock under k.mu
+	// (same family as the #2757 Status race; Start was the missed path).
 	lock := tryAcquireLock(k.projDir)
 	if lock == nil {
 		pid, _ := LockHeldBy(k.projDir)
 		debug.Log("knight", "%s", FormatLockMessage(pid))
 		return ErrLockConflict
 	}
-	k.lock = lock
 
 	if err := k.budget.EnsureDir(); err != nil {
-		k.lock.release()
-		k.lock = nil
+		lock.release()
 		return fmt.Errorf("knight: init budget dir: %w", err)
 	}
 	if err := k.usage.EnsureDir(); err != nil {
-		k.lock.release()
-		k.lock = nil
+		lock.release()
 		return fmt.Errorf("knight: init usage dir: %w", err)
 	}
 	if err := k.queue.EnsureDir(); err != nil {
-		k.lock.release()
-		k.lock = nil
+		lock.release()
 		return fmt.Errorf("knight: init candidate queue dir: %w", err)
 	}
 
@@ -168,8 +168,7 @@ func (k *Knight) Start(ctx context.Context) error {
 		filepath.Join(k.projDir, ".ggcode", "skills-snapshots"),
 	} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			k.lock.release()
-			k.lock = nil
+			lock.release()
 			return fmt.Errorf("knight: create dir %s: %w", dir, err)
 		}
 	}
@@ -190,6 +189,9 @@ func (k *Knight) Start(ctx context.Context) error {
 	k.mu.Lock()
 	if k.running {
 		k.mu.Unlock()
+		// Freshly acquired flock is redundant when already running
+		// (normally unreachable: double-Start fails at tryAcquireLock).
+		lock.release()
 		debug.Log("knight", "already running, start skipped")
 		return nil
 	}
@@ -197,6 +199,8 @@ func (k *Knight) Start(ctx context.Context) error {
 	k.cancel = cancel
 	k.running = true
 	k.lastIdle = time.Now()
+	// #3657: the k.lock field is written only here, under k.mu.
+	k.lock = lock
 	k.mu.Unlock()
 
 	k.wg.Add(1)
@@ -216,16 +220,21 @@ func (k *Knight) Stop() {
 		k.cancel = nil
 	}
 	k.running = false
+	k.mu.Unlock()
+
+	// Wait for runLoop to fully exit BEFORE releasing the cross-process
+	// instance lock (#3657). The old order (release inside k.mu, then
+	// wg.Wait) opened a window where another process could acquire the
+	// instance lock and run a second Knight while this runLoop was still
+	// mid-tick writing skill files. wg.Wait must not run under k.mu:
+	// runLoop takes k.mu during ticks and would deadlock.
+	k.wg.Wait()
+	k.mu.Lock()
 	if k.lock != nil {
 		k.lock.release()
 		k.lock = nil
 	}
 	k.mu.Unlock()
-
-	// Wait for runLoop to fully exit before returning. Without this,
-	// a quick Start→Stop→Start sequence can have two runLoop goroutines
-	// concurrently accessing stagingFailCount (no mutex on that map).
-	k.wg.Wait()
 	debug.Log("knight", "stopped")
 }
 
@@ -1843,7 +1852,12 @@ func (k *Knight) stageSkillRevision(ctx context.Context, skill *SkillEntry, task
 	staging, err := k.index.StagingSkills()
 	if err == nil {
 		for _, candidate := range staging {
-			if candidate.Name == skill.Name {
+			// #3691: same-name skills in different scopes are a legal layout
+			// (skill_validator.go CheckDuplicate). Dedup must match scope+name,
+			// otherwise a project:foo staging entry silently suppresses every
+			// global:foo revision (infinite silent-drop loop per tick).
+			if candidate.Name == skill.Name && candidate.Scope == skill.Scope {
+				debug.Log("knight", "staging entry for %s:%s already pending review, skip", skill.Scope, skill.Name)
 				return
 			}
 		}
@@ -1979,8 +1993,12 @@ func (k *Knight) isKnownCandidate(c SkillCandidate, active, staging []*SkillEntr
 		// the threshold above which two candidates describe the same workflow
 		// in this repo's existing skills. CJK-dominant fingerprints use a
 		// stricter 0.75 (#3637): bigram density makes same-prefix Chinese
-		// families score 0.55-0.60 without being duplicates.
-		if jaccardSimilarity(candFP, skillSimilarityFingerprint(s.Name, s.Meta.Description, "")) >= similarityDuplicateThreshold(candFP) {
+		// families score 0.55-0.60 without being duplicates. #3676: the gate
+		// is now pair-wise (both-side dominant = strict; mixed-script pair =
+		// 0.6) instead of candidate-side-only, which made the same pair
+		// direction-dependent and leaked [0.6,0.75) duplicates.
+		existFP := skillSimilarityFingerprint(s.Name, s.Meta.Description, "")
+		if jaccardSimilarity(candFP, existFP) >= duplicateThresholdForPair(candFP, existFP) {
 			return true
 		}
 	}
@@ -1988,7 +2006,12 @@ func (k *Knight) isKnownCandidate(c SkillCandidate, active, staging []*SkillEntr
 		if a == nil {
 			continue
 		}
-		if jaccardSimilarity(candFP, skillSimilarityFingerprint(a.Name, a.Meta.Description, "")) >= similarityDuplicateThreshold(candFP) {
+		// #3676: pair-wise gate on the active loop too - the candidate-side-only
+		// lookup here had the same direction dependence as the staging loop
+		// (review 6088096655): a wide-script candidate vs an English active
+		// skill leaked [0.6,0.75) duplicates through this path.
+		activeFP := skillSimilarityFingerprint(a.Name, a.Meta.Description, "")
+		if jaccardSimilarity(candFP, activeFP) >= duplicateThresholdForPair(candFP, activeFP) {
 			return true
 		}
 	}

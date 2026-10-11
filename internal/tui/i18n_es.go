@@ -604,6 +604,20 @@ func esCatalog(key string) string {
 		return "Error al limpiar memorias: %v\n\n"
 	case "memory.cleared":
 		return "Todas las memorias automaticas eliminadas.\n\n"
+	case "memory.forget_usage":
+		return "Usage: /memory forget <key> | /memory restore <key> | /memory forgotten\n\n"
+	case "memory.forgot":
+		return "Memory %q forgotten (restorable via /memory restore until next GC).\n\n"
+	case "memory.forget_failed":
+		return "Error forgetting memory: %v\n\n"
+	case "memory.forgotten_empty":
+		return "No forgotten memories.\n\n"
+	case "memory.forgotten_title":
+		return "Forgotten memories:\n"
+	case "memory.restored":
+		return "Memory %q restored to prompt injection.\n\n"
+	case "memory.restore_failed":
+		return "Error restoring memory: %v\n\n"
 	case "memory.title":
 		return "Memoria:\n"
 	case "memory.project":
@@ -1020,6 +1034,14 @@ func esCatalog(key string) string {
 		return "Gestor de contexto no disponible."
 	case "regenerate.no_response":
 		return "Sin respuesta del asistente para regenerar."
+	case "rewind.bad_arg":
+		return "Uso: /rewind [N] donde N >= 1 es el numero de turnos de usuario a rebobinar."
+	case "rewind.revert_failed":
+		return "Reversion de archivos rechazada, rebobinado abortado (nada cambio): %v"
+	case "rewind.success":
+		return "Rebobinados %d turno(s); ediciones de archivo revertidas (%s). Continuando en la sesion %s - la original se conserva."
+	case "rewind.success_no_edits":
+		return "Rebobinados %d turno(s); los turnos rebobinados no tenian ediciones de archivo rastreadas. Continuando en la sesion %s - la original se conserva."
 	case "branch.busy":
 		return "No se puede bifurcar mientras el agente está en ejecución. Presione Ctrl+C para cancelar primero."
 	case "branch.no_session":

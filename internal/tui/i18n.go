@@ -391,6 +391,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.regenerate")
 	case "/branch", "/fork":
 		return tr(lang, "slash.branch")
+	case "/rewind":
+		return tr(lang, "slash.rewind")
 	case "/reflect":
 		return tr(lang, "slash.reflect")
 	case "/rules":

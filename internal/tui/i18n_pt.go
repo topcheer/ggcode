@@ -173,6 +173,20 @@ func ptCatalog(key string) string {
 		return "Memórias Automáticas:"
 	case "memory.cleared":
 		return "Todas as memórias automáticas foram limpas."
+	case "memory.forget_usage":
+		return "Usage: /memory forget <key> | /memory restore <key> | /memory forgotten\n\n"
+	case "memory.forgot":
+		return "Memory %q forgotten (restorable via /memory restore until next GC).\n\n"
+	case "memory.forget_failed":
+		return "Error forgetting memory: %v\n\n"
+	case "memory.forgotten_empty":
+		return "No forgotten memories.\n\n"
+	case "memory.forgotten_title":
+		return "Forgotten memories:\n"
+	case "memory.restored":
+		return "Memory %q restored to prompt injection.\n\n"
+	case "memory.restore_failed":
+		return "Error restoring memory: %v\n\n"
 
 	// ── Regenerate ────────────────────────────────────────────────
 	case "regenerate.busy":
@@ -183,6 +197,14 @@ func ptCatalog(key string) string {
 		return "Nenhuma resposta do assistente para regenerar."
 
 	// ── Branch ────────────────────────────────────────────────────
+	case "rewind.bad_arg":
+		return "Uso: /rewind [N] onde N >= 1 e o numero de turnos do usuario a rebobinar."
+	case "rewind.revert_failed":
+		return "Reversao de arquivos recusada, rebobinamento abortado (nada mudou): %v"
+	case "rewind.success":
+		return "Rebobinados %d turno(s); edicoes de arquivo revertidas (%s). Continuando na sessao %s - a original e preservada."
+	case "rewind.success_no_edits":
+		return "Rebobinados %d turno(s); os turnos rebobinados nao tinham edicoes de arquivo rastreadas. Continuando na sessao %s - a original e preservada."
 	case "branch.busy":
 		return "Não é possível ramificar enquanto o agente está em execução. Pressione Ctrl+C para cancelar primeiro."
 	case "branch.no_session":

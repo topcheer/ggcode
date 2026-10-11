@@ -57,6 +57,14 @@ type WorkflowViolation struct {
 	// say where execution broke (never ran / failed / no artifact).
 	Attempts    []StepAttempt
 	LastAttempt *StepAttempt
+	// #3836 B: lifetime (non-evicting) per-step count says the step ran at
+	// least once this session, even when the sliding trace window no longer
+	// holds its entry. Drives the downgraded attribution wording.
+	AttemptedEver bool
+	// #3822: set when Missing references a step ID that does not exist
+	// in the merged spec (typo) - the requirement is unsatisfiable and
+	// the violation must say so instead of rendering "never attempted".
+	UnknownRequires bool
 }
 
 // workflowSpecFileDoc is the user-facing contract (mirrors invariantFile).
@@ -74,11 +82,25 @@ type workflowEngine struct {
 	loadDir   string    // dir whose .ggcode/workflow-spec.json to read
 	startedAt time.Time // #3414: freshness anchor for on-disk artifact probing
 	completed sync.Map  // step ID -> struct{} (grounded by artifact this run)
+	// #3822: declaring step ID -> requires entries that reference no
+	// declared step (typo) - populated at spec merge time for diagnostics.
+	unknownReq map[string][]string
 	// sa-85 failure ledger: outcomes of executed guarded commands, kept on a
 	// dedicated lock (never taken while holding traceMu) so attribution reads
 	// stay safe inside checkPreconditions' e.mu critical section.
 	traceMu sync.Mutex
 	trace   []StepAttempt
+	// #3836 B: per-step lifetime attempt counts. The trace is a shared
+	// 30-entry sliding window; a low-frequency prerequisite (run once) is
+	// evicted once ~30 later attempts land, after which recentAttempts
+	// returns nil and wfAttemptAttribution wrongly asserted "never
+	// attempted" about a step that DID run. This map never evicts, so
+	// attribution can distinguish "never attempted" from "attempt record
+	// fell out of the recent window".
+	attemptCounts map[string]int
+	// #3850: fire-once latch for the end-of-run outstanding-steps audit.
+	// Guarded by mu; see outstandingMessageOnce.
+	auditFired bool
 }
 
 const workflowSpecFileName = "workflow-spec.json"
@@ -128,6 +150,24 @@ func (e *workflowEngine) loadWorkflowSpec() {
 				e.order = append(e.order, st.ID)
 			}
 			e.steps[st.ID] = st // project scope runs last: overrides user
+		}
+	}
+	// #3822: every Requires entry must reference a declared step ID.
+	// A typo (requires:"tests" vs id:"test") makes isComplete/
+	// groundIfFresh permanently false: block mode rejects the guarded
+	// commands forever with an attribution of "never attempted" - the
+	// most common spec error was the least debuggable one. Detect at
+	// merge time and mark the declaring steps.
+	e.unknownReq = nil
+	for _, st := range e.steps {
+		for _, req := range st.Requires {
+			if _, ok := e.steps[req]; ok {
+				continue
+			}
+			if e.unknownReq == nil {
+				e.unknownReq = make(map[string][]string)
+			}
+			e.unknownReq[st.ID] = append(e.unknownReq[st.ID], req)
 		}
 	}
 }
@@ -210,7 +250,18 @@ func (e *workflowEngine) globFreshOnDisk(pattern string) bool {
 			return nil
 		}
 		rel, relErr := filepath.Rel(base, p)
-		if relErr != nil || !invariantGlobMatch(pattern, filepath.ToSlash(rel)) {
+		// #3780 A: absolute patterns are used AS-IS (the comment contract
+		// above and the write path's recordCompletion match absolute tool
+		// paths directly). The old code always matched against the RELATIVE
+		// path, so an absolute artifact_glob compiled to a leading-"/"
+		// literal regex that a relative path can never satisfy - probe and
+		// groundIfFresh silently dead for absolute specs, and block mode
+		// rejected already-completed steps.
+		cand := filepath.ToSlash(rel)
+		if filepath.IsAbs(pattern) {
+			cand = filepath.ToSlash(p)
+		}
+		if relErr != nil || !invariantGlobMatch(pattern, cand) {
 			return nil
 		}
 		info, infoErr := d.Info()
@@ -275,10 +326,38 @@ func (e *workflowEngine) groundIfFresh(id string) bool {
 // commandMatches reports whether cmd matches any OnCommands glob of the
 // step. Globs use the same semantics as invariant tool matching: a leading
 // or trailing "*" (prefix/suffix match); a bare "*" matches everything.
+//
+// #3860 A: the raw command string is preprocessed exactly like the
+// verify_hint gate family (#2122 compound split, #3751 env-assignment
+// strip) - same package helpers, no duplicated logic. Without this,
+// `cd pkg && go test ./...` and `GOFLAGS=-p=1 go test ./...` both bypassed
+// every guarded `go test*` pattern: no precondition check, no attempt
+// accounting, no grounding, while the step's verification silently never
+// ran. Each compound segment is matched independently, so the guarded verb
+// is seen wherever it appears in the pipeline.
+//
+// #3860 A (infix tightening): a `*x*` glob previously matched any string
+// merely CONTAINING x, so `echo push done` grounded a `*push*` step.
+// Infix globs now require the core to appear as an EXACT word of the
+// segment (`go test ./...` still matches `*test*`) and skip segments
+// whose verb only talks about work (echo/printf/true/false/:) instead
+// of doing it.
+// benignReportVerbs list commands that merely TALK about a thing instead
+// of doing it. An infix `*x*` glob must not let `echo push done` ground a
+// `*push*` step (#3860 A): the core appears as a word, but the verb makes
+// the segment a no-op statement.
+var benignReportVerbs = map[string]bool{
+	"echo": true, "printf": true, "true": true, "false": true, ":": true, "#": true,
+}
+
 func commandMatches(patterns []string, cmd string) bool {
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
 		return false
+	}
+	segments := splitCompoundCommand(cmd)
+	if len(segments) == 0 {
+		segments = []string{cmd}
 	}
 	for _, p := range patterns {
 		p = strings.TrimSpace(p)
@@ -288,22 +367,39 @@ func commandMatches(patterns []string, cmd string) bool {
 		if p == "*" {
 			return true
 		}
-		switch {
-		case strings.HasPrefix(p, "*") && strings.HasSuffix(p, "*"):
-			if strings.Contains(cmd, strings.Trim(p, "*")) {
-				return true
+		for _, segRaw := range segments {
+			seg := strings.TrimSpace(stripEnvAssignments(segRaw))
+			if seg == "" {
+				continue
 			}
-		case strings.HasPrefix(p, "*"):
-			if strings.HasSuffix(cmd, strings.TrimPrefix(p, "*")) {
-				return true
-			}
-		case strings.HasSuffix(p, "*"):
-			if strings.HasPrefix(cmd, strings.TrimSuffix(p, "*")) {
-				return true
-			}
-		default:
-			if cmd == p {
-				return true
+			switch {
+			case strings.HasPrefix(p, "*") && strings.HasSuffix(p, "*"):
+				// #3860 A (infix tightening): was contains-anywhere, so
+				// `echo push done` completed a `*push*` step. Now the core
+				// must appear as an exact word of the segment AND the verb
+				// must not be a report-only builtin (`go test ./...` keeps
+				// matching `*test*`; `pushy-comment` no longer does).
+				if benignReportVerbs[strings.Fields(seg)[0]] {
+					continue
+				}
+				core := strings.Trim(p, "*")
+				for _, f := range strings.Fields(seg) {
+					if f == core {
+						return true
+					}
+				}
+			case strings.HasPrefix(p, "*"):
+				if strings.HasSuffix(seg, strings.TrimPrefix(p, "*")) {
+					return true
+				}
+			case strings.HasSuffix(p, "*"):
+				if strings.HasPrefix(seg, strings.TrimSuffix(p, "*")) {
+					return true
+				}
+			default:
+				if seg == p {
+					return true
+				}
 			}
 		}
 	}
@@ -317,7 +413,7 @@ func commandMatches(patterns []string, cmd string) bool {
 // and the artifact that would prove it (debuggable violation, not a bare
 // denial).
 func (e *workflowEngine) checkPreconditions(toolName string, args json.RawMessage) *WorkflowViolation {
-	if toolName != "run_command" {
+	if !isCommandExecTool(toolName) {
 		return nil
 	}
 	e.loadWorkflowSpec()
@@ -349,15 +445,17 @@ func (e *workflowEngine) checkPreconditions(toolName string, args json.RawMessag
 				continue
 			}
 			want := ""
+			_, knownReq := e.steps[req]
 			if rs, ok := e.steps[req]; ok {
 				want = rs.ArtifactGlob
 			}
-			v := &WorkflowViolation{Step: st, Missing: req, WantGlob: want, Command: command}
+			v := &WorkflowViolation{Step: st, Missing: req, WantGlob: want, Command: command, UnknownRequires: !knownReq}
 			if att := e.recentAttempts(req, wfTraceMaxPerViolation); len(att) > 0 {
 				v.Attempts = att
 				last := att[len(att)-1]
 				v.LastAttempt = &last
 			}
+			v.AttemptedEver = e.stepAttemptedEver(req)
 			if st.Mode == "block" {
 				return v
 			}
@@ -402,6 +500,28 @@ func (e *workflowEngine) outstandingMessage() string {
 		ids[i] = st.ID + " (expects " + st.ArtifactGlob + ")"
 	}
 	return fmt.Sprintf("[workflow-spec] Declared steps with no produced artifacts yet this run: %s. If you are about to declare the task complete, verify these steps actually happened or state which ones were skipped.", strings.Join(ids, "; "))
+}
+
+// outstandingMessageOnce wraps outstandingMessage with a fire-once latch
+// (#3850): the end-of-run audit is computed on EVERY stop attempt; without
+// the latch the caller's `continue` would re-inject the same reminder every
+// iteration for the rest of the run. First non-empty message wins and arms
+// the latch; subsequent calls return "".
+func (e *workflowEngine) outstandingMessageOnce() string {
+	if e == nil {
+		return ""
+	}
+	m := e.outstandingMessage()
+	if m == "" {
+		return ""
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.auditFired {
+		return ""
+	}
+	e.auditFired = true
+	return m
 }
 
 // workflowEngineLazy mirrors invariantEngineLazy: anchored to the agent's

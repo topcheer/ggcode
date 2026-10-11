@@ -110,7 +110,12 @@ func (c *CommandTool) Execute(ctx context.Context, input json.RawMessage) (tool.
 		return tool.Result{Content: err.Error(), IsError: true}, nil
 	}
 
-	args := c.args
+	// #3911: c.args comes from yaml decoding, where the slice's cap is
+	// often > len (append-growth). Appending onto it writes into the shared
+	// backing array past len - and with parallel tool execution two
+	// concurrent Execute calls on the same CommandTool would concurrently
+	// write the same cells (data race). Copy into a fresh slice first.
+	args := append([]string(nil), c.args...)
 	if params.Args != "" {
 		args = append(args, strings.Fields(params.Args)...)
 	}

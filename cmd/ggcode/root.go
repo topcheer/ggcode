@@ -886,7 +886,17 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		// A2A instance override already applied by LoadWithInstance.
 		a2aSrv, a2aReg, a2aHandler, err := startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
+			// #3677: startA2AServer's internal fail-fast (#1174) checks
+			// oauth2/oidc/mTLS config and returns errors the TUI path used
+			// to swallow into a debug-only log - the session then ran with
+			// no A2A server at all (not on the registry, invisible to LAN
+			// peers, remote dispatch silently dead) with zero user-visible
+			// signal. Surface it on the TUI's native startup-notice channel
+			// (same list the first frame renders); the daemon path keeps its
+			// stderr warning.
 			debug.Log("root", "A2A server startup warning: %v", err)
+			startupNotices = append(startupNotices, fmt.Sprintf(
+				"A2A server failed to start - remote task dispatch and LAN visibility are DISABLED for this session. Fix the a2a config to re-enable: %v", err))
 		} else {
 			a2aServer = a2aSrv
 			a2aRegistry = a2aReg

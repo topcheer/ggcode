@@ -1363,9 +1363,10 @@ func (a *configAccess) reloadProvider() {
 
 	ApplyProviderToAgent(a.agentInst, prov, resolved)
 	ApplySessionTokenBudget(a.agentInst, a.cfg)
+	ApplySessionCostLimit(a.agentInst, a.cfg)
 	ApplySessionTimeBudget(a.agentInst, a.cfg)
 	ApplyToolCallBudget(a.agentInst, a.cfg)
-	ApplySessionTimeout(a.agentInst, a.cfg, false)
+	ApplySessionTimeout(a.agentInst, a.cfg, a.agentInst.IsAutopilotMode())
 	StartAsyncRelayModelLimitRefresh(a.cfg, resolved, a.agentInst, nil)
 	debug.Log("config", "provider reloaded: %s/%s/%s", resolved.VendorID, resolved.EndpointID, resolved.Model)
 

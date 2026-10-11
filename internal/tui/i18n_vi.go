@@ -604,6 +604,20 @@ func viCatalog(key string) string {
 		return "Lỗi xóa bộ nhớ: %v\n\n"
 	case "memory.cleared":
 		return "Đã xóa tất cả auto memory.\n\n"
+	case "memory.forget_usage":
+		return "Usage: /memory forget <key> | /memory restore <key> | /memory forgotten\n\n"
+	case "memory.forgot":
+		return "Memory %q forgotten (restorable via /memory restore until next GC).\n\n"
+	case "memory.forget_failed":
+		return "Error forgetting memory: %v\n\n"
+	case "memory.forgotten_empty":
+		return "No forgotten memories.\n\n"
+	case "memory.forgotten_title":
+		return "Forgotten memories:\n"
+	case "memory.restored":
+		return "Memory %q restored to prompt injection.\n\n"
+	case "memory.restore_failed":
+		return "Error restoring memory: %v\n\n"
 	case "memory.title":
 		return "Bộ nhớ:\n"
 	case "memory.project":
@@ -1020,6 +1034,14 @@ func viCatalog(key string) string {
 		return "Context manager không khả dụng."
 	case "regenerate.no_response":
 		return "Không có phản hồi assistant để tạo lại."
+	case "rewind.bad_arg":
+		return "Cách dùng: /rewind [N] với N >= 1 là số lượt người dùng cần tua lại."
+	case "rewind.revert_failed":
+		return "Từ chối hoàn tác tệp, đã hủy tua lại (không thay đổi gì): %v"
+	case "rewind.success":
+		return "Đã tua lại %d lượt; các chỉnh sửa tệp đã được hoàn tác (%s). Tiếp tục trong phiên %s - phiên gốc được giữ nguyên."
+	case "rewind.success_no_edits":
+		return "Đã tua lại %d lượt; các lượt được tua lại không có chỉnh sửa tệp nào được theo dõi. Tiếp tục trong phiên %s - phiên gốc được giữ nguyên."
 	case "branch.busy":
 		return "Không thể phân nhánh khi agent đang chạy. Nhấn Ctrl+C để hủy trước."
 	case "branch.no_session":

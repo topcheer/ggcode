@@ -46,6 +46,7 @@ func enCommandModule() map[string]string {
 		"slash.restart":             "Restart ggcode",
 		"slash.regenerate":          "Regenerate last response",
 		"slash.branch":              "Fork conversation into new session; [N] drops last N turns",
+		"slash.rewind":              "Rewind last N turns: revert their file edits, continue in forked session",
 		"slash.pin_session":         "Pin session (protected from cleanup)",
 		"slash.unpin_session":       "Unpin session",
 		"slash.tag":                 "Add tags to session",
@@ -107,6 +108,8 @@ func enCommandModule() map[string]string {
   /memory            Show loaded memory files
   /memory list       List auto memory entries
   /memory clear      Clear all auto memories
+  /memory forget <k> Forget a single memory (soft delete, restorable)
+  /memory forgotten  List forgotten memories
   /undo              Undo the last file edit (checkpoint rollback)
   /files             Show files modified by agent in this session
   /checkpoints       List all file edit checkpoints
@@ -191,6 +194,7 @@ func zhCommandModule() map[string]string {
 		"slash.restart":             "重启 ggcode",
 		"slash.regenerate":          "重新生成最近回复",
 		"slash.branch":              "分叉对话到新会话；[N] 回退 N 轮",
+		"slash.rewind":              "回退最近 N 轮：还原其文件编辑并在分叉会话中继续",
 		"slash.pin_session":         "固定会话（免清理、列表置顶）",
 		"slash.unpin_session":       "取消固定会话",
 		"slash.tag":                 "为会话添加标签",
@@ -252,6 +256,8 @@ func zhCommandModule() map[string]string {
   /memory            显示已加载记忆
   /memory list       列出自动记忆条目
   /memory clear      清空自动记忆
+  /memory forget <k> 遗忘单条记忆（软删除，可恢复）
+  /memory forgotten  列出已遗忘的记忆
   /undo              撤销最近一次文件修改（回滚检查点）
   /files             查看 agent 在本次会话中修改的文件
   /checkpoints       列出所有文件修改检查点
