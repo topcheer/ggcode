@@ -147,6 +147,7 @@ type Agent struct {
 	adversarialReviewRounds      int
 	adversarialReviewLastRun     string // task prompt of the last review; resets rounds per task
 	hookConfig                   hooks.HookConfig
+	rlCriticalWarned             bool // #3965: rate-limit critical warning edge-trigger latch (guarded by a.mu); healthy readings re-arm it
 	sessionStartFired            bool // on_session_start fired once per Agent lifetime
 	sessionEndFired              bool // on_session_end fired once (idempotent Close)
 	workingDir                   string
@@ -5928,6 +5929,30 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 					debug.Log("agent", "rate limit warning: req %d/%d (%.0f%%), tok %d/%d (%.0f%%)",
 						info.RemainingRequests, info.LimitRequests, info.RequestFractionRemaining()*100,
 						info.RemainingTokens, info.LimitTokens, info.TokenFractionRemaining()*100)
+					// #3965: the comment above promised a system warning event
+					// "so the UI/user is informed before a 429 occurs", but only
+					// debug.Log ever ran - TUI/desktop/IM had zero visibility until
+					// the 429 actually interrupted the run. Emit on the critical
+					// transition only (struct latch; the streamDone branch lives in
+					// streamChatResponse, a per-turn method, so the latch must
+					// outlive it); a healthy reading re-arms it.
+					a.mu.Lock()
+					firstCritical := !a.rlCriticalWarned
+					a.rlCriticalWarned = true
+					a.mu.Unlock()
+					if firstCritical {
+						onEvent(provider.StreamEvent{
+							Type: provider.StreamEventSystem,
+							Text: fmt.Sprintf("[rate limit] Quota nearly exhausted (requests %d/%d, tokens %d/%d remaining). Expect 429s soon - consider wrapping up or switching endpoint.",
+								info.RemainingRequests, info.LimitRequests, info.RemainingTokens, info.LimitTokens),
+						})
+					}
+				} else if !info.IsEmpty() {
+					// A concrete non-critical reading means quotas recovered;
+					// re-arm so a later critical episode warns again.
+					a.mu.Lock()
+					a.rlCriticalWarned = false
+					a.mu.Unlock()
 				}
 			}
 			// on_stream_stop hook (async fire-and-forget).
