@@ -1945,6 +1945,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// r415: same reset discipline for the time ladder - re-arms the
 	// run-start timestamp and clears the tier flags.
 	a.resetSessionTimeUsage()
+	// #3959: same reset discipline for the USD cost ladder. Without it the
+	// 80/95/100 tier flags stay latched from the previous run exactly as
+	// #1494 case A described for tokens - stopGiven=true makes Record-
+	// SessionCostUsage permanently silent for every later run in this
+	// process, so the financial guardrail goes dark until restart.
+	a.resetSessionCostUsage()
 
 	// Reset the unread-file edit tracker so each run starts fresh.
 	a.unreadEdit.reset()
@@ -2650,6 +2656,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.injectGuidance(msg)
 			debug.Log("session-cost-limit", "threshold crossed at iteration %d stop=%v", i+1, stop)
 			if stop {
+				sessionBudgetStop = true // #3959: arm the loop-top gate (parity with token/time twins above)
 				onEvent(provider.StreamEvent{
 					Type: provider.StreamEventSystem,
 					Text: "[Session spend limit fully consumed - winding down. Summarize the state so the user can resume with a fresh budget.] ",
