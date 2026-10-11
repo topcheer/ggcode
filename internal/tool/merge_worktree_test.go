@@ -80,6 +80,11 @@ func mwCall(t *testing.T, workingDir, worktree, action, verify string) Result {
 }
 
 func TestMergeWorktreeCleanAutoFinalize(t *testing.T) {
+	// Simulate the CI container: no global git identity anywhere. The tool
+	// must fall back to its own identity for the merge commit (CI failure
+	// "Committer identity unknown", run 38160992320).
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "none"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	repo, wt := newMergeWorktreeFixture(t)
 	// Worktree edits a NEW file; parent edits a different region of hello.txt.
 	os.WriteFile(filepath.Join(wt, "feature.txt"), []byte("from worktree\n"), 0644)
