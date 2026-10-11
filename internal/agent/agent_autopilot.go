@@ -158,11 +158,6 @@ func (a *Agent) GetAutopilotGoal() string {
 	return a.getAutopilotGoal()
 }
 
-// HasAutopilotGoal returns true if a goal is currently set and active.
-func (a *Agent) HasAutopilotGoal() bool {
-	return a.hasAutopilotGoal()
-}
-
 // hasAutopilotGoal returns true if a goal has been confirmed.
 func (a *Agent) hasAutopilotGoal() bool {
 	a.mu.RLock()

@@ -655,23 +655,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 	return a
 }
 
-// QualityComparison returns aggregated quality stats per provider/model pair,
-// sorted by average score descending. Returns nil if no runs have been scored.
-func (a *Agent) QualityComparison() []ProviderComparison {
-	if a.qualityScorer == nil {
-		return nil
-	}
-	return a.qualityScorer.Compare()
-}
-
-// QualityReport returns a human-readable provider/model comparison summary.
-func (a *Agent) QualityReport() string {
-	if a.qualityScorer == nil {
-		return "Quality scoring not available."
-	}
-	return a.qualityScorer.FormatComparison()
-}
-
 // SetProbeKey sets the probe cache key ("vendor|baseURL|model") used for
 // context window auto-detection from overflow errors.
 func (a *Agent) SetProbeKey(key string) {
