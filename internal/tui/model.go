@@ -313,6 +313,7 @@ type Model struct {
 	runStartTime         time.Time // when the current agent run started (for bell timing)
 	subAgentsCanceling   bool      // true while async CancelAll() is in progress after user cancel
 	lastUserSubmission   string    // last non-slash user prompt, for /retry
+	crashResumeTask      string    // task prompt captured from a crashed run, for /continue-task (sa-117)
 	// Blind-spot (unrecognized error) auto-retry: counters survive Model
 	// copies because handler methods run on the value receiver's parent.
 	blindSpotRetries int // attempts used for the current submission

@@ -557,6 +557,12 @@ func enCatalog(key string) string {
 		return "(debug log file unavailable)"
 	case "command.retry_busy":
 		return "Agent is busy. Wait for the current run to finish before retrying."
+	case "command.continue_task_empty":
+		return "No crashed task available to resume in this session."
+	case "command.continue_task_busy":
+		return "Agent is busy. Wait for the current run to finish before continuing the task."
+	case "command.continue_task_sent":
+		return "Resuming the interrupted task..."
 	case "command.edit_empty":
 		return "No previous submission to edit."
 	case "command.edit_busy":
@@ -907,6 +913,8 @@ func enCatalog(key string) string {
 		return "List saved sessions"
 	case "slash.resume":
 		return "Resume a previous session"
+	case "slash.continue_task":
+		return "Resume the task interrupted by a crash"
 	case "slash.export":
 		return "Export session to markdown"
 	case "slash.model":

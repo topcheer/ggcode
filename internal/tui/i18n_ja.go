@@ -531,6 +531,12 @@ func jaCatalog(key string) string {
 		return "再試行する前回の送信がありません。"
 	case "command.retry_busy":
 		return "エージェントが実行中です。再試行前に現在の実行が完了するまでお待ちください。"
+	case "command.continue_task_empty":
+		return "このセッションで再開できるクラッシュタスクはありません。"
+	case "command.continue_task_busy":
+		return "エージェントが実行中です。タスク再開前に現在の実行が完了するまでお待ちください。"
+	case "command.continue_task_sent":
+		return "中断されたタスクを再開しています…"
 	case "command.edit_empty":
 		return "前のメッセージがありません"
 	case "command.edit_busy":
@@ -811,6 +817,8 @@ func jaCatalog(key string) string {
 		return "セッション一覧を表示"
 	case "slash.resume":
 		return "セッションを復元"
+	case "slash.continue_task":
+		return "クラッシュで中断されたタスクを再開"
 	case "slash.export":
 		return "セッションをエクスポート"
 	case "slash.model":

@@ -494,6 +494,12 @@ func koCatalog(key string) string {
 		return "재시도할 이전 제출이 없습니다."
 	case "command.retry_busy":
 		return "에이전트가 실행 중입니다. 재시도 전 현재 실행이 완료될 때까지 기다리세요."
+	case "command.continue_task_empty":
+		return "이 세션에서 재개할 크래시 작업이 없습니다."
+	case "command.continue_task_busy":
+		return "에이전트가 실행 중입니다. 작업 재개 전 현재 실행이 완료될 때까지 기다리세요."
+	case "command.continue_task_sent":
+		return "중단된 작업을 재개하는 중…"
 	case "command.edit_empty":
 		return "편집할 이전 제출이 없습니다."
 	case "command.edit_busy":
@@ -772,6 +778,8 @@ func koCatalog(key string) string {
 		return "저장된 세션 목록"
 	case "slash.resume":
 		return "이전 세션 재개"
+	case "slash.continue_task":
+		return "크래시로 중단된 작업 재개"
 	case "slash.export":
 		return "세션을 Markdown으로 내보내기"
 	case "slash.model":

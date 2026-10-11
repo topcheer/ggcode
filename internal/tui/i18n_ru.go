@@ -532,6 +532,12 @@ func ruCatalog(key string) string {
 		return "Нет предыдущего ввода для повтора."
 	case "command.retry_busy":
 		return "Агент занят. Дождитесь завершения текущего запуска перед повтором."
+	case "command.continue_task_empty":
+		return "В этой сессии нет прерванной задачи для возобновления."
+	case "command.continue_task_busy":
+		return "Агент занят. Дождитесь завершения текущего запуска перед возобновлением задачи."
+	case "command.continue_task_sent":
+		return "Возобновляем прерванную задачу…"
 	case "command.edit_empty":
 		return "Нет предыдущего ввода для редактирования."
 	case "command.edit_busy":
@@ -840,6 +846,8 @@ func ruCatalog(key string) string {
 		return "Показать сохранённые сессии"
 	case "slash.resume":
 		return "Возобновить предыдущую сессию"
+	case "slash.continue_task":
+		return "Возобновить задачу, прерванную сбоем"
 	case "slash.export":
 		return "Экспортировать сессию в Markdown"
 	case "slash.model":

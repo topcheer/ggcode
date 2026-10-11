@@ -266,12 +266,28 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) (comp
 // CheckCrashRecovery detects whether the session's previous run was interrupted
 // by a crash (SIGKILL, panic, power loss). If so, it returns a human-readable
 // recovery message that callers can display to the user or inject into the
-// agent's context. Returns empty string if no crash is detected.
+// agent's context, plus the raw prompt of the interrupted task (second return
+// value) for the confirm-to-resume flow (sa-117 /continue-task). Both are
+// empty when no crash is detected. The task prompt is empty when the journal
+// was corrupt (placeholder text carries no real task).
 //
 // This should be called after RestoreSessionIntoAgent during session resume.
-func CheckCrashRecovery(sessionID string) string {
+func CheckCrashRecovery(sessionID string) (string, string) {
 	info := agent.CheckCrashedRun(sessionID)
-	return agent.FormatCrashRecoveryMessage(info)
+	return agent.FormatCrashRecoveryMessage(info), crashResumeTask(info)
+}
+
+// crashResumeTask extracts the interrupted task prompt, excluding the
+// corrupt-journal placeholder (run_journal.go formats it as
+// "<journal corrupted: ...>" - it names the evidence file, not a task).
+func crashResumeTask(info *agent.CrashRecoveryInfo) string {
+	if info == nil || info.UserPrompt == "" {
+		return ""
+	}
+	if strings.HasPrefix(info.UserPrompt, "<journal corrupted") {
+		return ""
+	}
+	return info.UserPrompt
 }
 
 // SeedCrashDedupWindow opens the crash-restore idempotency window
