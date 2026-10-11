@@ -136,6 +136,19 @@ func (t ApplyPatch) Execute(ctx context.Context, input json.RawMessage) (Result,
 	if err != nil {
 		return Result{IsError: true, Content: "Error: " + err.Error()}, nil
 	}
+	// #3951: the Move-to relocation target must clear the sandbox too.
+	// Execute previously checked only args.Path, so a section carrying
+	// "Move to: ../../outside/evil.txt" wrote OUTSIDE the sandbox (and
+	// deleted the source) - a full sandbox escape. The check must use the
+	// SAME target computation as applyV4ASection (Clean(Join(Dir(root),
+	// moveTo))), not the raw moveTo string, so the validated path and the
+	// written path can never drift apart.
+	if sec.moveTo != "" && filepath.Clean(sec.moveTo) != filepath.Clean(sec.path) && t.SandboxCheck != nil {
+		moveTarget := filepath.Clean(filepath.Join(filepath.Dir(resolved), sec.moveTo))
+		if !t.SandboxCheck(moveTarget) {
+			return Result{IsError: true, Content: fmt.Sprintf("Error: move-to target %q is outside the allowed sandbox", sec.moveTo)}, nil
+		}
+	}
 
 	summary, err := applyV4ASection(resolved, sec)
 	if err != nil {
