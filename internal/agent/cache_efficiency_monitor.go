@@ -28,10 +28,10 @@ package agent
 //     to near-zero after previously being high, indicating prefix instability
 //   - When a storm is detected, injects guidance identifying the likely cause
 //
-// This is different from:
-//   - cache_keepalive.go: keeps the cache warm during IDLE periods (TTL-based)
-//   - cache_efficiency_monitor.go (this): detects cache INSTABILITY during
-//     ACTIVE runs (prefix-bust-based)
+// This is different from an idle-TTL cache warm-up (the former
+// cache_keepalive concept has been removed from the codebase): this monitor
+// detects cache INSTABILITY during ACTIVE runs (prefix-bust-based), not
+// idle expiry.
 //
 // Zero LLM cost - deterministic token arithmetic + rolling window analysis.
 
