@@ -469,6 +469,14 @@ func verifyCommandAvailable(command string) bool {
 	// builtin with no Linux binary - probe the first segment that does
 	// real work instead of failing the preflight on it.
 	for _, seg := range splitCompoundCommand(command) {
+		// #3751: env prefixes must be stripped per-segment, not only at the
+		// start of the whole command - `cd /app && GOFLAGS=-p=1 go test ./...`
+		// otherwise probes LookPath("GOFLAGS=-p=1"), fails, and the whole
+		// verification is silently skipped while reporting Passed=true.
+		// TrimSpace first: splitCompoundCommand leaves the separator's
+		// surrounding whitespace in the segment, and the ^-anchored regex
+		// will not match " GOFLAGS=...".
+		seg = stripEnvAssignments(strings.TrimSpace(seg))
 		segFields := strings.Fields(seg)
 		if len(segFields) == 0 || segFields[0] == "cd" {
 			continue
@@ -914,7 +922,12 @@ func isVerifyCommand(cmd string) bool {
 //
 // Thread-safety: caller must NOT hold a.mu (this method acquires it).
 func (a *Agent) maybeResetVerifyOnCommand(toolName string, args json.RawMessage, resultErr bool) {
-	if toolName != "run_command" {
+	// #3796-A: background verification counts too. Long test suites are
+	// routinely started via start_command and read back with
+	// read_command_output; excluding them here left
+	// realBuildOrTestRunThisRun unset, so the final-turn gate accused the
+	// agent of never having verified - the opposite of the truth.
+	if toolName != "run_command" && toolName != "start_command" {
 		return
 	}
 
@@ -930,14 +943,21 @@ func (a *Agent) maybeResetVerifyOnCommand(toolName string, args json.RawMessage,
 	a.postEditVerify.buildOrTestRunThisRun = true
 	// #3045 B1: the final-turn evidence gate demands compile/test evidence;
 	// pure formatters (gofmt -l, prettier) exit 0 without proving anything.
+	// Deliberately kept for start_command launches too (#3796): spawn +
+	// read-back is a legitimate verification pattern, and excluding it made
+	// the final-turn gate accuse verified agents.
 	if isRealTestExecution(cmd) {
 		a.postEditVerify.realBuildOrTestRunThisRun = true
 	}
-	// #1841 case 3: only a REAL test/build execution may update the
-	// failure flag. `make help`, `task --list`, `gofmt -l` (all exit 0)
-	// used to unconditionally clear lastBuildFailed after a FAILED go
-	// test, so the "(which FAILED)" urgency hint could never appear.
-	if isRealTestExecution(cmd) {
+	// #3840: for start_command the resultErr is the LAUNCH outcome, not the
+	// test outcome - a successful launch proves nothing about the background
+	// run (read back via read_command_output, excluded at the top of this
+	// function). Writing the launch error into lastBuildFailed recorded a
+	// failed background test as success ('(which FAILED)' could never
+	// appear). Registration is not a result - the same semantics the
+	// premature-success side already applies to background jobs - so the
+	// failure flag may only be written by a COMPLETED execution.
+	if isRealTestExecution(cmd) && toolName == "run_command" {
 		a.postEditVerify.lastBuildFailed = resultErr
 	}
 
@@ -983,8 +1003,11 @@ func stripLeadingShellComment(s string) string {
 }
 
 // envAssignPrefix matches a leading environment-variable assignment such as
-// "GOFLAGS=-p=1 " or "CGO_ENABLED=0 " (#950).
-var envAssignPrefix = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=\S*\s+`)
+// "GOFLAGS=-p=1 " or "CGO_ENABLED=0 " (#950). #3751: quoted values with
+// spaces (GREETING="hello world") must be consumed whole - \S* alone cannot
+// cross the inner space, leaving the assignment unstripped so LookPath sees
+// `GREETING="hello` and fails.
+var envAssignPrefix = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+`)
 
 // stripEnvAssignments removes leading env-var assignment prefixes from a
 // command string so prefix-anchored verify matchers see the actual command
@@ -1007,9 +1030,37 @@ func splitCompoundCommand(cmd string) []string {
 	// #2122: without it, `cd /app && go test` stayed ONE segment whose
 	// first word is cd (a shell builtin with no Linux binary), so the
 	// preflight never reached the real command after it.
-	return strings.FieldsFunc(cmd, func(r rune) bool {
-		return r == ';' || r == '|' || r == '&'
-	})
+	// #3908: quote-aware. `git commit -m "fix && go test ./..."` had the
+	// quoted && split as a real separator, and the bogus segment then
+	// satisfied isVerifyCommandSegment / isRealTestSegment - a pure commit
+	// was credited as test evidence (final-turn gate weakened). Separators
+	// inside single/double-quoted literals no longer split.
+	var segs []string
+	var cur []rune
+	quote := rune(0) // 0 = unquoted, else the open quote rune
+	for _, r := range cmd {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+			cur = append(cur, r)
+		case r == '\'' || r == '"':
+			quote = r
+			cur = append(cur, r)
+		case r == ';' || r == '|' || r == '&':
+			if len(cur) > 0 {
+				segs = append(segs, string(cur))
+				cur = nil
+			}
+		default:
+			cur = append(cur, r)
+		}
+	}
+	if len(cur) > 0 {
+		segs = append(segs, string(cur))
+	}
+	return segs
 }
 
 // isVerifyCommandSegment reports whether a single shell segment (env
@@ -1091,7 +1142,10 @@ var makeRunnerNoopTargets = map[string]bool{
 // isRealTestSegment classifies one shell segment (already lowercased,
 // trimmed, env-stripped).
 func isRealTestSegment(seg string) bool {
-	if strings.Contains(seg, "--help") || strings.Contains(seg, " --list") ||
+	// #3862 C: `go test ./... -list .` (the official single-dash spelling)
+	// only LISTS test names and exits 0 - it must not count as a real test
+	// execution any more than the double-dash form.
+	if strings.Contains(seg, "--help") || strings.Contains(seg, " -list") || strings.Contains(seg, " --list") ||
 		strings.Contains(seg, "help") && strings.HasPrefix(seg, "make ") {
 		return false
 	}

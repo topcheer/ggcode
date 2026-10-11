@@ -60,6 +60,17 @@ ggcode 支持在文件中声明**行为不变式**（behavior invariants），�
 
 开启 `GGCODE_AUDIT_LEDGER` 时，block 级拒绝以 `invalid` 状态入账，条目携带 `invariant_id` 字段，可通过审计链追溯是哪条不变式拒绝了哪个调用。
 
+## 审计报告（读取审计链）
+
+审计链不只可验证，还可事后重构为人类可读报告：
+
+```
+GGCODE_AUDIT_LEDGER=/path/to/audit.jsonl ggcode   # 会话期间写入审计链
+ggcode audit report --path /path/to/audit.jsonl   # 事后重构该 run
+```
+
+`audit report` 输出：哈希链验证状态（篡改证据前置显示）、人工审批时间线（approved/user_denied/ask_timeout）、不变式拒绝计数（`invariant_id`）、A2A 远程任务归因（peer/task）、每工具活动直方图、错误聚类（路径/文件名/数字归一化后同形状错误合并计数）。可选 `--session` 只看单个会话；`--files f1,f2` 传入本次变更文件后追加 blast-radius 审查深度提示（`copy` < `code` < `critical`，涉及迁移/鉴权/基础设施/CI/密钥的变更标记为 critical）。
+
 ## 设计边界
 
 - 引擎是**确定性护栏**，不替代权限系统（permission）或对话层约束提醒（constraint_amnesia）

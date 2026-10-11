@@ -101,10 +101,28 @@ func syncCfgFileLocked() {
 	if globalCfg == nil {
 		return
 	}
-	if fresh, lerr := config.Load(path); lerr == nil && fresh != nil {
+	// #3769: keep the MERGED view. Startup initializes via LoadWithInstance;
+	// reloading with plain Load here replaced the merged config with the raw
+	// global file, silently dropping instance-scoped overrides (vendor /
+	// language / defaultMode), and the lost HasInstanceConfigAttached() also
+	// broke the instance-writeback on subsequent saves - self-reinforcing
+	// until restart. Reload through the same merge path when an instance
+	// workspace is attached.
+	fresh, lerr := loadCfgMergedWithInstance(path, globalCfg)
+	if lerr == nil && fresh != nil {
 		globalCfg = fresh
-		debug.Log("desktop", "config file changed externally; global config refreshed (#1847)")
+		debug.Log("desktop", "config file changed externally; global config refreshed (#1847, merged view #3769)")
 	}
+}
+
+// loadCfgMergedWithInstance mirrors startup initialization: LoadWithInstance
+// when the runtime config has an instance workspace attached, plain Load
+// otherwise (#3769).
+func loadCfgMergedWithInstance(path string, runtime *config.Config) (*config.Config, error) {
+	if runtime != nil && runtime.HasInstanceConfigAttached() {
+		return config.LoadWithInstance(path, runtime.InstanceWorkspace())
+	}
+	return config.Load(path)
 }
 
 // noteConfigFileSaved records the mtime right after OUR OWN save, so the
@@ -283,9 +301,10 @@ func UpdateConfig(values map[string]interface{}) error {
 		return fmt.Errorf("config not initialized")
 	}
 
-	// #740: validate before mutate. Four checks inside the mutation chain
+	// #740: validate before mutate. Five checks inside the mutation chain
 	// below can fail and return mid-way (vendor/endpoint existence for
-	// baseURL, duration parsing for the two timeouts), leaving fields that
+	// baseURL, duration parsing for the two timeouts, preset lookup for
+	// impersonatePreset #3770), leaving fields that
 	// were already written resident in the shared in-memory cfg — reported by
 	// GetFullConfig, picked up by the next chat session without Save, and
 	// silently persisted by the next successful save through any of the four
@@ -306,7 +325,18 @@ func UpdateConfig(values map[string]interface{}) error {
 		}
 		_ = d
 	}
-	if v, ok := values["baseURL"].(string); ok && v != "" {
+	// #3855: vendor/endpoint existence is validated whenever this batch
+	// touches vendor, endpoint, or baseURL - previously the whole check was
+	// gated on a non-empty baseURL in the SAME map, so the onboarding path
+	// (CompleteOnboard commits {vendor,endpoint,model} without baseURL)
+	// skipped validation entirely and a typo'd vendor/endpoint was written
+	// into the resident cfg before Save() had a chance to reject it. Failed
+	// updates then poisoned every in-session ResolveActiveEndpoint call
+	// until restart, violating the #740 contract above.
+	_, hasBaseURL := values["baseURL"].(string)
+	_, hasVendor := values["vendor"].(string)
+	_, hasEndpoint := values["endpoint"].(string)
+	if hasBaseURL || hasVendor || hasEndpoint {
 		// Mirror the effective vendor/endpoint the mutation chain will use:
 		// vendor/endpoint values in the same map take precedence over cfg.
 		vendor, endpoint := cfg.Vendor, cfg.Endpoint
@@ -321,9 +351,29 @@ func UpdateConfig(values map[string]interface{}) error {
 			if !ok {
 				return fmt.Errorf("vendor %q not found", vendor)
 			}
-			if _, ok := vc.Endpoints[endpoint]; !ok {
+			ep, ok := vc.Endpoints[endpoint]
+			if !ok {
 				return fmt.Errorf("endpoint %q not found in vendor %q", endpoint, vendor)
 			}
+			// Mirror internal/config Validate(): an endpoint without a
+			// protocol would pass the existence check but make Save()
+			// fail AFTER the resident cfg was already mutated - the exact
+			// in-memory pollution #3855 closes.
+			if strings.TrimSpace(ep.Protocol) == "" {
+				return fmt.Errorf("endpoint %q for vendor %q must declare a protocol", endpoint, vendor)
+			}
+		}
+	}
+
+	// #3770: impersonatePreset lookup is fallible (unknown preset id), so it
+	// belongs in this pre-validation block — validating it after the nine
+	// field writes above left a rejected request half-applied (e.g.
+	// {"model":"x","impersonatePreset":"bogus"} reported an error while
+	// cfg.Model had already been changed in place) and the next successful
+	// save silently persisted the mutation. Same #206/#740 failure shape.
+	if v, ok := values["impersonatePreset"].(string); ok {
+		if v != "none" && v != "" && provider.FindPresetByID(v) == nil {
+			return fmt.Errorf("unknown impersonation preset %q", v)
 		}
 	}
 
@@ -381,9 +431,8 @@ func UpdateConfig(values map[string]interface{}) error {
 		// App.UpdateConfig triggers still baked the OLD headers into the new
 		// provider; and an unknown preset id persisted silently and died at
 		// next init (#614's guard only covered the ApplyImpersonation path).
-		if v != "none" && v != "" && provider.FindPresetByID(v) == nil {
-			return fmt.Errorf("unknown impersonation preset %q", v)
-		}
+		// Preset existence is pre-validated above (#3770) so this branch
+		// cannot fail after earlier fields were written.
 		var preset *provider.ImpersonationPreset
 		if v != "none" && v != "" {
 			for _, p := range provider.DefaultImpersonationPresets() {
@@ -393,14 +442,19 @@ func UpdateConfig(values map[string]interface{}) error {
 				}
 			}
 		}
+		// #3852 B: CustomVersion must be written BEFORE
+		// SetActiveImpersonation below - the old order activated the
+		// runtime with the stale version while persisting the new one to
+		// disk, so impersonated header version numbers stayed wrong until
+		// the next unrelated config change.
+		if cv, ok := values["impersonateCustomVersion"].(string); ok {
+			cfg.Impersonation.CustomVersion = cv
+		}
 		// Preserve CustomHeaders/CustomVersion already in cfg; version falls
 		// back to the persisted one so SetActiveImpersonation sees the same
 		// state the next cold init would rebuild from.
 		provider.SetActiveImpersonation(preset, cfg.Impersonation.CustomVersion, cfg.Impersonation.CustomHeaders)
 		cfg.Impersonation.Preset = v
-	}
-	if v, ok := values["impersonateCustomVersion"].(string); ok {
-		cfg.Impersonation.CustomVersion = v
 	}
 	if v, ok := values["streamEncoder"].(string); ok {
 		cfg.Stream.HardwareEncoder = v
@@ -532,6 +586,10 @@ func saveWithInstanceWriteback(cfg *config.Config, vendor string) error {
 	if err := cfg.Save(); err != nil {
 		return err
 	}
+	// #3769: our own write advances the mtime; without recording it the 2s
+	// poller treated the save as an external change and reloaded the
+	// UNMERGED global file over the runtime view.
+	noteConfigFileSaved()
 	if !cfg.HasInstanceConfigAttached() {
 		return nil
 	}
@@ -788,6 +846,18 @@ func applyImpersonationLocked(presetID, version string, customHeaders map[string
 		return err
 	}
 	noteConfigFileSaved()
+	// #3852 A / #282 family: cfg.Save() strips instance-sourced keys from
+	// the global file. When the instance carries an impersonation section,
+	// impersonation fields are registered instance fields - without the
+	// write-back below the change is silently reverted by the instance
+	// merge on the next restart (persistTouchedInstanceFields itself no-ops
+	// when impersonation is not instance-sourced on this workspace).
+	if err := persistTouchedInstanceFields(cfg, map[string]interface{}{
+		"impersonatePreset":        presetID,
+		"impersonateCustomVersion": version,
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -920,11 +990,21 @@ func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 	if cfg == nil {
 		return fmt.Errorf("config not initialized")
 	}
+	// #3838 A: fail fast on an empty endpoint name BEFORE anything mutates.
+	// An empty name used to persist a degenerate Endpoints[""] key with no
+	// display name into vendors.yaml (and derive a PreferredEndpointAPIKey
+	// for the empty name when an apiKey was set).
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("endpoint name must not be empty")
+	}
 
 	vc, ok := cfg.Vendors[vendor]
 	if !ok {
 		vc = config.VendorConfig{Endpoints: make(map[string]config.EndpointConfig)}
-		cfg.Vendors[vendor] = vc
+		// #3838 B: do NOT insert the vendor shell into cfg.Vendors yet - a
+		// later failure (keys.env write below) used to leave the empty shell
+		// in memory, and any subsequent successful Save persisted it.
+		// Insertion now happens only after every fallible step succeeded.
 	}
 
 	// Load existing config and patch only provided fields
@@ -965,9 +1045,11 @@ func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 	// clearing here would wipe keys on unrelated edits. Legacy plaintext keys
 	// already on disk are migrated to keys.env by Save() via
 	// MigrateVendorsFilePlaintextAPIKeys.
-	if name != "" {
-		ep.DisplayName = name
-	}
+	ep.DisplayName = name
+	// #3838 B (commit phase): all fallible side effects above succeeded -
+	// now (and only now) mutate the in-memory config and persist. If the
+	// final save fails, keys.env may retain an orphan key for this endpoint,
+	// but it is inert: no endpoint references it, so it resolves nowhere.
 	vc.Endpoints[name] = ep
 	cfg.Vendors[vendor] = vc
 	return saveWithInstanceWriteback(cfg, vendor)
@@ -1209,6 +1291,9 @@ func GetEndpointDetails(vendor, endpoint string) *EndpointDetails {
 // directory no one parses — the edit was lost on restart (#532). Fall back to
 // the global Save(), the same no-instance path saveWithInstanceWriteback uses.
 func persistLimitChange(cfg *config.Config) error {
+	// #3769: record our own write so the poller does not fire a reload on
+	// it (same rationale as saveWithInstanceWriteback).
+	defer noteConfigFileSaved()
 	if cfg.HasInstanceConfigAttached() {
 		return cfg.SaveInstanceScoped(cfg.InstanceWorkspace())
 	}

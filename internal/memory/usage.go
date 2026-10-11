@@ -207,6 +207,19 @@ func (am *AutoMemory) RecordOutcome(key, outcome string) {
 		return // unknown outcomes are simply not recorded
 	}
 	safe := disambiguateKey(key, sanitizeKey(key))
+	// #3882: full read-modify-write of .usage.json under only am.mu loses a
+	// concurrent writer's entry to last-writer-wins across processes. Every
+	// sibling sidecar writer holds the #3120 cross-process lock
+	// (FileLock outer, am.mu inner) - RecordOutcome was the lone exception.
+	unlock, lockErr := util.FileLock(am.dir + ".lock")
+	if lockErr != nil {
+		debug.Log("memory", "usage lock unavailable, recording outcome unlocked: %v", lockErr)
+	}
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
 	am.mu.Lock()
 	defer am.mu.Unlock()
 	idx := am.loadUsage()
@@ -379,6 +392,18 @@ func (am *AutoMemory) RecordUse(keys []string, source string) {
 // ForgetUsage drops the provenance/usage record when the key is deleted,
 // so deleted keys cannot linger as ghost provenance entries.
 func (am *AutoMemory) ForgetUsage(key string) {
+	// #3602 / #3120: cross-process serialization for the sidecar
+	// read-modify-write, same lock file and lock order (FileLock outer,
+	// am.mu inner) as RecordUse/RecordConsumption. ForgetUsage used to hold
+	// only am.mu while doing loadUsage -> delete -> saveUsage full
+	// overwrite: a concurrent writer in another process could interleave
+	// and either lose its update or resurrect the deleted ghost entry.
+	// Fail-open with a log - same degradation contract as RecordUse.
+	if unlock, err := util.FileLock(am.dir + ".lock"); err == nil {
+		defer unlock()
+	} else {
+		debug.Log("memory", "automemory sidecar filelock failed, degraded to unlocked forget: %v", err)
+	}
 	am.mu.Lock()
 	defer am.mu.Unlock()
 	idx := am.loadUsage()

@@ -49,12 +49,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
-
-const maxSpecGamingWarnings = 1
 
 // specGamingState tracks whether the specification gaming detector has fired.
 type specGamingState struct {
@@ -82,7 +81,10 @@ var testFileSuffixes = []string{
 	".spec.js",  // JavaScript (Jest/Mocha)
 	".spec.jsx", // JavaScript React
 	"_test.rb",  // Ruby
-	"Test.java", // Java
+	"test.java", // Java - specGamingIsTestFile lowercases the path before
+	// HasSuffix (#3609); the mixed-case "Test.java" entry could never
+	// match, so FooTest.java landed in sourceFiles and Pattern 1
+	// (test-weakening) missed it.
 	"_test.rs",  // Rust
 	"_test.c",   // C
 	"_test.cpp", // C++
@@ -116,12 +118,38 @@ var skipMarkers = []string{
 	"test.skip(",
 	"describe.skip(",
 	"xdescribe(",
-	"xit(",
-	"xtest(",
+	// "xit(" / "xtest(" moved to boundarySkipMarkerRes (#3735): as plain
+	// substrings they hit the tail of every mainstream exit call
+	// (os.Exit / sys.exit / process.exit / exit(...)), turning normal
+	// error handling into a spec-gaming accusation and burning the
+	// fired-once detection budget on a false positive.
 	"// @ts-ignore", // suppress type errors
 	"@Disabled",     // JUnit
 	"testing.Skip(", // Go
 	"t.Skip(",       // Go testing
+}
+
+// boundarySkipMarkerRes are skip markers that REQUIRE a word boundary on
+// their left edge (#3735): the Jest/Mocha "xit("/"xtest(" forms are a bare
+// suffix of exit-family calls, so plain Contains matched every
+// os.Exit/sys.exit/process.exit in edits and commands. The boundary class
+// excludes identifier chars, so `xit(` still matches "foo() xit(1)" or
+// "describe('x', () => { it... xit(" but NOT os.exit( / nextest( / exit( .
+// Case-insensitive by construction (inputs are lowered before matching).
+var boundarySkipMarkerRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?:^|[^a-z0-9_])xit\(`),
+	regexp.MustCompile(`(?:^|[^a-z0-9_])xtest\(`),
+}
+
+// containsBoundarySkipMarker reports whether lower (ALREADY lowercased)
+// text contains any boundary-guarded skip marker.
+func containsBoundarySkipMarker(lower string) bool {
+	for _, re := range boundarySkipMarkerRes {
+		if re.MatchString(lower) {
+			return true
+		}
+	}
+	return false
 }
 
 // isTestFile returns true if the path matches a known test file naming pattern.
@@ -141,6 +169,11 @@ func stripTestSuffix(path string) string {
 	lower := strings.ToLower(path)
 	for _, suffix := range testFileSuffixes {
 		if strings.HasSuffix(lower, suffix) {
+			// Whole-name edge (#588 Bug4): a file named exactly "Test.java"
+			// must not strip to an empty base.
+			if len(path) == len(suffix) {
+				return path
+			}
 			// Remove the test-specific portion and reconstruct
 			base := path[:len(path)-len(suffix)]
 			// For Go: _test.go -> .go
@@ -178,6 +211,13 @@ func stripTestSuffix(path string) string {
 			}
 			if suffix == ".test.kt" {
 				return base + ".kt"
+			}
+			// For Java: FooTest.java -> Foo.java (#3627: every other
+			// suffix family re-attaches its extension; Java alone fell
+			// through to the bare-base fallback, so sourceExists looked
+			// for an extension-less "Foo" and never found the source).
+			if suffix == "test.java" {
+				return base + ".java"
 			}
 			// Fallback: just strip suffix
 			return base
@@ -245,7 +285,7 @@ var makefileNoOpCommands = []string{"echo", "true", "exit 0", "exit", ":", "pass
 // targets were neutered: a test target whose commands are all no-ops, or a
 // build target surviving while the test target was deleted (or commented
 // out) entirely. This is the partial detection the ciConfigFiles entry
-// "Makefile": false always promised (#588 Bug 2) — previously the comment
+// "Makefile": false always promised (#588 Bug 2) - previously the comment
 // existed but no Makefile content analysis did, so `sed -i 's/go test/echo
 // ok/' Makefile` passed silently while both patterns waved it through.
 // Unreadable files return false (never warn on I/O errors).
@@ -262,20 +302,35 @@ func hasMakefileTampering(path string) bool {
 // arguments still produce no verification).
 var makefileNoOpPrefixes = []string{"echo", "true", "exit 0", "exit", ":", "pass", "printf", "@echo", "@true", "@exit", "@pass", "@printf", "@:", "-echo", "-true", "-exit", "-pass", "-printf"}
 
+// isIndentedLine reports whether ln begins with a run of leading whitespace
+// (tab or spaces) followed by non-space content - the shape of a recipe
+// line, strict (tab) or lenient (spaces) (#3595).
+func isIndentedLine(ln string) bool {
+	trimmed := strings.TrimLeft(ln, " \t")
+	return trimmed != "" && trimmed != ln
+}
+
 // hasMakefileTamperingContent implements the Makefile analysis over raw
 // content (split from the path-taking wrapper so tests can exercise the
 // logic directly).
 func hasMakefileTamperingContent(content string) bool {
 	lines := strings.Split(content, "\n")
 	targets := map[string][]string{} // target name -> command lines
+	deps := map[string][]string{}    // #3610: target name -> dependency names
 	var order []string
 	cur := ""
 	for _, ln := range lines {
 		switch {
-		case strings.HasPrefix(ln, "\t") && cur != "":
+		case isIndentedLine(ln) && cur != "":
+			// #3595: recipes are tab-indented in strict make, but agents and
+			// editor users often write 4-space-indented recipes. Such lines
+			// fell to the rule-head default (no colon -> cur reset), leaving
+			// the target with zero commands and misreporting innocent files
+			// as tampered ("target exists with no commands"). Commands present
+			// with wrong indentation are a make lint problem, not sabotage.
 			targets[cur] = append(targets[cur], strings.TrimSpace(ln))
 		case strings.HasPrefix(ln, "#") || strings.TrimSpace(ln) == "":
-			// comments/blank lines — a commented-out "#test:" is absence
+			// comments/blank lines - a commented-out "#test:" is absence
 		default:
 			// rule head: "name: deps" (possibly with := assignment)
 			head := ln
@@ -288,6 +343,20 @@ func hasMakefileTamperingContent(content string) bool {
 				cur = name
 				targets[cur] = nil
 				order = append(order, cur)
+				rest := head[idx+1:]
+				// #3610 form 2: one-line recipe "target: ; cmd" - make runs the
+				// command after ';' on the head line itself; dropping the tail
+				// left the target with zero commands (false "no commands").
+				if semi := strings.Index(rest, ";"); semi >= 0 {
+					if inline := strings.TrimSpace(rest[semi+1:]); inline != "" {
+						targets[cur] = append(targets[cur], inline)
+					}
+					rest = rest[:semi]
+				}
+				// #3610 form 1: record deps for delegation resolution.
+				for _, f := range strings.Fields(rest) {
+					deps[cur] = append(deps[cur], strings.TrimSuffix(f, ":"))
+				}
 			} else {
 				cur = ""
 			}
@@ -319,12 +388,27 @@ func hasMakefileTamperingContent(content string) bool {
 		if !isTestTarget && !isBuildTarget {
 			continue
 		}
-		if len(cmds) == 0 {
-			// test/build target exists with no commands at all — nothing to run
-			return true
+		effCmds := cmds
+		if len(effCmds) == 0 {
+			// #3610 form 1: delegated targets ("test: unit" where unit carries
+			// the recipe) are the most common make idiom - `make test` fully
+			// executes unit's recipe. Resolve deps transitively (cycle-guarded)
+			// and analyze the delegated commands for real work.
+			effCmds = collectDelegatedCommands(targets, deps, name)
+		}
+		if len(effCmds) == 0 {
+			// #3626: an empty BUILD target ("all:" / "build:" with no recipe
+			// and no deps) is a legal placeholder - make just prints
+			// "Nothing to be done for 'all'". Only an empty TEST target (or
+			// a surviving .PHONY trace of one) is a sabotage signal; empty
+			// build placeholders are skipped.
+			if isTestTarget || makefilePhonyMentionsTest(lines) {
+				return true
+			}
+			continue
 		}
 		allNoOp := true
-		for _, c := range cmds {
+		for _, c := range effCmds {
 			if !isNoOp(c) {
 				allNoOp = false
 				break
@@ -352,9 +436,57 @@ func hasMakefileTamperingContent(content string) bool {
 	}
 	if hasBuild && !hasTest {
 		// A commented-out test target ("# test:") is a deliberate disable,
-		// not tampering — distinguish deletion from commenting.
-		if !strings.Contains(content, "# test:") && !strings.Contains(content, "#test:") {
-			return true
+		// not tampering - distinguish deletion from commenting.
+		if strings.Contains(content, "# test:") || strings.Contains(content, "#test:") {
+			return false
+		}
+		// #3610 form 3: pure-build Makefiles (library projects) never had a
+		// test target - absence alone is not evidence of tampering. Fire
+		// only when a trace shows a test target once existed (.PHONY
+		// still listing it, i.e. the target was deleted out from under it).
+		if !makefilePhonyMentionsTest(lines) {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// collectDelegatedCommands resolves a target's dependency chain
+// transitively (same file, cycle-guarded) and returns every command line
+// reachable through it (#3610 form 1: "test: unit" + unit recipe = test
+// is live). Depth-capped to keep malformed Makefiles from pathological
+// walks.
+func collectDelegatedCommands(targets map[string][]string, deps map[string][]string, root string) []string {
+	var out []string
+	visited := map[string]bool{root: true}
+	queue := append([]string(nil), deps[root]...)
+	for depth := 0; len(queue) > 0 && depth < 64; depth++ {
+		next := queue[:1]
+		queue = queue[1:]
+		dep := next[0]
+		if visited[dep] {
+			continue
+		}
+		visited[dep] = true
+		out = append(out, targets[dep]...)
+		queue = append(queue, deps[dep]...)
+	}
+	return out
+}
+
+// makefilePhonyMentionsTest reports whether any .PHONY line still lists a
+// verification-flavored target name (#3610 form 3: the target was deleted
+// but the .PHONY declaration survives as the trace).
+func makefilePhonyMentionsTest(lines []string) bool {
+	for _, ln := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(ln), ".PHONY") {
+			continue
+		}
+		for _, f := range strings.Fields(ln) {
+			if f == "test" || f == "check" || f == "verify" || strings.HasSuffix(f, "-test") {
+				return true
+			}
 		}
 	}
 	return false
@@ -378,6 +510,11 @@ var readOnlySearchVerbs = map[string]bool{
 // isReadOnlySearchCommand returns true when the shell command's effective
 // verb is a read-only search/read tool. Leading environment assignments
 // (FOO=bar cmd) are skipped so they cannot disguise the verb.
+// #3669: a search verb is NOT read-only when the command carries a
+// downstream mutation carrier - `find -exec sed -i`, `-ok`, a pipe into
+// xargs/sed, a redirect, or a chained command. The verb lookup alone
+// exempted `find . -name '*.go' -exec sed -i "s/t.Skip(//"` wholesale,
+// silently passing a real skip-marker tamper.
 func isReadOnlySearchCommand(cmd string) bool {
 	fields := strings.Fields(cmd)
 	idx := 0
@@ -386,6 +523,9 @@ func isReadOnlySearchCommand(cmd string) bool {
 		idx++
 	}
 	if idx >= len(fields) {
+		return false
+	}
+	if carriesSearchDownstreamMutation(cmd, fields[idx:]) {
 		return false
 	}
 	verb := filepath.Base(fields[idx])
@@ -413,9 +553,26 @@ func isReadOnlySearchCommand(cmd string) bool {
 	return false
 }
 
+// carriesSearchDownstreamMutation reports whether a command whose effective
+// verb is a search tool still carries a downstream MUTATION (#3669): find's
+// -exec/-execdir/-ok/-okdir run an arbitrary child command (and `;`/`+`
+// terminate it), a pipe or redirect can feed a rewriter, and `&&`/`;`/newline
+// chain a second command. Conservative by design: a false positive merely
+// drops the read-only EXEMPTION (the normal detection path still judges the
+// command), while a false negative silently passes tampering.
+func carriesSearchDownstreamMutation(cmd string, tail []string) bool {
+	for _, t := range tail {
+		switch t {
+		case "-exec", "-execdir", "-ok", "-okdir", "xargs":
+			return true
+		}
+	}
+	return strings.ContainsAny(cmd, "|>;\n") || strings.Contains(cmd, "&&")
+}
+
 // isTestWritingTask returns true when the user's prompt indicates the task
 // itself is writing or updating tests. For such tasks, editing only test
-// files is the expected outcome — Pattern 1 must not fire (#544 Bug C2).
+// files is the expected outcome - Pattern 1 must not fire (#544 Bug C2).
 // English keywords match whole words only (same tokenization as
 // isCIRelatedTask's #501 fix) to avoid substring hits like "latest".
 func isTestWritingTask(userPrompt string) bool {
@@ -495,12 +652,64 @@ func isSkipMarkerRemovalCommand(cmd string) bool {
 	return isAwkSkipRemoval(lower)
 }
 
-// isSedSkipRemoval detects sed 's/PATTERN/REPLACEMENT/' where PATTERN
-// contains a skip marker but REPLACEMENT does NOT contain the same marker
-// (i.e., the marker is being removed, not introduced).
+// sedNormalizeDelimiters rewrites sed s-expressions that use a
+// non-slash delimiter (s|a|b|, s#a#b#, s,a,b, - any punctuation except
+// '/' and alphanumerics) into their s/a/b/ form (#3652), so downstream
+// slash-split parsing sees one shape regardless of the delimiter the
+// agent typed. Escaped delimiters inside fields are not handled - such
+// expressions degrade to non-exemption (the pre-#3652 behavior), never
+// to a wrong exemption.
+func sedNormalizeDelimiters(cmd string) string {
+	const delimClass = "|,#:;%!~@^_"
+	var b strings.Builder
+	i := 0
+	for i < len(cmd) {
+		c := cmd[i]
+		// An `s` that starts a word (start/whitespace/quote/semicolon before
+		// it) and is followed by a candidate delimiter.
+		if c == 's' && i+1 < len(cmd) && strings.IndexByte(delimClass, cmd[i+1]) >= 0 {
+			prevOK := i == 0 || cmd[i-1] == ' ' || cmd[i-1] == '\t' || cmd[i-1] == '\'' || cmd[i-1] == '"' || cmd[i-1] == ';'
+			if prevOK {
+				delim := cmd[i+1]
+				// Find the next two unescaped occurrences of the delimiter:
+				// field1 ends at the 2nd, field2 at the 3rd.
+				p1 := strings.IndexByte(cmd[i+2:], delim)
+				if p1 >= 0 {
+					p2 := strings.IndexByte(cmd[i+2+p1+1:], delim)
+					if p2 >= 0 {
+						f1 := cmd[i+2 : i+2+p1]
+						f2 := cmd[i+2+p1+1 : i+2+p1+1+p2]
+						rest := cmd[i+2+p1+1+p2+1:]
+						// Fields containing '/' would corrupt the slash form - leave
+						// the expression untouched (degrades to non-exemption).
+						if !strings.Contains(f1, "/") && !strings.Contains(f2, "/") {
+							b.WriteString("s/" + f1 + "/" + f2 + "/" + rest)
+							i = len(cmd)
+							continue
+						}
+					}
+				}
+			}
+		}
+		b.WriteByte(c)
+		i++
+	}
+	return b.String()
+}
 func isSedSkipRemoval(cmd string) bool {
-	// Extract the s/// pattern (simplified parsing)
-	parts := strings.Split(cmd, "'s/")
+	// Extract the s/// pattern (simplified parsing). #3628: single- OR
+	// double-quoted `s/` forms. #3652: sed accepts ANY delimiter after
+	// `s` (`s|x|y|`, `s,x,y,`, `s#x#y#`); normalize those to `s/` first so
+	// the split logic below sees one shape. Unquoted `sed -i s/x/y/g` is
+	// covered by the space-prefixed fallback split.
+	normalized := sedNormalizeDelimiters(cmd)
+	parts := strings.Split(normalized, "'s/")
+	if len(parts) < 2 {
+		parts = strings.Split(normalized, "\"s/")
+	}
+	if len(parts) < 2 {
+		parts = strings.Split(normalized, " s/")
+	}
 	if len(parts) < 2 {
 		return false
 	}
@@ -586,8 +795,15 @@ func isAwkSkipRemoval(lower string) bool {
 // containsAnySkipMarker reports whether s contains any skip marker,
 // case-insensitively.
 func containsAnySkipMarker(s string) bool {
+	// #3735: lower the INPUT, not just the marker - the case-insensitive
+	// promise in the doc comment was only half-kept (sed-exemption paths
+	// fed original-case text against lowered markers).
+	lower := strings.ToLower(s)
+	if containsBoundarySkipMarker(lower) {
+		return true
+	}
 	for _, marker := range skipMarkers {
-		if strings.Contains(s, strings.ToLower(marker)) {
+		if strings.Contains(lower, strings.ToLower(marker)) {
 			return true
 		}
 	}
@@ -607,6 +823,9 @@ func hasSkipMarkersInCommands(commands []string) bool {
 			continue
 		}
 		lower := strings.ToLower(cmd)
+		if containsBoundarySkipMarker(lower) { // #3735: xit(/xtest( boundary forms
+			return true
+		}
 		for _, marker := range skipMarkers {
 			// Check for both unescaped and escaped forms of skip markers
 			// e.g., "t.Skip(" and "t.Skip\(" or "t\.Skip\("
@@ -626,6 +845,33 @@ func hasSkipMarkersInCommands(commands []string) bool {
 	return false
 }
 
+// hasSkipMarkersInEdits is the edit-family counterpart of
+// hasSkipMarkersInCommands (#3696). EditContents only ever holds ADDED
+// text (reflection.go records new_text/content/new_source, never
+// old_text), so no removal-exemption is needed: removing a marker is
+// remediation and never lands here. The read-only search exemption does
+// not apply either - an edit IS a write vector.
+func hasSkipMarkersInEdits(contents []string) bool {
+	for _, text := range contents {
+		lower := strings.ToLower(text)
+		if containsBoundarySkipMarker(lower) { // #3735: xit(/xtest( boundary forms
+			return true
+		}
+		for _, marker := range skipMarkers {
+			markerLower := strings.ToLower(marker)
+			if strings.Contains(lower, markerLower) {
+				return true
+			}
+			escapedMarker := strings.ReplaceAll(marker, "(", "\\(")
+			escapedMarker = strings.ReplaceAll(escapedMarker, ".", "\\.")
+			if strings.Contains(text, escapedMarker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // isCIRelatedTask returns true if the user prompt suggests the task is about
 // CI/build configuration itself (in which case CI edits are legitimate).
 func isCIRelatedTask(userPrompt string) bool {
@@ -633,7 +879,7 @@ func isCIRelatedTask(userPrompt string) bool {
 	// #501: the "ci" keyword must match as a whole word. As a bare substring
 	// it is contained in everyday English (efficient, special, decide,
 	// precision, pricing, sufficient, crucial...) and empirically matched
-	// 12/12 ordinary prompts — silently disabling the CI-tampering pattern
+	// 12/12 ordinary prompts - silently disabling the CI-tampering pattern
 	// for a large share of real tasks.
 	words := strings.FieldsFunc(lower, func(r rune) bool {
 		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
@@ -699,10 +945,14 @@ func (a *Agent) checkSpecGaming(stats *RunStats, userPrompt string) string {
 		}
 	}
 
-	// Pattern 2: Skip markers detected in commands
-	if hasSkipMarkersInCommands(stats.CommandsRun) {
+	// Pattern 2: Skip markers detected in commands or edit contents
+	// (#3696: the edit-family path - edit_file/write_file/multi_*/
+	// notebook - was previously unscanned, so injecting t.Skip via the
+	// agent's primary edit tools bypassed the detector entirely while
+	// the shell path stayed covered).
+	if hasSkipMarkersInCommands(stats.CommandsRun) || hasSkipMarkersInEdits(stats.EditContents) {
 		warnings = append(warnings,
-			"Test skip/ignore markers detected in commands. "+
+			"Test skip/ignore markers detected in commands or edits. "+
 				"Skipping failing tests is not a fix -- address the root cause in source code.")
 	}
 
@@ -716,7 +966,7 @@ func (a *Agent) checkSpecGaming(stats *RunStats, userPrompt string) string {
 				break // one warning is enough
 			}
 			// #588 Bug 2: Makefile gets content analysis instead of a blanket
-			// pass ("Makefile": false in ciConfigFiles) — the detector's founding
+			// pass ("Makefile": false in ciConfigFiles) - the detector's founding
 			// threat model (METR reward hacking: tamper `make test` into a no-op)
 			// was 100% missed while the L104 comment claimed partial handling.
 			if strings.EqualFold(filepath.Base(f), "makefile") && hasMakefileTampering(f) {

@@ -140,11 +140,13 @@ var readOnlyStashActions = map[string]bool{
 }
 
 // treePreservingGitSubcommands are git subcommands whose MUTATING forms
-// still never alter working-tree tracked content (sa-31). fetch/push and
-// ls-remote only update remote-tracking refs; tag, remote and reflog stay
-// inside .git metadata; rev-parse, blame, ls-files, describe, cat-file and
-// fsck inspect; config writes repo config, not tracked files; worktree
-// add/remove touches other worktrees. None of them can make a cached read
+// still never alter working-tree tracked content (sa-31, #3823-A).
+// fetch/push and ls-remote only update remote-tracking refs; tag,
+// remote, reflog, add (index only) and commit (creates a ref, never
+// checked-out content) stay inside .git metadata; init/clone touch no
+// tracked file; rev-parse, blame, ls-files, describe, cat-file and fsck
+// inspect; config writes repo config, not tracked files; worktree is
+// deliberately NOT a blanket entry - see treePreservingWorktreeSubs. None of them can make a cached read
 // stale, so they must not trigger the invalidation warning. First-hand FP:
 // the pre-task `git fetch origin main` fired the warning on every run that
 // had already read two or more files.
@@ -161,8 +163,20 @@ var treePreservingGitSubcommands = map[string]bool{
 	"cat-file":  true,
 	"config":    true,
 	"reflog":    true,
-	"worktree":  true,
+	"add":       true, // staging: index-only, never tracked content
+	"commit":    true, // creates a ref; checked-out content untouched
+	"init":      true,
+	"clone":     true,
 	"fsck":      true,
+}
+
+// treePreservingWorktreeSubs are the `git worktree` subcommands that do
+// not remove directories (#3823-B). add creates a new worktree (metadata
+// plus a new dir); list is bookkeeping; remove deletes a whole directory
+// and is deliberately absent, so `git worktree remove` still warns.
+var treePreservingWorktreeSubs = map[string]bool{
+	"list": true,
+	"add":  true,
 }
 
 // wtArgFields unmarshals the tool-arguments JSON object (best-effort;
@@ -197,6 +211,18 @@ var gitBranchMutatingFlags = map[string]bool{
 	"-d": true, "-D": true, "--delete": true, "-m": true, "--move": true,
 }
 
+// isShellBoundaryToken reports whether a whitespace-split token separates
+// two commands in a shell line (`&&`, `||`, `;`, `|`). Flag scans for one
+// subcommand must stop here: a later command's `-m` (e.g. `git log -m`)
+// belongs to that command, not to `git branch` (#3841).
+func isShellBoundaryToken(tok string) bool {
+	switch tok {
+	case "&&", "||", ";", "|":
+		return true
+	}
+	return false
+}
+
 // classifyGitCommandLine classifies one candidate command line. It scans
 // EVERY `git` invocation on the line and reports the line as read-only only
 // when every classified git command preserves the working tree. Compound
@@ -212,24 +238,112 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 		if filepath.Base(fields[idx]) != "git" || idx+1 >= len(fields) {
 			continue
 		}
-		sub := strings.ToLower(fields[idx+1])
+		// #3782-B: git accepts global flags before the subcommand
+		// (`git -C /other/repo status`, `git --no-pager diff`, `git -c
+		// core.autocrlf=false log`). The old fields[idx+1] grab treated the
+		// flag as the subcommand, fell to the default branch, and classified
+		// every -C-form invocation as mutating - a false "tree mutated"
+		// warning that burned the maxWTInvalidationWarnings budget in
+		// multi-repo workflows. Skip known global flags (and their values)
+		// before reading the subcommand.
+		subIdx := skipGitGlobalFlags(fields, idx+1)
+		if subIdx >= len(fields) {
+			return false, true // flags but no subcommand: treat as mutating (conservative)
+		}
+		sub := strings.ToLower(fields[subIdx])
 		switch {
 		case sub == "stash":
 			found = true
-			if idx+2 >= len(fields) {
+			if subIdx+1 >= len(fields) {
 				return false, true // bare `git stash` defaults to push (mutating)
 			}
-			if !readOnlyStashActions[strings.ToLower(fields[idx+2])] {
+			if !readOnlyStashActions[strings.ToLower(fields[subIdx+1])] {
 				readOnly = false
 			}
 		case sub == "branch":
 			// `git branch` lists; -d/-D/--delete/-m/--move mutate refs
 			// (conservative classification preserved from #544).
 			found = true
-			for _, f := range fields[idx+2:] {
+			// #3841: stop at the first compound-command boundary token.
+			// Scanning to end-of-line made `git branch && git log -m` (the
+			// merge-diff flag) or `git branch -a && echo "use -m to move"`
+			// classify as mutating - a read-only chain burned the
+			// maxWTInvalidationWarnings budget so real mutations went
+			// unwarned. Every other branch inspects at most one or two
+			// tokens; this was the only scan-to-EOL path.
+			for _, f := range fields[subIdx+1:] {
+				if isShellBoundaryToken(f) {
+					break
+				}
 				if gitBranchMutatingFlags[f] {
 					readOnly = false
 				}
+			}
+		case sub == "worktree":
+			// #3823-B: second-level token decides. list/add preserve every
+			// directory; remove/prune/... delete or lock directories whose
+			// files the agent may have cached reads for (cross-worktree
+			// collaboration is the norm in this repo).
+			found = true
+			if subIdx+1 >= len(fields) || !treePreservingWorktreeSubs[strings.ToLower(fields[subIdx+1])] {
+				readOnly = false
+			}
+		case sub == "checkout" || sub == "switch":
+			// #3864 B: `git checkout -b <new>` / `git switch -c <new>` create a
+			// branch from HEAD and switch - tracked content is untouched, a
+			// pure ref operation like the already-exempted add/commit. Two
+			// false "tree mutated" warnings here exhaust the budget and the
+			// NEXT, real checkout goes unwarned. Branch creation only; a
+			// target checkout (diff content) or a -- boundary stays mutating.
+			// #3929: the exemption holds ONLY for the no-start-point form.
+			// `checkout -b <new> <start-point>` == branch <new> <sp> +
+			// checkout <new> - when start-point != HEAD the tracked content IS
+			// replaced (git-tested in the issue), and the flag-only check
+			// exempted it - a silent miss on the common
+			// 'checkout -b fix origin/main' catch-up flow. Positional args
+			// after the create flag: exactly one (the name) = HEAD-anchored
+			// exemption; two or more (name + start-point) = mutating.
+			found = true
+			creating := false
+			positionals := 0
+			for _, f := range fields[subIdx+1:] {
+				if isShellBoundaryToken(f) || f == "--" {
+					break
+				}
+				if f == "-b" || f == "-B" || (sub == "switch" && (f == "-c" || f == "-C")) {
+					creating = true
+					continue
+				}
+				if strings.HasPrefix(f, "-") {
+					continue // other flags (e.g. --track) carry no positional
+				}
+				positionals++
+			}
+			if !creating || positionals > 1 {
+				readOnly = false
+			}
+		case sub == "reset":
+			// #3864 C: --soft moves HEAD only; --mixed (the default when no
+			// mode is given) additionally resets the index - neither touches
+			// working-tree files. --hard rewrites the tree; a `-- pathspec`
+			// form resets file content. Only the tree-touching forms warn.
+			found = true
+			softMixed := true
+			sawBoundary := false
+			for _, f := range fields[subIdx+1:] {
+				if f == "--" {
+					sawBoundary = true
+					break
+				}
+				if isShellBoundaryToken(f) {
+					break
+				}
+				if f == "--hard" {
+					softMixed = false
+				}
+			}
+			if !softMixed || sawBoundary {
+				readOnly = false
 			}
 		case readOnlyGitSubcommands[sub], treePreservingGitSubcommands[sub]:
 			found = true // cannot make cached reads stale
@@ -238,6 +352,28 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 		}
 	}
 	return readOnly, found
+}
+
+// skipGitGlobalFlags returns the index of the first token after `git` that
+// is not a known global flag (or a value consumed by a value-taking flag).
+func skipGitGlobalFlags(fields []string, start int) int {
+	i := start
+	for i < len(fields) {
+		f := fields[i]
+		switch {
+		case f == "-C" || f == "-c" || f == "--git-dir" || f == "--work-tree":
+			i += 2 // flag + its value
+		case f == "--no-pager" || f == "--no-optional-locks" || f == "--literal-pathspecs":
+			i++ // boolean global flag
+		case f == "--no-replace-objects" || f == "--bare" || f == "--paginate" || f == "--no-paginate":
+			i++ // boolean global flag (#3864 D: unlisted flags were read as the subcommand)
+		case strings.HasPrefix(f, "--git-dir=") || strings.HasPrefix(f, "--work-tree=") || strings.HasPrefix(f, "-C") && f != "-C":
+			i++ // inline-value form
+		default:
+			return i
+		}
+	}
+	return i
 }
 
 func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
@@ -254,8 +390,15 @@ func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
 	// to mention a git verb), so "检查 git log 后执行 reset" matched the
 	// read-only `log` token FIRST and the real reset's invalidation
 	// warning was swallowed; likewise a stash description mentioning
-	// `list` bypassed the action=push classification. The loop was also
-	// map-iteration-order dependent across multiple string fields.
+	// `list` bypassed the action=push classification.
+	// #3782-A: the old loop returned on the FIRST field containing a git
+	// command, so with A="git log" (read-only) and B="git reset --hard"
+	// the result depended on map iteration order - half the runs swallowed
+	// the reset's invalidation warning. Aggregate instead: a field with a
+	// git command that is NOT read-only disqualifies the whole invocation,
+	// no matter which field it sits in (same AND semantics the sa-31
+	// compound-command fix applied inside classifyGitCommandLine).
+	anyFound := false
 	for k, v := range m {
 		if k == "description" {
 			continue
@@ -265,8 +408,14 @@ func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
 			continue
 		}
 		if readOnly, found := classifyGitCommandLine(s); found {
-			return readOnly
+			anyFound = true
+			if !readOnly {
+				return false
+			}
 		}
+	}
+	if anyFound {
+		return true
 	}
 
 	// No git command found in any string field: for git_stash, fall back to
@@ -276,6 +425,32 @@ func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
 		if action, ok := m["action"].(string); ok {
 			return readOnlyStashActions[strings.ToLower(strings.TrimSpace(action))]
 		}
+	}
+	// #3864 B/C structured-field exemptions (the string scan above sees
+	// structured fields as bare tokens like "true"/"soft" and never finds
+	// a git subcommand):
+	// git_checkout create=true only adds and switches a ref - tracked
+	// content untouched. #3929: with a start_point the checkout lands on
+	// that revspec's content (validateRevspec-confirmed), so it mutates.
+	if toolName == "git_checkout" {
+		if create, ok := m["create"].(bool); ok && create {
+			if sp, ok := m["start_point"].(string); ok && sp != "" {
+				return false // create-from-start-point rewrites the tree (#3929)
+			}
+			return true
+		}
+		return false
+	}
+	// git_reset mode soft/mixed: ref/index only (same semantics as the
+	// command-line classifier above); hard (schema default) rewrites files.
+	if toolName == "git_reset" {
+		if mode, ok := m["mode"].(string); ok {
+			switch strings.ToLower(strings.TrimSpace(mode)) {
+			case "soft", "mixed":
+				return true
+			}
+		}
+		return false
 	}
 	return false
 }

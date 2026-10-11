@@ -102,7 +102,8 @@ Before the agent returns (no more tool calls), multiple gates check that the wor
 - `message_validation.go` — validates and repairs LLM message lists before sending to the provider.
 - `context/budget.go` — context budget analyzer: breaks down token usage by category (system, history, tools) for diagnostics.
 - `metrics/summary.go` — per-LLM-call TPS calculation with simple averaging across calls.
-- `provider/rate_limit.go` — captures rate-limit headers from Anthropic/OpenAI responses for proactive quota awareness.
+- `provider/rate_limit.go` — captures rate-limit headers from Anthropic/OpenAI responses for proactive quota awareness. When the tracker reports critical remaining quota (≤10%), the agent loop's streamDone branch emits an edge-triggered `StreamEventSystem` warning (`[rate limit] Quota nearly exhausted...`) so TUI/desktop/IM users are informed *before* a 429 interrupts the run (#3965); the latch re-arms once a healthy reading arrives.
+- `session_token_limit.go` / `session_time_limit.go` / `session_cost_limit.go` — per-session budget triple (tokens / wall-clock / USD): each evaluates an 80%/95%/100% guidance ladder per run, arms the `sessionBudgetStop` hard gate at 100% (#3945 semantics, cost wired in #3959), and is reset by the per-run reset block so the ladder re-fires on subsequent runs.
 
 See also `docs/design/context-management.md` for context management details.
 

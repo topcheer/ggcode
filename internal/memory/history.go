@@ -33,16 +33,16 @@ const (
 // write). Errors are reported, never fatal: callers fail open (#3120
 // precedent - memory writes must not block on archive faults) but log via
 // debug so the loss is observable.
-func (am *AutoMemory) archiveVersion(safe, path string) error {
+func (am *AutoMemory) archiveVersion(safe, path string) (string, error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			return nil // first write, nothing to archive
+			return "", nil // first write, nothing to archive
 		}
-		return err
+		return "", err
 	}
 	hdir := filepath.Join(am.dir, historyDirName)
 	if err := os.MkdirAll(hdir, 0755); err != nil {
-		return err
+		return "", err
 	}
 	stamp := time.Now().UTC().Format(historyTSFormat)
 	dst := filepath.Join(hdir, safe+"."+stamp+".md")
@@ -52,7 +52,10 @@ func (am *AutoMemory) archiveVersion(safe, path string) error {
 	if _, err := os.Stat(dst); err == nil {
 		dst = filepath.Join(hdir, fmt.Sprintf("%s.%s.%d.md", safe, stamp, os.Getpid()))
 	}
-	return os.Rename(path, dst)
+	if err := os.Rename(path, dst); err != nil {
+		return "", err
+	}
+	return dst, nil // #3818: caller rolls back from dst if the swap-in fails
 }
 
 // MemoryVersion is one archived (or current) snapshot of a memory key.
@@ -122,6 +125,19 @@ func (am *AutoMemory) ReadMemoryAsOf(key string, asOf time.Time) (content string
 	if info, statErr := os.Stat(path); statErr == nil {
 		versions = append(versions, snap{modTime: info.ModTime(), path: path})
 	}
+	// #3880/#3924: a tombstone (written by DeleteMemory) marks the deletion
+	// instant and CUTS the interval of the last pre-delete version: an
+	// as_of at/after the deletion resolves nothing UNLESS a newer version
+	// (a recreate) was written after the tombstone - then that version's
+	// own interval starts and selection picks it naturally. This keeps the
+	// three-segment truth: old version / deleted gap / recreated version.
+	// (The tombstone has no .md suffix, so historyVersions never lists it
+	// as a content version.)
+	tombPath := filepath.Join(am.dir, historyDirName, safe+".tombstone")
+	tombMTime := time.Time{}
+	if tInfo, tErr := os.Stat(tombPath); tErr == nil {
+		tombMTime = tInfo.ModTime()
+	}
 	if len(versions) == 0 {
 		return "", time.Time{}, false, nil
 	}
@@ -141,6 +157,13 @@ func (am *AutoMemory) ReadMemoryAsOf(key string, asOf time.Time) (content string
 	data, readErr := os.ReadFile(versions[chosen].path)
 	if readErr != nil {
 		return "", time.Time{}, false, readErr
+	}
+	// #3924: the chosen version predates the tombstone and the as_of is at
+	// or after the deletion - this is the DELETED GAP (no recreate landed
+	// before as_of), not the old version's interval.
+	if !tombMTime.IsZero() && versions[chosen].modTime.Before(tombMTime) && !asOf.Before(tombMTime) {
+		debug.Log("memory", "as_of %s falls in the deleted gap of %q", asOf.Format(time.RFC3339), key)
+		return "", time.Time{}, false, nil
 	}
 	return string(data), versions[chosen].modTime, true, nil
 }

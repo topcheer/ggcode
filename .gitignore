@@ -72,3 +72,9 @@ ggreport.html
 # editor/agent backup files (#582)
 *.bak[0-9]*
 *.bak$
+
+# Flutter-generated build artifacts - must NOT be tracked (#3613):
+# local flutter build regenerates them with the local pubspec version stamp,
+# which both dirties the tree and desyncs the committed stamp from pubspec.yaml.
+mobile/flutter/ios/Flutter/Generated.xcconfig
+mobile/flutter/ios/Flutter/flutter_export_environment.sh

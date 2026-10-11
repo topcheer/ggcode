@@ -37,8 +37,19 @@ func (k *Knight) RunSelfReflection(_ context.Context, window time.Duration) (Sel
 	}
 	cutoff := time.Now().Add(-window)
 
-	active, _ := k.index.ActiveSkills()
-	staging, _ := k.index.StagingSkills()
+	// #3638 / #1262 discipline: an unreadable index must fail the report,
+	// never surface as "active=0 staging=0" - that false conclusion would
+	// be written to semantic memory as a meta-lesson and pollute later
+	// analyzer/eval prompts. governance.go propagates Scan failures the
+	// same way.
+	active, err := k.index.ActiveSkills()
+	if err != nil {
+		return report, fmt.Errorf("self-reflection: active skills unavailable: %w", err)
+	}
+	staging, err := k.index.StagingSkills()
+	if err != nil {
+		return report, fmt.Errorf("self-reflection: staging skills unavailable: %w", err)
+	}
 	report.ActiveSkills = len(active)
 	report.StagingSkills = len(staging)
 

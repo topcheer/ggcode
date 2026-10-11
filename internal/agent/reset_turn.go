@@ -27,6 +27,7 @@ func (a *Agent) resetTurnDetectors() {
 	a.toolRedundancy.reset()
 	a.toolEquivDetect.reset()
 	a.toolSequence.reset()
+	a.obsContract.reset()
 	a.shellNativeHint.reset()
 	a.monorepoScoper.reset()
 	a.resetBgOrphan()

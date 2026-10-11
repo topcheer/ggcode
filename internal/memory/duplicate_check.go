@@ -38,7 +38,7 @@ func (am *AutoMemory) CheckDuplicate(key, content string) DuplicateCheck {
 		return DuplicateCheck{}
 	}
 
-	newTokens := tokenize(key)
+	newTokens := tokenizeOrdered(key)
 	if len(newTokens) == 0 {
 		return DuplicateCheck{}
 	}
@@ -46,8 +46,8 @@ func (am *AutoMemory) CheckDuplicate(key, content string) DuplicateCheck {
 	var best DuplicateCheck
 
 	for _, m := range metas {
-		existingTokens := tokenize(m.Key)
-		sim := jaccardSimilarity(newTokens, existingTokens)
+		existingTokens := tokenizeOrdered(m.Key)
+		sim := keySimilarity(newTokens, existingTokens)
 
 		if sim > best.Similarity {
 			best = DuplicateCheck{
@@ -77,6 +77,73 @@ func (am *AutoMemory) CheckDuplicate(key, content string) DuplicateCheck {
 	}
 
 	return best
+}
+
+// tokenizeOrdered splits a string into an ORDER-PRESERVING sequence of
+// lowercase alphanumeric tokens. #3827: the old tokenize() returned a set,
+// so "build-cmd" and "cmd-build" collided at similarity 1.0 and subset keys
+// like "timeout-detection" vs "http-timeout-detection" cleared the 0.6
+// duplicate threshold - legitimate new keys were warned away as duplicates.
+func tokenizeOrdered(s string) []string {
+	var tokens []string
+	var current strings.Builder
+	flush := func() {
+		if current.Len() > 0 {
+			tokens = append(tokens, current.String())
+			current.Reset()
+		}
+	}
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			current.WriteRune(unicode.ToLower(r))
+		} else {
+			flush()
+		}
+	}
+	flush()
+	return tokens
+}
+
+// keySimilarity compares two key token sequences (#3827). Bare set-Jaccard
+// scored "build-cmd" vs "cmd-build" at 1.0 and subset keys like
+// "timeout-detection" vs "http-timeout-detection" at 2/3 - both above the
+// 0.6 duplicate threshold, warning legitimate new keys away. The fix
+// anchors on the FIRST token (the primary semantic of a kebab-case memory
+// key, per the issue's suggestion):
+//   - same first token: same family - keep unigram Jaccard so extensions
+//     like "build-process-v2" vs "build-process" still flag (pinned by
+//     TestCheckDuplicateSimilar)
+//   - different first token: order matters - use token-bigram Jaccard;
+//     swapped-order keys share no bigram (0.0) and prefix-added subset
+//     keys score 1/2 (below threshold)
+//   - single-token sequences have no bigrams - unigram Jaccard
+func keySimilarity(a, b []string) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	if a[0] == b[0] {
+		return jaccardSimilarity(sliceToSet(a), sliceToSet(b))
+	}
+	if len(a) < 2 || len(b) < 2 {
+		return jaccardSimilarity(sliceToSet(a), sliceToSet(b))
+	}
+	return jaccardSimilarity(bigramSet(a), bigramSet(b))
+}
+
+func bigramSet(tokens []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(tokens)-1)
+	for i := 0; i+1 < len(tokens); i++ {
+		out[tokens[i]+"\x00"+tokens[i+1]] = struct{}{}
+	}
+	return out
+}
+
+func sliceToSet(tokens []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(tokens))
+	for _, t := range tokens {
+		out[t] = struct{}{}
+	}
+	return out
 }
 
 // tokenize splits a string into lowercase alphanumeric tokens for comparison.

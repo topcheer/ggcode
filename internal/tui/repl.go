@@ -1194,6 +1194,8 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 	tools.Register(tool.SwarmTaskListTool{Manager: mgr})
 	tools.Register(tool.SwarmTaskClaimTool{Manager: mgr})
 	tools.Register(tool.SwarmTaskCompleteTool{Manager: mgr})
+	tools.Register(tool.TeamReviewDigestTool{Manager: mgr})
+	tools.Register(tool.TeamReviewDecideTool{Manager: mgr})
 
 	// Re-register send_message with SwarmMgr so it can route to swarm teammates.
 	tools.Unregister("send_message")

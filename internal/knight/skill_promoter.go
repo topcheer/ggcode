@@ -31,11 +31,31 @@ func NewPromoter(homeDir, projectDir string) *Promoter {
 // Promote moves a skill from staging to the active skills directory.
 // It creates a snapshot of any existing skill with the same name for rollback.
 func (p *Promoter) Promote(entry *SkillEntry) error {
+	if entry == nil {
+		return fmt.Errorf("skill entry is nil")
+	}
 	if !entry.Staging {
 		return fmt.Errorf("skill %q is not in staging", entry.Name)
 	}
-	if err := validateSkillName(entry.Name); err != nil {
+	// #3656 d1: use the TRIMMED name everywhere downstream - the old code
+	// validated TrimSpace(name) but built paths from the raw value, so a
+	// name with surrounding whitespace passed validation and landed on
+	// disk as "knight-20261009- deploy-web.md".
+	name, err := validateSkillName(entry.Name)
+	if err != nil {
 		return err
+	}
+
+	// #3656 d2: the staging path comes from an index entry; entries can be
+	// inconsistent (Path in global staging while Scope="project") or
+	// poisoned. Verify ownership before reading - and especially before
+	// removeStagingSkill deletes the source file below.
+	stagingRoot := p.stagingDir(entry.Scope)
+	if stagingRoot == "" {
+		return fmt.Errorf("unknown scope %q for staging skill %q", entry.Scope, name)
+	}
+	if !isSubPath(stagingRoot, entry.Path) {
+		return fmt.Errorf("promote %q aborted: staging path %s is outside the %q staging directory (crossed index entry?)", name, entry.Path, entry.Scope)
 	}
 
 	// Determine target directory
@@ -45,7 +65,7 @@ func (p *Promoter) Promote(entry *SkillEntry) error {
 	}
 
 	// Ensure target directory exists
-	skillDir := filepath.Join(targetDir, entry.Name)
+	skillDir := filepath.Join(targetDir, name)
 	if err := os.MkdirAll(skillDir, 0755); err != nil {
 		return fmt.Errorf("create skill dir: %w", err)
 	}
@@ -54,7 +74,7 @@ func (p *Promoter) Promote(entry *SkillEntry) error {
 
 	// Snapshot existing skill if present
 	if _, err := os.Stat(targetPath); err == nil {
-		if snapErr := p.createSnapshot(entry.Name, targetPath); snapErr != nil {
+		if snapErr := p.createSnapshot(name, targetPath); snapErr != nil {
 			// #1267: this used to be a debug.Log-and-continue - the
 			// AtomicWriteFile below then overwrote the old active version with
 			// NO copy left anywhere (staging holds the NEW content, the snapshot
@@ -86,9 +106,17 @@ func (p *Promoter) Promote(entry *SkillEntry) error {
 	}
 
 	// Write changelog entry
-	p.appendChangelog("promote", entry.Name, entry.Scope, entry.Path)
+	p.appendChangelog("promote", name, entry.Scope, entry.Path)
 
 	return nil
+}
+
+// isSubPath reports whether path is located strictly under root (not
+// equal to root, not escaping via ..).
+func isSubPath(root, path string) bool {
+	cleanRoot := filepath.Clean(root)
+	cleanPath := filepath.Clean(path)
+	return strings.HasPrefix(cleanPath, cleanRoot+string(filepath.Separator)) && cleanPath != cleanRoot
 }
 
 // removeStagingSkill deletes the staging copy after a successful promote.
@@ -134,14 +162,15 @@ func (p *Promoter) MigrateLooseActive(entry *SkillEntry) error {
 	if !strings.HasSuffix(entry.Path, ".md") || filepath.Base(entry.Path) == "SKILL.md" {
 		return fmt.Errorf("skill %q is not a loose active markdown file", entry.Name)
 	}
-	if err := validateSkillName(entry.Name); err != nil {
+	name, err := validateSkillName(entry.Name)
+	if err != nil {
 		return err
 	}
 	targetDir := p.activeDir(entry)
 	if targetDir == "" {
 		return fmt.Errorf("cannot determine target directory for scope %q", entry.Scope)
 	}
-	skillDir := filepath.Join(targetDir, entry.Name)
+	skillDir := filepath.Join(targetDir, name)
 	targetPath := filepath.Join(skillDir, "SKILL.md")
 	if _, err := os.Stat(targetPath); err == nil {
 		return fmt.Errorf("standard skill already exists at %s", targetPath)
@@ -174,11 +203,12 @@ func (p *Promoter) Rollback(entry *SkillEntry) error {
 	if entry.Staging {
 		return fmt.Errorf("skill %q is in staging and cannot be rolled back", entry.Name)
 	}
-	if err := validateSkillName(entry.Name); err != nil {
+	name, err := validateSkillName(entry.Name)
+	if err != nil {
 		return err
 	}
 
-	snapshots, err := p.listSnapshots(entry.Name)
+	snapshots, err := p.listSnapshots(name)
 	if err != nil {
 		return err
 	}
@@ -212,7 +242,10 @@ func (p *Promoter) Rollback(entry *SkillEntry) error {
 
 // WriteStaging writes a new skill to the appropriate staging directory.
 func (p *Promoter) WriteStaging(name, scope, content string) (string, error) {
-	if err := validateSkillName(name); err != nil {
+	// #3656 d1: canonicalize first so the on-disk filename never contains
+	// whitespace that passed validation on the trimmed value.
+	name, err := validateSkillName(name)
+	if err != nil {
 		return "", err
 	}
 	stagingDir := p.stagingDir(scope)
@@ -263,7 +296,8 @@ func (p *Promoter) stagingDir(scope string) string {
 
 // createSnapshot copies the current active skill to the snapshots directory.
 func (p *Promoter) createSnapshot(name, activePath string) error {
-	if err := validateSkillName(name); err != nil {
+	name, err := validateSkillName(name)
+	if err != nil {
 		return err
 	}
 	snapDir := filepath.Join(p.projectDir, ".ggcode", "skills-snapshots")
@@ -335,7 +369,8 @@ func (p *Promoter) appendChangelog(action, name, scope, path string) {
 }
 
 func (p *Promoter) listSnapshots(name string) ([]string, error) {
-	if err := validateSkillName(name); err != nil {
+	name, err := validateSkillName(name)
+	if err != nil {
 		return nil, err
 	}
 	snapDir := filepath.Join(p.projectDir, ".ggcode", "skills-snapshots")
@@ -361,15 +396,19 @@ func (p *Promoter) listSnapshots(name string) ([]string, error) {
 	return matches, nil
 }
 
-func validateSkillName(name string) error {
+// validateSkillName trims the skill name and validates it. The returned
+// string is the canonical (trimmed) name callers MUST use for every path
+// they build - validating the trimmed value while using the raw one
+// produced on-disk names with embedded whitespace (#3656 d1).
+func validateSkillName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return fmt.Errorf("skill name is empty")
+		return "", fmt.Errorf("skill name is empty")
 	}
 	if strings.Contains(name, "..") || strings.ContainsAny(name, `/\`) || !safeSkillNamePattern.MatchString(name) {
-		return fmt.Errorf("unsafe skill name %q", name)
+		return "", fmt.Errorf("unsafe skill name %q", name)
 	}
-	return nil
+	return name, nil
 }
 
 // updateTimestamps updates the skill's YAML frontmatter with proper timestamps.

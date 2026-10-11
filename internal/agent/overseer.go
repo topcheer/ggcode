@@ -72,6 +72,11 @@ type overseerState struct {
 	// Last analysis iteration (to avoid re-analyzing too frequently).
 	lastAnalysisIter int
 
+	// Research synthesis findings (r343/sa-130): one entry per successful
+	// web_search/web_fetch result, collected post-redaction for the
+	// research-report gate's pre-folded draft. Capped at maxResearchFindings.
+	researchFindings []ResearchFinding
+
 	// researchMode is set when the task involves research, analysis, audit,
 	// or exploration. In research mode, thresholds for read-only stall, spam,
 	// and drift are significantly higher, and research tools (web_search,

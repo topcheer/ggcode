@@ -255,7 +255,7 @@ func shouldExecuteWhileBusy(text string) bool {
 		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status", "/inspector",
 		"/stream", "/restart", "/help", "/?",
 		"/share", "/tunnel", "/unshare",
-		"/diff", "/hooks", "/cost", "/commit", "/retry", "/edit", "/copy", "/context", "/regenerate", "/regen", "/cron", "/debug", "/title", "/pin", "/runreport", "/traj", "/interventions", "/refusals", "/why", "/evidence", "/branches", "/branch-switch":
+		"/diff", "/hooks", "/cost", "/commit", "/retry", "/edit", "/copy", "/context", "/regenerate", "/regen", "/cron", "/debug", "/title", "/pin", "/runreport", "/traj", "/interventions", "/refusals", "/why", "/evidence", "/branches", "/branch-switch", "/guidance":
 		return true
 	}
 	return false
@@ -551,13 +551,15 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		case "/redo":
 			return m.handleRedoCommand()
 		case "/runreport":
-			return m.handleRunReportCommand()
+			return m.handleRunReportCommand(parts[1:])
 		case "/traj":
 			return m.handleTrajCommand(parts)
 		case "/export-training":
 			return m.handleExportTrainingCommand()
 		case "/why":
 			return m.handleWhyCommand(parts)
+		case "/guidance":
+			return m.handleGuidanceStatsCommand(parts)
 		case "/evidence":
 			return m.handleEvidenceCommand()
 		case "/forecast":
@@ -572,6 +574,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleRegenerateCommand()
 		case "/branch", "/fork":
 			return m.handleBranchCommand(parts)
+		case "/rewind":
+			return m.handleRewindCommand(parts)
 		case "/branches":
 			return m.handleBranchesCommand(parts)
 		case "/branch-switch":
