@@ -1010,6 +1010,21 @@ func (s *Server) SetExtendedCard(card json.RawMessage) {
 	s.cardMu.Unlock()
 }
 
+// SetSkills replaces the skills advertised in the Agent Card. Passing an
+// empty slice keeps DefaultSkills (the generic set). Callers typically pass
+// append(DefaultSkills(), localSkills...) so peers see both the generic
+// capabilities and the instance's real, locally installed skills.
+// Guarded by cardMu: the card is read concurrently by HTTP handlers (#565,
+// #1114 - same discipline as SetExtendedCard).
+func (s *Server) SetSkills(skills []Skill) {
+	if len(skills) == 0 {
+		return
+	}
+	s.cardMu.Lock()
+	s.card.Skills = skills
+	s.cardMu.Unlock()
+}
+
 // SetTokenValidator installs an OAuth2/OIDC token validator.
 func (s *Server) SetTokenValidator(v *auth.TokenValidator) {
 	s.tokenValidator = v
