@@ -60,11 +60,14 @@ trigger: "error message | test failure | stack trace"
 |----------|-------|
 | `.agents/skills/` | Project-specific skills (agentskills.io open standard; same format, works with Claude Code / Codex CLI / VS Code) |
 | `.ggcode/skills/` | Project-specific skills |
+| `.agent-plugins/*/skills/` | Skills shipped by Agent Plugins packages (agent-plugins.org open standard; requires a valid `plugin.json` manifest in the plugin dir) |
 | `~/.ggcode/skills/` | Global skills (all projects) |
 | `~/.agents/skills/` | Global skills (open standard) |
 
 Project-specific skills override global skills with the same name; within
-the project, `.ggcode/skills/` overrides `.agents/skills/`.
+the project, `.ggcode/skills/` overrides `.agents/skills/`, and every
+native directory overrides a plugin-shipped skill of the same name
+(plugin skill targets are loaded first and are the lowest precedence).
 
 ## Fuzzy Name Matching
 
