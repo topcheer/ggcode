@@ -58,10 +58,13 @@ trigger: "error message | test failure | stack trace"
 
 | Location | Scope |
 |----------|-------|
+| `.agents/skills/` | Project-specific skills (agentskills.io open standard; same format, works with Claude Code / Codex CLI / VS Code) |
 | `.ggcode/skills/` | Project-specific skills |
 | `~/.ggcode/skills/` | Global skills (all projects) |
+| `~/.agents/skills/` | Global skills (open standard) |
 
-Project-specific skills override global skills with the same name.
+Project-specific skills override global skills with the same name; within
+the project, `.ggcode/skills/` overrides `.agents/skills/`.
 
 ## Fuzzy Name Matching
 
@@ -146,7 +149,7 @@ add, or remove a `SKILL.md` file (or a legacy `.md` command file), ggcode detect
 the change within a few seconds and applies it immediately -- no restart needed.
 
 This covers all skill directories: global (`~/.agents/skills`, `~/.ggcode/skills`),
-project-local (`.ggcode/skills`), and legacy command directories.
+project-local (`.agents/skills`, `.ggcode/skills`), and legacy command directories.
 
 The watcher uses a 5-second polling interval with a 500ms debounce window, so
 multi-file edits and atomic-save patterns (temp file + rename) are handled
