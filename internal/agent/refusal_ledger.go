@@ -113,8 +113,12 @@ var refusalNegatePattern = regexp.MustCompile(
 	`(?i)(?:don'?t|do not|never|no new|avoid|must not|should not|stop using|leave\b[^n]{0,5}alone|don'?t touch)\b[^\n.]{4,120}`)
 
 // releasePattern matches conversational lift phrases.
+// #3712: CJK lift words must live OUTSIDE the \b group - Go regexp \b is
+// an ASCII word boundary and never matches beside CJK runes (same trap the
+// reaffirm pattern's own comment documents), so 可以了|解除|允许 inside
+// the group never fired and pure-Chinese releases failed 100%.
 var refusalReleasePattern = regexp.MustCompile(
-	`(?i)\b(?:ok|fine|alright|go ahead|you (?:may|can) now|you(?:'re| are) (?:allowed|free) to|it'?s ok|lift|解除|允许|可以了)\b[^\n.]{0,80}`)
+	`(?i)\b(?:ok|fine|alright|go ahead|you (?:may|can) now|you(?:'re| are) (?:allowed|free) to|it'?s ok|lift)\b[^\n.]{0,80}|解除|允许|可以了`)
 
 // #3469 reaffirmation guard: lift text that ALSO continues the refusal is
 // a reaffirmation, not a release. "Ok, don't touch config.yaml, that's
@@ -123,7 +127,7 @@ var refusalReleasePattern = regexp.MustCompile(
 // ASCII word boundary and never matches beside CJK runes, so 别/保持 etc.
 // must live outside the \b group or they silently fail to veto).
 var refusalReaffirmPattern = regexp.MustCompile(
-	`(?i)\b(?:don'?t|do not|never|no\s+new|avoid|must not|should not|stop using|still\s+(?:do(?:n'?t)?|not)?\b|stays?\b|keep\s+(?:avoiding|out|away|it\s+that\s+way)|leave\s+[^\n]{0,10}alone|untouched|off[- ]limits|forbidden|not\s+allowed|prohibited)\b|不许|别碰|不要|禁止|继续|保持`)
+	`(?i)\b(?:don'?t|do not|never|no\s+new|avoid|must not|should not|stop using|still\s+(?:do(?:n'?t)?|not)?\b|stays?\b|keep\s+(?:avoiding|out|away|it\s+that\s+way)|leave\s+[^\n]{0,10}alone|untouched|off[- ]limits|forbidden|not\s+allowed|prohibited)\b|不许|别碰|不要|禁止|继续(?:别|不|不要|禁止|远离?|保持)|保持(?:现状|不动|原样|别动)`)
 
 // #3469 weak/strong lift split: bare "ok/fine/alright" prefixes are too
 // weak to release on their own (reaffirmations routinely start with
@@ -131,9 +135,11 @@ var refusalReaffirmPattern = regexp.MustCompile(
 // imperative/expermission phrases stand alone.
 var refusalWeakLiftPattern = regexp.MustCompile(`(?i)\b(?:ok|fine|alright|it'?s ok)\b`)
 var refusalStrongLiftPattern = regexp.MustCompile(
-	`(?i)\b(?:go ahead|you (?:may|can) now|you(?:'re| are) (?:allowed|free) to|lift(?:ed)?|解除|允许|可以了)\b`)
+	`(?i)\b(?:go ahead|you (?:may|can) now|you(?:'re| are) (?:allowed|free) to|lift(?:ed)?)\b|解除|允许|可以了`)
+
+// #3712: CJK words outside the \b group (see refusalReleasePattern note).
 var refusalAuthorizePattern = regexp.MustCompile(
-	`(?i)\b(?:can|may|now|go ahead|allowed|free to|resume|again|touch|modify|edit|write|use|可以|动了?|改了?|碰)\b`)
+	`(?i)\b(?:can|may|now|go ahead|allowed|free to|resume|again|touch|modify|edit|write|use)\b|可以|动了?|改了?|碰`)
 
 // #3469 (note): provably read-only command shapes are not write-class
 // actions; blocking "grep foo build/" on a "build/" refusal target would
