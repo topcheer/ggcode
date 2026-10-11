@@ -94,6 +94,14 @@ type MCPPlugin struct {
 	// separate goroutine; must not take the plugin write lock directly.
 	OnToolDrift func(server string, added, removed []string)
 
+	// notifyState, if set, is invoked (with m.mu NOT held) whenever a
+	// background path mutates connection state or the tool set outside the
+	// manager's connect/disconnect lifecycle (tool refresh, auto-reconnect).
+	// The manager injects its emitUpdate so UI panels converge (#3967);
+	// must be called outside the plugin lock because the listener chain
+	// re-enters Info() which takes the plugin read lock.
+	notifyState func()
+
 	// lastRefreshAt throttles manual tool refreshes so a user cannot hammer
 	// the server (each refresh is a ListTools roundtrip + potential rebuild).
 	lastRefreshAt time.Time
@@ -467,6 +475,10 @@ func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int) {
 	}
 
 	debug.Log("mcp-notif", "server=%s tools refreshed: %d tools", m.cfg.Name, len(tools))
+	// #3967: the tool set (and thus Info()) changed - push a snapshot so
+	// open panels re-render the new list instead of staying stale until
+	// reopened. Lock-free call site: notifyStateChange re-enters Info().
+	m.notifyStateChange()
 	return true, len(tools)
 }
 
@@ -572,6 +584,19 @@ func (m *MCPPlugin) startReconnectWatcher(client *mcp.Client) {
 // needed a minute to start is back well within a typical working session.
 const mcpReconnectCooldown = 60 * time.Second
 
+// notifyStateChange propagates a plugin-level state/tool change to the
+// manager's update listeners (the TUI panel rides emitUpdate). MUST be
+// called with m.mu NOT held: the listener chain re-enters Info() which
+// takes the plugin read lock (#3967).
+func (m *MCPPlugin) notifyStateChange() {
+	m.mu.RLock()
+	fn := m.notifyState
+	m.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 // attemptReconnect performs one reconnect cycle: mark disconnected, drop
 // stale tool registrations, reconnect, and re-register tools on success.
 // Returns true when the server is back and its tools are available again.
@@ -591,6 +616,9 @@ func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
 	m.client = nil
 	m.status = MCPStatusPending
 	m.mu.Unlock()
+	// #3967: the visible status flipped (e.g. connected -> pending after a
+	// crash); panels still showing the pre-crash state must converge.
+	m.notifyStateChange()
 	// Unregister old tools so stale definitions don't linger
 	if oldAdapter != nil && m.registry != nil {
 		for _, tn := range oldAdapter.ToolNames() {
@@ -631,12 +659,17 @@ func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
 				debug.Log("mcp-reconnect", "server=%s tool re-registration failed: %v", m.cfg.Name, regErr)
 			}
 		}
+		// #3967: auto-recovery succeeded - without this the panel keeps
+		// showing the outage (or the pre-crash connected mark) forever.
+		m.notifyStateChange()
 		return true
 	}
 	m.mu.Lock()
 	m.status = MCPStatusFailed
 	m.lastError = normalizeMCPError(err)
 	m.mu.Unlock()
+	// #3967: surface the failed attempt so the panel reflects reality.
+	m.notifyStateChange()
 	debug.Log("mcp-reconnect", "server=%s reconnect attempt failed: %v", m.cfg.Name, err)
 	return false
 }
@@ -1222,6 +1255,12 @@ func (m *MCPManager) Refresh(name string) (found bool, outcome RefreshOutcome, c
 		return false, RefreshNotConnected, 0
 	}
 	outcome, count = p.refreshToolsNow()
+	// #3967: a manual refresh must converge the UI regardless of outcome:
+	// the panel data is only as fresh as the last mcpServersUpdatedMsg, and
+	// unchanged results previously left the panel stale (e.g. a change that
+	// happened while the panel was closed). The changed path notifies via
+	// the plugin hook; this emitUpdate covers every other outcome.
+	m.emitUpdate()
 	return true, outcome, count
 }
 
@@ -1679,6 +1718,10 @@ func (m *MCPManager) newPluginFromConfig(s config.MCPServerConfig) *MCPPlugin {
 	p := NewMCPPlugin(s)
 	p.registry = m.registry
 	p.OnToolDrift = m.onToolDrift
+	// #3967: bridge plugin-level background mutations (tool refresh,
+	// auto-reconnect) into the manager's update broadcast so UI panels
+	// converge without a manual reopen.
+	p.notifyState = m.emitUpdate
 	if m.samplingHandler != nil {
 		p.SetSamplingHandler(m.samplingHandler)
 	}
