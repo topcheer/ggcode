@@ -221,6 +221,17 @@ func extractQuoted(text string, quote byte, keywords *[]string, seen map[string]
 		if idx < 0 {
 			break
 		}
+		// #3724: a single-quote flanked by letters on BOTH sides is an
+		// English contraction apostrophe (don't / it's / user's), not a
+		// delimiter. Pairing those turned the phonetic residue between two
+		// contractions ("don' ... user'") into a phantom keyword, which made
+		// prose-only plan items (no code symbols at all) permanently
+		// "unaddressed" - a deterministic drift false-positive. A real quote
+		// delimiter always has a non-letter on at least one side.
+		if quote == '\'' && isContractionApostrophe(text, idx) {
+			text = text[idx+1:]
+			continue
+		}
 		rest := text[idx+1:]
 		end := strings.IndexByte(rest, quote)
 		if end < 0 {
@@ -236,6 +247,15 @@ func extractQuoted(text string, quote byte, keywords *[]string, seen map[string]
 		}
 		text = rest[end+1:]
 	}
+}
+
+// isContractionApostrophe reports whether the single quote at text[i] sits
+// between two letters (an intra-word contraction apostrophe). Both quote
+// delimiters of a real quoted term have a non-letter boundary on at least
+// one side, so only contractions match this test.
+func isContractionApostrophe(text string, i int) bool {
+	return i > 0 && i+1 < len(text) &&
+		isAlphaByte(text[i-1]) && isAlphaByte(text[i+1])
 }
 
 // isCodeIdentifier checks if a string looks like a code identifier.
