@@ -89,6 +89,46 @@ func TestIssue3951_CheckedTargetMatchesWrittenFormula(t *testing.T) {
 	}
 }
 
+// Absolute-path probe: a "Move to:" that is an absolute path outside the
+// sandbox must not escape. Note Go semantics: Clean(Join(dir, "/abs")) nests
+// INSIDE dir (Join does not reset to the absolute root), so the written file
+// must end up contained within the sandbox either way. The security contract
+// is containment: nothing may land outside the sandbox root.
+func TestIssue3951_MoveToAbsolutePathOutsideRejected(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(filepath.Dir(dir), "escape3951-abs")
+	t.Cleanup(func() { os.RemoveAll(outside) })
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("line\n"), 0o644)
+	ap := zz3951Tool(t, dir)
+	diff := "*** Update File: a.txt\n@@\n-line\n+evil\n*** Move to: " + filepath.Join(outside, "evil.txt") + "\n"
+	res, err := ap.Execute(context.Background(), mustJSON3951(t, "a.txt", diff))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Containment: the absolute target (outside the sandbox) must NOT receive the file.
+	if _, statErr := os.Stat(filepath.Join(outside, "evil.txt")); statErr == nil {
+		t.Fatalf("absolute-path escape wrote a file outside the sandbox: %+v", res)
+	}
+	if res.IsError {
+		// Rejected: source must be intact.
+		if _, statErr := os.Stat(filepath.Join(dir, "a.txt")); statErr != nil {
+			t.Fatalf("source was deleted on a rejected move: %v", statErr)
+		}
+		return
+	}
+	// Succeeded: content must be somewhere INSIDE the sandbox root.
+	found := false
+	filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && d.Name() == "evil.txt" {
+			found = true
+		}
+		return nil
+	})
+	if !found {
+		t.Fatal("move reported success but evil.txt not found inside sandbox (containment violated or file lost)")
+	}
+}
+
 func mustJSON3951(t *testing.T, path, diff string) json.RawMessage {
 	t.Helper()
 	b, err := json.Marshal(map[string]string{"path": path, "diff": diff})
