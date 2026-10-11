@@ -21,6 +21,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // exportedFuncInfo describes an exported function or method found via AST
@@ -96,14 +98,25 @@ func receiverTypeName(expr ast.Expr) string {
 // parseTestFuncNames reads a Go test file and returns the set of function names
 // that start with "Test" (the Go testing convention). Returns nil on parse
 // error or when no test functions exist.
-func parseTestFuncNames(filePath string) map[string]bool {
+func parseTestFuncNames(filePath string) (map[string]bool, bool) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return nil
+		// A MISSING file is not a parse failure (#3662 defect 1, resurrected
+		// by #3649's ok-flag rework and caught by the #3620 word-boundary
+		// invariant probe on main): the sibling-absent case (foo.go with no
+		// foo_test.go) returned ok=false, set anyParseFailed, and the
+		// defect-2 suppression then vetoed every exact-name miss - the
+		// entire no-sibling branch reported nothing, the exact regression
+		// TestIssue3620_WordBoundaryNoPrefixHit pins. Absent = empty set,
+		// parse ok. Real parse failures keep the suppression.
+		if os.IsNotExist(err) {
+			return nil, true
+		}
+		return nil, false
 	}
 	file, _, err := parseGoSource(filePath, string(data), 0)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	names := make(map[string]bool)
 	for _, decl := range file.Decls {
@@ -115,7 +128,7 @@ func parseTestFuncNames(filePath string) map[string]bool {
 			names[fn.Name.Name] = true
 		}
 	}
-	return names
+	return names, true
 }
 
 // untestedExportedFuncs returns the display names of exported functions/methods
@@ -139,18 +152,50 @@ func untestedExportedFuncs(workingDir, goFile string) []string {
 		return nil
 	}
 
+	// #3649: tracks whether any candidate test file failed to parse -
+	// exact-name misses are untrustworthy then, so reporting suppresses.
+	anyParseFailed := false
+
 	// Find the corresponding test file.
 	base := filepath.Base(goFile)
 	srcName := strings.TrimSuffix(base, ".go")
 	testFile := filepath.Join(filepath.Dir(abs), srcName+"_test.go")
-	testFuncs := parseTestFuncNames(testFile)
-	if len(testFuncs) == 0 {
-		// No test file at all — every exported function is untested.
-		result := make([]string, 0, len(funcs))
-		for _, f := range funcs {
-			result = append(result, f.DisplayName)
+	testFuncs, siblingOK := parseTestFuncNames(testFile)
+	if !siblingOK {
+		anyParseFailed = true
+	}
+	noSibling := len(testFuncs) == 0
+	if noSibling {
+		// #3620: no same-name sibling, but the package may still test this
+		// file's exports from OTHER *_test.go files (Go convention; this
+		// repo's zz_issueNNNN_test.go pattern). Only when the whole
+		// directory has no test file may every export be called untested.
+		// Convention matching merges Test names across the directory;
+		// reference matching catches direct calls (zz tests call exported
+		// functions directly - the Test name never contains the symbol).
+		testFiles, _ := filepath.Glob(filepath.Join(filepath.Dir(abs), "*_test.go"))
+		if len(testFiles) == 0 {
+			result := make([]string, 0, len(funcs))
+			for _, f := range funcs {
+				result = append(result, f.DisplayName)
+			}
+			return result
 		}
-		return result
+		// #3649: a sibling _test.go that fails to parse (mid-edit WIP is
+		// routine on this shared tree) must not escalate to "every exported
+		// func untested" - track parse failures separately from empty maps.
+		testFuncs = map[string]bool{}
+		for _, tf := range testFiles {
+			names, ok := parseTestFuncNames(tf)
+			if !ok {
+				anyParseFailed = true
+				debug.Log("test-impact", "sibling test parse failed (partial): %s", tf)
+				continue
+			}
+			for name := range names {
+				testFuncs[name] = true
+			}
+		}
 	}
 
 	var untested []string
@@ -170,9 +215,43 @@ func untestedExportedFuncs(workingDir, goFile string) []string {
 				}
 			}
 		}
+		// #3649 (defect 1): the reference scan was #3620's no-sibling-only
+		// fallback - sibling files using table-driven naming
+		// (TestParseConfig_tableDriven) or coverage living in another test
+		// file (zz_issue123_test.go) never hit the exact-name map and were
+		// misreported as untested. Fall back to the directory reference
+		// scan in the sibling case too.
+		if dirTestFilesReferenceSymbol(filepath.Dir(abs), f.DisplayName) {
+			continue
+		}
+		// #3649 (defect 2): with a parse-failed sibling we can't trust the
+		// exact-name miss - suppress rather than misreport (advisory hint,
+		// false negatives are cheaper than false positives here).
+		if anyParseFailed {
+			continue
+		}
 		untested = append(untested, f.DisplayName)
 	}
 	return untested
+}
+
+// dirTestFilesReferenceSymbol reports whether any *_test.go in dir
+// references symbol as a whole word (#3620 no-sibling reference match).
+func dirTestFilesReferenceSymbol(dir, symbol string) bool {
+	if symbol == "" {
+		return false
+	}
+	testFiles, _ := filepath.Glob(filepath.Join(dir, "*_test.go"))
+	for _, tf := range testFiles {
+		data, err := os.ReadFile(tf)
+		if err != nil {
+			continue
+		}
+		if identBoundaryReferenced(string(data), symbol) {
+			return true
+		}
+	}
+	return false
 }
 
 // funcLevelCoverageGaps analyzes changed Go files and returns per-file lists
@@ -207,4 +286,28 @@ func funcLevelCoverageGaps(workingDir string, maxFiles, maxFuncsPerFile int) []f
 		}
 	}
 	return gaps
+}
+
+// identBoundaryReferenced reports whether symbol occurs in src as a
+// complete Go identifier (#3620): "Widget" must not match inside
+// "WidgetExtended". isIdentByte covers the FULL identifier byte set -
+// the shared isWordByte (success_declare.go) is lowercase-specialized and
+// does not treat uppercase as a word byte.
+func identBoundaryReferenced(src, symbol string) bool {
+	for i := 0; i+len(symbol) <= len(src); i++ {
+		if src[i:i+len(symbol)] != symbol {
+			continue
+		}
+		beforeOK := i == 0 || !isIdentByte(src[i-1])
+		afterOK := i+len(symbol) >= len(src) || !isIdentByte(src[i+len(symbol)])
+		if beforeOK && afterOK {
+			return true
+		}
+	}
+	return false
+}
+
+// isIdentByte covers the full Go identifier byte set.
+func isIdentByte(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }

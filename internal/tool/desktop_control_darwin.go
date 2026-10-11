@@ -39,7 +39,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "scroll":
 		return mouseScroll(ctx, p.X, p.Y, p.Direction, p.Amount)
 	case "modifier_click":
-		return modifierClick(ctx, p.X, p.Y, p.Text)
+		return modifierClick(ctx, p.X, p.Y, p.Text, p.Button)
 
 	// ── Keyboard ──
 	case "type":
@@ -436,11 +436,18 @@ func runSwiftCGEvent(ctx context.Context, code string) (Result, error) {
 
 // modifierClick holds modifier keys down while clicking (multi-select,
 // force-open-in-new-tab, etc.). modifiers is a normalized spec like
-// "cmd+shift".
-func modifierClick(ctx context.Context, x, y int, modifiers string) (Result, error) {
+// "cmd+shift"; button honors the schema contract (#1665 fixed the plain
+// click path, modifier_click had the same contract breach — #3876).
+func modifierClick(ctx context.Context, x, y int, modifiers, button string) (Result, error) {
 	mods, err := normalizeModifiers(modifiers)
 	if err != nil {
 		return Result{}, err
+	}
+	// Same event-type encoding as mouseClick: the CGEventType encodes the
+	// button, mouseButton stays .left for left/right.
+	downType, upType := ".leftMouseDown", ".leftMouseUp"
+	if button == "right" {
+		downType, upType = ".rightMouseDown", ".rightMouseUp"
 	}
 	// Map to CGEventFlags raw values: these overlap-free masks can be OR-ed.
 	var flags uint64
@@ -462,15 +469,15 @@ func modifierClick(ctx context.Context, x, y int, modifiers string) (Result, err
 import CoreGraphics
 let point = CGPoint(x: %d, y: %d)
 let flags = CGEventFlags(rawValue: %d)
-let eDown = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown,
+let eDown = CGEvent(mouseEventSource: nil, mouseType: %s,
                     mouseCursorPosition: point, mouseButton: .left)
 eDown?.flags = flags
 eDown?.post(tap: .cghidEventTap)
-let eUp = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp,
+let eUp = CGEvent(mouseEventSource: nil, mouseType: %s,
                   mouseCursorPosition: point, mouseButton: .left)
 eUp?.flags = flags
 eUp?.post(tap: .cghidEventTap)
-`, x, y, flags))
+`, x, y, flags, downType, upType))
 }
 
 // mousePosition returns the current cursor position in logical pixels.
@@ -822,9 +829,16 @@ ObjC.import('AppKit');
 // keyComboResult translates key combo strings (e.g. "cmd+c", "ctrl+shift+tab")
 // to AppleScript System Events key code commands.
 func keyComboResult(ctx context.Context, combo string) (Result, error) {
-	parts := strings.Split(combo, "+")
-	if len(parts) == 0 {
+	// #3876: strings.Split never returns an empty slice (len(parts)==0 was
+	// unreachable dead code), so an empty combo or a trailing "+" silently
+	// produced `keystroke ""` and an opaque osascript error. Reject both
+	// shapes up front, mirroring normalizeModifiers' empty-segment check.
+	if strings.TrimSpace(combo) == "" {
 		return Result{}, fmt.Errorf("empty key combo")
+	}
+	parts := strings.Split(combo, "+")
+	if strings.TrimSpace(parts[len(parts)-1]) == "" {
+		return Result{}, fmt.Errorf("key combo %q ends with an empty key (trailing "+"?)", combo)
 	}
 
 	modifiers := []string{}
@@ -960,5 +974,10 @@ func appleScriptResult(ctx context.Context, script string) (Result, error) {
 func applescriptQuote(s string) string {
 	s = strings.ReplaceAll(s, "\\", "\\\\")
 	s = strings.ReplaceAll(s, "\"", "\\\"")
+	// #3876: raw newlines/tabs inside `tell application "..."` produce
+	// osascript -2739 syntax errors; escape like swiftStringLiteral does.
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	s = strings.ReplaceAll(s, "\t", "\\t")
 	return "\"" + s + "\""
 }

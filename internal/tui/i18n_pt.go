@@ -183,6 +183,14 @@ func ptCatalog(key string) string {
 		return "Nenhuma resposta do assistente para regenerar."
 
 	// ── Branch ────────────────────────────────────────────────────
+	case "rewind.bad_arg":
+		return "Uso: /rewind [N] onde N >= 1 e o numero de turnos do usuario a rebobinar."
+	case "rewind.revert_failed":
+		return "Reversao de arquivos recusada, rebobinamento abortado (nada mudou): %v"
+	case "rewind.success":
+		return "Rebobinados %d turno(s); edicoes de arquivo revertidas (%s). Continuando na sessao %s - a original e preservada."
+	case "rewind.success_no_edits":
+		return "Rebobinados %d turno(s); os turnos rebobinados nao tinham edicoes de arquivo rastreadas. Continuando na sessao %s - a original e preservada."
 	case "branch.busy":
 		return "Não é possível ramificar enquanto o agente está em execução. Pressione Ctrl+C para cancelar primeiro."
 	case "branch.no_session":

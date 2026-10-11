@@ -47,6 +47,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -108,6 +109,9 @@ var sentimentPositiveWhitelist = []string{
 	"perfect", "excellent", "awesome", "thank you", "thanks",
 	"how do i stop", "how to stop", "how can i stop", "how do you stop",
 	"how do i restart", "how to restart",
+	// #3739 CJK positives: same masking role for Chinese acknowledgements.
+	"没问题", "不碍事", "谢谢", "好的", "很好", "不错", "可以了", "太好了",
+	"干得好", "看起来不错", "完美", "棒",
 }
 
 // negFeedbackPatterns maps patterns to categories. Matching is case-insensitive
@@ -125,13 +129,24 @@ var negFeedbackPatterns = []struct {
 		"that's wrong", "thats wrong", "this is wrong", "bad", "doesn't work",
 		"doesnt work", "didnt work", "didn't work", "broken", "still broken",
 		"still failing", "still not working", "still doesn't", "still doesnt",
-		"not working", "fails", "failing", "error again"},
+		"not working", "fails", "failing", "error again",
+		// #3739 CJK: Chinese users correcting the agent were 100% invisible to
+		// this detector (pure-CJK text matched no English pattern, resetting
+		// the escalation counter mid-sequence). CJK has no \b semantics, but
+		// wordContains degenerates safely to substring matching for CJK (its
+		// boundary check isAlnum is false for all bytes >= 0x80).
+		"错了", "不对", "不正确", "不是这样", "不是我要的", "改错了",
+		"坏了", "坏掉了", "不行", "不能用", "没成功", "又错了",
+		"还是错", "还是不对", "还是不行", "又失败"},
 		negCatRejection},
 	// Redirection: user changing direction.
 	{[]string{"instead", "actually", "i meant", "i should have", "let me rephrase",
 		"let me clarify", "what i actually", "what i really", "on second thought",
 		"never mind", "nevermind", "ignore that", "forget that", "disregard",
-		"start over", "try again", "redo"},
+		"start over", "try again", "redo",
+		// #3739 CJK redirection.
+		"重新来", "重来", "重新开始", "再来一次", "换个", "改用", "换成",
+		"我是说", "我的意思是", "我是想要", "算了", "别管了", "忽略刚才"},
 		negCatRedirection},
 	// Frustration: emotional signals.
 	// #1223: "why are you" narrowed to "why are you doing"/"why do you keep" -
@@ -143,7 +158,10 @@ var negFeedbackPatterns = []struct {
 		"i said", "as i said", "like i said", "i already told",
 		"are you listening", "read my message", "pay attention",
 		"this doesn't make sense", "this doesnt make sense",
-		"nonsense", "garbage", "useless", "terrible"},
+		"nonsense", "garbage", "useless", "terrible",
+		// #3739 CJK frustration.
+		"停下", "停一下", "别改了", "别动", "烦死了", "太差了", "垃圾",
+		"没用", "我说过了", "说过多少次", "你听了吗", "看我的消息"},
 		negCatFrustration},
 }
 
@@ -174,7 +192,13 @@ func detectNegativeFeedback(message string) string {
 	}
 
 	lower := strings.ToLower(firstLine)
-	isShort := len(firstLine) < 100
+	// #3968: rune count, not byte length - UTF-8 CJK runs 3 bytes/char, so
+	// `len() < 100` classified every Chinese message over ~33 chars as long,
+	// silently skipping rejection/frustration hits and resetting the
+	// escalation counter mid-sequence (exactly what #3739's CJK keywords
+	// were added to prevent). Rune count keeps the threshold semantics
+	// identical for ASCII (1 byte = 1 rune).
+	isShort := utf8.RuneCountInString(firstLine) < 100
 
 	// Positive-phrase masking (#1223, refined by #1227): whitelist phrases
 	// like "no problem" / "not bad" contain bare rejection words but express
@@ -205,7 +229,12 @@ func detectNegativeFeedback(message string) string {
 					return group.category
 				}
 				if group.category == negCatRedirection {
-					if idx := strings.Index(scanText, pat); idx >= 0 && idx < 40 {
+					// #3968: strings.Index is a BYTE index; comparing it against 40
+					// gave CJK openers only ~13 chars of window. Measure the rune
+					// count of the prefix instead so an opener is the first 40
+					// CHARACTERS in any script. ASCII behavior is unchanged
+					// (byte index == rune count when the prefix is pure ASCII).
+					if idx := strings.Index(scanText, pat); idx >= 0 && utf8.RuneCountInString(scanText[:idx]) < 40 {
 						return group.category
 					}
 				}

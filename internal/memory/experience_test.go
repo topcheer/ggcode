@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,6 +110,64 @@ func TestExperienceCapEvictsOldest(t *testing.T) {
 	}
 	if len(cases) > MaxExperienceCases {
 		t.Fatalf("cap not enforced: %d cases", len(cases))
+	}
+}
+
+// TestExperienceCapEvictsByUpdatedNotCreated (#3873): Record's
+// reconsolidation preserves Created and refreshes Updated. An early case
+// that is still being strengthened therefore has the oldest Created but the
+// freshest knowledge — eviction must key on Updated or the store discards
+// exactly the cases it exists to keep.
+func TestExperienceCapEvictsByUpdatedNotCreated(t *testing.T) {
+	es := newTestExperienceStore(t)
+	// Fill the store to the cap with distinct tasks; remember task0's ID
+	// (oldest Created) and task1's ID (second-oldest, never refreshed).
+	task0 := "cap-evict-probe task zero anchor"
+	task1 := "cap-evict-probe task one stale"
+	id0, updated, err := es.Record(task0, "approach", "success", nil)
+	if err != nil || updated {
+		t.Fatalf("Record task0: err=%v updated=%v", err, updated)
+	}
+	id1, _, err := es.Record(task1, "approach", "success", nil)
+	if err != nil {
+		t.Fatalf("Record task1: %v", err)
+	}
+	// Timestamps persist at RFC3339 (second) granularity; space the phases
+	// so Updated strictly distinguishes stale filler from refreshed anchor.
+	time.Sleep(1100 * time.Millisecond)
+	for i := 2; i < MaxExperienceCases; i++ {
+		if _, _, err := es.Record(fmt.Sprintf("cap-evict-probe task filler %02d", i), "approach", "success", nil); err != nil {
+			t.Fatalf("Record filler %d: %v", i, err)
+		}
+	}
+	time.Sleep(1100 * time.Millisecond)
+	// Strengthen task0: re-record refreshes Updated while Created stays
+	// the oldest in the store (reconsolidation, HMA semantics).
+	if _, updated, err := es.Record(task0, "approach refreshed", "success", nil); err != nil || !updated {
+		t.Fatalf("re-Record task0: err=%v updated=%v", err, updated)
+	}
+	// One more case pushes past the cap: exactly one eviction, and it must
+	// be the stale-Updated case (task1), not the old-Created-but-fresh
+	// task0.
+	if _, _, err := es.Record("cap-evict-probe task overflow new", "approach", "success", nil); err != nil {
+		t.Fatalf("Record overflow: %v", err)
+	}
+	cases, err := es.List()
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(cases) != MaxExperienceCases {
+		t.Fatalf("cap not exact: %d cases", len(cases))
+	}
+	alive := map[string]bool{}
+	for _, c := range cases {
+		alive[c.ID] = true
+	}
+	if !alive[id0] {
+		t.Fatal("old-Created but freshly-strengthened case was evicted; eviction must key on Updated, not Created (#3873)")
+	}
+	if alive[id1] {
+		t.Fatal("stale-Updated case survived eviction; expected it to be evicted first (#3873)")
 	}
 }
 

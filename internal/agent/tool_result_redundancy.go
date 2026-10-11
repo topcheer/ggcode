@@ -44,6 +44,7 @@ package agent
 // Zero LLM cost, deterministic.
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -117,6 +118,30 @@ func (t *toolResultRedundancyState) reset() {
 	t.entries = nil
 	t.warningsFired = 0
 	t.lastWarnedIter = 0
+}
+
+// recordToolCall is the entry point used by the agent loop (#3698). It
+// applies the verification-rerun exemption before content-overlap analysis:
+// re-running build/test/lint commands in a fix loop is verification work —
+// the diff between near-identical outputs IS the decision signal — so the
+// "use existing context" nudge is semantically wrong there and would fight
+// verify_debt / postEditVerifyHint. Truly redundant re-verification is
+// already handled by redundant_reverify.go (with the #3588 blacklist).
+func (t *toolResultRedundancyState) recordToolCall(toolName string, args json.RawMessage, content string, iteration int) string {
+	if trIsVerifyRerun(toolName, args) {
+		return ""
+	}
+	return t.recordResult(toolName, content, iteration)
+}
+
+// trIsVerifyRerun reports whether this tool call is a build/test/lint
+// command rerun (run_command whose command matches isVerifyCommand).
+func trIsVerifyRerun(toolName string, args json.RawMessage) bool {
+	if toolName != "run_command" {
+		return false
+	}
+	cmd := extractCommandFromArgs(args)
+	return cmd != "" && isVerifyCommand(cmd)
 }
 
 // recordResult processes a tool result and checks for redundancy with prior results.

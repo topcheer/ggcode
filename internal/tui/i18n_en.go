@@ -697,6 +697,24 @@ func enCatalog(key string) string {
 		return "No past-run learnings stored yet."
 	case "why.empty":
 		return "No tool-call decisions recorded yet — run a task first, then /why [n] explains what the agent did and why."
+	case "guidance.empty":
+		return "No guidance stats recorded yet — .ggcode/memory/guidance-stats.jsonl is absent or empty (it fills after a run where any detector fires)."
+	case "guidance.suppressed":
+		return "Suppressed %q — guidance from this detector is now blocked (takes effect immediately). Undo with /guidance reset <tag>."
+	case "guidance.reset":
+		return "Reset %q — detector default behavior restored."
+	case "guidance.noreset":
+		return "No override recorded for %q (nothing to reset)."
+	case "guidance.ambiguous":
+		return "Ambiguous tag %q — matches multiple detectors. Use the full tag:\n  %s"
+	case "guidance.usage":
+		return "Usage: /guidance [n] | /guidance <tag> | /guidance suppress <tag> | /guidance reset <tag>"
+	case "guidance.nohints":
+		return "No hint texts recorded yet — .ggcode/memory/guidance-hints.jsonl is absent or empty (written when a guidance hint is delivered; rerun after a detector fires)."
+	case "guidance.tagmiss":
+		return "No recorded hint matches tag %q. Available tags:\n  %s"
+	case "guidance.unavailable":
+		return "Cannot resolve the workspace directory to locate guidance-stats.jsonl."
 	case "evidence.empty":
 		return "No citable claims yet — after the agent answers with code references (file.go:42, `symbol`), /evidence links each to the tool output that backs it."
 	case "traj.header":
@@ -1221,6 +1239,14 @@ func enCatalog(key string) string {
 		return "Context manager not available."
 	case "regenerate.no_response":
 		return "No assistant response to regenerate."
+	case "rewind.bad_arg":
+		return "Usage: /rewind [N] where N >= 1 is the number of user turns to rewind."
+	case "rewind.revert_failed":
+		return "File rollback refused, rewind aborted (nothing changed): %v"
+	case "rewind.success":
+		return "Rewound %d turn(s); reverted file edits (%s). Continuing in session %s - original preserved."
+	case "rewind.success_no_edits":
+		return "Rewound %d turn(s); the rewound turns made no tracked file edits. Continuing in session %s - original preserved."
 	case "branch.busy":
 		return "Cannot branch while the agent is running. Press Ctrl+C to cancel first."
 	case "branch.no_session":

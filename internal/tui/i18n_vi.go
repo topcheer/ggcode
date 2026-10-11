@@ -1020,6 +1020,14 @@ func viCatalog(key string) string {
 		return "Context manager không khả dụng."
 	case "regenerate.no_response":
 		return "Không có phản hồi assistant để tạo lại."
+	case "rewind.bad_arg":
+		return "Cách dùng: /rewind [N] với N >= 1 là số lượt người dùng cần tua lại."
+	case "rewind.revert_failed":
+		return "Từ chối hoàn tác tệp, đã hủy tua lại (không thay đổi gì): %v"
+	case "rewind.success":
+		return "Đã tua lại %d lượt; các chỉnh sửa tệp đã được hoàn tác (%s). Tiếp tục trong phiên %s - phiên gốc được giữ nguyên."
+	case "rewind.success_no_edits":
+		return "Đã tua lại %d lượt; các lượt được tua lại không có chỉnh sửa tệp nào được theo dõi. Tiếp tục trong phiên %s - phiên gốc được giữ nguyên."
 	case "branch.busy":
 		return "Không thể phân nhánh khi agent đang chạy. Nhấn Ctrl+C để hủy trước."
 	case "branch.no_session":

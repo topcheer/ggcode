@@ -108,9 +108,22 @@ func (s *stalledConvergenceState) recordEdit() {
 func (s *stalledConvergenceState) recordVerify(content string, failed bool) string {
 	currentErrors := countVerifyErrors(content)
 
-	// Only track if there are errors and edits were made.
-	if !failed || !s.hadEdits {
-		// Still record for baseline, but don't assess trend without edits.
+	// #3596: a SUCCESSFUL verification resolves the current error set --
+	// the convergence episode is over. Appending the (typically zero)
+	// count instead would poison every later delta: any real error count
+	// after a 0 yields d > 0, permanently failing isStalledConvergence's
+	// non-increasing gate for the rest of the run in mixed verify flows
+	// (`go build && go test`, lint-then-test). Restart the sequence so
+	// the next failure opens a fresh episode.
+	if !failed {
+		s.errorHistory = nil
+		s.hadEdits = false
+		return ""
+	}
+
+	// No edits since the last verification: keep the sample for baseline,
+	// but don't assess trend without edits.
+	if !s.hadEdits {
 		s.errorHistory = append(s.errorHistory, currentErrors)
 		s.hadEdits = false
 		return ""

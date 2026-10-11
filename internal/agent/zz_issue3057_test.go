@@ -67,9 +67,9 @@ func TestIssue3057_CrossRunGateCanFireAgain(t *testing.T) {
 
 func TestIssue3057_RecordToolCallAccumulatesUntilReset(t *testing.T) {
 	o := newOverseerState()
-	o.recordToolCall("web_search", false, "")
-	o.recordToolCall("web_search", true, "") // errors don't count (#r365)
-	o.recordToolCall("web_fetch", false, "")
+	o.recordToolCall("web_search", false, "", "")
+	o.recordToolCall("web_search", true, "", "") // errors don't count (#r365)
+	o.recordToolCall("web_fetch", false, "", "")
 	o.mu.Lock()
 	sc, fc := o.searchCalls, o.fetchCalls
 	o.mu.Unlock()

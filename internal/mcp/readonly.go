@@ -99,16 +99,41 @@ func isWriteToolName(name string) bool {
 		return r == '_' || r == '-' || r == '.'
 	})
 	for _, kw := range writeKeywords {
-		for _, seg := range segments {
-			if seg == kw {
+		for i, seg := range segments {
+			if seg == kw && !nounUseAllowed(kw, i, segments) {
 				return true
 			}
 		}
-		for _, seg := range plainSegments {
-			if seg == kw {
+		for i, seg := range plainSegments {
+			if seg == kw && !nounUseAllowed(kw, i, plainSegments) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// readVerbRoots prefixes that mark the FOLLOWING noun segment as the
+// object of a read (#3807).
+var readVerbRoots = map[string]bool{
+	"get": true, "read": true, "list": true, "query": true, "fetch": true,
+	"find": true, "describe": true, "show": true, "view": true,
+	"search": true, "check": true, "status": true, "select": true,
+	"lookup": true, "head": true, "count": true, "inspect": true,
+}
+
+// nounUseAllowed reports whether the keyword hit at segs[idx] is a NOUN
+// usage that must NOT block in read-only mode (#3807). The short roots
+// "post" and "run" are both write verbs ("post_data", "run_command") AND
+// extremely common read-only nouns: GitHub Actions MCPs ship
+// get_run_status ([get run status]) and WordPress MCPs ship get_post - both
+// were blocked while their plural twins list_runs/list_posts sailed
+// through. Rule: post/run block only when they LEAD the name or follow
+// another write verb; after a read verb they are the queried object.
+// Fail-closed: any other predecessor (start_post, trigger_run) still blocks.
+func nounUseAllowed(kw string, idx int, segs []string) bool {
+	if (kw != "post" && kw != "run") || idx == 0 {
+		return false // verb-initial or unambiguous root: post_data / run_command
+	}
+	return readVerbRoots[segs[idx-1]]
 }

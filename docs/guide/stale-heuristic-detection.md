@@ -33,6 +33,16 @@ The cross-model contrast is what separates "model behavior changed" from "this p
 
 ## Reading the results
 
+Since r14/r15 the `/guidance` TUI command surfaces all of this without hand-grepping:
+
+- `/guidance` — per-tag fire/suppress aggregates, per-model split, gated-detector state, and a trailing "stale (harness-flagged)" list (the `stale_heuristic` reports below).
+- `/guidance <tag>` — drill down to the exact hint text last delivered for that tag (from `.ggcode/memory/guidance-hints.jsonl`).
+- `/guidance suppress <tag>` — block that detector's guidance immediately (r16 manual override; writes the same atomic store the auto channel uses, pinned `model:"manual"` so it never consumes the auto budget). Undo with `/guidance reset <tag>`.
+
+The suppress/reset pair closes the observability→controllability loop: seeing a misfiring detector is only useful if you can act on it without hand-editing `~/.ggcode/harness-overrides.json` and restarting.
+
+Raw fallback (pre-r14 workspaces):
+
 ```sh
 grep stale_heuristic .ggcode/memory/guidance-stats.jsonl | tail -20
 ```

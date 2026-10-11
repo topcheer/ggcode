@@ -83,7 +83,7 @@ func TestUnexportedHelper(t *testing.T) {}
 func helper() {}
 `), 0644)
 
-	names := parseTestFuncNames(src)
+	names, _ := parseTestFuncNames(src)
 	if len(names) != 3 {
 		t.Fatalf("expected 3 test funcs, got %d: %v", len(names), names)
 	}
@@ -289,7 +289,7 @@ func TestTransitiveImporters_RealModule(t *testing.T) {
 	}
 
 	// internal/debug is imported by many packages. Check transitive importers.
-	importers := transitiveImporters(dir, []string{"internal/debug"})
+	importers, _ := transitiveImporters(dir, []string{"internal/debug"})
 	// This may return nil if go list didn't resolve; just don't panic.
 	if importers != nil {
 		// Should contain at least internal/agent since agent imports debug.

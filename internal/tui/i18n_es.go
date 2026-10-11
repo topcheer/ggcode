@@ -1020,6 +1020,14 @@ func esCatalog(key string) string {
 		return "Gestor de contexto no disponible."
 	case "regenerate.no_response":
 		return "Sin respuesta del asistente para regenerar."
+	case "rewind.bad_arg":
+		return "Uso: /rewind [N] donde N >= 1 es el numero de turnos de usuario a rebobinar."
+	case "rewind.revert_failed":
+		return "Reversion de archivos rechazada, rebobinado abortado (nada cambio): %v"
+	case "rewind.success":
+		return "Rebobinados %d turno(s); ediciones de archivo revertidas (%s). Continuando en la sesion %s - la original se conserva."
+	case "rewind.success_no_edits":
+		return "Rebobinados %d turno(s); los turnos rebobinados no tenian ediciones de archivo rastreadas. Continuando en la sesion %s - la original se conserva."
 	case "branch.busy":
 		return "No se puede bifurcar mientras el agente está en ejecución. Presione Ctrl+C para cancelar primero."
 	case "branch.no_session":

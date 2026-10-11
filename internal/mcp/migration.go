@@ -202,7 +202,7 @@ func normalizedTransport(transport string) string {
 func serverSignature(cfg config.MCPServerConfig) string {
 	normalized := normalizedTransport(cfg.Type)
 	switch normalized {
-	case "http", "ws": // #1276: ws is URL-identified like http
+	case "http", "ws", "sse": // #1276: ws/sse are URL-identified like http
 		// Prefix with the NORMALIZED transport: an explicit yaml entry with
 		// Type: "HTTP" and a migrated lowercase "http" entry describe the
 		// same server and must collide for dedup (review of #1276 caught
@@ -213,6 +213,13 @@ func serverSignature(cfg config.MCPServerConfig) string {
 		// silently swapping a header would otherwise keep the grant.
 		// sig-v2 prefix: grants stored under the v1 scheme (URL-only /
 		// command-only) no longer match, forcing one re-approval.
+		//
+		// #3790: sse was accepted at the migration entry (transport
+		// normalizer returns it) but fell to the stdio default here - its
+		// Command/Args are empty, so EVERY sse server signed as
+		// `sig-v2:stdio:[""]` and the dedup pass silently dropped all but
+		// the first of multiple different-URL sse servers. sse is
+		// URL-identified exactly like http/ws (#1848).
 		sig := "sig-v2:" + normalized + ":" + strings.TrimSpace(cfg.URL)
 		if kv := canonicalKVPairs(cfg.Headers); kv != "" {
 			sig += "|" + kv

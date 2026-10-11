@@ -226,15 +226,22 @@ func strategyFixationIsMutation(toolName string) bool {
 }
 
 // strategyFixationIsVerification returns true for tools that verify correctness.
-// Note: run_command/start_command are verification-shaped but NOT every
-// invocation verifies — `cat`, `ls`, `git status` succeeding is not a green
-// build. The wiring in agent.go filters those through psIsVerifyCommand
-// (the same command-position analysis used by premature_success, #483) so
-// non-verifying commands neither reset streaks nor inject failures (#485).
+// #3685-B: the set now mirrors the agent.go causal gate's six command
+// channels (bash/powershell are reachable builtin names; wait_command/
+// read_command_output carry background-job terminal outcomes), minus
+// start_command: its LAUNCH result only means "job started" - recording
+// that cleared streaks before any test ran. The launch entry was removed;
+// the real verification event for a background job is its terminal outcome
+// (wired in agent.go's #2992 branch). run_command/bash/powershell are
+// filtered through psIsVerifyCommand in agent.go (#483/#485) so a
+// successful cat/ls neither resets streaks nor injects failures.
 func strategyFixationIsVerification(toolName string) bool {
 	switch {
 	case toolName == "run_command",
-		toolName == "start_command",
+		toolName == "bash",
+		toolName == "powershell",
+		toolName == "wait_command",
+		toolName == "read_command_output",
 		toolName == "code_health",
 		toolName == "review_changes",
 		toolName == "verify",

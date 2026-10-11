@@ -1026,6 +1026,14 @@ func koCatalog(key string) string {
 		return "컨텍스트 관리자를 사용할 수 없습니다."
 	case "regenerate.no_response":
 		return "재생성할 어시스턴트 응답이 없습니다."
+	case "rewind.bad_arg":
+		return "사용법: /rewind [N] (N >= 1, 되감을 사용자 턴 수)"
+	case "rewind.revert_failed":
+		return "파일 롤백이 거부되어 되감기를 중단했습니다 (변경된 것 없음): %v"
+	case "rewind.success":
+		return "%d턴을 되감았습니다. 파일 편집을 되돌렸습니다 (%s). 세션 %s에서 계속합니다 - 원본은 보존됩니다."
+	case "rewind.success_no_edits":
+		return "%d턴을 되감았습니다. 되감은 턴에는 추적된 파일 편집이 없습니다. 세션 %s에서 계속합니다 - 원본은 보존됩니다."
 	case "branch.busy":
 		return "에이전트가 실행 중에는 분기할 수 없습니다. 취소하려면 Ctrl+C를 누르세요."
 	case "branch.no_session":

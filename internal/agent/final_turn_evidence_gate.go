@@ -23,13 +23,19 @@ func finalTurnEvidenceGate(editsThisRun int, lastSourceFile string, realBuildOrT
 	if gateAlreadyFired || editsThisRun == 0 || realBuildOrTestRun {
 		return ""
 	}
-	if detectBuildSystem(workingDir) == "" {
+	fallback := detectBuildSystem(workingDir)
+	if fallback == "" {
 		// No build system: there is no canonical receipt to demand.
 		return ""
 	}
 	cmd := targetedVerifyCommand(workingDir, lastSourceFile)
 	if cmd == "" {
-		return ""
+		// #3796-B: targetedVerifyCommand returns "" for source extensions
+		// with no language profile (.sh/.php/.cs/... vs the 8-profile map)
+		// and for Go files outside any go.mod - silently letting those edits
+		// skip the gate. Fall back to the build-system command we already
+		// detected instead of waving the stop through.
+		cmd = fallback
 	}
 	return fmt.Sprintf(
 		"[Evidence Gate] You edited %d source file(s) this run but have not executed any "+

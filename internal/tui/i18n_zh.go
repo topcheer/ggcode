@@ -708,6 +708,24 @@ func zhCatalog(key string) string {
 		return "尚无历史运行学习条目。"
 	case "why.empty":
 		return "尚无工具调用决策记录——先运行任务，之后 /why [n] 可解释 agent 做了什么以及为什么。"
+	case "guidance.empty":
+		return "尚无引导统计记录——.ggcode/memory/guidance-stats.jsonl 不存在或为空（任一检测器开火后的运行会写入）。"
+	case "guidance.suppressed":
+		return "已抑制 %q ——该检测器的 guidance 即刻起被阻断。可用 /guidance reset <tag> 撤销。"
+	case "guidance.reset":
+		return "已重置 %q ——检测器恢复默认行为。"
+	case "guidance.noreset":
+		return "%q 没有记录在案的 override（无需重置）。"
+	case "guidance.ambiguous":
+		return "tag %q 存在歧义——命中多个检测器，请用完整 tag：\n  %s"
+	case "guidance.usage":
+		return "用法：/guidance [n] | /guidance <tag> | /guidance suppress <tag> | /guidance reset <tag>"
+	case "guidance.nohints":
+		return "尚无提示原文记录——.ggcode/memory/guidance-hints.jsonl 不存在或为空（提示送达时写入；检测器开火后重跑一次即可）。"
+	case "guidance.tagmiss":
+		return "没有匹配 %q 的提示记录。可用 tag:\n  %s"
+	case "guidance.unavailable":
+		return "无法解析工作区目录以定位 guidance-stats.jsonl。"
 	case "evidence.empty":
 		return "尚无可引用的结论——当 agent 的答复包含代码引用（file.go:42、`symbol`）后，/evidence 会把每条结论链接到支撑它的工具输出。"
 	case "traj.header":
@@ -1234,6 +1252,14 @@ func zhCatalog(key string) string {
 		return "上下文管理器不可用。"
 	case "regenerate.no_response":
 		return "没有可重新生成的 AI 回复。"
+	case "rewind.bad_arg":
+		return "用法：/rewind [N]，N >= 1，为要回退的用户轮数。"
+	case "rewind.revert_failed":
+		return "文件回滚被拒绝，已中止回退（未做任何改动）：%v"
+	case "rewind.success":
+		return "已回退 %d 轮；文件编辑已还原（%s）。在会话 %s 中继续 - 原会话保留。"
+	case "rewind.success_no_edits":
+		return "已回退 %d 轮；被回退的轮次没有受追踪的文件编辑。在会话 %s 中继续 - 原会话保留。"
 	case "branch.busy":
 		return "Agent 正在运行，无法分叉。请先按 Ctrl+C 取消。"
 	case "branch.no_session":

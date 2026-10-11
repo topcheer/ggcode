@@ -73,6 +73,7 @@ Before implementing strict mode, we applied these soft enforcement measures:
 1. **Schema fix**: All 21 tools with `description` parameter now have it correctly inside `properties` (was broken — either invalid JSON or at root level)
 2. **Required enforcement**: `description` is in every tool's `required` array
 3. **Description text emphasis**: Field description starts with "REQUIRED." and ends with "You MUST always provide this field."
+   *(Update 2026-10: the closing emphasis phrase was condensed to save per-tool schema tokens — the enforced contract is now the "REQUIRED." prefix plus the "activity label" marker phrase that `InjectDescriptionFallback` matches on. See commit 95486f64f.)*
 4. **TUI rendering fix**: `tool_labels.go` now checks `description` for 15 tools that previously ignored it
 
 This soft approach may be sufficient — `run_command` proved LLMs will comply with `required` + strong descriptions. The schema was previously broken for file tools, so historical non-compliance doesn't predict future behavior with fixed schemas.
