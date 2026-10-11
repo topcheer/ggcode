@@ -187,6 +187,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// Cross-session knowledge graph (typed entities + relationships)
 		&KnowledgeGraphTool{WorkingDir: workingDir},
 
+		// Durable hierarchical goal graph (long-horizon goal -> milestone -> task)
+		&GoalGraphTool{WorkingDir: workingDir},
+
 		// Project scaffolding (multi-language templates: Go, TS, Python, Rust)
 		ScaffoldProject{SandboxCheck: sandboxFor("scaffold_project"), WorkingDir: workingDir},
 	)
