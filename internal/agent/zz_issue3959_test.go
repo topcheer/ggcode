@@ -69,3 +69,31 @@ func TestSessionCostLimitStopArmsLoopGate(t *testing.T) {
 		t.Error("cost 100%% stop branch does not arm sessionBudgetStop - weaker stop semantics than token/time twins (#3945 parity)")
 	}
 }
+
+// Behavioral complement to the source-scan guards (merged from the ggcxf
+// seat's parallel fix per governance collision ruling): prove the ladder
+// actually re-fires after a 100% stop latch + reset - the exact per-run
+// re-arm the production wiring guarantees. The pre-existing suite only
+// latches through 95%; this one drives stopGiven through a real stop.
+func TestIssue3959CostLadderRearmsAfterReset(t *testing.T) {
+	a := &Agent{}
+	defer agentSessionCostLimits.Delete(a)
+
+	// $1.00 limit, $10/M input -> 2M tokens = $2 = 200%: hard stop fires.
+	a.SetSessionCostLimit(1.00, 10, 0, 0, 0)
+	msg, stop := a.RecordSessionCostUsage(2_000_000, 0, 0, 0)
+	if msg == "" || !stop {
+		t.Fatalf("200%%: got msg=%q stop=%v, want exhausted stop", msg, stop)
+	}
+	// Post-stop, further usage is silent (all three tier flags latched).
+	if msg, stop := a.RecordSessionCostUsage(1_000, 0, 0, 0); msg != "" || stop {
+		t.Fatalf("post-stop: got msg=%q stop=%v, want silence (latched)", msg, stop)
+	}
+	// The per-run reset (now wired in agent.go) must clear the latch...
+	a.resetSessionCostUsage()
+	// ...and the ladder must fire again: 900k tokens = 90% of $1.
+	msg, stop = a.RecordSessionCostUsage(900_000, 0, 0, 0)
+	if msg == "" || stop || !strings.Contains(msg, "80%") {
+		t.Fatalf("post-reset 90%%: got msg=%q stop=%v, want 80%% guidance re-fired", msg, stop)
+	}
+}
