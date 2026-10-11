@@ -193,7 +193,7 @@ func (w *ConfigHotReload) applyFreshConfig(fresh *config.Config) {
 		ApplySessionCostLimit(a.agentInst, old)
 		ApplySessionTimeBudget(a.agentInst, old)
 		ApplyToolCallBudget(a.agentInst, old)
-		ApplySessionTimeout(a.agentInst, old, false)
+		ApplySessionTimeout(a.agentInst, old, a.agentInst.IsAutopilotMode())
 	}
 }
 

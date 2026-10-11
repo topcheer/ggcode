@@ -164,7 +164,13 @@ func extractTaintFingerprints(content string) []string {
 	}
 	var fingerprints []string
 	seen := make(map[string]bool)
-	lowered := strings.ToLower(content)
+	// G1 (sa-157): the whole pipeline (guard-side detection, fingerprint
+	// extraction, consumer-side checkInfluence matching) runs on the same
+	// normalized+lowered copy. The old code indexed the lowered copy but
+	// sliced the ORIGINAL content; slicing normCopy here would still be
+	// misaligned because caller-side ToLower changes byte length for
+	// İ/ẞ-class chars (#3572 lesson: index and slice must share one string).
+	lowered := strings.ToLower(memory.NormalizeForInjectionMatch(content))
 
 	for _, pattern := range memory.InjectionPatterns {
 		if len(fingerprints) >= maxTaintFingerprints {
@@ -179,17 +185,17 @@ func extractTaintFingerprints(content string) []string {
 		// injection sentence verbatim to tool args without the original context.
 		start := idx
 		end := idx + len(pattern) + 35
-		if end > len(content) {
-			end = len(content)
+		if end > len(lowered) {
+			end = len(lowered)
 		}
 		if end-start < taintMinSnippetLen {
 			continue
 		}
-		snippet := strings.TrimSpace(content[start:end])
+		snippet := strings.TrimSpace(lowered[start:end])
 		if len(snippet) < taintMinSnippetLen {
 			continue
 		}
-		key := strings.ToLower(snippet)
+		key := snippet // already lowercase - lowered IS the slice source
 		if seen[key] {
 			continue
 		}
@@ -219,7 +225,7 @@ func (s *taintInfluenceState) checkInfluence(toolName string, argsStr string) st
 		return ""
 	}
 
-	lowerArgs := strings.ToLower(argsStr)
+	lowerArgs := strings.ToLower(memory.NormalizeForInjectionMatch(argsStr))
 
 	// Tier 1: Direct propagation -- tainted snippet appears literally in args.
 	// Budgets are per-tier (issue #720): exhausting the noisier Tier-2 window

@@ -145,7 +145,7 @@ func (t TeamReviewDigestTool) Parameters() json.RawMessage {
 			"team_id": {"type": "string", "description": "Team ID"},
 			"description": {
 				"type": "string",
-				"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language. You MUST always provide this field."
+				"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 			}
 		},
 		"required": ["team_id", "description"]
@@ -209,7 +209,7 @@ func (t TeamReviewDecideTool) Parameters() json.RawMessage {
 			"note": {"type": "string", "description": "Optional verdict rationale; required in practice for changes/reject so the teammate knows what to fix."},
 			"description": {
 				"type": "string",
-				"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language. You MUST always provide this field."
+				"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 			}
 		},
 		"required": ["team_id", "teammate_id", "verdict", "description"]

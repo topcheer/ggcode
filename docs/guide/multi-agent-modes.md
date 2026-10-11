@@ -55,6 +55,7 @@ By default the sub-agent edits files directly in the parent's working tree, whic
 - The worktree is created under `<repo>/.ggcode/worktrees/agent-<id>-<timestamp>-<rand>` on a dedicated branch of the same name.
 - The sub-agent runs with its working directory set to the worktree, so its file edits never touch the parent's working tree.
 - The spawn result and `wait_agent` snapshots both report the worktree path, so the parent can inspect, test, or merge the sub-agent's edits after the run.
+- To recover a finished branch, use the `merge_worktree` tool: clean merges auto-finalize; on conflicts it returns a structured arbitration report (conflict regions + both sides' commit intents) and keeps the merge state so you can resolve the markers with `edit_file`, then `action=finalize` (optionally gated by `verify_command`). `action=abort` rolls back; the branch is never deleted.
 - Worktrees and branches are **kept after the run** (never auto-removed) — clean them up with `git worktree remove` once merged.
 - If worktree creation fails (not a git repo, git errors), the spawn is rejected and the sub-agent cancelled rather than silently downgraded to non-isolated.
 - Note: the worktree starts from the last commit (`HEAD`); uncommitted changes in the parent tree are not visible to the sub-agent.
@@ -87,7 +88,7 @@ Sub-agents always use the parent agent's **current runtime provider**, not the p
 
 For tasks where a single attempt frequently fails (tricky refactor, elusive bug, ambiguous architecture), `best_of_n` launches N (2-4, default 3) **independent sub-agent candidates on the same task**, waits for all to finish, and picks the winner:
 
-- **Isolation**: each candidate runs in its own git worktree by default (`isolation: "worktree"`), so file edits never collide. The winner's worktree path is reported for merging; the others are disposable. Use `isolation: "none"` only for read-only/research tasks.
+- **Isolation**: each candidate runs in its own git worktree by default (`isolation: "worktree"`), so file edits never collide. The winner's worktree path is reported for merging (via `merge_worktree`); the others are disposable. Use `isolation: "none"` only for read-only/research tasks.
 - **Task contract**: a suffix appended to the task requires every candidate to verify its own work (targeted build/test) and state the outcome in its final message.
 - **Selection**: per-rollout distilled summaries (attempted/progress/failures/verdict) are ranked by consensus; ties or a failed "best-of-a-bad-lot" degrade to a **sequential-retry conditioning hint** distilled from ALL rollouts (RTV escalation from "Scaling Test-time Compute for LLM Agents", arXiv 2506.12928).
 - **Economics**: N runs cost N x sub-agent tokens - only justified for tasks where one attempt frequently fails. The orchestrator needs N free sub-agent slots (16-session budget) and refuses cleanly otherwise.
