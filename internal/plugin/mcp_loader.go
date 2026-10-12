@@ -452,7 +452,9 @@ func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int, e
 
 	// Unregister old tools
 	if oldAdapter != nil && registry != nil {
-		for _, tn := range oldAdapter.ToolNames() {
+		// #4071: only the names this adapter actually owns (#1594-A) -
+		// ToolNames() includes collision-skipped names owned by siblings.
+		for _, tn := range oldAdapter.RegisteredNames() {
 			registry.Unregister(tn)
 		}
 	}
@@ -625,7 +627,8 @@ func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
 	m.notifyStateChange()
 	// Unregister old tools so stale definitions don't linger
 	if oldAdapter != nil && m.registry != nil {
-		for _, tn := range oldAdapter.ToolNames() {
+		// #4071: owned subset only - see the Info() snapshot note.
+		for _, tn := range oldAdapter.RegisteredNames() {
 			m.registry.Unregister(tn)
 		}
 	}
@@ -645,7 +648,8 @@ func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
 			m.status = MCPStatusPending
 			m.mu.Unlock()
 			if m.registry != nil {
-				for _, tn := range adapter.ToolNames() {
+				// #4071: owned subset only (#1594-A).
+				for _, tn := range adapter.RegisteredNames() {
 					m.registry.Unregister(tn)
 				}
 			}
@@ -777,6 +781,21 @@ func (m *MCPPlugin) Info() MCPServerInfo {
 		info.ToolNames = m.adapter.ToolNames()
 	}
 	return info
+}
+
+// OwnedToolNames returns the registry names this plugin's adapter ACTUALLY
+// owns (#1594-A post-collision subset). Unregister paths must use this, not
+// Info().ToolNames - the Info snapshot keeps full definitions for display,
+// but Unregister is a pure name-key delete, so a duplicate-name server whose
+// registrations were all collision-skipped must not enumerate its sibling's
+// names (#4071).
+func (m *MCPPlugin) OwnedToolNames() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.adapter == nil {
+		return nil
+	}
+	return m.adapter.RegisteredNames()
 }
 
 func (m *MCPPlugin) Close() error {
@@ -1294,7 +1313,7 @@ func (m *MCPManager) Install(ctx context.Context, server config.MCPServerConfig)
 		m.plugins[i] = plugin
 		m.mu.Unlock()
 		if previous != nil {
-			for _, toolName := range previous.Info().ToolNames {
+			for _, toolName := range previous.OwnedToolNames() { // #4071 owned set
 				m.registry.Unregister(toolName)
 			}
 			_ = previous.Close()
@@ -1329,7 +1348,7 @@ func (m *MCPManager) Uninstall(name string) bool {
 		m.plugins = append(m.plugins[:i], m.plugins[i+1:]...)
 		m.mu.Unlock()
 
-		for _, toolName := range plugin.Info().ToolNames {
+		for _, toolName := range plugin.OwnedToolNames() { // #4071 owned set
 			m.registry.Unregister(toolName)
 		}
 		_ = plugin.Close()
@@ -1353,7 +1372,7 @@ func (m *MCPManager) Disconnect(name string) bool {
 		}
 		p := plugin
 		safego.Go("plugin.mcp.unregister", func() {
-			toolNames := p.Info().ToolNames
+			toolNames := p.OwnedToolNames() // #4071 owned set
 			for _, toolName := range toolNames {
 				m.registry.Unregister(toolName)
 			}
@@ -1400,7 +1419,9 @@ func (m *MCPManager) ForceReauth(name string) bool {
 		p.mu.RLock()
 		var oldToolNames []string
 		if p.adapter != nil {
-			oldToolNames = p.adapter.ToolNames()
+			// #4071: owned subset only (#1594-A) - ToolNames() includes
+			// collision-skipped names owned by duplicate-name siblings.
+			oldToolNames = p.adapter.RegisteredNames()
 		}
 		p.mu.RUnlock()
 		for _, toolName := range oldToolNames {
@@ -1697,7 +1718,7 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 
 	// Unregister tools + close removed/changed plugins (outside lock).
 	closeAndUnregister := func(p *MCPPlugin, reason string) {
-		for _, toolName := range p.Info().ToolNames {
+		for _, toolName := range p.OwnedToolNames() { // #4071 owned set
 			m.registry.Unregister(toolName)
 		}
 		_ = p.Close()
