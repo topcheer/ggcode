@@ -184,7 +184,7 @@ No configuration is needed — elicitation is enabled automatically when an inte
 Since protocol revision 2025-11-25, MCP servers may execute tool calls asynchronously. When ggcode sends a `tools/call` with the `task` request option, a compliant server can answer immediately with a *task descriptor* (`resultType: "task"`) instead of blocking until the tool finishes.
 
 ggcode's client implements the full task protocol:
-- `CallToolAsTask` sends the task-augmented call, then polls `tasks/get` until the task reaches a terminal state, and fetches the final tool result via `tasks/result`. The server's `pollInterval` hint is honored, clamped to [200ms, 10s], and the total polling budget is capped at 10 minutes so a stuck server cannot hang a call forever.
+- `CallToolAsTask` sends the task-augmented call, then polls `tasks/get` until the task reaches a terminal state, and fetches the final tool result via `tasks/result`. The server's `pollInterval` hint is honored, clamped to [200ms, 10s], and the total polling budget is capped at 10 minutes so a stuck server cannot hang a call forever. Both the 2025-11-25 field names (`pollInterval`/`ttl`) and the stable-extension names (`pollIntervalMs`/`ttlMs`) are decoded. A task lookup answered with JSON-RPC `-32602` (expired, TTL-deleted, or unknown task per the stable extension) surfaces as an explicit "expired or deleted" error instead of a bare "Invalid params".
 - `ListTasks`, `GetTask`, `CancelTask`, and `HasTasks` expose task management; listing is gated on the server's advertised `tasks` capability (uncapable servers get an empty list, never an error).
 - During initialize, ggcode declares client `tasks` support in both the legacy handshake and the modern per-request `_meta` envelope.
 
