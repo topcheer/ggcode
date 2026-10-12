@@ -2705,6 +2705,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.injectGuidance(msg)
 			debug.Log("session-token-budget", "delegated threshold drained at iteration %d stop=%v", i+1, stop)
 			if stop {
+				sessionBudgetStop = true // #4072: parity with the token/cost/time twins. The stopGiven once-flag was already consumed by the sub-agent goroutine's checkLocked, so the main-path RecordSessionTokenUsage above can never re-emit (msg=="" forever) - without this line a sub-agent-driven 100% crossing leaves the run unstoppable.
 				onEvent(provider.StreamEvent{
 					Type: provider.StreamEventSystem,
 					Text: "[Session token budget fully consumed (including sub-agent spend) - winding down. Summarize the state so the user can resume with a fresh budget.] ",

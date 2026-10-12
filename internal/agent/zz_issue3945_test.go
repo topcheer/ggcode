@@ -27,9 +27,11 @@ func TestIssue3945_StopGateWired(t *testing.T) {
 		}
 	}
 	// Exactly one arming site per budget dimension (token + time + cost;
-	// #3959 added the cost twin for loop-top gate parity).
-	if got := strings.Count(src, "sessionBudgetStop = true"); got != 3 {
-		t.Fatalf("want 3 arming sites (token + time + cost), got %d", got)
+	// #3959 added the cost twin for loop-top gate parity; #4072 added the
+	// delegated-drain twin - a sub-agent goroutine can consume the stopGiven
+	// once-flag before the main path ever sees it, so the drain must arm).
+	if got := strings.Count(src, "sessionBudgetStop = true"); got != 4 {
+		t.Fatalf("want 4 arming sites (token + time + cost + delegated drain), got %d", got)
 	}
 	// The gate must precede the next LLM call: it sits at the loop top.
 	gateIdx := strings.Index(src, "if sessionBudgetStop {")
