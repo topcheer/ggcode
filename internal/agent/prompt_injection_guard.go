@@ -112,6 +112,35 @@ var selfDefenseReadTargets = map[string]bool{
 	"taint_influence_check_test.go":  true,
 }
 
+// selfDefenseDirSegment is the repository path segment that must appear in a
+// read target for the basename exemption to apply. #3996: matching on
+// filepath.Base alone let ANY directory's same-named file (e.g.
+// /tmp/attacker/taint_influence_check.go) skip both the injection wrap and
+// the taint fingerprint - a two-layer defense bypass. Requiring the
+// internal/agent/ segment keeps the exemption for the real defense files
+// (relative, absolute, and worktree-prefixed forms all match) while
+// rejecting arbitrary same-basename paths elsewhere on disk.
+const selfDefenseDirSegment = "internal/agent/"
+
+// isSelfDefenseReadTarget reports whether x names one of the defense
+// system's own source files (#3996). A bare basename (no directory
+// information) is a cwd-relative read inside the trusted workspace, so it
+// keeps the #1481-B exemption; any path carrying directory information must
+// place the file under internal/agent/ - same-basename paths elsewhere on
+// disk (/tmp/attacker/taint_influence_check.go) are rejected.
+func isSelfDefenseReadTarget(x string) bool {
+	cleaned := filepath.Clean(strings.TrimSpace(x))
+	base := filepath.Base(cleaned)
+	if !selfDefenseReadTargets[base] {
+		return false
+	}
+	// Bare basename: cwd-relative, no directory evidence to contradict.
+	if cleaned == base {
+		return true
+	}
+	return strings.HasSuffix(cleaned, selfDefenseDirSegment+base)
+}
+
 // selfDefenseReadTargetFields are the arg fields that name a READ TARGET
 // (a file or directory being read/searched). Only values under these
 // fields qualify for the self-defense exemption. Content fields — grep
@@ -154,8 +183,7 @@ func isSelfDefenseRead(toolName string, args json.RawMessage) bool {
 			// #3155: only read-target fields qualify. A `pattern` or
 			// `query` equal to a detector basename is a content
 			// coincidence, not a self-defense read.
-			if selfDefenseReadTargetFields[field] &&
-				selfDefenseReadTargets[filepath.Base(strings.TrimSpace(x))] {
+			if selfDefenseReadTargetFields[field] && isSelfDefenseReadTarget(x) {
 				found = true
 			}
 		case map[string]interface{}:
