@@ -942,11 +942,18 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		if lanchatHub != nil {
 			lanchatHub.SetModel(r.Model)
 		}
-		agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
+		// #3994: every read below uses the LOCAL r (the fresh pointer
+		// ActivateCurrentSelection just returned), never the outer resolved -
+		// multiple IM adapters can enter this hook concurrently, and the outer
+		// pointer is reassigned under resolvedMu by the other goroutine between
+		// L937's unlock and any later read (data race; #2868's own discipline:
+		// reads go through currentResolved() or a held-lock copy - r is even
+		// stronger, it is this call's immutable snapshot).
+		agentruntime.StartAsyncRelayModelLimitRefresh(cfg, r, ag, nil)
 		if ses != nil {
 			ses.Vendor = cfg.Vendor
 			ses.Endpoint = cfg.Endpoint
-			ses.Model = resolved.Model
+			ses.Model = r.Model
 			// Persist model selection to session JSONL (session-scoped).
 			if err := store.AppendMetaToDisk(ses); err != nil {
 				debug.Log("daemon", "model switch: meta persist failed: %v", err)
@@ -960,25 +967,25 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				vendors = append(vendors, v)
 			}
 			endpoints := cfg.EndpointNames(cfg.Vendor)
-			models := resolved.Models
-			if len(models) == 0 && resolved.Model != "" {
-				models = []string{resolved.Model}
+			models := r.Models
+			if len(models) == 0 && r.Model != "" {
+				models = []string{r.Model}
 			}
 			return fmt.Sprintf(
 				"📋 Current config:\n  Provider: %s (%s)\n  Model: %s\n  Available providers: %s\n  Endpoints: %s\n  Models: %s",
-				resolved.VendorName, resolved.EndpointName, resolved.Model,
+				r.VendorName, r.EndpointName, r.Model,
 				strings.Join(vendors, ", "),
 				strings.Join(endpoints, ", "),
 				strings.Join(models, ", "),
 			), nil
 		}
 		if model != "" {
-			return fmt.Sprintf("✅ Model switched to: %s (%s)", resolved.Model, resolved.VendorName), nil
+			return fmt.Sprintf("✅ Model switched to: %s (%s)", r.Model, r.VendorName), nil
 		}
 		if vendor != "" {
-			return fmt.Sprintf("✅ Provider switched to: %s (%s) → model: %s", resolved.VendorName, resolved.EndpointName, resolved.Model), nil
+			return fmt.Sprintf("✅ Provider switched to: %s (%s) → model: %s", r.VendorName, r.EndpointName, r.Model), nil
 		}
-		return fmt.Sprintf("✅ Config updated: %s (%s) → %s", resolved.VendorName, resolved.EndpointName, resolved.Model), nil
+		return fmt.Sprintf("✅ Config updated: %s (%s) → %s", r.VendorName, r.EndpointName, r.Model), nil
 	})
 	// Turn-scoped vision fallback: image-bearing turns on non-vision models
 	// switch to a comparable vision model for that turn only. switchFn keeps
