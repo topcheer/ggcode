@@ -122,6 +122,22 @@ func obsTokenish(s string) bool {
 	return hasUp && hasLow && hasDigit
 }
 
+// obsSameURLBase reports whether two http(s) strings share scheme, host and
+// path — i.e. they differ only in query (or fragment) values. Agents
+// intentionally vary query parameters when paginating or slicing requests
+// (page=1→page=2, date windows, ids), so a query-only difference is a
+// semantic mutation, not a mistranscription (#3981). Presigned signature
+// re-orderings almost always exceed the near-match distance anyway, so
+// exempting query differences costs essentially no detection power.
+func obsSameURLBase(a, b string) bool {
+	ua, erra := url.Parse(a)
+	ub, errb := url.Parse(b)
+	if erra != nil || errb != nil {
+		return false
+	}
+	return ua.Scheme == ub.Scheme && ua.Host == ub.Host && ua.Path == ub.Path
+}
+
 // obsTTLSeconds extracts a validity window in seconds from a URL's query
 // parameters; 0 when the URL carries no TTL.
 func obsTTLSeconds(rawURL string) int {
@@ -246,6 +262,13 @@ func (t *observationContractTracker) checkArgs(toolName string, arguments []byte
 		}
 		for _, a := range t.artifacts {
 			if len(a.value) < obsNearMatchMinLen {
+				continue
+			}
+			// URL awareness (#3981): when both sides are URLs and only query
+			// parameters differ (pagination, parameter changes), that is an
+			// intentional mutation rather than a mistranscription — skip it.
+			// The near-match hint stays reserved for host/path-level typos.
+			if strings.HasPrefix(arg, "http") && strings.HasPrefix(a.value, "http") && obsSameURLBase(arg, a.value) {
 				continue
 			}
 			d := levenshtein(arg, a.value)
