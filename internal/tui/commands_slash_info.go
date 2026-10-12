@@ -847,19 +847,25 @@ func (m *Model) handleRunReportAllCommand() tea.Cmd {
 		list = list[:50]
 	}
 	sessionReports := make([]runeval.SessionReport, 0, len(list))
-	for _, ses := range list {
-		if len(ses.Messages) == 0 {
-			sessionReports = append(sessionReports, runeval.SessionReport{ID: ses.ID, Title: ses.Title})
+	for _, meta := range list {
+		// #3982: List() builds sessions from index entries only — Messages,
+		// UsageHistory and ContextMessages are always nil there. Evaluating
+		// the metadata skeleton directly made every session look empty and
+		// the whole report silently degrade to "no tool calls". Load the full
+		// session per ID first (same pattern as /export and /branch).
+		full, err := jsonlStore.Load(meta.ID)
+		if err != nil || full == nil || len(full.Messages) == 0 {
+			sessionReports = append(sessionReports, runeval.SessionReport{ID: meta.ID, Title: meta.Title})
 			continue
 		}
-		usage := make([]runeval.UsageSample, 0, len(ses.UsageHistory))
-		for _, e := range ses.UsageHistory {
+		usage := make([]runeval.UsageSample, 0, len(full.UsageHistory))
+		for _, e := range full.UsageHistory {
 			usage = append(usage, runeval.UsageSample{Source: e.Source, Usage: e.Usage})
 		}
 		sessionReports = append(sessionReports, runeval.SessionReport{
-			ID:     ses.ID,
-			Title:  ses.Title,
-			Report: runeval.EvaluateWithCoordination(ses.Messages, usage, runeval.CoordEventsFromMessages(ses.Messages)),
+			ID:     meta.ID,
+			Title:  meta.Title,
+			Report: runeval.EvaluateWithCoordination(full.Messages, usage, runeval.CoordEventsFromMessages(full.Messages)),
 		})
 	}
 	m.chatWriteSystem(nextSystemID(), runeval.RenderAggregate(runeval.Aggregate(sessionReports)))
