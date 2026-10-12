@@ -149,7 +149,10 @@ func (a *Agent) maybeInjectSentimentFeedback(userPrompt string) {
 	// The previous trajectory is now invalid -- those systems would carry
 	// stale progress data from the rejected work.
 	if shouldResetMonitoringOnFeedback(fb) {
-		a.resetOverseer()
+		// #4003: reseed researchMode from the correcting prompt itself -
+		// "stop researching, start fixing" must flip the mode, which the
+		// stale session-first-message fallback never could.
+		a.resetOverseer(userPrompt)
 		a.resetScopeDrift()
 		a.recurringError.reset()
 		a.confidence.reset()

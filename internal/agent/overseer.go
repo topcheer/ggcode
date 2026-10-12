@@ -617,20 +617,34 @@ func (a *Agent) overseerCheck(toolName string, isError bool, fileHint, resultCon
 	return a.overseer.analyze(iteration)
 }
 
-// resetOverseer clears trajectory for a new run.
-func (a *Agent) resetOverseer() {
+// resetOverseer clears trajectory for a new run. runTask is the CURRENT
+// run's user task text (#4003): researchMode must track what the agent is
+// working on right now, not the first message of the whole session -
+// multi-turn sessions would otherwise keep the run-1 verdict forever
+// (same per-run signal plannerAnalyze/maybeInjectResearchPlan use).
+func (a *Agent) resetOverseer(runTask string) {
 	if a.overseer == nil {
 		return
 	}
-	// Detect research mode from the autopilot goal or the first user message.
+	// Detect research mode from the autopilot goal or the current run's
+	// user text (both per-run fresh sources).
 	taskText := a.getAutopilotGoal()
-	msgs := a.Messages()
-	if taskText == "" && len(msgs) > 0 {
-		// Scan the first user message for research indicators.
-		for _, block := range msgs[0].Content {
-			if block.Type == "text" {
-				taskText = block.Text
-				break
+	if taskText == "" {
+		taskText = runTask
+	}
+	if taskText == "" {
+		// Last resort, kept for callers without run text: fall back to the
+		// latest user message instead of msgs[0] - still closer to "now".
+		msgs := a.Messages()
+		for i := len(msgs) - 1; i >= 0 && taskText == ""; i-- {
+			if msgs[i].Role != "user" {
+				continue
+			}
+			for _, block := range msgs[i].Content {
+				if block.Type == "text" {
+					taskText = block.Text
+					break
+				}
 			}
 		}
 	}
