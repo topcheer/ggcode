@@ -100,6 +100,12 @@ type trajectoryEntry struct {
 	toolName string
 	isError  bool
 	fileHint string // file path if extractable, empty otherwise
+	// productive is the #3568-gated forward-progress verdict computed at
+	// record time (productive tool AND (!isError || partial written paths),
+	// research union included). #3997: checkToolSpam reads this instead of
+	// re-scanning toolName maps - a failed run_command/edit_file no longer
+	// blinds the spam detector for the whole run.
+	productive bool
 }
 
 // productiveTools are tools that represent forward progress on the task.
@@ -245,24 +251,6 @@ func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint, 
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	o.trajectory = append(o.trajectory, trajectoryEntry{
-		toolName: toolName,
-		isError:  isError,
-		fileHint: fileHint,
-	})
-
-	// r365: count retrieval calls for the research-report gate (successful
-	// searches/fetches are the multi-hop signal; errors would double-count
-	// retries against the same source).
-	if !isError {
-		switch toolName {
-		case "web_search":
-			o.searchCalls++
-		case "web_fetch":
-			o.fetchCalls++
-		}
-	}
-
 	// A tool call is productive if it's a productive tool AND it succeeded
 	// (or, #3568, partially succeeded with files actually on disk —
 	// extractWrittenPaths is the same partial_success signal #1762 case 1
@@ -278,7 +266,30 @@ func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint, 
 	if o.researchMode && !isProductive {
 		isProductive = researchProductiveTools[toolName]
 	}
-	if isProductive && (!isError || len(extractWrittenPaths(resultContent)) > 0) {
+	isProductive = isProductive && (!isError || len(extractWrittenPaths(resultContent)) > 0)
+
+	o.trajectory = append(o.trajectory, trajectoryEntry{
+		toolName:   toolName,
+		isError:    isError,
+		fileHint:   fileHint,
+		productive: isProductive,
+	})
+
+	// r365: count retrieval calls for the research-report gate (successful
+	// searches/fetches are the multi-hop signal; errors would double-count
+	// retries against the same source).
+	if !isError {
+		switch toolName {
+		case "web_search":
+			o.searchCalls++
+		case "web_fetch":
+			o.fetchCalls++
+		}
+	}
+
+	// Forward-progress accounting uses the same #3568-gated verdict that
+	// was recorded on the entry above.
+	if isProductive {
 		o.itersSinceProductive = 0
 		// Reset file-read tracking after an edit.
 		o.fileReadsSinceEdit = make(map[string]int)
@@ -366,9 +377,13 @@ func (o *overseerState) checkToolSpam(traj []trajectoryEntry) string {
 	}
 	threshold := o.effectiveSpamThreshold()
 	// Only check spam if there are no productive tools at all.
+	// #3997: use the #3568-gated per-entry verdict recorded at tool-call
+	// time - a FAILED run_command/edit_file is not productive (unless it
+	// carried partial written paths), so one failed call can no longer
+	// switch the whole run's spam detector off.
 	hasProductive := false
 	for _, e := range traj {
-		if productiveTools[e.toolName] || (o.researchMode && researchProductiveTools[e.toolName]) {
+		if e.productive {
 			hasProductive = true
 			break
 		}
