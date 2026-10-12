@@ -389,6 +389,14 @@ func substituteParamPlaceholders(template json.RawMessage, params map[string]int
 					err = fmt.Errorf("placeholder {{%s}} has no matching param", name)
 					return m
 				}
+				// #4051: string params substitute their RAW value - the old
+				// Marshal+trim kept inner JSON escapes as literal two-byte
+				// sequences (\" \\ \n), so a grep pattern "say \"hi\"" became
+				// `say \"hi\"` and silently matched nothing. Marshal stays for
+				// numbers/bools, whose bare literal form is the goal.
+				if s, ok := val.(string); ok {
+					return s
+				}
 				esc, e := json.Marshal(val)
 				if e != nil {
 					err = e
