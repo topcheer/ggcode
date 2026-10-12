@@ -24,6 +24,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 const llmTapeEnv = "GGCODE_LLM_TAPE"
@@ -159,6 +160,7 @@ func (t *TapeProvider) ChatStream(ctx context.Context, messages []Message, tools
 		}
 		out := make(chan StreamEvent, len(e.Events)+1)
 		go func() {
+			defer safego.Recover("tape.replayStream")
 			defer close(out)
 			for _, ev := range e.Events {
 				out <- ev.toStreamEvent()
@@ -172,6 +174,7 @@ func (t *TapeProvider) ChatStream(ctx context.Context, messages []Message, tools
 	}
 	out := make(chan StreamEvent)
 	go func() {
+		defer safego.Recover("tape.recordStream")
 		defer close(out)
 		var evs []tapeEvent
 		for ev := range src {
