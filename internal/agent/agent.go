@@ -3605,10 +3605,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				continue
 			}
 			// Post-completion commit hint: after all gates pass, remind the agent
-			// to stage and commit its work if it hasn't already. This is the last
-			// gate. It injects a reminder and continues for one confirmation
-			// round (the fired flag makes it one-shot per run); it never
-			// hard-fails completion.
+			// to stage and commit its work if it hasn't already. Advisory commit
+			// hint, NOT the last gate (#4016): the doc-drift advisory (r465) and
+			// the draft-PR hint (sa-223) gates below may still fire once each
+			// after this one. It injects a reminder and continues for one
+			// confirmation round (the fired flag makes it one-shot per run); it
+			// never hard-fails completion.
 			if commitHintMsg := a.checkCommitHintGate(runStats); commitHintMsg != "" {
 				debug.Log("agent", "Iteration %d: commit hint gate injected reminder", i+1)
 				a.contextManager.Add(provider.Message{
