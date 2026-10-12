@@ -87,4 +87,10 @@ func (a *Agent) resetTurnDetectors() {
 	a.criteriaDrift.reset()
 	a.reasonAction.reset()
 	a.attemptBrief.reset()
+	// #3998: researchPlan fire-once is per-run ("fires ONCE per run",
+	// research_planner.go). Without this reset the plan injects only for
+	// the session's first research task, and researchPlanSubs from task 1
+	// pollute task 2's gap detection at the synthesis call.
+	a.researchPlan.reset()
+	a.researchPlanSubs = nil
 }
