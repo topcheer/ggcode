@@ -171,6 +171,19 @@ func (p *researchPlanState) reset() {
 	p.injected = false
 }
 
+// perspectiveKeywords returns the planner taxonomy's vocabulary for a
+// perspective name (nil when unknown, e.g. "general"). The synthesizer
+// reuses the exact words the planner matched so producer and consumer
+// stay semantically aligned (#3999).
+func perspectiveKeywords(name string) []string {
+	for _, p := range researchPerspectives {
+		if p.name == name {
+			return p.keywords
+		}
+	}
+	return nil
+}
+
 // maybeInjectResearchPlan fires the ONE-TIME research sub-query plan for
 // research-mode runs (same detectResearchMode signal the overseer uses).
 // The plan text is injected as a user message at the same early point the

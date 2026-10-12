@@ -182,12 +182,17 @@ func SynthesizeResearchReport(goal string, findings []ResearchFinding, planned [
 		b.WriteString("\n")
 	}
 
-	// Gaps: planned sub-queries with no finding whose query text overlaps.
+	// Gaps: planned sub-queries no finding covers. Every planner template
+	// starts with the goal text, so a bare goal-prefix probe is IDENTICAL
+	// for all sibling perspectives - one matching finding used to mark
+	// every planned sub-query covered, and one miss used to gap them all
+	// (#3999). Coverage now additionally requires the sub-query's own
+	// perspective vocabulary (the same taxonomy words the planner
+	// matched), restoring per-perspective granularity.
 	if len(planned) > 0 {
 		joined := strings.ToLower(strings.Join(groups, " \n "))
 		for _, p := range planned {
-			pk := strings.Join(strings.Fields(strings.ToLower(p.Query)), " ")
-			if pk != "" && !strings.Contains(joined, firstWords(pk, gapProbeWords)) {
+			if !subQueryCovered(joined, p) {
 				gaps = append(gaps, p.Query)
 			}
 		}
@@ -206,6 +211,34 @@ func SynthesizeResearchReport(goal string, findings []ResearchFinding, planned [
 // gapProbeWords is how many leading words of a planned sub-query are used
 // as the containment probe against collected finding queries.
 const gapProbeWords = 3
+
+// subQueryCovered reports whether the collected finding queries cover a
+// planned sub-query. Coverage needs (a) the goal-prefix probe - the first
+// gapProbeWords words of the planned query, which for template-expanded
+// queries are the goal's own words - and, when the perspective is known
+// (b) at least one of that perspective's vocabulary words in some finding
+// query. (b) is what separates sibling perspectives sharing the same goal
+// prefix. Unknown perspectives ("general", hand-built plans) fall back to
+// the goal-prefix probe alone.
+func subQueryCovered(joined string, p ResearchSubQuery) bool {
+	pk := strings.Join(strings.Fields(strings.ToLower(p.Query)), " ")
+	if pk == "" {
+		return true // nothing to probe; treat as covered
+	}
+	if !strings.Contains(joined, firstWords(pk, gapProbeWords)) {
+		return false
+	}
+	kws := perspectiveKeywords(p.Perspective)
+	if len(kws) == 0 {
+		return true
+	}
+	for _, kw := range kws {
+		if strings.Contains(joined, kw) {
+			return true
+		}
+	}
+	return false
+}
 
 // firstWords returns the first n words of a normalized string, used as a
 // cheap containment probe for gap detection.
