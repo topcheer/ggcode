@@ -979,13 +979,21 @@ func NewMCPManager(servers []config.MCPServerConfig, registry *tool.Registry, sc
 		p.registry = registry
 		plugins = append(plugins, p)
 	}
-	return &MCPManager{
+	m := &MCPManager{
 		plugins:      plugins,
 		registry:     registry,
 		scope:        scope,
 		timeout:      8 * time.Second,
 		stdioTimeout: 2 * time.Minute,
 	}
+	// #4062: wire the anti-rug-pull alert sink on every production assembly
+	// path. Previously OnToolDrift was nil everywhere outside tests, so a
+	// tampered MCP server was detected and silently re-baselined with the
+	// user never seeing the alert the docs promised.
+	for _, p := range m.plugins {
+		p.OnToolDrift = m.handleToolDrift
+	}
+	return m
 }
 
 // isDisabled reports whether the named server is disabled for this
@@ -1112,6 +1120,22 @@ func (m *MCPManager) emitUpdate() {
 	if fn != nil {
 		fn(m.Snapshot())
 	}
+}
+
+// handleToolDrift is the production sink for the anti-rug-pull alert
+// (#4062). Wired into every plugin built by NewMCPManager and
+// newPluginFromConfig so a detected tool-definition drift can no longer
+// die on an unwired callback: it is recorded on the manager's warnings
+// slice (surfaced by ConnectAll and MCP status consumers) and pushed to
+// UI panels via the update broadcast.
+func (m *MCPManager) handleToolDrift(server string, added, removed []string) {
+	m.mu.Lock()
+	m.warnings = append(m.warnings, fmt.Sprintf(
+		"warning: MCP server %s tool definitions changed after approval (added=%v removed=%v) - verify this is expected before trusting the new tools",
+		server, added, removed))
+	m.mu.Unlock()
+	debug.Log("mcp-drift", "server=%s TOOL DRIFT alert surfaced via manager warnings: added=%v removed=%v", server, added, removed)
+	m.emitUpdate()
 }
 
 func (m *MCPManager) connectOne(ctx context.Context, p *MCPPlugin) {
@@ -1712,6 +1736,8 @@ func (m *MCPManager) newPluginFromConfig(s config.MCPServerConfig) *MCPPlugin {
 	// auto-reconnect) into the manager's update broadcast so UI panels
 	// converge without a manual reopen.
 	p.notifyState = m.emitUpdate
+	// #4062: reload path must carry the drift alert sink too.
+	p.OnToolDrift = m.handleToolDrift
 	if m.samplingHandler != nil {
 		p.SetSamplingHandler(m.samplingHandler)
 	}

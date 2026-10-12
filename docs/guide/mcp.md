@@ -88,7 +88,7 @@ When `read_only: true`, ggcode blocks any MCP tool whose name matches a write/cr
 
 A compromised or updated MCP server can silently change its tool definitions after you approved them — swapped descriptions, added tools, or rolled-back versions (the "rug pull" pattern). ggcode content-hashes each server's tool definitions at first connection, persists the baseline to `mcp_baselines.json` under the config directory, and re-checks it on every reconnect and `tools/list_changed` refresh, surviving restarts.
 
-When the hash changes after the approved baseline, the drift is reported through the host's alert channel (`OnToolDrift`), diffed at tool-name granularity. Two false-positive guards are built in:
+When the hash changes after the approved baseline, the drift is reported through the host's alert channel (`OnToolDrift`), which the MCP manager wires on every construction path into its server warnings list and UI update broadcast, diffed at tool-name granularity. If no alert channel is wired at all, the approved baseline is kept instead of being overwritten, so the tampered tool set is re-detected on every reconnect rather than silently accepted. Two false-positive guards are built in:
 
 - **Onboarding window**: changes within 24h of approval update the baseline silently (first-day iteration of a server under active development).
 - **Escape hatch**: for a server whose definitions legitimately churn, opt out of the alert:
