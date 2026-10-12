@@ -1876,7 +1876,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.strategistNoProgressCount = 0
 	// Reset monitoring systems once at run start, NOT inside the iteration
 	// loop. These systems accumulate state across iterations within a run.
-	a.resetOverseer()
+	// #4003: pass the CURRENT run's userText - researchMode is per-run.
+	a.resetOverseer(userText)
 	a.resetPlanner()
 	// Agent-side planning: analyze the user's first message for complexity.
 	// If complex (multi-file, multi-goal, multi-step), suggest a structured

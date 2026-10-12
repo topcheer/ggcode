@@ -114,6 +114,49 @@ var sentimentPositiveWhitelist = []string{
 	"干得好", "看起来不错", "完美", "棒",
 }
 
+// containsCJKANotA reports whether s contains an A-not-A construction
+// (V不V, 是不是, 对不对, 行不行, 好不好, 能不能, 要不要...): a 不 rune whose
+// preceding 1-3 runes are repeated verbatim right after it. RE2 has no
+// backreferences, so this is scanned by hand.
+func containsCJKANotA(s string) bool {
+	r := []rune(s)
+	for i, c := range r {
+		if c != '不' {
+			continue
+		}
+		for k := 1; k <= 3 && i-k >= 0 && i+k < len(r); k++ {
+			if runesEqual(r[i-k:i], r[i+1:i+1+k]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func runesEqual(a, b []rune) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// isCJKANotAQuestion reports whether the line is a short CJK confirmation
+// question: it carries an A-not-A construction AND an interrogative ending
+// (？/?/吗/呢). (#4004)
+func isCJKANotAQuestion(line string) bool {
+	if utf8.RuneCountInString(line) > 40 || !containsCJKANotA(line) {
+		return false
+	}
+	t := strings.TrimRight(line, "。！!，, ")
+	return strings.HasSuffix(t, "？") || strings.HasSuffix(t, "?") ||
+		strings.HasSuffix(t, "吗") || strings.HasSuffix(t, "呢")
+}
+
 // negFeedbackPatterns maps patterns to categories. Matching is case-insensitive
 // and checks for word boundaries to avoid false positives (e.g., "now" matching
 // "no"). Patterns are ordered by priority - earlier matches take precedence.
@@ -210,6 +253,17 @@ func detectNegativeFeedback(message string) string {
 
 	// Check patterns in priority order.
 	for _, group := range negFeedbackPatterns {
+		// #4004: CJK A-not-A confirmation questions (对不对/行不行/是不是…)
+		// contain bare rejection substrings but mean the OPPOSITE - they ask
+		// for confirmation, the exact mirror of the English "no problem"/
+		// "not bad" whitelist problem #1223 solved. Masking cannot handle the
+		// nested form (是不是不对 masks 是不是 and still hits 不对), so the
+		// whole rejection category is skipped for short interrogative lines
+		// carrying an A-not-A construction. Genuine rejections (不对，重新做 /
+		// 还是错) carry no trailing interrogative and stay detected.
+		if group.category == negCatRejection && isCJKANotAQuestion(lower) {
+			continue
+		}
 		for _, pat := range group.patterns {
 			if wordContains(scanText, pat) {
 				// All categories only trigger for short messages to avoid
