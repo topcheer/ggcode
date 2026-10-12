@@ -3091,13 +3091,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				debug.Log("agent", "Iteration %d: reasoning-action alignment verifier triggered", i+1)
 				a.injectGuidance(raHint)
 			}
-			// Mindless action detector: tracks consecutive tool-call steps
-			// with minimal reasoning text. When 4+ consecutive mindless steps
-			// occur, inject guidance to pause and reflect before continuing.
-			if a.mindlessAction.recordStep(len(assistantText), len(toolCalls) > 0) {
-				debug.Log("agent", "Iteration %d: mindless action detector triggered (streak=%d)", i+1, a.mindlessAction.streak)
-				a.injectGuidance(mindlessActionWarning(a.mindlessAction.streak))
-			}
+			// #4012: this branch has no tool calls, so recordStep(false)
+			// RESETS the mindless streak (a reasoning-only turn breaks the
+			// rapid-fire chain). Detection itself happens on the tool-call
+			// path (see beginBatch wiring); recordStep(false) never fires.
+			a.mindlessAction.recordStep(len(assistantText), false)
 			// Trajectory health synthesizer (metacognitive layer): record
 			// per-iteration tool activity stats for composite health scoring.
 			if a.trajectoryHealth != nil {
@@ -3813,6 +3811,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		for _, tc := range toolCalls {
 			a.runToolNames = append(a.runToolNames, tc.Name)
 			a.cascade.notePlanned(tc.Name)
+		}
+		// #4012: mindless-action recording belongs on the TOOL-CALL path.
+		// The detector fires on 4+ consecutive tool-bearing responses with
+		// minimal reasoning text; before this wiring the only recordStep call
+		// sat inside the no-tool-call branch (its second arg therefore
+		// constant false), so streak never accumulated and the detector was
+		// dead from birth. hasToolCall is structurally true here.
+		if a.mindlessAction.recordStep(len(textBuf), true) {
+			debug.Log("agent", "Iteration %d: mindless action detector triggered (streak=%d)", i+1, a.mindlessAction.streak)
+			a.injectGuidance(mindlessActionWarning(a.mindlessAction.streak))
 		}
 		for idx, tc := range toolCalls {
 			if err := ctx.Err(); err != nil {
