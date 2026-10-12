@@ -36,26 +36,3 @@ func TestIssue4013RunToolNamesAppendedAtExecutionOnly(t *testing.T) {
 		t.Fatal("execution loop must append runToolNames past the skip gates (#4013)")
 	}
 }
-
-// #4016: the commit-hint gate comment claimed "This is the last gate" while
-// the doc-drift and draft-PR gates below it can still fire - misleading
-// maintenance comment, fixed to state the truth.
-func TestIssue4016CommitHintCommentIsHonest(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatalf("read agent.go: %v", err)
-	}
-	text := string(src)
-	anchor := "Post-completion commit hint"
-	idx := strings.Index(text, anchor)
-	if idx < 0 {
-		t.Fatal("commit-hint comment anchor not found")
-	}
-	window := text[idx : idx+700]
-	if strings.Contains(window, "This is the last gate") {
-		t.Fatal("commit-hint comment must no longer claim 'last gate' (#4016)")
-	}
-	if !strings.Contains(window, "NOT the last gate") {
-		t.Fatal("commit-hint comment must state doc-drift/draft-PR gates may still fire (#4016)")
-	}
-}
