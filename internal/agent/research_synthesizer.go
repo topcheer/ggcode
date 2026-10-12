@@ -225,7 +225,17 @@ func subQueryCovered(joined string, p ResearchSubQuery) bool {
 	if pk == "" {
 		return true // nothing to probe; treat as covered
 	}
-	if !strings.Contains(joined, firstWords(pk, gapProbeWords)) {
+	fields := strings.Fields(pk)
+	// #4067: the goal-prefix probe is one signal, NOT a hard gate. It is
+	// template-blind (every planned query of the same goal shares the same
+	// first words, so a reworded goal failed the gate for ALL perspectives)
+	// and CJK-blind (a Chinese goal has no spaces, so the "first 3 words"
+	// probe becomes the whole sentence + template tail - containment of
+	// which almost never holds, and word-overlap has nothing to match
+	// against reworded Chinese findings). Pass the gate on any of: prefix
+	// hit, >=2 content-word overlaps, or a CJK-bearing query.
+	prefixHit := strings.Contains(joined, firstWords(pk, gapProbeWords))
+	if !prefixHit && !containsCJK(pk) && contentOverlap(joined, fields) < 2 {
 		return false
 	}
 	kws := perspectiveKeywords(p.Perspective)
@@ -234,6 +244,42 @@ func subQueryCovered(joined string, p ResearchSubQuery) bool {
 	}
 	for _, kw := range kws {
 		if strings.Contains(joined, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// contentOverlap counts how many distinct content words of the planned
+// query appear in the joined finding queries (#4067 rephrase-tolerant
+// signal). Stop words are excluded so template tails ("and", "of", "the")
+// do not manufacture overlaps.
+var overlapStopWords = map[string]bool{
+	"and": true, "or": true, "the": true, "a": true, "an": true, "of": true,
+	"in": true, "on": true, "to": true, "for": true, "with": true, "how": true,
+	"its": true, "their": true, "is": true, "are": true, "technical": true,
+	"details": true, "mechanisms": true,
+}
+
+func contentOverlap(joined string, fields []string) int {
+	n := 0
+	for _, f := range fields {
+		if overlapStopWords[f] {
+			continue
+		}
+		if strings.Contains(joined, f) {
+			n++
+		}
+	}
+	return n
+}
+
+// containsCJK reports whether s carries any CJK rune (#4067): space-based
+// probes and word-overlap are both meaningless for CJK text, so such
+// queries fall through to the perspective-keyword gate directly.
+func containsCJK(s string) bool {
+	for _, r := range s {
+		if r >= 0x4E00 && r <= 0x9FFF {
 			return true
 		}
 	}
