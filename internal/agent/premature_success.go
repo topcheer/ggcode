@@ -171,6 +171,10 @@ var psEditTools = sourceMutatingTools
 type psJobRecord struct {
 	isVerify bool
 	cmd      string
+	// subAgent marks a #4011 spawn_agent registration: its task_output
+	// result carries no "Status:" snapshot header, so the consumer grades
+	// the terminal outcome via the tool call's IsError instead.
+	subAgent bool
 }
 
 // psMaxTrackedJobs caps the job-id registry so long sessions cannot grow it
@@ -199,6 +203,19 @@ func psExtractJobID(content string) string {
 	for _, ln := range strings.Split(content, "\n") {
 		ln = strings.TrimSpace(ln)
 		if v, ok := strings.CutPrefix(ln, "Job ID: "); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+// psExtractAgentID parses the "Sub-agent spawned with ID:" header emitted by
+// the spawn_agent tool result, linking the spawn RESULT to a registry key so
+// a later task_output lookup can be attributed (#4011). Returns "" when absent.
+func psExtractAgentID(content string) string {
+	for _, ln := range strings.Split(content, "\n") {
+		ln = strings.TrimSpace(ln)
+		if v, ok := strings.CutPrefix(ln, "Sub-agent spawned with ID: "); ok && strings.TrimSpace(v) != "" {
 			return strings.TrimSpace(v)
 		}
 	}
@@ -297,6 +314,9 @@ func (p *prematureSuccessState) reset() {
 // start_command from recordVerifyResult); wait_command / read_command_output
 // / task_output are attributed through their job_id, and grading comes from
 // the rendered job Status rather than IsError, which describes the action.
+// #4011: verify-type spawn_agent delegates register the same way (their
+// agent_id is a task_output task ID); sub-agent task_output results carry
+// no rendered Status snapshot, so those records are graded via IsError.
 func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]interface{}, isError bool, resultContent string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -335,6 +355,33 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 		cmd, _ := args["command"].(string)
 		p.psRegisterJobLocked(jobID, cmd)
 
+	case toolName == "spawn_agent":
+		// #4011: a one-shot sub-agent spawned to run a verification task is
+		// the sub-agent equivalent of a start_command verify job. Register
+		// the returned agent_id in the same #1153 registry so the later
+		// task_output lookup (task_output accepts sub-agent task IDs
+		// natively) attributes the outcome instead of silently missing.
+		// Launching never counts as verifying (#1153 parity with the
+		// start_command branch above).
+		if isError {
+			return
+		}
+		agentID := psExtractAgentID(resultContent)
+		if agentID == "" {
+			return
+		}
+		taskDesc, _ := args["task"].(string)
+		if !psIsVerifyCommand(taskDesc) {
+			return
+		}
+		p.psRegisterJobLocked(agentID, taskDesc)
+		// Mark the record sub-agent so the task_output consumer grades it
+		// via IsError instead of the command-job Status header (#4011).
+		if rec, ok := p.backgroundJobs[agentID]; ok {
+			rec.subAgent = true
+			p.backgroundJobs[agentID] = rec
+		}
+
 	case toolName == "wait_command" || toolName == "read_command_output" || toolName == "task_output":
 		jobID, _ := args["job_id"].(string)
 		if jobID == "" {
@@ -349,6 +396,25 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 		}
 		terminal, passed := psTerminalVerifyOutcome(psParseJobStatus(resultContent))
 		if !terminal {
+			// Sub-agent task IDs (#4011): task_output's sub-agent results
+			// carry no command-job "Status:" snapshot — the tool layer
+			// reflects the sub-agent terminal outcome in IsError (the
+			// raw sub-agent output has no parseable status header by
+			// design). Fall back to that channel so a completed
+			// verification run is graded instead of silently skipped.
+			if rec.subAgent {
+				delete(p.backgroundJobs, jobID)
+				if isError {
+					p.lastVerifyFailed = true
+					if rec.cmd != "" {
+						p.lastVerifyFailedCmd = rec.cmd
+					} else {
+						p.lastVerifyFailedCmd = "sub-agent verify " + jobID
+					}
+					return
+				}
+				p.psMarkVerifiedLocked()
+			}
 			// Still running (poll timeout) or unparsable status (#1153).
 			return
 		}
