@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -112,6 +113,40 @@ var selfDefenseReadTargets = map[string]bool{
 	"taint_influence_check_test.go":  true,
 }
 
+// selfDefenseDir is the directory that actually holds the defense
+// system's own source, captured at init from THIS file's location.
+// #3996: a basename match alone is an attacker-known magic-filename
+// oracle - read_file("/tmp/attacker/taint_influence_check.go") hit the
+// exemption and skipped BOTH the wrap and the taint fingerprint. The
+// exemption now also requires the resolved path to live inside this
+// directory. Fail-closed: if the directory cannot be established or the
+// path resolved, the exemption is withheld (worst case is the pre-#1481-B
+// self-inflicted wrap, never a bypass).
+var selfDefenseDir = func() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return ""
+	}
+	return filepath.Dir(file)
+}()
+
+// isSelfDefensePath reports whether p resolves inside selfDefenseDir.
+func isSelfDefensePath(p string) bool {
+	p = strings.TrimSpace(p)
+	if p == "" || selfDefenseDir == "" {
+		return false
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(selfDefenseDir, abs)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
 // selfDefenseReadTargetFields are the arg fields that name a READ TARGET
 // (a file or directory being read/searched). Only values under these
 // fields qualify for the self-defense exemption. Content fields — grep
@@ -154,7 +189,10 @@ func isSelfDefenseRead(toolName string, args json.RawMessage) bool {
 			// #3155: only read-target fields qualify. A `pattern` or
 			// `query` equal to a detector basename is a content
 			// coincidence, not a self-defense read.
+			// #3996: basename alone is a magic-filename oracle; the path
+			// must also resolve inside the defense source directory.
 			if selfDefenseReadTargetFields[field] &&
+				isSelfDefensePath(x) &&
 				selfDefenseReadTargets[filepath.Base(strings.TrimSpace(x))] {
 				found = true
 			}

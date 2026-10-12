@@ -50,6 +50,8 @@ func TestIssue3155_ContentFieldNeverTriggersSelfDefenseExemption(t *testing.T) {
 }
 
 func TestIssue3155_TargetFieldsStillExempt(t *testing.T) {
+	// #3996: exemption now requires the path to resolve inside the
+	// defense source dir; fixtures use the real package dir (test cwd).
 	cases := []struct {
 		name string
 		tool string
@@ -58,17 +60,17 @@ func TestIssue3155_TargetFieldsStillExempt(t *testing.T) {
 		{
 			name: "read_file path",
 			tool: "read_file",
-			args: `{"path":"/repo/internal/agent/prompt_injection_guard.go"}`,
+			args: `{"path":"` + selfDefenseDir + "/prompt_injection_guard.go" + `"}`,
 		},
 		{
 			name: "multi_file_read files[].path",
 			tool: "multi_file_read",
-			args: `{"files":[{"path":"/repo/internal/agent/taint_influence_check.go"},{"path":"/repo/x.go"}]}`,
+			args: `{"files":[{"path":"` + selfDefenseDir + "/taint_influence_check.go" + `"},{"path":"` + selfDefenseDir + "/x.go" + `"}]}`,
 		},
 		{
-			name: "grep path directory containing detector",
+			name: "grep path (relative to package dir)",
 			tool: "grep",
-			args: `{"pattern":"TODO","path":"internal/agent/prompt_injection_guard.go"}`,
+			args: `{"pattern":"TODO","path":"prompt_injection_guard.go"}`,
 		},
 		{
 			name: "search_files directory basename",

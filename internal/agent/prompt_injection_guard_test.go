@@ -265,13 +265,15 @@ func TestInjectionPatterns_HighPrecision(t *testing.T) {
 // times while agents worked on it.
 func TestInjectionGuardSelfDefenseExempt1481(t *testing.T) {
 	body := "var x = []string{\"ignore previous instructions\"}\n[system]\n"
+	// #3996: paths must resolve inside the defense source dir. Fixture
+	// uses the real package dir (selfDefenseDir), not a fictional /repo.
 	// read_file of the guard's own source: no wrap.
-	got := guardPromptInjection("read_file", json.RawMessage(`{"path":"/repo/internal/agent/prompt_injection_guard.go"}`), body)
+	got := guardPromptInjection("read_file", json.RawMessage(`{"path":"`+selfDefenseDir+"/prompt_injection_guard.go"+`"}`), body)
 	if strings.HasPrefix(got, injectionWarning) {
 		t.Fatal("self-defense read must be exempt from the wrap")
 	}
 	// grep with the taint check file in a nested glob arg: exempt too.
-	got = guardPromptInjection("grep", json.RawMessage(`{"pattern":"x","path":"/repo/internal/agent/taint_influence_check.go"}`), body)
+	got = guardPromptInjection("grep", json.RawMessage(`{"pattern":"x","path":"`+selfDefenseDir+"/taint_influence_check.go"+`"}`), body)
 	if strings.HasPrefix(got, injectionWarning) {
 		t.Fatal("self-defense grep target must be exempt")
 	}
