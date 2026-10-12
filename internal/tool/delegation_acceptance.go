@@ -93,13 +93,38 @@ func extractAcceptanceCriteria(task string) []string {
 	return items
 }
 
+// stripListPrefix removes a bullet marker and an OPTIONAL list index
+// ("1." / "12)") without eating metric-shaped content: TrimLeft over all
+// digits and dots used to greedily consume "2GB memory limit" -> "GB
+// memory limit" and "3.5s p99" -> "s p99" (#4052). A '.' directly followed
+// by another digit is a decimal, not an index separator, so the number is
+// kept intact.
+func stripListPrefix(s string) string {
+	b := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(s), "-*•"))
+	i := 0
+	for i < len(b) && b[i] >= '0' && b[i] <= '9' {
+		i++
+	}
+	if i == 0 || i >= len(b) {
+		return b
+	}
+	if b[i] == '.' || b[i] == ')' {
+		rest := b[i+1:]
+		if b[i] == '.' && len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9' {
+			return b // decimal like "3.5s", not an index
+		}
+		return strings.TrimSpace(rest)
+	}
+	return b
+}
+
 // appendCriterion normalizes a bullet/numbered/plain line into a criterion
 // string, enforcing the item cap and per-item length trim.
 func appendCriterion(items []string, line string) []string {
 	if len(items) >= maxAcceptanceItems {
 		return items
 	}
-	c := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "-*•0123456789."))
+	c := stripListPrefix(line) // #4052: index-aware, metric prefixes preserved
 	if c == "" {
 		return items
 	}
