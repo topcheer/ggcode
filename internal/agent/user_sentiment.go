@@ -342,8 +342,12 @@ func wordIndexIn(b []byte, pattern string) int {
 }
 
 // wordContains checks if text contains the pattern as a standalone word
-// (bounded by non-alphanumeric characters or string boundaries). This prevents
-// false positives like "now" matching "no".
+// (bounded by non-word characters or string boundaries). This prevents
+// false positives like "now" matching "no". Word characters include the
+// ASCII hyphen (#4033: engineering compounds like
+// "no-op"/"bad-API"/"stop-gaps" must NOT let their bare components hit
+// negative patterns; the hyphen is IN-word in ASCII, unlike CJK bytes
+// >= 0x80 which stay boundary/degenerate).
 func wordContains(text, pattern string) bool {
 	idx := strings.Index(text, pattern)
 	for idx >= 0 {
@@ -365,8 +369,14 @@ func wordContains(text, pattern string) bool {
 	return false
 }
 
+// isAlnum reports whether b is an in-word character for wordContains
+// boundary checks: ASCII letters, digits, apostrophe (contractions like
+// "don't"), and hyphen (#4033: "no-op"/"redo-log" style compounds are
+// single words to the matcher, so bare "no"/"redo" must not match inside
+// them). CJK bytes (>= 0x80) are deliberately NOT in-word: wordContains
+// degenerates to substring matching there, which is the intended CJK path.
 func isAlnum(b byte) bool {
-	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '\''
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '\'' || b == '-'
 }
 
 // SentimentFeedback represents the result of sentiment analysis for a single
