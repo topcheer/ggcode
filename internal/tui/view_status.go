@@ -140,6 +140,15 @@ func (m Model) renderStatusBar() string {
 	return m.renderContextBoxAuto("", sb.String(), lipgloss.Color("6"))
 }
 
+// staticHintsSuppressed reports whether the onboarding-style composer hints
+// (help / word count / Ctrl+R sidebar / Shift+Tab mode / Ctrl+C) should stay
+// hidden: they auto-hide 5 minutes after the TUI starts and never come back.
+// Hide priority is the highest -- once suppressed, the Ctrl+R sidebar
+// toggle's show/hide logic no longer re-shows its hint entry.
+func (m Model) staticHintsSuppressed() bool {
+	return !m.hintsShownAt.IsZero() && time.Since(m.hintsShownAt) > 5*time.Minute
+}
+
 func (m Model) renderComposerPanel() string {
 	accent := m.modeColor()
 	hints := []string{
@@ -153,23 +162,30 @@ func (m Model) renderComposerPanel() string {
 	if costLabel := m.sessionCostHint(); costLabel != "" {
 		hints = append(hints, costLabel)
 	}
-	hints = append(hints, m.t("hint.help"))
-	// Iteration 6: Word count for current input
-	if text := strings.TrimSpace(m.input.Value()); text != "" {
-		if wc := len(strings.Fields(text)); wc > 0 {
-			hints = append(hints, fmt.Sprintf("%d words", wc))
+	// Onboarding-style hints (help / word count / Ctrl+R sidebar /
+	// Shift+Tab mode / Ctrl+C) auto-hide 5 minutes after startup and never
+	// come back. The hide has the highest priority: in particular the Ctrl+R
+	// sidebar toggle's own show/hide logic must NOT re-show the hint once
+	// the grace window has passed (user request, 2026-10).
+	if !m.staticHintsSuppressed() {
+		hints = append(hints, m.t("hint.help"))
+		// Iteration 6: Word count for current input
+		if text := strings.TrimSpace(m.input.Value()); text != "" {
+			if wc := len(strings.Fields(text)); wc > 0 {
+				hints = append(hints, fmt.Sprintf("%d words", wc))
+			}
 		}
-	}
-	if m.sidebarAvailableByWidth() && !m.sidebarEnabled() {
-		hints = append(hints, m.t("hint.ctrlr_sidebar"))
-	}
-	if !m.autoCompleteActive {
-		hints = append(hints, m.t("hint.shift_tab_mode"))
-	}
-	if m.loading {
-		hints = append(hints, m.t("hint.ctrlc_cancel"))
-	} else {
-		hints = append(hints, m.t("hint.ctrlc_exit"))
+		if m.sidebarAvailableByWidth() && !m.sidebarEnabled() {
+			hints = append(hints, m.t("hint.ctrlr_sidebar"))
+		}
+		if !m.autoCompleteActive {
+			hints = append(hints, m.t("hint.shift_tab_mode"))
+		}
+		if m.loading {
+			hints = append(hints, m.t("hint.ctrlc_cancel"))
+		} else {
+			hints = append(hints, m.t("hint.ctrlc_exit"))
+		}
 	}
 	if count := m.pendingSubmissionCount(); count > 0 {
 		hints = append(hints, m.t("queued.count", count))

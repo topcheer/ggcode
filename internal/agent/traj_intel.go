@@ -293,6 +293,30 @@ func (s *trajIntelState) maybeExtractAndPersist(workingDir string, stats *RunSta
 	}
 }
 
+// trimLearnings evicts the lowest-EffectiveConfidence entries when the
+// store exceeds trajIntelMaxEntries (ties evict the oldest first), then
+// restores chronological order for the file. Shared by persistLocked and
+// TrajMergeInto so no write path regresses to the pre-r459 tail-FIFO trim,
+// which discarded the most-reinforced rows during merge/import/backflow
+// while decayed noise survived (#3705).
+func trimLearnings(all []trajectoryLearning) []trajectoryLearning {
+	if len(all) <= trajIntelMaxEntries {
+		return all
+	}
+	sort.SliceStable(all, func(i, j int) bool {
+		ci, cj := all[i].EffectiveConfidence(), all[j].EffectiveConfidence()
+		if ci != cj {
+			return ci > cj
+		}
+		return all[i].Timestamp.After(all[j].Timestamp)
+	})
+	all = all[:trajIntelMaxEntries]
+	sort.SliceStable(all, func(i, j int) bool { // restore chronological order for the file
+		return all[i].Timestamp.Before(all[j].Timestamp)
+	})
+	return all
+}
+
 // persistLocked appends new learnings to the JSONL file and trims to max
 // entries. Caller must hold s.mu. Since r461 the load→append→rewrite runs
 // inside rewriteAllLocked's cross-process critical section.
@@ -307,19 +331,7 @@ func (s *trajIntelState) persistLocked() error {
 		// Trim to most recent N entries - but evict lowest-confidence first
 		// among ties so repeatedly-reinforced old insights outlive one-off
 		// noise (pure tail FIFO was the pre-r459 behavior).
-		if len(all) > trajIntelMaxEntries {
-			sort.SliceStable(all, func(i, j int) bool {
-				ci, cj := all[i].EffectiveConfidence(), all[j].EffectiveConfidence()
-				if ci != cj {
-					return ci > cj
-				}
-				return all[i].Timestamp.After(all[j].Timestamp)
-			})
-			all = all[:trajIntelMaxEntries]
-			sort.SliceStable(all, func(i, j int) bool { // restore chronological order for the file
-				return all[i].Timestamp.Before(all[j].Timestamp)
-			})
-		}
+		all = trimLearnings(all)
 		return all, nil
 	})
 	if writeErr != nil {
@@ -800,9 +812,11 @@ func TrajMergeInto(dstWorkingDir, srcPath string) (int, error) {
 		return 0, nil
 	}
 	merged = consolidateLearnings(merged)
-	if len(merged) > trajIntelMaxEntries {
-		merged = merged[len(merged)-trajIntelMaxEntries:]
-	}
+	// #3705: use the shared confidence-aware trim. The tail-FIFO slice that
+	// was here revived the pre-r459 eviction policy on the merge path: it
+	// silently dropped the highest-confidence (most-reinforced) rows during
+	// /traj import and worktree backflow while decayed noise survived.
+	merged = trimLearnings(merged)
 	if err := writeTrajFile(dstPath, merged); err != nil {
 		return 0, err
 	}

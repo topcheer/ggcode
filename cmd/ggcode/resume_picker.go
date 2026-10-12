@@ -14,8 +14,7 @@ import (
 )
 
 const (
-	resumePickerFlagValue = "__ggcode_resume_picker__"
-	resumePickerPageSize  = 5
+	resumePickerPageSize = 5
 )
 
 type resumePickerGroup int

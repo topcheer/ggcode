@@ -213,12 +213,19 @@ func (m *Manager) applySaveLocked(cp Checkpoint) {
 
 // Undo rolls back the most recent checkpoint by writing OldContent back to the file.
 // The undone checkpoint is pushed onto the redo stack so it can be re-applied.
+// ErrNothingToUndo reports that the undo stack is empty (#3671-3 sentinel).
+var ErrNothingToUndo = errors.New("checkpoint: nothing to undo")
+
 func (m *Manager) Undo(source string) (*Checkpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if len(m.checkpoints) == 0 {
-		return nil, fmt.Errorf("no checkpoints to undo")
+		// #3671-3: sentinel so callers can distinguish "stack empty" from
+		// IO/corruption failures - the undo tool used to label EVERY error
+		// "Nothing to undo", and the LLM read a corrupt checkpoint file as
+		// an empty stack and diagnosed from wrong disk state.
+		return nil, fmt.Errorf("%w: no checkpoints to undo", ErrNothingToUndo)
 	}
 
 	// Copy the checkpoint value before truncating the slice. Without this copy,
@@ -479,7 +486,7 @@ func (m *Manager) UndoRun() ([]Checkpoint, error) {
 	defer m.mu.Unlock()
 
 	if len(m.checkpoints) == 0 {
-		return nil, fmt.Errorf("no checkpoints to undo")
+		return nil, fmt.Errorf("%w: no checkpoints to undo", ErrNothingToUndo)
 	}
 
 	// Identify the run ID of the most recent checkpoint.

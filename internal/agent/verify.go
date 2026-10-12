@@ -149,7 +149,7 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 	}
 	errorSummary += "\nFix these issues and ensure the build passes."
 	if a.verifyRegression != nil {
-		transition, regressionSummary := a.verifyRegression.classifyErrorsWithTransition(result.Errors)
+		transition, regressionSummary := a.verifyRegression.classifyErrorsWithTransition(result.Errors, cmd)
 		errorSummary += regressionSummary
 
 		// Feed the per-round transition into the self-correction stability gate.
@@ -216,7 +216,12 @@ func buildVerifyContext(workingDir string) string {
 		content := string(data)
 		var targets []string
 		for _, t := range []string{"test", "verify", "check", "lint", "ci", "build"} {
-			if strings.Contains(content, t+":") {
+			// #3801 A: bare strings.Contains(t+":") matches LONGER targets'
+			// prefixes (Makefile with only "unit-test:" claimed a phantom
+			// `test` target) and variable assignments. detectBuildSystem's
+			// hasMakeTarget already anchors at line start, skips comments
+			// and `=`/`:=` assignments - reuse it instead of a weaker copy.
+			if hasMakeTarget(content, t) {
 				targets = append(targets, t)
 			}
 		}
@@ -401,17 +406,80 @@ func (a *Agent) llmDecideVerifyCommand(ctx context.Context, changedFiles []strin
 // fenced command reached the pre-flight LookPath as a 3-backtick prefix,
 // failed, and came back Passed=true "verification skipped" - a silent
 // false green for every fenced oracle answer.
+//
+// #3743: the old prefix-strip + LastIndex-truncate pipeline broke on the
+// prose-then-fence shape common for non-English models ("建议运行：\n```bash
+// ..."). The LastIndex hit the CLOSING fence, leaving "prose + opening
+// fence" behind; the first-line cut then reduced it to the bare prose, which
+// leaked into executeVerifyCommand, failed LookPath, got skip-amnestied to
+// Passed=true, AND bypassed the deterministic fallback (a non-empty string
+// was returned). Now, whenever a fence opener appears ANYWHERE, the command
+// is the content of the LAST fenced block - prose before it is discarded.
+// isFirstTokenLangTag reports whether s's first whitespace-delimited token
+// is a Markdown code-fence language tag rather than a command verb (#3801 B).
+// "go" is deliberately ABSENT: in a single-line fence like ```go test ./x/`
+// it is the compiler command, not the Go language tag.
+func isFirstTokenLangTag(s string) bool {
+	sp := strings.IndexAny(s, " \t")
+	if sp < 0 {
+		return false
+	}
+	switch strings.ToLower(s[:sp]) {
+	case "bash", "sh", "shell", "zsh", "console", "shell-session",
+		"python", "python3", "py", "ruby", "node", "js", "javascript",
+		"typescript", "ts", "java", "rust", "c", "cpp", "sql", "yaml",
+		"json", "makefile", "dockerfile":
+		return true
+	}
+	return false
+}
+
 func stripCodeFence(s string) string {
 	t := strings.TrimSpace(s)
-	for _, fence := range []string{"```go", "```bash", "```sh", "```shell", "```"} {
-		if strings.HasPrefix(t, fence) {
-			t = strings.TrimPrefix(t, fence)
-			t = strings.TrimSpace(t)
+	// Collect every fence marker; fences pair left-to-right (opener, closer).
+	var fences []int
+	for i := 0; i+3 <= len(t); {
+		if j := strings.Index(t[i:], "```"); j >= 0 {
+			fences = append(fences, i+j)
+			i += j + 3
+		} else {
 			break
 		}
 	}
-	if idx := strings.LastIndex(t, "```"); idx >= 0 {
-		t = strings.TrimSpace(t[:idx])
+	if n := len(fences); n > 0 {
+		var block string
+		// Fences pair sequentially: f0/f1, f2/f3, ... (opener, closer).
+		// Use the LAST COMPLETE pair: a trailing ODD fence is stray noise
+		// (prose mentioning ``` or an unclosed aside), not a block
+		// boundary; pairing it with the preceding closer leaked
+		// inter-block prose (#3743 review follow-up).
+		if n >= 2 {
+			closerIdx := n - 1 - n%2 // n even -> n-1; n odd -> n-2
+			openerIdx := closerIdx - 1
+			block = t[fences[openerIdx]+3 : fences[closerIdx]]
+		} else {
+			// Single fence: an opener with unterminated content (prose
+			// before it, command after - the #3743 shape), or trailing
+			// noise after a bare command. Either way the command, if any,
+			// is what follows the fence's language-tag line.
+			block = t[fences[0]+3:]
+		}
+		if nl := strings.IndexByte(block, '\n'); nl >= 0 {
+			block = block[nl+1:] // drop the language-tag line
+		} else if sp := strings.IndexAny(block, " \t"); sp >= 0 {
+			// #3801 B: single-LINE fence (```go test ./x/```): there is no
+			// language-tag LINE. If the first token is a known tag, strip
+			// it and the remainder IS the command; if not (```go test ./x/`
+			// - "go" is also a command verb), the whole content is the
+			// command. Blank it and the oracle's scoped command silently
+			// fell back to whole-repo verification.
+			if isFirstTokenLangTag(block) {
+				block = strings.TrimSpace(block[sp+1:])
+			}
+		} else {
+			block = "" // lang-only / trailing fence: no command, use fallback
+		}
+		t = block
 	}
 	// Single line only - the oracle is asked for ONE command.
 	if nl := strings.IndexByte(t, '\n'); nl >= 0 {
@@ -776,7 +844,7 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 	}
 	errorSummary += "\nFix these issues and ensure the build passes."
 	if a.verifyRegression != nil {
-		transition, regressionSummary := a.verifyRegression.classifyErrorsWithTransition(result.Errors)
+		transition, regressionSummary := a.verifyRegression.classifyErrorsWithTransition(result.Errors, cmd)
 		errorSummary += regressionSummary
 
 		// Feed the per-round transition into the self-correction stability gate.

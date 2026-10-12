@@ -87,7 +87,7 @@ func (g *GhosttyTool) Parameters() json.RawMessage {
 			},
 			"description": {
 				"type": "string",
-				"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Splitting Ghostty pane', '列出 Ghostty 面板'). You MUST always provide this field."
+				"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 			}
 		},
 		"required": ["action", "description"]

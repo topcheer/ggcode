@@ -712,6 +712,12 @@ func (b *ChatBridge) finishRun(err error) {
 		return
 	}
 	b.finished = true
+	// #3771: a run ending while a tool was mid-execution leaves its
+	// Streaming flag set forever (ToolResult never arrives on
+	// cancel/preempt/supersede) - the frontend tool card spins until the
+	// session is rebuilt. Clear every tool entry now, before the first
+	// persist snapshot reads liveHistory-derived session state.
+	b.finalizeStreamingToolsLocked()
 	// #550 E1: if the run this finisher belongs to was superseded (session
 	// cleared / newer run started), its outward emissions would cross
 	// generations — run_done would clear the NEW run's frontend busy state
@@ -2692,6 +2698,20 @@ func (b *ChatBridge) finalizeStreamingAssistantLocked() {
 	}
 }
 
+// finalizeStreamingToolsLocked clears the Streaming flag of ALL tool-role
+// entries (#3771). The only other clear point is ToolResult matching by
+// ToolID; when a run is cancelled/preempted/superseded mid-tool-execution,
+// ToolResult never arrives and the tool entry spins forever in the frontend
+// until the session is rebuilt. Walk the whole history - parallel tools put
+// entries at non-tail positions.
+func (b *ChatBridge) finalizeStreamingToolsLocked() {
+	for i := range b.liveHistory {
+		if b.liveHistory[i].Role == "tool" && b.liveHistory[i].Streaming {
+			b.liveHistory[i].Streaming = false
+		}
+	}
+}
+
 // GetModelInfo returns the current model info for the status bar.
 func (b *ChatBridge) GetModelInfo() map[string]interface{} {
 	if b.cfg == nil {
@@ -3428,8 +3448,25 @@ func (b *ChatBridge) SetPermissionMode(modeStr string) {
 	store := b.sessionStore
 	b.mu.Unlock()
 	if agent != nil {
-		policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode)
-		agent.SetPermissionPolicy(policy)
+		// #3944: prefer the IN-PLACE mode switch (the no-UI fallback shape
+		// switch_mode uses, switch_mode.go SetMode) over rebuilding the
+		// policy. NewConfigPolicyWithMode(nil, ...) discarded every
+		// runtime-built layer on the live policy: session-approved
+		// always_allow patterns (RespondApproval / mobile tunnel) and
+		// overrides lived only in memory on the OLD instance, so a mode
+		// switch silently dropped them. Rebuild remains only as the
+		// no-existing-policy bootstrap fallback.
+		if cur := agent.PermissionPolicy(); cur != nil {
+			if ms, ok := cur.(interface {
+				SetMode(permission.PermissionMode)
+			}); ok {
+				ms.SetMode(mode)
+			} else {
+				agent.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode))
+			}
+		} else {
+			agent.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode))
+		}
 		// Update system prompt to include current mode, overriding any stale
 		// autopilot continue instructions that may still be in context.
 		b.refreshSystemPrompt()
@@ -4352,11 +4389,30 @@ func (b *ChatBridge) SetSessionLimits(contextWindow, maxTokens int) error {
 
 	// Apply to running agent immediately
 	if agent != nil {
-		if contextWindow > 0 {
-			agent.ContextManager().SetContextWindow(contextWindow)
+		// #3918: a value of 0 means "auto" - the running agent must fall
+		// back to the endpoint/per-model resolution, not silently keep the
+		// stale override (UI shows auto while the agent kept the old limit
+		// until restart). Same priority as the model-panel apply path:
+		// explicit value > resolved endpoint > leave unset.
+		cw, mt := contextWindow, maxTokens
+		if cw == 0 || mt == 0 {
+			b.mu.Lock()
+			resolved := b.resolved
+			b.mu.Unlock()
+			if resolved != nil {
+				if cw == 0 {
+					cw = resolved.ContextWindow
+				}
+				if mt == 0 {
+					mt = resolved.MaxTokens
+				}
+			}
 		}
-		if maxTokens > 0 {
-			agent.ContextManager().SetOutputReserve(maxTokens)
+		if cw > 0 {
+			agent.ContextManager().SetContextWindow(cw)
+		}
+		if mt > 0 {
+			agent.ContextManager().SetOutputReserve(mt)
 		}
 	}
 

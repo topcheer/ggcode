@@ -545,6 +545,12 @@ max_iterations: 0
 # Progressive warnings at 80% and 95%, hard stop at 100%.
 # session_token_budget: 0
 
+# Per-run USD spend cap for metered models with known pricing (0 = unlimited).
+# Same 80%/95%/100% ladder as the token budget, priced from the cost table
+# (input/output/cache rates). Subscription/bundled/free or unknown-pricing
+# models accumulate $0 - use session_token_budget for those instead.
+# session_cost_limit_usd: 0
+
 # Per-run wall-clock soft budget (e.g. 10m, 1h; 0 = unlimited). Unlike
 # session_timeout (a hard deadline), this steers: convergence guidance at
 # 80%, finalize pressure at 95%, wind-down at 100%.

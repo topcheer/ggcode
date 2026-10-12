@@ -1866,7 +1866,12 @@ func (k *Knight) stageSkillRevision(ctx context.Context, skill *SkillEntry, task
 	staging, err := k.index.StagingSkills()
 	if err == nil {
 		for _, candidate := range staging {
-			if candidate.Name == skill.Name {
+			// #3691: same-name skills in different scopes are a legal layout
+			// (skill_validator.go CheckDuplicate). Dedup must match scope+name,
+			// otherwise a project:foo staging entry silently suppresses every
+			// global:foo revision (infinite silent-drop loop per tick).
+			if candidate.Name == skill.Name && candidate.Scope == skill.Scope {
+				debug.Log("knight", "staging entry for %s:%s already pending review, skip", skill.Scope, skill.Name)
 				return
 			}
 		}
@@ -2002,8 +2007,12 @@ func (k *Knight) isKnownCandidate(c SkillCandidate, active, staging []*SkillEntr
 		// the threshold above which two candidates describe the same workflow
 		// in this repo's existing skills. CJK-dominant fingerprints use a
 		// stricter 0.75 (#3637): bigram density makes same-prefix Chinese
-		// families score 0.55-0.60 without being duplicates.
-		if jaccardSimilarity(candFP, skillSimilarityFingerprint(s.Name, s.Meta.Description, "")) >= similarityDuplicateThreshold(candFP) {
+		// families score 0.55-0.60 without being duplicates. #3676: the gate
+		// is now pair-wise (both-side dominant = strict; mixed-script pair =
+		// 0.6) instead of candidate-side-only, which made the same pair
+		// direction-dependent and leaked [0.6,0.75) duplicates.
+		existFP := skillSimilarityFingerprint(s.Name, s.Meta.Description, "")
+		if jaccardSimilarity(candFP, existFP) >= duplicateThresholdForPair(candFP, existFP) {
 			return true
 		}
 	}
@@ -2011,7 +2020,12 @@ func (k *Knight) isKnownCandidate(c SkillCandidate, active, staging []*SkillEntr
 		if a == nil {
 			continue
 		}
-		if jaccardSimilarity(candFP, skillSimilarityFingerprint(a.Name, a.Meta.Description, "")) >= similarityDuplicateThreshold(candFP) {
+		// #3676: pair-wise gate on the active loop too - the candidate-side-only
+		// lookup here had the same direction dependence as the staging loop
+		// (review 6088096655): a wide-script candidate vs an English active
+		// skill leaked [0.6,0.75) duplicates through this path.
+		activeFP := skillSimilarityFingerprint(a.Name, a.Meta.Description, "")
+		if jaccardSimilarity(candFP, activeFP) >= duplicateThresholdForPair(candFP, activeFP) {
 			return true
 		}
 	}

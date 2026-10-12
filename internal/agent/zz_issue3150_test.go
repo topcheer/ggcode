@@ -70,32 +70,43 @@ func TestIssue3150_StashPushTrailingSeparator_CountsAsBare(t *testing.T) {
 	}
 }
 
-// V2: two edits tie on CRS (same-dir weight offsets the recency gap), the
-// top suspect must be the NEWER edit.
+// V2: two edits tie on CRS, the top suspect must be the NEWER edit.
 //
-// Tie construction: error files web/err1.go + web/err2.go (same dir, no
-// exact match with any edit). Edit A (web/app.css, non-Go so same-package
-// weight never applies) earns same-dir 5x2 = 10 at rank 2 -> 10+20 = 30.
-// Edit B (assets/logo.png, unrelated) earns 0 at rank 3 -> 0+30 = 30.
-// C is an unrelated filler that only lifts the ranks.
+// #3794-B contract: the recency bonus now requires the edit to have
+// actually matched at least one error reference (file/dir/package tier),
+// so a zero-evidence edit can no longer manufacture a tie via recency
+// alone (the pre-#3794 construction - edit B unrelated, 0 evidence +
+// recency 30 - now correctly scores 0). The tie is therefore built from
+// evidence on BOTH sides, with the older edit carrying more dir evidence
+// to offset its lower recency rank:
+//
+// Edit A (olddir/style.css, rank 1): 4 same-dir error hits 5x4 = 20
+//   - recency 1x10 = 10 -> 30.
+//
+// Edit B (newdir/logo.png, rank 2): 2 same-dir error hits 5x2 = 10
+//   - recency 2x10 = 20 -> 30.
+//
+// Both suspects carry real evidence; equal score must resolve to B.
 func TestIssue3150_TieBreakPrefersMostRecentEdit(t *testing.T) {
 	s := newCausalAttributionState()
-	s.recordEdit("edit_file", "docs/readme.md", 1)  // filler: rank 1, score 10
-	s.recordEdit("edit_file", "web/app.css", 2)     // older suspect: rank 2, score 30
-	s.recordEdit("edit_file", "assets/logo.png", 3) // newer suspect: rank 3, score 30
+	s.recordEdit("edit_file", "olddir/style.css", 1) // older suspect: rank 1, score 30
+	s.recordEdit("edit_file", "newdir/logo.png", 2)  // newer suspect: rank 2, score 30
 
-	output := "build failed\nweb/err1.go:1: undefined: Foo\nweb/err2.go:2: undefined: Bar"
+	output := "build failed\n" +
+		"olddir/e1.go:1: undefined: A\nolddir/e2.go:2: undefined: B\n" +
+		"olddir/e3.go:3: undefined: C\nolddir/e4.go:4: undefined: D\n" +
+		"newdir/n1.go:1: undefined: E\nnewdir/n2.go:2: undefined: F"
 	g := s.attributeFailure(output)
 	if g == "" {
 		t.Fatal("tied top suspects at CRS=30 must clear the threshold and produce guidance")
 	}
-	if !strings.Contains(g, "assets/logo.png") {
-		t.Fatalf("tie must break to the MORE RECENT edit (assets/logo.png), got %q", g)
+	if !strings.Contains(g, "newdir/logo.png") {
+		t.Fatalf("tie must break to the MORE RECENT edit (newdir/logo.png), got %q", g)
 	}
-	if strings.Contains(g, "web/app.css") {
+	if strings.Contains(g, "olddir/style.css") {
 		t.Fatalf("older tied edit must not be the named suspect, got %q", g)
 	}
-	if !strings.Contains(g, "step 3") {
+	if !strings.Contains(g, "step 2") {
 		t.Fatalf("guidance should reference the newer edit's step number, got %q", g)
 	}
 }

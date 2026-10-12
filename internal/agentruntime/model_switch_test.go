@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/agent"
@@ -118,4 +119,34 @@ func TestResolveCurrentSelectionWrapsPureFallbacksArray(t *testing.T) {
 	if _, ok := prov.(*provider.FallbackProvider); !ok {
 		t.Fatalf("pure-fallbacks-array config must yield a FallbackProvider wrapper, got %T", prov)
 	}
+}
+
+// sa-44: ApplyProviderToAgent is the GGCODE_LLM_TAPE choke point - when the
+// env is set to record mode, the agent must end up holding a TapeProvider
+// wrapper; when unset, the provider must pass through unwrapped.
+func TestApplyProviderToAgentWrapsLLMTapeFromEnv(t *testing.T) {
+	base := config.ResolvedEndpoint{Protocol: "anthropic", Model: "m1"}
+
+	t.Run("unset env passes through", func(t *testing.T) {
+		prov := &fakeApplyProvider{}
+		a := agent.NewAgent(prov, tool.NewRegistry(), "", 10)
+		ApplyProviderToAgent(a, prov, &base)
+		if _, ok := a.Provider().(*provider.TapeProvider); ok {
+			t.Fatal("unset GGCODE_LLM_TAPE must not wrap the provider")
+		}
+	})
+
+	t.Run("record env wraps", func(t *testing.T) {
+		t.Setenv("GGCODE_LLM_TAPE", "record:"+filepath.Join(t.TempDir(), "t.jsonl"))
+		prov := &fakeApplyProvider{}
+		a := agent.NewAgent(prov, tool.NewRegistry(), "", 10)
+		ApplyProviderToAgent(a, prov, &base)
+		tp, ok := a.Provider().(*provider.TapeProvider)
+		if !ok {
+			t.Fatalf("record mode must wrap the provider, got %T", a.Provider())
+		}
+		if tp.Name() != prov.Name() {
+			t.Fatalf("wrapper must forward Name(): %q != %q", tp.Name(), prov.Name())
+		}
+	})
 }

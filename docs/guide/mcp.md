@@ -285,3 +285,28 @@ Servers implementing the MCP 2026-07-28 spec (SEP-2549) attach a `ttlMs` freshne
 - `notifications/tools/list_changed`, `notifications/prompts/list_changed`, `notifications/resources/list_changed` and `notifications/resources/updated` invalidate the affected entries immediately, so hot tool refreshes still observe fresh data.
 - Re-initializing a connection (including reconnects) clears the whole cache.
 - Servers that do not send `ttlMs` (all pre-2026-07-28 servers) are never cached — behavior is unchanged for them.
+
+## Agent Plugins (agent-plugins.org)
+
+Repositories may ship MCP servers as [Agent Plugins](https://agent-plugins.org)
+packages (open standard published 2026-08 by OpenAI, AWS, Cursor, GitHub,
+VS Code, and Vercel). A plugin lives in `.agent-plugins/<dir>/` with a
+required `plugin.json` manifest and an optional `mcp.json` (Claude
+`mcpServers` shape; `streamable-http` maps to the native `http` transport):
+
+```
+.agent-plugins/
+  toolkit/
+    plugin.json        {"name": "toolkit", "$schema": "https://agent-plugins.org/schema/v1.json"}
+    skills/            optional agentskills.io skills (see /skills docs)
+    mcp.json           {"mcpServers": {"linter": {"type": "stdio", "command": "run", "args": ["--root", "${PLUGIN_ROOT}"]}}}
+```
+
+Plugin MCP servers are gated exactly like workspace `.mcp.json` entries:
+they launch only after `ggcode mcp approve-project <name>` (or setting
+`GGCODE_ALLOW_PROJECT_MCP=1`), because plugin content arrives with the
+cloned repository. `${PLUGIN_ROOT}` expands to the plugin directory and
+`${PLUGIN_DATA}` to `~/.ggcode/plugin-data/<name>/` in args and env values
+only - never in command, url, or headers, per the spec. An invalid package
+(bad or missing `plugin.json`) is skipped whole with a debug log; sibling
+plugins are unaffected.

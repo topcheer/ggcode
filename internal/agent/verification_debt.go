@@ -125,12 +125,28 @@ func classifyDebtAction(toolName, args string) debtAction {
 // a verification action (build, test, vet, lint, typecheck).
 //
 // #1224: aligned with coverageIsVerifyCommand's lexical structure (first
+// isCommandChannelTool reports whether the tool name is one of the six
+// command-execution channels (the agent.go causal-gate / autopilot
+// strategist set; labels.go classes bash/powershell as command tools).
+// #3685-A: verification-debt and edit-propagation clearing each kept a
+// private subset that only recognized run_command - a `go test` run
+// through bash or powershell never cleared the debt and the detectors
+// accumulated fake "unverified edits" warnings.
+func isCommandChannelTool(name string) bool {
+	switch name {
+	case "run_command", "bash", "powershell", "start_command", "wait_command", "read_command_output":
+		return true
+	}
+	return false
+}
+
 // token = command runner, subsequent tokens = verify markers). The previous
 // anywhere-token and trimmed-prefix matching granted verification credit to
 // non-verification commands: "rm -rf build" (noun "build"), "yarn install",
 // "cargo clean", "makefile-parser" (bare-word prefix), and "git commit -m
 // 'now go test passes'" (Contains inside a commit message) all returned true,
 // silently resetting the edit-abandonment detector (#354 family).
+
 func isVerificationCommand(args string) bool {
 	// #1522: the run_command tool mandates a leading '# ' comment line
 	// (prompt convention, #471) - strip it before tokenizing or '# go test'

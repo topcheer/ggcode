@@ -47,6 +47,12 @@ const maxWGMisuseWarnings = 3
 // wgMisuseInfo records a single WaitGroup misuse pattern.
 type wgMisuseInfo struct {
 	pattern string // human-readable description of the misuse
+	// #3777 A: occurrence count for display only. It must NEVER be part of
+	// the delta fingerprint: Pattern 1 used to embed "(%d occurrence(s))"
+	// into pattern, so fixing 1 of 2 occurrences changed the fingerprint and
+	// the REMAINING pre-existing issue was re-reported as newOnly - punishing
+	// partial fixes with noise that invites over-rewriting correct code.
+	count int
 }
 
 // wgStats holds WaitGroup method call statistics for a function body.
@@ -99,7 +105,13 @@ func checkWaitGroupMisuse(filePath, oldContent, newContent string) []string {
 			continue
 		}
 		seen[issue.pattern] = true
-		warnings = append(warnings, issue.pattern)
+		if issue.count > 1 {
+			// #3777 A: count lives in the RENDERED warning only, never in the
+			// fingerprint compared above.
+			warnings = append(warnings, fmt.Sprintf("%s (%d occurrences)", issue.pattern, issue.count))
+		} else {
+			warnings = append(warnings, issue.pattern)
+		}
 		if len(warnings) >= maxWGMisuseWarnings {
 			break
 		}
@@ -148,24 +160,15 @@ func wgParamType(fn *ast.FuncDecl) bool {
 	// the advice added a redundant Add (counter 2, one Done) leaving Wait()
 	// deadlocked. Function-granularity cannot see the spawner here either.
 	if fn.Recv != nil {
-		for _, p := range fn.Recv.List {
-			if star, ok := p.Type.(*ast.StarExpr); ok {
-				if id, ok := star.X.(*ast.Ident); ok && strings.HasSuffix(id.Name, "Server") {
-					// Receiver named *...Server: struct-field wg is the norm;
-					// conservative exemption (zero-FP over zero-FN for this
-					// idiomatic shape - the parameter form stays checked).
-					return true
-				}
-			}
-		}
-		// #2987: the *Server suffix gate was an incomplete fix for the same
-		// case - the FP mechanism is SHAPE, not the type name: any worker
-		// method whose wg calls go through the receiver's own struct field
-		// (`p.wg.Done()`) has its Add() in the spawner, which function-
-		// granularity analysis cannot see, whatever the receiver type is
-		// (*Pool/*Manager/*Worker - the most common Go worker names). A
-		// method using a LOCAL wg variable still gets checked: the field
-		// scan below finds nothing and the general path applies.
+		// #3777 B: the *...Server suffix gate that used to sit here was
+		// removed - it returned early and exempted the ENTIRE class,
+		// including *Server methods using a LOCAL wg variable (a genuine
+		// bare-Done misuse), contradicting the #2987 contract that
+		// local-wg methods stay checked. The shape check below is the
+		// correct FP-free gate: it exempts exactly the methods whose wg
+		// calls go through the receiver's own struct field (`s.wg.Done()`),
+		// where Add() lives in the spawner and function-granularity
+		// analysis cannot see it - whatever the receiver type is named.
 		if recvFieldWGDone(fn) {
 			return true
 		}
@@ -239,14 +242,16 @@ func analyzeWGFunc(fn *ast.FuncDecl) []wgMisuseInfo {
 	var issues []wgMisuseInfo
 
 	// Pattern 1: Done() called without defer — early returns/panics skip it.
+	// #3777 A: pattern is a CONSTANT fingerprint (count is carried in the
+	// count field and rendered separately) so a partial fix (2 bare Done → 1)
+	// does not change the fingerprint and re-report the remaining issue.
 	if stats.doneBare > 0 && stats.doneDefer == 0 {
 		issues = append(issues, wgMisuseInfo{
-			pattern: fmt.Sprintf(
-				"wg.Done() is called without defer (%d occurrence(s)). "+
-					"Any early return or panic between Add() and Done() will skip "+
-					"the decrement, causing wg.Wait() to hang forever. "+
-					"Use 'defer wg.Done()' immediately after wg.Add(1).",
-				stats.doneBare),
+			pattern: "wg.Done() is called without defer. " +
+				"Any early return or panic between Add() and Done() will skip " +
+				"the decrement, causing wg.Wait() to hang forever. " +
+				"Use 'defer wg.Done()' immediately after wg.Add(1).",
+			count: stats.doneBare,
 		})
 	}
 

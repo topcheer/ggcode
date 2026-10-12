@@ -1578,6 +1578,23 @@ func (m *Manager) TruncateOldestGroupForRetry() bool {
 // discard the agent's last response so it can be re-generated. Returns the
 // text of the last remaining user message, or "" if no regeneration is
 // possible (no assistant message found or no preceding user message).
+// isToolResultCarrier reports whether a Role:"user" message is actually a
+// tool_result carrier inserted by ReconcileToolCalls rather than a real user
+// prompt: all its blocks are tool outputs (#3745).
+func isToolResultCarrier(msg provider.Message) bool {
+	hasToolResult := false
+	for _, b := range msg.Content {
+		if b.Type == "tool_result" {
+			hasToolResult = true
+			continue
+		}
+		if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+			return false // real prompt text present
+		}
+	}
+	return hasToolResult
+}
+
 func (m *Manager) RemoveLastAssistantGroup() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1595,13 +1612,23 @@ func (m *Manager) RemoveLastAssistantGroup() string {
 	if lastAsstIdx < 0 {
 		return ""
 	}
-	// Find the last user message before the assistant message.
+	// Find the last REAL user message before the assistant message.
+	// #3745: ReconcileToolCalls inserts tool_result carriers with
+	// Role:"user" (L598); stopping the reverse scan on one truncates at the
+	// carrier, deleting the trailing assistant while keeping the earlier
+	// assistant(tool_use) - the next API call then fails with unpaired
+	// tool_use. Skip carriers: a user message whose blocks are (only)
+	// tool_result outputs is not a prompt.
 	lastUserIdx := -1
 	for i := lastAsstIdx - 1; i >= 0; i-- {
-		if m.messages[i].Role == "user" {
-			lastUserIdx = i
-			break
+		if m.messages[i].Role != "user" {
+			continue
 		}
+		if isToolResultCarrier(m.messages[i]) {
+			continue
+		}
+		lastUserIdx = i
+		break
 	}
 	if lastUserIdx < 0 {
 		return ""
@@ -1614,15 +1641,28 @@ func (m *Manager) RemoveLastAssistantGroup() string {
 			break
 		}
 	}
+	// #3745: an empty userText (image-only input, or a carrier that slipped
+	// through) means there is nothing to re-submit. The contract treats "" as
+	// "cannot regenerate" and the caller gives up - but the truncation below
+	// used to run FIRST, irreversibly deleting the assistant reply with no
+	// undo path. Fail safe: no recoverable text, no deletion.
+	if userText == "" {
+		return ""
+	}
 	// Truncate: keep everything up to and including the last user message,
 	// discard the assistant response and any trailing tool messages.
+	// #3797: compute removed BEFORE the slice assignment - after it,
+	// len(m.messages) == lastUserIdx+1 and the old expression evaluated to
+	// a constant 1 (plus a meaningless +1 counting the KEPT user message),
+	// misreporting every regenerate in the debug log.
+	removed := len(m.messages) - lastUserIdx - 1
 	m.messages = m.messages[:lastUserIdx+1]
 	m.markBenignRemoval() // #663: retry/regenerate truncation — no semantic loss
 	m.version++
 	m.nonTailMutSeq++
 	m.recalcTokens()
 	debug.Log("ctx", "RemoveLastAssistantGroup: removed %d messages from index %d, remaining=%d tokens=%d",
-		len(m.messages)-lastUserIdx-1+1, lastAsstIdx, len(m.messages), m.tokenCountLocked())
+		removed, lastAsstIdx, len(m.messages), m.tokenCountLocked())
 	return userText
 }
 
@@ -1851,8 +1891,27 @@ func (m *Manager) CompactSupersededReads() int {
 		allFilesSuperseded := true
 		for p := range toolIDToPaths[id] {
 			ids := pathToToolIDs[p]
-			// This file is superseded if a later tool_id also read it.
-			if len(ids) <= 1 || ids[len(ids)-1] == id {
+			// #3726: supersession requires CONTENT coverage, not mere
+			// existence of a later read (#718 principle, as phase-2 above
+			// implements for the triggering path). The old check - "some
+			// later tool_id read this path" - let a LATER PARTIAL read of
+			// this path (an offset re-read of a slice the original read
+			// already covered) mark the whole multi-file read superseded,
+			// dropping tool results the conversation still depends on.
+			covered := false
+			for i, x := range ids {
+				if x != id {
+					continue
+				}
+				for _, laterID := range ids[i+1:] {
+					if readCovers(toolIDToRange[laterID], toolIDToRange[id]) {
+						covered = true
+						break
+					}
+				}
+				break // tool ids appear once per path
+			}
+			if !covered {
 				allFilesSuperseded = false
 				break
 			}
@@ -2410,7 +2469,8 @@ Omit entirely:
 			if summaryText, ok := summarizeParallel(ctx, prov, blocks, summaryTokenLimit, onUsage); ok {
 				// sa-237 fact retention: deterministically re-attach dropped
 				// constraints and recurring paths on every summary path.
-				return applyFactRetention(summaryText, payload), nil
+				// #3675: constraints come from user-role text only.
+				return applyFactRetention(summaryText, payload, userConstraintSource(msgs)), nil
 			}
 		}
 
@@ -2441,7 +2501,8 @@ Omit entirely:
 		}
 		debug.Log("ctx", "summarizeMessages: summary len=%d chars estimated=%d tokens limit=%d usage=%+v",
 			len(summaryText), EstimateTokens(summaryText), summaryTokenLimit, resp.Usage)
-		return applyFactRetention(summaryText, payload), nil
+		// #3675: constraints come from user-role text only.
+		return applyFactRetention(summaryText, payload, userConstraintSource(msgs)), nil
 	}
 	return "", fmt.Errorf("summarization returned empty text")
 }

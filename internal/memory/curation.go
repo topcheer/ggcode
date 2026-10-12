@@ -98,9 +98,13 @@ var yearPattern = regexp.MustCompile(`^\d{4}$`)
 // twoDigitPattern matches 2-digit month/day segments.
 var twoDigitPattern = regexp.MustCompile(`^\d{2}$`)
 
-// versionPattern matches r1, r2, r3, cycle1, cycle2, summary, r4 etc.
-// These are always stripped regardless of position.
-var versionPattern = regexp.MustCompile(`^(r\d+|cycle\d+|summary)$`)
+// versionPattern matches r1, r2, r3, cycle1, cycle2, r4 etc.
+// #3826: `summary` is no longer stripped UNCONDITIONALLY. Mid-key it
+// carries real semantics (research-summary-methods collapsed onto the
+// unrelated research-methods key and GC deleted the loser); as a TRAILING
+// segment it is still a version-suffix (impl-task-...-cycle1-summary) and
+// dedupKeyFor strips it positionally.
+var versionPattern = regexp.MustCompile(`^(r\d+|cycle\d+)$`)
 
 // monthDayPattern matches jul6, jul10, aug1 etc. #1278: restricted to REAL
 // month abbreviations - the old `^[a-z]{3}\d+$` swallowed semantic
@@ -120,8 +124,10 @@ func dedupKeyFor(key string) string {
 	afterDate := false    // past the date, skip version/monthday segments
 
 	for i, part := range parts {
-		// Version segments (r1, cycle2, summary) always stripped
-		if versionPattern.MatchString(part) {
+		// Version segments (r1, cycle2) always stripped; a TRAILING
+		// `summary` is a version-suffix too (#3826) - but a mid-key summary
+		// is semantic content and must survive.
+		if versionPattern.MatchString(part) || (part == "summary" && i == len(parts)-1) {
 			continue
 		}
 		if skippingDate {
@@ -162,9 +168,13 @@ func dedupKeyFor(key string) string {
 
 // classifyMemory determines the curation category from the memory key.
 func classifyMemory(key string) MemoryCategory {
-	for _, p := range transientPatterns {
+	// #3826: strong intent (persistent/evolving PREFIX patterns) wins over
+	// weak transient INFIXES. The old transient-first order let `-fix-`
+	// hijack `^release-`: release-fix-runbook was classified transient and
+	// expired after 30 days although its persistent prefix meant forever.
+	for _, p := range persistentPatterns {
 		if p.MatchString(key) {
-			return CategoryTransient
+			return CategoryPersistent
 		}
 	}
 	for _, p := range evolvingPatterns {
@@ -172,9 +182,9 @@ func classifyMemory(key string) MemoryCategory {
 			return CategoryEvolving
 		}
 	}
-	for _, p := range persistentPatterns {
+	for _, p := range transientPatterns {
 		if p.MatchString(key) {
-			return CategoryPersistent
+			return CategoryTransient
 		}
 	}
 	return CategoryDefault

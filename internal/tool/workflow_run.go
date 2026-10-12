@@ -43,7 +43,7 @@ func (t WorkflowRunTool) Parameters() json.RawMessage {
 	"properties": {
 		"workflow": {
 			"type": "object",
-			"description": "The task graph. Fields: steps (array of {id: unique short id, task: complete self-sufficient task contract for that step's sub-agent, dependsOn: optional array of step ids that must finish first, verifier: optional adversarial instruction - the verifier sub-agent will try to REFUTE this step's result, tools: optional tool whitelist, model: optional model override}), synthesis (instruction for the final synthesizer folding all surviving step outputs into the single answer). Design rules: each task must be fully self-contained (its sub-agent sees nothing else); fan out genuinely independent work; verify steps whose findings will drive action.",
+			"description": "The task graph. Fields: steps (array of {id: unique short id, task: complete self-sufficient task contract for that step's sub-agent, dependsOn: optional array of step ids that must finish first, verifier: optional adversarial instruction - the verifier sub-agent will try to REFUTE this step's result, tools: optional tool whitelist, model: optional model override, retries: optional per-step transient-failure retry budget 0..2 - a Failed/Cancelled worker, a REJECTED verdict, or a launch error requeues the step instead of poisoning its downstream chain}), synthesis (instruction for the final synthesizer folding all surviving step outputs into the single answer). Design rules: each task must be fully self-contained (its sub-agent sees nothing else); fan out genuinely independent work; verify steps whose findings will drive action.",
 			"required": ["steps", "synthesis"]
 		},
 		"context": {

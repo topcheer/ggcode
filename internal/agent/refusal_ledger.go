@@ -113,8 +113,12 @@ var refusalNegatePattern = regexp.MustCompile(
 	`(?i)(?:don'?t|do not|never|no new|avoid|must not|should not|stop using|leave\b[^n]{0,5}alone|don'?t touch)\b[^\n.]{4,120}`)
 
 // releasePattern matches conversational lift phrases.
+// #3712: CJK lift words must live OUTSIDE the \b group - Go regexp \b is
+// an ASCII word boundary and never matches beside CJK runes (same trap the
+// reaffirm pattern's own comment documents), so 可以了|解除|允许 inside
+// the group never fired and pure-Chinese releases failed 100%.
 var refusalReleasePattern = regexp.MustCompile(
-	`(?i)\b(?:ok|fine|alright|go ahead|you (?:may|can) now|you(?:'re| are) (?:allowed|free) to|it'?s ok|lift|解除|允许|可以了)\b[^\n.]{0,80}`)
+	`(?i)\b(?:ok|fine|alright|go ahead|you (?:may|can) now|you(?:'re| are) (?:allowed|free) to|it'?s ok|lift)\b[^\n.]{0,80}|解除|允许|可以了`)
 
 // #3469 reaffirmation guard: lift text that ALSO continues the refusal is
 // a reaffirmation, not a release. "Ok, don't touch config.yaml, that's
@@ -123,7 +127,7 @@ var refusalReleasePattern = regexp.MustCompile(
 // ASCII word boundary and never matches beside CJK runes, so 别/保持 etc.
 // must live outside the \b group or they silently fail to veto).
 var refusalReaffirmPattern = regexp.MustCompile(
-	`(?i)\b(?:don'?t|do not|never|no\s+new|avoid|must not|should not|stop using|still\s+(?:do(?:n'?t)?|not)?\b|stays?\b|keep\s+(?:avoiding|out|away|it\s+that\s+way)|leave\s+[^\n]{0,10}alone|untouched|off[- ]limits|forbidden|not\s+allowed|prohibited)\b|不许|别碰|不要|禁止|继续|保持`)
+	`(?i)\b(?:don'?t|do not|never|no\s+new|avoid|must not|should not|stop using|still\s+(?:do(?:n'?t)?|not)?\b|stays?\b|keep\s+(?:avoiding|out|away|it\s+that\s+way)|leave\s+[^\n]{0,10}alone|untouched|off[- ]limits|forbidden|not\s+allowed|prohibited)\b|不许|别碰|不要|禁止|继续(?:别|不|不要|禁止|远离?|保持)|保持(?:现状|不动|原样|别动)`)
 
 // #3469 weak/strong lift split: bare "ok/fine/alright" prefixes are too
 // weak to release on their own (reaffirmations routinely start with
@@ -131,9 +135,11 @@ var refusalReaffirmPattern = regexp.MustCompile(
 // imperative/expermission phrases stand alone.
 var refusalWeakLiftPattern = regexp.MustCompile(`(?i)\b(?:ok|fine|alright|it'?s ok)\b`)
 var refusalStrongLiftPattern = regexp.MustCompile(
-	`(?i)\b(?:go ahead|you (?:may|can) now|you(?:'re| are) (?:allowed|free) to|lift(?:ed)?|解除|允许|可以了)\b`)
+	`(?i)\b(?:go ahead|you (?:may|can) now|you(?:'re| are) (?:allowed|free) to|lift(?:ed)?)\b|解除|允许|可以了`)
+
+// #3712: CJK words outside the \b group (see refusalReleasePattern note).
 var refusalAuthorizePattern = regexp.MustCompile(
-	`(?i)\b(?:can|may|now|go ahead|allowed|free to|resume|again|touch|modify|edit|write|use|可以|动了?|改了?|碰)\b`)
+	`(?i)\b(?:can|may|now|go ahead|allowed|free to|resume|again|touch|modify|edit|write|use)\b|可以|动了?|改了?|碰`)
 
 // #3469 (note): provably read-only command shapes are not write-class
 // actions; blocking "grep foo build/" on a "build/" refusal target would
@@ -303,7 +309,7 @@ func (l *refusalLedger) checkBlocked(tool string, args string) string {
 	if l == nil || !refusalWriteTools[tool] {
 		return ""
 	}
-	lower := strings.ToLower(args)
+	lower := strings.ToLower(refusalMatchDomain(tool, args))
 	// #3469 (note): read-only run_command shapes never mutate the refusal
 	// target, so they are exempt from the write-class block.
 	// #3484: the prefix match alone is NOT proof of read-only-ness - shell
@@ -341,6 +347,70 @@ func (l *refusalLedger) checkBlocked(tool string, args string) string {
 		}
 	}
 	return ""
+}
+
+// refusalMatchDomain narrows #3717: the refusal check used to match against
+// the ENTIRE tool args JSON, so an edit_file whose new_text merely MENTIONED
+// a refused filename ("config.yaml supports many options") was hard-blocked
+// even though the write targeted a completely different file. The match
+// domain is now:
+//   - run_command / start_command: the command string itself (the command
+//     IS the write vector; whole-domain matching is correct there);
+//   - every other write tool: the path-bearing FIELD VALUES only
+//     (file_path/path/notebook_path/notebook/file/source/destination,
+//     recursively - covers files[].path and operations[].source/dest);
+//   - non-JSON args (or a non-object root): fall back to the raw string so
+//     a malformed payload fails CLOSED, never open.
+func refusalMatchDomain(tool string, args string) string {
+	if tool == "run_command" || tool == "start_command" {
+		var rc struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal([]byte(args), &rc) == nil && rc.Command != "" {
+			return rc.Command
+		}
+		return args
+	}
+	var root any
+	if err := json.Unmarshal([]byte(args), &root); err != nil {
+		return args // fail closed: unparseable payload keeps old semantics
+	}
+	var b strings.Builder
+	collectPathValues(root, &b)
+	if b.Len() == 0 {
+		// No path-bearing field at all: keep the raw args rather than an
+		// empty domain - an unrecognized write shape must not silently pass.
+		return args
+	}
+	return b.String()
+}
+
+// refusalPathKeys are the argument keys that carry a write TARGET. Content
+// keys (content/old_text/new_text/description...) are deliberately absent:
+// text that merely mentions a refused path is not a write to it.
+var refusalPathKeys = map[string]bool{
+	"file_path": true, "path": true, "file": true,
+	"notebook_path": true, "notebook": true,
+	"source": true, "destination": true, "to_path": true,
+}
+
+func collectPathValues(node any, b *strings.Builder) {
+	switch v := node.(type) {
+	case map[string]any:
+		for k, child := range v {
+			if refusalPathKeys[k] {
+				if s, ok := child.(string); ok {
+					b.WriteString(s)
+					b.WriteByte('\n')
+				}
+			}
+			collectPathValues(child, b)
+		}
+	case []any:
+		for _, child := range v {
+			collectPathValues(child, b)
+		}
+	}
 }
 
 func refusalAgeWords(secs int64) string {

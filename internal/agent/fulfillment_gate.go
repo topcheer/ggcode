@@ -37,8 +37,6 @@ import (
 // The gate fires AT MOST ONCE per run, injecting a reminder message that
 // gives the agent a final chance to address gaps before returning.
 
-const maxFulfillmentGateWarnings = 1
-
 // actionVerbs are verbs that indicate the user expects concrete code changes.
 var actionVerbs = []string{
 	"add", "create", "implement", "fix", "repair", "build",

@@ -124,11 +124,15 @@ func NestedProjectMemoryFilesForPath(targetPath string) ([]string, error) {
 		dir = filepath.Dir(absPath)
 	}
 
-	deepestFirst := make([]string, 0, 8)
+	// #3880: collect layers, then reverse the LAYER order only (shallower
+	// = higher priority). The old flat reversal also inverted the order
+	// WITHIN each layer, contradicting the ProjectMemoryFilenames priority
+	// declaration (GGCODE before AGENTS before CLAUDE...) for every level.
+	var layers [][]string
 	inRepo := false
 	current := filepath.Clean(dir)
 	for depth := 0; depth <= maxNestedDiscoveryDepth; depth++ {
-		deepestFirst = append(deepestFirst, listProjectMemoryFiles(current)...)
+		layers = append(layers, listProjectMemoryFiles(current))
 		if isRepositoryRoot(current) {
 			inRepo = true
 			break
@@ -142,9 +146,9 @@ func NestedProjectMemoryFilesForPath(targetPath string) ([]string, error) {
 	if !inRepo {
 		return append(globalProjectMemoryFiles(), listProjectMemoryFiles(dir)...), nil
 	}
-	paths := make([]string, 0, len(deepestFirst))
-	for i := len(deepestFirst) - 1; i >= 0; i-- {
-		paths = append(paths, deepestFirst[i])
+	paths := make([]string, 0, 8)
+	for i := len(layers) - 1; i >= 0; i-- {
+		paths = append(paths, layers[i]...)
 	}
 	return append(globalProjectMemoryFiles(), paths...), nil
 }
