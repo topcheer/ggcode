@@ -1167,7 +1167,11 @@ func (a *Agent) InvalidateToolCaches() {
 }
 
 // extractEditedPaths parses a tool call's arguments to extract file paths
-// from file-editing tools. Used to mark files dirty in the code index.
+// from file-editing tools. Used to mark files dirty in the code index and to
+// feed the post-edit trackers (fileChurn/tunnelVision/prematureCommit).
+// Every source-mutating tool (sourceMutatingTools in verify_hint.go) must
+// yield a non-empty result here; zz_issue4007_test.go pins the full set so
+// this hand-written switch cannot drift from the canonical superset again.
 func extractEditedPaths(tc provider.ToolCallDelta) []string {
 	if len(tc.Arguments) == 0 {
 		return nil
@@ -1178,7 +1182,9 @@ func extractEditedPaths(tc provider.ToolCallDelta) []string {
 	}
 	var paths []string
 	switch tc.Name {
-	case "write_file", "edit_file", "read_file":
+	case "write_file", "edit_file", "multi_edit_file", "lsp_rename":
+		// multi_edit_file/lsp_rename reuse the same path/file_path argument
+		// shape as the single-file editors (#4007).
 		if p, ok := args["path"].(string); ok {
 			paths = append(paths, p)
 		}
@@ -1192,6 +1198,32 @@ func extractEditedPaths(tc provider.ToolCallDelta) []string {
 					if p, ok := fm["path"].(string); ok {
 						paths = append(paths, p)
 					}
+				}
+			}
+		}
+	case "batch_replace":
+		// files is a plain array of path strings (batch_replace.go schema).
+		if files, ok := args["files"].([]any); ok {
+			for _, f := range files {
+				if p, ok := f.(string); ok {
+					paths = append(paths, p)
+				}
+			}
+		}
+	case "file_ops":
+		// operations[].source covers delete/move-origin; move also carries the
+		// destination, which becomes a new file on disk.
+		if ops, ok := args["operations"].([]any); ok {
+			for _, o := range ops {
+				om, ok := o.(map[string]any)
+				if !ok {
+					continue
+				}
+				if p, ok := om["source"].(string); ok && p != "" {
+					paths = append(paths, p)
+				}
+				if p, ok := om["destination"].(string); ok && p != "" {
+					paths = append(paths, p)
 				}
 			}
 		}
