@@ -31,7 +31,6 @@ var (
 	pSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
 	pPostMessageW             = user32.NewProc("PostMessageW")
 	pShowWindow               = user32.NewProc("ShowWindow")
-	pIsIconic                 = user32.NewProc("IsIconic")
 	pGetWindowRect            = user32.NewProc("GetWindowRect")
 	pMoveWindow               = user32.NewProc("MoveWindow")
 )
@@ -287,13 +286,10 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		if err != nil {
 			return Result{}, err
 		}
-		state := swMaximize
-		if r, _, _ := pIsIconic.Call(uintptr(h)); r != 0 {
-			// Already maximized means iconic-restore cycle is handled by the
-			// app; simplest deterministic behavior is maximize (idempotent).
-			state = swMaximize
-		}
-		pShowWindow.Call(uintptr(h), uintptr(state))
+		// Idempotent: ShowWindow(swMaximize) is a no-op on an already
+		// maximized window — a retry "make sure it's maximized" never
+		// restores it (#4058; this is the semantics Linux/macOS now match).
+		pShowWindow.Call(uintptr(h), swMaximize)
 		return Result{Content: "OK: maximized " + windowText(h)}, nil
 
 	case "set_window_bounds":

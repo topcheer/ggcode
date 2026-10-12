@@ -173,10 +173,14 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		// Use the target window name when provided; fall back to the active
 		// window so we never maximize every visible window (empty pattern
 		// matches all).
+		//
+		// #4058: --add (instead of toggle semantics) makes this idempotent - a retry
+		// "make sure it's maximized" must not UN-maximize the window.
+		// Matches Windows ShowWindow(swMaximize) semantics.
 		if strings.TrimSpace(p.Text) != "" {
-			return xdotoolResult(ctx, "search", "--name", p.Text, "windowstate", "--toggle", "--maximized", "%@")
+			return xdotoolResult(ctx, "search", "--name", p.Text, "windowstate", "--add", "--maximized", "%@")
 		}
-		return xdotoolResult(ctx, "getactivewindow", "windowstate", "--toggle", "--maximized")
+		return xdotoolResult(ctx, "getactivewindow", "windowstate", "--add", "--maximized")
 
 	// ── Application ──
 	case "open":
