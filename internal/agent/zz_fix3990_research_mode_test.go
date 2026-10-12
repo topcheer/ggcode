@@ -45,7 +45,7 @@ func TestFix3990FileStuckRaisedNotDisabledInResearchMode(t *testing.T) {
 	// 4 reads: below the research threshold, no hint yet (normal re-reading
 	// during analysis).
 	for i := 0; i < 4; i++ {
-		o.recordToolCall("read_file", false, "auth.go", "")
+		o.recordToolCall("read_file", false, "auth.go", "", i)
 	}
 	if msg := o.checkFileStuck(nil); msg != "" {
 		t.Fatalf("file_stuck fired below research threshold: %s", msg)
@@ -53,7 +53,7 @@ func TestFix3990FileStuckRaisedNotDisabledInResearchMode(t *testing.T) {
 	// 8 reads: the hint must fire even in research mode - a disabled
 	// detector is blind to a genuine same-file circle.
 	for i := 0; i < 4; i++ {
-		o.recordToolCall("read_file", false, "auth.go", "")
+		o.recordToolCall("read_file", false, "auth.go", "", i)
 	}
 	msg := o.checkFileStuck(nil)
 	if msg == "" {

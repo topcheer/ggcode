@@ -66,6 +66,10 @@ type overseerState struct {
 
 	// Iterations since last productive action (edit/write/command/commit).
 	itersSinceProductive int
+	// lastUnitIter is the iteration whose unproductive tool calls were
+	// last counted into itersSinceProductive (#4069: per-iteration advance,
+	// not per-call — parallel batches must not multiply the count).
+	lastUnitIter int
 
 	// Intervention tracking — which patterns have already fired.
 	fired map[string]bool
@@ -175,9 +179,12 @@ var readOnlyTools = map[string]bool{
 }
 
 func newOverseerState() *overseerState {
+	// lastUnitIter sentinel -1 (#4069): a fresh run's iteration 0 must
+	// still count as a NEW iteration - zero-valued 0 would swallow it.
 	return &overseerState{
 		fileReadsSinceEdit: make(map[string]int),
 		fired:              make(map[string]bool),
+		lastUnitIter:       -1, // #4069 sentinel: iteration 0 counts as new
 	}
 }
 
@@ -257,9 +264,17 @@ func (o *overseerState) effectiveDriftThreshold() int {
 // tool's result body (may be empty): #3568 uses extractWrittenPaths on it to
 // honor partial_success semantics (IsError=true but files actually reached
 // disk counts as productive, matching #1762's correction everywhere else).
-func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint, resultContent string) {
+func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint, resultContent string, iteration int) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+
+	// #4069: this method fires once per TOOL RESULT, but itersSinceProductive
+	// is calibrated and reported in ITERATIONS. A parallel read-only batch of
+	// N tools used to advance it N times (3 real iterations hit the 15-
+	// iteration stall threshold). Advance it at most once per new iteration;
+	// trajectory/search counters stay per-call (their consumers count calls).
+	newIteration := iteration != o.lastUnitIter
+	o.lastUnitIter = iteration
 
 	// A tool call is productive if it's a productive tool AND it succeeded
 	// (or, #3568, partially succeeded with files actually on disk —
@@ -306,7 +321,7 @@ func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint, 
 		// Reset drift level — a productive action means the agent is
 		// making progress, so future drift should start from level 1 again.
 		o.driftLevel = 0
-	} else {
+	} else if newIteration {
 		o.itersSinceProductive++
 	}
 
@@ -325,6 +340,7 @@ func (o *overseerState) reset() {
 	o.trajectory = nil
 	o.fileReadsSinceEdit = make(map[string]int)
 	o.itersSinceProductive = 0
+	o.lastUnitIter = -1 // #4069: per-run iteration-unit bookkeeping (sentinel)
 	o.driftLevel = 0
 	o.fired = make(map[string]bool)
 	o.lastAnalysisIter = 0
@@ -623,7 +639,7 @@ func (a *Agent) overseerCheck(toolName string, isError bool, fileHint, resultCon
 	if a.overseer == nil {
 		return ""
 	}
-	a.overseer.recordToolCall(toolName, isError, fileHint, resultContent)
+	a.overseer.recordToolCall(toolName, isError, fileHint, resultContent, iteration)
 	return a.overseer.analyze(iteration)
 }
 
