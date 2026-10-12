@@ -189,6 +189,25 @@ func newOverseerState() *overseerState {
 // "implement the stub" is a fix intent.
 var fixIntentRe = regexp.MustCompile(`\b(fix|fixes|fixed|fixing|repair|repairs|repaired|repairing|resolve|resolves|resolved|resolving|implement|implements|implemented|implementing|patch|patches|patched|patching)\b`)
 
+// hasFixIntentVerb reports whether the (already lowercased) text contains a
+// fix-intent verb that is NOT part of a hyphenated token. #4065: RE2's \b
+// treats '-' as a word boundary, so branch/PR names like "fix-4012",
+// "patch-4013", "resolve-4016" (this repo's naming convention) matched
+// \bfix\b and silently disabled research mode for read-heavy review tasks,
+// exposing them to full-strength stuck-detector hints. A match only counts
+// as fix intent when the following rune is not a hyphen; end-of-string
+// counts ("...and then fix"). p[m[1]] is an ASCII byte compare - multi-byte
+// runes (high bit set) never equal '-'.
+func hasFixIntentVerb(p string) bool {
+	for _, m := range fixIntentRe.FindAllStringIndex(p, -1) {
+		if m[1] < len(p) && p[m[1]] == '-' {
+			continue // hyphenated token (branch/PR/version form), not a verb
+		}
+		return true
+	}
+	return false
+}
+
 // detectResearchMode checks if a task description indicates research work.
 // Returns true for tasks involving research, analysis, audit, exploration,
 // evaluation, or comparison — where extensive reading IS the primary work.
@@ -202,7 +221,7 @@ var fixIntentRe = regexp.MustCompile(`\b(fix|fixes|fixed|fixing|repair|repairs|r
 // at normal thresholds.
 func detectResearchMode(taskText string) bool {
 	p := strings.ToLower(taskText)
-	if fixIntentRe.MatchString(p) {
+	if hasFixIntentVerb(p) {
 		return false
 	}
 	keywords := []string{
