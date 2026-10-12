@@ -3812,11 +3812,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			})
 		}
 		// r485: batch boundary for turn-tier cascade classification. The
-		// planning-time loop below records every call uniformly, covering
-		// both sequential and parallel execution paths.
+		// planning-time loop below records every planned call for cascade
+		// classification uniformly, covering both sequential and parallel
+		// execution paths. (#4013: runToolNames is NOT recorded here anymore -
+		// planned-but-skipped calls would leave phantom entries that polluted
+		// toolflow prefix matching; it is appended at the real-result point in
+		// the execution loop below.)
 		a.cascade.beginBatch()
 		for _, tc := range toolCalls {
-			a.runToolNames = append(a.runToolNames, tc.Name)
 			a.cascade.notePlanned(tc.Name)
 		}
 		for idx, tc := range toolCalls {
@@ -4013,6 +4016,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content += hint
 				}
 			}
+			// #4013: a real result now exists for this call (fresh execution,
+			// pre-executed parallel, or cache replay). Record it here - not at
+			// planning time - so skip paths that `continue` above (in-turn dedup
+			// reuse, ask quality gate, redaction write guard) leave no phantom
+			// entry in runToolNames, keeping the toolflow hint's prefix matching
+			// aligned with what actually ran. This is the single real-result
+			// point shared by every branch of the chain above.
+			a.runToolNames = append(a.runToolNames, tc.Name)
 			// Secret redaction (#1195): mask secret values in external-content
 			// tool results BEFORE any recorder, cache annotation, context append,
 			// or session-history persistence sees them. Applies uniformly to all
