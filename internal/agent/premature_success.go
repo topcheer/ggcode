@@ -205,6 +205,34 @@ func psExtractJobID(content string) string {
 	return ""
 }
 
+// psSubAgentOutputFailed reports whether a sub-agent's terminal free-text
+// output carries explicit failure markers (#4011). Conservative by design:
+// only unambiguous go-test/vet/panic failure lines count; a report merely
+// mentioning the word "fail" in prose does not.
+func psSubAgentOutputFailed(content string) bool {
+	for _, ln := range strings.Split(content, "\n") {
+		if strings.HasPrefix(ln, "--- FAIL:") || strings.HasPrefix(ln, "FAIL") ||
+			strings.Contains(ln, "panic:") || strings.HasPrefix(ln, "vet:") {
+			return true
+		}
+	}
+	return false
+}
+
+// psExtractSpawnedAgentID parses the "Sub-agent spawned with ID: <id>"
+// header emitted by spawn_agent's success result, linking the spawn RESULT
+// to the registry key task_output will later query with task_id (#4011).
+// Returns "" when absent.
+func psExtractSpawnedAgentID(content string) string {
+	for _, ln := range strings.Split(content, "\n") {
+		ln = strings.TrimSpace(ln)
+		if v, ok := strings.CutPrefix(ln, "Sub-agent spawned with ID: "); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
 // psParseJobStatus returns the lowercased first token of the "Status:"
 // header of a command-job snapshot rendering, "" when absent (#1153).
 func psParseJobStatus(content string) string {
@@ -335,7 +363,49 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 		cmd, _ := args["command"].(string)
 		p.psRegisterJobLocked(jobID, cmd)
 
-	case toolName == "wait_command" || toolName == "read_command_output" || toolName == "task_output":
+	case toolName == "spawn_agent":
+		// #4011: register sub-agent runs so a later task_output(task_id)
+		// attribute verify outcomes. spawn_agent and start_command job IDs
+		// are disjoint namespaces; without this registration the task_output
+		// branch's registry lookup is a decorative dead path and sub-agent
+		// verify results stay invisible to prematureSuccess/correctionSpiral/
+		// fixCascade (#1153 attribution contract).
+		if isError {
+			return
+		}
+		taskID := psExtractSpawnedAgentID(resultContent)
+		if taskID == "" {
+			return
+		}
+		task, _ := args["task"].(string)
+		p.psRegisterJobLocked(taskID, task)
+
+	case toolName == "task_output":
+		// #4011: task_output retrieves a sub-agent's terminal output (free
+		// text, no command-job "Status:" header), so the wait/read grading
+		// path below cannot parse it. Grade by outcome shape: tool error or
+		// explicit failure markers => failed; a returned body with no failure
+		// markers => the verify run concluded and passed.
+		jobID, _ := args["job_id"].(string)
+		if jobID == "" {
+			jobID, _ = args["task_id"].(string)
+		}
+		rec, tracked := p.backgroundJobs[jobID]
+		if !tracked || !rec.isVerify {
+			return
+		}
+		delete(p.backgroundJobs, jobID)
+		if isError || psSubAgentOutputFailed(resultContent) {
+			p.lastVerifyFailed = true
+			p.lastVerifyFailedCmd = rec.cmd
+			if p.lastVerifyFailedCmd == "" {
+				p.lastVerifyFailedCmd = "sub-agent verify " + jobID
+			}
+			return
+		}
+		p.psMarkVerifiedLocked()
+
+	case toolName == "wait_command" || toolName == "read_command_output":
 		jobID, _ := args["job_id"].(string)
 		if jobID == "" {
 			jobID, _ = args["task_id"].(string)
