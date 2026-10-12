@@ -158,6 +158,19 @@ func (p *researchPlanState) shouldInject() bool {
 	return true
 }
 
+// reset re-arms the fire-once latch for a NEW run. #4023: the header comment
+// promised "fires ONCE per run" but nothing ever reset injected - the actual
+// semantics were once per Agent lifetime, so a second research run in the
+// same session got no plan and the stale researchPlanSubs from run 1 fed the
+// r365 gap report (marking every run-1 sub-query as uncovered and steering
+// run 2 off-target). Called from the per-run reset block next to
+// resetPlanner.
+func (p *researchPlanState) reset() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.injected = false
+}
+
 // maybeInjectResearchPlan fires the ONE-TIME research sub-query plan for
 // research-mode runs (same detectResearchMode signal the overseer uses).
 // The plan text is injected as a user message at the same early point the
