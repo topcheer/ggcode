@@ -195,9 +195,15 @@ func (t CronListTool) Execute(_ context.Context, _ json.RawMessage) (Result, err
 		if job.Paused {
 			state = "paused, "
 		}
+		// #4049: Pause() clears NextFire to the zero time (#311 invariant);
+		// render it as none instead of the 0001-01-01 fake timestamp.
+		next := job.NextFire.Format(time.RFC3339)
+		if job.NextFire.IsZero() {
+			next = "none (paused)"
+		}
 		fmt.Fprintf(&sb, "- %s [%s%s, %s] %s next=%s\n",
 			job.ID, state, kind, queueMode, job.CronExpr,
-			job.NextFire.Format(time.RFC3339))
+			next)
 	}
 	return Result{Content: sb.String()}, nil
 }
@@ -459,7 +465,13 @@ func (t CronGetTool) Execute(_ context.Context, input json.RawMessage) (Result, 
 	fmt.Fprintf(&sb, "Type:        %s\n", kind)
 	fmt.Fprintf(&sb, "Queue mode:  %s\n", queueMode)
 	fmt.Fprintf(&sb, "Cron expr:   %s\n", job.CronExpr)
-	fmt.Fprintf(&sb, "Next fire:   %s\n", job.NextFire.Format(time.RFC3339))
+	// #4049: guard parity with CronUpdate L284 - a paused job carries a zero
+	// NextFire; render it as none instead of the 0001-01-01 fake timestamp.
+	nextFire := job.NextFire.Format(time.RFC3339)
+	if job.NextFire.IsZero() {
+		nextFire = "none (paused)"
+	}
+	fmt.Fprintf(&sb, "Next fire:   %s\n", nextFire)
 	fmt.Fprintf(&sb, "Created at:  %s\n", job.CreatedAt.Format(time.RFC3339))
 	fmt.Fprintf(&sb, "Prompt:\n%s\n", job.Prompt)
 	return Result{Content: sb.String()}, nil
