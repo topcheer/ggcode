@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -24,6 +26,44 @@ const maxAutopilotStrategistCalls = 100
 // without accidentally triggering completion. Detection matches only this tag,
 // not the substring "GOAL_ACHIEVED" anywhere in the response.
 const strategistCompleteMarker = "<GOAL_ACHIEVED/>"
+
+// indexFold returns the byte offset and byte length in s of the first
+// substring that equals marker case-insensitively; marker must be plain ASCII
+// and callers should pass it already upper-cased. Unlike
+// strings.Index(strings.ToUpper(s), marker), the returned offset refers to the
+// ORIGINAL s, so slicing s at it never drifts when ToUpper changes byte
+// lengths before the match (German ß→SS, ligature ﬁ→FI etc. each add bytes
+// and shift the uppercase copy's offsets - #4015). The matched window's byte
+// length is returned separately because s may hold the marker in a lowercase
+// form whose byte length differs.
+func indexFold(s, marker string) (int, int) {
+	markerRunes := []rune(marker)
+	n := len(markerRunes)
+	if n == 0 {
+		return 0, 0
+	}
+	rs := []rune(s)
+	starts := make([]int, len(rs)+1)
+	off := 0
+	for i, r := range rs {
+		starts[i] = off
+		off += utf8.RuneLen(r)
+	}
+	starts[len(rs)] = off
+	for i := 0; i+n <= len(rs); i++ {
+		ok := true
+		for j, mr := range markerRunes {
+			if unicode.ToUpper(rs[i+j]) != mr {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return starts[i], starts[i+n] - starts[i]
+		}
+	}
+	return -1, 0
+}
 
 // maxConsecutiveStrategistNoProgress is the maximum number of consecutive
 // strategist calls where the main agent made NO tool calls between them.

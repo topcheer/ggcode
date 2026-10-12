@@ -3196,8 +3196,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					summary := result.Guidance
 					// Strip the completion marker (possibly markdown-wrapped); the
 					// rest is the strategist's summary of what was accomplished.
-					if idx := strings.Index(strings.ToUpper(summary), strategistCompleteMarker); idx >= 0 {
-						after := summary[idx+len(strategistCompleteMarker):]
+					// #4015: slice offsets must come from the ORIGINAL string -
+					// the old strings.Index(strings.ToUpper(summary), ...) offset
+					// belongs to the uppercase copy and drifts past every char
+					// whose ToUpper changes byte length (ß→SS, ﬁ→FI), corrupting
+					// the summary's head. indexFold folds in place.
+					if idx, mlen := indexFold(summary, strategistCompleteMarker); idx >= 0 {
+						after := summary[idx+mlen:]
 						summary = strings.TrimSpace(after)
 					}
 					msg := "[Strategist: goal achieved — autopilot complete.]"
