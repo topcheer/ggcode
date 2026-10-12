@@ -17,7 +17,20 @@ import (
 // implementation with hundreds of subtasks) enough room to complete.
 const maxAutopilotStrategistCalls = 100
 
-// strategistCompleteMarker is the exact sentinel the strategist must emit to
+// stripStrategistCompleteMarker removes the completion marker (possibly
+// markdown-wrapped) from a strategist guidance summary and returns the
+// trimmed remainder (or the summary unchanged when no marker is present).
+// indexFoldASCII keeps the byte offset valid on the ORIGINAL string: a
+// ToUpper copy can change byte lengths before the marker (U+0250 ɐ→Ɐ +1B,
+// ſ→S −1B), which would shift the slice cut and corrupt the summary (#4015;
+// same defect class #2098 fixed for ToLower in bgorphan_detect.go).
+func stripStrategistCompleteMarker(summary string) string {
+	if idx := indexFoldASCII(summary, strategistCompleteMarker); idx >= 0 {
+		return strings.TrimSpace(summary[idx+len(strategistCompleteMarker):])
+	}
+	return summary
+}
+
 // declare the goal achieved. It is deliberately an uncommon XML-like tag rather
 // than the bare phrase "GOAL_ACHIEVED" so that the strategist can freely discuss
 // the concept (e.g. "do NOT emit the GOAL_ACHIEVED tag yet, more work remains")
