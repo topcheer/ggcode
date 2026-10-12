@@ -3196,10 +3196,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					summary := result.Guidance
 					// Strip the completion marker (possibly markdown-wrapped); the
 					// rest is the strategist's summary of what was accomplished.
-					if idx := strings.Index(strings.ToUpper(summary), strategistCompleteMarker); idx >= 0 {
-						after := summary[idx+len(strategistCompleteMarker):]
-						summary = strings.TrimSpace(after)
-					}
+					// #4015: offsets must come from a fold-scan of the original
+					// string, not from a ToUpper copy (byte-length-changing case
+					// mappings shifted the cut and corrupted the summary).
+					summary = stripStrategistCompleteMarker(summary)
 					msg := "[Strategist: goal achieved — autopilot complete.]"
 					if summary != "" {
 						msg = fmt.Sprintf("[Strategist: goal achieved — autopilot complete. %s]", summary)
