@@ -3169,7 +3169,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					debug.Log("agent", "Iteration %d: autopilot force-terminate after %d consecutive no-progress rounds", i+1, a.strategistNoProgressCount)
 					preview := textBuf
 					if len(preview) > 200 {
-						preview = preview[:200]
+						// #4014: a raw byte slice can split a multi-byte rune
+						// (CJK is 3 bytes/char; 200 = 3*66+2 always lands mid-
+						// sequence) and push invalid UTF-8 into the event
+						// stream, rendering as mojibake in TUI/IM. Drop the
+						// dangling partial rune instead.
+						preview = strings.ToValidUTF8(preview[:200], "")
 					}
 					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Autopilot: agent idle for %d consecutive rounds — terminating to avoid deadlock. Last output: %s]", a.strategistNoProgressCount, preview)})
 					a.ClearAutopilotGoal()
@@ -4857,6 +4862,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// truncated/null) outputs that subsequent steps build on without
 			// verifying, causing silent compounding failures.
 			if propGuidance := a.errorPropagate.recordResult(tc.Name, result.Content, result.IsError); propGuidance != "" {
+				// #952/#4010: same contract as failureMode/errorCascade above -
+				// this guidance precedes the consensus scan window, and
+				// checkOnly() admits voters only via recordFiring. Without it,
+				// errorPropagate was invisible to cross-detector consensus
+				// ("Systemic Failure" lost a voter).
+				a.crossDetectorConsensus.recordFiring("Error Propagation", i+1)
 				a.appendGuidance(&result, propGuidance)
 			}
 			// Scope drift: track productive file edits for semantic scope creep.
