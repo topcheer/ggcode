@@ -2696,6 +2696,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 			}
 		}
+		// Delegation budgets: sub-agent spend is recorded from OnUsage
+		// callbacks on sub-agent goroutines (RecordDelegatedTokenUsage); drain
+		// any threshold alert they parked so delegated runs cannot blow the
+		// budget ladder silently.
+		if msg, stop := a.SessionTokenBudgetAlert(); msg != "" {
+			a.crossDetectorConsensus.recordFiring("Session Token Budget", i+1)
+			a.injectGuidance(msg)
+			debug.Log("session-token-budget", "delegated threshold drained at iteration %d stop=%v", i+1, stop)
+			if stop {
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventSystem,
+					Text: "[Session token budget fully consumed (including sub-agent spend) - winding down. Summarize the state so the user can resume with a fresh budget.] ",
+				})
+			}
+		}
 		// r415: time-dimension soft ladder, evaluated at the same site as
 		// the token budget. Zero cost when unset (budget <= 0 short-circuits).
 		if msg, stop := a.RecordSessionTimeUsage(); msg != "" {
