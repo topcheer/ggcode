@@ -142,7 +142,10 @@ func researchPlanText(subs []ResearchSubQuery) string {
 	return b.String()
 }
 
-// researchPlanState guards the fire-once semantics of plan injection.
+// researchPlanState guards the fire-once semantics of plan injection -
+// ONCE PER RUN (#4023): reset below is called at run start alongside
+// resetPlanner, so a second research run in the same session gets its own
+// plan instead of silently reusing run-1's sub-queries.
 type researchPlanState struct {
 	mu       sync.Mutex
 	injected bool
@@ -156,6 +159,13 @@ func (p *researchPlanState) shouldInject() bool {
 	}
 	p.injected = true
 	return true
+}
+
+// reset restores per-run semantics (#4023).
+func (p *researchPlanState) reset() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.injected = false
 }
 
 // maybeInjectResearchPlan fires the ONE-TIME research sub-query plan for

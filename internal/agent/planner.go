@@ -322,6 +322,13 @@ func (a *Agent) resetPlanner() {
 	if a.planner != nil {
 		a.planner.reset()
 	}
+	// #4023: the research plan's fire-once is per-RUN, not per-Agent
+	// lifetime - run 2 of a research session must inject its own plan and
+	// must not compute gaps against run 1's sub-queries (which would flag
+	// every run-1 query as "uncovered" and steer the model off-run-2's
+	// goal). researchPlanSubs nil = "no plan yet" (field contract).
+	a.researchPlan.reset()
+	a.researchPlanSubs = nil
 }
 
 // --- Complexity detection helpers ---
