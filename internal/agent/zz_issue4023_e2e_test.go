@@ -16,7 +16,7 @@ func TestMaybeInjectResearchPlanSecondRunReplans(t *testing.T) {
 	a := &Agent{contextManager: ctxpkg.NewManager(200000)}
 	researchText := "research the architecture of Go build system and write a survey report"
 	if !detectResearchMode(researchText) {
-		t.Skip("detector heuristic shifted; test premise broken")
+		t.Fatal("test premise broken: research-mode detector no longer fires on plain research request text - update the fixed text to re-lock the e2e scenario")
 	}
 	a.maybeInjectResearchPlan(researchText)
 	if len(a.researchPlanSubs) == 0 {
