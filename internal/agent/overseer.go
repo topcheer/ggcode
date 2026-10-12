@@ -182,12 +182,22 @@ func newOverseerState() *overseerState {
 }
 
 // fixIntentRe is the #3990 fix-intent override for detectResearchMode.
-// Kept minimal on purpose: broader make-verbs like "refactor"/"migrate"
-// appear inside research wording ("assess the impact of the refactoring")
-// and would misclassify genuine research tasks. Word boundaries keep
-// inflected nouns out: "Explore competitor implementations" is research,
-// "implement the stub" is a fix intent.
-var fixIntentRe = regexp.MustCompile(`\b(fix|fixes|fixed|fixing|repair|repairs|repaired|repairing|resolve|resolves|resolved|resolving|implement|implements|implemented|implementing|patch|patches|patched|patching)\b`)
+// #4044: position-sensitive on purpose. A bare-word alternation matched
+// nouns ("survey of automated patch generation") and subordinate-clause
+// verbs ("how databases resolve deadlocks", "Go's GC fixes memory leaks"),
+// silently disabling research mode for read-only research tasks. The fix
+// intent must sit where the task itself commands the fix:
+//  1. an imperative sentence-start (also after . ! ? : or a newline,
+//     optionally led by please/now/first/go), or
+//  2. a coordinated/imperative follow-on clause - ", then fix", "and fix
+//     it", "and repair the handler" - where the verb takes a determiner
+//     object (it/them/that/this/the/a/an/our/my/all) or ends the text.
+//
+// Broader make-verbs like "refactor"/"migrate" stay out: they appear in
+// research wording ("assess the impact of the refactoring").
+var fixIntentRe = regexp.MustCompile(
+	`(?:^|[.!?:\n]\s+)(?:please\s+|now\s+|first\s+|go\s+)?(?:fix|repair|patch|resolve|implement)\b` +
+		`|(?:,\s*|\b(?:and|then)\s+)(?:please\s+)?(?:then\s+)?(?:fix|repair|patch|resolve|implement)\b(?:\s+(?:it|them|that|this|the|a|an|our|my|all)\b|$)`)
 
 // detectResearchMode checks if a task description indicates research work.
 // Returns true for tasks involving research, analysis, audit, exploration,
