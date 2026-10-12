@@ -4721,7 +4721,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// Trajectory→asset distillation: track verified-successful
 					// commands so the post-run distiller can persist them as
 					// cmd_snippet entries.
-					if !result.IsError {
+					// #3989: start_command is EXCLUDED here too - same signal,
+					// same consumer contract as the #3682 exclusion above: a
+					// background job's IsError=false only proves spawn, not the
+					// inner command's outcome, and wait_command never removes
+					// entries. Recording it would persist an unverified inner
+					// command as a "verified-successful" snippet across sessions.
+					if tc.Name == "run_command" && !result.IsError {
 						runStats.recordSuccessfulCommand(cmd)
 					}
 				}
