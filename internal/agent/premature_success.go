@@ -169,8 +169,9 @@ var psEditTools = sourceMutatingTools
 // originating command qualifies as a verification action, and the raw
 // command text for failure attribution.
 type psJobRecord struct {
-	isVerify bool
-	cmd      string
+	isVerify  bool
+	cmd       string
+	fromSpawn bool // registered via spawn_agent (#4011): free-text terminal output, no Status header
 }
 
 // psMaxTrackedJobs caps the job-id registry so long sessions cannot grow it
@@ -303,6 +304,21 @@ func (p *prematureSuccessState) psRegisterJobLocked(jobID, cmd string) {
 	}
 }
 
+// psRegisterTaskLocked registers a sub-agent run (#4011) so a later
+// task_output(task_id) attributes its terminal free-text outcome.
+func (p *prematureSuccessState) psRegisterTaskLocked(taskID, task string) {
+	if p.backgroundJobs == nil {
+		p.backgroundJobs = make(map[string]psJobRecord)
+	}
+	p.backgroundJobs[taskID] = psJobRecord{isVerify: psIsVerifyCommand(task), cmd: task, fromSpawn: true}
+	for len(p.backgroundJobs) > psMaxTrackedJobs {
+		for k := range p.backgroundJobs {
+			delete(p.backgroundJobs, k)
+			break
+		}
+	}
+}
+
 func (p *prematureSuccessState) reset() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -378,34 +394,9 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 			return
 		}
 		task, _ := args["task"].(string)
-		p.psRegisterJobLocked(taskID, task)
+		p.psRegisterTaskLocked(taskID, task)
 
-	case toolName == "task_output":
-		// #4011: task_output retrieves a sub-agent's terminal output (free
-		// text, no command-job "Status:" header), so the wait/read grading
-		// path below cannot parse it. Grade by outcome shape: tool error or
-		// explicit failure markers => failed; a returned body with no failure
-		// markers => the verify run concluded and passed.
-		jobID, _ := args["job_id"].(string)
-		if jobID == "" {
-			jobID, _ = args["task_id"].(string)
-		}
-		rec, tracked := p.backgroundJobs[jobID]
-		if !tracked || !rec.isVerify {
-			return
-		}
-		delete(p.backgroundJobs, jobID)
-		if isError || psSubAgentOutputFailed(resultContent) {
-			p.lastVerifyFailed = true
-			p.lastVerifyFailedCmd = rec.cmd
-			if p.lastVerifyFailedCmd == "" {
-				p.lastVerifyFailedCmd = "sub-agent verify " + jobID
-			}
-			return
-		}
-		p.psMarkVerifiedLocked()
-
-	case toolName == "wait_command" || toolName == "read_command_output":
+	case toolName == "wait_command" || toolName == "read_command_output" || toolName == "task_output":
 		jobID, _ := args["job_id"].(string)
 		if jobID == "" {
 			jobID, _ = args["task_id"].(string)
@@ -415,6 +406,23 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 			// An unregistered or non-verify job finishing says nothing about
 			// the task under development (#1153): conservatively leave
 			// editsSinceVerify and failure markers exactly as they are.
+			return
+		}
+		if rec.fromSpawn {
+			// #4011: sub-agent terminal output arrives as free text via
+			// task_output - no command-job Status header to parse. Grade by
+			// shape: tool error or explicit failure markers => failed; a
+			// returned body without them => the verify run passed.
+			delete(p.backgroundJobs, jobID)
+			if isError || psSubAgentOutputFailed(resultContent) {
+				p.lastVerifyFailed = true
+				p.lastVerifyFailedCmd = rec.cmd
+				if p.lastVerifyFailedCmd == "" {
+					p.lastVerifyFailedCmd = "sub-agent verify " + jobID
+				}
+				return
+			}
+			p.psMarkVerifiedLocked()
 			return
 		}
 		terminal, passed := psTerminalVerifyOutcome(psParseJobStatus(resultContent))
