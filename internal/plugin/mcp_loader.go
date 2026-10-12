@@ -966,10 +966,6 @@ type MCPManager struct {
 	urlOpener          func(string) error
 	samplingHandler    mcp.SamplingHandler
 	elicitationHandler mcp.ElicitationHandler
-	// onToolDrift, if set, receives anti-rug-pull drift alerts (sa-119)
-	// from every plugin created by this manager and is propagated to new
-	// plugins in newPluginFromConfig/NewMCPManager.
-	onToolDrift func(server string, added, removed []string)
 }
 
 func NewMCPManager(servers []config.MCPServerConfig, registry *tool.Registry, scope string) *MCPManager {
@@ -998,18 +994,6 @@ func (m *MCPManager) SetOnUpdate(fn func([]MCPServerInfo)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onUpdate = fn
-}
-
-// SetOnToolDrift registers the anti-rug-pull drift alert sink (sa-119):
-// a server's tool definitions changed after the user-approved baseline.
-// Must be called before Connect; plugins created afterwards inherit it.
-func (m *MCPManager) SetOnToolDrift(fn func(server string, added, removed []string)) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.onToolDrift = fn
-	for _, p := range m.plugins {
-		p.OnToolDrift = fn
-	}
 }
 
 func (m *MCPManager) SetURLOpener(fn func(string) error) {
@@ -1717,7 +1701,6 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 func (m *MCPManager) newPluginFromConfig(s config.MCPServerConfig) *MCPPlugin {
 	p := NewMCPPlugin(s)
 	p.registry = m.registry
-	p.OnToolDrift = m.onToolDrift
 	// #3967: bridge plugin-level background mutations (tool refresh,
 	// auto-reconnect) into the manager's update broadcast so UI panels
 	// converge without a manual reopen.
