@@ -76,7 +76,7 @@ func (DesktopControlTool) Parameters() json.RawMessage {
     },
     "x": {"type": "integer", "description": "X coordinate (logical pixels from left). Required for mouse position actions."},
     "y": {"type": "integer", "description": "Y coordinate (logical pixels from top). Required for mouse position actions."},
-    "text": {"type": "string", "description": "Text to type (for 'type') or key combo string (for 'key_combo'/'key_press') or app name (for 'launch_app'/'quit_app'/'focus_window') or menu path like 'File > Save' (for 'menu_select') or modifiers like 'cmd+shift' (for 'modifier_click') or URL/file path (for 'open') or window title substring (for 'set_window_bounds' on Linux/Windows)."},
+    "text": {"type": "string", "description": "Text to type (for 'type') or key combo string (for 'key_combo'/'key_press') or app name (for 'launch_app'/'quit_app'/'focus_window') or menu path like 'File > Save' (for 'menu_select') or modifiers like 'cmd+shift' (for 'modifier_click') or URL/file path (for 'open') or window title substring (for 'set_window_bounds' on Linux/Windows). Key names: 'delete' is backspace on macOS but forward delete on Windows/Linux; use 'backspace' or 'forward-delete' (macOS only) for unambiguous behavior."},
     "app": {"type": "string", "description": "Application name: to open the target with (for 'open'), or the app whose menu bar to use (for 'menu_select', default frontmost). Not yet honored for 'set_window_bounds': target that action's window via 'text' (title substring) on Linux/Windows, or the frontmost window on macOS."},
     "button": {"type": "string", "enum": ["left", "right"], "default": "left", "description": "Mouse button for click actions."},
     "direction": {"type": "string", "enum": ["up", "down"], "default": "down", "description": "Scroll direction."},
@@ -328,6 +328,25 @@ func (t DesktopControlTool) Execute(ctx context.Context, input json.RawMessage) 
 		params.TimeoutMs = 5000
 	}
 	return executeDesktopControl(ctx, params)
+}
+
+// unknownAlphaKeyName reports whether key looks like a mistyped key NAME
+// rather than text meant to be typed: longer than one character and purely
+// ASCII letters ("backspace", "f13"). Digits and mixed strings ("123",
+// "a1") stay eligible for literal typing fallbacks (#4054: on macOS an
+// unknown multi-char alphabetic name used to be keystroked literally into
+// the focused control with a fake success).
+func unknownAlphaKeyName(key string) bool {
+	if len(key) <= 1 {
+		return false
+	}
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return false
+		}
+	}
+	return true
 }
 
 // xdModifierName maps a normalized modifier (as produced by

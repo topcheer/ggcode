@@ -826,6 +826,27 @@ ObjC.import('AppKit');
 	return runJXA(ctx, script)
 }
 
+var keyCodeMap = map[string]int{
+	"return": 36, "enter": 76, "tab": 48, "space": 49,
+	// #4054: backspace was missing and fell through to the keystroke
+	// fallback, typing the literal text "backspace" into the focused
+	// control with a fake success. Apple key code 51 is the backspace key.
+	"backspace": 51, "delete": 51,
+	// #4055: "delete" is backspace on macOS but forward delete on
+	// Windows/Linux (xdotool Delete / VK_DELETE). Keep the legacy macOS
+	// mapping for compatibility, and expose unambiguous names for the
+	// forward direction (Fn+Delete, key code 117).
+	"forward-delete": 117, "forwarddelete": 117,
+	"esc": 53, "escape": 53,
+	"home": 115, "end": 119,
+	"pageup": 116, "page-up": 116, "pagedown": 121, "page-down": 121,
+	"arrowleft": 123, "arrow-left": 123, "arrowright": 124, "arrow-right": 124,
+	"arrowdown": 125, "arrow-down": 125, "arrowup": 126, "arrow-up": 126,
+	"f1": 122, "f2": 120, "f3": 99, "f4": 118,
+	"f5": 96, "f6": 97, "f7": 98, "f8": 100,
+	"f9": 101, "f10": 109, "f11": 103, "f12": 111,
+}
+
 // keyComboResult translates key combo strings (e.g. "cmd+c", "ctrl+shift+tab")
 // to AppleScript System Events key code commands.
 func keyComboResult(ctx context.Context, combo string) (Result, error) {
@@ -863,18 +884,6 @@ func keyComboResult(ctx context.Context, combo string) (Result, error) {
 	key := strings.TrimSpace(parts[len(parts)-1])
 	keyLower := strings.ToLower(key)
 
-	keyCodeMap := map[string]int{
-		"return": 36, "enter": 76, "tab": 48, "space": 49,
-		"delete": 51, "esc": 53, "escape": 53,
-		"home": 115, "end": 119,
-		"pageup": 116, "page-up": 116, "pagedown": 121, "page-down": 121,
-		"arrowleft": 123, "arrow-left": 123, "arrowright": 124, "arrow-right": 124,
-		"arrowdown": 125, "arrow-down": 125, "arrowup": 126, "arrow-up": 126,
-		"f1": 122, "f2": 120, "f3": 99, "f4": 118,
-		"f5": 96, "f6": 97, "f7": 98, "f8": 100,
-		"f9": 101, "f10": 109, "f11": 103, "f12": 111,
-	}
-
 	modList := ""
 	if len(modifiers) > 0 {
 		modList = " using {" + strings.Join(modifiers, ", ") + "}"
@@ -884,6 +893,16 @@ func keyComboResult(ctx context.Context, combo string) (Result, error) {
 	if code, ok := keyCodeMap[keyLower]; ok {
 		script = fmt.Sprintf(`tell application "System Events" to key code %d%s`, code, modList)
 	} else {
+		// #4054: a multi-char purely-alphabetic key that is not in the map is
+		// almost certainly a mistyped key NAME (e.g. "backspace" before the
+		// map entry existed, or "f13") — typing it literally is a silent
+		// wrong action with a fake success. Reject it and list supported
+		// names (Windows-side precedent: only single chars reach the literal
+		// fallback). Text to type belongs to the 'type' action; digits and
+		// mixed strings keep the keystroke fallback for key_combo tails.
+		if unknownAlphaKeyName(keyLower) {
+			return Result{IsError: true, Content: fmt.Sprintf("unknown key name %q; supported keys: return, enter, tab, space, backspace, delete, forward-delete, esc, escape, home, end, pageup, pagedown, arrowleft/right/up/down, f1-f12; single characters are typed literally", key)}, nil
+		}
 		// Escape the key for embedding in an AppleScript double-quoted
 		// string; applies to the single-char branch too (a literal " would
 		// otherwise break the script). Control characters must NOT use the
