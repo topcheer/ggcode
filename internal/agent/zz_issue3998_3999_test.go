@@ -3,9 +3,6 @@ package agent
 import (
 	"strings"
 	"testing"
-
-	"github.com/topcheer/ggcode/internal/provider"
-	"github.com/topcheer/ggcode/internal/tool"
 )
 
 // #3998: researchPlan fire-once must be per-run ("fires ONCE per run"),
@@ -24,31 +21,13 @@ func TestResearchPlanStateResetPerTurn(t *testing.T) {
 	}
 }
 
-// #3998: resetTurnDetectors must clear both the fire-once latch and the
-// stale plan so task 2's gap detection is not fed task 1's sub-queries.
-func TestResetTurnDetectorsClearsResearchPlan(t *testing.T) {
-	mp := &mockProvider{
-		chatResp: &provider.ChatResponse{
-			Message: provider.Message{
-				Role:    "assistant",
-				Content: []provider.ContentBlock{{Type: "text", Text: "ok"}},
-			},
-			Usage: provider.TokenUsage{InputTokens: 1, OutputTokens: 1},
-		},
-	}
-	a := NewAgent(mp, tool.NewRegistry(), "", 1)
-	a.researchPlan.injected = true
-	a.researchPlanSubs = []ResearchSubQuery{
-		{Perspective: "risk", Query: "stale task-1 query", Priority: 4},
-	}
-	a.resetTurnDetectors()
-	if a.researchPlan.injected {
-		t.Error("resetTurnDetectors left researchPlan.injected set: plan never fires again this session")
-	}
-	if len(a.researchPlanSubs) != 0 {
-		t.Errorf("resetTurnDetectors left stale researchPlanSubs (%d entries): task-2 gap detection would consume the task-1 plan", len(a.researchPlanSubs))
-	}
-}
+// #3998 per-run reset note: the original companion test here asserted the
+// researchPlan reset lived in resetTurnDetectors (the #3998 wiring). The
+// rebase ruling for this branch kept main's #4031 wiring instead (the
+// per-run block in agent.go) and deleted the duplicate, so this test moved
+// out with its implementation. The semantics stay covered on main by
+// TestIssue4023_LatchReArmsPerRun, TestIssue4023_PerRunResetWiring (source
+// guard) and TestMaybeInjectResearchPlanSecondRunReplans (e2e).
 
 // #3999: gap detection must keep per-perspective granularity. All planner
 // templates start with the goal text, so a goal-prefix probe alone is
