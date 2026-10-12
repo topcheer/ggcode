@@ -41,10 +41,10 @@ func TestIssue3996SelfDefenseExemptionRequiresPackageDir(t *testing.T) {
 func TestIssue3997FailedProductiveCallDoesNotBlindSpam(t *testing.T) {
 	o := newOverseerState()
 	// One failed build (no written paths => not productive under #3568).
-	o.recordToolCall("run_command", true, "", "exit status 1: build failed")
+	o.recordToolCall("run_command", true, "", "exit status 1: build failed", 999)
 	// Then spam the same read-only tool past the threshold.
 	for i := 0; i < overseerInterval; i++ {
-		o.recordToolCall("search_files", false, "", "")
+		o.recordToolCall("search_files", false, "", "", i)
 	}
 	msg := o.analyze(overseerInterval)
 	if msg == "" {
@@ -58,9 +58,9 @@ func TestIssue3997FailedProductiveCallDoesNotBlindSpam(t *testing.T) {
 // Control: a genuinely successful productive call keeps suppressing spam.
 func TestIssue3997SuccessfulProductiveStillSuppressesSpam(t *testing.T) {
 	o := newOverseerState()
-	o.recordToolCall("run_command", false, "", "ok")
+	o.recordToolCall("run_command", false, "", "ok", 0)
 	for i := 0; i < overseerInterval; i++ {
-		o.recordToolCall("search_files", false, "", "")
+		o.recordToolCall("search_files", false, "", "", i)
 	}
 	if msg := o.analyze(overseerInterval); msg != "" {
 		t.Fatalf("successful run_command must keep suppressing spam, got: %s", msg)
@@ -71,9 +71,9 @@ func TestIssue3997SuccessfulProductiveStillSuppressesSpam(t *testing.T) {
 // still wrote files counts as productive here too.
 func TestIssue3997PartialSuccessStillCounts(t *testing.T) {
 	o := newOverseerState()
-	o.recordToolCall("edit_file", true, "a.go", `{"written_paths":["a.go"]}`)
+	o.recordToolCall("edit_file", true, "a.go", `{"written_paths":["a.go"]}`, 0)
 	for i := 0; i < overseerInterval; i++ {
-		o.recordToolCall("search_files", false, "", "")
+		o.recordToolCall("search_files", false, "", "", i)
 	}
 	if msg := o.analyze(overseerInterval); msg != "" {
 		t.Fatalf("partial-success edit must remain productive, got: %s", msg)
