@@ -3815,8 +3815,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// planning-time loop below records every call uniformly, covering
 		// both sequential and parallel execution paths.
 		a.cascade.beginBatch()
+		// r485: batch boundary for turn-tier cascade classification. The
+		// planning-time loop below records every call uniformly, covering
+		// both sequential and parallel execution paths. runToolNames is
+		// deliberately NOT recorded here anymore (#4013): names are appended
+		// in the execution loop only when a result is actually produced.
 		for _, tc := range toolCalls {
-			a.runToolNames = append(a.runToolNames, tc.Name)
 			a.cascade.notePlanned(tc.Name)
 		}
 		for idx, tc := range toolCalls {
@@ -3954,6 +3958,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 				continue
 			}
+			// #4013: record the tool name only now - past the in-turn dedup,
+			// ask_user quality gate, and redaction write guard, all of which
+			// skip execution and previously left phantom names behind. The
+			// deduped second call never reaches this point; its first
+			// execution recorded the name exactly once (contract:
+			// "appended only as tools execute during a run").
+			a.runToolNames = append(a.runToolNames, tc.Name)
 			var result tool.Result
 			memoHit := false
 			if memoResult, hit := a.toolMemo.get(tc.Name, tc.Arguments); hit && a.speculativeHitAllowed(ctx, tc) {
