@@ -13,8 +13,10 @@ package agent
 // changed files unstaged and uncommitted. The user then has to manually run
 // git add + git commit, or the changes get lost when the next task starts.
 //
-// This gate fires AFTER all other completion gates pass (it is the last gate
-// before the agent returns). It checks:
+// This gate fires after the earlier completion gates pass. It is NOT the
+// last gate before the agent returns: the doc-drift advisory (r465) and the
+// draft-PR hint (sa-223) may each still fire one more continue round after
+// it (#4016). It checks:
 //   1. The agent made code edits in this run (not just exploration/Q&A)
 //   2. The agent did NOT already call git_add or git_commit
 //   3. There are uncommitted changes in the working tree
