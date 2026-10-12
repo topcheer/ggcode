@@ -25,6 +25,21 @@ const maxAutopilotStrategistCalls = 100
 // not the substring "GOAL_ACHIEVED" anywhere in the response.
 const strategistCompleteMarker = "<GOAL_ACHIEVED/>"
 
+// stripStrategistCompleteMarker removes the completion marker (possibly
+// markdown-wrapped) from the strategist's guidance; the remainder is the
+// summary of what was accomplished.
+//
+// #4015: match case-insensitively on the ORIGINAL string via indexFoldASCII.
+// Slicing with a byte offset taken from a ToUpper() copy misaligns whenever
+// uppercasing changes byte length before the marker (ﬁ 3B→FI 2B, ǰ 2B→J̌ 3B),
+// corrupting the visible completion summary.
+func stripStrategistCompleteMarker(summary string) string {
+	if idx := indexFoldASCII(summary, strategistCompleteMarker); idx >= 0 {
+		return strings.TrimSpace(summary[idx+len(strategistCompleteMarker):])
+	}
+	return summary
+}
+
 // maxConsecutiveStrategistNoProgress is the maximum number of consecutive
 // strategist calls where the main agent made NO tool calls between them.
 // When the agent says "I'm done" but the strategist keeps saying "verify first"
