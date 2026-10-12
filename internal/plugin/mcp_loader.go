@@ -414,14 +414,18 @@ func (m *MCPPlugin) setupNotificationHandler(client *mcp.Client) {
 
 // refreshTools re-fetches the tool list from the MCP server and updates the
 // adapter and registry. Called when the server signals tools/list_changed.
-func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int) {
+// #4042: the error is returned explicitly - callers must distinguish
+// "ListTools errored" from "succeeded with zero tools" (a legal
+// resources/prompts-only server), which the old (false, 0) collapsed into
+// one ambiguous value.
+func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	tools, err := client.ListTools(ctx)
 	if err != nil {
 		debug.Log("mcp-notif", "server=%s tool refresh failed: %v", m.cfg.Name, err)
-		return false, 0
+		return false, 0, err
 	}
 
 	newHash := computeToolsHash(tools)
@@ -434,7 +438,7 @@ func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int) {
 		// unchanged tools would churn the registry and the LLM-visible
 		// schemas for no benefit.
 		debug.Log("mcp-notif", "server=%s tools unchanged (hash match), skipping rebuild", m.cfg.Name)
-		return false, len(tools)
+		return false, len(tools), nil
 	}
 	m.toolsHash = newHash
 	if added, removed, fire := m.recordToolBaselineLocked(newHash, toolNamesOf(tools)); fire {
@@ -479,7 +483,7 @@ func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int) {
 	// open panels re-render the new list instead of staying stale until
 	// reopened. Lock-free call site: notifyStateChange re-enters Info().
 	m.notifyStateChange()
-	return true, len(tools)
+	return true, len(tools), nil
 }
 
 // computeToolsHash returns a stable content hash over a tool definition
@@ -1587,8 +1591,11 @@ func (m *MCPPlugin) refreshToolsNow() (RefreshOutcome, int) {
 	}
 	client := m.client
 	m.mu.Unlock()
-	changed, count := m.refreshTools(client)
-	if count == 0 && !changed {
+	changed, count, err := m.refreshTools(client)
+	// #4042: failure is the EXPLICIT error - a successful refresh that
+	// returns zero tools (resources/prompts-only server) is NOT a failure;
+	// the old `count == 0 && !changed` misreported it as RefreshFailed.
+	if err != nil {
 		return RefreshFailed, 0
 	}
 	if changed {
