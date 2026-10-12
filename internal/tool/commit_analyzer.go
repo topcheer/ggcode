@@ -202,11 +202,13 @@ type diffStats struct {
 	deletions int
 }
 
-// diffBinaryHeader matches the "Binary files a/x and b/x differ" marker.
-// Binary changes carry no hunks, so without this the file never entered
-// stats.files (#1650 case 1: pure-deletion and binary changes silently
-// bypassed the maxFilesPerCommit/maxLinesPerCommit warnings).
-var diffBinaryHeader = regexp.MustCompile(`^Binary files a/(.+) and b/(.+) differ`)
+// diffBinaryHeader matches the "Binary files ... differ" marker in all
+// three git forms: modify (a/x and b/x), add (/dev/null and b/x), and
+// delete (a/x and /dev/null). #4047: the old a/...b/-only pattern missed
+// the add/delete forms entirely - newly added binaries (the most common
+// accidental-commit shape #1650 targeted) bypassed the maxFilesPerCommit
+// warnings 100% of the time.
+var diffBinaryHeader = regexp.MustCompile(`^Binary files (?:a/(\S+)|/dev/null) and (?:b/(\S+)|/dev/null) differ$`)
 
 // diffModeChange matches the pure mode-change markers ("old mode"/
 // "new mode") - these hunks carry no +/- lines and previously no file
@@ -267,8 +269,14 @@ func parseDiffStats(diffOutput string) diffStats {
 			continue
 		}
 		// Binary change: no hunks, no +/- lines - extract the b/ path.
-		if m := diffBinaryHeader.FindStringSubmatch(line); m != nil && len(m) > 2 {
-			add(m[2])
+		if m := diffBinaryHeader.FindStringSubmatch(line); m != nil {
+			// #4047: register the non-/dev/null side - added binaries only
+			// have a b-side name, deleted ones only an a-side name.
+			if m[1] != "" {
+				add(m[1])
+			} else {
+				add(m[2])
+			}
 			lastOldFile = ""
 			continue
 		}
