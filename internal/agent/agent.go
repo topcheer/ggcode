@@ -4901,7 +4901,24 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 			// Drift recurrence: track edits and verifications relative to any drift warning.
-			a.driftRecurrenceRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments), string(tc.Arguments), !result.IsError)
+			// #4009: same multi-path upgrade as scopeDrift above (#2992 case 3)
+			// - extractFileHint returned only the FIRST path, so a multi_file_edit
+			// whose non-first files hit the warned-about dir never counted as a
+			// recurrence and the escalation warning went unreported. written_paths
+			// preferred when present (#1762 case 1). The empty fallback keeps the
+			// old single call so hint-free verification tools (run_command - its own
+			// early-return branch, lsp_diagnostics - single path) still record
+			// exactly once (#1544 case B: verification counting is outcome-blind).
+			driftRecPaths := extractFileHints(tc.Name, tc.Arguments)
+			if written := extractWrittenPaths(result.Content); len(written) > 0 {
+				driftRecPaths = written
+			}
+			if len(driftRecPaths) == 0 {
+				driftRecPaths = []string{extractFileHint(tc.Name, tc.Arguments)}
+			}
+			for _, fh := range driftRecPaths {
+				a.driftRecurrenceRecord(tc.Name, fh, string(tc.Arguments), !result.IsError)
+			}
 			// Last-known-good checkpoint: track edits for revert targeting.
 			// #1581-B: FAILED edits (bad old_text, wrong path) never touched
 			// disk - recording them put GHOST files into the revert list,
