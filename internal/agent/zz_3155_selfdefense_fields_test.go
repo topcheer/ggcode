@@ -9,6 +9,7 @@ package agent
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -50,6 +51,10 @@ func TestIssue3155_ContentFieldNeverTriggersSelfDefenseExemption(t *testing.T) {
 }
 
 func TestIssue3155_TargetFieldsStillExempt(t *testing.T) {
+	// #3996: paths are built from the REAL package dir (or legal relative
+	// forms); synthetic absolute prefixes no longer qualify.
+	guardAbs := filepath.Join(defenseSourceDir(), "prompt_injection_guard.go")
+	taintAbs := filepath.Join(defenseSourceDir(), "taint_influence_check.go")
 	cases := []struct {
 		name string
 		tool string
@@ -58,12 +63,12 @@ func TestIssue3155_TargetFieldsStillExempt(t *testing.T) {
 		{
 			name: "read_file path",
 			tool: "read_file",
-			args: `{"path":"/repo/internal/agent/prompt_injection_guard.go"}`,
+			args: `{"path":"` + guardAbs + `"}`,
 		},
 		{
 			name: "multi_file_read files[].path",
 			tool: "multi_file_read",
-			args: `{"files":[{"path":"/repo/internal/agent/taint_influence_check.go"},{"path":"/repo/x.go"}]}`,
+			args: `{"files":[{"path":"` + taintAbs + `"},{"path":"/repo/x.go"}]}`,
 		},
 		{
 			name: "grep path directory containing detector",

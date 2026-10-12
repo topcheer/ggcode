@@ -213,7 +213,17 @@ func isSelfDefensePath(p string) bool {
 		if dir == dd {
 			return true
 		}
-		if abs, err := filepath.Abs(dir); err == nil && abs == dd {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return false
+		}
+		// Two legal resolutions: CWD-relative (tests, absolute callers) and
+		// repo-root-relative (workspace paths like "internal/agent/x.go",
+		// which resolve against the repo root = grandparent of the package
+		// dir). Anything else - same-named files in other trees - stays
+		// guarded.
+		root := filepath.Dir(filepath.Dir(dd))
+		if abs == dd || filepath.Join(root, dir) == dd {
 			return true
 		}
 	}
