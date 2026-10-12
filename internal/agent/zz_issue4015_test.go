@@ -1,39 +1,51 @@
 package agent
 
-import "testing"
+import (
+	"testing"
+	"unicode/utf8"
+)
 
-// #4015: the completion-marker strip used a strings.ToUpper copy's byte
-// offset to slice the ORIGINAL summary. Case mappings that grow in bytes
-// (ß U+00DF -> SS, ﬁ U+FB01 -> FI) shift the marker's offset in the copy,
-// so the slice cut into the original landed mid-rune/late and corrupted
-// the displayed completion summary. stripStrategistCompleteMarker folds
-// in place (indexFoldASCII) so offsets are valid on the original string,
-// and the original casing is preserved.
+// #4015: the strategist completion-marker strip must slice the ORIGINAL
+// summary, not a strings.ToUpper copy whose byte offsets can drift.
+// Empirically corrected trigger family (probe-verified; Go's ToUpper is a
+// SIMPLE mapping, no special casing — the issue's ß/ﬁ examples do NOT
+// change byte length): grow ɐ U+0250(2B)→Ɐ U+2C6F(3B) +1B; shrink
+// ſ U+017F(2B)→S(1B) −1B and ı U+0131(2B)→I(1B) −1B.
+// stripStrategistCompleteMarker fold-scans in place (indexFoldASCII), so
+// offsets are valid on the original string and casing is preserved.
 func TestIssue4015StripMarkerOffsetStaysOnOriginalString(t *testing.T) {
 	cases := []struct {
 		name, in, want string
 	}{
 		{
-			// ß before the marker grows +1 byte in the ToUpper copy: the old
-			// code sliced one byte late into a 3-byte CJK rune.
-			name: "eszett before marker",
+			// ɐ grows +1B in the ToUpper copy: the old code sliced one byte
+			// late and ate the first rune of the remainder.
+			name: "growth char ɐ before marker",
+			in:   "注意 ɐ done <GOAL_ACHIEVED/> Shipping complete.",
+			want: "Shipping complete.",
+		},
+		{
+			// ſ shrinks −1B: the old slice started one byte early, leaving
+			// a stale prefix byte.
+			name: "shrink char ſ before marker",
+			in:   "ļ ſ ok <GOAL_ACHIEVED/> Done, all tests green.",
+			want: "Done, all tests green.",
+		},
+		{
+			// ı shrinks −1B (dev seat probe, #4022).
+			name: "shrink char ı before marker",
+			in:   "ıstanbul check <GOAL_ACHIEVED/> 登录页修复完成",
+			want: "登录页修复完成",
+		},
+		{
+			// ß does NOT drift under Go's simple ToUpper (2B→2B) — kept as
+			// a no-drift sanity case for the corrected trigger family.
+			name: "no-drift char ß still strips correctly",
 			in:   "Straße fertig. <GOAL_ACHIEVED/> 登录页修复完成",
 			want: "登录页修复完成",
 		},
 		{
-			// ﬁ ligature also grows +1 byte under ToUpper.
-			name: "fi ligature before marker",
-			in:   "ﬁnal check done <GOAL_ACHIEVED/> all tests pass",
-			want: "all tests pass",
-		},
-		{
-			// Markdown-wrapped marker, several length-changing chars before it.
-			name: "multiple growing chars",
-			in:   "ﬂow: Straße ﬁx `✓` <GOAL_ACHIEVED/> done",
-			want: "done",
-		},
-		{
-			// Case-insensitive detection is preserved from the old
+			// Case-insensitive detection preserved from the old
 			// ToUpper-based behavior.
 			name: "lowercase marker still stripped",
 			in:   "done with everything <goal_achieved/> ship it",
@@ -45,8 +57,8 @@ func TestIssue4015StripMarkerOffsetStaysOnOriginalString(t *testing.T) {
 			want: "shipped",
 		},
 		{
-			// No marker: pass through unchanged (autoupdate path where the
-			// strategist talks about the tag without emitting it).
+			// No marker: pass through unchanged (the strategist discusses
+			// the tag without emitting it).
 			name: "no marker passthrough",
 			in:   "do NOT emit the GOAL_ACHIEVED tag yet, more work remains",
 			want: "do NOT emit the GOAL_ACHIEVED tag yet, more work remains",
@@ -58,5 +70,18 @@ func TestIssue4015StripMarkerOffsetStaysOnOriginalString(t *testing.T) {
 				t.Fatalf("stripStrategistCompleteMarker(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// The old misaligned slice could land mid-rune and emit invalid UTF-8; the
+// fix must never do that.
+func TestIssue4015StripMarkerResultIsValidUTF8(t *testing.T) {
+	in := "ɐɐɐ <GOAL_ACHIEVED/> 完成了所有目标。"
+	got := stripStrategistCompleteMarker(in)
+	if got != "完成了所有目标。" {
+		t.Errorf("utf8 case: got %q", got)
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("result is not valid UTF-8: %q", got)
 	}
 }

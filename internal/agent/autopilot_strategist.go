@@ -28,9 +28,11 @@ const strategistCompleteMarker = "<GOAL_ACHIEVED/>"
 // stripStrategistCompleteMarker removes the completion marker (case-
 // insensitive, possibly markdown-wrapped) from s and returns the trimmed
 // remainder with the ORIGINAL casing preserved. (#4015: indexing a
-// strings.ToUpper copy yields byte offsets of that copy, not of s - case
-// mappings that change byte length (ß→SS, ﬁ→FI) shifted the slice cut and
-// corrupted the displayed summary. indexFoldASCII keeps offsets valid on s.)
+// strings.ToUpper copy yields byte offsets of that copy, not of s - simple
+// case mappings that change byte length (probe-verified family: ɐ→Ɐ +1B,
+// ſ→S and ı→I −1B; Go applies no special casing, so ß/ﬁ do NOT drift)
+// shifted the slice cut and corrupted the displayed summary.
+// indexFoldASCII keeps offsets valid on s.)
 func stripStrategistCompleteMarker(s string) string {
 	if idx := indexFoldASCII(s, strategistCompleteMarker); idx >= 0 {
 		return strings.TrimSpace(s[idx+len(strategistCompleteMarker):])
