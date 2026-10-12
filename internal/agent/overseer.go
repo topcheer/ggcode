@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,11 @@ const (
 	researchStallThreshold = 40 // read-only iterations before stall in research mode
 	researchSpamThreshold  = 15 // same read tool calls before spam in research mode
 	researchDriftThreshold = 50 // iterations without productive action in research mode
+
+	// #3990: research mode RAISES the file-stuck threshold instead of
+	// disabling the detector - circling one file is still a stall signal
+	// during research, just a weaker one.
+	fileStuckResearchThreshold = 8 // same file read >N times without edit in research mode
 )
 
 // overseerState tracks the agent's tool-call trajectory for analysis.
@@ -169,11 +175,30 @@ func newOverseerState() *overseerState {
 	}
 }
 
+// fixIntentRe is the #3990 fix-intent override for detectResearchMode.
+// Kept minimal on purpose: broader make-verbs like "refactor"/"migrate"
+// appear inside research wording ("assess the impact of the refactoring")
+// and would misclassify genuine research tasks. Word boundaries keep
+// inflected nouns out: "Explore competitor implementations" is research,
+// "implement the stub" is a fix intent.
+var fixIntentRe = regexp.MustCompile(`\b(fix|fixes|fixed|fixing|repair|repairs|repaired|repairing|resolve|resolves|resolved|resolving|implement|implements|implemented|implementing|patch|patches|patched|patching)\b`)
+
 // detectResearchMode checks if a task description indicates research work.
 // Returns true for tasks involving research, analysis, audit, exploration,
 // evaluation, or comparison — where extensive reading IS the primary work.
+//
+// #3990: a concrete make/fix deliverable overrides research verbs. Research
+// verbs ("analyze", "investigate", "review", ...) are ordinary wording in
+// bug-fix tasks ("investigate why tests fail and fix it"), yet research mode
+// disables/degrades all four stuck detectors for the whole run - including
+// file_stuck, which targets exactly the implementation-phase stall. When the
+// task text also states a fix/make intent, that intent wins and detectors run
+// at normal thresholds.
 func detectResearchMode(taskText string) bool {
 	p := strings.ToLower(taskText)
+	if fixIntentRe.MatchString(p) {
+		return false
+	}
 	keywords := []string{
 		"research", "analyze", "analysis", "audit", "investigate",
 		"explore", "evaluate", "assess", "examine", "compare",
@@ -427,18 +452,20 @@ func (o *overseerState) checkReadOnlyStall(traj []trajectoryEntry) string {
 
 // checkFileStuck detects when the same file is read repeatedly without
 // being edited, suggesting the agent can't figure out what to change.
-// In research mode, this check is skipped entirely — re-reading files
-// during analysis is normal.
+// In research mode the threshold is raised instead of disabled (#3990):
+// even pure research tasks can get stuck circling one file, and a
+// disabled detector is blind to it; a higher threshold keeps the hint
+// while tolerating legitimate re-reading during analysis.
 func (o *overseerState) checkFileStuck(traj []trajectoryEntry) string {
 	if o.fired["file_stuck"] {
 		return ""
 	}
-	// Skip in research mode: re-reading files during research/analysis is normal.
+	threshold := fileStuckThreshold
 	if o.researchMode {
-		return ""
+		threshold = fileStuckResearchThreshold
 	}
 	for file, count := range o.fileReadsSinceEdit {
-		if count >= fileStuckThreshold {
+		if count >= threshold {
 			o.fired["file_stuck"] = true
 			debug.Log("overseer", "file stuck: %s read %d times without edit", file, count)
 			return fmt.Sprintf(
