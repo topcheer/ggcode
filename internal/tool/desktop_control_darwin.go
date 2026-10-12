@@ -70,10 +70,12 @@ tell application %s
   set miniaturized of front window to true
 end tell`, applescriptQuote(p.Text)))
 	case "maximize_window":
-		// macOS doesn't have true maximize; use fullscreen toggle
+		// macOS doesn't have true maximize; use fullscreen. #4058: set to
+		// true (idempotent), NOT `not fullscreen` (toggle) — a retry must not
+		// exit fullscreen. Matches Windows ShowWindow(swMaximize) semantics.
 		return appleScriptResult(ctx, fmt.Sprintf(`
 tell application %s
-  set fullscreen of front window to not fullscreen of front window
+  set fullscreen of front window to true
 end tell`, applescriptQuote(p.Text)))
 
 	// ── Application ──
