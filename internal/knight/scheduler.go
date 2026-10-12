@@ -1122,7 +1122,8 @@ func (k *Knight) evaluateAutoPromoteCandidate(ctx context.Context, entry *SkillE
 	if baselineContext == "" {
 		baselineContext = "No active baseline skills are available yet."
 	}
-	memoryContext := k.formatRecentSemanticMemoryForEval(8)
+	memoryCtx := k.formatSemanticMemoryForEvalIDs(8)
+	memoryContext := memoryCtx.text
 	if memoryContext == "" {
 		memoryContext = "No prior Knight lessons recorded yet."
 	}
@@ -1204,6 +1205,19 @@ Staged skill:
 	decision.ReplayVerdict = abReplayVerdict(replay)
 	decision.finalizeFailureMode()
 	k.appendAutoPromoteEval(entry, decision)
+	// #r25 feedback loop: the eval consumed the injected lessons; its
+	// outcome feeds back into each lesson's utility score (approve = the
+	// context helped, decline = it did not). Small deltas compound across
+	// decisions via the utility-ranked retrieval above.
+	if len(memoryCtx.ids) > 0 {
+		delta := -0.05
+		if decision.Allowed() {
+			delta = 0.05
+		}
+		for _, id := range memoryCtx.ids {
+			_ = k.ReinforceSemanticMemory(id, delta)
+		}
+	}
 	if !decision.Allowed() {
 		if decision.Rationale == "" {
 			decision.Rationale = "scenario evaluation did not approve auto-promotion"
