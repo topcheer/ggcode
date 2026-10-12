@@ -1879,6 +1879,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// #4003: pass the CURRENT run's userText - researchMode is per-run.
 	a.resetOverseer(userText)
 	a.resetPlanner()
+	// #4023: research plan injection is per-run, not per-Agent-lifetime.
+	// Without this reset the second research run in the same session gets
+	// no [Research Plan], and the r365 gap gate computes run2's uncovered
+	// sub-queries against run1's residual researchPlanSubs (every run1
+	// sub-query mislabeled as a gap, steering the model off run2's goal).
+	a.researchPlan.reset()
+	a.researchPlanSubs = nil
 	// Agent-side planning: analyze the user's first message for complexity.
 	// If complex (multi-file, multi-goal, multi-step), suggest a structured
 	// plan early in the conversation (Devin/Claude Code auto-planning pattern).
