@@ -128,9 +128,19 @@ func matchProtectedPattern(relPath, slashPath, pattern string) bool {
 	// Directory prefix match: "dir/" matches "dir/anything" or "subdir/dir/anything"
 	if strings.HasSuffix(pat, "/") {
 		prefix := pat
+		// #4060: fold the prefix comparisons on case-insensitive FSes so a
+		// literal ".GIT/" variant cannot slip this branch — the OS resolves
+		// subdir/.GIT/config to the real .git/config (same file), and the
+		// guard must judge it under FS semantics, like matchSegFS does.
+		hasPrefix := strings.HasPrefix
+		if fsCaseInsensitive() {
+			hasPrefix = func(s, p string) bool {
+				return strings.HasPrefix(strings.ToLower(s), strings.ToLower(p))
+			}
+		}
 		// Match at workspace root
-		if strings.HasPrefix(relPath+"/", prefix) ||
-			strings.HasPrefix(slashPath+"/", prefix) ||
+		if hasPrefix(relPath+"/", prefix) ||
+			hasPrefix(slashPath+"/", prefix) ||
 			relPath+"/" == prefix {
 			return true
 		}
@@ -143,7 +153,9 @@ func matchProtectedPattern(relPath, slashPath, pattern string) bool {
 		dirName := strings.TrimSuffix(pat, "/")
 		for _, p := range []string{relPath, slashPath} {
 			for _, seg := range strings.Split(p, "/") {
-				if seg == dirName {
+				// #4060: segment equality must also fold on case-insensitive
+				// FSes ("subdir/.GIT/refs" carries seg ".GIT" vs dirName ".git").
+				if seg == dirName || (fsCaseInsensitive() && strings.EqualFold(seg, dirName)) {
 					return true
 				}
 			}
@@ -218,7 +230,7 @@ func matchDoubleStar(pattern, name string) (bool, error) {
 		if suffix == "" {
 			return true, nil
 		}
-		return filepath.Match(suffix, filepath.Base(name))
+		return matchSegFS(suffix, filepath.Base(name)), nil // #4060: FS-aware fold
 	}
 
 	// #445: the prefix may itself contain glob metacharacters (src/*-gen/**).
@@ -235,8 +247,7 @@ func matchDoubleStar(pattern, name string) (bool, error) {
 		return false, nil
 	}
 	for i, p := range pSegs {
-		matched, err := filepath.Match(p, nSegs[i])
-		if err != nil || !matched {
+		if !matchSegFS(p, nSegs[i]) { // #4060: FS-aware fold
 			return false, nil
 		}
 	}
@@ -253,8 +264,7 @@ func matchDoubleStar(pattern, name string) (bool, error) {
 		off := len(nSegs) - len(sSegs)
 		all := true
 		for i, s := range sSegs {
-			ok, err := filepath.Match(s, nSegs[off+i])
-			if err != nil || !ok {
+			if !matchSegFS(s, nSegs[off+i]) { // #4060: FS-aware fold
 				all = false
 				break
 			}
@@ -264,12 +274,10 @@ func matchDoubleStar(pattern, name string) (bool, error) {
 		}
 	}
 	// Single-segment or globbed suffix against the base.
-	matched, err := filepath.Match(suffix, filepath.Base(rest))
-	if err == nil && matched {
+	if matchSegFS(suffix, filepath.Base(rest)) { // #4060: FS-aware fold
 		return true, nil
 	}
-	matched2, err2 := filepath.Match(suffix, rest)
-	return matched2 && err2 == nil, nil
+	return matchSegFS(suffix, rest), nil
 }
 
 // resolveSymlinkPrefix resolves symlinks for the longest existing prefix
