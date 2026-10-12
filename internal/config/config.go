@@ -2125,6 +2125,28 @@ func mergeDefaultEndpoints(cfg, defaults *Config) {
 				}
 			}
 			carryGatewayVendorKey(&agVC, epName, oldVC.APIKey)
+			// #3986: if the top-level active selection points at the legacy
+			// vendor being deleted, redirect it to ai-gateway first —
+			// otherwise cfg.Vendor dangles, Validate() fails with
+			// "vendor %q is not configured" on next Load, and ggcode cannot
+			// start until the yaml is fixed by hand.
+			if cfg.Vendor == oldVendor {
+				cfg.Vendor = "ai-gateway"
+				if _, ok := agVC.Endpoints[cfg.Endpoint]; !ok {
+					// Legacy endpoint names do not carry over (they merge
+					// under the gateway endpoint names); fall back to the
+					// first endpoint deterministically (#1422-B2: lowest
+					// name, never map-iteration order).
+					eps := make([]string, 0, len(agVC.Endpoints))
+					for k := range agVC.Endpoints {
+						eps = append(eps, k)
+					}
+					sort.Strings(eps)
+					if len(eps) > 0 {
+						cfg.Endpoint = eps[0]
+					}
+				}
+			}
 			delete(cfg.Vendors, oldVendor)
 		}
 		cfg.Vendors["ai-gateway"] = agVC
