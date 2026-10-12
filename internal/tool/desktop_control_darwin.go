@@ -39,7 +39,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "scroll":
 		return mouseScroll(ctx, p.X, p.Y, p.Direction, p.Amount)
 	case "modifier_click":
-		return modifierClick(ctx, p.X, p.Y, p.Text)
+		return modifierClick(ctx, p.X, p.Y, p.Text, p.Button)
 
 	// ── Keyboard ──
 	case "type":
@@ -70,10 +70,12 @@ tell application %s
   set miniaturized of front window to true
 end tell`, applescriptQuote(p.Text)))
 	case "maximize_window":
-		// macOS doesn't have true maximize; use fullscreen toggle
+		// macOS doesn't have true maximize; use fullscreen. #4058: set to
+		// true (idempotent), NOT `not fullscreen` (toggle) — a retry must not
+		// exit fullscreen. Matches Windows ShowWindow(swMaximize) semantics.
 		return appleScriptResult(ctx, fmt.Sprintf(`
 tell application %s
-  set fullscreen of front window to not fullscreen of front window
+  set fullscreen of front window to true
 end tell`, applescriptQuote(p.Text)))
 
 	// ── Application ──
@@ -436,11 +438,18 @@ func runSwiftCGEvent(ctx context.Context, code string) (Result, error) {
 
 // modifierClick holds modifier keys down while clicking (multi-select,
 // force-open-in-new-tab, etc.). modifiers is a normalized spec like
-// "cmd+shift".
-func modifierClick(ctx context.Context, x, y int, modifiers string) (Result, error) {
+// "cmd+shift"; button honors the schema contract (#1665 fixed the plain
+// click path, modifier_click had the same contract breach — #3876).
+func modifierClick(ctx context.Context, x, y int, modifiers, button string) (Result, error) {
 	mods, err := normalizeModifiers(modifiers)
 	if err != nil {
 		return Result{}, err
+	}
+	// Same event-type encoding as mouseClick: the CGEventType encodes the
+	// button, mouseButton stays .left for left/right.
+	downType, upType := ".leftMouseDown", ".leftMouseUp"
+	if button == "right" {
+		downType, upType = ".rightMouseDown", ".rightMouseUp"
 	}
 	// Map to CGEventFlags raw values: these overlap-free masks can be OR-ed.
 	var flags uint64
@@ -462,15 +471,15 @@ func modifierClick(ctx context.Context, x, y int, modifiers string) (Result, err
 import CoreGraphics
 let point = CGPoint(x: %d, y: %d)
 let flags = CGEventFlags(rawValue: %d)
-let eDown = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown,
+let eDown = CGEvent(mouseEventSource: nil, mouseType: %s,
                     mouseCursorPosition: point, mouseButton: .left)
 eDown?.flags = flags
 eDown?.post(tap: .cghidEventTap)
-let eUp = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp,
+let eUp = CGEvent(mouseEventSource: nil, mouseType: %s,
                   mouseCursorPosition: point, mouseButton: .left)
 eUp?.flags = flags
 eUp?.post(tap: .cghidEventTap)
-`, x, y, flags))
+`, x, y, flags, downType, upType))
 }
 
 // mousePosition returns the current cursor position in logical pixels.
@@ -819,12 +828,40 @@ ObjC.import('AppKit');
 	return runJXA(ctx, script)
 }
 
+var keyCodeMap = map[string]int{
+	"return": 36, "enter": 76, "tab": 48, "space": 49,
+	// #4054: backspace was missing and fell through to the keystroke
+	// fallback, typing the literal text "backspace" into the focused
+	// control with a fake success. Apple key code 51 is the backspace key.
+	"backspace": 51, "delete": 51,
+	// #4055: "delete" is backspace on macOS but forward delete on
+	// Windows/Linux (xdotool Delete / VK_DELETE). Keep the legacy macOS
+	// mapping for compatibility, and expose unambiguous names for the
+	// forward direction (Fn+Delete, key code 117).
+	"forward-delete": 117, "forwarddelete": 117,
+	"esc": 53, "escape": 53,
+	"home": 115, "end": 119,
+	"pageup": 116, "page-up": 116, "pagedown": 121, "page-down": 121,
+	"arrowleft": 123, "arrow-left": 123, "arrowright": 124, "arrow-right": 124,
+	"arrowdown": 125, "arrow-down": 125, "arrowup": 126, "arrow-up": 126,
+	"f1": 122, "f2": 120, "f3": 99, "f4": 118,
+	"f5": 96, "f6": 97, "f7": 98, "f8": 100,
+	"f9": 101, "f10": 109, "f11": 103, "f12": 111,
+}
+
 // keyComboResult translates key combo strings (e.g. "cmd+c", "ctrl+shift+tab")
 // to AppleScript System Events key code commands.
 func keyComboResult(ctx context.Context, combo string) (Result, error) {
-	parts := strings.Split(combo, "+")
-	if len(parts) == 0 {
+	// #3876: strings.Split never returns an empty slice (len(parts)==0 was
+	// unreachable dead code), so an empty combo or a trailing "+" silently
+	// produced `keystroke ""` and an opaque osascript error. Reject both
+	// shapes up front, mirroring normalizeModifiers' empty-segment check.
+	if strings.TrimSpace(combo) == "" {
 		return Result{}, fmt.Errorf("empty key combo")
+	}
+	parts := strings.Split(combo, "+")
+	if strings.TrimSpace(parts[len(parts)-1]) == "" {
+		return Result{}, fmt.Errorf("key combo %q ends with an empty key (trailing "+"?)", combo)
 	}
 
 	modifiers := []string{}
@@ -849,18 +886,6 @@ func keyComboResult(ctx context.Context, combo string) (Result, error) {
 	key := strings.TrimSpace(parts[len(parts)-1])
 	keyLower := strings.ToLower(key)
 
-	keyCodeMap := map[string]int{
-		"return": 36, "enter": 76, "tab": 48, "space": 49,
-		"delete": 51, "esc": 53, "escape": 53,
-		"home": 115, "end": 119,
-		"pageup": 116, "page-up": 116, "pagedown": 121, "page-down": 121,
-		"arrowleft": 123, "arrow-left": 123, "arrowright": 124, "arrow-right": 124,
-		"arrowdown": 125, "arrow-down": 125, "arrowup": 126, "arrow-up": 126,
-		"f1": 122, "f2": 120, "f3": 99, "f4": 118,
-		"f5": 96, "f6": 97, "f7": 98, "f8": 100,
-		"f9": 101, "f10": 109, "f11": 103, "f12": 111,
-	}
-
 	modList := ""
 	if len(modifiers) > 0 {
 		modList = " using {" + strings.Join(modifiers, ", ") + "}"
@@ -870,6 +895,16 @@ func keyComboResult(ctx context.Context, combo string) (Result, error) {
 	if code, ok := keyCodeMap[keyLower]; ok {
 		script = fmt.Sprintf(`tell application "System Events" to key code %d%s`, code, modList)
 	} else {
+		// #4054: a multi-char purely-alphabetic key that is not in the map is
+		// almost certainly a mistyped key NAME (e.g. "backspace" before the
+		// map entry existed, or "f13") — typing it literally is a silent
+		// wrong action with a fake success. Reject it and list supported
+		// names (Windows-side precedent: only single chars reach the literal
+		// fallback). Text to type belongs to the 'type' action; digits and
+		// mixed strings keep the keystroke fallback for key_combo tails.
+		if unknownAlphaKeyName(keyLower) {
+			return Result{IsError: true, Content: fmt.Sprintf("unknown key name %q; supported keys: return, enter, tab, space, backspace, delete, forward-delete, esc, escape, home, end, pageup, pagedown, arrowleft/right/up/down, f1-f12; single characters are typed literally", key)}, nil
+		}
 		// Escape the key for embedding in an AppleScript double-quoted
 		// string; applies to the single-char branch too (a literal " would
 		// otherwise break the script). Control characters must NOT use the
@@ -960,5 +995,10 @@ func appleScriptResult(ctx context.Context, script string) (Result, error) {
 func applescriptQuote(s string) string {
 	s = strings.ReplaceAll(s, "\\", "\\\\")
 	s = strings.ReplaceAll(s, "\"", "\\\"")
+	// #3876: raw newlines/tabs inside `tell application "..."` produce
+	// osascript -2739 syntax errors; escape like swiftStringLiteral does.
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	s = strings.ReplaceAll(s, "\t", "\\t")
 	return "\"" + s + "\""
 }

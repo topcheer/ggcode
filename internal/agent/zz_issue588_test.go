@@ -102,12 +102,25 @@ test:
 			want: false,
 		},
 		{
+			// #3610: deletion needs a trace (.PHONY declaration survives
+			// the target) - a bare build-only Makefile is indistinguishable
+			// from a library project and must not fire.
 			name: "tampering - test target deleted entirely",
 			makefile: `
+.PHONY: build test
 build:
 	go build ./...
 `,
 			want: true,
+		},
+		{
+			// #3610 form 3: pure-build Makefile, no test trace ever.
+			name: "legitimate - pure-build Makefile (no test target ever)",
+			makefile: `
+build:
+	go build ./...
+`,
+			want: false,
 		},
 		{
 			name: "legitimate - only helper targets edited",

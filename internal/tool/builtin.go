@@ -91,6 +91,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		&EnterWorktree{WorkingDir: workingDir},
 		&ExitWorktree{WorkingDir: workingDir},
 		&ListWorktree{WorkingDir: workingDir},
+		MergeWorktree{WorkingDir: workingDir},
 
 		// Execution
 		&RunCommand{WorkingDir: workingDir, Policy: policy, Sandbox: sandbox, SecLedger: secLedger, RiskLedger: riskLedger},
@@ -187,6 +188,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// Cross-session knowledge graph (typed entities + relationships)
 		&KnowledgeGraphTool{WorkingDir: workingDir},
 
+		// Durable hierarchical goal graph (long-horizon goal -> milestone -> task)
+		&GoalGraphTool{WorkingDir: workingDir},
+
 		// Project scaffolding (multi-language templates: Go, TS, Python, Rust)
 		ScaffoldProject{SandboxCheck: sandboxFor("scaffold_project"), WorkingDir: workingDir},
 	)
@@ -235,6 +239,12 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 	// Tool macros (sa-148): record/replay reusable read-only tool-call
 	// sequences. Also holds a registry reference for run-time lookup.
 	if err := registry.Register(&MacroTool{WorkingDir: workingDir, Registry: registry}); err != nil {
+		return err
+	}
+
+	// Agent-defined parametrized tools (r13): macro step DSL + params
+	// schema, called as first-class parameterized tools.
+	if err := registry.Register(&DefineTool{WorkingDir: workingDir, Registry: registry}); err != nil {
 		return err
 	}
 

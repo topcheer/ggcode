@@ -340,11 +340,17 @@ func TestStrategyFixationIsMutation(t *testing.T) {
 }
 
 func TestStrategyFixationIsVerification(t *testing.T) {
-	tools := []string{"run_command", "start_command", "code_health", "review_changes", "verify", "lsp_diagnostics"}
+	// #3685-B: the set mirrors the causal-gate command channels MINUS
+	// start_command (its launch result only means "job started"; the real
+	// verification event for a background job is its terminal outcome).
+	tools := []string{"run_command", "bash", "powershell", "wait_command", "read_command_output", "code_health", "review_changes", "verify", "lsp_diagnostics"}
 	for _, tool := range tools {
 		if !strategyFixationIsVerification(tool) {
 			t.Errorf("expected %s to be verification", tool)
 		}
+	}
+	if strategyFixationIsVerification("start_command") {
+		t.Error("start_command must not count as verification at launch (#3685-B)")
 	}
 	if strategyFixationIsVerification("edit_file") {
 		t.Error("edit_file should not be verification")

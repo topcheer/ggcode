@@ -126,6 +126,9 @@ func TestRecordToolBaseline_FirstConnectionIsTheBaseline(t *testing.T) {
 
 func TestRecordToolBaseline_DriftAfterApproval(t *testing.T) {
 	m := newBaselineTestPlugin(t, config.MCPServerConfig{Name: "srv"})
+	// #4062: with a wired sink, drift re-baselines (one alert per change).
+	// The nil-sink fail-visible variant is covered by TestIssue4062_*.
+	m.OnToolDrift = func(server string, added, removed []string) {}
 	m.mu.Lock()
 	m.recordToolBaselineLocked("h1", []string{"t1", "t2"})
 	m.mu.Unlock()

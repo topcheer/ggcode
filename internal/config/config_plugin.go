@@ -86,14 +86,6 @@ func (c *Config) FindPlugin(name string) *PluginConfigEntry {
 	return nil
 }
 
-// ListPlugins returns all configured plugins.
-func (c *Config) ListPlugins() []PluginConfigEntry {
-	if c == nil {
-		return nil
-	}
-	return c.Plugins
-}
-
 // ValidateGRPCPlugin checks that a gRPC plugin config is valid.
 func (e *PluginConfigEntry) ValidateGRPCPlugin() error {
 	if e.Name == "" {

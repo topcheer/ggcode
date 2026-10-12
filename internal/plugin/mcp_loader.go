@@ -94,6 +94,14 @@ type MCPPlugin struct {
 	// separate goroutine; must not take the plugin write lock directly.
 	OnToolDrift func(server string, added, removed []string)
 
+	// notifyState, if set, is invoked (with m.mu NOT held) whenever a
+	// background path mutates connection state or the tool set outside the
+	// manager's connect/disconnect lifecycle (tool refresh, auto-reconnect).
+	// The manager injects its emitUpdate so UI panels converge (#3967);
+	// must be called outside the plugin lock because the listener chain
+	// re-enters Info() which takes the plugin read lock.
+	notifyState func()
+
 	// lastRefreshAt throttles manual tool refreshes so a user cannot hammer
 	// the server (each refresh is a ListTools roundtrip + potential rebuild).
 	lastRefreshAt time.Time
@@ -406,14 +414,18 @@ func (m *MCPPlugin) setupNotificationHandler(client *mcp.Client) {
 
 // refreshTools re-fetches the tool list from the MCP server and updates the
 // adapter and registry. Called when the server signals tools/list_changed.
-func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int) {
+// #4042: the error is returned explicitly - callers must distinguish
+// "ListTools errored" from "succeeded with zero tools" (a legal
+// resources/prompts-only server), which the old (false, 0) collapsed into
+// one ambiguous value.
+func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	tools, err := client.ListTools(ctx)
 	if err != nil {
 		debug.Log("mcp-notif", "server=%s tool refresh failed: %v", m.cfg.Name, err)
-		return false, 0
+		return false, 0, err
 	}
 
 	newHash := computeToolsHash(tools)
@@ -426,7 +438,7 @@ func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int) {
 		// unchanged tools would churn the registry and the LLM-visible
 		// schemas for no benefit.
 		debug.Log("mcp-notif", "server=%s tools unchanged (hash match), skipping rebuild", m.cfg.Name)
-		return false, len(tools)
+		return false, len(tools), nil
 	}
 	m.toolsHash = newHash
 	if added, removed, fire := m.recordToolBaselineLocked(newHash, toolNamesOf(tools)); fire {
@@ -440,7 +452,9 @@ func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int) {
 
 	// Unregister old tools
 	if oldAdapter != nil && registry != nil {
-		for _, tn := range oldAdapter.ToolNames() {
+		// #4071: only the names this adapter actually owns (#1594-A) -
+		// ToolNames() includes collision-skipped names owned by siblings.
+		for _, tn := range oldAdapter.RegisteredNames() {
 			registry.Unregister(tn)
 		}
 	}
@@ -467,7 +481,11 @@ func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int) {
 	}
 
 	debug.Log("mcp-notif", "server=%s tools refreshed: %d tools", m.cfg.Name, len(tools))
-	return true, len(tools)
+	// #3967: the tool set (and thus Info()) changed - push a snapshot so
+	// open panels re-render the new list instead of staying stale until
+	// reopened. Lock-free call site: notifyStateChange re-enters Info().
+	m.notifyStateChange()
+	return true, len(tools), nil
 }
 
 // computeToolsHash returns a stable content hash over a tool definition
@@ -572,6 +590,19 @@ func (m *MCPPlugin) startReconnectWatcher(client *mcp.Client) {
 // needed a minute to start is back well within a typical working session.
 const mcpReconnectCooldown = 60 * time.Second
 
+// notifyStateChange propagates a plugin-level state/tool change to the
+// manager's update listeners (the TUI panel rides emitUpdate). MUST be
+// called with m.mu NOT held: the listener chain re-enters Info() which
+// takes the plugin read lock (#3967).
+func (m *MCPPlugin) notifyStateChange() {
+	m.mu.RLock()
+	fn := m.notifyState
+	m.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 // attemptReconnect performs one reconnect cycle: mark disconnected, drop
 // stale tool registrations, reconnect, and re-register tools on success.
 // Returns true when the server is back and its tools are available again.
@@ -591,9 +622,13 @@ func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
 	m.client = nil
 	m.status = MCPStatusPending
 	m.mu.Unlock()
+	// #3967: the visible status flipped (e.g. connected -> pending after a
+	// crash); panels still showing the pre-crash state must converge.
+	m.notifyStateChange()
 	// Unregister old tools so stale definitions don't linger
 	if oldAdapter != nil && m.registry != nil {
-		for _, tn := range oldAdapter.ToolNames() {
+		// #4071: owned subset only - see the Info() snapshot note.
+		for _, tn := range oldAdapter.RegisteredNames() {
 			m.registry.Unregister(tn)
 		}
 	}
@@ -613,7 +648,8 @@ func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
 			m.status = MCPStatusPending
 			m.mu.Unlock()
 			if m.registry != nil {
-				for _, tn := range adapter.ToolNames() {
+				// #4071: owned subset only (#1594-A).
+				for _, tn := range adapter.RegisteredNames() {
 					m.registry.Unregister(tn)
 				}
 			}
@@ -631,12 +667,17 @@ func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
 				debug.Log("mcp-reconnect", "server=%s tool re-registration failed: %v", m.cfg.Name, regErr)
 			}
 		}
+		// #3967: auto-recovery succeeded - without this the panel keeps
+		// showing the outage (or the pre-crash connected mark) forever.
+		m.notifyStateChange()
 		return true
 	}
 	m.mu.Lock()
 	m.status = MCPStatusFailed
 	m.lastError = normalizeMCPError(err)
 	m.mu.Unlock()
+	// #3967: surface the failed attempt so the panel reflects reality.
+	m.notifyStateChange()
 	debug.Log("mcp-reconnect", "server=%s reconnect attempt failed: %v", m.cfg.Name, err)
 	return false
 }
@@ -740,6 +781,21 @@ func (m *MCPPlugin) Info() MCPServerInfo {
 		info.ToolNames = m.adapter.ToolNames()
 	}
 	return info
+}
+
+// OwnedToolNames returns the registry names this plugin's adapter ACTUALLY
+// owns (#1594-A post-collision subset). Unregister paths must use this, not
+// Info().ToolNames - the Info snapshot keeps full definitions for display,
+// but Unregister is a pure name-key delete, so a duplicate-name server whose
+// registrations were all collision-skipped must not enumerate its sibling's
+// names (#4071).
+func (m *MCPPlugin) OwnedToolNames() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.adapter == nil {
+		return nil
+	}
+	return m.adapter.RegisteredNames()
 }
 
 func (m *MCPPlugin) Close() error {
@@ -933,10 +989,6 @@ type MCPManager struct {
 	urlOpener          func(string) error
 	samplingHandler    mcp.SamplingHandler
 	elicitationHandler mcp.ElicitationHandler
-	// onToolDrift, if set, receives anti-rug-pull drift alerts (sa-119)
-	// from every plugin created by this manager and is propagated to new
-	// plugins in newPluginFromConfig/NewMCPManager.
-	onToolDrift func(server string, added, removed []string)
 }
 
 func NewMCPManager(servers []config.MCPServerConfig, registry *tool.Registry, scope string) *MCPManager {
@@ -946,13 +998,21 @@ func NewMCPManager(servers []config.MCPServerConfig, registry *tool.Registry, sc
 		p.registry = registry
 		plugins = append(plugins, p)
 	}
-	return &MCPManager{
+	m := &MCPManager{
 		plugins:      plugins,
 		registry:     registry,
 		scope:        scope,
 		timeout:      8 * time.Second,
 		stdioTimeout: 2 * time.Minute,
 	}
+	// #4062: wire the anti-rug-pull alert sink on every production assembly
+	// path. Previously OnToolDrift was nil everywhere outside tests, so a
+	// tampered MCP server was detected and silently re-baselined with the
+	// user never seeing the alert the docs promised.
+	for _, p := range m.plugins {
+		p.OnToolDrift = m.handleToolDrift
+	}
+	return m
 }
 
 // isDisabled reports whether the named server is disabled for this
@@ -965,18 +1025,6 @@ func (m *MCPManager) SetOnUpdate(fn func([]MCPServerInfo)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onUpdate = fn
-}
-
-// SetOnToolDrift registers the anti-rug-pull drift alert sink (sa-119):
-// a server's tool definitions changed after the user-approved baseline.
-// Must be called before Connect; plugins created afterwards inherit it.
-func (m *MCPManager) SetOnToolDrift(fn func(server string, added, removed []string)) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.onToolDrift = fn
-	for _, p := range m.plugins {
-		p.OnToolDrift = fn
-	}
 }
 
 func (m *MCPManager) SetURLOpener(fn func(string) error) {
@@ -1091,6 +1139,22 @@ func (m *MCPManager) emitUpdate() {
 	if fn != nil {
 		fn(m.Snapshot())
 	}
+}
+
+// handleToolDrift is the production sink for the anti-rug-pull alert
+// (#4062). Wired into every plugin built by NewMCPManager and
+// newPluginFromConfig so a detected tool-definition drift can no longer
+// die on an unwired callback: it is recorded on the manager's warnings
+// slice (surfaced by ConnectAll and MCP status consumers) and pushed to
+// UI panels via the update broadcast.
+func (m *MCPManager) handleToolDrift(server string, added, removed []string) {
+	m.mu.Lock()
+	m.warnings = append(m.warnings, fmt.Sprintf(
+		"warning: MCP server %s tool definitions changed after approval (added=%v removed=%v) - verify this is expected before trusting the new tools",
+		server, added, removed))
+	m.mu.Unlock()
+	debug.Log("mcp-drift", "server=%s TOOL DRIFT alert surfaced via manager warnings: added=%v removed=%v", server, added, removed)
+	m.emitUpdate()
 }
 
 func (m *MCPManager) connectOne(ctx context.Context, p *MCPPlugin) {
@@ -1222,6 +1286,12 @@ func (m *MCPManager) Refresh(name string) (found bool, outcome RefreshOutcome, c
 		return false, RefreshNotConnected, 0
 	}
 	outcome, count = p.refreshToolsNow()
+	// #3967: a manual refresh must converge the UI regardless of outcome:
+	// the panel data is only as fresh as the last mcpServersUpdatedMsg, and
+	// unchanged results previously left the panel stale (e.g. a change that
+	// happened while the panel was closed). The changed path notifies via
+	// the plugin hook; this emitUpdate covers every other outcome.
+	m.emitUpdate()
 	return true, outcome, count
 }
 
@@ -1243,7 +1313,7 @@ func (m *MCPManager) Install(ctx context.Context, server config.MCPServerConfig)
 		m.plugins[i] = plugin
 		m.mu.Unlock()
 		if previous != nil {
-			for _, toolName := range previous.Info().ToolNames {
+			for _, toolName := range previous.OwnedToolNames() { // #4071 owned set
 				m.registry.Unregister(toolName)
 			}
 			_ = previous.Close()
@@ -1278,7 +1348,7 @@ func (m *MCPManager) Uninstall(name string) bool {
 		m.plugins = append(m.plugins[:i], m.plugins[i+1:]...)
 		m.mu.Unlock()
 
-		for _, toolName := range plugin.Info().ToolNames {
+		for _, toolName := range plugin.OwnedToolNames() { // #4071 owned set
 			m.registry.Unregister(toolName)
 		}
 		_ = plugin.Close()
@@ -1302,7 +1372,7 @@ func (m *MCPManager) Disconnect(name string) bool {
 		}
 		p := plugin
 		safego.Go("plugin.mcp.unregister", func() {
-			toolNames := p.Info().ToolNames
+			toolNames := p.OwnedToolNames() // #4071 owned set
 			for _, toolName := range toolNames {
 				m.registry.Unregister(toolName)
 			}
@@ -1349,7 +1419,9 @@ func (m *MCPManager) ForceReauth(name string) bool {
 		p.mu.RLock()
 		var oldToolNames []string
 		if p.adapter != nil {
-			oldToolNames = p.adapter.ToolNames()
+			// #4071: owned subset only (#1594-A) - ToolNames() includes
+			// collision-skipped names owned by duplicate-name siblings.
+			oldToolNames = p.adapter.RegisteredNames()
 		}
 		p.mu.RUnlock()
 		for _, toolName := range oldToolNames {
@@ -1564,8 +1636,11 @@ func (m *MCPPlugin) refreshToolsNow() (RefreshOutcome, int) {
 	}
 	client := m.client
 	m.mu.Unlock()
-	changed, count := m.refreshTools(client)
-	if count == 0 && !changed {
+	changed, count, err := m.refreshTools(client)
+	// #4042: failure is the EXPLICIT error - a successful refresh that
+	// returns zero tools (resources/prompts-only server) is NOT a failure;
+	// the old `count == 0 && !changed` misreported it as RefreshFailed.
+	if err != nil {
 		return RefreshFailed, 0
 	}
 	if changed {
@@ -1643,7 +1718,7 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 
 	// Unregister tools + close removed/changed plugins (outside lock).
 	closeAndUnregister := func(p *MCPPlugin, reason string) {
-		for _, toolName := range p.Info().ToolNames {
+		for _, toolName := range p.OwnedToolNames() { // #4071 owned set
 			m.registry.Unregister(toolName)
 		}
 		_ = p.Close()
@@ -1678,7 +1753,12 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 func (m *MCPManager) newPluginFromConfig(s config.MCPServerConfig) *MCPPlugin {
 	p := NewMCPPlugin(s)
 	p.registry = m.registry
-	p.OnToolDrift = m.onToolDrift
+	// #3967: bridge plugin-level background mutations (tool refresh,
+	// auto-reconnect) into the manager's update broadcast so UI panels
+	// converge without a manual reopen.
+	p.notifyState = m.emitUpdate
+	// #4062: reload path must carry the drift alert sink too.
+	p.OnToolDrift = m.handleToolDrift
 	if m.samplingHandler != nil {
 		p.SetSamplingHandler(m.samplingHandler)
 	}

@@ -55,6 +55,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"lastRunStats":              "populated only after a run completes",
 		"experienceInjectedCaseIDs": "populated only by the run-start experience recall (#3072); nil = nothing injected yet",
 		"runToolNames":              "appended only as tools execute during a run (r484 toolflow hint input); nil = no tools run yet",
+		"researchPlanSubs":          "populated only when the r343/sa-130 research planner fires (research-mode run); nil = no plan yet",
 		"perfBaseline":              "loaded lazily from disk on first access (guarded)",
 		"guidancePromoter":          "loaded lazily from rule store (guarded)",
 		"ruleStore":                 "loaded lazily via SetRuleStore (guarded)",

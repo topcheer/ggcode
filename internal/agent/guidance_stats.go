@@ -31,7 +31,18 @@ const (
 	// guidanceStatsPath is project-local: detector firing profiles differ
 	// per project (a docs workspace never trips build-idempotency).
 	guidanceStatsPath = ".ggcode/memory/guidance-stats.jsonl"
+	// guidanceHintsPath (r15) stores tag → last delivered hint text so
+	// /guidance <tag> can drill from aggregate counts to the exact prose
+	// injected at the model (introspection span-payload layer).
+	guidanceHintsPath = ".ggcode/memory/guidance-hints.jsonl"
 )
+
+// guidanceHintRec is the drill-down payload for one detector tag.
+type guidanceHintRec struct {
+	TS   string `json:"ts"`
+	Tag  string `json:"tag"`
+	Text string `json:"text"`
+}
 
 type guidanceTagStat struct {
 	Delivered  int `json:"delivered"`
@@ -72,6 +83,46 @@ func guidanceTag(text string) string {
 		r = r[:guidanceTagMaxRunes]
 	}
 	return string(r)
+}
+
+// recordGuidanceHint (r15) remembers the most recent delivered text for a
+// tag; called from the injectGuidance funnel alongside guidanceStats.record.
+func (a *Agent) recordGuidanceHint(tag, text, ts string) {
+	if tag == "" || text == "" {
+		return
+	}
+	if a.guidanceHints == nil {
+		a.guidanceHints = make(map[string]guidanceHintRec)
+	}
+	a.guidanceHints[tag] = guidanceHintRec{TS: ts, Tag: tag, Text: text}
+}
+
+// writeGuidanceHints rewrites guidance-hints.jsonl from the in-memory
+// tag→text map. Rewrite (not append) semantics keep the file bounded:
+// cardinality equals live tag count (tens), each tag keeps only its most
+// recent delivered text — an append jsonl would grow unboundedly and
+// duplicate near-identical template text every run.
+func (a *Agent) writeGuidanceHints(workingDir string) {
+	if len(a.guidanceHints) == 0 || workingDir == "" {
+		return
+	}
+	path := filepath.Join(workingDir, filepath.FromSlash(guidanceHintsPath))
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		debug.Log("guidance-hints", "mkdir failed: %v", err)
+		return
+	}
+	var b []byte
+	for _, rec := range a.guidanceHints {
+		line, err := json.Marshal(rec)
+		if err != nil {
+			continue
+		}
+		b = append(b, line...)
+		b = append(b, '\n')
+	}
+	if err := os.WriteFile(path, b, 0644); err != nil {
+		debug.Log("guidance-hints", "write failed: %v", err)
+	}
 }
 
 // flushGuidanceStats appends one JSONL line per tag to the project's
@@ -118,6 +169,8 @@ func (a *Agent) flushGuidanceStats() {
 		f.Write(append(b, '\n'))
 	}
 	debug.Log("guidance-stats", "flushed %d tag(s) to %s", len(a.guidanceStats), path)
+	// r15: tag→text drill-down sidecar (best-effort, same working dir).
+	a.writeGuidanceHints(workingDir)
 	// r22: harness-assumption expiry check - cross-model dead-weight
 	// detection over the file we just flushed into. Best-effort.
 	analyzeStaleGuidance(path, model)

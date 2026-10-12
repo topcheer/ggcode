@@ -16,7 +16,7 @@ func TestIssue3568FailedEditNotProductive(t *testing.T) {
 	o.fileReadsSinceEdit["a.go"] = 3
 
 	// Failed edit_file with no files reaching disk (old_text mismatch).
-	o.recordToolCall("edit_file", true, "a.go", "error: old_text not found in file")
+	o.recordToolCall("edit_file", true, "a.go", "error: old_text not found in file", 999)
 
 	if o.itersSinceProductive != 8 {
 		t.Fatalf("failed edit_file must increment itersSinceProductive, got %d", o.itersSinceProductive)
@@ -30,7 +30,7 @@ func TestIssue3568FailedEditNotProductive(t *testing.T) {
 
 	// Failed run_command keeps the historical behavior: not productive.
 	o.itersSinceProductive = 0
-	o.recordToolCall("run_command", true, "", "exit status 1")
+	o.recordToolCall("run_command", true, "", "exit status 1", 1000)
 	if o.itersSinceProductive != 1 {
 		t.Fatalf("failed run_command must not be productive, got itersSinceProductive=%d", o.itersSinceProductive)
 	}
@@ -45,7 +45,7 @@ func TestIssue3568PartialSuccessIsProductive(t *testing.T) {
 	o.fileReadsSinceEdit["a.go"] = 2
 
 	result := `{"status":"partial_success","written_paths":["a.go","b.go"],"failed_files":1,"failed_paths":["c.go"]}`
-	o.recordToolCall("multi_file_edit", true, "a.go", result)
+	o.recordToolCall("multi_file_edit", true, "a.go", result, 999)
 
 	if o.itersSinceProductive != 0 {
 		t.Fatalf("partial_success with real written_paths must be productive (reset itersSinceProductive), got %d", o.itersSinceProductive)
@@ -60,7 +60,7 @@ func TestIssue3568SuccessfulEditStillProductive(t *testing.T) {
 
 	o.itersSinceProductive = 4
 	o.driftLevel = 1
-	o.recordToolCall("edit_file", false, "a.go", "Replaced 1 occurrence")
+	o.recordToolCall("edit_file", false, "a.go", "Replaced 1 occurrence", 999)
 
 	if o.itersSinceProductive != 0 {
 		t.Fatalf("successful edit_file must reset itersSinceProductive, got %d", o.itersSinceProductive)
@@ -81,8 +81,8 @@ func TestIssue3568ReadEditFailLoopTripsFileStuck(t *testing.T) {
 	// requires len(trajectory) >= overseerInterval (12), so the detector
 	// can only fire from cycle 6 onward.
 	for cycle := 0; cycle < 8; cycle++ {
-		o.recordToolCall("read_file", false, "loop.go", "file content")
-		o.recordToolCall("edit_file", true, "loop.go", "error: old_text not found")
+		o.recordToolCall("read_file", false, "loop.go", "file content", 999)
+		o.recordToolCall("edit_file", true, "loop.go", "error: old_text not found", 999)
 
 		// Analyze with enough trajectory to pass the interval gate.
 		iter := (cycle + 1) * overseerInterval

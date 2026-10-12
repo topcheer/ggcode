@@ -31,7 +31,6 @@ var (
 	pSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
 	pPostMessageW             = user32.NewProc("PostMessageW")
 	pShowWindow               = user32.NewProc("ShowWindow")
-	pIsIconic                 = user32.NewProc("IsIconic")
 	pGetWindowRect            = user32.NewProc("GetWindowRect")
 	pMoveWindow               = user32.NewProc("MoveWindow")
 )
@@ -223,7 +222,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "scroll":
 		return winScroll(ctx, p.Direction, p.Amount)
 	case "modifier_click":
-		return winModifierClick(ctx, p.X, p.Y, p.Text)
+		return winModifierClick(ctx, p.X, p.Y, p.Text, p.Button)
 	case "mouse_position":
 		var pt struct{ X, Y int32 }
 		r, _, err := pGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
@@ -287,13 +286,10 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		if err != nil {
 			return Result{}, err
 		}
-		state := swMaximize
-		if r, _, _ := pIsIconic.Call(uintptr(h)); r != 0 {
-			// Already maximized means iconic-restore cycle is handled by the
-			// app; simplest deterministic behavior is maximize (idempotent).
-			state = swMaximize
-		}
-		pShowWindow.Call(uintptr(h), uintptr(state))
+		// Idempotent: ShowWindow(swMaximize) is a no-op on an already
+		// maximized window — a retry "make sure it's maximized" never
+		// restores it (#4058; this is the semantics Linux/macOS now match).
+		pShowWindow.Call(uintptr(h), swMaximize)
 		return Result{Content: "OK: maximized " + windowText(h)}, nil
 
 	case "set_window_bounds":
@@ -599,10 +595,16 @@ func winScroll(ctx context.Context, direction string, amount int) (Result, error
 	return Result{Content: "OK"}, nil
 }
 
-func winModifierClick(ctx context.Context, x, y int, modifierSpec string) (Result, error) {
+func winModifierClick(ctx context.Context, x, y int, modifierSpec, button string) (Result, error) {
 	mods, err := normalizeModifiers(modifierSpec)
 	if err != nil {
 		return Result{}, err
+	}
+	// #3876: honor the schema button contract ("right" was silently
+	// left-clicked, same breach as #1665 fixed for plain click).
+	var down, up uint32 = mouseLeftDown, mouseLeftUp
+	if button == "right" {
+		down, up = mouseRightDown, mouseRightUp
 	}
 	vsx, vsy, vsw, vsh := virtualScreen()
 	var inputs []winINPUT
@@ -611,8 +613,8 @@ func winModifierClick(ctx context.Context, x, y int, modifierSpec string) (Resul
 	for _, m := range mods {
 		inputs = append(inputs, keyEventInput(winVK[m], 0))
 	}
-	inputs = append(inputs, mouseEventInput(mouseLeftDown, 0, 0))
-	inputs = append(inputs, mouseEventInput(mouseLeftUp, 0, 0))
+	inputs = append(inputs, mouseEventInput(down, 0, 0))
+	inputs = append(inputs, mouseEventInput(up, 0, 0))
 	for i := len(mods) - 1; i >= 0; i-- {
 		inputs = append(inputs, keyEventInput(winVK[mods[i]], keyUp))
 	}

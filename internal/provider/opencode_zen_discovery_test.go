@@ -9,6 +9,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +43,14 @@ func TestDiscoverModelsOpenCodeZenPublicListing(t *testing.T) {
 		APIKey: "public-listing",
 	})
 	if err != nil {
+		// The listing was public at implementation time, but upstream auth
+		// policy can change (CI red 38162326220: "status 401 Invalid API key"
+		// across unrelated PRs). Same rule as the DNS guard above: a live
+		// smoke test must not block unrelated changes on upstream-side auth
+		// shifts - skip WITH A REASON, keep failing on real regressions.
+		if strings.Contains(err.Error(), "401") {
+			t.Skipf("opencode.ai now rejects the public listing key (upstream auth change): %v", err)
+		}
 		t.Fatalf("DiscoverModels: %v", err)
 	}
 	if len(models) < 20 {
