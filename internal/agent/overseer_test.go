@@ -582,6 +582,12 @@ func TestDetectResearchMode(t *testing.T) {
 		"Compare performance before and after optimization",
 		"Benchmark the new parser against the old one",
 		"Review the API for consistency",
+		// #4065: hyphenated branch/PR names ("fix-4012" et al) must not read
+		// as fix-intent verbs - research-mode review runs keep their raised
+		// stuck-detector thresholds.
+		"Analyze branch fix-4012 divergence",
+		"Review the patch-4013 PR changes and assess impact",
+		"Investigate the resolve-4016 regression",
 	}
 	for _, task := range researchTasks {
 		if !detectResearchMode(task) {
@@ -595,6 +601,8 @@ func TestDetectResearchMode(t *testing.T) {
 		"Build the dashboard component",
 		"Deploy the service to production",
 		"Refactor the database connection pool",
+		// #4065: a real verb coexisting with a hyphenated token still wins.
+		"Fix the bug in fix-4012",
 	}
 	for _, task := range implTasks {
 		if detectResearchMode(task) {
