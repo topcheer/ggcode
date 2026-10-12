@@ -190,6 +190,15 @@ func (t MergeWorktree) doMerge(ctx context.Context, env []string, gitRoot, absWt
 	// Clean merge staged. Verify + commit via the shared finalize path
 	// (verify_command empty here — clean merges are usually safe, and the
 	// orchestrator can still run its own checks afterwards).
+	// #3984: --no-commit cannot stop a fast-forward - git completes the ff,
+	// exits 0, and leaves NO MERGE_HEAD (fast-forwards create no merge
+	// commit by definition). Routing that success into doFinalize would hit
+	// its MERGE_HEAD guard and misreport the already-completed merge as
+	// "no merge in progress", sending the orchestrator into a dead loop.
+	if _, err := mergeGit(ctx, gitRoot, env, "rev-parse", "-q", "--verify", "MERGE_HEAD"); err != nil {
+		head, _ := mergeGit(ctx, gitRoot, env, "rev-parse", "--short", "HEAD")
+		return Result{Content: fmt.Sprintf("fast-forward merge complete: parent tree advanced to %s (branch %s was a direct descendant of the previous HEAD; no merge commit was created, nothing to finalize)", strings.TrimSpace(head), branch)}, nil
+	}
 	return t.doFinalize(ctx, env, gitRoot, branch, "")
 }
 
@@ -270,7 +279,12 @@ func (t MergeWorktree) doFinalize(ctx context.Context, env []string, gitRoot, br
 		cmd.Dir = gitRoot
 		cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
 		if out, err := cmd.CombinedOutput(); err != nil {
-			mergeGit(ctx, gitRoot, env, "merge", "--abort") // fail-closed: bad resolution must not land
+			// #3985: report the abort's ACTUAL outcome - claiming "parent tree
+			// restored" while the abort itself failed would send the agent
+			// onwards on a tree that is still mid-merge.
+			if abortOut, abortErr := mergeGit(ctx, gitRoot, env, "merge", "--abort"); abortErr != nil {
+				return Result{IsError: true, Content: fmt.Sprintf("verify_command failed AND merge --abort also failed (parent tree may still be mid-merge at %s - inspect git status before any further action): verify: %s; abort: %s", gitRoot, lastLines(string(out), 10), lastLines(abortOut, 5))}, nil
+			}
 			return Result{IsError: true, Content: fmt.Sprintf("verify_command failed (merge aborted, parent tree restored, branch %s intact): %s", branch, lastLines(string(out), 15))}, nil
 		}
 	}
