@@ -110,6 +110,11 @@ type trajectoryEntry struct {
 	// re-scanning toolName maps - a failed run_command/edit_file no longer
 	// blinds the spam detector for the whole run.
 	productive bool
+	// iter is the loop iteration this call belongs to (#4075): detectors
+	// that promise ITERATION-based thresholds (checkReadOnlyStall) must
+	// window over distinct iterations, not over per-call entries - a
+	// parallel batch of N reads in one iteration used to count as N.
+	iter int
 }
 
 // productiveTools are tools that represent forward progress on the task.
@@ -298,6 +303,7 @@ func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint, 
 		isError:    isError,
 		fileHint:   fileHint,
 		productive: isProductive,
+		iter:       iteration,
 	})
 
 	// r365: count retrieval calls for the research-report gate (successful
@@ -456,11 +462,30 @@ func (o *overseerState) checkReadOnlyStall(traj []trajectoryEntry) string {
 		return ""
 	}
 	threshold := o.effectiveStallThreshold()
-	// Look at the last threshold entries.
-	if len(traj) < threshold {
-		return ""
+	// #4075: the window is the last `threshold` DISTINCT ITERATIONS (every
+	// entry of them), not the last `threshold` entries. recordToolCall
+	// appends one entry per tool result, so a parallel batch of 5 reads per
+	// iteration used to fill the 15-slot window in 3 real iterations and
+	// report "spent 15 iterations" at iteration 12 - arithmetically
+	// impossible. Walk back counting distinct iteration numbers; the
+	// window starts where the (threshold+1)-th most recent iteration begins.
+	distinct := 0
+	last := -1
+	start := 0
+	for i := len(traj) - 1; i >= 0; i-- {
+		if traj[i].iter != last {
+			distinct++
+			last = traj[i].iter
+		}
+		if distinct > threshold {
+			start = i + 1
+			break
+		}
 	}
-	recent := traj[len(traj)-threshold:]
+	if distinct < threshold {
+		return "" // fewer than threshold iterations observed so far
+	}
+	recent := traj[start:]
 	allReadOnly := true
 	for _, e := range recent {
 		if !readOnlyTools[e.toolName] {

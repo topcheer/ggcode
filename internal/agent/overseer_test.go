@@ -36,7 +36,8 @@ func TestOverseer_ToolSpam(t *testing.T) {
 func TestOverseer_ReadOnlyStall_MixedReadOnlyTools(t *testing.T) {
 	o := newOverseerState()
 	// Use different read-only tools so tool-spam doesn't fire first.
-	// Need stallThreshold consecutive read-only calls.
+	// Need stallThreshold read-only ITERATIONS (#4075: the stall window
+	// counts distinct iterations, not calls - one call per iteration here).
 	readOnlyTools := []string{"read_file", "search_files", "grep", "list_directory", "glob",
 		"git_log", "git_status", "git_diff", "lsp_definition", "lsp_references",
 		"web_search", "web_fetch", "lsp_symbols", "git_blame", "git_show"}
@@ -94,12 +95,13 @@ func TestOverseer_ProductiveActionResetsStall(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		o.recordToolCall("read_file", false, "/some/path.go", "", i)
 	}
-	// The stall check looks at the last stallThreshold entries.
-	// After the edit, itersSinceProductive resets, and only 5 more reads.
-	// But checkReadOnlyStall looks at trajectory, not itersSinceProductive.
+	// The stall window covers the last stallThreshold distinct ITERATIONS
+	// (#4075), not entries. The trajectory here spans only ~11 distinct
+	// iterations ({0..9} + the post-edit reads 0..4), short of 15, and the
+	// edit sits inside any window that does exist.
 	msg := o.analyze(stallThreshold + 1)
-	// Should NOT trigger stall because the edit broke the read-only streak
-	// in the last stallThreshold entries.
+	// Should NOT trigger stall: too few distinct iterations AND the edit
+	// broke the read-only streak.
 	if msg != "" && strings.Contains(msg, "reading and searching") {
 		t.Fatalf("should not trigger stall after productive action, got: %s", msg)
 	}
