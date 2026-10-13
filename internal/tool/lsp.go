@@ -460,30 +460,48 @@ func nearbyIdentifierPositions(path string, pos lsp.Position) []lsp.Position {
 	if lineIndex < 0 || lineIndex >= len(lines) {
 		return nil
 	}
-	line := []rune(lines[lineIndex])
-	if len(line) == 0 {
+	runes := []rune(lines[lineIndex])
+	if len(runes) == 0 {
 		return nil
 	}
-	charIndex := pos.Character - 1
-	if charIndex < 0 {
-		charIndex = 0
+	// #4101: LSP Position.Character is UTF-16 code units (3.16+), and the
+	// send side (client.toLSPPosition) plus offsetForPosition below both
+	// honor that - only this fallback indexed the line by RUNES, so on
+	// lines containing astral characters (emoji) every emitted candidate
+	// sat left of the real symbol by the astral count before it. Track the
+	// UTF-16 prefix of each rune so candidate emission and boundary math
+	// share the protocol unit.
+	u16 := make([]int, len(runes)+1)
+	for i, r := range runes {
+		u16[i+1] = u16[i] + utf16.RuneLen(r)
 	}
-	if charIndex >= len(line) {
-		charIndex = len(line) - 1
+	lineLen := u16[len(runes)]
+	charU16 := pos.Character - 1
+	if charU16 < 0 {
+		charU16 = 0
+	}
+	if charU16 > lineLen {
+		charU16 = lineLen
+	}
+	// Map the UTF-16 column to its rune index for span-distance math.
+	charIndex := 0
+	for i := 1; i <= len(runes) && u16[i] <= charU16; i++ {
+		charIndex = i
 	}
 	type span struct {
-		start int
-		end   int
-		dist  int
+		start    int // rune index (span scan)
+		startU16 int // UTF-16 units before the span start
+		end      int
+		dist     int
 	}
 	var spans []span
-	for i := 0; i < len(line); {
-		if !isIdentifierRune(line[i]) {
+	for i := 0; i < len(runes); {
+		if !isIdentifierRune(runes[i]) {
 			i++
 			continue
 		}
 		start := i
-		for i < len(line) && isIdentifierRune(line[i]) {
+		for i < len(runes) && isIdentifierRune(runes[i]) {
 			i++
 		}
 		end := i
@@ -494,7 +512,7 @@ func nearbyIdentifierPositions(path string, pos lsp.Position) []lsp.Position {
 		case charIndex >= end:
 			dist = charIndex - (end - 1)
 		}
-		spans = append(spans, span{start: start, end: end, dist: dist})
+		spans = append(spans, span{start: start, startU16: u16[start], end: end, dist: dist})
 	}
 	sort.SliceStable(spans, func(i, j int) bool {
 		if spans[i].dist != spans[j].dist {
@@ -513,7 +531,7 @@ func nearbyIdentifierPositions(path string, pos lsp.Position) []lsp.Position {
 	positions := make([]lsp.Position, 0, len(spans))
 	seen := make(map[lsp.Position]struct{}, len(spans))
 	for _, candidate := range spans {
-		position := lsp.Position{Line: pos.Line, Character: candidate.start + 1}
+		position := lsp.Position{Line: pos.Line, Character: candidate.startU16 + 1}
 		if _, ok := seen[position]; ok {
 			continue
 		}
