@@ -103,7 +103,7 @@ func TestLLMOverseerDormancy(t *testing.T) {
 	}
 
 	// Gate 2: short run.
-	a.overseer.recordToolCall("read_file", false, "a.go", "ok")
+	a.overseer.recordToolCall("read_file", false, "a.go", "ok", 1)
 	if got := a.llmOverseerCheck(5); got != "" {
 		t.Fatalf("short run must be dormant, got %q", got)
 	}
@@ -114,7 +114,7 @@ func TestLLMOverseerDormancy(t *testing.T) {
 	// Gate 3: no aux model at all.
 	bare := NewAgent(&llmOverseerMockProvider{}, tool.NewRegistry(), "sys", 5)
 	bare.overseer = newOverseerState()
-	bare.overseer.recordToolCall("read_file", false, "a.go", "ok")
+	bare.overseer.recordToolCall("read_file", false, "a.go", "ok", 1)
 	if got := bare.llmOverseerCheck(llmOverseerMinIters); got != "" {
 		t.Fatalf("unarmed agent must be dormant, got %q", got)
 	}
@@ -129,7 +129,7 @@ func TestLLMOverseerWrongApproachEmitsHint(t *testing.T) {
 	a.auxProvider = mock // bypass provider.NewProvider with unreachable endpoint
 
 	for i := 0; i < 10; i++ {
-		a.overseer.recordToolCall("grep", false, "pat", "ok")
+		a.overseer.recordToolCall("grep", false, "pat", "ok", i+1)
 	}
 
 	hint := a.llmOverseerCheck(llmOverseerMinIters)
@@ -156,7 +156,7 @@ func TestLLMOverseerOnTrackSilent(t *testing.T) {
 	a := newLLMOverseerTestAgent(t)
 	mock := &llmOverseerMockProvider{resp: `{"verdict":"on_track","evidence":"steady progress","suggestion":""}`}
 	a.auxProvider = mock
-	a.overseer.recordToolCall("edit_file", false, "a.go", "ok")
+	a.overseer.recordToolCall("edit_file", false, "a.go", "ok", 1)
 
 	if got := a.llmOverseerCheck(llmOverseerMinIters); got != "" {
 		t.Fatalf("on_track must stay silent, got %q", got)
@@ -171,7 +171,7 @@ func TestLLMOverseerBudgetAndFailureSilence(t *testing.T) {
 	// Malformed reply -> silent "".
 	mock := &llmOverseerMockProvider{resp: "not json at all"}
 	a.auxProvider = mock
-	a.overseer.recordToolCall("grep", false, "x", "ok")
+	a.overseer.recordToolCall("grep", false, "x", "ok", 1)
 
 	if got := a.llmOverseerCheck(llmOverseerMinIters); got != "" {
 		t.Fatalf("malformed verdict must degrade silently, got %q", got)
@@ -190,7 +190,7 @@ func TestLLMOverseerBudgetAndFailureSilence(t *testing.T) {
 func TestLLMOverseerSnapshotBounds(t *testing.T) {
 	a := newLLMOverseerTestAgent(t)
 	for i := 0; i < llmOverseerWindow+10; i++ {
-		a.overseer.recordToolCall("grep", false, "p", "ok")
+		a.overseer.recordToolCall("grep", false, "p", "ok", i+1)
 	}
 	if got := len(a.snapshotTrajectory(llmOverseerWindow)); got != llmOverseerWindow {
 		t.Fatalf("snapshot cap = %d, want %d", got, llmOverseerWindow)
