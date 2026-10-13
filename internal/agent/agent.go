@@ -2707,6 +2707,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.injectGuidance(msg)
 			debug.Log("session-token-budget", "delegated threshold drained at iteration %d stop=%v", i+1, stop)
 			if stop {
+				sessionBudgetStop = true // #4072: arm the loop-top gate, parity with the token/cost/time twins. The drain block is the ONLY armed path when delegated spend crossed 100% first (stopGiven once-flag makes RecordSessionTokenUsage return ("",false) afterward), so without this arm a fully-exhausted delegated budget never stops the run.
 				onEvent(provider.StreamEvent{
 					Type: provider.StreamEventSystem,
 					Text: "[Session token budget fully consumed (including sub-agent spend) - winding down. Summarize the state so the user can resume with a fresh budget.] ",

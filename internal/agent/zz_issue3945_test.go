@@ -26,10 +26,11 @@ func TestIssue3945_StopGateWired(t *testing.T) {
 			t.Fatalf("wiring missing %q", needle)
 		}
 	}
-	// Exactly one arming site per budget dimension (token + time + cost;
-	// #3959 added the cost twin for loop-top gate parity).
-	if got := strings.Count(src, "sessionBudgetStop = true"); got != 3 {
-		t.Fatalf("want 3 arming sites (token + time + cost), got %d", got)
+	// Exactly one arming site per budget dimension (token + time + cost +
+	// delegated-drain; #3959 added the cost twin and #4072 the delegated-drain
+	// twin for loop-top gate parity).
+	if got := strings.Count(src, "sessionBudgetStop = true"); got != 4 {
+		t.Fatalf("want 4 arming sites (token + time + cost + delegated drain), got %d", got)
 	}
 	// The gate must precede the next LLM call: it sits at the loop top.
 	gateIdx := strings.Index(src, "if sessionBudgetStop {")
