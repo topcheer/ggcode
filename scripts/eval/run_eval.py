@@ -24,6 +24,7 @@ import csv
 import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -1150,6 +1151,17 @@ def main():
     parser.add_argument("--no-trend", action="store_true",
                         help="Skip appending trend.jsonl (default: append)")
     args = parser.parse_args()
+
+    # #4100: fail fast when the daemon binary is unresolvable. Without this,
+    # start_daemon's bare `ggcode` command raises FileNotFoundError inside the
+    # round loop, every round is swallowed as "FAILED", and the run exits 0
+    # with an empty trend - the gate rejects it but the log hides the cause.
+    if args.auto and shutil.which("ggcode") is None:
+        sys.exit(
+            "[eval] FATAL: `ggcode` binary not found on PATH but --auto needs "
+            "it to start the daemon. Build it (go build -tags goolm -o bin/ggcode "
+            "./cmd/ggcode) and add bin/ to PATH."
+        )
 
     if args.repeat < 1:
         parser.error("--repeat must be >= 1")
