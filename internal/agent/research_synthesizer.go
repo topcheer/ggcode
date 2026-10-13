@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // Research synthesizer (r343 deep-research third component; sa-130). The
@@ -45,7 +46,14 @@ var findingURLRe = regexp.MustCompile(`https?://[^\s"'<>)\]]+`)
 func trimFindingSnippet(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) > researchSnippetCap {
-		s = s[:researchSnippetCap]
+		// #4076: byte slicing can split a multi-byte CJK rune mid-sequence,
+		// injecting U+FFFD garbage into the injected draft. Back off to the
+		// nearest rune boundary at or before the cap.
+		cut := researchSnippetCap
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut]
 	}
 	return s
 }
