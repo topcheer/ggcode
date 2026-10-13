@@ -40,6 +40,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -172,7 +173,7 @@ func (a *Agent) llmOverseerCall(traj []trajectoryEntry, iteration int) string {
 
 	taskHint := llmOverseerTaskHint(a)
 	if len(taskHint) > 600 {
-		taskHint = taskHint[:600]
+		taskHint = taskHint[:util.SnapToRuneStart(taskHint, 600)] // #4092: byte slicing cut CJK hints mid-rune
 	}
 
 	userPrompt := fmt.Sprintf(
