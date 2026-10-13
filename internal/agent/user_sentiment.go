@@ -195,7 +195,9 @@ var negFeedbackPatterns = []struct {
 	// #1223: "why are you" narrowed to "why are you doing"/"why do you keep" -
 	// the generic form matched technical questions like "why are you using a
 	// mutex here?". How-to-stop questions are whitelist phrases above.
-	{[]string{"stop", "ugh", "wtf", "this is frustrating", "frustrating",
+	// #4104: bare "stop" removed - see isBareStopCommand; imperative ops
+	// commands ("stop the dev server") must not read as frustration.
+	{[]string{"ugh", "wtf", "this is frustrating", "frustrating",
 		"why are you doing", "why do you keep", "why do you still",
 		"you keep", "stop doing", "stop trying",
 		"i said", "as i said", "like i said", "i already told",
@@ -252,6 +254,16 @@ func detectNegativeFeedback(message string) string {
 	scanText := maskPositivePhrases(lower)
 
 	// Check patterns in priority order.
+	// #4104: bare "stop" no longer sits in the frustration pattern list -
+	// it fired on imperative ops commands ("stop the dev server and check
+	// the logs") and injected a misleading course-correction signal, and two
+	// such commands escalated to a monitoring reset. Genuine bare-stop
+	// ABORT intent is the message consisting of essentially only "stop"
+	// ("stop", "stop!", "stop."); frustrated-work stop is already covered
+	// by "stop doing"/"stop trying".
+	if isBareStopCommand(lower) {
+		return negCatFrustration
+	}
 	for _, group := range negFeedbackPatterns {
 		// #4004: CJK A-not-A confirmation questions (对不对/行不行/是不是…)
 		// contain bare rejection substrings but mean the OPPOSITE - they ask
@@ -297,6 +309,14 @@ func detectNegativeFeedback(message string) string {
 	}
 
 	return ""
+}
+
+// isBareStopCommand reports whether the message is essentially just the
+// word "stop" with optional trailing punctuation - a genuine abort
+// command, not an imperative ops instruction that merely starts with
+// "stop" (#4104).
+func isBareStopCommand(lower string) bool {
+	return strings.Trim(lower, " !.!~\t\n") == "stop"
 }
 
 // maskPositivePhrases blanks out word-bounded occurrences of every
