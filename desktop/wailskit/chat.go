@@ -3692,6 +3692,10 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 		Port:    cfg.A2A.Port,
 		APIKey:  cfg.A2A.EffectiveAPIKey(),
 		APIKeys: cfg.A2A.Auth.APIKeys,
+		Delegation: a2a.DelegationPolicy{
+			RequireOnBehalfOf: cfg.A2A.Delegation.RequireOnBehalfOf,
+			MaxDepth:          cfg.A2A.Delegation.MaxDepth,
+		},
 	}, handler)
 
 	if err := srv.Start(); err != nil {
