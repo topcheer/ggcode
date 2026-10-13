@@ -1175,19 +1175,6 @@ func (a *AgentToolItem) AppendNested(item Item) {
 	a.Invalidate()
 }
 
-// UpdateNested updates a nested item by ID.
-func (a *AgentToolItem) UpdateNested(id string, item Item) {
-	for i, it := range a.nestedItems {
-		if it.ID() == id {
-			a.nestedItems[i] = item
-			a.Invalidate()
-			return
-		}
-	}
-	a.nestedItems = append(a.nestedItems, item)
-	a.Invalidate()
-}
-
 func (a *AgentToolItem) Render(width int) string {
 	if cached, _, ok := a.GetCached(width); ok {
 		return cached
