@@ -123,6 +123,30 @@ func (a *Agent) llmOverseerCheck(iteration int) string {
 	return hint
 }
 
+// llmOverseerTaskHint returns the task baseline for the verdict call: the
+// autopilot goal, or else the MOST RECENT user-role text message. #4086:
+// never msgs[0] - the system prompt is pinned at the head (so msgs[0] is
+// usually the SYSTEM message, not any user task), and the first USER
+// message in a long session is a stale task from turns ago; either way the
+// wrong_problem verdict was judging against the wrong baseline.
+func llmOverseerTaskHint(a *Agent) string {
+	if g := a.getAutopilotGoal(); g != "" {
+		return g
+	}
+	msgs := a.Messages()
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != "user" {
+			continue
+		}
+		for _, block := range msgs[i].Content {
+			if block.Type == "text" {
+				return block.Text
+			}
+		}
+	}
+	return ""
+}
+
 // llmOverseerCall performs the single aux-model verdict call and maps a
 // negative verdict to a guidance hint. All failures return "".
 func (a *Agent) llmOverseerCall(traj []trajectoryEntry, iteration int) string {
@@ -146,17 +170,7 @@ func (a *Agent) llmOverseerCall(traj []trajectoryEntry, iteration int) string {
 		`Use wrong_problem only when the work is clearly not the user's actual request. ` +
 		`When in doubt, answer on_track.`
 
-	var taskHint string
-	if g := a.getAutopilotGoal(); g != "" {
-		taskHint = g
-	} else if msgs := a.Messages(); len(msgs) > 0 {
-		for _, block := range msgs[0].Content {
-			if block.Type == "text" {
-				taskHint = block.Text
-				break
-			}
-		}
-	}
+	taskHint := llmOverseerTaskHint(a)
 	if len(taskHint) > 600 {
 		taskHint = taskHint[:600]
 	}

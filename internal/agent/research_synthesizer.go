@@ -91,11 +91,22 @@ func unquoteJSONString(s, key string) string {
 		return ""
 	}
 	rest = rest[start+1:]
-	end := strings.Index(rest, `"`)
-	if end < 0 {
-		return ""
+	// #4080: the closing quote must be found with escape awareness - a URL
+	// or query containing \" would otherwise truncate the value mid-way.
+	var b strings.Builder
+	for i := 0; i < len(rest); i++ {
+		if rest[i] == '\\' && i+1 < len(rest) {
+			b.WriteByte(rest[i])
+			b.WriteByte(rest[i+1])
+			i++
+			continue
+		}
+		if rest[i] == '"' {
+			return b.String()
+		}
+		b.WriteByte(rest[i])
 	}
-	return rest[:end]
+	return ""
 }
 
 // recordFinding appends one finding to the overseer's collection. Called
@@ -112,9 +123,21 @@ func (o *overseerState) recordFinding(toolName, argsStr, resultContent string) {
 		return
 	}
 	q := extractFindingQuery(toolName, argsStr)
+	// #4080: source attribution priority is tool-class-dependent. For
+	// FETCH-class tools the argument IS the page's own URL - the stripped
+	// body never repeats it, so the old body-first-then-arg order captured
+	// the first CDN/asset link in the body instead (cdn.example.net/logo.png
+	// "became" the source of a docs page). web_search bodies are result
+	// lists, where the first link IS the top result's URL - keep body-first
+	// there, with the query as fallback.
 	url := ""
-	if m := findingURLRe.FindString(resultContent); m != "" {
-		url = m
+	if toolName != "web_search" {
+		url = q
+	}
+	if url == "" {
+		if m := findingURLRe.FindString(resultContent); m != "" {
+			url = m
+		}
 	}
 	if url == "" {
 		url = q
@@ -139,6 +162,9 @@ func (o *overseerState) findingsSnapshot() []ResearchFinding {
 // hostOf extracts the scheme-stripped host of a URL, best-effort.
 func hostOf(url string) string {
 	s := strings.TrimPrefix(strings.TrimPrefix(url, "https://"), "http://")
+	// #4080: www-prefixed and bare hosts are the same site - distinct-host
+	// conflict detection was splitting one source into two.
+	s = strings.TrimPrefix(s, "www.")
 	if i := strings.IndexByte(s, '/'); i >= 0 {
 		s = s[:i]
 	}
