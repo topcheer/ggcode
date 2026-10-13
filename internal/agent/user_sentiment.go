@@ -342,8 +342,14 @@ func wordIndexIn(b []byte, pattern string) int {
 }
 
 // wordContains checks if text contains the pattern as a standalone word
-// (bounded by non-alphanumeric characters or string boundaries). This prevents
+// (bounded by non-word characters or string boundaries). This prevents
 // false positives like "now" matching "no".
+// #4033: hyphens and underscores are word-continuation bytes, NOT boundaries,
+// so "no-op"/"bad-API"/"stop-gaps" are single tokens and no longer match the
+// bare negative patterns "no"/"bad"/"stop". Without this, any hyphenated
+// compound sharing its first syllable with a negative word fired the
+// sentiment escalation ladder on neutral technical messages ("this is a
+// no-op change").
 func wordContains(text, pattern string) bool {
 	idx := strings.Index(text, pattern)
 	for idx >= 0 {
@@ -365,8 +371,11 @@ func wordContains(text, pattern string) bool {
 	return false
 }
 
+// isAlnum reports whether b continues a word: ASCII alphanumerics, the
+// apostrophe ("don't"), and - #4033 - hyphen/underscore, so a hyphenated
+// compound is one token rather than two boundary-separated words.
 func isAlnum(b byte) bool {
-	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '\''
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '\'' || b == '-' || b == '_'
 }
 
 // SentimentFeedback represents the result of sentiment analysis for a single

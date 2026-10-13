@@ -211,6 +211,23 @@ var fixIntentRe = regexp.MustCompile(
 	`(?:^|[.!?:\n]\s+)(?:please\s+|now\s+|first\s+|go\s+)?(?:fix|repair|patch|resolve|implement)\b` +
 		`|(?:,\s*|\b(?:and|then)\s+)(?:please\s+)?(?:then\s+)?(?:fix|repair|patch|resolve|implement)\b(?:\s+(?:it|them|that|this|the|a|an|our|my|all)\b|$)`)
 
+// fixIntentStripRe scrubs tokens where a fix verb is part of a larger
+// identifier, not an imperative: branch/PR/ticket names (fix-4012,
+// patch-4013, resolve-4016, fix_4012) and hyphenated compounds led by the
+// verb (fix-intent, patch-set). In those tokens the hyphen/underscore
+// satisfies \b, so fixIntentRe fired on research tasks that merely MENTION
+// a branch like "analyze branch fix-4012 divergence" and wrongly disabled
+// research mode (#4065). RE2 has no lookahead, so the guard works by
+// replacing the token with a verb-neutral placeholder before matching.
+var fixIntentStripRe = regexp.MustCompile(`\b(?:fix|repair|patch|resolve|implement)[_-][a-z0-9]+(?:-[a-z0-9]+)*`)
+
+// stripFixIntentTokens applies fixIntentStripRe and returns text safe to
+// run fixIntentRe against. Placeholder "ref" shares no token with any fix
+// verb and keeps surrounding boundaries intact.
+func stripFixIntentTokens(lower string) string {
+	return fixIntentStripRe.ReplaceAllString(lower, "ref")
+}
+
 // detectResearchMode checks if a task description indicates research work.
 // Returns true for tasks involving research, analysis, audit, exploration,
 // evaluation, or comparison — where extensive reading IS the primary work.
@@ -224,7 +241,7 @@ var fixIntentRe = regexp.MustCompile(
 // at normal thresholds.
 func detectResearchMode(taskText string) bool {
 	p := strings.ToLower(taskText)
-	if fixIntentRe.MatchString(p) {
+	if fixIntentRe.MatchString(stripFixIntentTokens(p)) {
 		return false
 	}
 	keywords := []string{
