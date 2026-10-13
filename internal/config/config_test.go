@@ -195,6 +195,46 @@ func TestLoad_NonExistent(t *testing.T) {
 	}
 }
 
+// sa-84 A-JWT-lite delegation declarations: yaml surface + zero-value
+// default (all inbound checks off).
+func TestLoad_A2ADelegationConfig(t *testing.T) {
+	withTestHome(t)
+	path := filepath.Join(t.TempDir(), "ggcode.yaml")
+	yaml := `a2a:
+  delegation:
+    require_on_behalf_of: true
+    max_depth: 3
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.A2A.Delegation.RequireOnBehalfOf {
+		t.Error("require_on_behalf_of not parsed")
+	}
+	if cfg.A2A.Delegation.MaxDepth != 3 {
+		t.Errorf("max_depth = %d, want 3", cfg.A2A.Delegation.MaxDepth)
+	}
+}
+
+func TestLoad_A2ADelegationZeroValueDisablesChecks(t *testing.T) {
+	withTestHome(t)
+	path := filepath.Join(t.TempDir(), "ggcode.yaml")
+	if err := os.WriteFile(path, []byte("a2a: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.A2A.Delegation.RequireOnBehalfOf || cfg.A2A.Delegation.MaxDepth != 0 {
+		t.Errorf("zero value must disable all delegation checks, got %+v", cfg.A2A.Delegation)
+	}
+}
+
 func TestLoad_NonExistentExpandsEnvDefaults(t *testing.T) {
 	withTestHome(t)
 	t.Setenv("ZAI_API_KEY", "test-key")

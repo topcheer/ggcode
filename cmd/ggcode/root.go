@@ -1473,6 +1473,10 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		APIKey:     a2aAPIKey(cfg),
 		APIKeys:    cfg.A2A.Auth.APIKeys,
 		Extensions: a2aExtensionsFromConfig(cfg.A2A.Extensions),
+		Delegation: a2a.DelegationPolicy{
+			RequireOnBehalfOf: cfg.A2A.Delegation.RequireOnBehalfOf,
+			MaxDepth:          cfg.A2A.Delegation.MaxDepth,
+		},
 	}, handler)
 
 	// Wire OAuth2/OIDC token validation if configured

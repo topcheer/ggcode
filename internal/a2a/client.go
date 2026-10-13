@@ -44,6 +44,11 @@ type Client struct {
 	apiKeyName    string        // #1458-A: card-declared header name
 	apiKeyIn      string        // #1458-A: card-declared location (header/query)
 
+	// delegation declarations (A-JWT-lite, sa-84): injected into outgoing
+	// message metadata when set via SetDelegation/WithDelegation.
+	delegationOnBehalfOf string
+	delegationIntent     string
+
 	// activateExtensions holds the URIs sent in the A2A-Extensions header on
 	// every POST to the remote agent (A2A v1.0 extension activation opt-in).
 	activateExtensions atomic.Pointer[[]string]
@@ -511,6 +516,7 @@ func (c *Client) SendMessage(ctx context.Context, skill, text string, existingTa
 		Skill:  skill,
 		TaskID: taskID,
 	}
+	c.injectDelegationMeta(&params.Message)
 
 	var result Task
 	if err := c.rpc(ctx, "message/send", params, &result); err != nil {
@@ -521,6 +527,7 @@ func (c *Client) SendMessage(ctx context.Context, skill, text string, existingTa
 
 // SendMessageWithConfig sends a message with full configuration options.
 func (c *Client) SendMessageWithConfig(ctx context.Context, params SendMessageParams) (*Task, error) {
+	c.injectDelegationMeta(&params.Message)
 	var result Task
 	if err := c.rpc(ctx, "message/send", params, &result); err != nil {
 		return nil, err
@@ -538,6 +545,7 @@ func (c *Client) SendMessageStream(ctx context.Context, skill, text string) (<-c
 		},
 		Skill: skill,
 	}
+	c.injectDelegationMeta(&params.Message)
 
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {

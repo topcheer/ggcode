@@ -602,13 +602,14 @@ const DefaultA2AAPIKey = "ggcode-lan-a2a-v1"
 // A2A is enabled by default — mDNS discovery runs automatically so teams
 // on the same network can discover each other without any configuration.
 type A2AConfig struct {
-	Disabled    bool          `yaml:"disabled,omitempty"`   // true to disable (default: enabled)
-	Port        int           `yaml:"port"`                 // 0 = auto-assign
-	Host        string        `yaml:"host"`                 // default "0.0.0.0" (always)
-	MaxTasks    int           `yaml:"max_tasks"`            // concurrent task limit (default 5)
-	TaskTimeout string        `yaml:"task_timeout"`         // per-task timeout (default "5m")
-	Interfaces  []string      `yaml:"interfaces,omitempty"` // mDNS advertise interfaces (default: auto-detect default route)
-	Auth        A2AAuthConfig `yaml:"auth,omitempty"`
+	Disabled    bool                `yaml:"disabled,omitempty"`   // true to disable (default: enabled)
+	Port        int                 `yaml:"port"`                 // 0 = auto-assign
+	Host        string              `yaml:"host"`                 // default "0.0.0.0" (always)
+	MaxTasks    int                 `yaml:"max_tasks"`            // concurrent task limit (default 5)
+	TaskTimeout string              `yaml:"task_timeout"`         // per-task timeout (default "5m")
+	Interfaces  []string            `yaml:"interfaces,omitempty"` // mDNS advertise interfaces (default: auto-detect default route)
+	Auth        A2AAuthConfig       `yaml:"auth,omitempty"`
+	Delegation  A2ADelegationConfig `yaml:"delegation,omitempty"`
 
 	// Extensions declares A2A protocol extensions this instance SUPPORTS
 	// (server side, A2A v1.0 "Extension Declaration"). They appear in the
@@ -629,6 +630,22 @@ type A2AConfig struct {
 	// bidirectional instance-wins merge in MergeA2AConfig. Unexported so it
 	// never round-trips through yaml or crosses package boundaries.
 	disabledExplicit bool
+}
+
+// A2ADelegationConfig configures the A-JWT-lite delegation declarations
+// (sa-84): outbound tasks may carry ggcode.dev/on-behalf-of +
+// ggcode.dev/delegation message metadata (declarations, NOT signatures -
+// audit anchors only, never an authentication basis). These knobs control
+// INBOUND enforcement on the local A2A server; the zero value disables all
+// checks.
+type A2ADelegationConfig struct {
+	// RequireOnBehalfOf rejects inbound tasks that carry no
+	// ggcode.dev/on-behalf-of declaration.
+	RequireOnBehalfOf bool `yaml:"require_on_behalf_of,omitempty"`
+	// MaxDepth rejects inbound tasks whose delegation-depth exceeds this
+	// bound (guard against unbounded agent-to-agent forwarding chains).
+	// 0 (default) = no depth check. Recommended: 3.
+	MaxDepth int `yaml:"max_depth,omitempty"`
 }
 
 // A2AExtensionConfig declares one supported A2A protocol extension

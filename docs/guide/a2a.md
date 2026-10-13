@@ -136,6 +136,25 @@ Per-workspace A2A config via `.ggcode/a2a.yaml` in the workspace root.
 
 See [A2A Authentication Guide](../a2a-auth.md) for detailed setup instructions.
 
+## Delegation Declarations (Audit Anchors)
+
+ggcode agents can attach delegation declarations to outgoing A2A tasks
+(`ggcode.dev/on-behalf-of` and `ggcode.dev/delegation` message metadata),
+recording WHO the agent acts for and WHY (intent summary). Receiving
+instances can enforce an inbound policy:
+
+```yaml
+a2a:
+  delegation:
+    require_on_behalf_of: true  # reject tasks without an on-behalf-of declaration
+    max_depth: 3                # reject delegation chains deeper than 3
+```
+
+Both knobs default to off (zero behavior change). **These are declarations,
+not signatures**: they do not prevent forgery or tampering and are never an
+authentication basis - they give auditors and policy-enforcing receivers an
+anchor, complementing (not replacing) the auth schemes above.
+
 ## Protocol Extensions (A2A v1.0)
 
 ggcode implements the A2A extension negotiation protocol:
