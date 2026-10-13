@@ -12,7 +12,30 @@ composer.
 statusline:
   command: "~/.ggcode/statusline.sh"   # empty (default) disables the feature
   timeout_ms: 2000                      # optional, default 2000
+  osc_7501: false                       # optional, emit OSC 7501 state records
 ```
+
+## OSC 7501 Program Status Protocol
+
+Set `statusline.osc_7501: true` (independent of `command`) and ggcode emits
+[OSC 7501](https://mitchellh.com/writing/program-status-osc7501) escape records
+so terminal multiplexers can surface agent state — e.g. tmux 3.5.1+
+`pane-border-status`, WezTerm, or agent-inbox tooling:
+
+| Record | Boundary |
+| --- | --- |
+| `state=working` | run submitted, or approval/diff/question answered (run resumes) |
+| `state=blocked:kind=permission` | tool approval dialog shown |
+| `state=blocked:kind=permission` | diff confirmation dialog shown |
+| `state=blocked:kind=question` | ask_user questionnaire shown |
+| `state=done` | turn finished successfully |
+| `state=error` | turn finished with a failed run |
+| `state=idle` | turn canceled, or TUI startup |
+
+Record shape: `ESC ] 7501 ; state=<s>[:kind=<k>]:app=ggcode[:msg=<base64>] ST`.
+`msg` (optional) is a short human-readable hint, base64-encoded and truncated
+to 120 runes. Records are only written when stdout is a TTY, so piping output
+to a file stays clean.
 
 - The command runs through `sh -c` (Linux/macOS) or `cmd /c` (Windows).
 - **stdin**: one JSON object (schema below).
