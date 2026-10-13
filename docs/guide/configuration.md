@@ -395,6 +395,7 @@ IM adapters (QQ, Telegram, Discord, Slack, DingTalk, Feishu, etc.) are configure
 | `GGCODE_DEBUG` | Enable debug logging (`1` to enable) |
 | `GGCODE_TOOL_TAPE` | Deterministic tool-call cassette: `record:<path>` or `replay:<path>` (JSONL). Replay misses fail closed — never a silent live call |
 | `GGCODE_LLM_TAPE` | LLM response cassette: `record:<path>` or `replay:<path>` (JSONL). Set together with `GGCODE_TOOL_TAPE` to reproduce a full trajectory offline with zero network calls |
+| `GGCODE_LLM_FAULT` | Deterministic LLM fault injection for agent chaos testing (sa-65): comma-separated `<kind>@<call>` directives with 1-based call index; kinds `crash`, `omit-tool`, `omit-content`, `value-args`, `value-text`. Pairs with `GGCODE_LLM_TAPE=replay:<path>` to test resilience mechanisms offline; invalid directives are skipped |
 | `${ENV_VAR}` | Expansion syntax used throughout YAML config |
 
 > API keys in `keys.env` are referenced via `${VAR}` expansion in the YAML - they are never stored directly in `ggcode.yaml`.

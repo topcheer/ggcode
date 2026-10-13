@@ -113,6 +113,13 @@ func ApplyProviderToAgent(agentInst *agent.Agent, prov provider.Provider, resolv
 	if _, alreadyWrapped := prov.(*provider.TapeProvider); !alreadyWrapped {
 		prov = provider.WrapLLMTapeFromEnv(prov)
 	}
+	// sa-65 fault injector: wraps OUTSIDE the tape so the agent receives
+	// exactly the perturbed stream — the recorded/replayed tape stays
+	// pristine, and GGCODE_LLM_TAPE=replay + GGCODE_LLM_FAULT composes
+	// into offline chaos tests (AgentChaos-style shared-layer injection).
+	if _, alreadyFaulted := prov.(*provider.FaultProvider); !alreadyFaulted {
+		prov = provider.WrapLLMFaultFromEnv(prov)
+	}
 	agentInst.SetProvider(prov)
 	ApplyResolvedLimitsToAgent(agentInst, resolved)
 	agentInst.SetSupportsVision(resolved.SupportsVision)
