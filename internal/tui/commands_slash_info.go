@@ -1132,12 +1132,15 @@ func (m *Model) handleForecastCommand(args []string) tea.Cmd {
 	}
 
 	var sb strings.Builder
-	shown := prompt
-	if len(shown) > 60 {
-		shown = shown[:60] + "..."
+	// #4114: rune-safe truncation - the old byte slice [:60] cut CJK
+	// sequences mid-rune and the %q escape then printed the invalid bytes
+	// as \xe6 litter. Preview with %s in quotes so CJK stays readable.
+	shown := util.Truncate(prompt, 60)
+	if len([]rune(prompt)) > 60 {
+		shown += "..."
 	}
 	sb.WriteString(fmt.Sprintf("Cost forecast (before running):\n"))
-	sb.WriteString(fmt.Sprintf("  Task: %q\n", shown))
+	sb.WriteString(fmt.Sprintf("  Task: %s\n", "\""+shown+"\""))
 	if fc.Degraded {
 		sb.WriteString(fmt.Sprintf("  (few similar runs - range covers all %d runs in this workspace)\n", fc.Neighbors))
 	} else {
