@@ -9,6 +9,8 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cron"
+	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -73,6 +75,26 @@ func ApplyIdleMaintenance(ag *agent.Agent, cfg config.IdleConfig) *agent.IdleMai
 	ag.SetIdleMaintainer(m)
 	m.Start()
 	return m
+}
+
+// AttachIdleConsolidation wires the memory re-consolidation sweep (sa-63,
+// Letta sleep-time compute "from a queue" trigger) into an idle
+// maintainer. The sweep is deterministic, idempotent and cheap (capped
+// pairwise scan), so it runs on EVERY idle fire - including the fires the
+// pre-compact ratio gate skips - surfacing stale / conflicting /
+// near-duplicate memory long before the next process start instead of
+// waiting for the startup-only sweep. No-op when either input is nil
+// (e.g. idle maintenance disabled).
+func AttachIdleConsolidation(m *agent.IdleMaintainer, autoMem *memory.AutoMemory, workingDir string) {
+	if m == nil || autoMem == nil {
+		return
+	}
+	m.SetMaintenance(func() {
+		report := autoMem.Consolidate(workingDir)
+		if report.Scanned > 0 {
+			debug.Log("memory", "idle re-consolidation: %s", report.String())
+		}
+	})
 }
 
 func RegisterCronTools(registry *tool.Registry, scheduler *cron.Scheduler) {

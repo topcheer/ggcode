@@ -1086,6 +1086,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	defer fileWatch.Stop()
 	// Sleep-time compute (r373): pre-compact during idle windows.
 	idleMaint := agentruntime.ApplyIdleMaintenance(ag, cfg.Idle)
+	// sa-63: every idle fire also re-runs the memory consolidation sweep,
+	// so long-lived sessions surface stale/conflicting memory without
+	// waiting for the startup-only sweep.
+	agentruntime.AttachIdleConsolidation(idleMaint, autoMem, workingDir)
 	defer idleMaint.Stop()
 	repl.SetPlanModeTools(registry)
 	repl.SetSendMessageTool(subMgr, registry)
