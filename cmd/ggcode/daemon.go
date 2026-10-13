@@ -648,6 +648,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	defer fileWatch.Stop()
 	// Sleep-time compute (r373): pre-compact during idle windows.
 	idleMaint := agentruntime.ApplyIdleMaintenance(ag, cfg.Idle)
+	// sa-63: every idle fire also re-runs the memory consolidation sweep,
+	// so long-lived daemon sessions surface stale/conflicting memory without
+	// waiting for the startup-only sweep.
+	agentruntime.AttachIdleConsolidation(idleMaint, autoMem, workingDir)
 	defer idleMaint.Stop()
 
 	// Sub-agent manager

@@ -335,6 +335,11 @@ the window to pre-compact the context if usage is at/above
 `precompact_ratio` (default 0.6). The compaction LLM call happens while you
 are away instead of adding latency to your next message.
 
+Every idle fire additionally re-runs the memory consolidation sweep
+(staleness / contradiction / near-duplicate scan), independent of the
+pre-compact ratio gate — so long-lived sessions surface stale or
+conflicting memories without waiting for the next process start.
+
 ```yaml
 idle:
   enabled: true
