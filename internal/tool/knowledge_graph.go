@@ -220,7 +220,14 @@ func (t *KnowledgeGraphTool) doAdd(s *kgStore, p *kgParams) (Result, error) {
 	}
 
 	now := time.Now()
+	// #4098: capture the pre-update title BEFORE the field assignment
+	// below - the disclosure at the end re-reads s.Nodes[id] (the same
+	// pointer, already carrying p.Title), so comparing against ex.Title
+	// there was always equal and the #1692 case-4 disclosure never fired
+	// (silent overwrite of a different-title node under an explicit id).
+	prevTitle := ""
 	if ex, ok := s.Nodes[id]; ok {
+		prevTitle = ex.Title
 		// #1327: Type had no non-empty guard (Title/Content/Tags/Status all
 		// do) - a partial update carrying id+title but no type silently
 		// reclassified decision/entity nodes as note, and the next save
@@ -255,8 +262,8 @@ func (t *KnowledgeGraphTool) doAdd(s *kgStore, p *kgParams) (Result, error) {
 	// "c api" -> c-api) and the second save silently OVERWROTE the first
 	// node's fields while reporting a plain "saved".
 	note := ""
-	if ex, ok := s.Nodes[id]; ok && p.Title != "" && ex.Title != "" && !strings.EqualFold(ex.Title, p.Title) {
-		note = fmt.Sprintf(" (note: slug '%s' already existed with title %q - fields were overwritten)", id, ex.Title)
+	if prevTitle != "" && p.Title != "" && !strings.EqualFold(prevTitle, p.Title) {
+		note = fmt.Sprintf(" (note: slug '%s' already existed with title %q - fields were overwritten)", id, prevTitle)
 	}
 	return Result{Content: fmt.Sprintf("Node '%s' (%s) saved%s. Total: %d nodes.", id, nt, note, len(s.Nodes))}, nil
 }
