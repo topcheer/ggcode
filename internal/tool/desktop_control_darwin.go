@@ -784,7 +784,7 @@ func waitAndClick(ctx context.Context, searchText string, maxDepth, timeoutMs in
 		case <-time.After(pollInterval):
 		}
 	}
-	return Result{Content: fmt.Sprintf("Timed out waiting for element %q after %dms", searchText, timeoutMs)}, nil
+	return Result{IsError: true, Content: fmt.Sprintf("Timed out waiting for element %q after %dms", searchText, timeoutMs)}, nil // #4091: consumers gate on IsError (termGuard, spec memo)
 }
 
 // runJXA runs a JavaScript for Automation script via osascript.

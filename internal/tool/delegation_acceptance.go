@@ -129,7 +129,7 @@ func appendCriterion(items []string, line string) []string {
 		return items
 	}
 	if len(c) > maxAcceptanceItemLen {
-		c = c[:maxAcceptanceItemLen] + "..."
+		c = truncateUTF8Safe(c, maxAcceptanceItemLen) + "..." // #4090: byte slicing cut CJK criteria mid-rune
 	}
 	return append(items, c)
 }
