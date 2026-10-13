@@ -188,13 +188,27 @@ func injectIntoMFlag(cmd string, mIdx int) string {
 		return cmd + " --trailer \"" + coAuthorTrailer + "\""
 	}
 
-	// Quoted message — find closing quote
+	// Quoted message — find closing quote, skipping backslash escapes.
+	// #4077: strings.IndexByte hits the quote INSIDE \" and cuts the message
+	// mid-way (odd-quote leftover variant = bash syntax error, no commit at
+	// all; balanced variant = message truncated with args spilling outside
+	// -m). Scan with escape state instead; on any parse trouble fall back to
+	// the proven --trailer form (#831).
 	pos++ // skip opening quote
-	closeIdx := strings.IndexByte(cmd[pos:], quote)
-	if closeIdx < 0 {
+	var absClose = -1
+	for i := pos; i < len(cmd); i++ {
+		if cmd[i] == '\\' {
+			i++ // consume the escaped byte (\" \\ etc.) in pairs
+			continue
+		}
+		if cmd[i] == quote {
+			absClose = i
+			break
+		}
+	}
+	if absClose < 0 {
 		return cmd + " --trailer \"" + coAuthorTrailer + "\""
 	}
-	absClose := pos + closeIdx
 	msg := cmd[pos:absClose]
 	newMsg := msg + "\n\n" + coAuthorTrailer
 	return cmd[:pos] + newMsg + cmd[absClose:]
