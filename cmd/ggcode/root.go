@@ -275,6 +275,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newLLMProbeCmd(&cfgFile))
 	cmd.AddCommand(newACPCommand(&cfgFile))
 	cmd.AddCommand(newStatusCmd())
+	cmd.AddCommand(newBOMCmd())
 	cmd.AddCommand(newReportCmd())
 	cmd.AddCommand(newLoginCmd(&cfgFile))
 	configureHelpRendering(cmd)
