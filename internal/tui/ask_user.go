@@ -148,6 +148,7 @@ func (m Model) handleQuestionnaireKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 func (m *Model) handleQuestionnaireResult(status string) tea.Cmd {
 	qs := m.pendingQuestionnaire
 	m.pendingQuestionnaire = nil
+	m.oscWorking("") // OSC 7501: questionnaire answered, run resumes
 	if qs == nil || qs.response == nil {
 		return nil
 	}

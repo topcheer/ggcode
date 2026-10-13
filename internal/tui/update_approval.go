@@ -53,6 +53,7 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 	m.approvalOptions = defaultApprovalOptionsFor(m.currentLanguage())
 	m.approvalCursor = 0
 	m.inputBellFired = false
+	m.oscBlocked(oscKindPermission, "Approval needed: "+msg.ToolName) // OSC 7501
 	// Push to IM if available so user can approve remotely
 	m.approvalNotifiedIM = false
 	if m.imEmitter != nil {
@@ -83,6 +84,7 @@ func (m Model) handleDiffConfirmMsg(msg DiffConfirmMsg) (Model, tea.Cmd) {
 	m.diffOptions = diffConfirmOptionsFor(m.currentLanguage())
 	m.diffCursor = 0
 	m.inputBellFired = false
+	m.oscBlocked(oscKindPermission, "Confirm edit") // OSC 7501
 	// Schedule delayed input bell
 	return m, m.scheduleInputBell("Diff confirmation needed")
 
@@ -105,6 +107,7 @@ func (m Model) handleAskUserMsg(msg AskUserMsg) (Model, tea.Cmd) {
 	m.pendingQuestionnaire = newQuestionnaireState(msg.Request, msg.Response, m.currentLanguage())
 	m.syncQuestionnaireInputWidth()
 	m.inputBellFired = false
+	m.oscBlocked(oscKindQuestion, "Question: "+msg.Request.Title) // OSC 7501
 	// Push the first question to IM so remote users can answer.
 	if len(msg.Request.Questions) > 0 {
 		q := msg.Request.Questions[0]
