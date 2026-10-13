@@ -142,7 +142,7 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 	// PID) was consumed and deleted by CheckCrashedRun, so CheckContinuation
 	// below sees no snapshot; an interrupted run stamped State=completed, so
 	// CheckCrashedRun returned nil. Only one of the two can ever fire.
-	if recoveryMsg := agentruntime.CheckCrashRecovery(ses.ID); recoveryMsg != "" {
+	if recoveryMsg, resumeTask := agentruntime.CheckCrashRecovery(ses.ID); recoveryMsg != "" {
 		m.chatWrite(chat.NewSystemItem("crash-recovery", recoveryMsg, m.chatStyles))
 		if m.agent != nil {
 			m.agent.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: recoveryMsg}}})
@@ -152,6 +152,11 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 		// replay (double push / double IM send) is suppressed with an
 		// advisory instead of re-executing the side effect.
 		agentruntime.SeedCrashDedupWindow(m.agent, ses.ID)
+		// sa-117: capture the interrupted task so /continue-task can offer
+		// explicit user-confirmed resumption. Empty for corrupt journals
+		// (placeholder carries no real task) - the command then reports
+		// nothing to resume.
+		m.crashResumeTask = resumeTask
 	}
 	// r445: user-interrupted (Ctrl+C) runs get a structured continuation
 	// point - shown to the user AND injected into the agent's context so

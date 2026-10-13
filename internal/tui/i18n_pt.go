@@ -39,6 +39,8 @@ func ptCatalog(key string) string {
 		return "Listar todas as sessões salvas"
 	case "slash.resume":
 		return "Retomar uma sessão anterior"
+	case "slash.continue_task":
+		return "Retomar a tarefa interrompida por uma falha"
 	case "slash.export":
 		return "Exportar sessão para arquivo markdown"
 	case "slash.clear":
@@ -879,6 +881,12 @@ func ptCatalog(key string) string {
 		return "Fornecedor desconhecido: %s (disponíveis: %v)\n\n"
 	case "command.retry_busy":
 		return "Agente está ocupado. Aguarde a execução atual terminar antes de tentar novamente."
+	case "command.continue_task_empty":
+		return "Não há tarefa interrompida para retomar nesta sessão."
+	case "command.continue_task_busy":
+		return "Agente está ocupado. Aguarde a execução atual terminar antes de retomar a tarefa."
+	case "command.continue_task_sent":
+		return "Retomando a tarefa interrompida…"
 	case "command.retry_empty":
 		return "Nenhum envio anterior para tentar novamente."
 	case "command.skill_agent_only":

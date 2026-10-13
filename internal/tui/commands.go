@@ -435,6 +435,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleUntagCommand(parts[1:])
 		case "/tags":
 			return m.handleTagsCommand()
+		case "/continue-task":
+			return m.handleContinueTaskCommand()
 		case "/resume":
 			if len(parts) > 1 {
 				return m.resumeSession(parts[1])
@@ -775,6 +777,29 @@ func (m *Model) handleRetryCommand() tea.Cmd {
 	text := m.lastUserSubmission
 	m.lastUserSubmission = "" // clear to avoid retry loop
 	return m.submitText(text, true)
+}
+
+// handleContinueTaskCommand resumes the task that was interrupted by the
+// previous crash in this session (sa-117). The original prompt was captured
+// by the crash-recovery check at session load; typing /continue-task is the
+// explicit user confirmation to re-run it. One-shot: the captured task is
+// consumed on dispatch so the user cannot double-fire it.
+func (m *Model) handleContinueTaskCommand() tea.Cmd {
+	if m.crashResumeTask == "" {
+		m.chatWriteSystem(nextSystemID(), m.t("command.continue_task_empty"))
+		m.chatListScrollToBottom()
+		return nil
+	}
+	if m.loading {
+		m.chatWriteSystem(nextSystemID(), m.t("command.continue_task_busy"))
+		m.chatListScrollToBottom()
+		return nil
+	}
+	task := m.crashResumeTask
+	m.crashResumeTask = "" // one-shot: consumed on dispatch
+	m.chatWriteSystem(nextSystemID(), m.t("command.continue_task_sent"))
+	m.chatListScrollToBottom()
+	return m.submitText(task, true)
 }
 
 // handleEditCommand loads the last user prompt into the input box for editing.

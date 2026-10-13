@@ -490,6 +490,12 @@ func esCatalog(key string) string {
 		return "No hay envio previo para reintentar."
 	case "command.retry_busy":
 		return "El agente está ocupado. Espere a que termine la ejecución actual antes de reintentar."
+	case "command.continue_task_empty":
+		return "No hay ninguna tarea interrumpida que reanudar en esta sesión."
+	case "command.continue_task_busy":
+		return "El agente está ocupado. Espere a que termine la ejecución actual antes de reanudar la tarea."
+	case "command.continue_task_sent":
+		return "Reanudando la tarea interrumpida…"
 	case "command.edit_empty":
 		return "No hay envio previo para editar."
 	case "command.edit_busy":
@@ -780,6 +786,8 @@ func esCatalog(key string) string {
 		return "Listar sesiónes guardadas"
 	case "slash.resume":
 		return "Reanudar una sesión previa"
+	case "slash.continue_task":
+		return "Reanudar la tarea interrumpida por un fallo"
 	case "slash.export":
 		return "Exportar sesión a markdown"
 	case "slash.model":

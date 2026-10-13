@@ -490,6 +490,12 @@ func viCatalog(key string) string {
 		return "Không có nội dung gửi trước để thử lại."
 	case "command.retry_busy":
 		return "Agent đang bận. Đợi lượt chạy hiện tại hoàn tất trước khi thử lại."
+	case "command.continue_task_empty":
+		return "Không có tác vụ bị gián đoạn nào để tiếp tục trong phiên này."
+	case "command.continue_task_busy":
+		return "Agent đang bận. Đợi lượt chạy hiện tại hoàn tất trước khi tiếp tục tác vụ."
+	case "command.continue_task_sent":
+		return "Đang tiếp tục tác vụ bị gián đoạn…"
 	case "command.edit_empty":
 		return "Không có nội dung gửi trước để sửa."
 	case "command.edit_busy":
@@ -780,6 +786,8 @@ func viCatalog(key string) string {
 		return "Liệt kê phiên đã lưu"
 	case "slash.resume":
 		return "Tiếp tục phiên trước đó"
+	case "slash.continue_task":
+		return "Tiếp tục tác vụ bị gián đoạn do lỗi"
 	case "slash.export":
 		return "Xuất phiên sang markdown"
 	case "slash.model":

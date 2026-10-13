@@ -69,6 +69,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/edit` | Edit last user message and resubmit |
 | `/retry` | Retry last agent turn |
 | `/regenerate` | Regenerate last response |
+| `/continue-task` | Resume the task interrupted by a crash in this session (available right after the `[Crash Recovery]` notice appears; one-shot) |
 
 ## LAN Chat
 

@@ -540,6 +540,12 @@ func deCatalog(key string) string {
 		return "Keine vorherige Eingabe zum Wiederholen."
 	case "command.retry_busy":
 		return "Agent ist beschäftigt. Warten Sie, bis der aktuelle Lauf abgeschlossen ist, bevor Sie es erneut versuchen."
+	case "command.continue_task_empty":
+		return "Keine abgestürzte Aufgabe in dieser Sitzung fortzusetzen."
+	case "command.continue_task_busy":
+		return "Agent ist beschäftigt. Warten Sie, bis der aktuelle Lauf abgeschlossen ist, bevor Sie die Aufgabe fortsetzen."
+	case "command.continue_task_sent":
+		return "Die unterbrochene Aufgabe wird fortgesetzt…"
 	case "command.edit_empty":
 		return "Keine vorherige Eingabe zum Bearbeiten."
 	case "command.edit_busy":
@@ -862,6 +868,8 @@ func deCatalog(key string) string {
 		return "Gespeicherte Sitzungen auflisten"
 	case "slash.resume":
 		return "Vorherige Sitzung fortsetzen"
+	case "slash.continue_task":
+		return "Die durch einen Absturz unterbrochene Aufgabe fortsetzen"
 	case "slash.export":
 		return "Sitzung als Markdown exportieren"
 	case "slash.model":

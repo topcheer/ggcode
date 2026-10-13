@@ -259,6 +259,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.sessions")
 	case "/resume":
 		return tr(lang, "slash.resume")
+	case "/continue-task":
+		return tr(lang, "slash.continue_task")
 	case "/export":
 		return tr(lang, "slash.export")
 	case "/model":

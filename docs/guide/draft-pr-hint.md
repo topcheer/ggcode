@@ -30,5 +30,5 @@ ggcode 的完成门只走到 commit：feature 分支上已完成提交的工作�
 
 ## Backlog（同研究，未实施）
 
-- crash 后任务级自动续跑（中高，~120 行）：`run_journal.go:205` 已有检测，缺确认式续跑闭环，挂载 `internal/tui/commands_slash.go:137`
+- ~~crash 后任务级自动续跑~~（已实施 sa-117：`/continue-task` 命令，确认式续跑闭环）
 - run report 结构化文档沉淀（低，建议 skill 化）

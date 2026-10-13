@@ -568,6 +568,12 @@ func zhCatalog(key string) string {
 		return "（调试日志文件不可用）"
 	case "command.retry_busy":
 		return "Agent 正在运行，请等待当前任务完成后再重试。"
+	case "command.continue_task_empty":
+		return "本会话中没有可续跑的崩溃任务。"
+	case "command.continue_task_busy":
+		return "Agent 正在运行，请等待当前任务完成后再续跑。"
+	case "command.continue_task_sent":
+		return "正在续跑被打断的任务…"
 	case "command.edit_empty":
 		return "没有可编辑的上一次提交。"
 	case "command.edit_busy":
@@ -934,6 +940,8 @@ func zhCatalog(key string) string {
 		return "列出已保存会话"
 	case "slash.resume":
 		return "恢复历史会话"
+	case "slash.continue_task":
+		return "续跑本会话中被崩溃打断的任务"
 	case "slash.export":
 		return "导出会话为 Markdown"
 	case "slash.model":

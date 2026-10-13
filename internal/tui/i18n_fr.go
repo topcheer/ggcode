@@ -490,6 +490,12 @@ func frCatalog(key string) string {
 		return "Aucun envoi précédent a réessayer."
 	case "command.retry_busy":
 		return "L'agent est occupé. Attendez la fin de l'exécution actuelle avant de réessayer."
+	case "command.continue_task_empty":
+		return "Aucune tâche interrompue à reprendre dans cette session."
+	case "command.continue_task_busy":
+		return "L'agent est occupé. Attendez la fin de l'exécution actuelle avant de reprendre la tâche."
+	case "command.continue_task_sent":
+		return "Reprise de la tâche interrompue…"
 	case "command.edit_empty":
 		return "Aucun envoi précédent a éditer."
 	case "command.edit_busy":
@@ -780,6 +786,8 @@ func frCatalog(key string) string {
 		return "Lister les sessions sauvegardées"
 	case "slash.resume":
 		return "Reprendre une session précédente"
+	case "slash.continue_task":
+		return "Reprendre la tâche interrompue par un plantage"
 	case "slash.export":
 		return "Exporter la session en markdown"
 	case "slash.model":
