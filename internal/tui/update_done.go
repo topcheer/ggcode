@@ -45,6 +45,7 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 	wasFailed := m.runFailed
 	m.runCanceled = false
 	m.runFailed = false
+	m.oscRunOutcome(wasFailed, wasCanceled) // OSC 7501: turn end state
 
 	// #1768 case 3: the lanchat receipt used to fire BEFORE the
 	// canceled/failed flags were read - failed and cancelled runs still
@@ -122,6 +123,7 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	wasFailed := m.runFailed
 	m.runCanceled = false
 	m.runFailed = false
+	m.oscRunOutcome(wasFailed, wasCanceled) // OSC 7501: turn end state
 
 	// #1768 case 3: the lanchat receipt used to fire BEFORE the
 	// canceled/failed flags were read - failed and cancelled runs still

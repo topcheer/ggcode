@@ -359,6 +359,7 @@ func (m *Model) handleApproval(d permission.Decision) tea.Cmd {
 		return nil
 	}
 	m.pushTunnelApprovalResult(requestID, tunnelDecisionString(d))
+	m.oscWorking("") // OSC 7501: approval decided, run resumes
 	safego.Go("tui.commands.approvalRespond", func() {
 		select {
 		case pa.Response <- d:
@@ -425,6 +426,7 @@ func (m *Model) handleDiffConfirm(approved bool) tea.Cmd {
 	if pd == nil || pd.Response == nil {
 		return nil
 	}
+	m.oscWorking("") // OSC 7501: diff decided, run resumes
 	safego.Go("tui.commands.diffConfirm", func() {
 		select {
 		case pd.Response <- approved:
