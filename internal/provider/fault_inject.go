@@ -129,6 +129,10 @@ func (f *FaultProvider) Fired() []string {
 
 func (f *FaultProvider) Name() string { return f.inner.Name() }
 
+// InnerProvider exposes the wrapped provider (composition/introspection
+// in tests: assert fault layer sits outside the tape layer).
+func (f *FaultProvider) InnerProvider() Provider { return f.inner }
+
 func (f *FaultProvider) CountTokens(ctx context.Context, messages []Message) (int, error) {
 	return f.inner.CountTokens(ctx, messages) // local computation, no injection
 }

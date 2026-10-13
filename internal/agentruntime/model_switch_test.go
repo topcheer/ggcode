@@ -150,3 +150,55 @@ func TestApplyProviderToAgentWrapsLLMTapeFromEnv(t *testing.T) {
 		}
 	})
 }
+
+// sa-65: ApplyProviderToAgent is also the GGCODE_LLM_FAULT choke point -
+// the fault injector must wrap OUTSIDE the tape (agent receives the
+// perturbed stream, tape stays pristine) and must not double-wrap on hot
+// model switches (mirrors the #3917 tape idempotency contract).
+func TestApplyProviderToAgentWrapsLLMFaultFromEnv(t *testing.T) {
+	base := config.ResolvedEndpoint{Protocol: "anthropic", Model: "m1"}
+
+	t.Run("unset env passes through", func(t *testing.T) {
+		prov := &fakeApplyProvider{}
+		a := agent.NewAgent(prov, tool.NewRegistry(), "", 10)
+		ApplyProviderToAgent(a, prov, &base)
+		if _, ok := a.Provider().(*provider.FaultProvider); ok {
+			t.Fatal("unset GGCODE_LLM_FAULT must not wrap the provider")
+		}
+	})
+
+	t.Run("fault env wraps outermost around tape", func(t *testing.T) {
+		t.Setenv("GGCODE_LLM_TAPE", "record:"+filepath.Join(t.TempDir(), "t.jsonl"))
+		t.Setenv("GGCODE_LLM_FAULT", "crash@1")
+		prov := &fakeApplyProvider{}
+		a := agent.NewAgent(prov, tool.NewRegistry(), "", 10)
+		ApplyProviderToAgent(a, prov, &base)
+		fp, ok := a.Provider().(*provider.FaultProvider)
+		if !ok {
+			t.Fatalf("GGCODE_LLM_FAULT must wrap the provider, got %T", a.Provider())
+		}
+		if _, ok := fp.InnerProvider().(*provider.TapeProvider); !ok {
+			t.Fatalf("fault layer must sit OUTSIDE the tape layer, inner is %T", fp.InnerProvider())
+		}
+		if fp.Name() != prov.Name() {
+			t.Fatalf("wrapper must forward Name(): %q != %q", fp.Name(), prov.Name())
+		}
+	})
+
+	t.Run("hot switch does not double-wrap", func(t *testing.T) {
+		t.Setenv("GGCODE_LLM_FAULT", "crash@1")
+		prov := &fakeApplyProvider{}
+		a := agent.NewAgent(prov, tool.NewRegistry(), "", 10)
+		ApplyProviderToAgent(a, prov, &base)
+		wrapped := a.Provider()
+		// Re-apply with the already-wrapped provider (hot model switch path).
+		ApplyProviderToAgent(a, wrapped, &base)
+		fp, ok := a.Provider().(*provider.FaultProvider)
+		if !ok {
+			t.Fatalf("still a FaultProvider after re-apply, got %T", a.Provider())
+		}
+		if _, innerFault := fp.InnerProvider().(*provider.FaultProvider); innerFault {
+			t.Fatal("re-apply must not stack a second FaultProvider layer")
+		}
+	})
+}
