@@ -35,8 +35,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      # #4100: run_eval.py start_daemon invokes the bare command `ggcode`
+      # (dev-machine semantics: installed binary on PATH). The build below
+      # emits bin/ggcode but nothing put it on PATH, so the SECOND scheduled
+      # run (2026-10-13) failed every round with FileNotFoundError('ggcode'),
+      # exited 0 with an empty trend, and the fail-closed gate fired. Export
+      # bin/ via GITHUB_PATH so the bare command resolves - zero run_eval.py
+      # call-site changes, mirrors the #3440 provisioning fix.
       - name: Build ggcode
-        run: go build -tags goolm -o bin/ggcode ./cmd/ggcode
+        run: |
+          go build -tags goolm -o bin/ggcode ./cmd/ggcode
+          echo "$PWD/bin" >> "$GITHUB_PATH"
 
       - name: Install eval deps
         run: pip install -r scripts/eval/requirements.txt
