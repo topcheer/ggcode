@@ -274,8 +274,37 @@ func (s *speculator) predictNext(lastTool string) []string {
 
 // cacheKey generates a deterministic cache key from tool name and arguments.
 func cacheKey(toolName string, args json.RawMessage) string {
+	// #4079: tools with a no-arg template carry REQUIRED-but-semantically-
+	// empty args — description is an LLM-facing label every schema demands,
+	// so the raw byte hash never equaled the `{}` template: name-only
+	// predictions were structurally 0% hit while every miss poisoned the
+	// adaptive threshold (#1496's exact failure mode, reintroduced by r11).
+	// Drop description for those tools only, at the single hash entry point
+	// shared by store (predict) and query (consume), before hashing.
+	if _, ok := noArgTemplates[toolName]; ok {
+		args = stripDescriptionArg(args)
+	}
 	h := sha256.Sum256(append([]byte(toolName+":"), args...))
 	return hex.EncodeToString(h[:8])
+}
+
+// stripDescriptionArg removes the description field from a JSON object.
+// Non-objects, invalid JSON, and objects without the field pass through
+// unchanged; map marshaling is key-sorted, so the result is deterministic.
+func stripDescriptionArg(args json.RawMessage) json.RawMessage {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(args, &fields); err != nil || len(fields) == 0 {
+		return args
+	}
+	if _, has := fields["description"]; !has {
+		return args
+	}
+	delete(fields, "description")
+	b, err := json.Marshal(fields)
+	if err != nil {
+		return args
+	}
+	return b
 }
 
 // getCached returns a speculative result if available and fresh.
