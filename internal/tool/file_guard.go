@@ -230,6 +230,33 @@ func matchDoubleStar(pattern, name string) (bool, error) {
 		if suffix == "" {
 			return true, nil
 		}
+		// #4089: a multi-segment suffix with no literal prefix
+		// ('**/secrets/**', '**/config/prod.yaml' style) previously fell
+		// through to matchSegFS(suffix, filepath.Base(name)); a suffix
+		// containing '/' can never equal a single base segment, so the
+		// guard silently failed OPEN. The '**' prefix anchors nothing,
+		// so the suffix must be tried at every segment offset; a trailing
+		// '**' segment consumes all remaining segments (crossing '/').
+		if strings.Contains(suffix, "/") {
+			sSegs := strings.Split(suffix, "/")
+			nSegs := strings.Split(name, "/")
+			for i := 0; i < len(nSegs); i++ {
+				ok := true
+				for j, s := range sSegs {
+					if s == "**" && j == len(sSegs)-1 {
+						break // trailing ** consumes the rest
+					}
+					if i+j >= len(nSegs) || !matchSegFS(s, nSegs[i+j]) { // #4060: FS-aware fold
+						ok = false
+						break
+					}
+				}
+				if ok {
+					return true, nil
+				}
+			}
+			return false, nil
+		}
 		return matchSegFS(suffix, filepath.Base(name)), nil // #4060: FS-aware fold
 	}
 
