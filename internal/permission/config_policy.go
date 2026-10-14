@@ -14,11 +14,6 @@ import (
 // DefaultMode is the default permission mode if not specified.
 var DefaultMode = SupervisedMode
 
-// ToolRule defines the permission level for a tool.
-type ToolRule struct {
-	Decision Decision `yaml:"decision"`
-}
-
 // ConfigPolicy implements PermissionPolicy based on configuration rules.
 type ConfigPolicy struct {
 	rules           map[string]Decision
