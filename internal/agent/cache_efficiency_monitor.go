@@ -89,6 +89,24 @@ func newCacheEffMonitor() *cacheEffMonitor {
 	}
 }
 
+// rollingHitRatio returns the mean per-call cache hit ratio over the
+// current window (cache_hit_ratio research gap G3: the compaction trigger
+// consumes this to defer compaction while the prefix cache is still
+// delivering value). ok=false when there are not yet enough samples for a
+// meaningful ratio (decision then falls back to the pure-threshold path).
+func (m *cacheEffMonitor) rollingHitRatio() (float64, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.samples) < cacheEffMinCalls {
+		return 0, false
+	}
+	totalRatio := 0.0
+	for _, s := range m.samples {
+		totalRatio += m.hitRatio(s)
+	}
+	return totalRatio / float64(len(m.samples)), true
+}
+
 // reset clears state for a new run.
 func (m *cacheEffMonitor) reset() {
 	m.mu.Lock()

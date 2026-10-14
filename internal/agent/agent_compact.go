@@ -224,6 +224,22 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	return true
 }
 
+// cacheAwareDeferHeadroom: while the rolling cache hit ratio is warm, the
+// auto-compact trigger is deferred until usage crosses threshold*headroom.
+const cacheAwareDeferHeadroom = 1.15
+
+// deferCompactWhileCacheWarm decides whether auto-compaction should be
+// deferred one more turn because the prompt cache is still delivering value
+// (research G3). Pure function for testability; ok=false (insufficient
+// samples) never defers - the fallback is the plain threshold path.
+func deferCompactWhileCacheWarm(tokens, threshold int, ratio float64) bool {
+	if ratio < cacheHitRatioThreshold {
+		return false
+	}
+	ceiling := float64(threshold) * cacheAwareDeferHeadroom
+	return float64(tokens) < ceiling
+}
+
 // maybeAutoCompact keeps the hot LLM path non-blocking. When token usage
 // exceeds the auto-compact threshold (contextWindow - fixedPromptOverhead), it
 // schedules a background precompact (LLM summarization). If precompact succeeds,
@@ -238,6 +254,18 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 
 	// Trigger precompact when message tokens reach the fixed-overhead threshold.
 	if tokens < threshold {
+		return nil
+	}
+
+	// Cache-aware defer (research G3, r494 verdict): compaction rewrites the
+	// prefix and busts the prompt cache; while the rolling cache hit ratio is
+	// warm (>= cacheHitRatioThreshold), every deferred turn saves the full
+	// prefix re-write. Defer only inside the headroom band [threshold,
+	// threshold*cacheAwareDeferHeadroom); beyond the hard ceiling compact
+	// immediately - cache savings never outrank fitting the window.
+	if ratio, ok := a.cacheEffMonitor.rollingHitRatio(); ok && deferCompactWhileCacheWarm(tokens, threshold, ratio) {
+		debug.Log("agent", "maybeAutoCompact: DEFER (cache warm, ratio=%.2f tokens=%d threshold=%d ceiling=%d)",
+			ratio, tokens, threshold, int(float64(threshold)*cacheAwareDeferHeadroom))
 		return nil
 	}
 
