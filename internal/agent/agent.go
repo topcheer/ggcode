@@ -158,6 +158,9 @@ type Agent struct {
 	codeIndex                    *tool.CodeIndexManager // optional: background BM25 index for code_search
 	diffConfirm                  DiffConfirmFunc
 	onInterrupt                  interruptionHandler
+	subagentCompletionFeed       func() []SubagentCompletion
+	subagentNotified             map[string]bool
+	subagentNotifiedMu           sync.Mutex
 	projectMemory                map[string]struct{}
 	supportsVision               bool
 	lastTool                     string // tracks previous tool for execution graph composition patterns (sa-116)
@@ -2247,6 +2250,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				return context.Canceled
 			}
 			continue
+		}
+		// P1-1: push newly-finished sub-agent runs into context at the same
+		// boundary so the loop never has to poll blindly. One merged notice;
+		// budget edge handled like #3778 (persisted but unreached in-run).
+		if a.injectSubagentCompletions() {
+			if a.maxIter > 0 && i == a.maxIter-1 {
+				guidanceAtBudget = true
+			}
 		}
 		if err := a.maybeAutoCompact(ctx, onEvent, &transientCompactWarned); err != nil {
 			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
