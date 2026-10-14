@@ -39,6 +39,16 @@ func TestClassifyInterruption(t *testing.T) {
 		{"plain guidance", "also add a README", InterruptionAddition},
 		{"change of plans (legacy test text)", "change of plans", InterruptionAddition},
 		{"empty", "", InterruptionAddition},
+		// Insert: complex separate task brief (composite signal: >=120 runes
+		// AND >=2 sentence units, no revision marker). Conservative - see
+		// looksLikeInsertedTask; full hit/miss matrix in zz_issue_insert_class_test.go.
+		{"long multi-sentence brief => insert",
+			"Please also review the billing module for double-charge bugs. The finance team reported duplicated invoices on renewals. Reproduce with the fixture in testdata/billing, then propose a minimal fix with tests.",
+			InterruptionInsert},
+		{"short follow-up stays addition", "also handle the retry backoff in the same client", InterruptionAddition},
+		{"revision marker beats insert signal",
+			"Please switch to plan B entirely and drop the old approach. It must also cover the retry path with tests and the migration script.",
+			InterruptionRevision},
 	}
 	for _, c := range cases {
 		if got := classifyInterruption(c.text); got != c.want {

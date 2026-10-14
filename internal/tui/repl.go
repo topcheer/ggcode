@@ -858,6 +858,32 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		SystemPromptBuilder: r.systemPromptBuilder,
 	}
 	tools.Register(spawnTool)
+	// P1-1: completion push - convert manager terminal states into the
+	// agent-local feed type (internal/agent cannot import internal/subagent;
+	// subagent imports agent for its runner factory).
+	r.model.agent.SetSubagentCompletionFeed(func() []agent.SubagentCompletion {
+		var out []agent.SubagentCompletion
+		for _, st := range mgr.Statuses() {
+			switch st.Status {
+			case subagent.StatusCompleted:
+			case subagent.StatusFailed, subagent.StatusCancelled:
+				c := agent.SubagentCompletion{ID: st.ID, Name: st.Name, Failed: true}
+				if res, ok := mgr.GetTaskOutput(st.ID); ok {
+					c.Summary = res
+				}
+				out = append(out, c)
+				continue
+			default:
+				continue
+			}
+			c := agent.SubagentCompletion{ID: st.ID, Name: st.Name}
+			if res, ok := mgr.GetTaskOutput(st.ID); ok {
+				c.Summary = res
+			}
+			out = append(out, c)
+		}
+		return out
+	})
 	tools.Register(tool.BestOfNTool{
 		Manager: mgr,
 		Run:     agentruntime.BestOfNRunnerFor(spawnTool, mgr),

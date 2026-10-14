@@ -79,7 +79,7 @@ func (t SpawnAgentTool) currentProvider() provider.Provider {
 func (t SpawnAgentTool) Name() string { return "spawn_agent" }
 
 func (t SpawnAgentTool) Description() string {
-	return "Spawn a one-shot sub-agent run to work on an independent task. Put the full task and needed context in the initial request; do not assume the run will accept later work via send_message. Returns an agent_id. Use wait_agent or list_agents to poll status and retrieve the eventual result. At most 16 sub-agents may run concurrently (config: subagents.max_concurrent); spawns beyond the limit are rejected until earlier runs complete. A separate lifetime budget (config: subagents.max_total, default unlimited) bounds the TOTAL number of spawns per session and is not released when agents finish - once exhausted, no new sub-agents can be spawned. Delegation economics: a sub-agent re-reads context from scratch (context-copy token cost) and adds wall-clock latency; only fan out genuinely independent tasks, and for small or trivial work do it yourself with local tools."
+	return "Spawn a one-shot sub-agent run to work on an independent task. Put the full task and needed context in the initial request; do not assume the run will accept later work via send_message. Returns an agent_id. Use wait_agent or list_agents to poll status and retrieve the eventual result. At most 16 sub-agents may run concurrently (config: subagents.max_concurrent); spawns beyond the limit are rejected until earlier runs complete. A separate lifetime budget (config: subagents.max_total, default unlimited) bounds the TOTAL number of spawns per session and is not released when agents finish - once exhausted, no new sub-agents can be spawned. Delegation trade-off: a sub-agent re-reads context from scratch (context-copy token cost) and adds wall-clock latency, so do small in-scope work yourself; BUT delegation keeps that work's context OUT of yours - for a complex independent task (research, exploration, multi-file reads, or a NEW task unrelated to your current main thread), prefer spawn_agent to protect your main context."
 }
 
 func (t SpawnAgentTool) Parameters() json.RawMessage {
@@ -215,7 +215,7 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		return Result{IsError: true, Content: fmt.Sprintf("%v. Fix the git state or retry with isolation=none.", err)}, nil
 	}
 
-	content := fmt.Sprintf("Sub-agent spawned with ID: %s\nUse wait_agent or list_agents to monitor progress and retrieve the result.", id)
+	content := fmt.Sprintf("Sub-agent spawned with ID: %s\nIt runs asynchronously - before waiting, continue with work that does not depend on this result; harvest it later via wait_agent or list_agents.", id)
 	if worktreePath != "" {
 		content += fmt.Sprintf("\nIsolated in git worktree: %s (branch: %s). Its edits stay off the parent working tree; inspect or merge from that path after the run completes.", worktreePath, filepath.Base(worktreePath))
 	}

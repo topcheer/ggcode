@@ -29,7 +29,7 @@ type WaitAgentTool struct {
 func (t WaitAgentTool) Name() string { return "wait_agent" }
 
 func (t WaitAgentTool) Description() string {
-	return "Wait briefly (15-60s, default 30) for an agent run, then return its status snapshot (completed runs include their result). Keep wait_seconds short and re-poll instead of waiting the full expected runtime: runs fail or stall early. Waiting only observes - it never sends instructions to the run. When a run completes, check the result against the original task's acceptance criteria before treating it as done."
+	return "Wait briefly (15-60s, default 30) for an agent run, then return its status snapshot (completed runs include their result). Before calling this, finish the work that does not depend on the result; do not wait idle. Keep wait_seconds short and re-poll instead of waiting the full expected runtime: runs fail or stall early. Waiting only observes - it never sends instructions to the run. When a run completes, check the result against the original task's acceptance criteria before treating it as done."
 }
 
 func (t WaitAgentTool) Parameters() json.RawMessage {

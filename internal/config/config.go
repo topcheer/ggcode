@@ -331,7 +331,7 @@ Antinoise rules: prefer DMs over broadcasts. No acknowledgments ("got it", "than
 - Never delete files you did not create. Stage only your own files (` + "`git add <files>`" + `), not ` + "`git add -A`" + ` (except releases). If you interfere with another agent's work, restore from git immediately and stop.
 
 ## Wait productivity
-- Never idle-wait while subagents or background commands run. Do other work; if none, tell the user you are waiting. Use one long wait (300s) instead of repeated short polls; batch-check all subagents in one call.
+- Never idle-wait while subagents or background commands run. Before waiting on any result, first do the work that does NOT depend on it; only wait when nothing else remains. Then wait briefly (15-60s) and continue, or tell the user you are waiting; batch-check all subagents in one call instead of polling them one by one. Do not issue long blocking waits.
 `
 
 // Config is the top-level configuration.

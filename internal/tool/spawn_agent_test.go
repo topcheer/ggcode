@@ -207,9 +207,14 @@ func TestSpawnAgentDescriptionDocumentsLimit(t *testing.T) {
 		t.Errorf("spawn_agent description must document the 16-concurrent limit, got: %s", desc)
 	}
 	// Delegation economics contract (#349): the LLM must see the context-copy
-	// cost so it only fans out genuinely independent tasks.
-	if !strings.Contains(desc, "genuinely independent") {
-		t.Errorf("spawn_agent description must document the delegation economics contract, got: %s", desc)
+	// cost so it only fans out independent tasks. Since the P0-2 symmetry
+	// fix the description must ALSO carry the benefit side (protect main
+	// context) so independent complex tasks are delegated, not folded in.
+	if !strings.Contains(desc, "context-copy token cost") {
+		t.Errorf("spawn_agent description must document the delegation cost, got: %s", desc)
+	}
+	if !strings.Contains(desc, "protect your main context") {
+		t.Errorf("spawn_agent description must document the delegation benefit (context protection), got: %s", desc)
 	}
 }
 
