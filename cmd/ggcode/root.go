@@ -100,10 +100,15 @@ func NewRootCmd() *cobra.Command {
 
 			debug.Init()
 
-			workingDirForConfig, _ := os.Getwd()
-			cfg, err := config.LoadWithInstance(cfgFile, workingDirForConfig)
+			cfg, err := loadConfigForRun(cfgFile, &adhocLLM)
 			if err != nil {
-				return fmt.Errorf("loading config: %w", err)
+				return err
+			}
+			// #4117: ad-hoc provider mode zeroes the config-file association so
+			// nothing downstream can read or write ggcode.yaml on this run: no
+			// hot-reload watch (empty SetConfigPath), no config-tool write target.
+			if adhocLLM.adhocActive() {
+				cfgFile = ""
 			}
 			// r415: per-run budget override. Flags beat the config file for
 			// this invocation only (nothing is persisted); 0/unset keeps the
@@ -217,6 +222,16 @@ func NewRootCmd() *cobra.Command {
 	// The time ladder steers (80%/95%/100%) like the token budget.
 	cmd.Flags().Int64Var(&tokenBudgetFlag, "token-budget", 0, "per-run session token budget override (input+output tokens; 0 = use config)")
 	cmd.Flags().DurationVar(&timeBudgetFlag, "time-budget", 0, "per-run wall-clock soft budget override (e.g. 10m, 1h; 0 = use config)")
+	// #4117: ad-hoc provider flags (pipe mode). When --llm-base-url and
+	// --llm-model (or their GGCODE_LLM_* env equivalents) are both present,
+	// the config file is neither loaded nor written; provider settings come
+	// purely from these flags + env. See cmd/ggcode/adhoc.go.
+	cmd.Flags().StringVar(&adhocLLM.BaseURL, "llm-base-url", "", "ad-hoc provider mode: base URL of the endpoint (env "+adhocEnvBaseURL+")")
+	cmd.Flags().StringVar(&adhocLLM.Model, "llm-model", "", "ad-hoc provider mode: model name (env "+adhocEnvModel+")")
+	cmd.Flags().StringVar(&adhocLLM.APIKey, "llm-api-key", "", "ad-hoc provider mode: API key (env "+adhocEnvAPIKey+")")
+	cmd.Flags().StringVar(&adhocLLM.Protocol, "llm-protocol", "", "ad-hoc provider mode: wire protocol override - openai|anthropic|gemini (env "+adhocEnvProtocol+"; default: inferred from URL)")
+	cmd.Flags().IntVar(&adhocLLM.ContextWindow, "llm-context-window", 0, "ad-hoc provider mode: context window override (env "+adhocEnvContextWindow+")")
+	cmd.Flags().IntVar(&adhocLLM.MaxTokens, "llm-max-tokens", 0, "ad-hoc provider mode: max output tokens override (env "+adhocEnvMaxTokens+")")
 
 	helperCmd := &cobra.Command{
 		Use:    "update-helper",
