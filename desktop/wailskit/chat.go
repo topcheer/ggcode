@@ -1286,8 +1286,8 @@ func (b *ChatBridge) LoadSession(id string) error {
 		sesModel := state.Session.Model
 		sesVendor := state.Session.Vendor
 		sesEndpoint := state.Session.Endpoint
-		// Only switch if the session's model differs from what InitAgent resolved.
-		if b.resolved == nil || b.resolved.Model != sesModel {
+		// Only switch if the session's selection differs from what InitAgent resolved.
+		if !sessionSelectionMatches(b.resolved, sesVendor, sesEndpoint, sesModel) {
 			resolved, prov, err := agentruntime.ActivateCurrentSelection(b.cfg, sesVendor, sesEndpoint, sesModel)
 			if err == nil {
 				b.mu.Lock()
@@ -4628,6 +4628,29 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	}
 	b.finishRun(err)
 	return err
+}
+
+// sessionSelectionMatches reports whether the provider InitAgent resolved is
+// already the session's saved selection, so LoadSession can skip the
+// re-activation (#4123). The comparison is the full (vendor, endpoint, model)
+// triple, not the bare model name: model names are free-form strings, and
+// identical names across vendors (a gateway re-exporting an official model is
+// common) made the old model-name-only short-circuit silently keep the global
+// provider while currentSes.Vendor still pointed at the session's vendor —
+// divergent state plus usage billed to the wrong endpoint bucket
+// (AddUsageForEndpoint bills by ses.Vendor). Sessions saved before
+// vendor/endpoint were recorded (both empty) keep the legacy model-name-only
+// comparison: ActivateCurrentSelection treats an empty pair as "inherit the
+// current selection", so a name match there is a true no-op.
+func sessionSelectionMatches(resolved *config.ResolvedEndpoint, sesVendor, sesEndpoint, sesModel string) bool {
+	if resolved == nil || resolved.Model != sesModel {
+		return false
+	}
+	if sesVendor == "" && sesEndpoint == "" {
+		// Legacy session without vendor/endpoint provenance: inherit semantics.
+		return true
+	}
+	return resolved.VendorID == sesVendor && resolved.EndpointID == sesEndpoint
 }
 
 // contentHasImageBlocks reports whether any block is an image.
