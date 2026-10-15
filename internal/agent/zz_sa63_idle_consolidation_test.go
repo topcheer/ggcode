@@ -95,8 +95,8 @@ func TestIdleMaintenancePanicIsolated(t *testing.T) {
 func TestIdleMaintenanceNilCallbackSafe(t *testing.T) {
 	m := NewIdleMaintainer(time.Minute, 0.9, func() float64 { return 0 }, nil)
 	m.after = 0
-	m.SetMaintenance(nil) // no-op, must not store anything
-	m.check()             // must not panic on unset maintenance
+	m.SetMaintenance(nil) // #4122: clears via sentinel, must not fire anything
+	m.check()             // must not panic with cleared maintenance
 	var nilM *IdleMaintainer
 	nilM.SetMaintenance(func() {}) // nil receiver: no-op
 }

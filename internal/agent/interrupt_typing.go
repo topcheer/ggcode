@@ -68,7 +68,11 @@ var retractPhrases = map[string]struct{}{
 // revisionMarkers: explicit redirection signal inside the message.
 var revisionMarkers = []string{
 	"instead", "switch to", "rather than", "actually, do", "change it to",
-	"make it", "revise the goal", "new direction",
+	// #4121: bare "make it" removed - it fired on ordinary refinement
+	// instructions ("make it more robust") and the Revision preamble made
+	// the model abandon valid in-flight work. Explicit redirection forms
+	// ("change it to", "revise the goal") remain.
+	"revise the goal", "new direction",
 	"改成", "换成", "改用", "改为", "换成方案", "不要这个了要", "换个思路",
 }
 
