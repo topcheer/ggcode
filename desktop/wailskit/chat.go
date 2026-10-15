@@ -1144,6 +1144,7 @@ func (b *ChatBridge) bindSessionIntegrations(ses *session.Session) {
 // LoadSession loads an existing session by ID.
 // Releases the previous session's lock (if any), cleans up ephemeral
 // sessions, then acquires a lock on the target session before loading.
+
 func (b *ChatBridge) LoadSession(id string) error {
 	if b.sessionStore == nil {
 		store, err := session.NewDefaultStore()
@@ -1287,6 +1288,9 @@ func (b *ChatBridge) LoadSession(id string) error {
 		sesVendor := state.Session.Vendor
 		sesEndpoint := state.Session.Endpoint
 		// Only switch if the session's selection differs from what InitAgent resolved.
+		// #4123: sessionSelectionMatches compares vendor/endpoint too when the
+		// session recorded them (same-name models across vendors must not
+		// short-circuit the restore).
 		if !sessionSelectionMatches(b.resolved, sesVendor, sesEndpoint, sesModel) {
 			resolved, prov, err := agentruntime.ActivateCurrentSelection(b.cfg, sesVendor, sesEndpoint, sesModel)
 			if err == nil {
@@ -2123,7 +2127,13 @@ func (p *desktopRuntimeProvider) RuntimePermissionMode() string {
 	if p.bridge.currentSes != nil && p.bridge.currentSes.PermissionMode != "" {
 		return p.bridge.currentSes.PermissionMode
 	}
-	return "supervised"
+	// #4125: fall back to the same default InitAgent armed (set from
+	// InteractivePermissionModeWithDefault(cfg, false, "auto")) instead of a
+	// hardcoded "supervised" that desyncs enforcement from the system
+	// prompt's claimed auto mode on sessions that have not called
+	// SetPermissionMode yet. Recomputing with identical arguments is the
+	// single source of truth for the default.
+	return agentruntime.InteractivePermissionModeWithDefault(p.bridge.cfg, false, "auto").String()
 }
 
 func (p *desktopRuntimeProvider) RuntimeVendor() string {
