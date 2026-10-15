@@ -103,7 +103,11 @@ const (
 // A first line containing any of these phrases is never classified as
 // negative feedback.
 var sentimentPositiveWhitelist = []string{
-	"no problem", "no worries", "no issues", "no issue", "no need",
+	"no problem", "no problems", "no worries", "no issues", "no issue", "no need",
+	// #4203: plural/collective "no X" confirmations — "no problems, looks
+	// good" etc. The bare "no" must be masked before the rejection scan,
+	// same family as #1223/#4197.
+	"no sweat", "no complaints", "no concerns",
 	"not bad", "not too bad", "looks good", "looks great", "looks fine",
 	"all good", "well done", "good job", "nice work", "great work",
 	"perfect", "excellent", "awesome", "thank you", "thanks",
