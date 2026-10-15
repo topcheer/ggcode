@@ -255,7 +255,10 @@ func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string,
 	}
 	if displayModel != "" {
 		if sa, ok := t.Manager.Get(id); ok && sa != nil {
-			sa.Model = displayModel
+			// #4161: all Model readers (snapshot/statusInfo) hold sa.mu and the
+			// runner write path locks too - a bare write here is a data race
+			// (string header tear) that -race flags even though it is display-only.
+			sa.SetModel(displayModel)
 		}
 	}
 
@@ -332,15 +335,19 @@ func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string,
 }
 
 // setupIsolationWorktree creates the isolation worktree for a spawned
-// sub-agent when isolation="worktree". Synthetic IDs (sa-limit-*/sa-shutdown-*)
-// are pre-failed registrations that never run, so no worktree is created for
-// them. On creation failure the sub-agent is cancelled rather than silently
-// downgraded to non-isolated, and the wrapped error is returned.
+// sub-agent when isolation="worktree". Synthetic IDs (sa-shutdown-/*
+// sa-budget-/* sa-limit-*) are pre-failed registrations that never run, so no
+// worktree is created for them. On creation failure the sub-agent is
+// cancelled rather than silently downgraded to non-isolated, and the wrapped
+// error is returned.
 func (t SpawnAgentTool) setupIsolationWorktree(ctx context.Context, isolation, id string) (string, error) {
 	if isolation != "worktree" {
 		return "", nil
 	}
-	if strings.HasPrefix(id, "sa-limit-") || strings.HasPrefix(id, "sa-shutdown-") {
+	// #4160: must cover sa-budget-* too - budget exhaustion is an expected
+	// saturation state (subagents.max_total), and each pass-through here
+	// deterministically leaked one worktree + branch on the terminal entry.
+	if subagent.IsSyntheticID(id) {
 		return "", nil
 	}
 	wtPath, _, err := createAgentWorktree(ctx, t.WorkingDir, id)
