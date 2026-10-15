@@ -385,11 +385,21 @@ func detectNegativeFeedback(message string) string {
 				if group.category != negCatRedirection {
 					openerWindow = 12
 				}
-				// #3968: strings.Index is a BYTE index; compare the rune
-				// count of the prefix so the window is CHARACTERS in any
-				// script. ASCII behavior is unchanged (byte index == rune
-				// count when the prefix is pure ASCII).
-				if idx := strings.Index(scanText, pat); idx >= 0 && utf8.RuneCountInString(scanText[:idx]) < openerWindow {
+				// #3968: the index is a BYTE index; compare the rune count
+				// of the prefix so the window is CHARACTERS in any script.
+				// #4174: use the word-BOUNDED index (wordIndexIn, same
+				// semantics as the wordContains gate above), not bare
+				// strings.Index. A bare substring index could hit a
+				// non-word EMBEDDING at the message start ("Now"/"Nobody"/
+				// "Note"/"Know" embed "no") while the gate matched a
+				// genuinely standalone negative word mid-message - the
+				// opener window check then borrowed the embedding's tiny
+				// prefix position and misread a neutral long message as
+				// course-correction feedback. Word-bounded indexing keeps
+				// the gate and the position check on the SAME occurrence;
+				// CJK (no boundaries under isAlnum) keeps the old substring
+				// semantics, matching wordContains.
+				if idx := wordIndexIn([]byte(scanText), pat); idx >= 0 && utf8.RuneCountInString(scanText[:idx]) < openerWindow {
 					return group.category
 				}
 			}
