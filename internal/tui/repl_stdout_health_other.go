@@ -14,3 +14,6 @@ type displayWakeMsg struct{}
 func startStdoutHealthMonitor(_ context.Context, _ func(any)) (stop func()) {
 	return func() {}
 }
+
+// stdoutDead is always false on non-Unix platforms (no monitor, no flag).
+func stdoutDead() bool { return false }

@@ -1517,7 +1517,11 @@ func (r *REPL) Run() error {
 	markdown.Warmup()
 	traceMark("markdown warmup")
 
-	r.program = tea.NewProgram(r.model)
+	// #4154: route all renderer writes through the guard writer - while the
+	// stdout health monitor flags stdout dead (display sleep / SSH drop),
+	// frames are dropped instead of blocking the renderer on a dead pty.
+	// Recovery sends displayWakeMsg which triggers a full repaint.
+	r.program = tea.NewProgram(r.model, tea.WithOutput(stdoutGuardWriter{File: os.Stdout}))
 	// #2844: give the Model a thread-safe message injector so background
 	// goroutines (context probe results) never touch shared state directly.
 	// Assignment happens before Run(), so the happens-before edge is the
