@@ -205,7 +205,12 @@ var negFeedbackPatterns = []struct {
 		"why are you doing this", "why are you doing that", "why do you still",
 		"you keep doing", "you keep making", "you keep trying",
 		"stop doing", "stop trying",
-		"i said", "as i said", "like i said", "i already told",
+		// #4129: bare "i said"/"as i said"/"like i said"/"i already told"
+		// removed - neutral technical restatement ("as I said, the parser
+		// retries on 429") read as frustration and two such messages
+		// reset monitoring. Only the agent-directed reprimand form keeps
+		// firing; the CJK counterpart 我说过了 is already reprimand-shaped.
+		"i already told you",
 		"are you listening", "read my message", "pay attention",
 		"this doesn't make sense", "this doesnt make sense",
 		"nonsense", "garbage", "useless", "terrible",
