@@ -331,6 +331,7 @@ type Agent struct {
 	outputOffload                *outputOffloader            // tool output offloading (full truncated results persisted to disk for re-reading)
 	circularReasoning            *circularReasoningState     // circular reasoning detection (tautological justification)
 	contradiction                *contradictionState         // cross-turn contradiction detection (root-cause reversals)
+	reverify                     *reverifyState              // stale-observation re-verification escalation (PoS belief-trapping recovery)
 	actionHedging                *actionHedgingState         // action hedging detection (verbalized uncertainty during mutations)
 	scopeCreep                   *scopeCreepState            // scope creep detection (unsolicited changes beyond request)
 	prematureAbstr               *prematureAbstrState        // premature abstraction detection (over-engineering within task scope)
@@ -576,6 +577,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		outputOffload:          newOutputOffloader(),
 		circularReasoning:      newCircularReasoningState(),
 		contradiction:          newContradictionState(),
+		reverify:               newReverifyState(),
 		actionHedging:          newActionHedgingState(),
 		scopeCreep:             newScopeCreepState(),
 		prematureAbstr:         newPrematureAbstrState(),
@@ -2071,6 +2073,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.truncClaim.reset()
 	a.circularReasoning.reset()
 	a.contradiction.reset()
+	a.reverify.reset()
 	a.actionHedging.reset()
 	a.scopeCreep.reset()
 	a.prematureAbstr.reset()
@@ -2921,6 +2924,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				debug.Log("agent", "Iteration %d: false premise detected (ungrounded success claim)", i+1)
 				a.recordUncertainty("false_premise", weightFalsePremise)
 				a.injectGuidance(fpMsg)
+			}
+			// Stale-observation re-verify escalation (PoS belief-trapping
+			// recovery, arXiv:2610.01415): a success claim resting on an AGED
+			// negative observation (pre-mutation "no matches"/"not found")
+			// escalates to a hard re-run instruction, not just a lexical nudge.
+			if rvMsg := a.reverify.checkStaleTrap(assistantText, i+1); rvMsg != "" {
+				debug.Log("agent", "Iteration %d: stale-observation reverify escalation triggered", i+1)
+				a.recordUncertainty("stale_obs_trapped", weightStaleObs)
+				a.injectGuidance(rvMsg)
 			}
 			// Tool output integration monitor: check whether the assistant text
 			// references key evidence from the previous information-tool result
@@ -4637,6 +4649,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Outcome misattribution: record failure indicators in tool
 			// results to detect success claims that follow failures.
 			a.outcomeMisattrib.recordResult(tc.Name, result.Content, result.IsError, i+1)
+			// Stale-observation re-verify escalation: record negative
+			// observations from successful tool calls and mutation recency
+			// (the delayed contradiction analysis this block's comment has
+			// promised since the recorder landed — sa-134).
+			a.reverify.recordToolResult(tc.Name, string(tc.Arguments), result.Content, result.IsError, i+1)
 			// Context-length goal drift: record tool call targets to
 			// detect drift from original user request (arXiv:2505.02709).
 			a.goalDriftCtx.recordToolCall(tc.Name, string(tc.Arguments))
