@@ -1369,7 +1369,8 @@ func (m *Manager) compositionLocked() (asciiChars, cjkChars, latinExtChars int) 
 func (m *Manager) Clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.userReset = true // #663: /clear is a user-driven semantic reset
+	m.userReset = true             // #663: /clear is a user-driven semantic reset
+	m.lastSummarizeApplied = false // #4179 defensive: stale applied-flag must not survive a reset
 	oldTokens := m.tokenCountLocked()
 	oldMsgCount := len(m.messages)
 	if len(m.messages) > 0 && m.messages[0].Role == "system" {
@@ -1429,6 +1430,15 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 	plan, ok := m.buildSummaryPlan()
 	if !ok {
 		debug.Log("ctx", "Summarize: no plan built, nothing to summarize")
+		// #4179: nothing was applied on this path either. Without this
+		// reset, a stale `true` from a previous successful Summarize leaks
+		// into CheckAndSummarize, which then reports changed=true and the
+		// caller skips its fallbacks (e.g. PTL truncate retry) while the
+		// context is still over budget: the exact failure mode #702b
+		// fixed for the TOCTOU-discard path below.
+		m.mu.Lock()
+		m.lastSummarizeApplied = false // #702b/#4179: nothing was applied
+		m.mu.Unlock()
 		return nil
 	}
 
