@@ -3606,6 +3606,45 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 		b.mu.Lock()
 		b.cancel = nil
 		b.mu.Unlock()
+
+		// #4150: mirror sendMessageData/SendContent run-end defers — this
+		// third run-starter was the only one NOT draining the pending queue,
+		// so a hidden message popped at the head left every later visible
+		// message stranded (UI idle, queue non-empty) until the next user
+		// action. All three run-end defers must pump the queue symmetrically.
+		if pending, ok := b.drainPending(); ok {
+			if b.OnStreamEvent != nil {
+				b.OnStreamEvent("pending_consumed", nil)
+			}
+			if pending.Hidden {
+				_ = b.SendHiddenText(pending.Text)
+			} else {
+				if broker := b.currentTunnelBroker(); broker != nil {
+					broker.PushSystemMessage("Processing queued message...")
+				}
+				data := tunnel.MessageData{Text: pending.Text}
+				src := "desktop"
+				exclude := ""
+				if pending.Meta != nil {
+					data = *pending.Meta
+					src = "mobile"
+				}
+				// #461/#475: pop this queued message's OWN source/exclude pair
+				// (FIFO, index-aligned with the queue), same as the other two
+				// drain sites.
+				b.mu.Lock()
+				if len(b.pendingSource) > 0 {
+					src = b.pendingSource[0]
+					b.pendingSource = b.pendingSource[1:]
+				}
+				if len(b.pendingExclude) > 0 {
+					exclude = b.pendingExclude[0]
+					b.pendingExclude = b.pendingExclude[1:]
+				}
+				b.mu.Unlock()
+				_ = b.sendMessageData(data, src, exclude)
+			}
+		}
 	}()
 
 	if b.agent == nil {
