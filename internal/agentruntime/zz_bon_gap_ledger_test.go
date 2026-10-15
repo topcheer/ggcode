@@ -16,17 +16,42 @@ import (
 func mkRep(n int, successes int, winnerUsable, degraded bool) BestOfNReport {
 	rep := BestOfNReport{N: n, WinnerIndex: -1, Degraded: degraded}
 	for i := 0; i < n; i++ {
-		st := "failed"
+		st, vd := "failed", "failed"
 		if i < successes {
-			st = "completed"
+			// #4136: a "success" candidate is completed AND verdict-succeeded;
+			// use mkRepCompletedOnly to build the completed-but-failed shape.
+			st, vd = "completed", "succeeded"
 		}
 		rep.Candidates = append(rep.Candidates, CandidateOutcome{
-			Name: "c", ID: "id", Status: st, Verdict: "failed",
+			Name: "c", ID: "id", Status: st, Verdict: vd,
 		})
 	}
 	if winnerUsable {
 		rep.WinnerIndex = 0
+		rep.Candidates[0].Status = "completed"
 		rep.Candidates[0].Verdict = "succeeded"
+	}
+	return rep
+}
+
+// #4136 regression shape: every candidate's process completed but none
+// actually succeeded (2 failed + 1 partial, discriminator saving none).
+// Status-basis counting read this as successes=3/3 (headroom 1.0, hint
+// silent); the verdict basis must read 0 successes and fire the headroom
+// hint naming generator-pool exhaustion.
+func mkRepCompletedOnly(n int, winnerUsable, degraded bool, partials int) BestOfNReport {
+	rep := BestOfNReport{N: n, WinnerIndex: -1, Degraded: degraded}
+	for i := 0; i < n; i++ {
+		vd := "failed"
+		if i < partials {
+			vd = "partial"
+		}
+		rep.Candidates = append(rep.Candidates, CandidateOutcome{
+			Name: "c", ID: "id", Status: "completed", Verdict: vd,
+		})
+	}
+	if winnerUsable {
+		rep.WinnerIndex = 0
 	}
 	return rep
 }
@@ -44,6 +69,27 @@ func TestBONGapLedgerHeadroomHint(t *testing.T) {
 	}
 	if !strings.Contains(hint, "headroom") {
 		t.Fatalf("hint should name coverage headroom, got: %s", hint)
+	}
+}
+
+// #4136: completed-but-verdict-failed candidates must NOT count as
+// successes - the exact scenario the issue documented (N=3, 2 failed + 1
+// partial, all processes completed) previously read headroom 1.0 and
+// misdiagnosed as a selector problem or stayed fully silent.
+func TestBONGapLedgerCompletedOnlyIsZeroHeadroom(t *testing.T) {
+	l := NewBONGapLedger("")
+	for i := 0; i < 5; i++ {
+		l.Record("fix flaky test X", mkRepCompletedOnly(3, false, true, 1))
+	}
+	hint, ok := l.AdmissionHint("fix flaky test X")
+	if !ok {
+		t.Fatal("all-completed-none-succeeded history must produce a hint")
+	}
+	if !strings.Contains(hint, "headroom") {
+		t.Fatalf("hint should name coverage headroom (generator pool exhausted), got: %s", hint)
+	}
+	if strings.Contains(hint, "verifier_models") {
+		t.Fatalf("misdiagnosis (#4136): hint recommends selector fix but the generator pool has zero true successes: %s", hint)
 	}
 }
 

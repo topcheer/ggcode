@@ -323,21 +323,24 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// Agent
 	ag = agent.NewAgent(prov, registry, systemPrompt, cfg.MaxIterations)
-	if rTool, ok := registry.Get("runtime"); ok {
-		if rt, ok := rTool.(tool.RuntimeTool); ok {
-			if dp, ok := rt.Provider.(*daemonRuntimeProvider); ok {
-				dp.agent = ag
-			}
-		}
-	}
+	// #4132: the runtime tool's Provider is (re)wired below (daemon.go:617)
+	// with a daemonRuntimeProvider that carries `agent` directly; the old
+	// type assertion here could never match (builtin.go registers RuntimeTool
+	// by value with a nil Provider interface, and internal/tool cannot hold
+	// this package-private type) - removed as dead code.
 	core.SetConfigAgent(ag)
 	refreshAgentSystemPrompt := func() {
 		nextPrompt, nextRefs := buildCurrentSystemPrompt()
-		systemPrompt = nextPrompt
+		// #4133: same data race root.go fixed in #2102 - daemon is a
+		// long-lived process with two concurrent callers (save_memory tool
+		// goroutine via SetAfterSave, and the 2s command ticker goroutine
+		// via commandMgr.Reload), so the systemPrompt string write must live
+		// inside the mutex; writing the ptr+len header outside it can tear.
 		promptSkillRefsMu.Lock()
+		systemPrompt = nextPrompt
 		promptSkillRefs = append(promptSkillRefs[:0], nextRefs...)
 		promptSkillRefsMu.Unlock()
-		ag.UpdateSystemPrompt(systemPrompt)
+		ag.UpdateSystemPrompt(nextPrompt)
 		if knightAgent != nil {
 			knightAgent.RecordSkillPromptExposure(nextRefs)
 		}
@@ -616,11 +619,15 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Wire runtime tool to daemon's runtime status
 	if rt, ok := registry.Get("runtime"); ok {
 		if rTool, ok := rt.(tool.RuntimeTool); ok {
+			// #4132: `agent: ag` is required - without it the provider's
+			// RuntimeContextWindow/RuntimeMaxTokens gate on a nil agent and
+			// return 0, silently zeroing context-budget hints in daemon mode.
 			rTool.Provider = &daemonRuntimeProvider{
 				ses:    ses,
 				cfg:    cfg,
 				imMgr:  imMgr,
 				bridge: bridge,
+				agent:  ag,
 			}
 			registry.Unregister("runtime")
 			registry.Register(rTool)

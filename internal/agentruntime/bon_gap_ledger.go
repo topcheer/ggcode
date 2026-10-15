@@ -66,7 +66,7 @@ const (
 // bonRunRecord is one completed best-of-N run's admission-relevant outcome.
 type bonRunRecord struct {
 	N            int       `json:"n"`
-	Successes    int       `json:"successes"` // candidates with terminal completed status
+	Successes    int       `json:"successes"` // candidates whose process completed AND verdict succeeded (#4136: matches the winner-gate verdict basis, not the process-status basis)
 	WinnerUsable bool      `json:"winner_usable"`
 	Degraded     bool      `json:"degraded"`
 	At           time.Time `json:"at"`
@@ -124,7 +124,13 @@ func (l *BONGapLedger) Record(task string, rep BestOfNReport) {
 	}
 	successes := 0
 	for _, c := range rep.Candidates {
-		if c.Status == "completed" {
+		// #4136: admission headroom must measure task success, not process
+		// survival. Status=="completed" only says the subagent didn't crash;
+		// completed-but-verdict-failed is the most common outcome on hard
+		// task families - exactly when the admission hint must speak up.
+		// Align with the winner gate's verdict basis so both admission
+		// signals measure the same thing.
+		if c.Status == "completed" && c.Verdict == "succeeded" {
 			successes++
 		}
 	}
