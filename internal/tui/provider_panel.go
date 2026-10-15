@@ -1106,6 +1106,13 @@ func (m *Model) handleNewVendorStep() (Model, tea.Cmd) {
 			return *m, nil
 		}
 		if err := m.saveConfig(); err != nil {
+			// #4153: mirror the #1387-D rollback above - AddVendor/AddEndpoint
+			// already mutated the in-memory config, so a failed persist must
+			// undo it or the name is stuck as a phantom "already exists" until
+			// restart (and the next successful saveConfig would flush it).
+			if rerr := m.config.RemoveVendor(d.vendorName); rerr != nil {
+				debug.Log("provider", "saveConfig-failure rollback failed: %v", rerr)
+			}
 			panel.message = err.Error()
 			panel.newVendorStep = 0
 			return *m, nil
@@ -1187,6 +1194,11 @@ func (m *Model) handleNewEndpointStep() (Model, tea.Cmd) {
 			return *m, nil
 		}
 		if err := m.saveConfig(); err != nil {
+			// #4153: AddEndpoint mutated in-memory state; roll it back so the
+			// retry is not permanently blocked by "endpoint already exists".
+			if rerr := m.config.RemoveEndpoint(panel.selectedVendor(), d.endpointName); rerr != nil {
+				debug.Log("provider", "saveConfig-failure rollback failed: %v", rerr)
+			}
 			panel.message = err.Error()
 			panel.newEndpointStep = 0
 			return *m, nil

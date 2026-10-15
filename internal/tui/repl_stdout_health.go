@@ -20,6 +20,12 @@ type displaySleepMsg struct{}
 // displayWakeMsg is sent when stdout becomes writable again.
 type displayWakeMsg struct{}
 
+// stdoutDead reports whether the stdout health monitor currently considers
+// stdout dead. The renderer-side guard writer (repl_stdout_guard.go) is the
+// reader (#4154) - it drops frames while this is true so bubbletea never
+// blocks on a dead pty.
+func stdoutDead() bool { return stdoutDeadFlag.Load() }
+
 // stdoutDeadFlag is an atomic flag shared between the health monitor and
 // the renderer. When true, the renderer should skip Write() calls.
 var stdoutDeadFlag atomic.Bool
@@ -37,11 +43,17 @@ const stdoutHealthInterval = 2 * time.Second
 func startStdoutHealthMonitor(ctx context.Context, sendMsg func(any)) (stop func()) {
 	// Check if stdout is a terminal — if piped, skip monitoring
 	if !isTerminalStdout() {
-		return func() {}
+		// #4154: still reset the flag on stop - a stale true (previous
+		// monitor run or manual Store) would make the guard writer drop
+		// frames of the next tea program in-process forever.
+		return func() { stdoutDeadFlag.Store(false) }
 	}
 
 	wctx, cancel := context.WithCancel(ctx)
-	dead := false
+	// #4154: seed from the global flag - if a previous monitor in this
+	// process left it true without a clean stop, treat stdout as dead
+	// until a probe proves otherwise (so we also emit the wake message).
+	dead := stdoutDeadFlag.Load()
 
 	safego.Go("tui.stdoutHealth", func() {
 		ticker := time.NewTicker(stdoutHealthInterval)
@@ -72,7 +84,12 @@ func startStdoutHealthMonitor(ctx context.Context, sendMsg func(any)) (stop func
 		}
 	})
 
-	return cancel
+	return func() {
+		cancel()
+		// #4154: a monitor that dies while stdout is dead must not leave
+		// the global flag stuck at true.
+		stdoutDeadFlag.Store(false)
+	}
 }
 
 // probeStdout checks if stdout is still writable by attempting a

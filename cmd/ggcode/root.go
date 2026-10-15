@@ -901,7 +901,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	var a2aTaskHandler *a2a.TaskHandler
 	if !cfg.A2A.Disabled {
 		// A2A instance override already applied by LoadWithInstance.
-		a2aSrv, a2aReg, a2aHandler, err := startA2AServer(cfg, ag, registry, workingDir)
+		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err := startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
 			// #3677: startA2AServer's internal fail-fast (#1174) checks
 			// oauth2/oidc/mTLS config and returns errors the TUI path used
@@ -924,6 +924,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			a2aReg.StartBackgroundRefresh(a2aBgCtx)
 			defer func() {
 				a2aBgCancel()
+				// #4155: stop the refreshCache ticker goroutine too.
+				a2aStopRefresh()
 				if a2aRegistry != nil {
 					_ = a2aRegistry.Unregister()
 				}
@@ -954,6 +956,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub, a2aServer.Port())
 		// Sync peers from A2A registry
+		// #4155: cancellable so the 10s ticker goroutine exits when run()
+		// returns instead of relying solely on process exit.
+		syncCtx, syncCancel := context.WithCancel(context.Background())
+		defer syncCancel()
 		safego.Go("lanchat.syncPeers", func() {
 			syncPeers := func() {
 				instances := a2aRegistry.CachedInstances()
@@ -975,8 +981,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			// Then periodic every 10s
 			ticker := time.NewTicker(10 * time.Second)
 			defer ticker.Stop()
-			for range ticker.C {
-				syncPeers()
+			for {
+				select {
+				case <-syncCtx.Done():
+					return
+				case <-ticker.C:
+					syncPeers()
+				}
 			}
 		})
 	}
@@ -1472,10 +1483,10 @@ func parseA2ATimeout(s string) time.Duration {
 	return d
 }
 
-func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, workingDir string) (*a2a.Server, *a2a.Registry, *a2a.TaskHandler, error) {
+func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, workingDir string) (*a2a.Server, *a2a.Registry, *a2a.TaskHandler, func(), error) {
 	a2aReg, err := a2a.NewRegistry()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("a2a registry: %w", err)
+		return nil, nil, nil, func() {}, fmt.Errorf("a2a registry: %w", err)
 	}
 
 	handler := a2a.NewTaskHandler(workingDir, ag, reg,
@@ -1503,14 +1514,14 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		_, _, clientID, _, err := auth.ResolveA2AAuth(oc.Provider, oc.ClientID, oc.IssuerURL, oc.Scopes)
 		if err != nil {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oauth2: %w", err)
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a oauth2: %w", err)
 		}
 		// Issue #1174: refuse to silently run without token validation when an
 		// oauth2 auth block is present but resolves to nothing (fail-open
 		// downgrade to the public default API key would otherwise be invisible).
 		if clientID == "" {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oauth2: no client_id resolved (set client_id, or a provider with a default)")
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a oauth2: no client_id resolved (set client_id, or a provider with a default)")
 		}
 		// Issue #1175: derive the issuer from the OIDC discovery URL, never
 		// from the token endpoint - TokenURL is not a valid issuer and makes
@@ -1518,7 +1529,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		issuerURL := auth.ResolveA2AIssuerURL(oc.Provider, oc.IssuerURL)
 		if issuerURL == "" {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oauth2: no issuer available for provider %q (preset has no OIDC discovery URL); set issuer_url explicitly", oc.Provider)
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a oauth2: no issuer available for provider %q (preset has no OIDC discovery URL); set issuer_url explicitly", oc.Provider)
 		}
 		// #1503: preset placeholders (AUTH0_TENANT/AZURE_TENANT) pass the
 		// non-empty checks and the server starts fine - then every JWKS
@@ -1526,7 +1537,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		// at startup instead, matching the #1174/#1175 spirit.
 		if strings.Contains(issuerURL, "AUTH0_TENANT") || strings.Contains(issuerURL, "AZURE_TENANT") {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oauth2: provider %q issuer is an unfilled preset placeholder (%s); set issuer_url/tenant and restart", oc.Provider, issuerURL)
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a oauth2: provider %q issuer is an unfilled preset placeholder (%s); set issuer_url/tenant and restart", oc.Provider, issuerURL)
 		}
 		if issuerURL != "" && clientID != "" {
 			tv, err := auth.NewTokenValidator(clientID, issuerURL,
@@ -1535,7 +1546,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 			)
 			if err != nil {
 				srv.Stop()
-				return nil, nil, nil, fmt.Errorf("a2a oauth2: %w", err)
+				return nil, nil, nil, func() {}, fmt.Errorf("a2a oauth2: %w", err)
 			}
 			srv.SetTokenValidator(tv)
 		}
@@ -1546,17 +1557,17 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		_, _, clientID, _, err := auth.ResolveA2AAuth(oc.Provider, oc.ClientID, oc.IssuerURL, oc.Scopes)
 		if err != nil {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oidc: %w", err)
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a oidc: %w", err)
 		}
 		// Issue #1174: fail fast when the oidc block resolves to nothing.
 		if clientID == "" {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oidc: no client_id resolved (set client_id, or a provider with a default)")
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a oidc: no client_id resolved (set client_id, or a provider with a default)")
 		}
 		issuerURL := auth.ResolveA2AIssuerURL(oc.Provider, oc.IssuerURL)
 		if issuerURL == "" {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oidc: no issuer available for provider %q; set issuer_url explicitly", oc.Provider)
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a oidc: no issuer available for provider %q; set issuer_url explicitly", oc.Provider)
 		}
 		// #2781: the same preset-placeholder fail-fast as the OAuth2 block
 		// (#1503) - without it an auth0/azure preset without a filled
@@ -1564,7 +1575,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		// NXDOMAIN placeholder host: silent per-request 401s.
 		if strings.Contains(issuerURL, "AUTH0_TENANT") || strings.Contains(issuerURL, "AZURE_TENANT") {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oidc: provider %q issuer is an unfilled preset placeholder (%s); set issuer_url/tenant and restart", oc.Provider, issuerURL)
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a oidc: provider %q issuer is an unfilled preset placeholder (%s); set issuer_url/tenant and restart", oc.Provider, issuerURL)
 		}
 		if issuerURL != "" && clientID != "" {
 			tv, err := auth.NewTokenValidator(clientID, issuerURL,
@@ -1573,7 +1584,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 			)
 			if err != nil {
 				srv.Stop()
-				return nil, nil, nil, fmt.Errorf("a2a oidc: %w", err)
+				return nil, nil, nil, func() {}, fmt.Errorf("a2a oidc: %w", err)
 			}
 			srv.SetTokenValidator(tv)
 		}
@@ -1587,13 +1598,13 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		tlsCfg, err := mtlsCfg.BuildTLSConfig()
 		if err != nil {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a mtls: %w", err)
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a mtls: %w", err)
 		}
 		srv.SetTLSConfig(tlsCfg)
 	}
 
 	if err := srv.Start(); err != nil {
-		return nil, nil, nil, fmt.Errorf("a2a start: %w", err)
+		return nil, nil, nil, func() {}, fmt.Errorf("a2a start: %w", err)
 	}
 
 	// Register this instance in the shared local registry.
@@ -1609,7 +1620,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	a2aReg.SetInterfaces(cfg.A2A.Interfaces)
 	if err := a2aReg.Register(instance); err != nil {
 		srv.Stop()
-		return nil, nil, nil, fmt.Errorf("a2a register: %w", err)
+		return nil, nil, nil, func() {}, fmt.Errorf("a2a register: %w", err)
 	}
 
 	// Register MCP bridge tools for external MCP clients (Claude, Cursor, etc.)
@@ -1627,16 +1638,25 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	_ = reg.Register(remoteTool)
 
 	// Periodically refresh the remote instance cache so new instances are discovered.
+	// #4155: cancellable like the sibling StartBackgroundRefresh context the
+	// callers own - the ticker goroutine used to have no exit path and
+	// outlived the server teardown (latent leak, exposed by library reuse).
+	refreshCtx, refreshCancel := context.WithCancel(context.Background())
 	safego.Go("root.a2a.refreshCache", func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
-			remoteTool.RefreshCache()
+		for {
+			select {
+			case <-refreshCtx.Done():
+				return
+			case <-ticker.C:
+				remoteTool.RefreshCache()
+			}
 		}
 	})
 
 	debug.Log("root", "A2A server started at %s", srv.Endpoint())
-	return srv, a2aReg, handler, nil
+	return srv, a2aReg, handler, refreshCancel, nil
 }
 
 func init() {

@@ -1067,9 +1067,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	var a2aSrv *a2a.Server
 	// a2aReg already declared above for system prompt access
 	var a2aHandler *a2a.TaskHandler
+	var a2aStopRefresh func() // #4155: stops the refreshCache ticker goroutine
 	if !cfg.A2A.Disabled {
 		// A2A instance override already applied by LoadWithInstance.
-		a2aSrv, a2aReg, a2aHandler, err = startA2AServer(cfg, ag, registry, workingDir)
+		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err = startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
 			debug.Log("daemon", "A2A server start failed: %v", err)
 			fmt.Fprintf(os.Stderr, "A2A server warning: %v\n", err)
@@ -1078,6 +1079,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			a2aReg.StartBackgroundRefresh(a2aBgCtx)
 			defer func() {
 				a2aBgCancel()
+				// #4155: stop the refreshCache ticker goroutine too.
+				a2aStopRefresh()
 				_ = a2aReg.Unregister()
 				if lanchatHub != nil {
 					lanchatHub.Close()
