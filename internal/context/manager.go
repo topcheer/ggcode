@@ -43,6 +43,9 @@ type ContextManager interface {
 	CheckAndSummarize(ctx context.Context, prov provider.Provider) (bool, error)
 	TruncateOldestGroupForRetry() bool
 	RemoveLastAssistantGroup() string
+	// RemoveLastUserMessage drops the trailing real (non-tool-result
+	// carrier) user message (#4188 vision-fallback retry de-duplication).
+	RemoveLastUserMessage() bool
 	Clear()
 	UsageRatio() float64
 	AutoCompactThreshold() int
@@ -1608,6 +1611,33 @@ func isToolResultCarrier(msg provider.Message) bool {
 		}
 	}
 	return hasToolResult
+}
+
+// RemoveLastUserMessage removes the trailing real (non-tool-result-carrier)
+// user message from the in-memory history and reports whether one was
+// removed. #4188: RunStreamWithContent adds the user message BEFORE the
+// provider call; when the caller retries the same turn with a different
+// projection of that message (desktop vision fallback: image content ->
+// text-only), the pre-retry original must be dropped or the turn is
+// duplicated in the live context AND the persisted JSONL. Disk JSONL keeps
+// the already-appended first copy (append-only store); the session-index
+// view is rebuilt from the in-memory history on resume after adoption of
+// the projection, so the surviving copy is the one the next provider call
+// actually saw.
+func (m *Manager) RemoveLastUserMessage() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].Role != "user" {
+			continue
+		}
+		if isToolResultCarrier(m.messages[i]) {
+			continue
+		}
+		m.messages = append(m.messages[:i], m.messages[i+1:]...)
+		return true
+	}
+	return false
 }
 
 func (m *Manager) RemoveLastAssistantGroup() string {
