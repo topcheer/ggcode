@@ -124,6 +124,10 @@ var sentimentPositiveWhitelist = []string{
 	"计算了", "预算了", "结算", "打算了",
 	"垃圾回收", "没用上", "没用到", "没用过", "不对齐",
 	"帮我停一下", "我是说中文", "我是说英文", "我是说英语",
+	// #4181: 还是错 inside 还是错误处理/还是错误码 (a neutral
+	// technical recommendation, not a rejection of the agent's output)
+	// - same carrier family as #4149.
+	"还是错误",
 	// Mid-compound straddle carriers: 别动 inside 区别动态, 重来 inside
 	// 重庆来. A clause-start position rule was tried and rejected - it also
 	// killed genuine mid-sentence predicates ("这个方案错了", #4003 test
