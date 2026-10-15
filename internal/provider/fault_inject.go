@@ -172,6 +172,15 @@ func (f *FaultProvider) ChatStream(ctx context.Context, messages []Message, tool
 		defer safego.Recover("fault.injectStream")
 		defer close(out)
 		applied := false
+		// #4146: abandoning consumers (see tape_provider recordStream) parked
+		// this goroutine on the bare `out <- nev` forever. ctx-guarded send +
+		// deferred src drain, matching the fallback.go #602/#2570 standard.
+		defer func() {
+			go safego.Run("fault.injectStream.drain", func() {
+				for range src {
+				}
+			})
+		}()
 		for ev := range src {
 			nev, drop, mutated := perturbStreamEvent(ev, d.kind)
 			if drop {
@@ -181,7 +190,17 @@ func (f *FaultProvider) ChatStream(ctx context.Context, messages []Message, tool
 			if mutated {
 				applied = true
 			}
-			out <- nev
+			select {
+			case out <- nev:
+			case <-ctx.Done():
+				// The fault was (at least partially) observed before the
+				// abandon; record it as consumed so call numbering stays
+				// aligned with what the harness actually saw.
+				if applied {
+					f.fire(d)
+				}
+				return
+			}
 		}
 		if applied {
 			f.fire(d)
