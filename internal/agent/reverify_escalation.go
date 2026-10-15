@@ -93,7 +93,13 @@ type negativeObservation struct {
 	argSummary string
 	snippet    string
 	iteration  int
-	consumed   bool
+	// seq is the global recordToolResult tick at which this observation
+	// was recorded. #4192: iteration alone cannot order events INSIDE one
+	// iteration (the tool loop calls recordToolResult with the same iter for
+	// an edit and a following grep), so staleness ordering uses seq while
+	// aging keeps the iteration-based threshold.
+	seq      int
+	consumed bool
 }
 
 // reverifyState tracks negative observations and mutation recency for the
@@ -101,16 +107,24 @@ type negativeObservation struct {
 type reverifyState struct {
 	observations     []negativeObservation
 	lastMutationIter int
-	warnings         int
+	// lastMutationSeq is the recordSeq of the most recent SUCCESSFUL
+	// mutation (#4192: strictly-greater-than comparison against the
+	// observation's seq distinguishes edit-then-grep from grep-then-edit
+	// inside one iteration).
+	lastMutationSeq int
+	recordSeq       int
+	warnings        int
 }
 
 func newReverifyState() *reverifyState {
-	return &reverifyState{lastMutationIter: -1}
+	return &reverifyState{lastMutationIter: -1, lastMutationSeq: -1}
 }
 
 func (s *reverifyState) reset() {
 	s.observations = nil
 	s.lastMutationIter = -1
+	s.lastMutationSeq = -1
+	s.recordSeq = 0
 	s.warnings = 0
 }
 
@@ -123,9 +137,17 @@ func (s *reverifyState) reset() {
 //     replaced the old negative - query-granularity supersede, matching the
 //     false-premise detector post-#546).
 func (s *reverifyState) recordToolResult(toolName, args, resultContent string, isError bool, iter int) {
+	s.recordSeq++
 	if reverifyMutationTools[toolName] {
-		if iter > s.lastMutationIter {
-			s.lastMutationIter = iter
+		// #4182: only a mutation that actually happened can invalidate an
+		// earlier observation (a failed edit has no side effects). #4184
+		// carried this gate; it was lost in the #4177-train merge of the
+		// parallel variant and is restored here.
+		if !isError {
+			if iter > s.lastMutationIter {
+				s.lastMutationIter = iter
+			}
+			s.lastMutationSeq = s.recordSeq
 		}
 		return
 	}
@@ -158,6 +180,7 @@ func (s *reverifyState) recordToolResult(toolName, args, resultContent string, i
 		argSummary: reverifySummarizeArgs(args),
 		snippet:    reverifyFirstLine(resultContent),
 		iteration:  iter,
+		seq:        s.recordSeq,
 	})
 	if len(s.observations) > reverifyMaxObservations {
 		s.observations = s.observations[len(s.observations)-reverifyMaxObservations:]
@@ -181,7 +204,14 @@ func (s *reverifyState) checkStaleTrap(assistantText string, iter int) string {
 			continue
 		}
 		aged := iter-o.iteration >= reverifyStaleAgeIters
-		mutatedAfter := s.lastMutationIter >= o.iteration
+		// #4192: seq-ordered strict comparison. The iteration-number form
+		// (lastMutationIter >= o.iteration) fired when the edit came BEFORE
+		// the grep in the same iteration - exactly the edit-then-verify
+		// workflow - and the injected instruction then asserted "file changes
+		// have happened since" when the observation was already the
+		// post-edit state. A strictly LATER record tick is the only true
+		// invalidation signal.
+		mutatedAfter := s.lastMutationSeq > o.seq
 		if !aged || !mutatedAfter {
 			continue
 		}
