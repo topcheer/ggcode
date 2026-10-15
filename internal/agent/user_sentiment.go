@@ -385,11 +385,19 @@ func detectNegativeFeedback(message string) string {
 				if group.category != negCatRedirection {
 					openerWindow = 12
 				}
-				// #3968: strings.Index is a BYTE index; compare the rune
+				// #3968: the index is a BYTE index; compare the rune
 				// count of the prefix so the window is CHARACTERS in any
 				// script. ASCII behavior is unchanged (byte index == rune
 				// count when the prefix is pure ASCII).
-				if idx := strings.Index(scanText, pat); idx >= 0 && utf8.RuneCountInString(scanText[:idx]) < openerWindow {
+				// #4174: use wordIndexIn, not strings.Index. The gate that
+				// got us here is wordContains (word-bounded), so the
+				// position check must use the same boundary semantics:
+				// strings.Index finds a substring embedded in an unrelated
+				// word at the START ("no" inside "Now that..."), and that
+				// borrowed position passes the 12-rune opener window even
+				// though the word-bounded match that actually fired is
+				// mid-message - exactly what the window exists to exclude.
+				if idx := wordIndexIn([]byte(scanText), pat); idx >= 0 && utf8.RuneCountInString(scanText[:idx]) < openerWindow {
 					return group.category
 				}
 			}

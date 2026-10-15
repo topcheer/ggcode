@@ -102,6 +102,61 @@ func TestDetectNegativeFeedback_MultiLine(t *testing.T) {
 	}
 }
 
+// TestDetectNegativeFeedback_OpenerWindowWordBoundary pins #4174: the
+// opener-window position check must use word-boundary matching (wordIndexIn),
+// the same semantics as the wordContains gate. strings.Index finds a substring
+// embedded in an unrelated opening word ("no" inside "Now that..."), and that
+// borrowed position passes the 12-rune window even though the word-bounded
+// match that actually fired is mid-message - so neutral long messages whose
+// only standalone negative word appears mid-text must NOT be classified as
+// course-correction feedback.
+func TestDetectNegativeFeedback_OpenerWindowWordBoundary(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+	}{
+		{
+			// Issue repro: "Now" embeds "no" at index 0; the standalone
+			// "no" is ~100 runes in ("the answer is no for now").
+			name: "Now-opener with mid-message standalone no",
+			msg:  "Now that we've validated the parser, let's discuss the deployment plan. I reviewed the checklist with the team yesterday and we agreed the answer is no for now, because the staging cluster is not ready yet.",
+		},
+		{
+			name: "Nobody-opener with trailing standalone wrong",
+			msg:  "Nobody has reviewed the migration plan yet, so I took a pass this morning and left comments on the pull request; overall the approach looks right, but the rollback section is wrong.",
+		},
+		{
+			name: "Note-opener with mid-message standalone wrong",
+			msg:  "Note that some tests still fail on the CI runner; the first failure is a flake we have seen before, but the second one is definitely wrong and needs a fix before we merge.",
+		},
+		{
+			// Control proving causality: same mid-message negative word,
+			// but the opener ("Knowledge...") embeds nothing - passed both
+			// before and after the fix.
+			name: "Knowledge-opener control",
+			msg:  "Knowledge of the retry semantics is spread across three files, which is why the fix is non-trivial; honestly the earlier approach was wrong and the new one is better documented.",
+		},
+	}
+	for _, tt := range tests {
+		if got := detectNegativeFeedback(tt.msg); got != "" {
+			t.Errorf("%s: detectNegativeFeedback = %q, want empty", tt.name, got)
+		}
+	}
+
+	// Positive controls: genuine openers on long messages must still fire.
+	rej := "no, that is not what I meant at all. I asked for the dry-run report first and the full migration after, because the staging data is not representative of production yet."
+	if got := detectNegativeFeedback(rej); got != negCatRejection {
+		t.Errorf("genuine no-opener: detectNegativeFeedback = %q, want %q", got, negCatRejection)
+	}
+	// "wrong" belongs to the rejection group and is checked before the
+	// redirection group, so a "wrong ... instead" opener classifies as
+	// rejection (pre-existing precedence, unaffected by #4174).
+	redir := "wrong approach - use the batch endpoint instead. Looping one request per item is what blew the rate limit last time, and the batch call has been available since API v2 launched."
+	if got := detectNegativeFeedback(redir); got != negCatRejection {
+		t.Errorf("genuine wrong-opener: detectNegativeFeedback = %q, want %q", got, negCatRejection)
+	}
+}
+
 // TestDetectNegativeFeedback_PositivePhrases pins #1223: affirmative
 // acknowledgements that contain bare rejection words ("no problem", "not bad")
 // and technical how-to questions ("how do I stop...") must NOT be classified
