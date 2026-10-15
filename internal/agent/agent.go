@@ -2758,7 +2758,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Detect empty LLM response: API accepted input but produced no output.
 		// Only trigger when InputTokens > 0 (real API call) to avoid false positives
 		// in tests or scenarios where usage stats are unavailable.
-		if resp.Usage.OutputTokens == 0 && resp.Usage.InputTokens > 0 && len(toolCalls) == 0 {
+		// #4201: guard against providers whose final usage chunk reports
+		// {output_tokens: 0} even though text streamed out fine (vLLM /
+		// LiteLLM / Ollama compat gateways that ignore IncludeUsage). If we
+		// actually received text or message content, the response is NOT
+		// empty regardless of what the usage numbers claim - same defense
+		// the terminal stream-error path uses (see strings.TrimSpace(textBuf)
+		// above). Without it, three normal text replies on such an endpoint
+		// abort the run with "3 consecutive empty responses" and the text is
+		// silently dropped from history.
+		if resp.Usage.OutputTokens == 0 && resp.Usage.InputTokens > 0 && len(toolCalls) == 0 &&
+			strings.TrimSpace(textBuf) == "" && len(resp.Message.Content) == 0 {
 			// Complete policy block (no partial text, no output tokens): the
 			// request was rejected by a provider safety filter. An empty-response
 			// nudge would just re-trigger the same filter — report and stop (#266).
