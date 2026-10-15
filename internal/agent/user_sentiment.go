@@ -112,6 +112,23 @@ var sentimentPositiveWhitelist = []string{
 	// #3739 CJK positives: same masking role for Chinese acknowledgements.
 	"没问题", "不碍事", "谢谢", "好的", "很好", "不错", "可以了", "太好了",
 	"干得好", "看起来不错", "完美", "棒",
+	// #4149 CJK neutral carriers: bare CJK negative words have no word
+	// boundaries (isAlnum is false for all bytes >= 0x80, so wordContains
+	// degenerates to substring matching), and everyday Chinese compounds
+	// EMBED the trigger patterns: 算了 inside 计算了/结算, 垃圾 inside
+	// 垃圾回收, 没用 inside 没用上/没用过, 不对 inside 不对齐, 停一下
+	// inside 帮我停一下, 我是说 inside 我是说中文. These are the CJK
+	// counterparts of the English #1223/#4104 false-positive families:
+	// masking the carrier blanks the embedded trigger while leaving any
+	// other negative words in the line still detectable.
+	"计算了", "预算了", "结算", "打算了",
+	"垃圾回收", "没用上", "没用到", "没用过", "不对齐",
+	"帮我停一下", "我是说中文", "我是说英文", "我是说英语",
+	// Mid-compound straddle carriers: 别动 inside 区别动态, 重来 inside
+	// 重庆来. A clause-start position rule was tried and rejected - it also
+	// killed genuine mid-sentence predicates ("这个方案错了", #4003 test
+	// suite) - so these two niche straddles are masked as carriers instead.
+	"区别动", "重庆来",
 }
 
 // containsCJKANotA reports whether s contains an A-not-A construction
@@ -129,6 +146,35 @@ func containsCJKANotA(s string) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+// patternHasCJK reports whether the pattern contains at least one CJK rune.
+// #4149 gates below apply only to such patterns; ASCII patterns keep the
+// wordContains boundary semantics unchanged.
+func patternHasCJK(pat string) bool {
+	for _, r := range pat {
+		if r >= 0x4E00 && r <= 0x9FFF {
+			return true
+		}
+	}
+	return false
+}
+
+// isCJKQuestionLine reports whether the (first) line is an interrogative:
+// after trimming trailing spaces and sentence-final 。/！/， it ends with ？,
+// ?, 吗 or 呢. Diagnostic questions ("服务为什么停下了？", "部署没成功吗？")
+// carry bare negative substrings without any feedback intent. (#4149)
+func isCJKQuestionLine(line string) bool {
+	t := strings.TrimRight(line, "。！!，, \t")
+	if t == "" {
+		return false
+	}
+	last, _ := utf8.DecodeLastRuneInString(t)
+	switch last {
+	case '？', '?', '吗', '呢':
+		return true
 	}
 	return false
 }
@@ -288,6 +334,22 @@ func detectNegativeFeedback(message string) string {
 		}
 		for _, pat := range group.patterns {
 			if wordContains(scanText, pat) {
+				// #4149: CJK bare words carry no word boundaries, so an
+				// additional gate applies before a CJK pattern counts:
+				// QUESTION GATE: a line ending in an interrogative
+				//     (吗/呢/？/?) is a diagnostic question, not feedback -
+				//     "服务为什么停下了？" / "部署没成功吗？". Same conservative
+				//     direction as the #4004 A-not-A question skip above.
+				//     Mid-compound straddles (区别动态->别动, 重庆来->重来) and
+				//     neutral carriers (计算了/垃圾回收/没用上) are handled by
+				//     masking in the whitelist above; a clause-start position
+				//     rule was tried and rejected - it killed genuine
+				//     mid-sentence predicates like "这个方案错了".
+				if patternHasCJK(pat) {
+					if isCJKQuestionLine(firstLine) {
+						continue
+					}
+				}
 				// All categories only trigger for short messages to avoid
 				// false positives in detailed technical messages. A long
 				// message with "actually" mid-sentence is context, not
