@@ -145,7 +145,14 @@ func (MinimaxProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageIn
 		if !strings.EqualFold(strings.TrimSpace(mr.ModelName), "general") {
 			continue
 		}
-		if mr.CurrentIntervalRemainingPercent > 0 {
+		// #4141: gate on window EXISTENCE, not remaining budget. A window with
+		// remaining==0 is the exhausted state - the exact moment the user needs
+		// the signal - and the old `remaining > 0` gate dropped it entirely
+		// (panel showed nothing instead of "100% used + reset time"). The
+		// end-time timestamp is the existence signal: absent JSON fields decode
+		// as zero for both, so EndTimeMs>0 OR remaining>0 covers an active or
+		// exhausted window while still hiding structurally absent ones.
+		if mr.EndTimeMs > 0 || mr.CurrentIntervalRemainingPercent > 0 {
 			w := UsageWindow{Label: "5h", UsedPercent: clampPercent(100 - mr.CurrentIntervalRemainingPercent)}
 			if mr.EndTimeMs > 0 {
 				w.ResetsAt = time.UnixMilli(mr.EndTimeMs)
@@ -154,7 +161,8 @@ func (MinimaxProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageIn
 		}
 		// Weekly only exists while the plan's weekly tier is active
 		// (status==1); showing it otherwise displays a stale/zero bucket.
-		if mr.CurrentWeeklyStatus == 1 && mr.CurrentWeeklyRemainingPercent > 0 {
+		// #4141: same existence-vs-remaining gate as the 5h window above.
+		if mr.CurrentWeeklyStatus == 1 && (mr.WeeklyEndTimeMs > 0 || mr.CurrentWeeklyRemainingPercent > 0) {
 			w := UsageWindow{Label: "weekly", UsedPercent: clampPercent(100 - mr.CurrentWeeklyRemainingPercent)}
 			if mr.WeeklyEndTimeMs > 0 {
 				w.ResetsAt = time.UnixMilli(mr.WeeklyEndTimeMs)
