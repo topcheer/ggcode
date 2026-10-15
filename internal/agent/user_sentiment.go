@@ -103,7 +103,7 @@ const (
 // A first line containing any of these phrases is never classified as
 // negative feedback.
 var sentimentPositiveWhitelist = []string{
-	"no problem", "no worries", "no issues", "no issue",
+	"no problem", "no worries", "no issues", "no issue", "no need",
 	"not bad", "not too bad", "looks good", "looks great", "looks fine",
 	"all good", "well done", "good job", "nice work", "great work",
 	"perfect", "excellent", "awesome", "thank you", "thanks",
