@@ -4669,6 +4669,14 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 			textOnly = []provider.ContentBlock{provider.TextBlock("[image omitted: the active model has no vision support]")}
 		}
 		{
+			// #4188: the first RunStreamWithContent already added the
+			// ORIGINAL (image) content to the context manager before the
+			// provider call; retrying with the text-only projection without
+			// removing it would leave the turn doubled in the live context
+			// (and re-persisted) - resume would replay both copies. Drop the
+			// original first; the retry's Add() then records exactly the
+			// projection the next provider call actually saw.
+			b.agent.RemoveLastUserMessage()
 			retryErr := b.agent.RunStreamWithContent(ctx, textOnly, func(ev provider.StreamEvent) {
 				b.emitIfCurrent(runGen, ev)
 			})

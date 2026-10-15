@@ -921,6 +921,18 @@ func (a *Agent) ReconcileToolCalls() bool {
 	return a.contextManager.ReconcileToolCalls()
 }
 
+// RemoveLastUserMessage drops the trailing real user message from the live
+// context (#4188). Callers retrying a turn with a re-projected version of
+// the same message (desktop vision fallback) call this before the retry so
+// the turn is not duplicated.
+// See context.Manager.RemoveLastUserMessage for details.
+func (a *Agent) RemoveLastUserMessage() bool {
+	if a.contextManager == nil {
+		return false
+	}
+	return a.contextManager.RemoveLastUserMessage()
+}
+
 // SetProjectMemoryFiles seeds the set of already-loaded project memory files so
 // path-triggered dynamic loading can avoid reinjecting startup guidance.
 func (a *Agent) SetProjectMemoryFiles(files []string) {
