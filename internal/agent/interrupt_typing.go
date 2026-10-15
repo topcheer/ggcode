@@ -66,14 +66,26 @@ var retractPhrases = map[string]struct{}{
 }
 
 // revisionMarkers: explicit redirection signal inside the message.
+// #4121/#4180 family bar: a marker earns its place only when its ordinary
+// technical usage is RARE. Bare connectives ("instead", "rather than",
+// "switch to") and bare CJK modification verbs (改为/改成/换成/改用 - the most
+// ordinary way to request a rename or reorder) fired on everyday refinement,
+// and the Revision preamble then told the model to abandon in-flight work
+// that was still valid. Remaining forms all carry explicit redirection
+// semantics: deictic references to the prior plan ("instead of that/this",
+// "change it to"), goal language ("revise/change the goal", "new/different
+// direction or goal", "switch to plan N"), or scheme-swap compounds
+// (改成/换成方案, 换个思路/方向) that ordinary refinements ("把变量名改为
+// camelCase 再继续") never produce contiguously.
 var revisionMarkers = []string{
-	"instead", "switch to", "rather than", "actually, do", "change it to",
-	// #4121: bare "make it" removed - it fired on ordinary refinement
-	// instructions ("make it more robust") and the Revision preamble made
-	// the model abandon valid in-flight work. Explicit redirection forms
-	// ("change it to", "revise the goal") remain.
-	"revise the goal", "new direction",
-	"改成", "换成", "改用", "改为", "换成方案", "不要这个了要", "换个思路",
+	// "instead," with the comma is the imperative swap form ("instead, use
+	// the buffered writer", pinned by #4121) - distinct from the trailing
+	// connective ("use X instead of Y", the #4180 FP family, no comma).
+	"instead,", "actually, do", "change it to", "instead of that", "instead of this",
+	"revise the goal", "change the goal", "new direction", "different goal",
+	"switch to plan",
+	"改成方案", "换成方案", "不要这个了要", "换个思路", "换个方向",
+	"改目标", "需求变了", "需求改了",
 }
 
 // normalizeRetract folds a candidate phrase: lowercase, drop all whitespace
