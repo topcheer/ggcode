@@ -97,10 +97,10 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		sa.setActivity("thinking", "", "")
 		sa.setStartedAt(time.Now())
 		// Set model for display in follow strip and tool call labels.
+		// #4161: route through SetModel - snapshot()/statusInfo() read this
+		// field under sa.mu, so every writer must take the same lock.
 		if cfg.Model != "" {
-			sa.mu.Lock()
-			sa.Model = cfg.Model
-			sa.mu.Unlock()
+			sa.SetModel(cfg.Model)
 		}
 		// Mark that a real goroutine is running this agent.
 		// CancelAll() uses this to decide whether to wait on done.
