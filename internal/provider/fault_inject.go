@@ -171,8 +171,34 @@ func (f *FaultProvider) ChatStream(ctx context.Context, messages []Message, tool
 	go func() {
 		defer safego.Recover("fault.injectStream")
 		defer close(out)
+		// #4146: out is unbuffered; the former bare `out <- nev` parked this
+		// goroutine forever once the consumer abandoned the stream (ctx
+		// cancelled, no reader left), cascading into the inner provider's
+		// stream goroutine. Both channel ops now watch ctx (fallback.go
+		// watchStreamForFailover pattern) and, on abandon, src is drained in
+		// the background so the inner stream goroutine can still finish.
+		drainOnAbandon := func() {
+			go safego.Run("provider.fault.drainOnAbandon", func() {
+				for range src {
+				}
+			})
+		}
+		defer drainOnAbandon()
 		applied := false
-		for ev := range src {
+		for {
+			var ev StreamEvent
+			select {
+			case next, ok := <-src:
+				if !ok {
+					if applied {
+						f.fire(d)
+					}
+					return
+				}
+				ev = next
+			case <-ctx.Done():
+				return
+			}
 			nev, drop, mutated := perturbStreamEvent(ev, d.kind)
 			if drop {
 				applied = true
@@ -181,10 +207,11 @@ func (f *FaultProvider) ChatStream(ctx context.Context, messages []Message, tool
 			if mutated {
 				applied = true
 			}
-			out <- nev
-		}
-		if applied {
-			f.fire(d)
+			select {
+			case out <- nev:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 	return out, nil
