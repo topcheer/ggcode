@@ -185,6 +185,23 @@ func TestServerDelegationPolicyDisabledByDefault(t *testing.T) {
 	if !srv2.checkDelegation(rr5, json.RawMessage(`1`), &Message{Metadata: json.RawMessage(`{"ggcode.dev/on-behalf-of":"alice"}`)}) {
 		t.Fatalf("RequireOnBehalfOf must accept declared messages, body: %s", rr5.Body.String())
 	}
+	// #4168: JSON null or any non-string value is NOT a valid declaration.
+	for name, raw := range map[string]string{
+		"json null":   `{"ggcode.dev/on-behalf-of":null}`,
+		"number":      `{"ggcode.dev/on-behalf-of":123}`,
+		"bool":        `{"ggcode.dev/on-behalf-of":true}`,
+		"array":       `{"ggcode.dev/on-behalf-of":[]}`,
+		"object":      `{"ggcode.dev/on-behalf-of":{"a":1}}`,
+		"empty array": `{"ggcode.dev/on-behalf-of":[""]}`,
+	} {
+		rr := httptest.NewRecorder()
+		if srv2.checkDelegation(rr, json.RawMessage(`1`), &Message{Metadata: json.RawMessage(raw)}) {
+			t.Fatalf("RequireOnBehalfOf must reject non-string on-behalf-of (%s): %s", name, raw)
+		}
+		if !strings.Contains(rr.Body.String(), "missing ggcode.dev/on-behalf-of declaration") {
+			t.Fatalf("(%s) unexpected rejection body: %s", name, rr.Body.String())
+		}
+	}
 }
 
 func ctxBG() context.Context { return context.Background() }
