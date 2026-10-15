@@ -4593,6 +4593,27 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	// claimed generation; emitIfCurrent drops stale events, matching the
 	// text main path which never re-assigns.
 
+	// #4124: parity with the text main path (sendMessageData). The image
+	// paste path used to only append currentSes.Messages, so once
+	// liveHistory was already non-empty the pasted image never entered it
+	// (applySemanticToLiveHistory only seeds when empty) - the frontend
+	// showed an assistant-only orphan turn for that round, and the mobile
+	// tunnel missed the user message + busy status entirely. Bind the
+	// projection broker, append the live user message, and push the round
+	// to the tunnel, mirroring sendMessageData 1:1.
+	b.bindTunnelProjectionSession()
+	if summary := sendContentUserSummary(content); summary != "" {
+		b.appendLiveUserMessage(summary)
+		if broker := b.currentTunnelBroker(); broker != nil {
+			broker.PushUserMessageData(tunnel.MessageData{
+				Text:      summary,
+				MessageID: broker.NextMessageID(),
+			})
+			broker.PushStatus(tunnel.StatusBusy, "")
+			b.resetTunnelRoundState()
+		}
+	}
+
 	if b.currentSes != nil {
 		msg := provider.Message{Role: "user", Content: content}
 		b.currentSes.Messages = append(b.currentSes.Messages, msg)
@@ -4661,6 +4682,30 @@ func contentHasImageBlocks(content []provider.ContentBlock) bool {
 		}
 	}
 	return false
+}
+
+// sendContentUserSummary flattens pasted content blocks into the short user
+// turn summary used for liveHistory and the mobile tunnel push (#4124).
+// Image-only paste yields "[image]" so the round still shows a user bubble;
+// text plus images appends the marker so the bubble reflects the attachment.
+func sendContentUserSummary(blocks []provider.ContentBlock) string {
+	var text strings.Builder
+	for _, blk := range blocks {
+		if blk.Type == "text" && strings.TrimSpace(blk.Text) != "" {
+			if text.Len() > 0 {
+				text.WriteByte(' ')
+			}
+			text.WriteString(strings.TrimSpace(blk.Text))
+		}
+	}
+	summary := text.String()
+	if contentHasImageBlocks(blocks) {
+		if summary != "" {
+			summary += " "
+		}
+		summary += "[image]"
+	}
+	return summary
 }
 
 // stripImageBlocks removes image blocks, keeping text and other blocks.
