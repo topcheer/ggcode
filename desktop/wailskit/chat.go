@@ -1144,6 +1144,7 @@ func (b *ChatBridge) bindSessionIntegrations(ses *session.Session) {
 // LoadSession loads an existing session by ID.
 // Releases the previous session's lock (if any), cleans up ephemeral
 // sessions, then acquires a lock on the target session before loading.
+
 func (b *ChatBridge) LoadSession(id string) error {
 	if b.sessionStore == nil {
 		store, err := session.NewDefaultStore()
