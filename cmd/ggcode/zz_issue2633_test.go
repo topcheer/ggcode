@@ -30,7 +30,7 @@ func TestIssue2633DetachForkFailureStaysForeground(t *testing.T) {
 		t.Fatalf("mkdir pid path: %v", err)
 	}
 
-	got := detachToBackground(daemon.LangEn, "", workingDir, "sess-2633")
+	got := detachToBackground(daemon.LangEn, "", workingDir, "sess-2633", nil)
 	if got != false {
 		t.Fatalf("detachToBackground returned %v on slot-check failure; want false (stay foreground)", got)
 	}
