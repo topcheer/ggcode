@@ -248,12 +248,6 @@ func (c *InteractiveRuntimeCore) Close() {
 	lsp.ShutdownAll()
 }
 
-// MCPManagerCancel returns the MCP cancel function for callers that need
-// cleanup on exit (e.g. TUI's defer chain).
-func (c *InteractiveRuntimeCore) MCPManagerCancel() context.CancelFunc {
-	return c.mcpCancel
-}
-
 func NewSkillTool(
 	commandMgr *commands.Manager,
 	mcpMgr *plugin.MCPManager,

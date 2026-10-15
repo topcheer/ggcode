@@ -84,27 +84,6 @@ func (h *TunnelHost) handleRTCSignal(cmd tunnel.GatewayMessage) {
 	mgr.HandleSignalMessage(signal)
 }
 
-// IsP2PActive returns whether a P2P DataChannel is currently in use
-// for the active share.
-func (h *TunnelHost) IsP2PActive() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.onlineBroker == nil {
-		return false
-	}
-	return h.onlineBroker.HasP2PTransport()
-}
-
-// P2PUpgradeState returns the current P2P upgrade state.
-func (h *TunnelHost) P2PUpgradeState() tunnel.UpgradeState {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.upgradeMgr == nil {
-		return tunnel.UpgradeIdle
-	}
-	return h.upgradeMgr.State()
-}
-
 // Call this when the session changes or is first created.
 // Returns the projection broker state with replay events and authority epoch.
 func (h *TunnelHost) BindSession(ses *session.Session, store session.Store) ProjectionBrokerState {
