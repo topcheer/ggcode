@@ -904,7 +904,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	var a2aTaskHandler *a2a.TaskHandler
 	if !cfg.A2A.Disabled {
 		// A2A instance override already applied by LoadWithInstance.
-		a2aSrv, a2aReg, a2aHandler, err := startA2AServer(cfg, ag, registry, workingDir)
+		// #4155: this ctx is created before startA2AServer so the server's
+		// internal refreshCache loop shares the caller-owned lifetime; the
+		// unconditional defer covers the startup-error path too.
+		a2aBgCtx, a2aBgCancel := context.WithCancel(context.Background())
+		defer a2aBgCancel()
+		a2aSrv, a2aReg, a2aHandler, err := startA2AServer(a2aBgCtx, cfg, ag, registry, workingDir)
 		if err != nil {
 			// #3677: startA2AServer's internal fail-fast (#1174) checks
 			// oauth2/oidc/mTLS config and returns errors the TUI path used
@@ -957,6 +962,14 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub, a2aServer.Port())
 		// Sync peers from A2A registry
+		// #4155: the goroutine previously ran `for range ticker.C` with no
+		// exit path — run()'s Unregister/Stop defers could never reach it,
+		// leaking it for the process lifetime (a library embedder or test
+		// runner keeps it alive across callers). refreshLoopUntil selects on
+		// a caller-owned ctx hung on run()'s defer chain, mirroring the
+		// StartBackgroundRefresh pattern ten lines above.
+		syncPeersCtx, syncPeersCancel := context.WithCancel(context.Background())
+		defer syncPeersCancel()
 		safego.Go("lanchat.syncPeers", func() {
 			syncPeers := func() {
 				instances := a2aRegistry.CachedInstances()
@@ -972,15 +985,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 				}
 				lanchatHub.UpdatePeers(peers)
 			}
-			// Initial sync after 3s (let mDNS browser warm up)
-			time.Sleep(3 * time.Second)
-			syncPeers()
-			// Then periodic every 10s
-			ticker := time.NewTicker(10 * time.Second)
-			defer ticker.Stop()
-			for range ticker.C {
-				syncPeers()
-			}
+			// Initial sync after 3s (let mDNS browser warm up), then every 10s.
+			refreshLoopUntil(syncPeersCtx, 3*time.Second, 10*time.Second, syncPeers)
 		})
 	}
 
@@ -1475,7 +1481,7 @@ func parseA2ATimeout(s string) time.Duration {
 	return d
 }
 
-func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, workingDir string) (*a2a.Server, *a2a.Registry, *a2a.TaskHandler, error) {
+func startA2AServer(ctx context.Context, cfg *config.Config, ag *agent.Agent, reg *tool.Registry, workingDir string) (*a2a.Server, *a2a.Registry, *a2a.TaskHandler, error) {
 	a2aReg, err := a2a.NewRegistry()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("a2a registry: %w", err)
@@ -1629,13 +1635,13 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	remoteTool := a2a.NewRemoteTool(a2aReg, a2aAPIKey(cfg))
 	_ = reg.Register(remoteTool)
 
-	// Periodically refresh the remote instance cache so new instances are discovered.
+	// Periodically refresh the remote instance cache so new instances are
+	// discovered. #4155: this loop previously ran `for range ticker.C` with no
+	// exit path, so run()/daemon's Unregister+Stop cleanup defers could never
+	// reach it. It now selects on the caller-supplied background-refresh ctx
+	// (the same one StartBackgroundRefresh uses, cancelled on shutdown).
 	safego.Go("root.a2a.refreshCache", func() {
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			remoteTool.RefreshCache()
-		}
+		refreshLoopUntil(ctx, 0, 15*time.Second, remoteTool.RefreshCache)
 	})
 
 	debug.Log("root", "A2A server started at %s", srv.Endpoint())
@@ -1649,6 +1655,35 @@ func init() {
 }
 
 // detectGitStatus returns a short git status string or "".
+// refreshLoopUntil invokes fn once after firstDelay (when > 0) and then on
+// every interval tick, until ctx is cancelled. #4155: extracted from the
+// a2a refreshCache and lanchat syncPeers background goroutines, whose
+// `for range ticker.C` loops had no exit path — the shutdown defers in
+// run()/runDaemon could never reach them, structurally leaking one
+// goroutine per caller for library embedders and in-process tests.
+// firstDelay == 0 skips the initial call (loop starts at the first tick),
+// preserving the historical behavior of each call site.
+func refreshLoopUntil(ctx context.Context, firstDelay, interval time.Duration, fn func()) {
+	if firstDelay > 0 {
+		select {
+		case <-time.After(firstDelay):
+			fn()
+		case <-ctx.Done():
+			return
+		}
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			fn()
+		}
+	}
+}
+
 func detectGitStatus(workingDir string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

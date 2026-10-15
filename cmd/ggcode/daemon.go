@@ -1069,12 +1069,16 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	var a2aHandler *a2a.TaskHandler
 	if !cfg.A2A.Disabled {
 		// A2A instance override already applied by LoadWithInstance.
-		a2aSrv, a2aReg, a2aHandler, err = startA2AServer(cfg, ag, registry, workingDir)
+		// #4155: ctx created before startA2AServer so its internal
+		// refreshCache loop shares this caller-owned lifetime; the
+		// unconditional defer covers the startup-error path too.
+		a2aBgCtx, a2aBgCancel := context.WithCancel(context.Background())
+		defer a2aBgCancel()
+		a2aSrv, a2aReg, a2aHandler, err = startA2AServer(a2aBgCtx, cfg, ag, registry, workingDir)
 		if err != nil {
 			debug.Log("daemon", "A2A server start failed: %v", err)
 			fmt.Fprintf(os.Stderr, "A2A server warning: %v\n", err)
 		} else {
-			a2aBgCtx, a2aBgCancel := context.WithCancel(context.Background())
 			a2aReg.StartBackgroundRefresh(a2aBgCtx)
 			defer func() {
 				a2aBgCancel()
