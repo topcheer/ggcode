@@ -64,6 +64,12 @@ func NewIdleMaintainer(after time.Duration, ratioFloor float64, ratioFn func() f
 	return m
 }
 
+// maintenanceCleared is the sentinel stored in place of nil: atomic.Value
+// cannot hold a nil func. Calling it is observationally identical to having
+// no maintenance registered (#4122: "Pass nil to clear" was previously a
+// no-op, so a registered callback could never be stopped).
+var maintenanceCleared = func() {}
+
 // SetMaintenance registers a secondary idle-window callback that runs on
 // EVERY idle fire, independent of the pre-compact ratio gate (sa-63, Letta
 // sleep-time compute "every few turns / from a queue" trigger). Use it for
@@ -72,8 +78,11 @@ func NewIdleMaintainer(after time.Duration, ratioFloor float64, ratioFn func() f
 // doing anything. fn must be safe to run between runs (inflight == 0).
 // Pass nil to clear. No-op on a nil receiver.
 func (m *IdleMaintainer) SetMaintenance(fn func()) {
-	if m == nil || fn == nil {
+	if m == nil {
 		return
+	}
+	if fn == nil {
+		fn = maintenanceCleared
 	}
 	m.maintenance.Store(fn)
 }

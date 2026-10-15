@@ -192,15 +192,25 @@ var negFeedbackPatterns = []struct {
 		"我是说", "我的意思是", "我是想要", "算了", "别管了", "忽略刚才"},
 		negCatRedirection},
 	// Frustration: emotional signals.
-	// #1223: "why are you" narrowed to "why are you doing"/"why do you keep" -
-	// the generic form matched technical questions like "why are you using a
-	// mutex here?". How-to-stop questions are whitelist phrases above.
+	// #1223: "why are you" removed - it matched technical questions like
+	// "why are you using a mutex here?". How-to-stop questions are whitelist
+	// phrases above.
 	// #4104: bare "stop" removed - see isBareStopCommand; imperative ops
 	// commands ("stop the dev server") must not read as frustration.
+	// #4127: "why do you keep"/"you keep"/"why are you doing" narrowed to
+	// gerund/deixis forms - keep+doing/making is frustration, keep/doing + a
+	// noun phrase ("keep a mutex", "doing a bounds check") is a neutral
+	// technical question, the same false-positive family #1223 removed.
 	{[]string{"ugh", "wtf", "this is frustrating", "frustrating",
-		"why are you doing", "why do you keep", "why do you still",
-		"you keep", "stop doing", "stop trying",
-		"i said", "as i said", "like i said", "i already told",
+		"why are you doing this", "why are you doing that", "why do you still",
+		"you keep doing", "you keep making", "you keep trying",
+		"stop doing", "stop trying",
+		// #4129: bare "i said"/"as i said"/"like i said"/"i already told"
+		// removed - neutral technical restatement ("as I said, the parser
+		// retries on 429") read as frustration and two such messages
+		// reset monitoring. Only the agent-directed reprimand form keeps
+		// firing; the CJK counterpart 我说过了 is already reprimand-shaped.
+		"i already told you",
 		"are you listening", "read my message", "pay attention",
 		"this doesn't make sense", "this doesnt make sense",
 		"nonsense", "garbage", "useless", "terrible",
@@ -294,15 +304,31 @@ func detectNegativeFeedback(message string) string {
 				if isShort {
 					return group.category
 				}
-				if group.category == negCatRedirection {
-					// #3968: strings.Index is a BYTE index; comparing it against 40
-					// gave CJK openers only ~13 chars of window. Measure the rune
-					// count of the prefix instead so an opener is the first 40
-					// CHARACTERS in any script. ASCII behavior is unchanged
-					// (byte index == rune count when the prefix is pure ASCII).
-					if idx := strings.Index(scanText, pat); idx >= 0 && utf8.RuneCountInString(scanText[:idx]) < 40 {
-						return group.category
-					}
+				// Opener exception: a strong signal word near the START of a
+				// LONG message is still course-correction feedback, not
+				// context. #1521 introduced this for redirection; #4126
+				// extends it to rejection/frustration - a detailed
+				// correction opening with "不对/错了/烦死了" (CJK corrections
+				// run long fast: 100 runes is ~2-3 sentences) was swallowed
+				// AND reset consecutiveNegatives, systematically delaying the
+				// escalation ladder exactly when the user is escalating.
+				// Two-tier window: redirection markers ("instead",
+				// "actually") are unambiguous course words and keep the
+				// #1521/#3968 40-rune window; bare rejection/frustration
+				// words ("wrong", "bad") are common inside reflective prose
+				// ("I was thinking about how the wrong approach might
+				// actually be right...") and only qualify when the message
+				// essentially BEGINS with them (12 runes of preamble).
+				openerWindow := 40
+				if group.category != negCatRedirection {
+					openerWindow = 12
+				}
+				// #3968: strings.Index is a BYTE index; compare the rune
+				// count of the prefix so the window is CHARACTERS in any
+				// script. ASCII behavior is unchanged (byte index == rune
+				// count when the prefix is pure ASCII).
+				if idx := strings.Index(scanText, pat); idx >= 0 && utf8.RuneCountInString(scanText[:idx]) < openerWindow {
+					return group.category
 				}
 			}
 		}
