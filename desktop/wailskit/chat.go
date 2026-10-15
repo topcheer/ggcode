@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/a2a"
@@ -153,6 +154,11 @@ type ChatBridge struct {
 
 	// Pending approval/ask_user requests from agent
 	interactions *agentruntime.InteractionBroker
+
+	// #4151: local generator for approval/ask_user request IDs when no tunnel
+	// broker is connected. Distinct prefix from the broker's "msg-N" IDs so
+	// the two namespaces never collide.
+	localReqSeq atomic.Uint64
 
 	// Callback for emitting events to frontend.
 	OnStreamEvent func(eventType string, data json.RawMessage)
@@ -1707,7 +1713,10 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	}
 	b.acpClientMgr = acpclient.NewClientManager(b.workingDir, policy)
 	b.acpClientMgr.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
-		return b.RequestApproval(ctx, "", toolName, input)
+		// #4151: was hardcoded to "" — two concurrent ACP approvals shared the
+		// same map key in InteractionBroker, so the first resolution (or the
+		// first timeout cleanup) silenced both waiters.
+		return b.RequestApproval(ctx, b.nextInteractionRequestID(), toolName, input)
 	})
 	// Sub-agent manager
 	agentFactory := func(prov provider.Provider, t interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
@@ -1980,22 +1989,18 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 
 	// Wire approval handler
 	a.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
-		requestID := ""
-		if broker := b.currentTunnelBroker(); broker != nil {
-			requestID = broker.NextMessageID()
-		}
-		return b.RequestApproval(ctx, requestID, toolName, input)
+		// #4151: was "" when no tunnel broker was connected — concurrent
+		// approvals collided on the empty ID key (map overwrite, cross-wired
+		// or dead waiters). Every request now carries a unique ID.
+		return b.RequestApproval(ctx, b.nextInteractionRequestID(), toolName, input)
 	})
 
 	// Wire ask_user handler
 	if askTool, ok := b.registry.Get("ask_user"); ok {
 		if aut, ok := askTool.(*tool.AskUserTool); ok {
 			aut.SetHandler(func(ctx context.Context, req tool.AskUserRequest) (tool.AskUserResponse, error) {
-				requestID := ""
-				if broker := b.currentTunnelBroker(); broker != nil {
-					requestID = broker.NextMessageID()
-				}
-				return b.RequestAskUser(ctx, requestID, req)
+				// #4151: same empty-ID collision class as the approval handler.
+				return b.RequestAskUser(ctx, b.nextInteractionRequestID(), req)
 			})
 		}
 	}
@@ -2987,6 +2992,18 @@ func (b *ChatBridge) ResetCurrentSessionTunnelLedger() {
 func (b *ChatBridge) CurrentTunnelHistory() []tunnel.HistoryEntry {
 	// TODO: implement when HistoryEntry fields are needed
 	return nil
+}
+
+// nextInteractionRequestID returns a unique request ID for approval/ask_user
+// round-trips. When a tunnel broker is connected its NextMessageID namespace
+// is used (mobile replies resolve against it); otherwise a bridge-local
+// "req-N" sequence is generated so concurrent desktop-only approvals never
+// share the empty-string key (#4151).
+func (b *ChatBridge) nextInteractionRequestID() string {
+	if broker := b.currentTunnelBroker(); broker != nil {
+		return broker.NextMessageID()
+	}
+	return fmt.Sprintf("req-%d", b.localReqSeq.Add(1))
 }
 
 // RequestApproval blocks until the user (desktop or mobile) responds to an
