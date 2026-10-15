@@ -161,6 +161,18 @@ func unbindBelongsToWorkspace(bindingWorkspace, daemonWorkspace string) bool {
 	return session.NormalizeWorkspacePath(bindingWorkspace) == session.NormalizeWorkspacePath(daemonWorkspace)
 }
 
+// runtimeBypassActive reports whether the LIVE permission policy is in
+// bypass mode. The CLI `bypass` flag only captures process-start state; a
+// runtime switch_mode transition lives in the ConfigPolicy (the local `mode`
+// copy is only refreshed on session restore), so detach/restart argv
+// reconstruction must ask the policy itself (#4148-B1).
+func runtimeBypassActive(policy permission.PermissionPolicy, mode permission.PermissionMode) bool {
+	if cp, ok := policy.(*permission.ConfigPolicy); ok {
+		return cp.CurrentMode() == permission.BypassMode
+	}
+	return mode == permission.BypassMode
+}
+
 func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool, startTunnel bool, newSession bool, fullLoad bool) error {
 	// --- Steps 1-8: same as run() in root.go ---
 
@@ -1577,6 +1589,11 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}()
 
+	// #4148-B3: retain the tunnel stream-event subscription's unsubscribe so
+	// a second 't' StartShare can release the previous forwarder goroutine
+	// (bridge.Subscribe has no removal path otherwise).
+	var unsubscribeTunnelPrev func()
+
 	// Main loop
 loop:
 	for {
@@ -1594,9 +1611,24 @@ loop:
 			case 'x': // exit
 				break loop
 			case 'd': // detach to background
+				// #4148-B1: mirror the restart argv construction (#873 family) -
+				// runtime permission mode and a live tunnel are invisible in
+				// os.Args when enabled at runtime (switch_mode tool / 't' key),
+				// so the forked child would silently fall back to supervised
+				// mode and drop the phone connection.
+				var detachExtra []string
+				if runtimeBypassActive(policy, mode) {
+					detachExtra = append(detachExtra, "--bypass")
+				}
+				if core.Tunnel.GetShareInfo() != nil {
+					detachExtra = append(detachExtra, "--tunnel")
+				}
+				if fullLoad {
+					detachExtra = append(detachExtra, "--full")
+				}
 				// #2633: on fork failure stay in the foreground - the session
 				// must keep running in this process, not die with a break.
-				if detachToBackground(lang, cfgFile, workingDir, ses.ID) {
+				if detachToBackground(lang, cfgFile, workingDir, ses.ID, detachExtra) {
 					detachedToBackground = true
 					break loop
 				}
@@ -1696,8 +1728,15 @@ loop:
 							ctrl.HandleRunState(busy)
 						})
 						bridge.SetUserMessageHook(ctrl.HandleUserMessage)
-						unsubscribeTunnel := bridge.Subscribe(ctrl.HandleStreamEvent)
-						_ = unsubscribeTunnel // cleaned up on daemon exit
+						// #4148-B3: release the previous subscription before
+						// replacing it - DaemonBridge.eventSubs has no removal
+						// path, so without this each re-'t' after a teardown
+						// leaks one forwarder goroutine whose stale ctrl keeps
+						// firing against the dead broker.
+						if unsubscribeTunnelPrev != nil {
+							unsubscribeTunnelPrev()
+						}
+						unsubscribeTunnelPrev = bridge.Subscribe(ctrl.HandleStreamEvent)
 
 						fmt.Fprintf(os.Stderr, "\r\n  Mobile Tunnel Active\r\n")
 						fmt.Fprintf(os.Stderr, "  URL: %s\r\n\r\n", result.ConnectURL)
@@ -1769,7 +1808,9 @@ loop:
 		// #873: propagate --tunnel/--full through the restart argv - a tunnel
 		// daemon otherwise loses its mobile tunnel silently (phone connections
 		// drop, no error anywhere) and --full sessions fall back to 24h window.
-		if startTunnel {
+		// #4148-B2: also honor a tunnel opened at runtime via the 't' key -
+		// startTunnel only reflects the CLI flag.
+		if startTunnel || core.Tunnel.GetShareInfo() != nil {
 			args = append(args, "--tunnel")
 		}
 		if fullLoad {
