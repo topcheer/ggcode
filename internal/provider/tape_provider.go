@@ -177,9 +177,30 @@ func (t *TapeProvider) ChatStream(ctx context.Context, messages []Message, tools
 		defer safego.Recover("tape.recordStream")
 		defer close(out)
 		var evs []tapeEvent
+		// #4146: consumers that abandon the stream (agent-loop panic recovery,
+		// harness early exit) stop reading `out` forever. The old bare
+		// `out <- ev` parked this goroutine permanently and, through it, the
+		// inner provider's producer. Align with the #602/#2570 standard set in
+		// fallback.go: ctx-guarded sends plus a deferred drain so the producer
+		// can always reach its end-of-stream close.
+		drainSrc := func() {
+			go safego.Run("tape.recordStream.drain", func() {
+				for range src {
+				}
+			})
+		}
+		defer drainSrc()
 		for ev := range src {
 			evs = append(evs, fromStreamEvent(ev))
-			out <- ev
+			select {
+			case out <- ev:
+			case <-ctx.Done():
+				// Abandoned mid-stream: still append what was observed so the
+				// tape stays key-aligned for replay (same rationale as the
+				// zero-event placeholder below, #3933).
+				t.append(&llmTapeEntry{Key: key, Kind: "stream", Events: evs})
+				return
+			}
 		}
 		// #3933: record a placeholder for ZERO-event streams too. A zero-
 		// event turn (ctx cancelled before the first event landed - the
