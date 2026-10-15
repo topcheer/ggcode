@@ -179,6 +179,34 @@ func isCJKQuestionLine(line string) bool {
 	return false
 }
 
+// isEnglishQuestionLine reports whether the (first) line is an English
+// interrogative: it ends with a question mark, or opens with a question
+// word. Diagnostic questions ("is the build still broken?", "why does the
+// auth flow keep failing?") embed rejection substrings without feedback
+// intent - the ASCII counterpart of the #4149 CJK question gate. (#4190)
+func isEnglishQuestionLine(line string) bool {
+	t := strings.TrimSpace(line)
+	if t == "" {
+		return false
+	}
+	if strings.HasSuffix(strings.TrimRight(t, "! \t"), "?") {
+		return true
+	}
+	for _, w := range []string{
+		"is ", "are ", "was ", "were ",
+		"do ", "does ", "did ",
+		"why ", "what ", "how ", "when ", "where ", "who ",
+		"can ", "could ", "should ", "would ", "will ", "shall ",
+		"has ", "have ", "had ",
+		"isn't ", "aren't ", "doesn't ", "don't ",
+	} {
+		if strings.HasPrefix(t, w) {
+			return true
+		}
+	}
+	return false
+}
+
 func runesEqual(a, b []rune) bool {
 	if len(a) != len(b) {
 		return false
@@ -349,6 +377,14 @@ func detectNegativeFeedback(message string) string {
 					if isCJKQuestionLine(firstLine) {
 						continue
 					}
+				} else if group.category == negCatRejection && isEnglishQuestionLine(firstLine) {
+					// #4190: ASCII mirror of the #4149 gate. English
+					// diagnostic questions ("is the build still broken?",
+					// "why does the auth flow keep failing?") embed
+					// rejection substrings without feedback intent.
+					// Scoped to the rejection category so genuinely
+					// emotional questions keep their category signal.
+					continue
 				}
 				// All categories only trigger for short messages to avoid
 				// false positives in detailed technical messages. A long
