@@ -145,7 +145,12 @@ func (MinimaxProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageIn
 		if !strings.EqualFold(strings.TrimSpace(mr.ModelName), "general") {
 			continue
 		}
-		if mr.CurrentIntervalRemainingPercent > 0 {
+		// #4141: gate on EXISTENCE (an end-time signal), not on remaining.
+		// remaining==0 is the exhausted state - the moment the user most
+		// needs the "100% used / resets at" signal. The old `remaining > 0`
+		// gate made the panel go blank exactly when throttled. EndTimeMs > 0
+		// means the tier is real even when the quota is fully spent.
+		if mr.CurrentIntervalRemainingPercent > 0 || mr.EndTimeMs > 0 {
 			w := UsageWindow{Label: "5h", UsedPercent: clampPercent(100 - mr.CurrentIntervalRemainingPercent)}
 			if mr.EndTimeMs > 0 {
 				w.ResetsAt = time.UnixMilli(mr.EndTimeMs)
@@ -154,7 +159,7 @@ func (MinimaxProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageIn
 		}
 		// Weekly only exists while the plan's weekly tier is active
 		// (status==1); showing it otherwise displays a stale/zero bucket.
-		if mr.CurrentWeeklyStatus == 1 && mr.CurrentWeeklyRemainingPercent > 0 {
+		if mr.CurrentWeeklyStatus == 1 { // #4141: status alone proves the tier exists; remaining==0 must still show 100%
 			w := UsageWindow{Label: "weekly", UsedPercent: clampPercent(100 - mr.CurrentWeeklyRemainingPercent)}
 			if mr.WeeklyEndTimeMs > 0 {
 				w.ResetsAt = time.UnixMilli(mr.WeeklyEndTimeMs)
