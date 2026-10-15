@@ -1284,6 +1284,19 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
 		case "cost":
 			postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
+		case "message_remove":
+			// #4200: tombstone written by AppendUserMessageRemovalToDisk when
+			// the desktop vision-fallback retry drops the last user message
+			// from live context (Manager.RemoveLastUserMessage). Scan-order
+			// semantics: pop the most recent still-present user message record
+			// from BOTH streams so resume neither renders it nor replays it
+			// into the agent context. Non-user records (assistant/tool turns
+			// recorded after the original) are skipped over, matching the
+			// in-memory Remove which only ever targets user messages. No
+			// matching user record (tombstone before any user message, or a
+			// duplicate tombstone) is a defensive no-op.
+			allMessages = popLastUserRecord(allMessages)
+			postCPEntries = popLastUserLightweightEntry(postCPEntries)
 		case "tunnel_event":
 			// Tunnel events are no longer stored in session JSONL.
 			// Old files may still contain these lines — skip them silently.
@@ -2373,6 +2386,53 @@ func (s *JSONLStore) AppendMessageToDisk(ses *Session, msg provider.Message) err
 	}
 	s.lastIndexUpdate[ses.ID] = time.Now()
 	return s.updateIndex(ses)
+}
+
+// AppendUserMessageRemovalToDisk appends a message_remove tombstone record to
+// the session's JSONL (#4200). loadSession applies tombstones in scan order:
+// each one pops the most recent still-present user message record from both
+// the rendering history (allMessages) and the checkpoint-context stream
+// (postCPEntries). This is the journal-side compensation for in-memory
+// Manager.RemoveLastUserMessage: the vision-fallback retry path drops the
+// original image content from live context, and without this tombstone the
+// JSONL kept the original message — on resume the agent replayed BOTH the
+// original and the text-only projection turns, re-triggering the vision
+// error the fallback was meant to absorb. Append-only: no file rewrite, so a
+// crash between the failed turn and the retry cannot corrupt the journal.
+func (s *JSONLStore) AppendUserMessageRemovalToDisk(ses *Session) error {
+	if ses == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path := s.sessionPath(ses.ID)
+	rec := jsonlRecord{Type: "message_remove", SessionID: ses.ID, Timestamp: time.Now()}
+	return appendRecordLine(path, rec)
+}
+
+// popLastUserRecord removes the most recent user-role message record from recs
+// (#4200 tombstone application). Scans backward past non-user records so a
+// tombstone arriving after the failed turn's assistant/tool records still
+// reaches the original user message. Returns recs unchanged when no user
+// record is present.
+func popLastUserRecord(recs []jsonlRecord) []jsonlRecord {
+	for i := len(recs) - 1; i >= 0; i-- {
+		if recs[i].Message != nil && recs[i].Message.Role == "user" {
+			return append(recs[:i:i], recs[i+1:]...)
+		}
+	}
+	return recs
+}
+
+// popLastUserLightweightEntry is popLastUserRecord for the checkpoint-context
+// stream used to build ContextMessages.
+func popLastUserLightweightEntry(entries []localLightweightEntry) []localLightweightEntry {
+	for i := len(entries) - 1; i >= 0; i-- {
+		if e := entries[i].record; e.Message != nil && e.Message.Role == "user" {
+			return append(entries[:i:i], entries[i+1:]...)
+		}
+	}
+	return entries
 }
 
 // AppendMessagesBatchToDisk persists multiple messages to the session's JSONL

@@ -1075,6 +1075,33 @@ func (b *ChatBridge) appendPersistMessage(store *session.JSONLStore, ses *sessio
 	}
 }
 
+// persistUserMessageRemoval appends a message_remove tombstone to the run's
+// JSONL (#4200). It is the journal-side compensation for
+// Manager.RemoveLastUserMessage in the vision-fallback retry path: the first
+// RunStreamWithContent persisted the ORIGINAL image content via the persist
+// handler, so dropping it from live context alone left the journal replaying
+// both the original and the text-only projection on resume. Guard discipline
+// mirrors appendPersistMessage (run-scoped persistSession snapshot, #269 lock
+// mismatch, #305 deleted-session tombstone).
+func (b *ChatBridge) persistUserMessageRemoval() {
+	b.mu.Lock()
+	ses := b.persistSession
+	mismatch := b.sessionLockMismatchLocked(ses)
+	_, deleted := b.deletedSessions[ses.ID]
+	store := b.sessionStore
+	b.mu.Unlock()
+	if ses == nil || mismatch || deleted {
+		return
+	}
+	jsonlStore, ok := store.(*session.JSONLStore)
+	if !ok {
+		return
+	}
+	if err := jsonlStore.AppendUserMessageRemovalToDisk(ses); err != nil {
+		log.Printf("[chat] persist: AppendUserMessageRemovalToDisk failed: %v", err)
+	}
+}
+
 func (b *ChatBridge) setSessionState(state agentruntime.SessionState) {
 	b.mu.Lock()
 	// The session is being (re)loaded/created — future persists targeting it
@@ -4677,6 +4704,13 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 			// original first; the retry's Add() then records exactly the
 			// projection the next provider call actually saw.
 			b.agent.RemoveLastUserMessage()
+			// #4200: RemoveLastUserMessage only rolls back the in-memory
+			// context. The first run's persist handler already appended the
+			// ORIGINAL image content to the JSONL journal, so a resume would
+			// replay both turns (original + text-only projection) and the
+			// vision error would recur on the original copy. Append the
+			// matching journal tombstone so the reload path drops it too.
+			b.persistUserMessageRemoval()
 			retryErr := b.agent.RunStreamWithContent(ctx, textOnly, func(ev provider.StreamEvent) {
 				b.emitIfCurrent(runGen, ev)
 			})
