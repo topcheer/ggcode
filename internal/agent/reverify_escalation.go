@@ -118,9 +118,10 @@ func (s *reverifyState) reset() {
 //   - Mutation tools advance lastMutationIter.
 //   - Successful negative results (no-match/not-found/empty indicators in
 //     non-error output) are recorded as observations.
-//   - A later successful, NON-negative result from the same tool supersedes
-//     that tool's unconsumed observations (newer evidence replaced the old
-//     negative - same supersede semantics as false premise #331).
+//   - A later successful, NON-negative result from the same tool AND same
+//     args supersedes that query's unconsumed observations (newer evidence
+//     replaced the old negative - query-granularity supersede, matching the
+//     false-premise detector post-#546).
 func (s *reverifyState) recordToolResult(toolName, args, resultContent string, isError bool, iter int) {
 	if reverifyMutationTools[toolName] {
 		if iter > s.lastMutationIter {
@@ -134,11 +135,18 @@ func (s *reverifyState) recordToolResult(toolName, args, resultContent string, i
 	}
 	negative := indicatesNoResult(resultContent) || indicatesNotFound(resultContent)
 	if !negative {
-		// Supersede: same tool now returns real content; drop its stale
-		// negatives so a later positive claim does not false-fire.
+		// Supersede: the SAME QUERY now returns real content; drop its stale
+		// negatives so a later positive claim does not false-fire (#4173:
+		// keyed by (toolName, argSummary), not toolName alone - a successful
+		// grep for pattern B says nothing about an earlier no-match grep for
+		// pattern A, especially after a mutation changed the match surface.
+		// Same query-granularity the false-premise detector adopted in #546.
+		// Empty args summarize to "" on both sides, so arg-less observations
+		// keep the old supersede behavior as a fallback.)
+		curSummary := reverifySummarizeArgs(args)
 		kept := s.observations[:0]
 		for _, o := range s.observations {
-			if o.toolName != toolName || o.consumed {
+			if o.toolName != toolName || o.argSummary != curSummary || o.consumed {
 				kept = append(kept, o)
 			}
 		}

@@ -81,6 +81,38 @@ func TestReverifyEscalationSupersededByNewerEvidence(t *testing.T) {
 	}
 }
 
+// #4173: supersede must be keyed by (toolName, argSummary). A successful
+// same-tool result for a DIFFERENT query says nothing about an earlier
+// negative observation - especially after a mutation changed the match
+// surface - and must not silently clear it.
+func TestReverifyEscalationDifferentQueryDoesNotSupersede(t *testing.T) {
+	s := newReverifyState()
+	// Iteration 1: grep pattern=TODO -> no matches (negative observation).
+	s.recordToolResult("grep", `{"pattern":"TODO"}`, "no matches found", false, 1)
+	// Iteration 3: a mutation changes the match surface.
+	s.recordToolResult("edit_file", `{"path":"a.go"}`, "ok", false, 3)
+	// Iteration 5: grep pattern="func main" HITS - a different query.
+	// Old code superseded by toolName alone, dropping the TODO observation.
+	s.recordToolResult("grep", `{"pattern":"func main"}`, "a.go:10: func main() {", false, 5)
+	// Iteration 8: agent claims all TODOs cleaned up. The aged+mutated TODO
+	// observation must still be there to trigger the re-run instruction.
+	msg := s.checkStaleTrap("All TODOs are cleaned up, everything is done now.", 8)
+	if msg == "" {
+		t.Fatal("different-query success must not supersede the TODO observation; expected escalation, got none")
+	}
+	if !strings.Contains(msg, "TODO") {
+		t.Fatalf("escalation should reference the surviving TODO observation: %s", msg)
+	}
+	// Fallback: an arg-less successful call keeps the old broad supersede.
+	s2 := newReverifyState()
+	s2.recordToolResult("tool_x", `{"q":"first"}`, "empty", false, 1)
+	s2.recordToolResult("edit_file", `{"path":"a.go"}`, "ok", false, 2)
+	s2.recordToolResult("tool_x", "", "real content now", false, 4)
+	if m := s2.checkStaleTrap("done, everything works", 8); m != "" {
+		t.Fatalf("empty-args success should retain old broad-supersede fallback, got: %s", m)
+	}
+}
+
 func TestReverifyEscalationNonPositiveTextNoFire(t *testing.T) {
 	s := newReverifyState()
 	s.recordToolResult("search_files", `{"pattern":"foo"}`, "No results", false, 1)
