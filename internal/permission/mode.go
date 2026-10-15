@@ -142,6 +142,11 @@ func IsAlwaysAllowedTool(name string) bool {
 	// filesystem or external side effects; see internal/tool/compact_context.go.
 	case "compact_context":
 		return true
+	// recall_compacted (re-retrieval): read-only search of the session's
+	// compacted-content archive; no side effects; see
+	// internal/tool/recall_compacted.go.
+	case "recall_compacted":
+		return true
 	}
 	return false
 }
