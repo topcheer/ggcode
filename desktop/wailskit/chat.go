@@ -483,6 +483,7 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	b.finished = false      // reset per-run finish guard (#223)
 	b.persistedRunCount = 0 // #1181: fresh persist watermark per run
 	b.usageTurnIndex++
+	b.startTime = time.Now() // #4186: every run entry sets the elapsed-time origin, not just SendContent
 	// #522: bump the generation at EVERY run start, not just SendContent
 	// (setRunPersistSnapshot was the only bump site). Without this, a
 	// cancelled text run's tail-draining callbacks pass the emitIfCurrent
@@ -3594,6 +3595,7 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	b.finished = false      // reset per-run finish guard (#223)
 	b.persistedRunCount = 0 // #1201: fresh persist watermark per run
 	b.usageTurnIndex++
+	b.startTime = time.Now() // #4186: every run entry sets the elapsed-time origin, not just SendContent
 	// #522: same generation bump as sendMessageData — hidden runs (LAN
 	// chat injection, deferred drains) previously reused the cancelled
 	// run's generation, defeating the emitIfCurrent guard.
