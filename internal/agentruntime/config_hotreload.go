@@ -38,11 +38,6 @@ import (
 // dependency) comparing sha256 of each watched file against its own
 // baseline, with mtime prefilter to keep idle cost near zero.
 
-// HotReloadFieldPolicy classifies which top-level config fields may be
-// refreshed in place on a live Config. Everything not listed here keeps the
-// startup snapshot value (restart to change) - conservative by default.
-type HotReloadFieldPolicy struct{}
-
 // ConfigHotReload is the watcher for ggcode.yaml + external config files.
 type ConfigHotReload struct {
 	configPath  string // ggcode.yaml (or workspace equivalent)
