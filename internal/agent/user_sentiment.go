@@ -185,11 +185,17 @@ func isCJKQuestionLine(line string) bool {
 // auth flow keep failing?") embed rejection substrings without feedback
 // intent - the ASCII counterpart of the #4149 CJK question gate. (#4190)
 func isEnglishQuestionLine(line string) bool {
-	t := strings.TrimSpace(line)
+	// #4194: lowercase INSIDE the function. IM clients auto-capitalize the
+	// first letter and drop the question mark ("Why is this still failing"),
+	// which used to defeat both the suffix check and the all-lowercase
+	// prefix list while the rejection scanner happily lowercased its own
+	// copy. Also accept the full-width question mark: mixed CJK/English
+	// lines commonly end with ？ and were invisible to the ASCII suffix.
+	t := strings.ToLower(strings.TrimSpace(line))
 	if t == "" {
 		return false
 	}
-	if strings.HasSuffix(strings.TrimRight(t, "! \t"), "?") {
+	if strings.HasSuffix(strings.TrimRight(t, "! \t"), "?") || strings.HasSuffix(strings.TrimRight(t, "! \t"), "？") {
 		return true
 	}
 	for _, w := range []string{
