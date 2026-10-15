@@ -121,8 +121,12 @@ func (s *Server) checkDelegation(w http.ResponseWriter, id json.RawMessage, msg 
 		}
 	}
 	if s.delegation.RequireOnBehalfOf {
-		v, ok := meta[MetadataKeyOnBehalfOf]
-		if !ok || len(v) == 0 || string(v) == `""` {
+		// The declaration must deserialize as a non-empty string. A raw JSON
+		// null (or any non-string value such as 123/true/[]) is NOT a valid
+		// on-behalf-of declaration and must be rejected (#4168).
+		var principal string
+		raw, ok := meta[MetadataKeyOnBehalfOf]
+		if !ok || json.Unmarshal(raw, &principal) != nil || principal == "" {
 			writeRPCError(w, id, &JSONRPCError{
 				Code:    -32000,
 				Message: "delegation policy: task missing ggcode.dev/on-behalf-of declaration",
