@@ -61,9 +61,10 @@ func TestSuggestionEvidenceTail(t *testing.T) {
 		t.Errorf("cmds tail wrong: %q", tail)
 	}
 	// task-key identity: the tail lives inside the " (tools: ...)" parenthesis,
-	// so suggestionTaskKey truncation is unaffected.
+	// so suggestionTaskKey truncation is unaffected. #4178: the date prefix is
+	// also stripped so the key is the day-stable task text.
 	line := "- [2026-10-02] tidy (tools: edit_file; " + tail + ") - recurring workflow"
-	if k := suggestionTaskKey(line); k != "- [2026-10-02] tidy" {
+	if k := suggestionTaskKey(line); k != "tidy" {
 		t.Errorf("task key drifted: %q", k)
 	}
 }
