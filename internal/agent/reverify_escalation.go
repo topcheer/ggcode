@@ -118,9 +118,11 @@ func (s *reverifyState) reset() {
 //   - Mutation tools advance lastMutationIter.
 //   - Successful negative results (no-match/not-found/empty indicators in
 //     non-error output) are recorded as observations.
-//   - A later successful, NON-negative result from the same tool supersedes
-//     that tool's unconsumed observations (newer evidence replaced the old
-//     negative - same supersede semantics as false premise #331).
+//   - A later successful, NON-negative result from the same tool AND the
+//     same query (argSummary) supersedes that query's unconsumed
+//     observations (newer evidence replaced the old negative - query
+//     granularity per #546/#5993: a successful grep for pattern B says
+//     nothing about an earlier no-match for pattern A, #4173).
 func (s *reverifyState) recordToolResult(toolName, args, resultContent string, isError bool, iter int) {
 	if reverifyMutationTools[toolName] {
 		if iter > s.lastMutationIter {
@@ -134,11 +136,18 @@ func (s *reverifyState) recordToolResult(toolName, args, resultContent string, i
 	}
 	negative := indicatesNoResult(resultContent) || indicatesNotFound(resultContent)
 	if !negative {
-		// Supersede: same tool now returns real content; drop its stale
-		// negatives so a later positive claim does not false-fire.
+		// Supersede: same tool, same query now returns real content; drop
+		// that query's stale negatives so a later positive claim does not
+		// false-fire. #4173: key on (toolName, argSummary) - matching on the
+		// bare tool name let a successful grep for pattern B silently clear
+		// the no-match observation for pattern A (typically after a mutation
+		// changed the match surface), so checkStaleTrap lost exactly the
+		// observation it exists to re-run. Argless tools keep the old
+		// semantics: empty argSummary on both sides is a query match.
+		argSummary := reverifySummarizeArgs(args)
 		kept := s.observations[:0]
 		for _, o := range s.observations {
-			if o.toolName != toolName || o.consumed {
+			if o.toolName != toolName || o.argSummary != argSummary || o.consumed {
 				kept = append(kept, o)
 			}
 		}
