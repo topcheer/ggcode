@@ -1,11 +1,7 @@
 package im
 
 import (
-	"encoding/csv"
-	"encoding/json"
-	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -156,50 +152,4 @@ func (m *EvalMetrics) Snapshot() map[string]interface{} {
 		"input_tokens":     m.InputTokens,
 		"output_tokens":    m.OutputTokens,
 	}
-}
-
-// WriteCSV appends a metrics row to a CSV file.
-func (m *EvalMetrics) WriteCSV(path string, runID, phase, mode string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	w := csv.NewWriter(f)
-	defer w.Flush()
-
-	record := []string{
-		runID,
-		phase,
-		mode,
-		"", // provider_vendor
-		"", // provider_endpoint
-		"", // provider_model
-		"", // task_set
-		"", // task_id
-		"", // success
-		strconv.Itoa(m.ToolErrors),
-		strconv.Itoa(m.TotalToolCalls),
-		strconv.Itoa(m.UserMessages),
-		strconv.Itoa(int(m.ElapsedMs / 1000)),
-		strconv.Itoa(m.InputTokens),
-		strconv.Itoa(m.OutputTokens),
-		strconv.Itoa(m.StagedSkills),
-		"", // patched_skills
-		"", // rollbacks
-		"", // notes
-	}
-	return w.Write(record)
-}
-
-// WriteJSON writes the metrics snapshot to a JSON file.
-func (m *EvalMetrics) WriteJSON(path string) error {
-	data, err := json.MarshalIndent(m.Snapshot(), "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
 }

@@ -36,12 +36,6 @@ func NewRecallToolFlowTool() *RecallToolFlowTool {
 	return &RecallToolFlowTool{}
 }
 
-// NewRecallToolFlowToolDir creates a recall_toolflow tool bound to an
-// explicit sessions directory (test seam).
-func NewRecallToolFlowToolDir(dir string) *RecallToolFlowTool {
-	return &RecallToolFlowTool{sessionsDir: dir}
-}
-
 func (t *RecallToolFlowTool) Name() string { return "recall_toolflow" }
 
 func (t *RecallToolFlowTool) Description() string {
