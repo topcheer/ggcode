@@ -176,11 +176,16 @@ func (t *TapeProvider) ChatStream(ctx context.Context, messages []Message, tools
 	go func() {
 		defer safego.Recover("tape.recordStream")
 		defer close(out)
+		// #4146: out is unbuffered; the former bare `out <- ev` parked this
+		// goroutine forever once the consumer abandoned the stream (ctx
+		// cancelled, e.g. after a panic-containment recovery), cascading into
+		// the inner provider's stream goroutine AND skipping the append below,
+		// so the tape silently lost this turn's events. Both channel ops now
+		// watch ctx (fallback.go watchStreamForFailover pattern). On abandon we
+		// keep draining src so the inner stream goroutine can finish, and still
+		// append what the live call produced — including events the consumer
+		// never saw — so tape key alignment (#3933) survives abandoned streams.
 		var evs []tapeEvent
-		for ev := range src {
-			evs = append(evs, fromStreamEvent(ev))
-			out <- ev
-		}
 		// #3933: record a placeholder for ZERO-event streams too. A zero-
 		// event turn (ctx cancelled before the first event landed - the
 		// sendEvent drop path is reachable, `emitted=false` in logs) left a
@@ -188,7 +193,36 @@ func (t *TapeProvider) ChatStream(ctx context.Context, messages []Message, tools
 		// this key - one round of silent misalignment before the hard error.
 		// A placeholder keeps key alignment; replaying it yields an empty
 		// stream, faithful to what was recorded.
-		t.append(&llmTapeEntry{Key: key, Kind: "stream", Events: evs})
+		record := func() {
+			t.append(&llmTapeEntry{Key: key, Kind: "stream", Events: evs})
+		}
+		abandon := func() {
+			for ev := range src {
+				evs = append(evs, fromStreamEvent(ev))
+			}
+			record()
+		}
+		for {
+			var ev StreamEvent
+			select {
+			case next, ok := <-src:
+				if !ok {
+					record()
+					return
+				}
+				ev = next
+			case <-ctx.Done():
+				abandon()
+				return
+			}
+			evs = append(evs, fromStreamEvent(ev))
+			select {
+			case out <- ev:
+			case <-ctx.Done():
+				abandon()
+				return
+			}
+		}
 	}()
 	return out, nil
 }
