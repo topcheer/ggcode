@@ -258,6 +258,10 @@ func NewRootCmd() *cobra.Command {
 	}
 	cmd.AddCommand(versionCmd)
 
+	// config subcommand - print the effective configuration (secrets
+	// masked). Composes with the root --config path flag.
+	cmd.AddCommand(newConfigCmd(&cfgFile))
+
 	// Shell completion commands
 	completionCmd := &cobra.Command{
 		Use:       "completion [shell]",
