@@ -113,7 +113,17 @@ func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{IsError: true, Content: fmt.Sprintf("wait failed: %v", err)}, nil
 	}
 
-	if snap.Status == subagent.StatusCompleted && snap.ProgressSummary == "" && snap.CurrentTool == "" && snap.Result != "" {
+	// #4139: any completed run with a non-empty result takes the full-result
+	// path. The old condition also demanded ProgressSummary=="" &&
+	// CurrentTool=="" - but Complete() already clears CurrentTool on terminal
+	// states while NOTHING clears ProgressSummary, so a run whose last tool
+	// was a command tool (the only category that sets a progress summary)
+	// fell through to the snapshot formatter, which truncates Result to 200
+	// chars for the list_agents multi-row display (#3176). A 100KB delivery
+	// report was silently cut to 200 chars depending on the type of the
+	// sub-agent's last tool. Snapshot status lines remain for non-terminal
+	// runs and completed runs with an empty result.
+	if snap.Status == subagent.StatusCompleted && snap.Result != "" {
 		// #3237: snap.Task carries the nudge spawn appended; strip it so
 		// both reminders extract the ORIGINAL acceptance criteria.
 		task := stripReadBackNudge(snap.Task)
