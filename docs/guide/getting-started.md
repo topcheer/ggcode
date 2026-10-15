@@ -77,6 +77,13 @@ tool (Context-as-Tool): it runs a cheap mechanical pass immediately and, at
 or above the auto-compact threshold, schedules background summarization that
 applies at the next turn boundary.
 
+Compaction is lossy, so anything it removes (summarized-away turns and
+superseded tool results) is kept in a session-scoped archive (~1MB, oldest
+entries evicted first). The agent can retrieve the verbatim original text
+later via the read-only `recall_compacted` tool — e.g. to recover an exact
+error message or command output that predates the last summary — instead of
+re-running the work.
+
 ## 5. Next Steps
 
 - [Configuration](./configuration.md) — Full config reference

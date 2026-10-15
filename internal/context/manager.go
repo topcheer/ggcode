@@ -161,6 +161,7 @@ type Manager struct {
 	providerCountChecked     bool // whether providerCountSupportsRPC has been determined
 	providerCountSupportsRPC bool // cached: does provider.CountTokens do real RPC?
 	todoPath                 string
+	compactedArchive         []CompactedEntry // recall_compacted (#re-retrieval): 压缩丢弃原文的旁路归档，供 SearchCompactedArchive 按需找回
 	onUsage                  func(provider.TokenUsage)
 	calibrator               *TokenCalibrator
 	onPersist                func(msg provider.Message) // called on every Add() for real-time JSONL persistence
@@ -1073,6 +1074,10 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 
 	// Messages appended after the marker (or after OrigLen in fallback) are
 	// preserved as-is.
+	// recall_compacted: archive the messages the summary is about to replace
+	// (skip system prompt) so their verbatim text stays retrievable after the
+	// live window moves on. Must happen before m.messages is reassigned below.
+	m.archiveCompactedMessages(m.messages[:extraStart])
 	extra := append([]provider.Message(nil), m.messages[extraStart:]...)
 	newMsgs := append([]provider.Message(nil), result.Messages...)
 	newMsgs = append(newMsgs, extra...)
@@ -2015,6 +2020,9 @@ func (m *Manager) compactSupersededToolResults(supersededIDs map[string]bool, re
 			if origLen < 200 {
 				continue // skip small results — not worth compacting
 			}
+			// recall_compacted: keep the original output retrievable before the
+			// stub rewrite drops it from the live window.
+			m.archiveSupersededToolOutput(m.messages[i].Role, b.ToolID, reason, b.Output)
 			b.Output = fmt.Sprintf("[superseded: %s, output was %d chars]", reason, origLen)
 			b.Images = nil
 			freedChars += origLen
