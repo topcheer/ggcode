@@ -167,7 +167,12 @@ func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
 	// Split text into sentences first for per-sentence dedup
 	sentences := cdSplitSentences(lower)
 	for _, sentence := range sentences {
-		sentenceIndicators[sentence] = make(map[string]bool)
+		// #4265: cdSplitSentences keys carry trailing whitespace past the
+		// boundary while cdFindSentenceForPattern lookups end at the
+		// boundary char - untrimmed keys were a guaranteed map miss for
+		// every non-final sentence, so the #586 F7 dedup never fired and
+		// two synonymous phrases in one sentence counted twice.
+		sentenceIndicators[strings.TrimSpace(sentence)] = make(map[string]bool)
 	}
 
 	for cat, pats := range criteriaDriftPatterns {

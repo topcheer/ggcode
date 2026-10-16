@@ -802,6 +802,15 @@ func (c A2AConfig) EffectiveAPIKey() string {
 	if strings.TrimSpace(c.Auth.APIKey) != "" {
 		return c.Auth.APIKey
 	}
+	// #4259: an explicit api_keys list IS an auth configuration - falling
+	// back to the PUBLIC built-in default key here let any LAN host
+	// authenticate with the well-known key even though the user configured
+	// strong keys (NewServer merges this return value into the accepted
+	// list). Only a fully absent auth config gets the LAN-convenience
+	// default.
+	if len(c.Auth.APIKeys) > 0 {
+		return ""
+	}
 	return DefaultA2AAPIKey
 }
 
