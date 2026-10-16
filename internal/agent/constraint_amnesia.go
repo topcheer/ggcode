@@ -76,6 +76,8 @@ type constraintAmnesiaState struct {
 	constraints []constraintEntry
 	warnings    int
 	currentIter int
+	// #4224: markUndelivered (guidance-budget rollback) support.
+	canRevert bool
 }
 
 func newConstraintAmnesiaState() *constraintAmnesiaState {
@@ -160,6 +162,17 @@ func (s *constraintAmnesiaState) recordConstraints(text string, messageIdx int) 
 	}
 }
 
+// markUndelivered (#4224) rolls back the warnings bump consumed by
+// maybeWarn when the guidance budget suppressed the message, so the
+// constraint reminder re-fires on a later, less saturated iteration
+// (mirrors futileCycle #3380). No-op if there is no revertible fire.
+func (s *constraintAmnesiaState) markUndelivered() {
+	if s.canRevert {
+		s.warnings--
+		s.canRevert = false
+	}
+}
+
 // maybeWarn checks whether any tracked constraints are at risk of being
 // forgotten and returns a reminder message if so. iteration is the current
 // 1-based agent loop iteration.
@@ -182,6 +195,7 @@ func (s *constraintAmnesiaState) maybeWarn(iteration int) string {
 		return ""
 	}
 
+	s.canRevert = true // #4224: markUndelivered may roll this back
 	s.warnings++
 
 	// Build the reminder with tracked constraints.

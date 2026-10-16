@@ -115,6 +115,8 @@ type serialReadState struct {
 
 	// fired tracks whether the detector has already fired this run.
 	fired bool
+	// #4224: markUndelivered (guidance-budget rollback) support.
+	canRevert bool
 }
 
 func newSerialReadState() *serialReadState {
@@ -166,6 +168,19 @@ func (s *serialReadState) recordToolCall(toolName string) {
 	}
 }
 
+// markUndelivered (#4224) rolls back the fired flag consumed by endTurn
+// when the guidance budget suppressed the message, so the serial-read hint
+// re-fires on a later, less saturated iteration (mirrors futileCycle #3380).
+// No-op if there is no revertible fire.
+func (s *serialReadState) markUndelivered() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.canRevert {
+		s.fired = false
+		s.canRevert = false
+	}
+}
+
 // endTurn is called when all tool calls in the current turn have been processed.
 // It updates the consecutive streak and returns a guidance hint if the
 // serialization threshold is met.
@@ -200,6 +215,7 @@ func (s *serialReadState) endTurn(iteration int) string {
 			return ""
 		}
 		s.fired = true
+		s.canRevert = true // #4224: markUndelivered may roll this back
 		debug.Log("agent", "Serial read serialization detected: %d consecutive single-read turns at iteration %d", s.consecutiveSingleReads, iteration)
 		return strings.TrimSpace(`
 [Batch Opportunity] You have issued exactly one read-only tool call per turn for the last 3+ turns. These independent reads could have been batched into a single turn with parallel tool calls, saving 2+ LLM round-trips and reducing context fragmentation. When you need to explore multiple independent targets (files, searches, symbols), issue them together in one turn. Reserve single-call turns for dependent operations where each result informs the next call.`)

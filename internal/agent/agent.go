@@ -2396,7 +2396,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if a.claimsSupervision {
 			if sgMsg := a.subgoalTrack.maybeWarn(i + 1); sgMsg != "" {
 				debug.Log("agent", "Iteration %d: subgoal completion gap detected", i+1)
-				msgs = a.guidanceEmit(sgMsg, msgs)
+				// #4224: quota consumed by maybeWarn must only stick on delivery.
+				if a.injectGuidance(sgMsg) {
+					msgs = a.contextManager.Messages()
+				} else {
+					a.subgoalTrack.markUndelivered()
+				}
 			}
 		}
 		// Success-declaration calibration detector is gated behind
@@ -2405,18 +2410,33 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if a.claimsSupervision {
 			if sdMsg := a.successDeclare.maybeWarn(i + 1); sdMsg != "" {
 				debug.Log("agent", "Iteration %d: premature success declaration detected", i+1)
-				msgs = a.guidanceEmit(sdMsg, msgs)
+				// #4224: quota consumed by maybeWarn must only stick on delivery.
+				if a.injectGuidance(sdMsg) {
+					msgs = a.contextManager.Messages()
+				} else {
+					a.successDeclare.markUndelivered()
+				}
 			}
 		}
 		if cdMsg := a.criteriaDrift.maybeWarn(i + 1); cdMsg != "" {
 			debug.Log("agent", "Iteration %d: success criteria drift detected", i+1)
-			msgs = a.guidanceEmit(cdMsg, msgs)
+			// #4224: quota consumed by maybeWarn must only stick on delivery.
+			if a.injectGuidance(cdMsg) {
+				msgs = a.contextManager.Messages()
+			} else {
+				a.criteriaDrift.markUndelivered()
+			}
 		}
 		// Attempt brief: compact summary of failed approaches to prevent
 		// repeating the same dead-end strategy.
 		if abMsg := a.attemptBrief.maybeBrief(i + 1); abMsg != "" {
 			debug.Log("agent", "Iteration %d: injecting attempt brief", i+1)
-			msgs = a.guidanceEmit(abMsg, msgs)
+			// #4224: quota consumed by maybeBrief must only stick on delivery.
+			if a.injectGuidance(abMsg) {
+				msgs = a.contextManager.Messages()
+			} else {
+				a.attemptBrief.markUndelivered()
+			}
 		}
 		// Wasted exploration detection: nudge the agent when previous
 		// search results containing file paths were never acted upon.
@@ -2515,7 +2535,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// that may have scrolled out of effective attention after many iterations.
 		// Catastrophic forgetting in token space (Letta/MemGPT 2025).
 		if caMsg := a.constraintAmnesia.maybeWarn(i + 1); caMsg != "" {
-			msgs = a.guidanceEmit(caMsg, msgs)
+			// #4224: quota consumed by maybeWarn must only stick on delivery.
+			if a.injectGuidance(caMsg) {
+				msgs = a.contextManager.Messages()
+			} else {
+				a.constraintAmnesia.markUndelivered()
+			}
 		}
 		// Diagnostic-action disconnect detection: when the agent has received
 		// diagnostic content (errors, undefined symbols) but subsequent actions
@@ -5836,13 +5861,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Serial read serialization detection: check if this turn was a
 		// single read-only call (batching opportunity across turns).
 		if serialWarn := a.serialRead.endTurn(i + 1); serialWarn != "" {
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: serialWarn,
-				}},
-			})
+			// #4224: route through the guidance budget like every other
+			// detector - this site bypassed it entirely (no cap, no stats),
+			// and the once-per-run fire must only stick on delivery.
+			if a.injectGuidance(serialWarn) {
+				msgs = a.contextManager.Messages()
+			} else {
+				a.serialRead.markUndelivered()
+			}
 		}
 		// Speculative tool execution (PASTE-inspired): now that tool results
 		// are sent to the LLM, the LLM will spend 2-5 seconds generating its

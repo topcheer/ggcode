@@ -62,6 +62,8 @@ type subgoalState struct {
 	subgoals []subgoalEntry
 	planIter int  // iteration when the plan was declared
 	fired    bool // whether the warning has been issued
+	// #4224: markUndelivered (guidance-budget rollback) support.
+	canRevert bool
 }
 
 func newSubgoalState() *subgoalState {
@@ -245,6 +247,19 @@ func sgKeywordWordByte(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
 }
 
+// markUndelivered (#4224) rolls back the fired flag consumed by maybeWarn
+// when the guidance budget suppressed the message, so the subgoal warning
+// re-fires on a later, less saturated iteration (mirrors futileCycle #3380).
+// No-op if there is no revertible fire.
+func (s *subgoalState) markUndelivered() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.canRevert {
+		s.fired = false
+		s.canRevert = false
+	}
+}
+
 // maybeWarn checks if unaddressed subgoals warrant a warning.
 func (s *subgoalState) maybeWarn(currentIter int) string {
 	s.mu.Lock()
@@ -282,6 +297,7 @@ func (s *subgoalState) maybeWarn(currentIter int) string {
 		return ""
 	}
 	s.fired = true
+	s.canRevert = true // #4224: markUndelivered may roll this back
 	debug.Log("agent", "subgoal_track: %d/%d subgoals unaddressed at iter %d", unaddressed, len(s.subgoals), currentIter)
 	return fmt.Sprintf(
 		"[Subgoal Completion] %d of %d planned subgoals have received no tool activity:\n%s\n"+

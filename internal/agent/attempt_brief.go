@@ -40,6 +40,11 @@ type attemptBriefState struct {
 	firedCount   int
 	lastFireIter int
 	runIter      int
+	// #4224: markUndelivered (guidance-budget rollback) support - snapshot
+	// taken right before firedCount++/lastFireIter=iter consume the quota.
+	prevFiredCount int
+	prevLastFire   int
+	canRevert      bool
 }
 
 func newAttemptBriefState() *attemptBriefState {
@@ -94,6 +99,20 @@ func (s *attemptBriefState) recordOutcome(toolName, target string, success bool,
 	s.entries = append(s.entries, entry)
 }
 
+// markUndelivered (#4224) rolls back the firedCount bump and lastFireIter
+// watermark consumed by maybeBrief when the guidance budget suppressed the
+// message, so the brief re-fires on a later, less saturated iteration
+// (mirrors futileCycle #3380). No-op if there is no revertible fire.
+func (s *attemptBriefState) markUndelivered() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.canRevert {
+		s.firedCount = s.prevFiredCount
+		s.lastFireIter = s.prevLastFire
+		s.canRevert = false
+	}
+}
+
 // maybeBrief inspects accumulated failures and returns a compact guidance string
 // if the agent should be reminded of what's already been tried.
 func (s *attemptBriefState) maybeBrief(iter int) string {
@@ -140,6 +159,10 @@ func (s *attemptBriefState) maybeBrief(iter int) string {
 		return ""
 	}
 
+	// #4224: snapshot for markUndelivered (guidance-budget rollback).
+	s.prevFiredCount = s.firedCount
+	s.prevLastFire = s.lastFireIter
+	s.canRevert = true
 	s.firedCount++
 	s.lastFireIter = iter
 

@@ -109,6 +109,8 @@ type successDeclareState struct {
 	actionsSince    int    // tool calls since the declaration
 	warnCount       int    // warnings issued this run
 	fired           bool   // whether the detector has fired this run
+	// #4224: markUndelivered (guidance-budget rollback) support.
+	canRevert bool
 }
 
 func newSuccessDeclareState() *successDeclareState {
@@ -237,6 +239,7 @@ func (s *successDeclareState) maybeWarn(currentIter int) string {
 
 	s.fired = true
 	s.warnCount++
+	s.canRevert = true // #4224: markUndelivered may roll this back
 
 	return `[Metacognitive Calibration] You declared task completion at iteration ` +
 		itoaSD(s.declarationIter+1) + `, but have since taken ` + itoaSD(s.actionsSince) +
@@ -434,6 +437,22 @@ func sdHasCaveat(lowerText string) bool {
 		}
 	}
 	return false
+}
+
+// markUndelivered (#4224) rolls back the fire marker and warn count consumed
+// by maybeWarn when the guidance budget suppressed delivery, so the
+// calibration warning re-fires on a later, less saturated iteration
+// (mirrors futileCycle #3380). No-op if there is no revertible fire.
+func (s *successDeclareState) markUndelivered() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.canRevert {
+		s.fired = false
+		if s.warnCount > 0 {
+			s.warnCount--
+		}
+		s.canRevert = false
+	}
 }
 
 // itoaSD is a local int-to-string to avoid importing strconv just for this.

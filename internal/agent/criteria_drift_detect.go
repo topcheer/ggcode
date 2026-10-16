@@ -79,6 +79,11 @@ type criteriaDriftState struct {
 	indicators     []cdIndicator   // accumulated distinct drift indicators this run (with iter)
 	seenCategories map[string]bool // categories with at least one indicator
 	warnCount      int
+	// #4224: markUndelivered (guidance-budget rollback) support - snapshot
+	// taken right before warnCount++/indicators=nil consume the quota.
+	prevIndicators []cdIndicator
+	prevWarnCount  int
+	canRevert      bool
 }
 
 func newCriteriaDriftState() *criteriaDriftState {
@@ -459,6 +464,11 @@ func (c *criteriaDriftState) maybeWarn(iter int) string {
 		return ""
 	}
 
+	// #4224: snapshot for markUndelivered (guidance-budget rollback) -
+	// warnCount and the consumed indicator batch are restored on suppress.
+	c.prevIndicators = c.indicators
+	c.prevWarnCount = c.warnCount
+	c.canRevert = true
 	c.warnCount++
 
 	n := len(c.indicators)
@@ -482,6 +492,21 @@ func (c *criteriaDriftState) maybeWarn(iter int) string {
 		`If requirements cannot be fully met: (1) state explicitly which parts are incomplete, ` +
 		`(2) explain why, (3) never silently substitute easier alternatives or reclassify ` +
 		`unmet requirements as "out of scope" without acknowledging the deviation to the user.`
+}
+
+// markUndelivered (#4224) rolls back the warnCount bump and restores the
+// consumed indicator batch when the guidance budget suppressed the message,
+// so the drift warning re-fires on a later, less saturated iteration
+// (mirrors futileCycle #3380). No-op if there is no revertible fire.
+func (c *criteriaDriftState) markUndelivered() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.canRevert {
+		c.warnCount = c.prevWarnCount
+		c.indicators = c.prevIndicators
+		c.canRevert = false
+		c.prevIndicators = nil
+	}
 }
 
 // cdContains checks if a slice contains a string.
