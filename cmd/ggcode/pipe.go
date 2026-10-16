@@ -222,7 +222,12 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 				_ = outFile.Close()
 			}
 		}()
-		w = f
+		// Tee instead of redirect: stdout keeps streaming the model text
+		// exactly as without --output (orchestrators watching the pipe stay
+		// live), while the file receives the same bytes. Write errors from
+		// either side still surface via writeErr (MultiWriter fails on the
+		// first failing writer).
+		w = io.MultiWriter(os.Stdout, f)
 	}
 
 	// Run agent non-interactively. Watch SIGINT/SIGTERM so CI-style stop
@@ -260,6 +265,10 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 			switch event.Type {
 			case provider.StreamEventText:
 				writeText(event.Text)
+			case provider.StreamEventReasoning:
+				// Stream thinking to stderr as it arrives (rationale in the
+				// RunStream twin below).
+				fmt.Fprint(os.Stderr, event.Text)
 			case provider.StreamEventToolCallDone:
 				if line := formatPipeProgressEvent(event); line != "" {
 					fmt.Fprintln(os.Stderr, line)
@@ -278,6 +287,12 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 			switch event.Type {
 			case provider.StreamEventText:
 				writeText(event.Text)
+			case provider.StreamEventReasoning:
+				// Stream thinking to stderr as it arrives: orchestrators
+				// watching the pipe see the model's reasoning live (same
+				// visibility as the TUI reasoning panel), while stdout and the
+				// --output file keep only the answer text.
+				fmt.Fprint(os.Stderr, event.Text)
 			case provider.StreamEventToolCallDone:
 				if line := formatPipeProgressEvent(event); line != "" {
 					fmt.Fprintln(os.Stderr, line)
