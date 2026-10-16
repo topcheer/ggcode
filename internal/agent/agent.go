@@ -2262,7 +2262,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if a.consumeReadyPreCompact(onEvent) {
 			runStats.recordCompaction()
 		}
-		if injected, kind := a.injectPendingInterruptions(); injected {
+		if injected, kind := a.injectPendingInterruptions(i + 1); injected {
 			a.recordIntervention(i + 1)
 			// #3778: guidance injected on the final iteration is persisted in
 			// context but can never reach an LLM call in THIS run - flag it so
@@ -3259,7 +3259,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				debug.Log("agent", "Iteration %d: context-length goal drift detected", i+1)
 				a.injectGuidance(gdHint)
 			}
-			if injected, kind := a.injectPendingInterruptions(); injected {
+			if injected, kind := a.injectPendingInterruptions(i + 1); injected {
 				a.recordIntervention(i + 1)
 				// #3778: mirror the Run-loop flag here (same function scope,
 				// same post-loop block consumes it).
@@ -5994,7 +5994,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 // revision tells the model the old goal is superseded; retraction-stop
 // additionally signals the caller to abort the run (the injected notice
 // survives in context so the next resume knows the task was withdrawn).
-func (a *Agent) injectPendingInterruptions() (bool, InterruptionKind) {
+// #4226: iter is the 1-based loop iteration at the injection point; injected
+// guidance is fed to the constraint-amnesia ledger here (Run()-entry recording
+// alone was blind to mid-run steering constraints - exactly the long-run
+// scenario the detector exists for).
+func (a *Agent) injectPendingInterruptions(iter int) (bool, InterruptionKind) {
 	a.mu.RLock()
 	fn := a.onInterrupt
 	a.mu.RUnlock()
@@ -6031,6 +6035,11 @@ func (a *Agent) injectPendingInterruptions() (bool, InterruptionKind) {
 		Role:    "user",
 		Content: content,
 	})
+	// #4226: record explicit constraints carried by the injected guidance
+	// (e.g. "do not modify the auth module"). onInterrupt drains the queue, so
+	// this text never replays as a Run()-entry userText - without this wiring
+	// the detector stays silent for mid-run steering in long runs.
+	a.constraintAmnesia.recordConstraints(firstTextBlock(blocks), iter)
 	return true, kind
 }
 
