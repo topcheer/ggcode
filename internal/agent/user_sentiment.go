@@ -106,8 +106,9 @@ var sentimentPositiveWhitelist = []string{
 	"no problem", "no problems", "no worries", "no issues", "no issue", "no need",
 	// #4203: plural/collective "no X" confirmations — "no problems, looks
 	// good" etc. The bare "no" must be masked before the rejection scan,
-	// same family as #1223/#4197.
-	"no sweat", "no complaints", "no concerns",
+	// same family as #1223/#4197. #4207: "no biggie"/"no rush" - benign
+	// pacing/reassurance ("No rush, take your time") is not a rejection.
+	"no sweat", "no complaints", "no concerns", "no biggie", "no rush",
 	"not bad", "not too bad", "looks good", "looks great", "looks fine",
 	"all good", "well done", "good job", "nice work", "great work",
 	"perfect", "excellent", "awesome", "thank you", "thanks",
