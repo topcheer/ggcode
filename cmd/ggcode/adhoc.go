@@ -76,17 +76,6 @@ const (
 	adhocEnvRetryAlways   = "GGCODE_LLM_RETRY_ALWAYS"
 )
 
-// adhocEnvTouched reports whether any GGCODE_LLM_* provider variable is set
-// (used for the partial-pair diagnostic: env half-set deserves a hint).
-func adhocEnvTouched() bool {
-	for _, k := range []string{adhocEnvBaseURL, adhocEnvModel, adhocEnvAPIKey, adhocEnvProtocol, adhocEnvContextWindow, adhocEnvMaxTokens, adhocEnvRetryAlways} {
-		if strings.TrimSpace(os.Getenv(k)) != "" {
-			return true
-		}
-	}
-	return false
-}
-
 // synthesizeAdhocConfig builds the in-memory Config for ad-hoc mode. It must
 // never touch the filesystem: no load, no save path is viable later either,
 // because root.go passes cfgFile="" which disables the hot-reload watcher and
@@ -202,12 +191,36 @@ func (f *adhocLLMFlags) checkPartialPair() error {
 			adhocEnvModel, adhocEnvBaseURL)
 	}
 	// Neither side of the pair: warn when any adhoc-ish source is set so the
-	// user learns the settings are inert without the pair.
-	orphanFlags := f.APIKey != "" || f.Protocol != "" || f.ContextWindow > 0 || f.MaxTokens > 0 || f.RetryAlways
-	if orphanFlags || adhocEnvTouched() {
-		fmt.Fprintf(os.Stderr, "[ggcode] note: ignoring --llm-* / %s settings: ad-hoc provider mode activates only when BOTH --llm-base-url and --llm-model are set\n", "GGCODE_LLM_*")
+	// user learns the settings are inert without the pair. RetryAlways is
+	// deliberately EXCLUDED from that warning: it activates without the pair
+	// on any pipe run (#4217), so lumping it into "ignoring --llm-*" would
+	// tell the user an active setting is ignored (#4223). It gets its own
+	// affirmative note instead.
+	retryAlways := adhocBool(f.RetryAlways, adhocEnvRetryAlways)
+	if retryAlways {
+		fmt.Fprintf(os.Stderr, "[ggcode] note: --llm-retry-always is ACTIVE for this run: retryable LLM errors are retried indefinitely (context overflow is not retried); Ctrl-C stops\n")
+	}
+	// Orphan diagnostics cover only the settings that genuinely need the
+	// ad-hoc pair (api-key/protocol/context-window/max-tokens via flag, or
+	// their GGCODE_LLM_* envs - adhocEnvTouchedNoRetry excludes the
+	// retry-always env, which just printed its own ACTIVE note above).
+	orphanFlags := f.APIKey != "" || f.Protocol != "" || f.ContextWindow > 0 || f.MaxTokens > 0
+	if orphanFlags || adhocEnvTouchedNoRetry() {
+		fmt.Fprintf(os.Stderr, "[ggcode] note: ignoring --llm-* / %s settings (--llm-retry-always is independent and stays active): ad-hoc provider mode activates only when BOTH --llm-base-url and --llm-model are set\n", "GGCODE_LLM_*")
 	}
 	return nil
+}
+
+// adhocEnvTouchedNoRetry is adhocEnvTouched minus GGCODE_LLM_RETRY_ALWAYS:
+// the retry-always env never makes the "ignoring" note fire on its own
+// because the setting is NOT ignored on non-adhoc runs (#4223).
+func adhocEnvTouchedNoRetry() bool {
+	for _, k := range []string{adhocEnvBaseURL, adhocEnvModel, adhocEnvAPIKey, adhocEnvProtocol, adhocEnvContextWindow, adhocEnvMaxTokens} {
+		if strings.TrimSpace(os.Getenv(k)) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // adhocInt resolves an int override: flag (non-zero) wins over env.
