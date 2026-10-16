@@ -458,3 +458,12 @@ func itoaSD(n int) string {
 	}
 	return string(buf[i:])
 }
+
+// markUndelivered (#4224) rolls back the fire marker consumed by maybeWarn
+// when the guidance budget suppressed delivery (#3380 rollback pattern).
+func (s *successDeclareState) markUndelivered() {
+	s.fired = false
+	if s.warnCount > 0 {
+		s.warnCount--
+	}
+}

@@ -297,3 +297,8 @@ func truncate(s string, max int) string {
 	}
 	return s[:max-3] + "..."
 }
+
+// markUndelivered (#4224) rolls back the one-shot quota consumed by maybeWarn
+// when the guidance budget suppressed delivery, mirroring the #3380 rollback
+// pattern: only a delivered warning keeps its quota.
+func (s *subgoalState) markUndelivered() { s.fired = false }

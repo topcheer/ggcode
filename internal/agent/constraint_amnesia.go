@@ -200,3 +200,11 @@ func (s *constraintAmnesiaState) maybeWarn(iteration int) string {
 		strings.Join(lines, "\n"),
 	)
 }
+
+// markUndelivered (#4224) rolls back the warning quota consumed by maybeWarn
+// when the guidance budget suppressed delivery (#3380 rollback pattern).
+func (s *constraintAmnesiaState) markUndelivered() {
+	if s.warnings > 0 {
+		s.warnings--
+	}
+}

@@ -2382,7 +2382,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if a.claimsSupervision {
 			if sgMsg := a.subgoalTrack.maybeWarn(i + 1); sgMsg != "" {
 				debug.Log("agent", "Iteration %d: subgoal completion gap detected", i+1)
-				msgs = a.guidanceEmit(sgMsg, msgs)
+				// #4224: only a delivered warning keeps its one-shot quota (#3380
+				// rollback pattern; guidanceEmit used to drop the suppression).
+				if a.injectGuidance(sgMsg) {
+					msgs = a.contextManager.Messages()
+				} else {
+					a.subgoalTrack.markUndelivered()
+				}
 			}
 		}
 		// Success-declaration calibration detector is gated behind
@@ -2391,7 +2397,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if a.claimsSupervision {
 			if sdMsg := a.successDeclare.maybeWarn(i + 1); sdMsg != "" {
 				debug.Log("agent", "Iteration %d: premature success declaration detected", i+1)
-				msgs = a.guidanceEmit(sdMsg, msgs)
+				// #4224: as above - only a delivered warning keeps its quota.
+				if a.injectGuidance(sdMsg) {
+					msgs = a.contextManager.Messages()
+				} else {
+					a.successDeclare.markUndelivered()
+				}
 			}
 		}
 		if cdMsg := a.criteriaDrift.maybeWarn(i + 1); cdMsg != "" {
@@ -2501,7 +2512,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// that may have scrolled out of effective attention after many iterations.
 		// Catastrophic forgetting in token space (Letta/MemGPT 2025).
 		if caMsg := a.constraintAmnesia.maybeWarn(i + 1); caMsg != "" {
-			msgs = a.guidanceEmit(caMsg, msgs)
+			// #4224: only a delivered warning keeps its quota (#3380 pattern).
+			if a.injectGuidance(caMsg) {
+				msgs = a.contextManager.Messages()
+			} else {
+				a.constraintAmnesia.markUndelivered()
+			}
 		}
 		// Diagnostic-action disconnect detection: when the agent has received
 		// diagnostic content (errors, undefined symbols) but subsequent actions
