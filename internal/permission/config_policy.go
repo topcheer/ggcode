@@ -364,7 +364,13 @@ func switchModeEscalates(input json.RawMessage) bool {
 		Mode string `json:"mode"`
 	}
 	_ = json.Unmarshal(input, &a)
-	m := strings.TrimSpace(a.Mode)
+	// #4260: the tool side parses the mode case-INSENSITIVELY
+	// (switch_mode.go lowercases before ParsePermissionMode), and the
+	// permission Check sees the raw JSON args BEFORE CoerceEnumValues
+	// normalizes them. A case-sensitive compare here let {"mode":"Bypass"}
+	// skip the escalation Ask entirely while still switching into bypass -
+	// normalize the same way the parser does.
+	m := strings.ToLower(strings.TrimSpace(a.Mode))
 	return m == "bypass" || m == "autopilot"
 }
 
