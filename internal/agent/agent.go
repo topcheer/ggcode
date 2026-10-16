@@ -5455,7 +5455,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			if csIsEditTool(tc.Name) {
 				a.correctionSpiral.recordEdit(i + 1)
-			} else if tc.Name == "run_command" && psIsVerifyCommand(sfCommandArg(psArgs)) {
+			} else if (tc.Name == "run_command" || tc.Name == "bash" || tc.Name == "powershell") && psIsVerifyCommand(sfCommandArg(psArgs)) {
+				// #4254: bash/powershell are reachable command channels
+				// (#3685-A family) - a `go test` through them verifies
+				// exactly like run_command; hardcoding run_command left the
+				// spiral detector blind in bash-dominated sessions.
 				a.correctionSpiral.recordVerifyResult(tc.Name, result.Content, result.IsError, i+1)
 			} else if tc.Name == "wait_command" || tc.Name == "read_command_output" || tc.Name == "task_output" {
 				// #1773 case 4: the final outcome of a long verification
