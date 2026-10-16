@@ -168,7 +168,20 @@ func retraceInjectMessage(verdict, guidance string) string {
 
 // runRetraceVerification executes both stages and returns the gate injection
 // message ("" = pass through). Errors never block the stop.
-func (a *Agent) runRetraceVerification(ctx context.Context, task, diff string) string {
+func (a *Agent) runRetraceVerification(ctx context.Context, task, diff string) (msg string) {
+	// Best-effort gate: a panic inside the verification stream (provider
+	// bug, nil deref, ...) must never kill a run that already earned its
+	// stop - same doctrine as the error paths below. Real-world basis:
+	// crash agent-20261016-101603 (nil pointer dereference inside
+	// ChatStream reached this gate and took down the whole agent goroutine;
+	// the outer recover in RunStreamWithContent only wrote a crash log,
+	// losing the run).
+	defer func() {
+		if r := recover(); r != nil {
+			debug.Log("agent", "retrace: recovered from panic in verification stream (%v), passing through", r)
+			msg = ""
+		}
+	}()
 	_, backward, _, _, _, err := a.streamChatResponse(ctx, buildBackwardMessages(diff), nil, nil)
 	if err != nil || strings.TrimSpace(backward) == "" {
 		debug.Log("agent", "retrace: backward stage failed (%v), passing through", err)

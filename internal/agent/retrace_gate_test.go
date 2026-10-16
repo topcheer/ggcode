@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 // r440 probes: RETRACE bidirectional stop gate. Unit level - the two LLM
@@ -119,4 +121,28 @@ func TestRetraceGateStateZeroValue(t *testing.T) {
 		t.Fatal("zero-value retraceGateState must not be fired")
 	}
 	_ = context.Background() // keep context import honest for future probes
+}
+
+// The gate is best-effort: a provider panic inside ChatStream must be
+// recovered and pass through ("" injection) instead of killing the agent
+// run. Real-world basis: crash agent-20261016-101603 - a nil pointer
+// dereference inside ChatStream reached runRetraceVerification and took
+// down the whole agent goroutine.
+func TestRetraceVerificationSurvivesProviderPanic(t *testing.T) {
+	a := &Agent{provider: &panicStreamProvider{}}
+	msg := a.runRetraceVerification(context.Background(), "fix the bug", "diff --git a/x.go b/x.go")
+	if msg != "" {
+		t.Fatalf("panic must pass through with empty injection, got %.60q", msg)
+	}
+}
+
+// panicStreamProvider panics inside ChatStream, simulating a provider-side
+// nil dereference. Embeds the interface so only the method under test is
+// implemented.
+type panicStreamProvider struct{ provider.Provider }
+
+func (p *panicStreamProvider) ChatStream(ctx context.Context, messages []provider.Message, tools []provider.ToolDefinition) (<-chan provider.StreamEvent, error) {
+	var nilMap map[string]int
+	_ = nilMap["boom"] // deliberate nil map dereference
+	return nil, nil
 }
