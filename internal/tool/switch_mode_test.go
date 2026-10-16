@@ -12,6 +12,17 @@ func TestSwitchModeTool(t *testing.T) {
 	policy := permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.SupervisedMode)
 	tool := NewSwitchModeTool(policy)
 
+	// #4215: dangerous must be rejected at runtime even though it is a
+	// "valid" mode name - switch_mode is approval-free in every mode, so
+	// accepting it would let the model self-escalate to allow-everything.
+	result, _ := tool.Execute(context.Background(), json.RawMessage(`{"mode":"dangerous","description":"self-escalate"}`))
+	if !result.IsError {
+		t.Fatal("expected error for dangerous mode (#4215 runtime gate)")
+	}
+	if policy.Mode() != permission.SupervisedMode {
+		t.Fatalf("dangerous mode must not be applied, got %s", policy.Mode())
+	}
+
 	// Switch from supervised to auto
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{"mode":"auto","description":"switch to auto"}`))
 	if err != nil {
