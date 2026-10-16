@@ -30,7 +30,7 @@ import (
 
 // RunPipe executes the agent in non-interactive pipe mode.
 // Returns the exit code (0=success, 1=failure).
-func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, readOnlyAllowedDirs []string, outputSchemaPath string) int {
+func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, readOnlyAllowedDirs []string, outputSchemaPath string, skipPermissions bool) int {
 	// Crash-leftover sweep (mirrors root.run; sa-242 runtime audit).
 	if wd, wdErr := os.Getwd(); wdErr == nil {
 		if n, sweepErr := util.SweepStaleTempFiles(filepath.Join(wd, ".ggcode"), time.Hour); sweepErr == nil && n > 0 {
@@ -93,7 +93,10 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 			rules[name] = permission.Deny
 		}
 	}
-	mode := pipePermissionMode(bypass, cfg.DefaultMode)
+	mode := pipePermissionMode(bypass, skipPermissions, cfg.DefaultMode)
+	if skipPermissions {
+		fmt.Fprintf(os.Stderr, "WARNING: --dangerously-skip-permissions active - ALL tool calls run unchecked (no sandbox, no danger/exfiltration gates). Use only in throwaway environments.\n")
+	}
 	policy := permission.NewConfigPolicyWithModeAndReadOnlyDirs(rules, allowedDirs, readOnlyAllowedDirs, mode)
 
 	// Apply allowedTools filter
@@ -379,7 +382,10 @@ func pipeOutputIsValidJSON(s string) bool {
 	return false
 }
 
-func pipePermissionMode(bypass bool, defaultMode string) permission.PermissionMode {
+func pipePermissionMode(bypass, skipPermissions bool, defaultMode string) permission.PermissionMode {
+	if skipPermissions {
+		return permission.DangerousMode
+	}
 	if bypass {
 		return permission.BypassMode
 	}

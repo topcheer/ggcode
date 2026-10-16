@@ -18,6 +18,12 @@ const (
 	BypassMode
 	// AutopilotMode uses bypass permissions and keeps going when the model asks the user to decide.
 	AutopilotMode
+	// DangerousMode skips ALL permission checks: every tool call is allowed,
+	// no sandbox, no danger gates, no exfiltration gates. Reached ONLY via the
+	// --dangerously-skip-permissions CLI flag (pipe mode). Explicit user deny
+	// rules in config still win (deny is the strongest user intent). Not part
+	// of the interactive mode cycle on purpose.
+	DangerousMode
 )
 
 func (m PermissionMode) String() string {
@@ -32,6 +38,8 @@ func (m PermissionMode) String() string {
 		return "bypass"
 	case AutopilotMode:
 		return "autopilot"
+	case DangerousMode:
+		return "dangerous"
 	default:
 		return "supervised"
 	}
@@ -48,6 +56,8 @@ func ParsePermissionMode(s string) PermissionMode {
 		return BypassMode
 	case "autopilot":
 		return AutopilotMode
+	case "dangerous":
+		return DangerousMode
 	case "supervised":
 		return SupervisedMode
 	default:
@@ -57,7 +67,7 @@ func ParsePermissionMode(s string) PermissionMode {
 
 // ValidPermissionModes is the set of mode names accepted by ParsePermissionMode.
 var ValidPermissionModes = []PermissionMode{
-	SupervisedMode, PlanMode, AutoMode, BypassMode, AutopilotMode,
+	SupervisedMode, PlanMode, AutoMode, BypassMode, AutopilotMode, DangerousMode,
 }
 
 // IsValidPermissionMode returns true if s is a recognized mode name.

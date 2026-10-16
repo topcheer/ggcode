@@ -179,6 +179,14 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 
 	// Mode-specific handling
 	switch p.mode {
+	case DangerousMode:
+		// --dangerously-skip-permissions: allow EVERYTHING. No sandbox, no
+		// danger gates, no exfiltration gates, no redirect checks. Explicit
+		// deny rules (tool + command) already returned Deny above; nothing
+		// else may block. This mode exists for headless pipe runs where the
+		// user explicitly accepted full risk (flag is opt-in, named
+		// "dangerously" on purpose, and warned about on stderr at startup).
+		return Allow, nil
 	case BypassMode, AutopilotMode:
 		// Bypass mode: allow everything except extremely dangerous operations
 		// and network exfiltration (data egress always requires human gating).

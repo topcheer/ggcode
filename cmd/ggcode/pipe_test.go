@@ -77,14 +77,28 @@ func TestPipeAllowedDirsDedupesIdenticalBases(t *testing.T) {
 }
 
 func TestPipePermissionModeHonorsBypass(t *testing.T) {
-	if got := pipePermissionMode(true, ""); got != permission.BypassMode {
+	if got := pipePermissionMode(true, false, ""); got != permission.BypassMode {
 		t.Fatalf("pipePermissionMode(true) = %v, want %v", got, permission.BypassMode)
 	}
-	if got := pipePermissionMode(false, ""); got != permission.AutoMode {
+	if got := pipePermissionMode(false, false, ""); got != permission.AutoMode {
 		t.Fatalf("pipePermissionMode(false, empty) = %v, want %v", got, permission.AutoMode)
 	}
-	if got := pipePermissionMode(false, "bypass"); got != permission.BypassMode {
+	if got := pipePermissionMode(false, false, "bypass"); got != permission.BypassMode {
 		t.Fatalf("pipePermissionMode(false, bypass) = %v, want %v", got, permission.BypassMode)
+	}
+}
+
+func TestPipePermissionModeSkipPermissionsWins(t *testing.T) {
+	// --dangerously-skip-permissions outranks both --bypass and the config
+	// default_mode: it is the explicit "run everything" opt-in.
+	if got := pipePermissionMode(false, true, ""); got != permission.DangerousMode {
+		t.Fatalf("pipePermissionMode(skip) = %v, want %v", got, permission.DangerousMode)
+	}
+	if got := pipePermissionMode(true, true, ""); got != permission.DangerousMode {
+		t.Fatalf("pipePermissionMode(bypass+skip) = %v, want %v", got, permission.DangerousMode)
+	}
+	if got := pipePermissionMode(false, true, "bypass"); got != permission.DangerousMode {
+		t.Fatalf("pipePermissionMode(skip, cfg=bypass) = %v, want %v", got, permission.DangerousMode)
 	}
 }
 

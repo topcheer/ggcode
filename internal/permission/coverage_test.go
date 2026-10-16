@@ -501,6 +501,7 @@ func TestIsValidPermissionMode(t *testing.T) {
 		"auto", "AUTO", "Auto",
 		"bypass", "BYPASS", "Bypass",
 		"autopilot", "AUTOPILOT", "Autopilot",
+		"dangerous", "DANGEROUS", "Dangerous",
 	}
 
 	for _, mode := range validModes {
@@ -510,7 +511,7 @@ func TestIsValidPermissionMode(t *testing.T) {
 	}
 
 	invalidModes := []string{
-		"", "unknown", "invalid", "dangerous", "read-only",
+		"", "unknown", "invalid", "read-only",
 	}
 
 	for _, mode := range invalidModes {

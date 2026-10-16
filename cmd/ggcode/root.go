@@ -54,6 +54,7 @@ func NewRootCmd() *cobra.Command {
 	var allowedDirs []string
 	var readOnlyAllowedDirs []string
 	var bypassFlag bool
+	var dangerousFlag bool
 	var plainFlag bool
 	var outputPath string
 	var outputSchemaPath string
@@ -140,7 +141,7 @@ func NewRootCmd() *cobra.Command {
 
 			// Pipe mode: non-interactive single execution
 			if pipePrompt != "" {
-				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs, outputSchemaPath)
+				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs, outputSchemaPath, dangerousFlag)
 				if code != 0 {
 					debug.Close()
 					os.Exit(code)
@@ -215,6 +216,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&readOnlyAllowedDirs, "readOnlyAllowedDir", nil, "extra read-only sandbox directory for pipe mode (can be repeated)")
 	_ = cmd.Flags().MarkHidden("readOnlyAllowedDir")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
+	cmd.Flags().BoolVar(&dangerousFlag, "dangerously-skip-permissions", false, "pipe mode: skip ALL permission checks - every tool call runs (no sandbox, no danger/exfiltration gates; explicit config deny rules still apply). Expert use only in throwaway environments")
 	cmd.Flags().BoolVar(&plainFlag, "plain", false, "disable ANSI colors and decorative rendering (dumb terminals, screen readers, piped output; sets NO_COLOR)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
 	cmd.Flags().StringVar(&outputSchemaPath, "output-schema", "", "path to a JSON Schema the final response must conform to (structured outputs; supported endpoints constrain decoding, others fall back to prompt guidance)")
