@@ -70,6 +70,27 @@ var ValidPermissionModes = []PermissionMode{
 	SupervisedMode, PlanMode, AutoMode, BypassMode, AutopilotMode, DangerousMode,
 }
 
+// IsRuntimeSelectableMode reports whether mode may be entered at RUNTIME via
+// switch_mode / /mode / tunnel mode-change / IM slash (#4215). DangerousMode
+// is excluded: it disables every gate (sandbox, danger, exfiltration) and is
+
+// reachable ONLY via the explicit --dangerously-skip-permissions CLI flag at
+// process start. Without this gate a model (or a prompt-injected transcript,
+// or a paired phone) could self-escalate to allow-everything with zero
+// approval because switch_mode sits in the IsAlwaysAllowedTool whitelist.
+func IsRuntimeSelectableMode(mode PermissionMode) bool {
+	return mode != DangerousMode
+}
+
+// IsRuntimeSelectableModeName is the string form check for entry points that
+// validate raw mode strings before parsing.
+func IsRuntimeSelectableModeName(s string) bool {
+	if !IsValidPermissionMode(s) {
+		return false
+	}
+	return IsRuntimeSelectableMode(ParsePermissionMode(s))
+}
+
 // IsValidPermissionMode returns true if s is a recognized mode name.
 func IsValidPermissionMode(s string) bool {
 	lower := strings.ToLower(s)

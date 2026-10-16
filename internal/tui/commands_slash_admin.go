@@ -57,6 +57,12 @@ func (m *Model) handleModeCommand(parts []string) tea.Cmd {
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Invalid mode %q. Valid modes: supervised | plan | auto | bypass | autopilot", parts[1]))
 			return nil
 		}
+		// #4215: dangerous is enterable only via --dangerously-skip-permissions
+		// at startup, never at runtime.
+		if !permission.IsRuntimeSelectableModeName(parts[1]) {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Mode %q cannot be selected at runtime; restart with --dangerously-skip-permissions if you really need it", parts[1]))
+			return nil
+		}
 		oldMode := m.mode
 		newMode := permission.ParsePermissionMode(parts[1])
 		m.mode = newMode

@@ -11,7 +11,10 @@ import (
 
 // --llm-retry-always (ad-hoc pipe mode): when SetRetryAlways(true) is active
 // every error class becomes retryable, including the permanent ones the
-// classifier normally rejects (401/404/422/400, quota, context overflow).
+// classifier normally rejects (401/404/422/400, quota). Context overflow
+// STAYS non-retryable even under retry-always (#4214): the request body is
+// byte-identical on every retry so success is mathematically impossible, and
+// the flag's rationale (intermittent gateway misreports) never covers it.
 // Caller-context cancellation stays non-retryable so Ctrl-C still works, and
 // the attempt/backoff caps are lifted (callPolicy.attempts, retryBudget).
 
@@ -24,13 +27,28 @@ func TestRetryAlwaysPermanentErrorsBecomeRetryable(t *testing.T) {
 		&openai.APIError{HTTPStatusCode: 404, Message: "model not found"},
 		&openai.APIError{HTTPStatusCode: 422, Message: "unprocessable"},
 		errors.New("status code: 400, message: bad request"),
-		errors.New("requested 40123 tokens, maximum is 131072"), // context overflow
 		errors.New("quota exceeded: billing cycle"),
 	}
 	ctx := context.Background()
 	for _, err := range cases {
 		if !isRetryableForContext(ctx, err) {
 			t.Fatalf("retry-always must retry %q", err)
+		}
+	}
+}
+
+// #4214: context overflow is deterministic - retry-always must NOT retry it.
+func TestRetryAlwaysContextOverflowStillFails(t *testing.T) {
+	SetRetryAlways(true)
+	t.Cleanup(func() { SetRetryAlways(false) })
+
+	overflow := []error{
+		errors.New("requested 40123 tokens, maximum is 131072"),
+		errors.New("prompt is too long: 90000 tokens > 8192 maximum"),
+	}
+	for _, err := range overflow {
+		if isRetryableForContext(context.Background(), err) {
+			t.Fatalf("retry-always must not retry deterministic overflow: %q", err)
 		}
 	}
 }

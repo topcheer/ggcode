@@ -989,7 +989,7 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 		// the full stream lifetime (ChatStream returns immediately).
 		ctx, cancel := p.policy.withTimeout(ctx)
 		defer cancel()
-		budget := newRetryBudget() // #722: cap cumulative retry backoff sleep per stream call
+		budget := newRetryBudgetForMode() // #722: cap cumulative retry backoff sleep per stream call; #4217: exempt under retry-always
 		for attempt := 0; attempt < p.policy.attempts(); attempt++ {
 			if attempt > 0 {
 				debug.Log("openai-responses", "Stream retry attempt %d/%d model=%s baseURL=%s", attempt+1, p.policy.attempts(), p.model, p.baseURL)

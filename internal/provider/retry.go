@@ -72,6 +72,22 @@ func newRetryBudget() *retryBudget {
 	return &retryBudget{deadline: time.Now().Add(providerRetryTimeBudget)}
 }
 
+// newRetryBudgetForMode returns a retry budget with the retry-always exemption
+// applied when the flag is enabled (#4217). Streaming ChatStream loops and the
+// non-streaming retryWithBackoffCtx share this so both paths honor the same
+// "retry indefinitely until Ctrl-C" contract; without it the streaming loops
+// still terminated after the 2-minute cumulative backoff budget despite the
+// flag promising unlimited retries.
+func newRetryBudgetForMode() *retryBudget {
+	budget := newRetryBudget()
+	if retryAlwaysEnabled.Load() {
+		// Retry-always: no cumulative backoff cap - only context
+		// cancellation ends the loop.
+		budget.unlimited = true
+	}
+	return budget
+}
+
 // sleep sleeps for delay (from retryDelay) unless the budget deadline is
 // closer, in which case it truncates the sleep and returns
 // errRetryBudgetExhausted (the pending retry must not run — the budget is
@@ -335,8 +351,18 @@ func isRetryableForContext(ctx context.Context, err error) bool {
 	if ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return false
 	}
+	// Context overflow is deterministic given the same request body —
+	// even retry-always cannot succeed (the request is byte-identical on
+	// every retry). Keep the permanent-failure gate ahead of the
+	// retry-always bypass (#4214); it only guards mathematically-certain
+	// failures, not the intermittent 401/404/quota misreports the flag
+	// was designed for.
+	if IsContextOverflowError(err) {
+		return false
+	}
 	// Retry-always mode: retry EVERYTHING except the caller-context
-	// cancellations above (Ctrl-C / agent-turn timeout must still work).
+	// cancellations above (Ctrl-C / agent-turn timeout must still work)
+	// and the deterministic overflow gate just above.
 	// The permanent-error classifier below is deliberately bypassed.
 	if retryAlwaysEnabled.Load() {
 		return true
@@ -374,12 +400,7 @@ func retryWithBackoffCtx(ctx context.Context, fn func() error, maxAttempts int) 
 	if maxAttempts <= 0 {
 		maxAttempts = 1
 	}
-	budget := newRetryBudget()
-	if retryAlwaysEnabled.Load() {
-		// Retry-always: no cumulative backoff cap - only context
-		// cancellation ends the loop.
-		budget.unlimited = true
-	}
+	budget := newRetryBudgetForMode()
 	var lastErr error
 	for i := 0; i < maxAttempts; i++ {
 		err := fn()

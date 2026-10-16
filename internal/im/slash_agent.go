@@ -105,6 +105,11 @@ func (b *DaemonBridge) SwitchMode(name string) error {
 	if !permission.IsValidPermissionMode(name) {
 		return fmt.Errorf("unknown permission mode %q (valid: supervised, plan, auto, bypass, autopilot)", name)
 	}
+	// #4215: dangerous is CLI-flag-only; even the remote-dangerous opt-in
+	// does not extend to allow-everything mode over IM.
+	if !permission.IsRuntimeSelectableModeName(name) {
+		return fmt.Errorf("mode %q cannot be selected at runtime (#4215); restart the agent with --dangerously-skip-permissions instead", name)
+	}
 	newMode := permission.ParsePermissionMode(name)
 	if (newMode == permission.BypassMode || newMode == permission.AutopilotMode) &&
 		!b.remoteDangerousAllowed() {

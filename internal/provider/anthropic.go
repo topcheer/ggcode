@@ -741,8 +741,8 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 		var usage *TokenUsage
 		var outputChars int
 		var truncated bool
-		streamError := false       // set when a non-retryable error was sent to ch
-		budget := newRetryBudget() // #722: cap cumulative retry backoff sleep per stream call
+		streamError := false              // set when a non-retryable error was sent to ch
+		budget := newRetryBudgetForMode() // #722: cap cumulative retry backoff sleep per stream call; #4217: exempt under retry-always
 
 		for attempt := 0; attempt < p.policy.attempts(); attempt++ {
 			if attempt > 0 {

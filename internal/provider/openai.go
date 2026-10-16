@@ -677,8 +677,8 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		var truncated bool
 		var logprobSum float64 // sa-74: confidence telemetry accumulators
 		var logprobN int
-		streamError := false       // set when a non-retryable error was sent to ch
-		budget := newRetryBudget() // #722: cap cumulative retry backoff sleep per stream call
+		streamError := false              // set when a non-retryable error was sent to ch
+		budget := newRetryBudgetForMode() // #722: cap cumulative retry backoff sleep per stream call; #4217: exempt under retry-always
 
 		for attempt := 0; attempt < p.policy.attempts(); attempt++ {
 			if attempt > 0 {

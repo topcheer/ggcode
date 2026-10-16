@@ -1304,6 +1304,12 @@ func (s *replModeSwitcher) Mode() permission.PermissionMode {
 }
 
 func (s *replModeSwitcher) SetMode(mode permission.PermissionMode) {
+	// #4215 defense-in-depth: the switch_mode tool already rejects dangerous,
+	// but this switcher is reachable from other callers too - enforce the
+	// CLI-flag-only contract at the sink as well.
+	if !permission.IsRuntimeSelectableMode(mode) {
+		return
+	}
 	// ConfigPolicy.SetMode is thread-safe (has its own mutex)
 	if cp, ok := s.model.policy.(*permission.ConfigPolicy); ok {
 		cp.SetMode(mode)

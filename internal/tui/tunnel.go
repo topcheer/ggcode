@@ -1078,6 +1078,11 @@ func (m *Model) handleTunnelModeChangeMsg(msg tunnelModeChangeMsg) (tea.Model, t
 	if !permission.IsValidPermissionMode(msg.mode) {
 		return m, nil
 	}
+	// #4215: dangerous is CLI-flag-only (--dangerously-skip-permissions);
+	// a paired phone must not be able to enable allow-everything remotely.
+	if !permission.IsRuntimeSelectableModeName(msg.mode) {
+		return m, nil
+	}
 	m.mode = newMode
 	if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
 		cp.SetMode(newMode)

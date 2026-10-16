@@ -75,6 +75,14 @@ func (t *SwitchModeTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	if !permission.IsValidPermissionMode(mode) {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid mode %q. Valid modes: supervised, plan, auto, bypass, autopilot", args.Mode)}, nil
 	}
+	// #4215: dangerous mode is only enterable via the explicit
+	// --dangerously-skip-permissions CLI flag at startup. It must never be
+	// reachable at runtime — switch_mode is approval-free in every mode, so
+	// accepting it here would let the model (or an injected transcript)
+	// self-escalate to allow-everything.
+	if !permission.IsRuntimeSelectableModeName(mode) {
+		return Result{IsError: true, Content: fmt.Sprintf("mode %q cannot be selected at runtime; restart with --dangerously-skip-permissions if you really need it (#4215)", args.Mode)}, nil
+	}
 
 	newMode := permission.ParsePermissionMode(mode)
 

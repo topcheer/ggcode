@@ -363,7 +363,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 		ctx, cancel := p.policy.withTimeout(ctx)
 		defer cancel()
 
-		budget := newRetryBudget()             // #722: cap cumulative retry backoff sleep per stream call
+		budget := newRetryBudgetForMode()      // #722: cap cumulative retry backoff sleep per stream call; #4217: exempt under retry-always
 		grounding := newGeminiGroundingAccum() // built-in tool grounding sources, deduped across chunks/attempts
 		for attempt := 0; attempt < p.policy.attempts(); attempt++ {
 			var usage TokenUsage // reset per attempt to avoid leaking failed-attempt usage

@@ -46,6 +46,10 @@ var errStreamInterruptedForReplan = errors.New("stream interrupted for replan")
 // These are typically mid-stream disconnects or DNS hiccups after partial output.
 const maxAgentLLMRetries = 3
 
+// maxAgentLLMRetryDelay caps the per-retry backoff even in retry-always mode,
+// where the retry counter itself is unbounded (#4219).
+const maxAgentLLMRetryDelay = 60 * time.Second
+
 // agentLLMRetryLimit lifts the 3-retry cap in retry-always mode so the agent
 // turn loop also retries without bound (provider layer already lifted its own
 // caps via SetRetryAlways).
@@ -68,6 +72,16 @@ func isAgentRetryableLLMError(err error) bool {
 		return false
 	}
 	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	// Context overflow is deterministic given the same message payload — even
+	// retry-always cannot succeed (#4219, mirrors the provider-layer gate in
+	// retry.go #4214). Overflow belongs to the reactive-compaction path: the
+	// caller routes it through tryReactiveCompact, which terminates the run
+	// once maxReactiveCompactRetries is exhausted. Letting it fall into the
+	// retry-always branch here turned that exhaustion exit into an infinite
+	// resend loop with monotonically growing delays and no termination.
+	if isPromptTooLongError(err) {
 		return false
 	}
 	if provider.RetryAlwaysEnabled() {
@@ -2655,6 +2669,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					multiplier = 5 // 5s, 10s, 15s for rate-limited requests
 				}
 				delay := time.Duration(agentLLMRetries*multiplier) * time.Second
+				// Cap the linear backoff (#4219): under retry-always the retry
+				// counter is effectively unbounded, and an unbounded linear
+				// delay silently turns "retry forever" into "wait forever".
+				if delay > maxAgentLLMRetryDelay {
+					delay = maxAgentLLMRetryDelay
+				}
 				debug.Log("agent", "transient LLM error (attempt %d/%d), retrying in %v: %v",
 					agentLLMRetries, agentLLMRetryLimit(), delay, err)
 				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
