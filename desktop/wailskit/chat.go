@@ -3089,7 +3089,23 @@ func (b *ChatBridge) RequestApproval(ctx context.Context, requestID, toolName, i
 	// via the existing ctx.Done() branch in AwaitApproval.
 	approvalCtx, cancelApproval := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Minute)
 	defer cancelApproval()
-	return b.interactions.AwaitApproval(approvalCtx, req)
+	decision := b.interactions.AwaitApproval(approvalCtx, req)
+	if approvalCtx.Err() != nil {
+		// #4250: the timeout closed the wait on the AGENT side only - both
+		// UIs were still showing the request (desktop modal with a
+		// full-screen overlay, mobile approval card keyed to this ID), and a
+		// late click looked acknowledged while being silently dropped.
+		// Emit the close events so neither end hangs.
+		if b.OnStreamEvent != nil {
+			raw, _ := json.Marshal(map[string]string{"requestID": requestID, "reason": "timeout"})
+			b.OnStreamEvent("approval:cancel", raw)
+		}
+		agentruntime.PushTunnelApprovalResult(b.currentTunnelBroker(), requestID, "timeout", agentruntime.TunnelStateUpdate{
+			HasStatus: true,
+			Status:    tunnel.StatusBusy,
+		})
+	}
+	return decision
 }
 
 // RequestAskUser blocks until the user (desktop or mobile) responds to a
@@ -3133,6 +3149,18 @@ func (b *ChatBridge) RespondApproval(requestID, decision string) {
 	d := agentruntime.ApprovalDecisionFromTunnel(decision)
 	req, ok := b.interactions.ResolveApproval(requestID, d)
 	if !ok {
+		// #4250: stale click (request already timed out to Deny). The
+		// frontend closes the dialog unconditionally after this call, so
+		// tell it WHY via the cancel channel and mirror the terminal
+		// outcome to mobile so its card clears too.
+		if b.OnStreamEvent != nil {
+			raw, _ := json.Marshal(map[string]string{"requestID": requestID, "reason": "stale"})
+			b.OnStreamEvent("approval:cancel", raw)
+		}
+		agentruntime.PushTunnelApprovalResult(b.currentTunnelBroker(), requestID, "stale", agentruntime.TunnelStateUpdate{
+			HasStatus: true,
+			Status:    tunnel.StatusBusy,
+		})
 		return
 	}
 
@@ -3217,6 +3245,13 @@ func (b *ChatBridge) HandleMobileApprovalResponse(data tunnel.ApprovalResponseDa
 	decision := agentruntime.ResolveTunnelApproval(data.Decision, "", nil)
 	req, ok := b.interactions.ResolveApproval(data.ID, decision)
 	if !ok {
+		// #4250: stale mobile tap (already timed out). Without this push the
+		// mobile approval card stays "waiting" forever - the early return
+		// skipped the only code path that ever tells mobile the outcome.
+		agentruntime.PushTunnelApprovalResult(b.currentTunnelBroker(), data.ID, "stale", agentruntime.TunnelStateUpdate{
+			HasStatus: true,
+			Status:    tunnel.StatusBusy,
+		})
 		return
 	}
 	agentruntime.ResolveTunnelApproval(data.Decision, req.ToolName, func(toolName string) {
