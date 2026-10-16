@@ -168,6 +168,28 @@ func loadConfigForRun(cfgFile string, f *adhocLLMFlags) (*config.Config, error) 
 		}
 		return f.synthesizeAdhocConfig()
 	}
+	// #4216: a HALF-SET pair (base-url without model or vice versa, flag or
+	// env) used to fall through to the regular config completely silently -
+	// unattended pipes ran on ggcode.yaml's default provider while the user
+	// believed they were testing a new endpoint. The unreachable
+	// synthesizeAdhocConfig error branch was the only diagnostic ever
+	// written. Surface the partial pair loudly at the fallback point
+	// instead (stderr survives pipe mode; hard-failing here would change
+	// CLI behavior for users who set stray GGCODE_LLM_* vars).
+	if f != nil {
+		if baseURL := adhocValue(f.BaseURL, adhocEnvBaseURL); (baseURL == "") != (adhocValue(f.Model, adhocEnvModel) == "") {
+			missing, present := "--llm-model", "--llm-base-url"
+			if baseURL == "" {
+				missing, present = "--llm-base-url", "--llm-model"
+			}
+			fmt.Fprintf(os.Stderr, "WARNING: ad-hoc provider pair is incomplete: %s is set but %s is not - the ad-hoc endpoint is INACTIVE and this run uses the regular config file instead. Set %s (or env %s) or clear the other half to avoid billing the wrong endpoint.\n", present, missing, missing, func() string {
+				if missing == "--llm-base-url" {
+					return adhocEnvBaseURL
+				}
+				return adhocEnvModel
+			}())
+		}
+	}
 	wd, _ := os.Getwd()
 	return config.LoadWithInstance(cfgFile, wd)
 }

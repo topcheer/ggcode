@@ -267,6 +267,15 @@ func (t *DefineTool) doCall(ctx context.Context, name string, params map[string]
 	var b strings.Builder
 	total := 0
 	for i, s := range def.Steps {
+		// #4221: re-validate the read-only whitelist at EXECUTION time, not
+		// just at define time. Definitions persist in workspace-shared
+		// plaintext (.ggcode/define_tools.json); a hand-crafted file loaded
+		// by loadLocked skips doDefine's check entirely, and nested Execute
+		// bypasses the agent-level approval that guards top-level calls -
+		// a smuggled run_command/write_file step would run unapproved.
+		if _, ok := readOnlyToolNames[s.Tool]; !ok {
+			return Result{IsError: true, Content: fmt.Sprintf("step %d: tool %q is not read-only. This definition was not created via the define action (the on-disk store allows arbitrary content) - refusing to execute a write-capable nested step without the normal per-call approval flow.", i+1, s.Tool)}, nil
+		}
 		resolved, err := substituteParamPlaceholders(s.Args, params)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("step %d: %v", i+1, err)}, nil

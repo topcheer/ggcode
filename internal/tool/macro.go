@@ -251,6 +251,13 @@ func (t *MacroTool) doRun(ctx context.Context, name string, runArgsRaw json.RawM
 	fmt.Fprintf(&out, "macro %q: %d step(s)\n", name, len(def.Steps))
 	total := 0
 	for i, s := range def.Steps {
+		// #4221: same execution-time whitelist re-check as define_tool -
+		// macros.json is workspace-shared plaintext; a definition that never
+		// passed doDefine must not gain unapproved nested write access just
+		// because the file says so.
+		if _, ok := readOnlyToolNames[s.Tool]; !ok {
+			return Result{IsError: true, Content: fmt.Sprintf("%swrite-capable tool %q is not allowed in macro steps (definition failed the execution-time read-only re-check, #4221)\n(stopped at step %d)", fmt.Sprintf("--- step %d/%d %s: ", i+1, len(def.Steps), s.Tool), s.Tool, i+1)}, nil
+		}
 		expanded, err := expandMacroArgs(s.Args, runArgs)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("step %d: %v", i+1, err)}, nil
