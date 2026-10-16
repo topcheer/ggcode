@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -901,7 +903,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 								debug.Log("openai", "tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
 							}
 						}
-						for idx, tc := range toolCalls {
+						// #4244: Go map iteration is randomized - emitting the parallel
+						// tool calls in map order lost the model's idx-expressed intent
+						// (mkdir→write, add→commit pairs executed in random order, and
+						// replay transcripts differed run-to-run). Emit sorted by idx.
+						for _, idx := range slices.Sorted(maps.Keys(toolCalls)) {
+							tc := toolCalls[idx]
 							// Attempt JSON repair for truncated/malformed args.
 							// This is especially important when finish_reason is
 							// "length" (max_tokens truncation) - the args may be
