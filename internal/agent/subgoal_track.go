@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -169,10 +170,15 @@ var sgPlanIntentPhrases = []string{
 }
 
 // hasPlanIntent reports whether the text carries plan-intent language.
+// #4229: bare substring matching turned "explanation" into "plan", "plant"
+// into "plan" and "auto download" into "to do", adopting diagnostic lists as
+// plans. Match phrases on word boundaries via sgKeywordPresent (the #2829
+// helper). CJK phrases have no word bytes around them, so any occurrence still
+// matches, preserving recall for 任务/计划/步骤.
 func hasPlanIntent(text string) bool {
 	lower := strings.ToLower(text)
 	for _, p := range sgPlanIntentPhrases {
-		if strings.Contains(lower, p) {
+		if sgKeywordPresent(lower, p) {
 			return true
 		}
 	}
@@ -291,11 +297,28 @@ func (s *subgoalState) maybeWarn(currentIter int) string {
 		unaddressed, trackable, strings.Join(missing, "\n"))
 }
 
+// truncate cuts s to at most max bytes, appending an ellipsis when it
+// truncates. #4229: the old s[:max-3] byte slice could split a multi-byte
+// rune mid-sequence, producing invalid UTF-8 in the guidance message. Snap
+// the cut point back to a rune boundary first (same pattern as
+// truncateRunesUTF8 in traj_intel.go).
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return s[:max-3] + "..."
+	if max < 3 {
+		// No room for an ellipsis; cut on a rune boundary only.
+		cut := max
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		return s[:cut]
+	}
+	cut := max - 3
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "..."
 }
 
 // markUndelivered (#4224) rolls back the one-shot quota consumed by maybeWarn
