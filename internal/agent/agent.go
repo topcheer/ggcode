@@ -6031,6 +6031,21 @@ func (a *Agent) injectPendingInterruptions() (bool, InterruptionKind) {
 		Role:    "user",
 		Content: content,
 	})
+	// #4226: mid-run user constraints must enter the amnesia detector's
+	// record. recordConstraints previously ran only on Run()'s entry text, so
+	// a steering message like "do not modify the auth module" was visible to
+	// the model but invisible to the detector - exactly the long-run scenario
+	// it exists for. Record the RAW user text (blocks), not the preamble.
+	var rawText strings.Builder
+	for _, b := range blocks {
+		if b.Type == "text" {
+			rawText.WriteString(b.Text)
+			rawText.WriteString("\n")
+		}
+	}
+	if rawText.Len() > 0 {
+		a.constraintAmnesia.recordConstraints(rawText.String(), 0)
+	}
 	return true, kind
 }
 

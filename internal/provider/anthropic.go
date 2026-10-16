@@ -893,7 +893,12 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						return
 					}
 					// Retry without the effort carrier if the endpoint rejects it.
-					if !emitted && isEffortError(err) && p.effortCarrier.CompareAndSwap(true, false) {
+					// #4227: same attempt guard as the thinking/retry branches -
+					// without it a final-attempt effort error CAS-es the carrier,
+					// sets retry=true, and the for-postfix attempt++ exhausts the
+					// loop into the fallback path that fabricates usage and emits
+					// a false StreamEventDone.
+					if !emitted && isEffortError(err) && attempt < p.policy.attempts()-1 && p.effortCarrier.CompareAndSwap(true, false) {
 						debug.Log("anthropic", "Stream: retrying without output_config (endpoint rejected the effort carrier)")
 						ch <- StreamEvent{Type: StreamEventSystem, Text: "[Endpoint rejected output_config effort - retrying without it] "}
 						params.OutputConfig = anthropic.OutputConfigParam{}
