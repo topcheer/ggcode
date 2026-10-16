@@ -1695,7 +1695,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// a 30s timeout) and produce noisy insights for aborted work.
 		// The onRunResult callback and todo cleanup still run to ensure
 		// session persistence and state cleanup.
-		isCancelled := errors.Is(err, context.Canceled) ||
+		// #4248: deadline/sentinel completion of #4232 case 3 - the
+		// DeadlineExceeded arm was locked behind `err == nil`, but the two
+		// session-timeout main paths return NON-nil errors: the hard stop
+		// surfaces the bare ErrSessionTimeout sentinel (session_timeout.go)
+		// and the L2229 path surfaces ctx.Err() itself. Honor both in the
+		// err chain plus the sentinel so timeout-aborted runs skip
+		// reflection/failure-attribution like user cancellations do.
+		isCancelled := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+			errors.Is(err, ErrSessionTimeout) ||
 			(err == nil && ctx.Err() != nil && (errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded)))
 		if !isCancelled {
 			a.maybeReflect(runStats)
@@ -2839,7 +2847,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				if len(resp.Message.Content) > 0 {
 					a.contextManager.Add(resp.Message)
 				}
-				return nil
+				// #4249: return nil reported "blocked by a safety filter" to
+				// ACP / A2A / Knight / sub-agent callers as a NORMAL
+				// completion (the #1672 false-success mechanism on the
+				// adjacent empty-response path). Surface a distinguishable
+				// error instead; the System event above already told the
+				// interactive user.
+				return fmt.Errorf("agent: response blocked by provider safety filter (task did not complete)")
 			}
 			consecutiveEmptyResponses++
 			debug.Log("agent", "Iteration %d: empty response detected (consecutive=%d, input_tokens=%d)",
