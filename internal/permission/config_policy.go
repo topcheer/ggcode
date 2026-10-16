@@ -271,6 +271,23 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		if isWriteFileTool(toolName) {
 			return Deny, nil
 		}
+		// #4261: restore the #712 plan read-only floors - the two-mode
+		// rewrite (8a8ca1e05) dropped this call site while keeping the
+		// function, so sensitive out-of-sandbox reads (~/.ssh into model
+		// context) and web calls carrying secret material became silent
+		// Allows in plan mode. Deny, not Ask: plan mode has no human loop.
+		if d := p.checkPlanReadOnlyExceptions(toolName, input); d != Allow {
+			return d, nil
+		}
+		// #4261/#596-P2: MCP write tools are not name-classifiable as file
+		// tools, but drop_table/apply_patch/send_message are write
+		// operations - plan mode's own contract (only explicit file-writing
+		// denied) must extend to them. IsReadOnlyTool encodes the verified
+		// read-only MCP whitelist; everything else mcp__ denies.
+		if strings.HasPrefix(toolName, "mcp__") && !IsReadOnlyTool(toolName) {
+			debug.Log("permission", "non-read-only MCP tool denied in plan mode (#596-P2/#4261)")
+			return Deny, nil
+		}
 		if isCommandTool(toolName) {
 			for _, cmd := range extractCommandsForTool(toolName, input) {
 				if p.detector.IsExtremelyDangerous(cmd) {
