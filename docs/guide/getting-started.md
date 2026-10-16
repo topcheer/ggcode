@@ -68,7 +68,7 @@ The input supports three modes:
 | `/help` | Show available commands |
 | `/sessions` | List and resume sessions |
 | `/model [name]` | Switch model |
-| `/mode [mode]` | Switch permission mode (supervised/plan/auto/bypass/autopilot) |
+| `/mode [mode]` | Switch permission mode (supervised/bypass; auto/autopilot accepted as legacy aliases) |
 | `/compact` | Compact conversation to save context |
 | `/exit` | Exit ggcode |
 

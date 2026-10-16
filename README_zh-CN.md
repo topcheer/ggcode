@@ -104,7 +104,7 @@ ggcode
 | [CLI 参考](docs/guide/cli-reference.md) | 命令、参数、管道模式 |
 | [模型配置](docs/guide/providers.md) | LLM 厂商和端点配置 |
 | [斜杠命令](docs/guide/slash-commands.md) | TUI 内命令参考 |
-| [权限模式](docs/guide/modes.md) | 监督 / 计划 / 自动 / 旁路 / 自动驾驶 |
+| [权限模式](docs/guide/modes.md) | 监督 / 旁路 双模式（auto/autopilot 为兼容别名） |
 | [MCP 服务器](docs/guide/mcp.md) | 通过 MCP 连接外部工具 |
 | [gRPC 插件](docs/guide/grpc-plugins.md) | 编写和安装自定义工具插件（Go / Python / Node.js）|
 | [IM 集成](docs/guide/im-integration.md) | QQ / Telegram / Discord / Slack / 飞书 / 钉钉 |

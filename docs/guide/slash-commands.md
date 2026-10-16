@@ -39,7 +39,7 @@ Slash commands are typed directly in the chat input within the TUI.
 
 | Command | Description |
 |---------|-------------|
-| `/mode [supervised\|plan\|auto\|bypass\|autopilot]` | Switch permission mode |
+| `/mode [supervised\|bypass]` | Switch permission mode (auto/autopilot accepted as legacy aliases; plan is tool-internal) |
 | `/config` | Configuration management |
 | `/allow [tool]` | Permanently allow a tool (override permission policy) |
 | `/init` | Create `GGCODE.md` project memory file |
@@ -178,7 +178,7 @@ Quick-send messages to other ggcode instances on your LAN directly from the main
 | `Ctrl+T` | Toggle config save scope (global ↔ instance) |
 | `Ctrl+X` | Open terminal pane menu (tmux/Ghostty/Warp/Kitty/iTerm2) |
 | `Ctrl+Shift+C` | Copy last assistant response to clipboard |
-| `Shift+Tab` | Cycle permission mode (supervised → plan → auto → bypass → autopilot) |
+| `Shift+Tab` | Cycle permission mode (supervised → bypass) |
 | `Alt+Up` / `Alt+K` | Cycle to previous session |
 | `Alt+Down` / `Alt+J` | Cycle to next session |
 | `Esc Esc` (double) | Trigger `/undo` (checkpoint rollback) |
