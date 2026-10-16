@@ -276,7 +276,7 @@ ggcode version                         # Print version, commit, and build date
 | `--config <path>` | Use a specific config file |
 | `--bypass` | Start in bypass permission mode |
 | `--dangerously-skip-permissions` | Pipe mode: skip ALL permission checks (expert use only) |
-| `--llm-retry-always` | Pipe mode: retry every LLM error indefinitely (env `GGCODE_LLM_RETRY_ALWAYS`) |
+| `--llm-retry-always` | Pipe mode: retry every retryable LLM error indefinitely; overflow stays non-retryable (env `GGCODE_LLM_RETRY_ALWAYS`) |
 | `-p, --prompt <prompt>` | Non-interactive pipe mode |
 | `--allowedTools <name>` | Restrict tools in pipe mode (repeatable) |
 | `--output <path>` | Output file path (default: stdout) |
