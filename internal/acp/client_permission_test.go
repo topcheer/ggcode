@@ -11,7 +11,12 @@ import (
 )
 
 func TestPermissionRequestResponseUsesStableToolKeyAndPersistentAllow(t *testing.T) {
-	policy := permission.NewConfigPolicyWithMode(map[string]permission.Decision{}, nil, permission.SupervisedMode)
+	// two-mode refactor: supervised defaults to Allow, so the delegate tool
+	// needs an explicit Ask rule to route through the approval pipeline this
+	// test exercises.
+	policy := permission.NewConfigPolicyWithMode(map[string]permission.Decision{
+		"delegate_copilot_execute": permission.Ask,
+	}, nil, permission.SupervisedMode)
 	client := NewClient(DiscoveredAgent{Def: AgentDef{Name: "copilot"}}, t.TempDir(), policy, nil)
 
 	var gotToolName string

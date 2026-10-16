@@ -18,25 +18,29 @@ func (a *Agent) currentMode() permission.PermissionMode {
 	return permission.SupervisedMode
 }
 
-// IsAutopilotMode reports whether the agent's current permission mode is
-// autopilot. Runtime reload wiring (ApplySessionTimeout call sites) must
-// re-derive the autopilot default timeout with the REAL mode, not a
-// hardcoded false - a mid-run reload used to silently disarm the 600-min
-// autopilot wall-clock guard when session_timeout was unset (#3958).
+// IsAutopilotMode reports whether the autopilot cruise control (goal
+// declaration, strategist oversight) is active. Cruise now rides on the
+// bypass permission surface (two-mode refactor): the standalone
+// AutopilotMode is a legacy alias for BypassMode. Runtime reload wiring
+// (ApplySessionTimeout call sites) must re-derive the cruise default
+// timeout with the REAL mode, not a hardcoded false - a mid-run reload
+// used to silently disarm the 600-min wall-clock guard when
+// session_timeout was unset (#3958).
 func (a *Agent) IsAutopilotMode() bool {
 	if a == nil {
 		return false
 	}
-	return a.currentMode() == permission.AutopilotMode
+	return a.currentMode().IsCruiseMode()
 }
 
 // --- Autopilot Goal management ---
 
-// clearGoalIfNotAutopilot clears the goal if the current mode is no longer
-// autopilot. This handles TUI's cp.SetMode() which mutates the policy in
-// place without calling agent.SetPermissionPolicy().
+// clearGoalIfNotCruise clears the goal if cruise control is no longer
+// active (i.e. the mode left the bypass surface). This handles TUI's
+// cp.SetMode() which mutates the policy in place without calling
+// agent.SetPermissionPolicy().
 func (a *Agent) clearGoalIfNotAutopilot() {
-	if a.currentMode() != permission.AutopilotMode {
+	if !a.currentMode().IsCruiseMode() {
 		a.mu.Lock()
 		if a.autopilotGoal != "" || a.autopilotGoalSet || a.autopilotGoalAsked {
 			a.autopilotGoal = ""
@@ -60,7 +64,7 @@ func (a *Agent) clearGoalIfNotAutopilot() {
 // agent runtime can extract it for the strategist.
 // detection.
 func (a *Agent) maybeInjectAutopilotGoalCollection() {
-	if a.currentMode() != permission.AutopilotMode {
+	if !a.currentMode().IsCruiseMode() {
 		return
 	}
 	a.mu.Lock()

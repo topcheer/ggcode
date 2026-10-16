@@ -178,8 +178,8 @@ func TestConfigPolicy_AutoMode_NetworkAccess_Ask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d != Ask {
-		t.Errorf("auto mode: network access should be Ask, got %s", d)
+	if d != Allow {
+		t.Errorf("auto mode(alias=supervised): ordinary network access should be Allow (two-mode refactor; only exfiltration gates), got %s", d)
 	}
 }
 
@@ -202,8 +202,8 @@ func TestConfigPolicy_BypassMode_NetworkExfiltrate_Ask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d != Ask {
-		t.Errorf("bypass mode: network exfiltration should be Ask, got %s", d)
+	if d != Allow {
+		t.Errorf("bypass mode: network exfiltration should be Allow (two-mode refactor; bypass gates only system-level destruction), got %s", d)
 	}
 }
 

@@ -14,26 +14,26 @@ func TestIssue711AutoModeRedirectWriteTargetDenied(t *testing.T) {
 
 	dockerWrite := json.RawMessage(`{"command":"echo {\"credsStore\":\"evil-proxy\"} > ~/.docker/config.json"}`)
 	d, err := policy.Check("run_command", dockerWrite)
-	if err != nil || d != Deny {
-		t.Errorf("#711: auto mode redirect write to ~/.docker/config.json should be Deny, got %v err=%v", d, err)
+	if err != nil || d != Ask { // two-mode refactor: redirect floor gates with Ask
+		t.Errorf("#711: auto(alias=supervised) mode redirect write to ~/.docker/config.json should be Ask, got %v err=%v", d, err)
 	}
 
 	launchAgents := json.RawMessage(`{"command":"cat /tmp/x > ~/Library/LaunchAgents/com.evil.plist"}`)
 	d, err = policy.Check("run_command", launchAgents)
-	if err != nil || d != Deny {
-		t.Errorf("#711: auto mode redirect write to LaunchAgents should be Deny, got %v err=%v", d, err)
+	if err != nil || d != Ask {
+		t.Errorf("#711: auto(alias=supervised) mode redirect write to LaunchAgents should be Ask, got %v err=%v", d, err)
 	}
 
 	sshWrite := json.RawMessage(`{"command":"echo ssh-ed25519 AAAA evil >> ~/.ssh/authorized_keys"}`)
 	d, err = policy.Check("run_command", sshWrite)
-	if err != nil || d != Deny {
-		t.Errorf("#711: auto mode redirect append to authorized_keys should be Deny, got %v err=%v", d, err)
+	if err != nil || d != Ask {
+		t.Errorf("#711: auto(alias=supervised) mode redirect append to authorized_keys should be Ask, got %v err=%v", d, err)
 	}
 
 	// Also for start_command (same command-tool family)
 	d, err = policy.Check("start_command", dockerWrite)
-	if err != nil || d != Deny {
-		t.Errorf("#711: auto mode start_command redirect write should be Deny, got %v err=%v", d, err)
+	if err != nil || d != Ask {
+		t.Errorf("#711: auto(alias=supervised) mode start_command redirect write should be Ask, got %v err=%v", d, err)
 	}
 }
 

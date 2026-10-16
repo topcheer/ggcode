@@ -5,49 +5,80 @@ import (
 )
 
 // PermissionMode controls how the agent handles tool permissions.
+//
+// Mode-system refactor: there are now exactly TWO user-facing modes:
+//
+//   - supervised: most tool calls flow without prompting; only extremely
+//     dangerous calls (system-level destruction, credential exfiltration,
+//     out-of-sandbox writes) are gated. This absorbs the old "auto" mode,
+//     which is now a parse-time alias.
+//   - bypass: nothing is gated except system-level destructive commands
+//     (the old "autopilot" permission surface). The autopilot cruise
+//     control (goal declaration + strategist oversight) is enabled while
+//     in bypass mode.
+//
+// plan is an internal mode: users cannot switch into it directly. It is
+// entered/exited only by the enter_plan_mode/exit_plan_mode tools. Inside
+// plan mode everything is allowed EXCEPT explicit file-writing tools
+// (run_command and other shell access is permitted).
+//
+// The legacy enum values AutoMode and AutopilotMode are retained for
+// wire/config compatibility (hundreds of call sites, stored configs) but
+// normalize: String() reports the canonical name and every policy branch
+// treats them as their canonical counterpart.
 type PermissionMode int
 
 const (
-	// SupervisedMode respects explicit per-tool rules and asks for anything unspecified.
+	// SupervisedMode gates only extremely dangerous calls; everything
+	// else flows without prompting (absorbs the old AutoMode).
 	SupervisedMode PermissionMode = iota
-	// PlanMode allows a strict read-only subset and denies writes/commands automatically.
+	// PlanMode is tool-entered read-planning mode: all tools allowed except
+	// explicit file writers. Not user-switchable.
 	PlanMode
-	// AutoMode allows safe operations and denies dangerous ones automatically.
+	// AutoMode is a deprecated alias for SupervisedMode (config compat).
 	AutoMode
-	// BypassMode allows almost everything automatically and only asks on critical cases.
+	// BypassMode gates nothing except system-level destructive commands;
+	// cruise control (strategist/goal) runs while in this mode.
 	BypassMode
-	// AutopilotMode uses bypass permissions and keeps going when the model asks the user to decide.
+	// AutopilotMode is a deprecated alias for BypassMode (config compat).
 	AutopilotMode
 )
 
+// String returns the canonical user-facing mode name. Deprecated aliases
+// normalize to their canonical counterpart so stored configs and UI state
+// converge on the two-mode system on next save.
 func (m PermissionMode) String() string {
 	switch m {
-	case SupervisedMode:
+	case SupervisedMode, AutoMode:
 		return "supervised"
 	case PlanMode:
 		return "plan"
-	case AutoMode:
-		return "auto"
-	case BypassMode:
+	case BypassMode, AutopilotMode:
 		return "bypass"
-	case AutopilotMode:
-		return "autopilot"
 	default:
 		return "supervised"
 	}
 }
 
+// IsCruiseMode reports whether the autopilot cruise control (goal
+// declaration, strategist oversight) is active. Cruise now rides on the
+// bypass permission surface: the old standalone AutopilotMode is an alias.
+func (m PermissionMode) IsCruiseMode() bool {
+	return m == BypassMode || m == AutopilotMode
+}
+
 // ParsePermissionMode parses a string to PermissionMode (case-insensitive).
+// Legacy names "auto" and "autopilot" are accepted and normalized.
 func ParsePermissionMode(s string) PermissionMode {
 	switch strings.ToLower(s) {
 	case "plan":
 		return PlanMode
-	case "auto":
-		return AutoMode
+	case "auto": // legacy alias
+		return SupervisedMode
+	case "autopilot": // legacy alias
+		return BypassMode
 	case "bypass":
 		return BypassMode
-	case "autopilot":
-		return AutopilotMode
 	case "supervised":
 		return SupervisedMode
 	default:
@@ -61,28 +92,24 @@ var ValidPermissionModes = []PermissionMode{
 }
 
 // IsValidPermissionMode returns true if s is a recognized mode name.
+// Legacy names "auto"/"autopilot" remain valid (config compat) even
+// though they normalize to supervised/bypass.
 func IsValidPermissionMode(s string) bool {
-	lower := strings.ToLower(s)
-	for _, m := range ValidPermissionModes {
-		if lower == strings.ToLower(m.String()) {
-			return true
-		}
+	switch strings.ToLower(s) {
+	case "supervised", "plan", "auto", "bypass", "autopilot":
+		return true
 	}
 	return false
 }
 
-// Next returns the next mode in the cycle: supervised → plan → auto → bypass → autopilot → supervised.
+// Next returns the next USER-switchable mode in the two-mode cycle:
+// supervised → bypass → supervised. Plan is tool-internal and never part
+// of the cycle; legacy alias values normalize into the cycle.
 func (m PermissionMode) Next() PermissionMode {
 	switch m {
-	case SupervisedMode:
-		return PlanMode
-	case PlanMode:
-		return AutoMode
-	case AutoMode:
+	case SupervisedMode, AutoMode:
 		return BypassMode
-	case BypassMode:
-		return AutopilotMode
-	default:
+	default: // BypassMode, AutopilotMode, PlanMode (tool-internal)
 		return SupervisedMode
 	}
 }

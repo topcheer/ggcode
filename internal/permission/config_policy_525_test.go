@@ -7,14 +7,17 @@ import (
 )
 
 // TestConfigPolicyDangerousAllowDowngradeParity (#525 Bug C): the same
-// dangerous command under user-explicit allow must get the same decision
-// regardless of which rule source matched — runtime cmdRules (TUI "always
-// allow"), static config rules (ggcode.yaml / permission_rules.json), or no
-// rule at all (default). Previously the static-rule branch hard-Denied,
-// making "configured allow" stricter than "configured nothing" (non-
-// monotonic paradox). An explicit Deny rule stays Deny.
+// extremely dangerous command under user-explicit allow must get the same
+// decision regardless of which rule source matched — runtime cmdRules (TUI
+// "always allow"), static config rules (ggcode.yaml /
+// permission_rules.json), or no rule at all (default). Previously the
+// static-rule branch hard-Denied, making "configured allow" stricter than
+// "configured nothing" (non-monotonic paradox). An explicit Deny rule
+// stays Deny.
+// two-mode refactor: the parity floor is the IsExtremelyDangerous gate
+// (the only supervised gate left), so the probe command is extreme.
 func TestConfigPolicyDangerousAllowDowngradeParity(t *testing.T) {
-	in := json.RawMessage(`{"command":"sudo rm /tmp/x"}`)
+	in := json.RawMessage(`{"command":"sudo rm -rf /"}`)
 
 	// Form 1: runtime cmdRules allow (TUI "always allow") + dangerous → Ask.
 	p1 := NewConfigPolicyWithMode(nil, []string{t.TempDir()}, SupervisedMode)

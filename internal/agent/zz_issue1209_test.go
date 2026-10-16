@@ -45,8 +45,8 @@ func TestIssue1209_DenyMessageIncludesModeAttribution(t *testing.T) {
 	}
 	for _, want := range []string{
 		"current mode: plan",
-		"Plan mode is read-only",
-		"switch_mode",
+		// two-mode refactor: plan only denies explicit file-writing tools.
+		"Plan mode denies explicit file-writing tools",
 		"exit_plan_mode",
 	} {
 		if !strings.Contains(res.Content, want) {
@@ -55,10 +55,11 @@ func TestIssue1209_DenyMessageIncludesModeAttribution(t *testing.T) {
 	}
 
 	// Non-plan mode: mode still named, but no plan-specific self-rescue line.
+	// two-mode refactor: AutoMode.String() normalizes to "supervised".
 	a2 := &Agent{policy: &stubDenyPolicy{mode: permission.AutoMode}}
 	res2 := a2.executeToolWithPermission(context.Background(), tc)
-	if !strings.Contains(res2.Content, "current mode: auto") {
-		t.Errorf("auto-mode deny message missing mode attribution:\n%s", res2.Content)
+	if !strings.Contains(res2.Content, "current mode: supervised") {
+		t.Errorf("auto(alias)-mode deny message missing mode attribution:\n%s", res2.Content)
 	}
 	if strings.Contains(res2.Content, "Plan mode is read-only") {
 		t.Errorf("auto-mode deny message should not contain plan-mode guidance:\n%s", res2.Content)

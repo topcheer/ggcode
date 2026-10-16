@@ -993,8 +993,8 @@ func TestHandleTunnelModeChangeMsg_ValidMode(t *testing.T) {
 
 	_, _ = m.handleTunnelModeChangeMsg(tunnelModeChangeMsg{mode: "auto"})
 
-	if m.mode != permission.AutoMode {
-		t.Errorf("expected mode=auto, got %v", m.mode)
+	if m.mode != permission.SupervisedMode {
+		t.Errorf("expected mode=supervised (auto normalizes), got %v", m.mode)
 	}
 }
 
@@ -1046,8 +1046,8 @@ func TestHandleModeCommand_InvalidNameRejected(t *testing.T) {
 	}
 	// Valid names still work.
 	_ = m.handleModeCommand([]string{"mode", "autopilot"})
-	if m.mode != permission.AutopilotMode {
-		t.Errorf("valid name should switch mode, got %v", m.mode)
+	if m.mode != permission.BypassMode {
+		t.Errorf("valid name should switch mode (autopilot normalizes to bypass), got %v", m.mode)
 	}
 }
 
@@ -1542,8 +1542,8 @@ func TestSwitchToSessionNewInheritsGlobalMode(t *testing.T) {
 
 	m.switchToSession(ses, true)
 
-	if m.mode != permission.AutoMode {
-		t.Errorf("expected new session to inherit global default mode (auto), got %s", m.mode)
+	if m.mode != permission.SupervisedMode {
+		t.Errorf("expected new session to inherit global default mode (auto normalizes to supervised), got %s", m.mode)
 	}
 }
 

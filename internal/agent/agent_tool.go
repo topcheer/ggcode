@@ -42,8 +42,9 @@ func (a *Agent) permissionDeniedMessage(toolName string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Permission denied for tool %q. The operation was blocked by the permission policy (current mode: %s).\n", toolName, mode)
 	if mode == permission.PlanMode {
-		b.WriteString("Plan mode is read-only: writes, shell commands, and other non-readonly tools are denied until the mode changes. " +
-			"If you did not intend to operate in plan mode, call switch_mode to restore the previous mode (e.g. \"auto\"), or present your plan via exit_plan_mode.\n")
+		b.WriteString("Plan mode denies explicit file-writing tools until the mode changes (reads, shell probes, and builds are allowed). " +
+			"If you did not intend to operate in plan mode, call exit_plan_mode to restore the previous mode (" +
+			"supervised or bypass), or present your plan via exit_plan_mode.\n")
 	}
 	b.WriteString("To proceed:\n" +
 		"1. If this is a file write, ensure the path is within the workspace\n" +

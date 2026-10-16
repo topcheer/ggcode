@@ -1913,11 +1913,11 @@ func TestModeSwitchPersistsDefaultModePreference(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected no command from mode switch")
 	}
-	if m.mode != permission.PlanMode {
-		t.Fatalf("expected in-memory mode %v, got %v", permission.PlanMode, m.mode)
+	if m.mode != permission.BypassMode {
+		t.Fatalf("expected in-memory mode %v (two-mode cycle), got %v", permission.BypassMode, m.mode)
 	}
-	if ses.PermissionMode != permission.PlanMode.String() {
-		t.Fatalf("expected session.PermissionMode %q, got %q", permission.PlanMode.String(), ses.PermissionMode)
+	if ses.PermissionMode != permission.BypassMode.String() {
+		t.Fatalf("expected session.PermissionMode %q, got %q", permission.BypassMode.String(), ses.PermissionMode)
 	}
 	if m.chatList != nil && m.chatList.Len() != 0 {
 		t.Errorf("expected no output on successful mode persistence, got %q", renderedOutput(&m))
@@ -1935,11 +1935,12 @@ func TestModeCommandPersistsDefaultModePreference(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected no command from /mode set")
 	}
-	if m.mode != permission.AutoMode {
-		t.Fatalf("expected in-memory mode %v, got %v", permission.AutoMode, m.mode)
+	// two-mode refactor: auto normalizes to supervised.
+	if m.mode != permission.SupervisedMode {
+		t.Fatalf("expected in-memory mode %v (auto normalizes), got %v", permission.SupervisedMode, m.mode)
 	}
-	if ses.PermissionMode != permission.AutoMode.String() {
-		t.Fatalf("expected session.PermissionMode %q, got %q", permission.AutoMode.String(), ses.PermissionMode)
+	if ses.PermissionMode != permission.SupervisedMode.String() {
+		t.Fatalf("expected session.PermissionMode %q, got %q", permission.SupervisedMode.String(), ses.PermissionMode)
 	}
 	if m.chatList != nil && m.chatList.Len() != 0 {
 		t.Errorf("expected no output on successful /mode persistence, got %q", renderedOutput(&m))

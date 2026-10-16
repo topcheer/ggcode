@@ -49,8 +49,8 @@ func TestIssue1210_NonPlanModeGuidance(t *testing.T) {
 	if g == "" {
 		t.Fatal("expected guidance at threshold in auto mode")
 	}
-	if !strings.Contains(g, `mode: "auto"`) {
-		t.Errorf("guidance missing mode: %s", g)
+	if !strings.Contains(g, `mode: "supervised"`) {
+		t.Errorf("guidance missing mode (auto alias normalizes to supervised): %s", g)
 	}
 	if strings.Contains(g, "Plan mode is read-only") {
 		t.Errorf("auto-mode guidance should not mention plan mode: %s", g)

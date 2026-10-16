@@ -180,219 +180,134 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	// Mode-specific handling
 	switch p.mode {
 	case BypassMode, AutopilotMode:
-		// Bypass mode: allow everything except extremely dangerous operations
-		// and network exfiltration (data egress always requires human gating).
+		// Bypass mode: nothing is gated except system-level destructive
+		// commands AND persistence-backdoor writes (shell redirects to
+		// sensitive files, file-tool writes outside the sandbox) — the
+		// #573-C / locks.md S5 floors. These trigger on paths like
+		// ~/.ssh/authorized_keys, ~/.bashrc, /etc/** — rare by construction
+		// and never a daily-interruption source. The network-exfiltration
+		// and sensitive-read gates were removed in the two-mode refactor
+		// (they were the false-positive sources); mode-independent Deny
+		// rules at the top of Check still win. Cruise control (goal +
+		// strategist) rides on this mode.
 		if isCommandTool(toolName) {
 			// #713: audit every channel (command + terminal `text`).
 			for _, cmd := range extractCommandsForTool(toolName, input) {
 				if p.detector.IsExtremelyDangerous(cmd) {
 					return Ask, nil
 				}
-				// Network exfiltration (file contents sent externally) always
-				// requires confirmation, even in bypass/autopilot. General
-				// network access is allowed in bypass mode.
-				if p.networkDetector && IsNetworkExfiltrate(cmd) {
-					debug.Log("permission", "network exfiltration blocked in bypass mode")
-					return Ask, nil
-				}
-				// #573-C: redirection targets are file writes — hold them to the
-				// same bar as write tools (out-of-sandbox or sensitive path →
-				// Ask). Without this, `> ~/.ssh/authorized_keys` (High) slipped
-				// through because bypass only gates ≥Critical patterns and the
-				// file-tool sandbox fallback below never sees shell redirects —
-				// the classic prompt-injection persistence path.
+				// #573-C: redirection targets are file writes — a shell
+				// redirect is the classic prompt-injection persistence path
+				// (`> ~/.ssh/authorized_keys`). Out-of-sandbox or sensitive
+				// targets gate.
 				for _, tgt := range extractRedirectTargets(cmd) {
 					resolved := expandTilde(tgt)
 					if !p.sandbox.Allowed(resolved) || isSensitivePath(resolved) {
-						debug.Log("permission", "redirect to out-of-sandbox/sensitive path blocked in bypass mode")
+						debug.Log("permission", "redirect to out-of-sandbox/sensitive path gated in bypass mode (#573-C)")
 						return Ask, nil
 					}
 				}
 			}
 		}
-		// Check sandbox for file tools (still protect workspace boundary).
-		// In bypass/autopilot, any *write* outside the writable sandbox is
-		// downgraded to Ask, regardless of whether the path is on the small
-		// "sensitive" allow-list. Without this, ~/.aws/credentials,
-		// ~/.docker/config.json, /etc/**, and arbitrary user files outside
-		// the workspace get silently overwritten on a prompt-injected tool
-		// call. See locks.md S5.
+		// File-tool writes outside the writable sandbox gate (locks.md S5):
+		// ~/.aws/credentials, /etc/** etc. — same persistence-backdoor class.
 		if isWriteFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {
 				if path != "" && !p.sandbox.Allowed(path) {
 					return Ask, nil
 				}
 			}
-		} else if isFileTool(toolName) {
-			for _, path := range extractFilePaths(input) {
-				if path != "" && !p.sandbox.Allowed(path) && isSensitivePath(path) {
-					return Ask, nil
-				}
-			}
 		}
 		return Allow, nil
 	case PlanMode:
-		// Plan mode: mode control tools + read-only tools allowed, everything else denied
-		// enter_plan_mode is always allowed (entering read-only mode is safe).
-		// exit_plan_mode is allowed: it restores the user's own previous mode.
+		// Plan mode is tool-entered (enter_plan_mode/exit_plan_mode); users
+		// cannot switch into it directly. Inside plan mode everything is
+		// allowed EXCEPT explicit file-writing tools — run_command and other
+		// shell access is permitted (planning may need builds, probes,
+		// read-only git inspection), gated only by the extremely-dangerous
+		// and exfiltration floors below so a plan detour cannot become a
+		// soft bypass around those.
 		if toolName == "enter_plan_mode" {
 			return Allow, nil
 		}
 		if toolName == "exit_plan_mode" {
-			// Exiting plan mode restores the mode the USER had chosen before
-			// entering plan mode (c47a99ec): returning to a state the user
-			// themselves selected is not an escalation and needs no gate.
-			// This reverses #551-D's Ask: that fix aligned the code with an
-			// old doc comment without challenging the comment itself, and it
-			// broke both symmetry (enter was Allow, exit was Ask — an agent
-			// that entered plan mode mid-run was trapped, needing human
-			// rescue to resume an autopilot/bypass run) and user sovereignty
-			// (a user on bypass/autopilot who detoured through plan mode
-			// needed "permission" to go back to their own chosen mode). The
-			// real escalation vector — a switch_mode call that NAMES bypass
-			// or autopilot — is still gated with Ask below and in every other
-			// mode (#1705 case 1).
+			// Exiting plan mode restores the mode the USER had chosen
+			// before entering plan mode (c47a99ec): not an escalation.
 			return Allow, nil
 		}
-		if IsReadOnlyTool(toolName) {
-			if d := p.checkPlanReadOnlyExceptions(toolName, input); d != Allow {
-				return d, nil
+		if isWriteFileTool(toolName) {
+			return Deny, nil
+		}
+		if isCommandTool(toolName) {
+			for _, cmd := range extractCommandsForTool(toolName, input) {
+				if p.detector.IsExtremelyDangerous(cmd) {
+					return Ask, nil
+				}
+				if p.networkDetector && IsNetworkExfiltrate(cmd) {
+					return Ask, nil
+				}
 			}
-			// Non-sensitive read-only tools remain always allowed in plan mode.
-			return Allow, nil
 		}
-		return Deny, nil
+		return Allow, nil
 	case AutoMode:
-		// Auto mode: allow safe ops, deny dangerous ones, no prompts.
-		// Network egress commands are downgraded to Ask — they require human
-		// confirmation even in auto mode because they can exfiltrate data
-		// to external endpoints (prompt injection defense).
+		// Deprecated alias: the two-mode refactor folded auto INTO
+		// supervised (supervised now flows most calls without prompting).
+		// Kept as a distinct case only so legacy ConfigPolicy instances
+		// take the same code path as SupervisedMode below.
+		fallthrough
+	case SupervisedMode:
+		// Supervised (two-mode refactor): most calls flow WITHOUT
+		// prompting. Gated floors only:
+		//   - commands: system-level destruction (IsExtremelyDangerous) or
+		//     credential exfiltration (IsNetworkExfiltrate) -> Ask
+		//   - file writes outside the writable sandbox -> Ask (the ~/.ssh,
+		//     ~/.aws, /etc/** tamper floor)
+		// The old "Ask for anything unspecified" default was the #1 source
+		// of over-conservative interruption and is gone: default is Allow.
 		if isCommandTool(toolName) {
-			// #713: audit every channel (command + terminal `text`).
+			// #713: audit every channel (command + terminal `text`); the
+			// mode-independent deny short-circuit at the top of Check has
+			// already returned on any Deny match, so an allow-match here is safe.
 			for _, cmd := range extractCommandsForTool(toolName, input) {
-				if p.detector.IsDangerous(cmd) {
-					return Deny, nil
-				}
-				if p.networkDetector {
-					if nc := CheckNetwork(cmd); nc.Risk != NetworkNone {
-						debug.Log("permission", "network egress in auto mode: %s (risk=%s)", nc.Reason, nc.Risk)
-						return Ask, nil
-					}
-				}
-				// #711: redirect targets are file writes — hold them to the same
-				// bar as write tools, mirroring the #573-C gate that protects
-				// bypass/autopilot but was never copied here. Without it, Auto was
-				// the ONLY mode silently allowing `> ~/.docker/config.json` or a
-				// LaunchAgents plist write (run_command is neither a file tool nor
-				// caught by the dangerous-pattern list). Auto has no human loop,
-				// so the decision is Deny rather than Ask.
-				for _, tgt := range extractRedirectTargets(cmd) {
-					resolved := expandTilde(tgt)
-					if !p.sandbox.Allowed(resolved) || isSensitivePath(resolved) {
-						debug.Log("permission", "redirect to out-of-sandbox/sensitive path denied in auto mode (#711)")
-						return Deny, nil
-					}
-				}
-			}
-		}
-		// Check sandbox for file tools (including write-only tools like
-		// file_ops and batch_replace that mutate disk but aren't in isFileTool).
-		if isFileTool(toolName) || isWriteFileTool(toolName) {
-			for _, path := range extractFilePaths(input) {
-				if path != "" && !p.sandbox.Allowed(path) {
-					return Deny, nil
-				}
-			}
-		}
-		return Allow, nil
-	}
-
-	// Supervised mode (default): read-only tools are auto-allowed
-	// (no per-call confirmation needed), but sensitive paths outside the
-	// sandbox still require confirmation to prevent secret exfiltration.
-	if IsReadOnlyTool(toolName) {
-		if isFileTool(toolName) {
-			for _, path := range extractFilePaths(input) {
-				if path != "" && !p.sandbox.Allowed(path) && isSensitivePath(path) {
+				if p.detector.IsExtremelyDangerous(cmd) {
 					return Ask, nil
 				}
-			}
-		}
-		return Allow, nil
-	}
-	if isCommandTool(toolName) {
-		// #713: audit every channel (command + terminal `text`); the
-		// mode-independent deny short-circuit at the top of Check has
-		// already returned on any Deny match, so an allow-match here is safe.
-		for _, cmd := range extractCommandsForTool(toolName, input) {
-			rs := p.cmdRules
-			if rs != nil {
-				if d, matched := rs.Check(cmd); matched {
-					if d == Deny {
-						return Deny, nil
-					}
-					// Allow matched, but still check dangerous detector
-					if p.detector.IsDangerous(cmd) {
-						return Ask, nil
-					}
-					// Data egress always requires human gating, even when a
-					// saved allow rule matched (#194): a wildcard allow can
-					// cover the command word while the payload exfiltrates
-					// credentials (curl -d @~/.ssh/id_rsa ...). Mirrors the
-					// bypass/auto branches' IsNetworkExfiltrate calls.
-					if IsNetworkExfiltrate(cmd) {
-						return Ask, nil
-					}
-					return Allow, nil
-				}
-			}
-		}
-	}
-	if d, ok := p.rules[toolName]; ok {
-		if isFileTool(toolName) {
-			for _, path := range extractFilePaths(input) {
-				if path != "" && !p.sandbox.Allowed(path) {
-					// Out-of-sandbox access under a static rule downgrades to Ask
-					// (human review), mirroring the bypass branch, which also
-					// keeps a human in the loop for out-of-sandbox writes. An
-					// explicit user Allow/Ask rule must not become a harder Deny
-					// than the no-rule default (Ask); only an explicit Deny rule
-					// stays Deny (#525 Bug D).
-					if d == Deny {
-						return Deny, nil
-					}
-					return Ask, nil
-				}
-			}
-		}
-		if isCommandTool(toolName) {
-			for _, cmd := range extractCommandsForTool(toolName, input) {
-				if p.detector.IsDangerous(cmd) {
-					// Dangerous command under a static allow rule downgrades to Ask,
-					// matching the runtime cmdRules branch above: both rule sources
-					// are explicit user allows, so they must share the same downgrade
-					// target. An explicit allow must not be a harder Deny than the
-					// no-rule default (Ask). An explicit Deny rule stays Deny
-					// (#525 Bug C).
-					if d == Deny {
-						return Deny, nil
-					}
-					return Ask, nil
-				}
-				// Data egress always requires human gating, even when a static
-				// config allow rule matched (#256): a tools.run_command: allow
-				// setting covers the command word while the payload can still
-				// exfiltrate credentials (curl -d @~/.ssh/id_rsa ...). Mirrors
-				// the cmdRules branch above and the bypass/auto branches.
+				// Data egress requires human gating even in supervised (#194):
+				// a wildcard allow can cover the command word while the payload
+				// exfiltrates credentials.
 				if IsNetworkExfiltrate(cmd) {
 					return Ask, nil
 				}
+				// #711: redirect targets are file writes — hold them to the same
+				// persistence-backdoor floor as the bypass branch (#573-C):
+				// `> ~/.docker/config.json` or a LaunchAgents plist write via
+				// run_command must not bypass the write-tool sandbox gate.
+				for _, tgt := range extractRedirectTargets(cmd) {
+					resolved := expandTilde(tgt)
+					if !p.sandbox.Allowed(resolved) || isSensitivePath(resolved) {
+						debug.Log("permission", "redirect to out-of-sandbox/sensitive path gated in supervised mode (#711)")
+						return Ask, nil
+					}
+				}
 			}
 		}
-		return d, nil
+		if isWriteFileTool(toolName) {
+			for _, path := range extractFilePaths(input) {
+				if path != "" && !p.sandbox.Allowed(path) {
+					return Ask, nil
+				}
+			}
+		}
+		// Explicit user rules still win when present.
+		if d, ok := p.rules[toolName]; ok {
+			return d, nil
+		}
+		return Allow, nil
 	}
 
-	return Ask, nil
+	// Default (unreachable: every enum value has a case above, but Go
+	// requires the function to end in a statement).
+	return Allow, nil
 }
 
 // imActionIsBenign reports whether an im tool call performs only local,

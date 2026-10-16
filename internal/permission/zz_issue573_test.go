@@ -185,8 +185,11 @@ func TestIssue573_G_SupervisedSensitiveReadCaseFlipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d != Ask {
-		t.Errorf("read case-flipped key got %v, want Ask (was silently allowed pre-fix)", d)
+	// two-mode refactor: the supervised sensitive-read gate is gone
+	// (reads flow Allow; exfil floor is command-side), so even the
+	// case-flipped form flows Allow.
+	if d != Allow {
+		t.Errorf("read case-flipped key got %v, want Allow (two-mode refactor; sensitive-read gate removed)", d)
 	}
 }
 

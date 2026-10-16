@@ -2,145 +2,63 @@
 
 ggcode uses permission modes to control how much autonomy the agent has over file writes and command execution.
 
+**Two-mode refactor**: ggcode now exposes exactly two user-facing modes. `auto` and `autopilot` remain accepted as legacy aliases (config compatibility) and normalize to `supervised` / `bypass` respectively. `plan` is tool-internal (entered via the `enter_plan_mode` tool, exited via `exit_plan_mode`) and cannot be switched into directly.
+
 ## Modes
 
 ### `supervised`
 
-Default mode. Respects per-tool permission rules, asks for confirmation on unspecified tools.
+Default mode. Most tool calls flow **without prompting** — the old "ask for anything unspecified" fallback is gone. Only these floors still gate (each one asks for confirmation):
+
+- **System-level destructive commands** (`rm -rf /`, disk/device wipes): Ask
+- **Credential exfiltration** (`curl -d @~/.ssh/id_rsa ...`, `scp ~/.aws/credentials ...`): Ask
+- **Shell redirects to out-of-sandbox or sensitive paths** (`echo x > ~/.ssh/authorized_keys`): Ask — a redirect is a file write and must not bypass the write-tool sandbox floor
+- **File-writing tools targeting paths outside the writable sandbox**: Ask
+
+Explicit per-tool rules (`permission_rules.json`, `/allow`) still take precedence when present.
 
 ```bash
 ggcode
 ```
 
-Best for exploring an unfamiliar codebase or working with sensitive code.
-
-### `plan`
-
-Read-only mode — allows `read_file`, `multi_file_read`, `list_directory`, `search_files`, `glob`; denies writes and command execution. The agent can only read and search. The `lanchat` and `im` tools are always allowed (communication tools with no filesystem impact).
-
-Best for code review, exploration, and planning before implementation.
-
-### `auto`
-
-Allows safe operations automatically, **denies** dangerous ones. Never prompts the user — every operation is either allowed or denied. Reduces interruptions while maintaining hard safety guardrails.
-
-- **Dangerous commands** (`rm -rf`, `git push --force`, etc.): **Denied** (hard block, agent cannot proceed)
-- **File writes outside sandbox**: **Denied**
-- **File reads outside sandbox**: **Denied**
-- **Normal/safe operations**: Allowed silently
+Best for everyday work: near-zero interruptions, with hard floors against prompt-injection persistence and credential theft.
 
 ### `bypass`
 
-Auto-approves safe operations, **asks** on potentially dangerous ones. Faster for trusted workflows — the agent can proceed with most operations, and you only get prompted for genuinely risky actions.
+Cruise control (goal + strategist oversight) rides on this mode. Nothing is gated except:
+
+- **System-level destructive commands**: Ask
+- **Persistence-backdoor writes**: shell redirects to sensitive files (`~/.ssh/authorized_keys`, `~/.bashrc`, `/etc/**`) and file-tool writes outside the sandbox — Ask. These are rare by construction and never a daily-interruption source.
+
+Network exfiltration and sensitive-path **reads** are no longer gated in bypass (they were the top false-positive sources; the exfiltration floor remains in supervised).
 
 ```bash
 ggcode --bypass
 ```
 
-- **Extremely dangerous commands** (catastrophic, irreversible): **Ask** (you can approve or reject)
-- **Dangerous commands** (not extremely dangerous): **Allowed** silently
-- **File writes outside sandbox**: **Ask** (you can approve or reject per-call)
-- **File reads outside sandbox**: **Allowed** silently, unless the path is sensitive (`~/.aws/credentials`, `/etc/**`, etc.) — then **Ask**
-- **Normal/safe operations**: Allowed silently
+### `plan`
 
-### `auto` vs `bypass` — Detailed Comparison
+Tool-entered read-orientation mode. Denies explicit file-writing tools only; reads, shell probes, and builds are allowed so planning stays grounded in real diagnostics. Entered with `enter_plan_mode`, exited with `exit_plan_mode`.
 
-| Scenario | `auto` | `bypass` |
-|----------|--------|---------|
+## Comparison
+
+| Scenario | `supervised` | `bypass` |
+|----------|--------------|----------|
 | Safe command (`go build`, `ls`) | Allow | Allow |
-| Dangerous command (`rm -rf`, `git push --force`) | **Deny** (hard block) | **Allow** (only extremely dangerous commands trigger Ask) |
-| Extremely dangerous command | **Deny** | **Ask** (can approve) |
-| Write file inside workspace | Allow | Allow |
-| Write file outside workspace | **Deny** | **Ask** (can approve) |
-| Read file inside workspace | Allow | Allow |
-| Read file outside workspace | **Deny** | Allow (unless sensitive path → **Ask**) |
-| User prompts / interruptions | Never | Only for edge cases |
+| Extremely dangerous command (`rm -rf /`) | Ask | Ask |
+| Ordinary dangerous command (`sudo rm file`) | Allow | Allow |
+| Credential exfiltration (`curl -d @~/.ssh/...`) | Ask | Allow |
+| Write inside workspace | Allow | Allow |
+| Write outside workspace | Allow (file tools: Ask) | Ask |
+| Redirect to `~/.ssh/authorized_keys` | Ask | Ask |
+| Read `~/.aws/credentials` | Allow | Allow |
 
-**Key difference**: `auto` **never prompts** — it hard-denies anything risky. `bypass` **may prompt** for edge cases (out-of-sandbox writes, extremely dangerous commands), giving you the choice to approve or reject case-by-case.
+## Mode-independent controls
 
-**Danger levels**: There are two tiers of command danger classification:
-- `IsDangerous` — broader set (e.g. `rm -rf`, `git push --force`, `dd`). `auto` uses this to deny.
-- `IsExtremelyDangerous` — narrower subset (catastrophic, irreversible). `bypass` uses this to ask; everything else is allowed.
+- **Deny rules** (`permission_rules.json`, ACP/A2A deny) win in every mode, including bypass.
+- **`switch_mode` escalation gate**: switching to `bypass` always asks for user consent, from any mode.
+- **Shift+Tab / status-bar click** cycles `supervised` ↔ `bypass`.
 
-### `autopilot`
+## Legacy aliases
 
-Bypass permissions plus automatically continues when the model asks for input. Escalates external blockers to `ask_user`. Enables fully autonomous workflows.
-
-```bash
-ggcode --bypass  # then switch to autopilot via /mode
-```
-
-#### Goal-Directed Execution
-
-In autopilot mode, the agent starts each session by declaring a **Goal** via a `GOAL:` sentinel line. The Goal is a concise 1-3 sentence definition of what "done" looks like. The agent then:
-
-1. Works autonomously until the Goal is fully achieved
-2. Anchors all work to the original task to prevent scope drift
-3. Does not stop for preferences or confirmation when a reasonable default exists
-4. Escalates to `ask_user` only when blocked on an external dependency
-5. A strategist process analyzes the conversation and decides when the Goal is achieved
-
-This means you can start a session and walk away — the agent will work through to completion.
-
-## Session-Scoped Persistence
-
-Permission mode and sidebar visibility are **persisted per session** in the session JSONL meta record, not globally:
-
-- **New session**: uses the global `default_mode` from config (or `supervised` if unset); sidebar uses global `sidebar_visible` config
-- **Switching mode mid-session**: saves to `session.PermissionMode` in the JSONL file, **not** to global config
-- **Ctrl+R (toggle sidebar)**: saves to `session.SidebarVisible` (`*bool`) in the JSONL file, **not** to global config
-- **Resuming a session**: restores the mode and sidebar visibility that were active when the session was last used
-- **Multiple instances**: each session tracks its own mode and sidebar state independently
-
-This means switching to `bypass` in one session won't affect other sessions or future new sessions. To change the global default, edit `default_mode` in `ggcode.yaml` or use `config set default_mode=bypass`.
-
-## Mode Indicator
-
-The active mode is shown in the TUI status bar:
-
-```
-[supervised]  model: gpt-4o  |  cost: $0.012
-```
-
-## Switching Mid-Session
-
-Switch modes without restarting using the `/mode` slash command, or press `Shift+Tab` in the TUI to cycle through modes in order:
-
-```
-/mode supervised
-/mode plan
-/mode auto
-/mode bypass
-/mode autopilot
-```
-
-## Pipe Mode
-
-When using pipe mode (`-p`), ggcode defaults to `supervised` mode unless `--bypass` is specified:
-
-```bash
-echo "fix the typo" | ggcode -p            # supervised mode (asks confirmation)
-echo "fix the typo" | ggcode -p --bypass   # bypass mode (auto-approve)
-```
-
-## Allowed-Risk Accumulation (r28)
-
-The mode table above shows dangerous commands are **Allowed silently** in auto/bypass. Each single allowance is a deliberate design choice - but a session full of individually-permitted risky steps (one chmod here, one `curl | bash` there, one non-critical `rm` after another) can drift the system toward a hazardous state with no single step ever raising a flag. Frontier research (DreamGuard, arXiv:2608.05695) names this blind spot: guardrails judge steps, not trajectories.
-
-ggcode keeps an **allowed-risk ledger** as the dual of the denial ledger (which records what was *blocked* - but a blocked action cannot accumulate danger; only allowed ones can):
-
-- Every gate-passed command the dangerous-pattern table classifies (medium/high/critical) scores on a session-level ledger (1 / 3 / 4 points), shared across `run_command` and `start_command`
-- Crossing a cumulative threshold (score 8, or 5 same-class commands) appends a `RISK ACCUMULATION` notice to the tool result - naming the pattern, the count, and recent commands - prompting the agent (and you) to reassess whether the cumulative effect was intended
-- At most 2 escalations per session; unclassified commands never score; the ledger is memory-capped and inert when unwired
-
-This is advisory, not blocking: it does not second-guess individual allowances, it only surfaces the trajectory they add up to.
-
-## Recommendations
-
-| Scenario | Mode |
-|----------|------|
-| Exploring unfamiliar code | `supervised` |
-| Code review / planning | `plan` |
-| Trusted workflow with guardrails | `auto` |
-| Fast trusted workflow | `bypass` |
-| Fully autonomous | `autopilot` |
+Old configs (`default_mode: auto` / `autopilot`) keep working: they normalize at load time. Sessions stored with legacy mode names restore to the canonical mode. The ACP protocol still accepts the legacy names for external clients (Zed etc.).
