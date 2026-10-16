@@ -80,7 +80,7 @@ func (p *ConfigPolicy) AllowCommandPattern(pattern string) {
 
 // Check returns the permission decision for a tool call.
 func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, error) {
-	// Don't dump tool input JSON — can be huge and contains file content
+	// Don't dump tool input JSON - can be huge and contains file content
 
 	// #1595-C: an explicit user Deny is the STRONGEST signal (the #741 /
 	// #573-B comment itself says so) - it must precede the fast paths.
@@ -105,9 +105,9 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	}
 
 	// Interactive/communication tools are always auto-approved regardless of mode.
-	// ask_user: the tool itself IS the user interaction — requiring approval would be circular.
+	// ask_user: the tool itself IS the user interaction - requiring approval would be circular.
 	// save_memory: writing project memory is always safe and expected.
-	// lanchat: P2P messaging between ggcode instances — no local filesystem or system impact.
+	// lanchat: P2P messaging between ggcode instances - no local filesystem or system impact.
 	if IsAlwaysAllowedTool(toolName) {
 		// #1705 case 1: switch_mode stays reachable in EVERY mode (the
 		// #1210 self-rescue invariant - an agent trapped in plan mode
@@ -123,7 +123,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		}
 		return Allow, nil
 	}
-	// #1283: im is no longer blanket-approved — only its side-effect-free
+	// #1283: im is no longer blanket-approved - only its side-effect-free
 	// actions stay on the fast path. send/send_file must flow through the
 	// normal pipeline (deny rules first, then mode policy: plan denies,
 	// supervised asks) because send_file uploads arbitrary local files to
@@ -177,14 +177,34 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		return Deny, nil
 	}
 
+	// Review (techwriter222, medium): an explicit user "ask" rule must stay
+	// meaningful after the two-mode refactor made the default Allow — a user
+	// who pinned a tool to ask (rules editor / always-ask memory) would
+	// otherwise be silently auto-approved in every mode. Floors below can
+	// still add their own Ask on top; this never downgrades a floor to Allow.
+	if hasDenyRule && denyRule == Ask {
+		debug.Log("permission", "tool pinned to ask by explicit user rule (mode-independent): %s", toolName)
+		return Ask, nil
+	}
+	// Command-pattern ask rules: same respect, per command. Checked after the
+	// deny loop above so deny patterns (stronger) win first.
+	if isCommandTool(toolName) && cmdRuleSnapshot != nil {
+		for _, cmd := range extractCommandsForTool(toolName, input) {
+			if d, matched := cmdRuleSnapshot.Check(cmd); matched && d == Ask {
+				debug.Log("permission", "command pinned to ask by cmd rule (mode-independent)")
+				return Ask, nil
+			}
+		}
+	}
+
 	// Mode-specific handling
 	switch p.mode {
 	case BypassMode, AutopilotMode:
 		// Bypass mode: nothing is gated except system-level destructive
 		// commands AND persistence-backdoor writes (shell redirects to
-		// sensitive files, file-tool writes outside the sandbox) — the
+		// sensitive files, file-tool writes outside the sandbox) - the
 		// #573-C / locks.md S5 floors. These trigger on paths like
-		// ~/.ssh/authorized_keys, ~/.bashrc, /etc/** — rare by construction
+		// ~/.ssh/authorized_keys, ~/.bashrc, /etc/** - rare by construction
 		// and never a daily-interruption source. The network-exfiltration
 		// and sensitive-read gates were removed in the two-mode refactor
 		// (they were the false-positive sources); mode-independent Deny
@@ -196,7 +216,16 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				if p.detector.IsExtremelyDangerous(cmd) {
 					return Ask, nil
 				}
-				// #573-C: redirection targets are file writes — a shell
+				// Watchdog review (MED): the general exfil gate was removed from
+				// bypass as an FP source, but credential-theft uploads must not
+				// become zero-friction. Narrow floor: an upload-direction
+				// transfer whose command text carries a literal credential-path
+				// payload asks. Ordinary uploads (scp secret.txt host:) stay free.
+				if p.networkDetector && credentialPayloadExfil(cmd) {
+					debug.Log("permission", "credential-payload exfil gated in bypass mode (watchdog narrow floor)")
+					return Ask, nil
+				}
+				// #573-C: redirection targets are file writes - a shell
 				// redirect is the classic prompt-injection persistence path
 				// (`> ~/.ssh/authorized_keys`). Out-of-sandbox or sensitive
 				// targets gate.
@@ -210,7 +239,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 			}
 		}
 		// File-tool writes outside the writable sandbox gate (locks.md S5):
-		// ~/.aws/credentials, /etc/** etc. — same persistence-backdoor class.
+		// ~/.aws/credentials, /etc/** etc. - same persistence-backdoor class.
 		if isWriteFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {
 				if path != "" && !p.sandbox.Allowed(path) {
@@ -222,7 +251,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	case PlanMode:
 		// Plan mode is tool-entered (enter_plan_mode/exit_plan_mode); users
 		// cannot switch into it directly. Inside plan mode everything is
-		// allowed EXCEPT explicit file-writing tools — run_command and other
+		// allowed EXCEPT explicit file-writing tools - run_command and other
 		// shell access is permitted (planning may need builds, probes,
 		// read-only git inspection), gated only by the extremely-dangerous
 		// and exfiltration floors below so a plan detour cannot become a
@@ -245,6 +274,16 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				}
 				if p.networkDetector && IsNetworkExfiltrate(cmd) {
 					return Ask, nil
+				}
+				// Review (plan indirect-write channel): a shell redirect IS a
+				// file write - hold it to the same floor as the write-tool Deny
+				// above so `echo x > file` cannot bypass isWriteFileTool.
+				for _, tgt := range extractRedirectTargets(cmd) {
+					resolved := expandTilde(tgt)
+					if !p.sandbox.Allowed(resolved) || isSensitivePath(resolved) {
+						debug.Log("permission", "redirect to out-of-sandbox/sensitive path gated in plan mode")
+						return Ask, nil
+					}
 				}
 			}
 		}
@@ -274,11 +313,12 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				}
 				// Data egress requires human gating even in supervised (#194):
 				// a wildcard allow can cover the command word while the payload
-				// exfiltrates credentials.
-				if IsNetworkExfiltrate(cmd) {
+				// exfiltrates credentials. Guarded by the same user-configurable
+				// flag as the plan branch (review: guard consistency).
+				if p.networkDetector && IsNetworkExfiltrate(cmd) {
 					return Ask, nil
 				}
-				// #711: redirect targets are file writes — hold them to the same
+				// #711: redirect targets are file writes - hold them to the same
 				// persistence-backdoor floor as the bypass branch (#573-C):
 				// `> ~/.docker/config.json` or a LaunchAgents plist write via
 				// run_command must not bypass the write-tool sandbox gate.
@@ -313,7 +353,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 // imActionIsBenign reports whether an im tool call performs only local,
 // side-effect-free adapter management (#1283). Anything that can move data
 // out of the machine (send, send_file) or an unknown/missing action is NOT
-// benign — fail closed toward the normal approval pipeline.
+// benign - fail closed toward the normal approval pipeline.
 // switchModeEscalates reports whether a switch_mode call targets a MORE
 // privileged mode (#1705 case 1): bypass/autopilot ask for consent; every
 // other target (including plan escapes) flows Allow.
@@ -564,7 +604,7 @@ func isCommandTool(name string) bool {
 	switch name {
 	// write_command_input removed (#197): its `input` field is arbitrary data
 	// written to a job's stdin (script bodies, docs, logs), not a shell
-	// command — pattern-matching it caused false Deny on normal content.
+	// command - pattern-matching it caused false Deny on normal content.
 	case "run_command", "start_command", "tmux", "ghostty", "warp", "kitty", "iterm2":
 		return true
 	}
@@ -690,6 +730,35 @@ func extractCommand(input json.RawMessage) (string, bool) {
 	return "", false
 }
 
+// credentialPayloadExfil reports whether cmd is an upload-direction
+// network transfer that carries a literal credential-path payload. It is
+// the narrow credential-theft floor kept in bypass mode after the general
+// exfiltration gate was removed (watchdog review): only transfers whose
+// own text references credential locations (~/.ssh, ~/.aws, ~/.gnupg,
+// /etc/shadow, .env files) gate, so the everyday-upload false positives
+// that motivated the removal stay free.
+func credentialPayloadExfil(cmd string) bool {
+	if !IsNetworkExfiltrate(cmd) {
+		return false
+	}
+	for _, pat := range []string{
+		"~/.ssh/", ".ssh/id", "~/.aws/", ".aws/credentials",
+		"~/.gnupg/", "/etc/shadow", "/etc/passwd",
+		"credentials.json", ".env",
+	} {
+		if strings.Contains(cmd, pat) {
+			return true
+		}
+	}
+	return false
+}
+
+// isAbsolutePathish reports whether tok is absolute or home-anchored - the
+// conservative capture predicate for redirections inside quoted bodies.
+func isAbsolutePathish(tok string) bool {
+	return strings.HasPrefix(tok, "/") || strings.HasPrefix(tok, "~")
+}
+
 // extractRedirectTargets returns file paths a shell command writes to via
 // output redirection (> and >>), including fd-prefixed forms (2>, &>). Used
 // to give command tools the same sensitive-path / out-of-sandbox gating that
@@ -705,6 +774,28 @@ func extractRedirectTargets(cmd string) []string {
 		if quote != 0 {
 			if c == quote {
 				quote = 0
+				continue
+			}
+			// Review PoC (sh -c 'echo x > <target>'): a redirection inside
+			// a quoted body still executes when the quote wraps an
+			// interpreter -c argument. A full parse cannot distinguish that
+			// from data quotes (echo "a > b"), so capture the conservative
+			// subset only: single-quoted bodies (no variable expansion =>
+			// literal path) with absolute/home-anchored targets - exactly
+			// the paths the out-of-sandbox/sensitive gates key on.
+			if c == '>' && quote == '\'' {
+				j := i
+				for j < len(runes) && runes[j] == '>' {
+					j++
+				}
+				if j-i <= 2 {
+					if tok := scanRedirectToken(runes, j); isAbsolutePathish(tok) {
+						targets = append(targets, tok)
+					}
+				}
+				if j > i {
+					i = j - 1
+				}
 			}
 			continue
 		}
@@ -801,7 +892,7 @@ func expandTilde(path string) string {
 }
 
 // isWebEgressTool reports whether the tool sends caller-supplied data to
-// external endpoints — the egress half of the plan-mode read→exfiltrate
+// external endpoints - the egress half of the plan-mode read→exfiltrate
 // loop (#712). Covers built-in web tools and their whitelisted MCP twins.
 func isWebEgressTool(name string) bool {
 	switch name {
@@ -829,7 +920,7 @@ var exfilPayloadMarkers = []string{
 }
 
 // hasDataEgressSignature returns true if a web tool call's arguments carry
-// secret/credential material — the classic read-then-exfiltrate shape where
+// secret/credential material - the classic read-then-exfiltrate shape where
 // a previously-read key ends up in the fetched URL or request body (#712).
 func hasDataEgressSignature(input json.RawMessage) bool {
 	var m map[string]json.RawMessage
@@ -855,9 +946,9 @@ func hasDataEgressSignature(input json.RawMessage) bool {
 
 // checkPlanReadOnlyExceptions applies the #712 exceptions to plan mode's
 // read-only Allow: the unconditional Allow had two holes that made plan mode
-// WEAKER than supervised for sensitive reads — (a) a sensitive-path read
+// WEAKER than supervised for sensitive reads - (a) a sensitive-path read
 // (~/.ssh/id_rsa, credentials) silently put secrets into model context, and
-// (b) web_fetch/web_search — also whitelisted — could carry them out, closing
+// (b) web_fetch/web_search - also whitelisted - could carry them out, closing
 // a read→exfiltrate loop with zero prompts. Sensitive out-of-sandbox reads
 // and web calls carrying secret material are denied outright (plan mode has
 // no human loop to route an Ask through). Returns Deny when an exception

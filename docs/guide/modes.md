@@ -28,7 +28,8 @@ Best for everyday work: near-zero interruptions, with hard floors against prompt
 Cruise control (goal + strategist oversight) rides on this mode. Nothing is gated except:
 
 - **System-level destructive commands**: Ask
-- **Persistence-backdoor writes**: shell redirects to sensitive files (`~/.ssh/authorized_keys`, `~/.bashrc`, `/etc/**`) and file-tool writes outside the sandbox — Ask. These are rare by construction and never a daily-interruption source.
+- **Persistence-backdoor writes**: shell redirects to out-of-sandbox **or** sensitive paths (`~/.ssh/authorized_keys`, `~/.bashrc`, `/etc/**`) and file-tool writes outside the sandbox - Ask. These are rare by construction and never a daily-interruption source.
+- **Credential-payload uploads** (narrow watchdog floor): upload-direction transfers whose own command text references a credential location (`scp ~/.ssh/id_rsa host:`, `curl -d @~/.aws/credentials`) - Ask. Ordinary uploads are unaffected.
 
 Network exfiltration and sensitive-path **reads** are no longer gated in bypass (they were the top false-positive sources; the exfiltration floor remains in supervised).
 
@@ -38,7 +39,7 @@ ggcode --bypass
 
 ### `plan`
 
-Tool-entered read-orientation mode. Denies explicit file-writing tools only; reads, shell probes, and builds are allowed so planning stays grounded in real diagnostics. Entered with `enter_plan_mode`, exited with `exit_plan_mode`.
+Tool-entered read-orientation mode. Denies explicit file-writing tools only; reads, shell probes, and builds are allowed (extremely-dangerous, exfiltration, and redirect-to-backdoor floors still ask) so planning stays grounded in real diagnostics. Entered with `enter_plan_mode`, exited with `exit_plan_mode`.
 
 ## Comparison
 
@@ -49,16 +50,22 @@ Tool-entered read-orientation mode. Denies explicit file-writing tools only; rea
 | Ordinary dangerous command (`sudo rm file`) | Allow | Allow |
 | Credential exfiltration (`curl -d @~/.ssh/...`) | Ask | Allow |
 | Write inside workspace | Allow | Allow |
-| Write outside workspace | Allow (file tools: Ask) | Ask |
-| Redirect to `~/.ssh/authorized_keys` | Ask | Ask |
+| Write outside workspace | Ask (file tools and shell redirects) | Ask (file tools and shell redirects) |
+| Redirect to `~/.ssh/authorized_keys` (incl. `sh -c '... > path'`) | Ask | Ask |
 | Read `~/.aws/credentials` | Allow | Allow |
 
 ## Mode-independent controls
 
-- **Deny rules** (`permission_rules.json`, ACP/A2A deny) win in every mode, including bypass.
+- **Deny rules** (`permission_rules.json`, ACP/A2A deny) win in every mode, including bypass. Explicit **ask** rules (per-tool or command-pattern) are also honored in every mode - the two-mode default-Allow never silently overrides a rule the user pinned. Explicit **allow** rules cannot cross the safety floors (a floor always asks regardless).
+- **Dangerous-but-not-extreme commands** (`IsDangerous` tier: `git push --force`, `sudo` file ops, etc.) are **allowed** in both modes - deliberate: the interruption budget is reserved for system-level destruction and persistence backdoors. Deny/ask rules can still pin them.
 - **`switch_mode` escalation gate**: switching to `bypass` always asks for user consent, from any mode.
 - **Shift+Tab / status-bar click** cycles `supervised` ↔ `bypass`.
 
 ## Legacy aliases
 
 Old configs (`default_mode: auto` / `autopilot`) keep working: they normalize at load time. Sessions stored with legacy mode names restore to the canonical mode. The ACP protocol still accepts the legacy names for external clients (Zed etc.).
+
+## Related mechanisms (previously in this page)
+
+- **Allowed-risk accumulation** and **session-scoped persistence** still exist; see the permission rules guide (`docs/guide/permission-rules.md`) and `/allow` command docs.
+- **Pipe mode** (`ggcode -p`) still defaults to supervised.

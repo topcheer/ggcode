@@ -64,7 +64,7 @@ func TestMobileAlwaysAllowGrantsCommandPatternNotWholeTool(t *testing.T) {
 	}
 	// ...but NOT blanket-allow the whole tool. two-mode refactor: supervised
 	// defaults to Allow, so the #1038 probe can no longer be "an unrelated
-	// command is not Allow" — use an extremely dangerous command instead:
+	// command is not Allow" - use an extremely dangerous command instead:
 	// a correct pattern grant leaves the supervised safety floor intact
 	// (Ask), while a blanket SetOverride would have bypassed nothing anyway
 	// now, but this still pins that granting a pattern never disarms the floor.

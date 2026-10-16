@@ -54,7 +54,7 @@ func TestIssue4138_SupervisedSensitiveTildeReadAsks(t *testing.T) {
 	// two-mode refactor: the supervised sensitive-read gate was removed
 	// entirely (reads flow Allow; the exfiltration floor is command-side),
 	// so the tilde-vs-absolute asymmetry of #4138 no longer produces a
-	// decision split — both forms now flow Allow symmetrically.
+	// decision split - both forms now flow Allow symmetrically.
 	if d != Allow {
 		t.Fatalf("supervised read_file ~/.ssh/id_rsa must Allow (two-mode refactor), got %v", d)
 	}

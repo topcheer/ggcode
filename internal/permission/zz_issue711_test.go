@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// zz_issue711_test.go — Auto mode must gate shell-redirect write targets the
+// zz_issue711_test.go - Auto mode must gate shell-redirect write targets the
 // same way #573-C gates bypass/autopilot. Auto was the only mode silently
 // allowing `> ~/.docker/config.json` or a LaunchAgents plist write.
 
@@ -40,7 +40,7 @@ func TestIssue711AutoModeRedirectWriteTargetDenied(t *testing.T) {
 func TestIssue711AutoModeInSandboxRedirectStillAllowed(t *testing.T) {
 	policy := NewConfigPolicyWithMode(nil, []string{"."}, AutoMode)
 
-	// Redirect inside the workspace sandbox and to harmless sinks stays Allow —
+	// Redirect inside the workspace sandbox and to harmless sinks stays Allow -
 	// the gate must not break normal auto-mode workflows.
 	inSandbox := json.RawMessage(`{"command":"go test ./... > test-output.txt 2>&1"}`)
 	d, err := policy.Check("run_command", inSandbox)

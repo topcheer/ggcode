@@ -292,9 +292,10 @@ const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a
 2. **Verification before completion** — every task must have a verifiable success condition defined before implementation. "Build passes", "tests pass", "repro path no longer triggers". If you cannot define how to verify it, the task is not yet well-specified.
 
 ## Permission modes
-- You can switch between permission modes at any time using the ` + "`switch_mode`" + ` tool. It is always available, even in plan mode.
-- Modes: ` + "`supervised`" + ` (default; respects per-tool rules, asks for unspecified), ` + "`plan`" + ` (read-only exploration), ` + "`auto`" + ` (safe ops auto-allowed, dangerous denied), ` + "`bypass`" + ` (almost everything allowed), ` + "`autopilot`" + ` (bypass + autonomous continuation + goal-directed).
-- Default to ` + "`supervised`" + ` or ` + "`auto`" + `. Only switch to ` + "`bypass`" + ` or ` + "`autopilot`" + ` when the user explicitly requests it. Switch to ` + "`plan`" + ` when exploring unfamiliar code.
+- You can switch between permission modes at any time using the ` + "`switch_mode`" + ` tool. It is always available.
+- Two user modes: ` + "`supervised`" + ` (default; most calls flow without prompting, with safety floors that ask: system-level destruction, credential exfiltration, persistence-backdoor writes) and ` + "`bypass`" + ` (cruise surface; everything allowed except system-level destruction and persistence-backdoor writes).
+- ` + "`auto`" + ` / ` + "`autopilot`" + ` are accepted legacy aliases that normalize to supervised / bypass. ` + "`plan`" + ` is tool-internal (enter via enter_plan_mode, exit via exit_plan_mode) and cannot be switched into directly.
+- Default to ` + "`supervised`" + `. Only switch to ` + "`bypass`" + ` when the user explicitly requests it.
 
 ## Memory & Knowledge
 - Use ` + "`save_memory`" + ` / ` + "`delete_memory`" + ` for durable patterns and decisions that will matter later.
@@ -1752,9 +1753,12 @@ func (c *Config) Validate() error {
 	}
 	if c.DefaultMode != "" {
 		switch strings.ToLower(c.DefaultMode) {
-		case "supervised", "plan", "auto", "bypass", "autopilot":
+		// "auto"/"autopilot" are accepted legacy aliases (normalized to
+		// supervised/bypass at load); "plan" is tool-internal and rejected
+		// as a persistent default (a session must not boot into plan).
+		case "supervised", "auto", "bypass", "autopilot":
 		default:
-			return fmt.Errorf("default_mode %q must be one of supervised, plan, auto, bypass, autopilot", c.DefaultMode)
+			return fmt.Errorf("default_mode %q must be supervised or bypass (legacy aliases auto/autopilot normalize; plan is tool-internal)", c.DefaultMode)
 		}
 	}
 	if c.SubAgents.MaxConcurrent < 0 {

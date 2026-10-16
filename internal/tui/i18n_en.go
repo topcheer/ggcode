@@ -346,7 +346,7 @@ func enCatalog(key string) string {
 	case "lang.first_use.hint":
 		return " Tab/j/k move • Enter confirm • e/z shortcuts"
 	case "mode.current":
-		return "Current mode: %s\nUsage: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  Ask when a tool has no explicit rule\n  plan        Read-only exploration; deny writes and commands\n  auto        Allow safe operations, deny dangerous ones\n  bypass      Allow almost everything; only stop on critical actions\n  autopilot   bypass + keep going when the model asks back\n\n"
+		return "Current mode: %s\nUsage: /mode <supervised|bypass>\n  supervised  Default; most calls flow without prompts - safety floors (system-level destruction, credential exfil, persistence-backdoor writes) ask\n  bypass      Cruise surface; everything allowed except system-level destruction and persistence-backdoor writes\n  (auto/autopilot are legacy aliases)\n"
 	case "mode.persist_failed":
 		return "Failed to persist mode preference: %v"
 	case "input.placeholder":
@@ -1250,7 +1250,7 @@ func enCatalog(key string) string {
 	case "goal.current":
 		return "Active goal: %s\n\nThe goal persists across context compaction and session interruptions."
 	case "goal.set":
-		return "Goal set: %s\n\nSwitch to autopilot mode (/mode autopilot) for autonomous execution. The goal survives context compaction."
+		return "Goal set: %s\n\nSwitch to bypass mode (/mode bypass; cruise surface) for autonomous execution. The goal survives context compaction."
 	case "goal.cleared":
 		return "Autopilot goal cleared."
 	case "regenerate.busy":
@@ -1310,7 +1310,7 @@ Model & Provider:
   /model [name]      Open model panel or switch directly
   /provider [vendor] Open provider manager
   /impersonate [p/m] Test a provider/model without switching config
-  /mode <mode>       Set agent mode (supervised|plan|auto|bypass|autopilot)
+  /mode <mode>       Set agent mode (supervised|bypass)
   /goal [text]       Show, set, or clear persistent autopilot goal
   /stream            Toggle stream output mode
 

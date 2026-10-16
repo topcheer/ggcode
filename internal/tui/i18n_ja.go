@@ -338,7 +338,7 @@ func jaCatalog(key string) string {
 	case "lang.first_use.hint":
 		return " Tab/j/k 移動 • Enter 確認 • e/z ショートカット"
 	case "mode.current":
-		return "現在のモード: %s\n使用法: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  ツールに明示的なルールがない場合に確認\n  plan        読み取り専用探索; 書き込みとコマンドを拒否\n  auto        安全な操作を許可、危険な操作を拒否\n  bypass      ほぼすべて許可; 重要な操作のみ停止\n  autopilot   bypass + モデルが質問しても継続\n\n"
+		return "現在のモード: %s\n使用法: /mode <supervised|bypass>\n  supervised  デフォルト。ほぼノンストップ - 安全フロア（システム破壊/資格情報流出/バックドア書き込み）のみ確認\n  bypass      クルーズ面。システム破壊とバックドア書き込み以外はすべて許可\n  （auto/autopilot は旧エイリアス）\n"
 	case "mode.persist_failed":
 		return "モード設定の保存に失敗しました: %v"
 	case "input.placeholder":
@@ -1127,7 +1127,7 @@ func jaCatalog(key string) string {
 モデル & プロバイダ:
   /model [name]      モデルパネルを開く、または直接切り替え
   /provider [vendor] プロバイダマネージャを開く
-  /mode <mode>       エージェントモードを設定 (supervised|plan|auto|bypass|autopilot)
+  /mode <mode>       エージェントモードを設定 (supervised|bypass)
 
 開発:
   /diff [opts]       git diff をチャットに表示 (--cached, --stat, <file>)

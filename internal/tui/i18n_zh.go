@@ -354,7 +354,7 @@ func zhCatalog(key string) string {
 	case "lang.first_use.hint":
 		return " Tab/j/k 移动 • Enter 确认 • e/z 快捷键"
 	case "mode.current":
-		return "当前模式：%s\n用法：/mode <supervised|plan|auto|bypass|autopilot>\n  supervised  未显式配置的工具会询问\n  plan        严格只读探索；拒绝写入和命令\n  auto        自动允许安全操作，拒绝危险操作\n  bypass      基本全放行，只在关键操作时停下\n  autopilot   等同 bypass，并在模型反问时自动继续\n\n"
+		return "当前模式：%s\n用法：/mode <supervised|bypass>\n  supervised  默认；多数调用免打扰，仅安全地板（极危命令/凭证外传/持久化后门写入）会询问\n  bypass      巡航面；几乎全放行，仅系统级破坏与持久化后门写入会询问\n  （auto/autopilot 为兼容别名）\n"
 	case "mode.persist_failed":
 		return "持久化模式偏好失败：%v"
 	case "input.placeholder":
@@ -1263,7 +1263,7 @@ func zhCatalog(key string) string {
 	case "goal.current":
 		return "当前目标：%s\n\n该目标在上下文压缩和会话中断后仍然保留。"
 	case "goal.set":
-		return "目标已设置：%s\n\n切换到自动驾驶模式（/mode autopilot）以自主执行。目标在上下文压缩后仍然保留。"
+		return "目标已设置：%s\n\n切换到旁路模式（/mode bypass；巡航面）以自主执行。目标在上下文压缩后仍然保留。"
 	case "goal.cleared":
 		return "自动驾驶目标已清除。"
 	case "regenerate.busy":

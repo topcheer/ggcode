@@ -119,7 +119,7 @@ func enCommandModule() map[string]string {
   /allow <tool>      Always allow a specific tool
   /plugins           List loaded plugins and their tools
   /image <path>      Attach an image file
-  /mode <mode>       Set agent mode (supervised|plan|auto|bypass|autopilot)
+  /mode <mode>       Set agent mode (supervised|bypass)
   /init              Generate AGENTS.md from the current project
   /agents            List sub-agents
   /agent <id>        Show sub-agent details

@@ -59,7 +59,7 @@ func agentLLMRetryLimit() int {
 // isAgentRetryableLLMError returns true for transient errors that warrant an
 // agent-level retry. Excludes: context overflow (handled by reactive compact),
 // user cancellation (should not retry), auth errors (retrying won't help),
-// and permanent quota exhaustion (429 with billing/quota keywords — provider
+// and permanent quota exhaustion (429 with billing/quota keywords - provider
 // layer already detected and chose not to retry, agent should respect that).
 // In retry-always mode (ad-hoc -p --llm-retry-always) every error including
 // 401/403 auth is retried; only user cancellation exits.
@@ -74,7 +74,7 @@ func isAgentRetryableLLMError(err error) bool {
 		return true
 	}
 	s := strings.ToLower(err.Error())
-	// Quota/billing exhaustion is permanent — never retry, even if the error
+	// Quota/billing exhaustion is permanent - never retry, even if the error
 	// contains "rate limit" or "429". Coding plan providers (ZAI/GLM, Kimi,
 	// OpenAI) use 429 for both transient rate limits AND permanent quota
 	// exhaustion. The provider layer's shared classifier already filters
@@ -711,14 +711,14 @@ func (a *Agent) SetPermissionPolicy(policy permission.PermissionPolicy) {
 	if newMode != oldMode {
 		a.autonomyDial.reset()
 	}
-	// Entering autopilot: reset goal collection state.
-	if newMode == permission.AutopilotMode && oldMode != permission.AutopilotMode {
+	// Entering cruise (bypass surface, two-mode refactor): reset goal collection state.
+	if newMode.IsCruiseMode() && !oldMode.IsCruiseMode() {
 		a.autopilotGoal = ""
 		a.autopilotGoalAsked = false
 		a.autopilotGoalSet = false
 	}
-	// Leaving autopilot: clear everything.
-	if oldMode == permission.AutopilotMode && newMode != permission.AutopilotMode {
+	// Leaving cruise: clear everything.
+	if oldMode.IsCruiseMode() && !newMode.IsCruiseMode() {
 		a.autopilotGoal = ""
 		a.autopilotGoalAsked = false
 		a.autopilotGoalSet = false
@@ -736,7 +736,7 @@ func (a *Agent) SetUsageHandler(fn func(usage provider.TokenUsage)) {
 
 // SetMetricHandler sets a callback invoked after each LLM call or tool execution
 // with performance metrics (TTFT, think time, tool duration, etc.).
-// The callback must be non-blocking — it should send to a channel or drop if busy.
+// The callback must be non-blocking - it should send to a channel or drop if busy.
 func (a *Agent) SetMetricHandler(fn func(metrics.MetricEvent)) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1013,7 +1013,7 @@ func (a *Agent) Provider() provider.Provider {
 func (a *Agent) SetReasoningEffort(effort string) bool {
 	ok := a.setReasoningEffortInternal(effort)
 	if ok {
-		// Mark that the user has explicitly set effort — adaptive effort stays dormant.
+		// Mark that the user has explicitly set effort - adaptive effort stays dormant.
 		a.mu.Lock()
 		if a.effortAdapter != nil {
 			a.effortAdapter.setUserOverride(effort != "")
@@ -1024,7 +1024,7 @@ func (a *Agent) SetReasoningEffort(effort string) bool {
 }
 
 // setReasoningEffortInternal sets the provider effort WITHOUT the userOverride
-// side effect — used by the adaptive-effort apply/restore paths so they do not
+// side effect - used by the adaptive-effort apply/restore paths so they do not
 // self-disarm the adapter (#356).
 func (a *Agent) setReasoningEffortInternal(effort string) bool {
 	a.mu.Lock()
@@ -1303,7 +1303,7 @@ func (a *Agent) SetHookConfig(cfg hooks.HookConfig) {
 func (a *Agent) SetSessionTokenBudget(budget int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	// #543: this body was previously empty — session_token_budget was
+	// #543: this body was previously empty - session_token_budget was
 	// parsed, validated, and listed by `config list` but never stored, so
 	// the documented feature was an end-to-end no-op. Storage and the
 	// enforcement primitive live in session_token_budget.go so this file's
@@ -1644,8 +1644,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	runStats := newRunStats(userPromptForStats)
 	// Experience recall (Memento-style case-based reasoning): before the
 	// loop starts, retrieve past cases relevant to this task and inject
-	// them once as a system message. Injection happens here — before the
-	// first LLM request — so it never splits a tool_call/tool_result pair,
+	// them once as a system message. Injection happens here - before the
+	// first LLM request - so it never splits a tool_call/tool_result pair,
 	// and the cases ride the prompt cache established at run start.
 	if a.contextManager != nil {
 		// r379: reset the decision-time recall one-shot gate for the new run.
@@ -1777,7 +1777,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				tw.ClearTodos()
 			}
 		}
-		// Launch async verification — does not block the return.
+		// Launch async verification - does not block the return.
 		// Runs build/test in background, reports result via callbacks.
 		// Also skipped on cancellation (err != nil).
 		if asyncVerifyStats != nil && err == nil && !isCancelled {
@@ -1860,7 +1860,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			StopReason: stopReason,
 			StopError:  stopError,
 		})
-		// (#466: guidance promoter removed — its RunStartHook injection was
+		// (#466: guidance promoter removed - its RunStartHook injection was
 		// deleted by the monitoring-trim while the write side kept running;
 		// promoted tags were never injected, so persistence was write-only.)
 	}()
@@ -1917,7 +1917,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// Server-side Tool Search Tool handoff (Anthropic advanced-tool-use
 	// beta): when the provider declares tool_search_tool_regex/bm25, schema
 	// discovery is owned by the API via defer_loading + tool_reference. The
-	// client-side meta-tool must yield — it strips deferred schemas from the
+	// client-side meta-tool must yield - it strips deferred schemas from the
 	// request, which the server-side search requires to rank against.
 	if enabler, ok := a.provider.(interface{ ServerToolSearchActive() bool }); ok && enabler.ServerToolSearchActive() {
 		a.toolSearch.disable()
@@ -1955,7 +1955,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// Agent-side planning: analyze the user's first message for complexity.
 	// If complex (multi-file, multi-goal, multi-step), suggest a structured
 	// plan early in the conversation (Devin/Claude Code auto-planning pattern).
-	// #1480: MUST run after resetPlanner above — the previous placement ~80
+	// #1480: MUST run after resetPlanner above - the previous placement ~80
 	// lines earlier let resetPlanner wipe isComplex before maybeSuggestPlan
 	// could ever consume it, dead-ending the planner on every run.
 	a.plannerAnalyze(userText)
@@ -1968,7 +1968,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.bgVerifyJobs = newBgVerifyRegistry()
 	a.resetDriftRecurrence()
 	// Per-user-turn reset of the attention-fragment directory window: the
-	// sliding window is per-turn semantics per its own doc comment — leaving
+	// sliding window is per-turn semantics per its own doc comment - leaving
 	// it across turns let the first analyze of a new turn fire on the last
 	// turn's directory switches (#378).
 	a.attentionFragment.reset()
@@ -2029,7 +2029,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// Reset the edit failure recovery tracker.
 	a.editFailRecovery.reset()
 	// #677: solution fixation / redundant re-verify were the only detectors
-	// whose reset() this per-run block never called — "at most 2 warnings per
+	// whose reset() this per-run block never called - "at most 2 warnings per
 	// run" silently degraded to a per-Agent lifetime cap (permanent silence
 	// after the first 2) and firedFor / recentCalls / failedByFile state
 	// leaked across runs.
@@ -2145,7 +2145,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.draftPRHint.reset()
 	if workingDir := a.WorkingDir(); workingDir != "" {
 		a.changeReconcile.capturePreRunState(workingDir)
-		// Inject awareness if the tree is dirty — the agent should know about
+		// Inject awareness if the tree is dirty - the agent should know about
 		// pre-existing uncommitted changes so it can avoid accidentally
 		// staging or committing them.
 		if n := a.changeReconcile.dirtyFileCount(); n > 0 {
@@ -2156,7 +2156,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Text: fmt.Sprintf(
 						"[workspace] Note: %d file(s) have uncommitted changes in the working tree "+
 							"(your own work before this session). When committing, stage only the files "+
-							"you modified during this task — do not use 'git add -A' or 'git commit -a' "+
+							"you modified during this task - do not use 'git add -A' or 'git commit -a' "+
 							"unless the user explicitly asks.",
 						n,
 					),
@@ -2198,7 +2198,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.checkpoints.StartRun(runStats.RunID())
 	}
 	// Start the session wall-clock timeout timer.
-	a.sessionTimeout.start(a.currentMode() == permission.AutopilotMode)
+	a.sessionTimeout.start(a.currentMode().IsCruiseMode())
 	// Input underspecification detection: if the user's initial request is
 	// vague/underspecified (no concrete identifiers, short, vague verbs),
 	// inject an advisory before the agent starts exploring. Zero-LLM-cost,
@@ -2494,7 +2494,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		// Drift-recurrence iteration bookkeeping: check()'s post-warning
 		// window (driftRecurrencePostWarnWindow) compares against the current
-		// iteration — without this call currentIteration stayed 0 and the
+		// iteration - without this call currentIteration stayed 0 and the
 		// window guard was permanently false, letting stale warnings from
 		// dozens of iterations ago fire on a normal edit rhythm (#377).
 		a.driftRecurrence.recordIteration(i + 1)
@@ -2556,7 +2556,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// a one-time hint to confirm scope and consider package-scoped ops.
 		if monorepoMsg := a.monorepoScoper.maybeWarnScopeSprawl(); monorepoMsg != "" {
 			debug.Log("monorepo-scope", "package scope sprawl detected: %s", monorepoMsg)
-			// #681: one-shot hint — if the per-turn budget suppresses it, the
+			// #681: one-shot hint - if the per-turn budget suppresses it, the
 			// one-time chance is restored so it retries on a later iteration
 			// instead of the detector going dark for the rest of the run.
 			if a.injectGuidance(monorepoMsg) {
@@ -2567,20 +2567,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		// Mid-point progress checkpoint: at 60% of max iterations, inject a
 		// one-time progress assessment. This is the lightweight "overseer"
-		// pattern from SICA — giving the agent a chance to course-correct
+		// pattern from SICA - giving the agent a chance to course-correct
 		// before running out of iteration budget.
 		// Only fires when maxIter >= 20 to avoid interfering with short runs.
 		if a.maxIter >= 20 && !progressCheckInjected && i+1 >= a.maxIter*3/5 {
 			progressCheckInjected = true
 			debug.Log("agent", "Injecting mid-point progress checkpoint at iteration %d/%d", i+1, a.maxIter)
-			// #681: one-shot protocol prompt — direct add, exempt from the
+			// #681: one-shot protocol prompt - direct add, exempt from the
 			// per-turn guidance budget like the loop-recovery nudges above
 			// (budget suppression would silently burn the run's only
 			// checkpoint exactly when the run is struggling hardest).
 			a.contextManager.Add(provider.Message{
 				Role: "user",
 				Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf(
-					"Progress checkpoint: iteration %d/%d. Assess — on track? If not, switch strategy.",
+					"Progress checkpoint: iteration %d/%d. Assess - on track? If not, switch strategy.",
 					i+1, a.maxIter,
 				)}},
 			})
@@ -2685,7 +2685,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				continue
 			}
 			// #983: terminal stream error (cancellation or fatal provider
-			// error) — preserve the assistant text already streamed so a
+			// error) - preserve the assistant text already streamed so a
 			// resumed session doesn't lose the partial turn. Pure text only:
 			// partial tool_use blocks are correctly discarded for pairing
 			// integrity. Mirrors the policyBlocked handling above, which keeps
@@ -2746,7 +2746,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				sessionBudgetStop = true // #3945: arm the loop-top gate
 				onEvent(provider.StreamEvent{
 					Type: provider.StreamEventSystem,
-					Text: "[Session token budget fully consumed — winding down. Summarize the state so the user can resume with a fresh budget.] ",
+					Text: "[Session token budget fully consumed - winding down. Summarize the state so the user can resume with a fresh budget.] ",
 				})
 			}
 		}
@@ -2791,7 +2791,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				sessionBudgetStop = true // #3945: arm the loop-top gate
 				onEvent(provider.StreamEvent{
 					Type: provider.StreamEventSystem,
-					Text: "[Session time budget fully elapsed — winding down. Summarize the state so the user can resume with a fresh budget.] ",
+					Text: "[Session time budget fully elapsed - winding down. Summarize the state so the user can resume with a fresh budget.] ",
 				})
 			}
 		}
@@ -2829,12 +2829,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			strings.TrimSpace(textBuf) == "" && len(resp.Message.Content) == 0 {
 			// Complete policy block (no partial text, no output tokens): the
 			// request was rejected by a provider safety filter. An empty-response
-			// nudge would just re-trigger the same filter — report and stop (#266).
+			// nudge would just re-trigger the same filter - report and stop (#266).
 			if policyBlocked {
 				debug.Log("agent", "Iteration %d: response fully blocked by provider policy, not retrying", i+1)
 				onEvent(provider.StreamEvent{
 					Type: provider.StreamEventSystem,
-					Text: "[Response blocked by provider safety policy — not retrying. Try rephrasing the request.] ",
+					Text: "[Response blocked by provider safety policy - not retrying. Try rephrasing the request.] ",
 				})
 				if len(resp.Message.Content) > 0 {
 					a.contextManager.Add(resp.Message)
@@ -2854,12 +2854,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// distinguishable error.
 				onEvent(provider.StreamEvent{
 					Type: provider.StreamEventText,
-					Text: "[run aborted — the model returned 3 consecutive empty responses; the task did not complete]\n",
+					Text: "[run aborted - the model returned 3 consecutive empty responses; the task did not complete]\n",
 				})
 				return fmt.Errorf("agent: aborted after %d consecutive empty responses", consecutiveEmptyResponses)
 			}
 			// Retry: inject a nudge and continue.
-			// #677: loop-recovery protocol, NOT detector guidance — it keeps its
+			// #677: loop-recovery protocol, NOT detector guidance - it keeps its
 			// own cap (3 consecutive empties abort the run) and must stay outside
 			// the per-turn guidance budget: budget suppression would make
 			// empty-response recovery impossible.
@@ -2886,16 +2886,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.contextManager.Add(resp.Message)
 				onEvent(provider.StreamEvent{
 					Type: provider.StreamEventSystem,
-					Text: "[Response was truncated by output length limit — continuing...] ",
+					Text: "[Response was truncated by output length limit - continuing...] ",
 				})
-				// #677: continuation protocol, NOT detector guidance — a budget-
+				// #677: continuation protocol, NOT detector guidance - a budget-
 				// suppressed continuation prompt would strand the partial output, so
 				// it stays a direct add (own cap: truncationContinues < 3).
 				a.contextManager.Add(provider.Message{
 					Role: "user",
 					Content: []provider.ContentBlock{{
 						Type: "text",
-						Text: "Your previous response was cut off by the output token limit. Continue from where you left off — do not repeat what you already wrote.",
+						Text: "Your previous response was cut off by the output token limit. Continue from where you left off - do not repeat what you already wrote.",
 					}},
 				})
 				continue
@@ -2908,19 +2908,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				debug.Log("agent", "Iteration %d: response blocked by provider policy, skipping auto-continuation", i+1)
 				onEvent(provider.StreamEvent{
 					Type: provider.StreamEventSystem,
-					Text: "[Response blocked by provider safety policy — partial output kept, not retrying.] ",
+					Text: "[Response blocked by provider safety policy - partial output kept, not retrying.] ",
 				})
 			} else if truncated && !policyBlocked && truncationContinues >= 3 {
-				// #2894: output-limit truncation budget exhausted — the partial
+				// #2894: output-limit truncation budget exhausted - the partial
 				// output is kept and the run completes, but the response may be
 				// incomplete. Surface that instead of returning silently: the
 				// policyBlocked branch above notifies, and #1672 made the empty-
-				// response budget exhaustion an explicit error — the truncated
+				// response budget exhaustion an explicit error - the truncated
 				// variant was the last silent path.
 				debug.Log("agent", "Iteration %d: response truncated, continuation budget exhausted (3/3), keeping partial output", i+1)
 				onEvent(provider.StreamEvent{
 					Type: provider.StreamEventSystem,
-					Text: "[Output truncated — auto-continuation budget exhausted (3/3); response may be incomplete.] ",
+					Text: "[Output truncated - auto-continuation budget exhausted (3/3); response may be incomplete.] ",
 				})
 			}
 			// Detect inline tool calls in text/reasoning (common with lower-reasoning
@@ -2936,13 +2936,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// a prior degraded tool result in its reasoning text. If not, it is
 			// silently building on corrupted state (Galileo error propagation chain).
 			// (#1823 case 1: the over-reflection detector this comment announced was
-			// removed in 387282a6 — pure-text-turn waste is a recorded trade-off,
+			// removed in 387282a6 - pure-text-turn waste is a recorded trade-off,
 			// partially compensated by errorStrategyLoop's rerun-same-command check.)
 			if hasInlineToolCall(assistantText) && inlineToolCallNudges < 2 {
 				inlineToolCallNudges++
 				debug.Log("agent", "Iteration %d: inline tool call detected in text, nudging model (attempt %d/2)", i+1, inlineToolCallNudges)
 				a.contextManager.Add(resp.Message)
-				// #677: format-correction protocol, NOT detector guidance — if the
+				// #677: format-correction protocol, NOT detector guidance - if the
 				// budget suppressed it, a model that only writes inline tool calls
 				// could never emit a structured tool_use block again this turn
 				// (own cap: 2 nudges).
@@ -2977,7 +2977,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// user-stated premise without independent verification.
 			// (#1823 case 2: the premature-surrender detector this comment announced
 			// was removed in 387282a6 (noise trade-off); the narrow give-up+revert
-			// re-add lives in giveupRevertCheck — see premature_success.go.)
+			// re-add lives in giveupRevertCheck - see premature_success.go.)
 			// Agentic abstention detection: track whether the assistant text
 			// acknowledges negative environment signals, and inject guidance
 			// if unacknowledged negatives accumulate. arXiv:2606.28733.
@@ -3029,7 +3029,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					debug.Log("agent", "Iteration %d: premature success claim detected (edits without verification)", i+1)
 					a.injectGuidance(psHint)
 					// Feed the compounded-uncertainty accumulator: an unverified
-					// success claim is a 1.5-unit epistemic risk event (#484 — this
+					// success claim is a 1.5-unit epistemic risk event (#484 - this
 					// channel was declared in the accumulator's weights but never
 					// wired, so the documented 4-channel design only ever saw 2).
 					a.recordUncertainty("unverified_success", weightUnverifiedSucc)
@@ -3301,10 +3301,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// higher than the raw count suggests.
 			//
 			// Budget: 100 calls per Run. With ~5 tool iterations between each
-			// strategist call, this covers ~500 tool operations — enough for
+			// strategist call, this covers ~500 tool operations - enough for
 			// large-scale implementation tasks. For very large projects, the user
 			// sends another message ("continue") to reset the budget.
-			if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() && a.autopilotStrategistCount < maxAutopilotStrategistCalls {
+			if a.currentMode().IsCruiseMode() && a.hasAutopilotGoal() && a.autopilotStrategistCount < maxAutopilotStrategistCalls {
 				a.strategistNoProgressCount++
 				a.autopilotStrategistCount++
 				// Deadlock detection: if the agent has made NO tool calls for
@@ -3322,10 +3322,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						// dangling partial rune instead.
 						preview = strings.ToValidUTF8(preview[:200], "")
 					}
-					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Autopilot: agent idle for %d consecutive rounds — terminating to avoid deadlock. Last output: %s]", a.strategistNoProgressCount, preview)})
+					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Autopilot: agent idle for %d consecutive rounds - terminating to avoid deadlock. Last output: %s]", a.strategistNoProgressCount, preview)})
 					a.ClearAutopilotGoal()
 					// #3683: this early return used to skip EVERY completion gate
-					// below (sync verify, async verify goroutine — asyncVerifyStats
+					// below (sync verify, async verify goroutine - asyncVerifyStats
 					// stayed nil), so code changed during the run exited as
 					// "success" without ever being built or tested. Hand the stats
 					// to the deferred async verification so unverified changes still
@@ -3340,8 +3340,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				result, sErr := a.runAutopilotStrategist(ctx, textBuf)
 				if sErr != nil {
 					debug.Log("agent", "autopilot strategist failed: %v", sErr)
-					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist unavailable (%v) — autopilot stopping]", sErr)})
-					// Fall through to normal return — can't drive autonomously.
+					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist unavailable (%v) - autopilot stopping]", sErr)})
+					// Fall through to normal return - can't drive autonomously.
 				} else if result.Complete {
 					debug.Log("agent", "Iteration %d: strategist declared goal achieved", i+1)
 					summary := result.Guidance
@@ -3351,13 +3351,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// string, not from a ToUpper copy (byte-length-changing case
 					// mappings shifted the cut and corrupted the summary).
 					summary = stripStrategistCompleteMarker(summary)
-					msg := "[Strategist: goal achieved — autopilot complete.]"
+					msg := "[Strategist: goal achieved - autopilot complete.]"
 					if summary != "" {
-						msg = fmt.Sprintf("[Strategist: goal achieved — autopilot complete. %s]", summary)
+						msg = fmt.Sprintf("[Strategist: goal achieved - autopilot complete. %s]", summary)
 					}
 					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: msg})
 					a.ClearAutopilotGoal()
-					// #3683: same bypass as the deadlock path above — the strategist's
+					// #3683: same bypass as the deadlock path above - the strategist's
 					// Complete verdict used to return before any completion gate ran.
 					// The verdict is a judgment call, not a verification result; hand
 					// the run's stats to the deferred async verification so changed
@@ -3397,19 +3397,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					})
 					continue
 				}
-			} else if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() && !a.strategistBudgetAnnounced {
+			} else if a.currentMode().IsCruiseMode() && a.hasAutopilotGoal() && !a.strategistBudgetAnnounced {
 				// Strategist call budget exhausted. Inject a one-time guidance
 				// message so the agent can wrap up or continue with its own
 				// judgment. Without the flag this would re-inject on every
 				// subsequent no-tool-call iteration, creating an infinite loop.
 				a.strategistBudgetAnnounced = true
 				debug.Log("agent", "Iteration %d: strategist budget exhausted (%d/%d), injecting one-time continuation guidance", i+1, a.autopilotStrategistCount, maxAutopilotStrategistCalls)
-				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist budget at limit (%d/%d) — continuing autonomously]", a.autopilotStrategistCount, maxAutopilotStrategistCalls)})
+				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist budget at limit (%d/%d) - continuing autonomously]", a.autopilotStrategistCount, maxAutopilotStrategistCalls)})
 				a.contextManager.Add(provider.Message{
 					Role: "user",
 					Content: []provider.ContentBlock{{
 						Type: "text",
-						Text: "Strategist budget exhausted. Continue remaining tasks autonomously — build, test, verify, then summarize.",
+						Text: "Strategist budget exhausted. Continue remaining tasks autonomously - build, test, verify, then summarize.",
 					}},
 				})
 				continue
@@ -3658,7 +3658,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Synchronous verification with auto-repair.
 			// Before returning, verify the build if code was changed. If it
 			// fails and retry budget remains, inject errors and continue the
-			// loop — this is the "fix-on-fail" pattern used by Claude Code,
+			// loop - this is the "fix-on-fail" pattern used by Claude Code,
 			// Aider, and Cursor. It eliminates the manual round-trip where
 			// the user must say "fix the build" after every failed change.
 			syncPassed := false
@@ -3666,7 +3666,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// #953: syncVerifyAndGate now reports whether verification PASSED,
 				// not merely whether it ran. A pass on a retry round (build failed,
 				// agent repaired, round 2 passed) also skips the redundant async
-				// verify — the old `syncVerifyRetries == 0` condition only skipped
+				// verify - the old `syncVerifyRetries == 0` condition only skipped
 				// first-attempt passes and re-ran the full build/test in the defer.
 				if shouldContinue, passed := a.syncVerifyAndGate(ctx, runStats, syncVerifyRetries); shouldContinue {
 					syncVerifyRetries++
@@ -3870,7 +3870,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			})
 		}
 		// Execute tool calls and build tool_result message
-		// Reset the no-progress counter — the agent is making forward progress.
+		// Reset the no-progress counter - the agent is making forward progress.
 		a.strategistNoProgressCount = 0
 		var toolResults []provider.ContentBlock
 		// Collect follow-up messages from tools (e.g., inline skills)
@@ -4064,7 +4064,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					deferredMemoryTarget = mt
 				}
 			}
-			// Don't log executeToolWithPermission start — the permission check log already covers this
+			// Don't log executeToolWithPermission start - the permission check log already covers this
 			// In-turn deduplication: if the LLM sent the same read-only tool call
 			// twice in this response, reuse the first result instead of re-executing.
 			dedupK := dedupKey{tool: tc.Name, args: string(tc.Arguments)}
@@ -4141,7 +4141,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// Context-efficient: only added for non-empty, non-error results, and the
 				// prefix is capped at 80 chars.
 				if result.Content != "" && !result.IsError {
-					result.Content = fmt.Sprintf("[cached — %s returned identical content since your last call]\n%s", tc.Name, result.Content)
+					result.Content = fmt.Sprintf("[cached - %s returned identical content since your last call]\n%s", tc.Name, result.Content)
 				}
 				debug.Log("memoize", "memo hit for %s (saved tool execution)", tc.Name)
 			} else if cachedResult, hit := a.speculator.getCached(tc.Name, tc.Arguments); hit && a.speculativeHitAllowed(ctx, tc) {
@@ -4301,7 +4301,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 			// Store result in memoization cache for read-only tools.
-			// #983: skip the put on a memo hit — the cached entry already holds
+			// #983: skip the put on a memo hit - the cached entry already holds
 			// the pristine result, and re-putting the annotated copy (with the
 			// "[cached ...]" prefix and any appended hints) would stack one
 			// prefix per repeated call and make the "identical content"
@@ -4346,7 +4346,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 				}
 			}
-			// #476: search-tool output counts toward exploration breadth —
+			// #476: search-tool output counts toward exploration breadth -
 			// grep/code_search/files_with_matches results name the files the
 			// agent has effectively "looked at". Without this, a 12-file grep
 			// sweep plus 2 read_file's scored as 2 files and triggered a
@@ -4382,7 +4382,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.readHash.recordWriteHash(p)
 					a.redundantRead.recordWrite(p)
 					// Refresh the stale-read baseline: the agent's own edit just
-					// bumped the mtime — without this, checkStaleRead would flag
+					// bumped the mtime - without this, checkStaleRead would flag
 					// our own edit as an external modification (#168).
 					a.unreadEdit.recordWrite(p)
 					if a.tokenWasteBudget != nil {
@@ -4394,11 +4394,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// Diminishing edit: track edit substance size for polish-spiral detection.
 					a.diminishingRecordEdit(tc.Name, tc.Arguments)
 					// Overcorrection cascade: track edit size vs error severity.
-					// #1823 case 3: gated behind claimsSupervision — same class of
+					// #1823 case 3: gated behind claimsSupervision - same class of
 					// lexical/byte-count heuristic as the claims family, same noise
 					// asymmetry argument. Ungated it enforced only the
 					// “shrink your edit” side while the “verify before claiming”
-					// side stayed opt-in — a directional bias opposite to the
+					// side stayed opt-in - a directional bias opposite to the
 					// paired-axes design intent.
 					if a.claimsSupervision {
 						if ocHint := a.overcorrectionRecordEdit(tc.Name, tc.Arguments); ocHint != "" {
@@ -4724,7 +4724,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Stale-observation re-verify escalation: record negative
 			// observations from successful tool calls and mutation recency
 			// (the delayed contradiction analysis this block's comment has
-			// promised since the recorder landed — sa-134).
+			// promised since the recorder landed - sa-134).
 			a.reverify.recordToolResult(tc.Name, string(tc.Arguments), result.Content, result.IsError, i+1)
 			// Context-length goal drift: record tool call targets to
 			// detect drift from original user request (arXiv:2505.02709).
@@ -4938,7 +4938,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// #952: capture the ORIGINAL content length BEFORE the detector chain
 			// (errorClassifier at errorClassifier below through consensus). Guidance
-			// appended by detectors flows into token-waste metering at record time —
+			// appended by detectors flows into token-waste metering at record time -
 			// metering the polluted string double-counts guidance tokens in both the
 			// waste numerator and denominator (#553 residual: the old capture point
 			// sat after the chain, so an original 1-token result was recorded as 19).
@@ -5021,7 +5021,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// injects high-level strategy when a dominant mode emerges.
 			if modeGuidance := a.failureMode.recordResult(tc.Name, result.IsError, result.Content); modeGuidance != "" {
 				// #952: this guidance is appended BEFORE the consensus scan window
-				// starts (see consensusBaseline), so record the firing explicitly —
+				// starts (see consensusBaseline), so record the firing explicitly -
 				// the content scan below would otherwise never see this detector.
 				a.crossDetectorConsensus.recordFiring("Failure Mode", i+1)
 				a.appendGuidance(&result, modeGuidance)
@@ -5030,7 +5030,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// resource (file path or symbol), inject root-cause-first guidance.
 			if result.IsError {
 				if cascadeGuidance := a.errorCascade.recordError(tc.Name, result.Content); cascadeGuidance != "" {
-					// #952: same as failureMode above — this guidance precedes the
+					// #952: same as failureMode above - this guidance precedes the
 					// consensus scan window; record the firing explicitly.
 					a.crossDetectorConsensus.recordFiring("Error Cascade", i+1)
 					a.appendGuidance(&result, cascadeGuidance)
@@ -5330,7 +5330,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 				}
 			}
-			// #487: gate on command CONTENT — the unconditional raw setter made
+			// #487: gate on command CONTENT - the unconditional raw setter made
 			// the first read_file count as a build/test and silenced the
 			// detector for the whole run.
 			a.prematureRefactorRecordVerifyForTool(tc.Arguments)
@@ -5490,7 +5490,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// mirror).
 			if strategyFixationIsMutation(tc.Name) {
 				// Record EVERY referenced file: multi_file_edit edits all
-				// files[] entries and notebook_edit carries notebook_path —
+				// files[] entries and notebook_edit carries notebook_path -
 				// counting only the first path under-tracked edits (#485).
 				for _, fp := range sfExtractMutationPaths(tc.Arguments) {
 					a.strategyFixation.recordEdit(fp)
@@ -5533,7 +5533,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.irrevGate.recordOutcome(tc.Name, result.IsError)
 			}
 			// Futile cycle: track reads vs writes to detect circular exploration.
-			// #953: a FAILED edit produced no state mutation — recording it as a
+			// #953: a FAILED edit produced no state mutation - recording it as a
 			// write resets the epoch, so the legitimate re-read the agent performs
 			// to recover a correct anchor (edit_fail_recovery's own advice) looks
 			// like a futile re-read loop (Jaccard=1.0). Only successful edits count,
@@ -5555,7 +5555,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// the futile/expired signals - the read-side mirror of the
 				// #953 write-side fix above.
 				if readPaths := extractFilePathsFromArgs(tc.Arguments, tc.Name); len(readPaths) > 0 {
-					// #500: batch-aware — multi_file_read carries N paths but the
+					// #500: batch-aware - multi_file_read carries N paths but the
 					// old single-path extraction recorded only files[0], suppressing
 					// the cross-file stale-read warning (minReadsBeforeWarning) and
 					// starving expired-read/futile-cycle for the same reason.
@@ -5566,7 +5566,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						a.wtInvalidation.recordRead(p)
 					}
 					// Post-edit re-read check: warn if re-reading shortly after edit.
-					// First path only — each hint appends, N hints would spam.
+					// First path only - each hint appends, N hints would spam.
 					if hint := a.expiredRead.checkPostEditReread(readPaths[0]); hint != "" {
 						a.appendGuidance(&result, hint)
 					}
@@ -5695,8 +5695,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Exfiltration chain source recording moved UP to the pre-redaction
 			// chokepoint (#3539); see the secret-redaction block above.
 			// Spiral-of-hallucination: an execution-type tool call with
-			// observable side effects breaks the spiral chain (#161 — prose
-			// keyword matching fired on nearly every turn; #167 — read-only
+			// observable side effects breaks the spiral chain (#161 - prose
+			// keyword matching fired on nearly every turn; #167 - read-only
 			// tools must not count as verification).
 			if !result.IsError {
 				a.recordSpiralVerification(tc.Name, result.Content)
@@ -5751,7 +5751,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Both vision and non-vision paths share the same hint assembly logic.
 			// originalContentLen was captured BEFORE the detector chain above (#952,
 			// #553 residual) so detector guidance never inflates waste metering.
-			// #1819 case 2: capture the POST-shrink length here — compress/
+			// #1819 case 2: capture the POST-shrink length here - compress/
 			// guardToolOutput may have rewritten Content between the original
 			// capture and this point, and metering must reflect what actually
 			// enters the context (the #952 "real context cost" intent cuts both
@@ -5875,7 +5875,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Context-fill-aware: skip speculation when context is critically
 			// full (>75%). Speculative results arriving into a nearly-full
 			// context window can trigger unnecessary compaction. Speculation
-			// is optional — skipping it is always safe.
+			// is optional - skipping it is always safe.
 			speculateOK := true
 			if a.contextManager != nil {
 				if threshold := a.contextManager.AutoCompactThreshold(); threshold > 0 {
@@ -5926,7 +5926,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// and return a sentinel error so callers (sub-agents, ACP
 				// loops, session resume) can distinguish budget truncation
 				// from normal completion. The old path injected the
-				// "summarize" directive into contextManager and returned nil —
+				// "summarize" directive into contextManager and returned nil -
 				// the loop had already ended, so the directive was never
 				// consumed in-run and merely confused the next session turn
 				// (#367).
@@ -5934,14 +5934,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				summary := runStats.Summary()
 				onEvent(provider.StreamEvent{
 					Type: provider.StreamEventText,
-					Text: fmt.Sprintf("\nTool call budget exhausted (%d calls). Summary: %s.\nYour task may be partially complete — review the changes above. You can continue by sending a follow-up message.", a.toolCallBudget.totalCalls, summary),
+					Text: fmt.Sprintf("\nTool call budget exhausted (%d calls). Summary: %s.\nYour task may be partially complete - review the changes above. You can continue by sending a follow-up message.", a.toolCallBudget.totalCalls, summary),
 				})
 				err := fmt.Errorf("tool call budget (%d calls) exhausted", a.toolCallBudget.totalCalls)
 				onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
 				return err
 			}
 			// Soft warning (80% / 95%): inject guidance so the CURRENT run
-			// wraps up — the loop continues and the LLM consumes it.
+			// wraps up - the loop continues and the LLM consumes it.
 			a.contextManager.Add(provider.Message{
 				Role: "user",
 				Content: []provider.ContentBlock{{
@@ -5965,7 +5965,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		summary := runStats.Summary()
 		onEvent(provider.StreamEvent{
 			Type: provider.StreamEventText,
-			Text: fmt.Sprintf("\nSession wall-clock timeout reached (limit: %s). Summary: %s.\nYour task may be partially complete — review the changes above. You can continue by sending a follow-up message.", a.sessionTimeout.timeout.Round(time.Second), summary),
+			Text: fmt.Sprintf("\nSession wall-clock timeout reached (limit: %s). Summary: %s.\nYour task may be partially complete - review the changes above. You can continue by sending a follow-up message.", a.sessionTimeout.timeout.Round(time.Second), summary),
 		})
 		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ErrSessionTimeout})
 		return ErrSessionTimeout
@@ -5992,7 +5992,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		debug.Log("agent", "RunStreamWithContent END: max iterations reached (%s)", summary)
 		onEvent(provider.StreamEvent{
 			Type: provider.StreamEventText,
-			Text: fmt.Sprintf("\nReached maximum iterations (%d). Summary: %s.\nYour task may be partially complete — review the changes above. You can continue by sending a follow-up message.", a.maxIter, summary),
+			Text: fmt.Sprintf("\nReached maximum iterations (%d). Summary: %s.\nYour task may be partially complete - review the changes above. You can continue by sending a follow-up message.", a.maxIter, summary),
 		})
 		err := fmt.Errorf("max iterations (%d) reached", a.maxIter)
 		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
@@ -6093,7 +6093,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			return
 		}
 		s := textBuf.String()
-		// Skip whitespace-only text blocks — these occur when models emit
+		// Skip whitespace-only text blocks - these occur when models emit
 		// newlines/spaces between tool_use blocks with no meaningful content.
 		// Keeping them wastes tokens and can cause API errors on strict providers.
 		if strings.TrimSpace(s) != "" {
@@ -6102,7 +6102,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 		textBuf.Reset()
 	}
 	var thinkingAcc thinkingAccumulator
-	// Metric tracking — records timestamps during streaming, fires onMetric on Done.
+	// Metric tracking - records timestamps during streaming, fires onMetric on Done.
 	turnMetrics := newLLMTurnMetrics()
 	for event := range stream {
 		switch event.Type {
@@ -6148,7 +6148,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			}
 			truncated = event.Truncated
 			policyBlocked = event.PolicyBlocked
-			// sa-74: confidence telemetry — log the turn's mean token logprob
+			// sa-74: confidence telemetry - log the turn's mean token logprob
 			// and surface a low-confidence notice for human review (selective
 			// escalation; "Logprobs Know Uncertainty", ACM KDD 2025). Threshold:
 			// mean logprob < -2.5 ~= e^-2.5 ~= 8% average token probability.
@@ -6160,7 +6160,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 				if conf < -2.5 {
 					onEvent(provider.StreamEvent{
 						Type: provider.StreamEventSystem,
-						Text: fmt.Sprintf("[confidence] low model confidence this turn (avg token logprob %.2f) — consider reviewing the output.", conf),
+						Text: fmt.Sprintf("[confidence] low model confidence this turn (avg token logprob %.2f) - consider reviewing the output.", conf),
 					})
 				}
 			}
@@ -6238,7 +6238,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 	// Store reasoning/thinking content for echo-back to reasoning models.
 	// - DeepSeek: reasoning_content (plain text, single unsigned block)
 	// - Anthropic: one thinking ContentBlock per streamed block, each with
-	//   its own signature — preserved as separate blocks, prepended before
+	//   its own signature - preserved as separate blocks, prepended before
 	//   tool_use blocks (#228).
 	if blocks := thinkingAcc.accumulated(); len(blocks) > 0 {
 		respMsg.Content = append(blocks, respMsg.Content...)

@@ -117,7 +117,10 @@ func extractGoalFromText(text string) (string, bool) {
 // (both text-only and tool-call turns) to capture the goal as early as
 // possible.
 func (a *Agent) maybeSetAutopilotGoalFromLLMOutput(text string) {
-	if a.currentMode() != permission.AutopilotMode {
+	// Cruise modes only: goal capture is a cruise-control feature. Early
+	// return when NOT cruising (negated predicate - the old form compared
+	// against the raw AutopilotMode enum before the two-mode refactor).
+	if !a.currentMode().IsCruiseMode() {
 		return
 	}
 	a.mu.Lock()

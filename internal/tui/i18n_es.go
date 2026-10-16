@@ -333,7 +333,7 @@ func esCatalog(key string) string {
 	case "lang.first_use.hint":
 		return " Tab/j/k mover • Enter confirmar • e/z atajos"
 	case "mode.current":
-		return "Modo actual: %s\nUso: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  Preguntar cuándo una herramienta no tiene regla explicita\n  plan        Exploracion de solo lectura; denegar escrituras y comandos\n  auto        Permitir operaciónes seguras, denegar peligrosas\n  bypass      Permitir casí todo; solo parar en acciones críticas\n  autopilot   bypass + continúar cuándo el modelo pregunte\n\n"
+		return "Modo actual: %s\nUso: /mode <supervised|bypass>\n  supervised  Predeterminado; la mayoria de llamadas fluyen sin avisos - solo los pisos de seguridad preguntan (destruccion de sistema, exfiltracion de credenciales, escrituras de puerta trasera)\n  bypass      Superficie de crucero; todo permitido salvo destruccion de sistema y escrituras de puerta trasera\n  (auto/autopilot son alias heredados)\n"
 	case "mode.persist_failed":
 		return "Error al persistir la preferencia de modo: %v"
 	case "input.placeholder":
@@ -1082,7 +1082,7 @@ Sesión e Historial:
 Modelo y Proveedor:
   /model [nombre]    Abrir panel de modelos o cambiar directamente
   /provider [vendor] Abrir gestor de proveedores
-  /mode <modo>       Establecer modo del agente (supervised|plan|auto|bypass|autopilot)
+  /mode <modo>       Establecer modo del agente (supervised|bypass)
 
 Desarrollo:
   /diff [opts]       Mostrar git diff en el chat (--cached, --stat, <archivo>)
