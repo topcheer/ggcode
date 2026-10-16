@@ -1695,8 +1695,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// a 30s timeout) and produce noisy insights for aborted work.
 		// The onRunResult callback and todo cleanup still run to ensure
 		// session persistence and state cleanup.
-		isCancelled := errors.Is(err, context.Canceled) ||
-			(err == nil && ctx.Err() != nil && errors.Is(ctx.Err(), context.Canceled))
+		// #4232 case 3: a deadline-exceeded run is as aborted as a cancelled
+		// one - running reflection/failure-attribution on a timeout-stopped
+		// run pollutes the stats with "failure" noise for work that simply
+		// ran out of its time budget.
+		isCancelled := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+			(err == nil && ctx.Err() != nil && (errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded)))
 		if !isCancelled {
 			a.maybeReflect(runStats)
 			// r413: persist the failed run's terminal causal suspect
@@ -2701,8 +2705,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// context.Canceled) so callers can detect it with errors.Is.
 			// Converting to a friendly string would break the error chain.
 			if errors.Is(err, context.Canceled) || (ctx.Err() != nil && errors.Is(ctx.Err(), context.Canceled)) {
-				onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ctx.Err()})
-				return ctx.Err()
+				// #4232 case 1: the stream watchdog (idle-timeout child ctx) can
+				// cancel its child while the RUN ctx is still alive - ctx.Err()
+				// is nil here, so the old body emitted an Error event with a nil
+				// error and returned nil: a timeout-aborted run reported as a
+				// clean success to every upstream that checks the return value.
+				cancelCause := ctx.Err()
+				if cancelCause == nil {
+					cancelCause = fmt.Errorf("agent: stream aborted by watchdog cancellation: %w", err)
+				}
+				onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: cancelCause})
+				return cancelCause
 			}
 			friendlyErr := fmt.Errorf("%s", provider.FriendlyError(err))
 			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: friendlyErr})
@@ -2810,7 +2823,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// above). Without it, three normal text replies on such an endpoint
 		// abort the run with "3 consecutive empty responses" and the text is
 		// silently dropped from history.
-		if resp.Usage.OutputTokens == 0 && resp.Usage.InputTokens > 0 && len(toolCalls) == 0 &&
+		// #4232 case 2: the InputTokens>0 conjunct let all-zero-usage
+		// gateways (older vLLM/LiteLLM builds) skip this guard entirely, so
+		// consecutiveEmptyResponses never accumulated and a single empty
+		// reply ended the run as a silent empty success. The #4201
+		// false-positive protection is carried by the textBuf/Content
+		// emptiness checks below, not by this conjunct.
+		if resp.Usage.OutputTokens == 0 && len(toolCalls) == 0 &&
 			strings.TrimSpace(textBuf) == "" && len(resp.Message.Content) == 0 {
 			// Complete policy block (no partial text, no output tokens): the
 			// request was rejected by a provider safety filter. An empty-response
@@ -5277,7 +5296,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// powershell are reachable tool names (OpenAI responses builtin)
 			// and a `go test` run through them clears debt exactly like
 			// run_command does.
-			if isCommandChannelTool(tc.Name) && !result.IsError && isVerificationCommand(extractCommandFromArgs(tc.Arguments)) {
+			// #4234: start_command is EXCLUDED here - its success only means
+			// "job started", never "tests ran and passed". Counting it cleared
+			// the verify debt at launch time, so a later background failure (or
+			// a never-followed-up wait) left failed code graded as green. Same
+			// exclusion the #3685 sister gate (strategyFixation) already had.
+			if isCommandChannelTool(tc.Name) && tc.Name != "start_command" && !result.IsError && isVerificationCommand(extractCommandFromArgs(tc.Arguments)) {
 				a.verifyDebt.recordVerifyCommand(extractCommandFromArgs(tc.Arguments), result.IsError)
 			}
 			// #2992 case 2: the long-test workflow runs builds/tests via
@@ -5327,7 +5351,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// detector's own charter ("7 edits to 7 DIFFERENT files") was
 			// unreachable. Only a successful VERIFY COMMAND resets now.
 			// #3685-A: same six-channel widening as the verifyDebt gate above.
-			if isCommandChannelTool(tc.Name) && !result.IsError {
+			// #4234: start_command excluded with it - launch is not a green
+			// build; only a terminal outcome settles these detectors.
+			if isCommandChannelTool(tc.Name) && tc.Name != "start_command" && !result.IsError {
 				if cmd := extractCommandFromArgs(tc.Arguments); cmd != "" && isVerifyCommand(cmd) {
 					a.editPropagation.recordGreenBuild()
 					// #1460-C: a green verification confirms the edit
