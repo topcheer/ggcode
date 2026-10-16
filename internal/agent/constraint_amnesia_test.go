@@ -107,6 +107,8 @@ func TestConstraintAmnesiaState_MaybeWarn_TooEarly(t *testing.T) {
 func TestConstraintAmnesiaState_MaybeWarn_FiresAfterThreshold(t *testing.T) {
 	s := newConstraintAmnesiaState()
 	s.recordConstraints("Don't modify the auth module", 1)
+	// #4242: edit-relevance gate - a recent edit is now required to fire.
+	s.noteEdit(constraintReminderMinIterations)
 	msg := s.maybeWarn(constraintReminderMinIterations + 1)
 	if msg == "" {
 		t.Error("expected warning after threshold, got empty string")
@@ -122,6 +124,8 @@ func TestConstraintAmnesiaState_MaybeWarn_FiresAfterThreshold(t *testing.T) {
 func TestConstraintAmnesiaState_MaybeWarn_MaxWarnings(t *testing.T) {
 	s := newConstraintAmnesiaState()
 	s.recordConstraints("Don't modify the auth module", 1)
+	// #4242: edit-relevance gate - keep an edit in the recency window.
+	s.noteEdit(constraintReminderMinIterations)
 	// First warning
 	msg1 := s.maybeWarn(constraintReminderMinIterations + 1)
 	if msg1 == "" {
@@ -155,6 +159,8 @@ func TestConstraintAmnesiaState_Reset(t *testing.T) {
 func TestConstraintAmnesiaState_MultipleConstraints(t *testing.T) {
 	s := newConstraintAmnesiaState()
 	s.recordConstraints("Don't modify the auth module. Only use PostgreSQL. Avoid touching the config files.", 1)
+	// #4242: edit-relevance gate.
+	s.noteEdit(constraintReminderMinIterations)
 	msg := s.maybeWarn(constraintReminderMinIterations + 1)
 	if msg == "" {
 		t.Fatal("expected warning")

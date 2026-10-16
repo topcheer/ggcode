@@ -5228,6 +5228,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			if isEditTool(tc.Name) && len(editPaths) > 0 {
 				a.fileChurn.recordEdit(editPaths)
+				// #4242: feed the constraint-amnesia edit-relevance gate.
+				a.constraintAmnesia.noteEdit(i + 1)
 				for _, p := range editPaths {
 					a.tunnelVision.recordFile(p)
 				}
