@@ -116,12 +116,15 @@ Switch modes without restarting using the `/mode` slash command, or press `Shift
 
 ## Pipe Mode
 
-When using pipe mode (`-p`), ggcode defaults to `supervised` mode unless `--bypass` is specified:
+When using pipe mode (`-p`), ggcode defaults to `auto` mode (safe operations run, risky ones are denied - there is no interactive prompt in pipe mode, so anything that would "ask" is denied). `--bypass` relaxes this to auto-approve with a few remaining gates; `--dangerously-skip-permissions` removes all checks:
 
 ```bash
-echo "fix the typo" | ggcode -p            # supervised mode (asks confirmation)
-echo "fix the typo" | ggcode -p --bypass   # bypass mode (auto-approve)
+echo "fix the typo" | ggcode -p            # auto mode (risky calls denied)
+echo "fix the typo" | ggcode -p --bypass   # bypass mode (nearly everything auto-approved)
+echo "fix the typo" | ggcode -p --dangerously-skip-permissions   # no checks at all
 ```
+
+`--dangerously-skip-permissions` outranks `--bypass` and `default_mode`. Under it every tool call runs unchecked - no sandbox, no danger/exfiltration gates. The only surviving restriction is an explicit `tools.<name>: deny` rule in your config (user-authored deny rules win in every mode). Use it only in throwaway environments; a startup warning is printed to stderr.
 
 ## Allowed-Risk Accumulation (r28)
 

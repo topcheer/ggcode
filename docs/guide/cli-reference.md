@@ -23,6 +23,8 @@ Additional pipe-mode flags:
 - `--allowedTools <name>` — restrict tools (repeatable)
 - `--output <path>` — write output to file (default: stdout)
 - `--output-schema <path>` — constrain the final response to a JSON Schema file (structured outputs; supported endpoints use constrained decoding, others fall back to prompt guidance + a JSON-validity exit-code check)
+- `--llm-retry-always` — retry EVERY LLM error indefinitely (auth/404/quota/overflow all retried, attempt and backoff caps lifted); only Ctrl-C stops (env `GGCODE_LLM_RETRY_ALWAYS`; pairs with `--llm-base-url` etc. but works for any pipe run)
+- `--dangerously-skip-permissions` — skip ALL permission checks: every tool call runs (no sandbox, no danger/exfiltration gates; explicit config `deny` rules still apply). Expert use only in throwaway environments
 
 ### Resume Session
 
@@ -273,6 +275,8 @@ ggcode version                         # Print version, commit, and build date
 |------|-------------|
 | `--config <path>` | Use a specific config file |
 | `--bypass` | Start in bypass permission mode |
+| `--dangerously-skip-permissions` | Pipe mode: skip ALL permission checks (expert use only) |
+| `--llm-retry-always` | Pipe mode: retry every LLM error indefinitely (env `GGCODE_LLM_RETRY_ALWAYS`) |
 | `-p, --prompt <prompt>` | Non-interactive pipe mode |
 | `--allowedTools <name>` | Restrict tools in pipe mode (repeatable) |
 | `--output <path>` | Output file path (default: stdout) |
