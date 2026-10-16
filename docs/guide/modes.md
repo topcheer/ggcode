@@ -126,6 +126,8 @@ echo "fix the typo" | ggcode -p --dangerously-skip-permissions   # no checks at 
 
 `--dangerously-skip-permissions` outranks `--bypass` and `default_mode`. Under it every tool call runs unchecked - no sandbox, no danger/exfiltration gates. The only surviving restriction is an explicit `tools.<name>: deny` rule in your config (user-authored deny rules win in every mode). Use it only in throwaway environments; a startup warning is printed to stderr.
 
+This mode is a **startup-only flag**: it cannot be entered at runtime. The `switch_mode` tool, `/mode`, mobile tunnel mode switching, and IM slash commands all reject `dangerous` — restart the process with the flag if you genuinely need it. This keeps a prompt-injected transcript (or a paired phone) from escalating a normal session to allow-everything.
+
 ## Allowed-Risk Accumulation (r28)
 
 The mode table above shows dangerous commands are **Allowed silently** in auto/bypass. Each single allowance is a deliberate design choice - but a session full of individually-permitted risky steps (one chmod here, one `curl | bash` there, one non-critical `rm` after another) can drift the system toward a hazardous state with no single step ever raising a flag. Frontier research (DreamGuard, arXiv:2608.05695) names this blind spot: guardrails judge steps, not trajectories.
