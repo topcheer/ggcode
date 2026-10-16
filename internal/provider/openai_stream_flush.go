@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -20,7 +22,10 @@ func (p *OpenAIProvider) flushResidualToolCalls(ctx context.Context, ch chan<- S
 	if !shouldFlush {
 		return 0, false, true
 	}
-	for idx, tc := range toolCalls {
+	// #4244: sorted emit (same randomized-map fix as the finish_reason
+	// loop in openai.go) - the flush path must not reorder either.
+	for _, idx := range slices.Sorted(maps.Keys(toolCalls)) {
+		tc := toolCalls[idx]
 		if tc.Name == "" || tc.ID == "" {
 			continue
 		}
