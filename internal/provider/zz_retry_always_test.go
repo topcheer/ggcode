@@ -24,7 +24,8 @@ func TestRetryAlwaysPermanentErrorsBecomeRetryable(t *testing.T) {
 		&openai.APIError{HTTPStatusCode: 404, Message: "model not found"},
 		&openai.APIError{HTTPStatusCode: 422, Message: "unprocessable"},
 		errors.New("status code: 400, message: bad request"),
-		errors.New("requested 40123 tokens, maximum is 131072"), // context overflow
+		// context overflow removed (#4214): deterministic failure, excluded
+		// from retry-always - see TestRetryAlwaysDoesNotRetryContextOverflow.
 		errors.New("quota exceeded: billing cycle"),
 	}
 	ctx := context.Background()
