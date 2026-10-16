@@ -232,6 +232,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.Flags().StringVar(&adhocLLM.Protocol, "llm-protocol", "", "ad-hoc provider mode: wire protocol override - openai|anthropic|gemini (env "+adhocEnvProtocol+"; default: inferred from URL)")
 	cmd.Flags().IntVar(&adhocLLM.ContextWindow, "llm-context-window", 0, "ad-hoc provider mode: context window override (env "+adhocEnvContextWindow+")")
 	cmd.Flags().IntVar(&adhocLLM.MaxTokens, "llm-max-tokens", 0, "ad-hoc provider mode: max output tokens override (env "+adhocEnvMaxTokens+")")
+	cmd.Flags().BoolVar(&adhocLLM.RetryAlways, "llm-retry-always", false, "ad-hoc provider mode: retry EVERY LLM error indefinitely - auth/404/quota/overflow all retried, attempt and backoff caps lifted; only Ctrl-C/cancellation stops (env "+adhocEnvRetryAlways+"=true/1)")
 
 	helperCmd := &cobra.Command{
 		Use:    "update-helper",

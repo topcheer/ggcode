@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 // Ad-hoc provider mode (#4117): run pipe (-p) with a model + endpoint URL
@@ -22,6 +23,10 @@ import (
 //   --llm-protocol          GGCODE_LLM_PROTOCOL     (default: inferred from URL)
 //   --llm-context-window    GGCODE_LLM_CONTEXT_WINDOW
 //   --llm-max-tokens        GGCODE_LLM_MAX_TOKENS
+//   --llm-retry-always      GGCODE_LLM_RETRY_ALWAYS (true/1: retry EVERY LLM
+//                          error indefinitely — auth/404/quota/overflow all
+//                          retried; only Ctrl-C/cancellation stops; lifts the
+//                          20-attempt and 2-minute backoff caps)
 //
 // Mode activates only when BOTH base URL and model are present (from either
 // source combined). A partial pair is a user error and is reported as such.
@@ -39,6 +44,7 @@ type adhocLLMFlags struct {
 	Protocol      string
 	ContextWindow int
 	MaxTokens     int
+	RetryAlways   bool
 }
 
 // adhocActive reports whether ad-hoc mode is requested: base URL + model both
@@ -67,12 +73,13 @@ const (
 	adhocEnvProtocol      = "GGCODE_LLM_PROTOCOL"
 	adhocEnvContextWindow = "GGCODE_LLM_CONTEXT_WINDOW"
 	adhocEnvMaxTokens     = "GGCODE_LLM_MAX_TOKENS"
+	adhocEnvRetryAlways   = "GGCODE_LLM_RETRY_ALWAYS"
 )
 
 // adhocEnvTouched reports whether any GGCODE_LLM_* provider variable is set
 // (used for the partial-pair diagnostic: env half-set deserves a hint).
 func adhocEnvTouched() bool {
-	for _, k := range []string{adhocEnvBaseURL, adhocEnvModel, adhocEnvAPIKey, adhocEnvProtocol, adhocEnvContextWindow, adhocEnvMaxTokens} {
+	for _, k := range []string{adhocEnvBaseURL, adhocEnvModel, adhocEnvAPIKey, adhocEnvProtocol, adhocEnvContextWindow, adhocEnvMaxTokens, adhocEnvRetryAlways} {
 		if strings.TrimSpace(os.Getenv(k)) != "" {
 			return true
 		}
@@ -153,6 +160,12 @@ var adhocLLM adhocLLMFlags
 // file-loaded config otherwise.
 func loadConfigForRun(cfgFile string, f *adhocLLMFlags) (*config.Config, error) {
 	if f.adhocActive() {
+		// Retry-always is an ad-hoc-mode-only escape hatch (the user owns the
+		// endpoint and knows its flakiness); it must not leak into normal
+		// file-config runs.
+		if adhocBool(f.RetryAlways, adhocEnvRetryAlways) {
+			provider.SetRetryAlways(true)
+		}
 		return f.synthesizeAdhocConfig()
 	}
 	wd, _ := os.Getwd()
@@ -170,4 +183,17 @@ func adhocInt(flagVal int, envKey string) int {
 		}
 	}
 	return 0
+}
+
+// adhocBool resolves a bool override: flag (true) wins over env. Env accepts
+// the common truthy spellings (1/true/yes/on, case-insensitive).
+func adhocBool(flagVal bool, envKey string) bool {
+	if flagVal {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(envKey))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }

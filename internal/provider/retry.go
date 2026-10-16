@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
@@ -31,6 +32,26 @@ const (
 // shrink it.
 var providerRetryTimeBudget = 2 * time.Minute
 
+// retryAlwaysEnabled lifts ALL retry caps for the process: every error
+// class becomes retryable (see isRetryableForContext), the cumulative
+// backoff budget becomes infinite (see retryWithBackoffCtx), and the
+// attempt cap is removed (see callPolicy.attempts). Only caller-context
+// cancellation still stops the loop. Set once at startup by ad-hoc pipe
+// mode (--llm-retry-always / GGCODE_LLM_RETRY_ALWAYS, cmd/ggcode/adhoc.go):
+// the user explicitly opts into grinding through misleading permanent codes
+// from flaky gateways (intermittent 401/404/quota) instead of failing fast.
+var retryAlwaysEnabled atomic.Bool
+
+// SetRetryAlways turns the retry-everything mode on or off process-wide.
+func SetRetryAlways(v bool) { retryAlwaysEnabled.Store(v) }
+
+// RetryAlwaysEnabled reports whether retry-everything mode is active.
+func RetryAlwaysEnabled() bool { return retryAlwaysEnabled.Load() }
+
+// retryAlwaysAttempts is the attempt cap under retry-always mode. Huge but
+// bounded so loop counters stay well clear of int overflow even with jitter.
+const retryAlwaysAttempts = 1 << 30
+
 // errRetryBudgetExhausted marks a failure whose inner retry loop already
 // consumed the full per-call backoff budget — the provider got a best-effort
 // chance. FallbackProvider treats it as sustained failure and switches
@@ -42,8 +63,9 @@ var errRetryBudgetExhausted = errors.New("retry budget exhausted")
 // errRetryBudgetExhausted so callers stop retrying and surface a
 // sentinel-wrapped error.
 type retryBudget struct {
-	deadline time.Time
-	done     bool
+	deadline  time.Time
+	done      bool
+	unlimited bool // retry-always mode: skip every deadline check
 }
 
 func newRetryBudget() *retryBudget {
@@ -55,6 +77,9 @@ func newRetryBudget() *retryBudget {
 // errRetryBudgetExhausted (the pending retry must not run — the budget is
 // spent). Context cancellation propagates unchanged.
 func (b *retryBudget) sleep(ctx context.Context, delay time.Duration) error {
+	if b.unlimited {
+		return retrySleep(ctx, delay)
+	}
 	if remaining := time.Until(b.deadline); remaining <= 0 {
 		b.done = true
 		return errRetryBudgetExhausted
@@ -310,6 +335,12 @@ func isRetryableForContext(ctx context.Context, err error) bool {
 	if ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return false
 	}
+	// Retry-always mode: retry EVERYTHING except the caller-context
+	// cancellations above (Ctrl-C / agent-turn timeout must still work).
+	// The permanent-error classifier below is deliberately bypassed.
+	if retryAlwaysEnabled.Load() {
+		return true
+	}
 	return isRetryable(err)
 }
 
@@ -344,6 +375,11 @@ func retryWithBackoffCtx(ctx context.Context, fn func() error, maxAttempts int) 
 		maxAttempts = 1
 	}
 	budget := newRetryBudget()
+	if retryAlwaysEnabled.Load() {
+		// Retry-always: no cumulative backoff cap - only context
+		// cancellation ends the loop.
+		budget.unlimited = true
+	}
 	var lastErr error
 	for i := 0; i < maxAttempts; i++ {
 		err := fn()
