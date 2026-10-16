@@ -266,19 +266,10 @@ func (al *AgentLoop) Mode() string {
 
 // applyModePolicy rebuilds the permission policy for the given mode.
 func (al *AgentLoop) applyModePolicy(mode string) {
-	var permMode permission.PermissionMode
-	switch mode {
-	case "bypass":
-		permMode = permission.BypassMode
-	case "autopilot":
-		permMode = permission.AutopilotMode
-	case "auto":
-		permMode = permission.AutoMode
-	case "supervised":
-		permMode = permission.SupervisedMode
-	default:
-		permMode = permission.AutoMode
-	}
+	// two-mode refactor: single-point normalization - legacy names (auto /
+	// autopilot) map to supervised / bypass, unknown input falls back to the
+	// supervised default instead of silently becoming a legacy alias.
+	permMode := permission.ParsePermissionMode(mode)
 	policy := permission.NewConfigPolicyWithMode(nil, al.cfg.AllowedDirs, permMode)
 	al.agent.SetPermissionPolicy(policy)
 }

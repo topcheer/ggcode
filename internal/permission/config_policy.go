@@ -276,8 +276,10 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 					return Ask, nil
 				}
 				// Review (plan indirect-write channel): a shell redirect IS a
-				// file write - hold it to the same floor as the write-tool Deny
-				// above so `echo x > file` cannot bypass isWriteFileTool.
+				// file write - held to an Ask floor (deliberately softer than
+				// the write-tool Deny above: one extra confirm beats killing
+				// a legitimate planning probe) so `echo x > file` cannot
+				// silently bypass isWriteFileTool.
 				for _, tgt := range extractRedirectTargets(cmd) {
 					resolved := expandTilde(tgt)
 					if !p.sandbox.Allowed(resolved) || isSensitivePath(resolved) {

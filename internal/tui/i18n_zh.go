@@ -1319,7 +1319,7 @@ func zhCatalog(key string) string {
   /model [name]      打开模型面板或直接切换
   /provider [vendor] 打开供应商管理界面
   /impersonate [p/m] 测试供应商/模型而不切换配置
-  /mode <mode>       设置运行模式（supervised|plan|auto|bypass|autopilot）
+  /mode <mode>       设置运行模式（supervised|bypass；auto/autopilot 为兼容别名）
   /goal [text]       查看、设置或清除持久化自动驾驶目标
   /stream            切换流式输出模式
 

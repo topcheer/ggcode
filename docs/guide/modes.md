@@ -39,7 +39,7 @@ ggcode --bypass
 
 ### `plan`
 
-Tool-entered read-orientation mode. Denies explicit file-writing tools only; reads, shell probes, and builds are allowed (extremely-dangerous, exfiltration, and redirect-to-backdoor floors still ask) so planning stays grounded in real diagnostics. Entered with `enter_plan_mode`, exited with `exit_plan_mode`.
+Tool-entered read-orientation mode. Denies explicit file-writing tools only; reads, shell probes, and builds are allowed (extremely-dangerous, exfiltration, and redirect-to-backdoor floors still ask) so planning stays grounded in real diagnostics. Note this intentionally permits non-redirect indirect side effects (a `git commit -a`, `make`, or `curl -o file` run during planning) — the contract trades strict read-only-ness for grounded planning. Entered with `enter_plan_mode`, exited with `exit_plan_mode`.
 
 ## Comparison
 
