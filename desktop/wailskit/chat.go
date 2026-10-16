@@ -1089,7 +1089,14 @@ func (b *ChatBridge) persistUserMessageRemoval() {
 	b.mu.Lock()
 	ses := b.persistSession
 	mismatch := b.sessionLockMismatchLocked(ses)
-	_, deleted := b.deletedSessions[ses.ID]
+	// #4251: nil check BEFORE the deletedSessions lookup - ses.ID dereferences
+	// the snapshot, and ClearCurrentSession can leave persistSession nil while
+	// a draining vision-fallback run still reaches this point (stop + new
+	// session sequence). Mirrors the persist handler's ordering.
+	var deleted bool
+	if ses != nil {
+		_, deleted = b.deletedSessions[ses.ID]
+	}
 	store := b.sessionStore
 	b.mu.Unlock()
 	if ses == nil || mismatch || deleted {
