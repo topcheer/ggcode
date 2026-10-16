@@ -159,17 +159,55 @@ var adhocLLM adhocLLMFlags
 // when ad-hoc mode is active (config file is NEVER opened), or the regular
 // file-loaded config otherwise.
 func loadConfigForRun(cfgFile string, f *adhocLLMFlags) (*config.Config, error) {
+	// Retry-always is a per-run escape hatch (the user owns the endpoint and
+	// knows its flakiness). It must activate whenever the flag/env is set -
+	// including plain -p pipe runs against the CONFIG-FILE provider. Gating
+	// it behind adhocActive() (which requires --llm-base-url AND --llm-model)
+	// silently disabled it for exactly the batch callers who passed only the
+	// flag: their 401s terminated on the first attempt with no retry at all.
+	// It must not leak into interactive TUI/daemon sessions: those surfaces
+	// never set the flag, and the env var is opt-in per process.
+	if adhocBool(f.RetryAlways, adhocEnvRetryAlways) {
+		provider.SetRetryAlways(true)
+	}
 	if f.adhocActive() {
-		// Retry-always is an ad-hoc-mode-only escape hatch (the user owns the
-		// endpoint and knows its flakiness); it must not leak into normal
-		// file-config runs.
-		if adhocBool(f.RetryAlways, adhocEnvRetryAlways) {
-			provider.SetRetryAlways(true)
-		}
 		return f.synthesizeAdhocConfig()
+	}
+	// Enforce the file-header contract (#4216): a half-set pair must be a
+	// hard error, not a silent fallthrough to the config-file provider —
+	// the batch would run against the wrong endpoint/model with no clue.
+	if err := f.checkPartialPair(); err != nil {
+		return nil, err
 	}
 	wd, _ := os.Getwd()
 	return config.LoadWithInstance(cfgFile, wd)
+}
+
+// checkPartialPair rejects exactly-one-of {base URL, model} (#4216). When
+// neither is set, auxiliary --llm-* values (api-key/protocol/context-window/
+// max-tokens/retry-always, via flag or GGCODE_LLM_* env) are tolerated — the
+// leniency is intentional — but the user still gets a stderr hint instead of
+// the old zero-feedback behavior.
+func (f *adhocLLMFlags) checkPartialPair() error {
+	baseURL := adhocValue(f.BaseURL, adhocEnvBaseURL)
+	model := adhocValue(f.Model, adhocEnvModel)
+	switch {
+	case baseURL != "" && model == "":
+		return fmt.Errorf(
+			"ad-hoc provider mode needs BOTH a base URL and a model: --llm-base-url (or %s) is set but no model was given (use --llm-model or %s); refusing to silently fall back to the config-file provider (#4216)",
+			adhocEnvBaseURL, adhocEnvModel)
+	case baseURL == "" && model != "":
+		return fmt.Errorf(
+			"ad-hoc provider mode needs BOTH a base URL and a model: --llm-model (or %s) is set but no base URL was given (use --llm-base-url or %s); refusing to silently fall back to the config-file provider (#4216)",
+			adhocEnvModel, adhocEnvBaseURL)
+	}
+	// Neither side of the pair: warn when any adhoc-ish source is set so the
+	// user learns the settings are inert without the pair.
+	orphanFlags := f.APIKey != "" || f.Protocol != "" || f.ContextWindow > 0 || f.MaxTokens > 0 || f.RetryAlways
+	if orphanFlags || adhocEnvTouched() {
+		fmt.Fprintf(os.Stderr, "[ggcode] note: ignoring --llm-* / %s settings: ad-hoc provider mode activates only when BOTH --llm-base-url and --llm-model are set\n", "GGCODE_LLM_*")
+	}
+	return nil
 }
 
 // adhocInt resolves an int override: flag (non-zero) wins over env.

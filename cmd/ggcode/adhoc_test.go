@@ -186,15 +186,30 @@ func TestAdhocRetryAlwaysActivatesOnlyInAdhocMode(t *testing.T) {
 		t.Fatal("retry-always must stay off when not requested")
 	}
 
-	// Retry-always requested but ad-hoc mode NOT active (no base URL/model):
-	// the escape hatch must not leak into normal file-config runs.
+	// Retry-always requested on a plain -p pipe run (no ad-hoc provider
+	// pair): the escape hatch MUST activate. Batch callers pass only the
+	// flag against the config-file provider; gating it behind
+	// adhocActive() silently disabled retries for exactly those callers
+	// (their 401s terminated on the first attempt). Config-file load may
+	// fail on a nonexistent path - irrelevant to the activation check.
 	t.Setenv(adhocEnvBaseURL, "")
 	t.Setenv(adhocEnvModel, "")
 	t.Setenv(adhocEnvRetryAlways, "true")
+	provider.SetRetryAlways(false)
+	if _, err := loadConfigForRun("nonexistent-config-file-for-test.yaml", &adhocLLMFlags{}); err == nil {
+		t.Log("config file load unexpectedly succeeded; activation check still applies")
+	}
+	if !provider.RetryAlwaysEnabled() {
+		t.Fatal("retry-always must activate on plain pipe runs via env, even without the ad-hoc provider pair")
+	}
+
+	// Not requested anywhere: mode stays off (no leak from stale state).
+	provider.SetRetryAlways(false)
+	t.Setenv(adhocEnvRetryAlways, "")
 	if _, err := loadConfigForRun("nonexistent-config-file-for-test.yaml", &adhocLLMFlags{}); err == nil {
 		t.Log("config file load unexpectedly succeeded; leak check still applies")
 	}
 	if provider.RetryAlwaysEnabled() {
-		t.Fatal("retry-always must NOT activate outside ad-hoc mode")
+		t.Fatal("retry-always must stay off when not requested")
 	}
 }
