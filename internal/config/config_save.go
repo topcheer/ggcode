@@ -162,14 +162,23 @@ func (c *Config) Save() error {
 // globalOnlyVendors returns the subset of merged vendors that existed in the
 // global snapshot — i.e. excluding vendors that came from the instance config
 // merge. If globalSnap is unavailable the merged set is returned unchanged.
+//
+// For a vendor that existed globally but was OVERRIDDEN by the instance merge
+// (#2289 instance-wins), the snapshot's original struct is written back, NOT
+// the merged struct: the merged value carries instance-sourced fields (e.g.
+// api_key/base_url overrides) and writing it to the global vendors.yaml would
+// leak the workspace-private key into the shared ~/.ggcode/keys.env that every
+// other workspace loads (#4262). Runtime edits to a global vendor are not
+// affected: they flow through SyncVendorToGlobalSnapshot (#368), which updates
+// the snapshot to the edited value before Save runs.
 func globalOnlyVendors(merged, globalSnapVendors map[string]VendorConfig) map[string]VendorConfig {
 	if globalSnapVendors == nil {
 		return merged
 	}
 	out := make(map[string]VendorConfig, len(merged))
-	for name, vc := range merged {
-		if _, isGlobal := globalSnapVendors[name]; isGlobal {
-			out[name] = vc
+	for name := range merged {
+		if gvc, isGlobal := globalSnapVendors[name]; isGlobal {
+			out[name] = gvc
 		}
 	}
 	return out
