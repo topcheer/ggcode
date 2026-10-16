@@ -62,6 +62,15 @@ func (r GateResult) IsBlocked() bool { return r.Behavior == Block }
 type CommandGate struct {
 	blockRules []*gateRule
 	askRules   []*gateRule
+	// warnRules are informational only: they never gate execution. The
+	// injection family lives here (downgraded from Ask): shell
+	// substitutions are native syntax agents use constantly, and the ASK
+	// tier fired on parameter DATA (gh issue create --body "run $(make)")
+	// as often as on code. The real threats nested inside substitutions
+	// (mkfs, credential exfiltration, rm -rf) are independently covered by
+	// the Block tier and the destructive Ask rules — probes verified those
+	// still fire with the injection rules fully relaxed.
+	warnRules  []*gateRule
 	cleanRules []cleanRule
 }
 
@@ -206,17 +215,8 @@ func NewCommandGate() *CommandGate {
 	// ================================================================
 	g.askRules = []*gateRule{
 
-		// --- Command injection patterns (Claude Code style) ---
-		{kind: "injection", desc: "command substitution $() may hide nested commands",
-			pattern: regexp.MustCompile(`\$\(`)},
-		{kind: "injection", desc: "process substitution <() can bypass path checks",
-			pattern: regexp.MustCompile(`<\(`)},
-		{kind: "injection", desc: "process substitution >() can redirect output covertly",
-			pattern: regexp.MustCompile(`>\(`)},
-		{kind: "injection", desc: "backtick command substitution",
-			pattern: regexp.MustCompile("`.+`")},
-		{kind: "injection", desc: "parameter expansion ${} can execute code",
-			pattern: regexp.MustCompile(`\$\{`)},
+		// (Command injection patterns moved to warnRules — see the field
+		// doc and the block of assignments before cleanRules.)
 
 		// --- Dangerous file operations ---
 		{kind: "destructive", desc: "recursive force delete",
@@ -281,6 +281,31 @@ func NewCommandGate() *CommandGate {
 		// --- Destructive cron ---
 		{kind: "destructive", desc: "destructive cron job",
 			pattern: regexp.MustCompile(`(?i)crontab\s+.*\brm\s+-r`)},
+	}
+
+	// ================================================================
+	// WARN — shell-substitution syntax (informational, never gates)
+	// ================================================================
+	// Downgraded from the ASK tier: these are native shell syntax that
+	// agents legitimately use in nearly every nontrivial command
+	// (`grep -rn "$(git rev-parse --show-toplevel)" ...`), and the regexes
+	// matched argument DATA as readily as code — `gh issue create --body
+	// "repro: run $(make test)"` was confirmation-gated, breaking
+	// unattended pipelines. Catastrophic commands nested inside a
+	// substitution are still caught independently: Block-tier rules
+	// (disk format, credential exfiltration, ...) and destructive Ask
+	// rules (rm -rf, ...) match the nested form without these patterns.
+	g.warnRules = []*gateRule{
+		{kind: "injection", desc: "shell command substitution $() (informational)",
+			pattern: regexp.MustCompile(`\$\(`)},
+		{kind: "injection", desc: "process substitution <() (informational)",
+			pattern: regexp.MustCompile(`<\(`)},
+		{kind: "injection", desc: "process substitution >() (informational)",
+			pattern: regexp.MustCompile(`>\(`)},
+		{kind: "injection", desc: "backtick command substitution (informational)",
+			pattern: regexp.MustCompile("`.+`")},
+		{kind: "injection", desc: "parameter expansion ${} (informational)",
+			pattern: regexp.MustCompile(`\$\{`)},
 	}
 
 	// ================================================================
@@ -375,6 +400,18 @@ func (g *CommandGate) Check(cmd string) GateResult {
 
 	// ---- Layer 3: Destructive warnings (informational only) ----
 	result.Warnings = g.destructiveWarnings(cmd)
+
+	// ---- Layer 3a: Shell-substitution warnings (informational only) ----
+	// Downgraded injection family: surface the syntax in the tool result
+	// without gating execution (rationale on the warnRules field).
+	for _, rule := range g.warnRules {
+		for _, v := range matchViews {
+			if rule.pattern.MatchString(v) {
+				result.Warnings = append(result.Warnings, rule.desc)
+				break
+			}
+		}
+	}
 
 	// ---- Layer 3b: Interactive command warning ----
 	// Detect commands that will hang indefinitely waiting for stdin or that

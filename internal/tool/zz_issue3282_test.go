@@ -14,9 +14,12 @@ import (
 // the highest-value sandbox-probing detection surface (#3281 reviewer
 // ruling: mandatory follow-up).
 
-// askProbeCmd hits the injection ask-rule ("$(..." command substitution)
-// while being harmless when actually executed in the end-to-end test.
-const askProbeCmd = "echo $(date)"
+// askProbeCmd hits the rm -f destructive ask-rule while being harmless when
+// actually executed in the end-to-end test (deleting a nonexistent temp
+// file). It previously used "echo $(date)" via the injection ask-rule, but
+// the injection family was downgraded to informational warnings — the
+// destructive family is the stable Ask-tier probe.
+const askProbeCmd = "rm -f temp.txt"
 
 func TestIssue3282_BypassAskDowngradeRecordsLedger(t *testing.T) {
 	ledger := &SecurityLedger{}
