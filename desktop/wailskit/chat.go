@@ -1213,6 +1213,15 @@ func (b *ChatBridge) LoadSession(id string) error {
 	storeDir, _ := session.DefaultDir()
 	lock, lockErr := session.TryAcquireSessionLock(storeDir, id)
 	if lockErr != nil || lock == nil || !lock.Acquired() {
+		// #4240: early-fail point 1 — the old session's lock was already
+		// released by cleanupEphemeralSession, but currentSes still points
+		// at it. Without the rollback the bridge keeps using an unlocked
+		// session: a concurrent instance can acquire its lock and both
+		// append to the same JSONL (#269).
+		b.rollbackSessionLoad(prev.ses, prev)
+		if cb := b.OnSessionChanged; cb != nil {
+			cb()
+		}
 		return fmt.Errorf("session is locked by another instance: %s", id)
 	}
 	b.mu.Lock()
@@ -1232,6 +1241,13 @@ func (b *ChatBridge) LoadSession(id string) error {
 		b.mu.Unlock()
 		if ours {
 			lock.Release()
+		}
+		// #4240: early-fail point 2 — target lock released above; roll the
+		// old session (lock + view) back so the bridge never sits on an
+		// unlocked currentSes.
+		b.rollbackSessionLoad(prev.ses, prev)
+		if cb := b.OnSessionChanged; cb != nil {
+			cb()
 		}
 		return fmt.Errorf("load session: %w", err)
 	}
@@ -1256,6 +1272,12 @@ func (b *ChatBridge) LoadSession(id string) error {
 		b.mu.Unlock()
 		if ours {
 			lock.Release()
+		}
+		// #4240: early-fail point 3 (the #2741 busy re-check) — same
+		// unlocked-old-session exposure as the load failure above.
+		b.rollbackSessionLoad(prev.ses, prev)
+		if cb := b.OnSessionChanged; cb != nil {
+			cb()
 		}
 		return fmt.Errorf("session switch while agent is running")
 	}
