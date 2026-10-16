@@ -4057,6 +4057,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// r27 ask quality gate: block zero-information-gain asks (self-
 			// answerable facts, same-run duplicates) BEFORE execution; advisory
 			// for safe-default choices rides along on allowed asks.
+			// #4212: the advisory used to be computed and then dropped (log
+			// only). Cache it per-iteration and splice it into the tool
+			// result after ask_user executes, below.
+			askAdvisory := ""
 			if tc.Name == "ask_user" {
 				if blockMsg, advMsg := a.checkAskQualityGate(string(tc.Arguments)); blockMsg != "" {
 					toolResults = append(toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, blockMsg, true))
@@ -4068,7 +4072,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					})
 					continue
 				} else if advMsg != "" {
-					debug.Log("ask-gate", "safe-default advisory attached to ask_user call")
+					askAdvisory = advMsg
 				}
 			}
 			// Secret-redaction write guard (#1195): a file-write tool whose
@@ -5724,6 +5728,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// waste ratio past the 40% threshold early; a truncated large read
 			// metered at full size dilutes it).
 			measuredLen := len(result.Content)
+			// #4212: splice the cached safe-default advisory into the
+			// successful ask_user result so the model actually receives the
+			// "proceed with the stated default" guidance (r27 soft-advisory
+			// channel). Skipped on error: a failed ask already carries its own
+			// remediation text.
+			if askAdvisory != "" && tc.Name == "ask_user" && !result.IsError {
+				result.Content = result.Content + "\n\n" + askAdvisory
+			}
 			a.applyToolResultGuidance(&result, loopGuidance, searchParamHint, redundancyHint, equivHint, undoBlindHint)
 			// Untrusted-content spotlighting: the block sent to the provider
 			// is wrapped in untrusted_tool_output markers (data marking);
