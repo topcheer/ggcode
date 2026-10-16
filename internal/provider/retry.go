@@ -335,6 +335,15 @@ func isRetryableForContext(ctx context.Context, err error) bool {
 	if ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return false
 	}
+	// #4214: context overflow is mathematically deterministic - the same
+	// request bytes cannot fit no matter how many times they are resent.
+	// Exclude it from retry-always, whose rationale is intermittent
+	// misleading permanent codes from flaky gateways, not deterministic
+	// failures (an unattended pipe would spin 2^30 attempts / unbounded
+	// budget on a zero-probability retry).
+	if IsContextOverflowError(err) {
+		return false
+	}
 	// Retry-always mode: retry EVERYTHING except the caller-context
 	// cancellations above (Ctrl-C / agent-turn timeout must still work).
 	// The permanent-error classifier below is deliberately bypassed.
