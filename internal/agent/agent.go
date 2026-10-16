@@ -1696,7 +1696,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// The onRunResult callback and todo cleanup still run to ensure
 		// session persistence and state cleanup.
 		isCancelled := errors.Is(err, context.Canceled) ||
-			(err == nil && ctx.Err() != nil && errors.Is(ctx.Err(), context.Canceled))
+			(err == nil && ctx.Err() != nil && (errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded)))
 		if !isCancelled {
 			a.maybeReflect(runStats)
 			// r413: persist the failed run's terminal causal suspect
@@ -2701,8 +2701,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// context.Canceled) so callers can detect it with errors.Is.
 			// Converting to a friendly string would break the error chain.
 			if errors.Is(err, context.Canceled) || (ctx.Err() != nil && errors.Is(ctx.Err(), context.Canceled)) {
-				onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ctx.Err()})
-				return ctx.Err()
+				// #4232 case 1: the provider stream layer cancels a per-request
+				// child context on idle-timeout (internal/provider/idle_timeout_transport.go)
+				// while the main run ctx stays alive - ctx.Err() is nil here.
+				// Returning ctx.Err() would silently report the aborted stream
+				// as success (nil) to ACP/subagent/cron callers; return the
+				// original error instead so errors.Is keeps working.
+				cancelErr := ctx.Err()
+				if cancelErr == nil {
+					cancelErr = err
+				}
+				onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: cancelErr})
+				return cancelErr
 			}
 			friendlyErr := fmt.Errorf("%s", provider.FriendlyError(err))
 			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: friendlyErr})
@@ -2799,8 +2809,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			debug.Log("cache-efficiency", "injecting cache bust storm guidance at iteration %d", i+1)
 		}
 		// Detect empty LLM response: API accepted input but produced no output.
-		// Only trigger when InputTokens > 0 (real API call) to avoid false positives
-		// in tests or scenarios where usage stats are unavailable.
+		// Only trigger on OutputTokens == 0 with no text/tool calls.
 		// #4201: guard against providers whose final usage chunk reports
 		// {output_tokens: 0} even though text streamed out fine (vLLM /
 		// LiteLLM / Ollama compat gateways that ignore IncludeUsage). If we
@@ -2810,7 +2819,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// above). Without it, three normal text replies on such an endpoint
 		// abort the run with "3 consecutive empty responses" and the text is
 		// silently dropped from history.
-		if resp.Usage.OutputTokens == 0 && resp.Usage.InputTokens > 0 && len(toolCalls) == 0 &&
+		// #4232 case 2: the old `InputTokens > 0` conjunct made the whole
+		// guard unreachable on all-zero-usage gateways (vLLM/LiteLLM old
+		// versions), so consecutiveEmptyResponses could never accumulate and
+		// a single empty reply exited as silent success. The #4201 false-
+		// positive defense is carried entirely by the textBuf/Message.Content
+		// emptiness checks, so dropping the conjunct reintroduces nothing.
+		if resp.Usage.OutputTokens == 0 && len(toolCalls) == 0 &&
 			strings.TrimSpace(textBuf) == "" && len(resp.Message.Content) == 0 {
 			// Complete policy block (no partial text, no output tokens): the
 			// request was rejected by a provider safety filter. An empty-response
