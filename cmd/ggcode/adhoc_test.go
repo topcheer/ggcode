@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 // #4117 ad-hoc provider mode: flag/env resolution, protocol inference, config
@@ -130,5 +132,69 @@ func TestAdhocConfigIsResolvable(t *testing.T) {
 	}
 	if resolved.BaseURL != f.BaseURL || resolved.Model != f.Model {
 		t.Errorf("resolved endpoint mismatch: %+v", resolved)
+	}
+}
+
+// --llm-retry-always (#ad-hoc): bool flag/env resolution and the process-wide
+// retry-always activation contract (ad-hoc mode only; never leaks into normal
+// file-config runs).
+
+func TestAdhocBoolFlagAndEnv(t *testing.T) {
+	t.Setenv(adhocEnvRetryAlways, "")
+	if adhocBool(false, adhocEnvRetryAlways) {
+		t.Fatal("false flag + empty env must be false")
+	}
+	if !adhocBool(true, adhocEnvRetryAlways) {
+		t.Fatal("true flag must win regardless of env")
+	}
+	for _, v := range []string{"1", "true", "TRUE", "Yes", "on"} {
+		t.Setenv(adhocEnvRetryAlways, v)
+		if !adhocBool(false, adhocEnvRetryAlways) {
+			t.Fatalf("env %q must read as true", v)
+		}
+	}
+	for _, v := range []string{"0", "false", "no", "off", "garbage"} {
+		t.Setenv(adhocEnvRetryAlways, v)
+		if adhocBool(false, adhocEnvRetryAlways) {
+			t.Fatalf("env %q must read as false", v)
+		}
+	}
+}
+
+func TestAdhocRetryAlwaysActivatesOnlyInAdhocMode(t *testing.T) {
+	provider.SetRetryAlways(false)
+	t.Cleanup(func() { provider.SetRetryAlways(false) })
+
+	// Ad-hoc active + retry-always set: process-wide mode flips on.
+	t.Setenv(adhocEnvBaseURL, "https://api.example.com/v1")
+	t.Setenv(adhocEnvModel, "m")
+	t.Setenv(adhocEnvRetryAlways, "true")
+	if _, err := loadConfigForRun("", &adhocLLMFlags{}); err != nil {
+		t.Fatalf("loadConfigForRun adhoc: %v", err)
+	}
+	if !provider.RetryAlwaysEnabled() {
+		t.Fatal("retry-always must activate in ad-hoc mode")
+	}
+
+	// Ad-hoc active WITHOUT retry-always: mode stays off.
+	provider.SetRetryAlways(false)
+	t.Setenv(adhocEnvRetryAlways, "")
+	if _, err := loadConfigForRun("", &adhocLLMFlags{}); err != nil {
+		t.Fatalf("loadConfigForRun adhoc (no retry-always): %v", err)
+	}
+	if provider.RetryAlwaysEnabled() {
+		t.Fatal("retry-always must stay off when not requested")
+	}
+
+	// Retry-always requested but ad-hoc mode NOT active (no base URL/model):
+	// the escape hatch must not leak into normal file-config runs.
+	t.Setenv(adhocEnvBaseURL, "")
+	t.Setenv(adhocEnvModel, "")
+	t.Setenv(adhocEnvRetryAlways, "true")
+	if _, err := loadConfigForRun("nonexistent-config-file-for-test.yaml", &adhocLLMFlags{}); err == nil {
+		t.Log("config file load unexpectedly succeeded; leak check still applies")
+	}
+	if provider.RetryAlwaysEnabled() {
+		t.Fatal("retry-always must NOT activate outside ad-hoc mode")
 	}
 }

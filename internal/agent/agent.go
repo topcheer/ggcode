@@ -46,17 +46,32 @@ var errStreamInterruptedForReplan = errors.New("stream interrupted for replan")
 // These are typically mid-stream disconnects or DNS hiccups after partial output.
 const maxAgentLLMRetries = 3
 
+// agentLLMRetryLimit lifts the 3-retry cap in retry-always mode so the agent
+// turn loop also retries without bound (provider layer already lifted its own
+// caps via SetRetryAlways).
+func agentLLMRetryLimit() int {
+	if provider.RetryAlwaysEnabled() {
+		return 1 << 30
+	}
+	return maxAgentLLMRetries
+}
+
 // isAgentRetryableLLMError returns true for transient errors that warrant an
 // agent-level retry. Excludes: context overflow (handled by reactive compact),
 // user cancellation (should not retry), auth errors (retrying won't help),
 // and permanent quota exhaustion (429 with billing/quota keywords — provider
 // layer already detected and chose not to retry, agent should respect that).
+// In retry-always mode (ad-hoc -p --llm-retry-always) every error including
+// 401/403 auth is retried; only user cancellation exits.
 func isAgentRetryableLLMError(err error) bool {
 	if err == nil {
 		return false
 	}
 	if errors.Is(err, context.Canceled) {
 		return false
+	}
+	if provider.RetryAlwaysEnabled() {
+		return true
 	}
 	s := strings.ToLower(err.Error())
 	// Quota/billing exhaustion is permanent — never retry, even if the error
@@ -2629,7 +2644,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Agent-level retry for transient LLM errors that slip past the
 			// provider's own retry loop (e.g. mid-stream disconnect after
 			// partial output, DNS hiccup between provider retries).
-			if isAgentRetryableLLMError(err) && agentLLMRetries < maxAgentLLMRetries {
+			if isAgentRetryableLLMError(err) && agentLLMRetries < agentLLMRetryLimit() {
 				agentLLMRetries++
 				// Use longer backoff for rate limiting errors (429/overloaded)
 				// vs. transient network errors. Rate limits need more time
@@ -2641,10 +2656,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 				delay := time.Duration(agentLLMRetries*multiplier) * time.Second
 				debug.Log("agent", "transient LLM error (attempt %d/%d), retrying in %v: %v",
-					agentLLMRetries, maxAgentLLMRetries, delay, err)
+					agentLLMRetries, agentLLMRetryLimit(), delay, err)
 				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
 					Text: fmt.Sprintf("[Retrying LLM call (%d/%d) after %v...] ",
-						agentLLMRetries, maxAgentLLMRetries, delay)})
+						agentLLMRetries, agentLLMRetryLimit(), delay)})
 				select {
 				case <-time.After(delay):
 				case <-ctx.Done():
@@ -5997,6 +6012,13 @@ func (a *Agent) injectPendingInterruptions() (bool, InterruptionKind) {
 // completed tool calls, and whether the stream ended truncated and/or blocked
 // by a provider policy filter.
 func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message, toolDefs []provider.ToolDefinition, onEvent func(provider.StreamEvent)) (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, bool, error) {
+	// Normalize a nil onEvent once: the drain loop below calls it bare on
+	// every text/reasoning/tool event. Callers that don't need live events
+	// (e.g. the retrace gate passes nil) would panic on the first streamed
+	// event - the real root cause behind crash agent-20261016-101603.
+	if onEvent == nil {
+		onEvent = func(provider.StreamEvent) {}
+	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	rawStream, err := a.provider.ChatStream(streamCtx, msgs, toolDefs)
