@@ -103,7 +103,10 @@ func NewAgentLoop(
 	}
 
 	// --- Permission policy ---
-	permMode := permission.AutoMode
+	// Canonical supervised literal (dev_developer final-review nit): the
+	// legacy AutoMode alias behaves identically here, but keeping the enum
+	// surface canonical avoids ambiguity against the normalization contract.
+	permMode := permission.SupervisedMode
 	policy := permission.NewConfigPolicyWithMode(nil, cfg.AllowedDirs, permMode)
 	a.SetPermissionPolicy(policy)
 
