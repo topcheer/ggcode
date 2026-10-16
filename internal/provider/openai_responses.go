@@ -678,20 +678,33 @@ func (p *OpenAIResponsesProvider) chatStreamBackground(ctx context.Context, req 
 	safego.Go("provider.openaiResponses.pollLoop", func() {
 		defer close(ch)
 		var emitted int
+		// #4230 case C: every send honors cancellation - the consumer may
+		// stop reading after ctx cancel (agent abort), and a bare send on
+		// the 64-buffer channel would block this goroutine forever once
+		// >64 events backlog, leaking the goroutine and the final payload.
+		send := func(ev StreamEvent) bool {
+			select {
+			case ch <- ev:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
 		onPoll := func(cur *responsesPayload) {
 			full := responsesOutputText(cur)
 			if len(full) > emitted {
-				ch <- StreamEvent{Type: StreamEventText, Text: full[emitted:]}
-				emitted = len(full)
+				if send(StreamEvent{Type: StreamEventText, Text: full[emitted:]}) {
+					emitted = len(full)
+				}
 			}
 		}
 		final, err := p.pollBackground(ctx, payload, onPoll)
 		if err != nil {
-			ch <- StreamEvent{Type: StreamEventError, Error: err}
+			send(StreamEvent{Type: StreamEventError, Error: err})
 			return
 		}
 		if final.Status == responsesStatusFailed || final.Status == responsesStatusCancelled {
-			ch <- StreamEvent{Type: StreamEventError, Error: backgroundTerminalError(final)}
+			send(StreamEvent{Type: StreamEventError, Error: backgroundTerminalError(final)})
 			return
 		}
 		for _, rawItem := range final.Output {
@@ -709,10 +722,14 @@ func (p *OpenAIResponsesProvider) chatStreamBackground(ctx context.Context, req 
 				// sa-54: forward the raw reasoning item through the reasoning
 				// channel; the thinking accumulator stores it verbatim for
 				// stateless replay.
-				ch <- StreamEvent{Type: StreamEventReasoning, ThinkingSignature: string(rawItem)}
+				if !send(StreamEvent{Type: StreamEventReasoning, ThinkingSignature: string(rawItem)}) {
+					return
+				}
 			case "web_search_call":
 				// sa-62: keep the hosted tool exchange replayable.
-				ch <- StreamEvent{Type: StreamEventServerTool, Block: responsesServerToolBlock(rawItem)}
+				if !send(StreamEvent{Type: StreamEventServerTool, Block: responsesServerToolBlock(rawItem)}) {
+					return
+				}
 			case "function_call":
 				args := item.Arguments
 				if args == "" {
@@ -723,13 +740,21 @@ func (p *OpenAIResponsesProvider) chatStreamBackground(ctx context.Context, req 
 						args = string(repaired)
 					}
 				}
-				ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: ToolCallDelta{
+				if !send(StreamEvent{Type: StreamEventToolCallDone, Tool: ToolCallDelta{
 					ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(args),
-				}}
+				}}) {
+					return
+				}
 			}
 		}
-		usage := &TokenUsage{InputTokens: final.Usage.InputTokens, OutputTokens: final.Usage.OutputTokens}
-		ch <- StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: final.Status == responsesStatusIncomplete}
+		usage := &TokenUsage{
+			InputTokens:  final.Usage.InputTokens,
+			OutputTokens: final.Usage.OutputTokens,
+			// #4230 case B: cache discount for background cost accounting,
+			// same decode as parseResponsesFinal on the streaming path.
+			CacheRead: final.Usage.InputTokensDetails.CachedTokens,
+		}
+		send(StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: final.Status == responsesStatusIncomplete})
 	})
 	return ch, nil
 }
@@ -854,6 +879,11 @@ type responsesPayload struct {
 	Usage  struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
+		// #4230 case B: cached-token detail for background/non-stream cost
+		// accounting, same shape parseResponsesFinal already decodes.
+		InputTokensDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"input_tokens_details"`
 	} `json:"usage"`
 	IncompleteDetails struct {
 		Reason string `json:"reason"`
@@ -889,7 +919,6 @@ func (p *OpenAIResponsesProvider) chatBackground(ctx context.Context, payload *r
 
 func chatResponseFromPayload(payload *responsesPayload) *ChatResponse {
 	out := &ChatResponse{Message: Message{Role: "assistant"}}
-	var texts []string
 	for _, rawItem := range payload.Output {
 		var item struct {
 			Type    string `json:"type"`
@@ -913,14 +942,19 @@ func chatResponseFromPayload(payload *responsesPayload) *ChatResponse {
 				if c.Type == "output_text" && (c.Text != "" || len(c.Annotations) > 0) {
 					// sa-63: keep generated-file / retrieval citations next to
 					// the text that referenced them.
-					texts = append(texts, appendResponsesCitations(c.Text, c.Annotations))
+					// #4230 case A: append at encounter position so Content keeps
+					// generation order (text-then-tool_call); the old collect-then-
+					// append-at-end reversed [message, function_call] outputs.
+					out.Message.Content = append(out.Message.Content,
+						TextBlock(appendResponsesCitations(c.Text, c.Annotations)))
 				}
 			}
 		case "code_interpreter_call", "file_search_call":
 			// sa-63: server-executed tool results; surface the transcript
 			// as text (observability only, nothing is replayed to the API).
+			// #4230 case A: encounter-position append (order fidelity).
 			if block, ok := formatResponsesServerItem(rawItem); ok {
-				texts = append(texts, block)
+				out.Message.Content = append(out.Message.Content, TextBlock(block))
 			}
 		case "function_call":
 			args := item.Arguments
@@ -962,10 +996,14 @@ func chatResponseFromPayload(payload *responsesPayload) *ChatResponse {
 			}
 		}
 	}
-	if len(texts) > 0 {
-		out.Message.Content = append(out.Message.Content, TextBlock(strings.Join(texts, "")))
+	out.Usage = TokenUsage{
+		InputTokens:  payload.Usage.InputTokens,
+		OutputTokens: payload.Usage.OutputTokens,
+		// #4230 case B: cached-token detail, same decode as the streaming
+		// path (parseResponsesFinal) so background/non-stream cost accounting
+		// gets the cache discount too.
+		CacheRead: payload.Usage.InputTokensDetails.CachedTokens,
 	}
-	out.Usage = TokenUsage{InputTokens: payload.Usage.InputTokens, OutputTokens: payload.Usage.OutputTokens}
 	if payload.Status == responsesStatusIncomplete {
 		out.StopReason = "max_tokens"
 	}
