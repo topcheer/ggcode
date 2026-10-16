@@ -152,7 +152,13 @@ func (b *DaemonBridge) ToolList() (string, error) {
 	for _, t := range tools {
 		desc := t.Description()
 		if len(desc) > 120 {
-			desc = desc[:117] + "..."
+			// #4237: rune-safe cut - a byte slice can land mid-rune and the
+			// IM channel then shows U+FFFD mojibake for CJK/emoji tool
+			// descriptions (same class as the #4229 truncate fix).
+			r := []rune(desc)
+			if len(r) > 117 {
+				desc = string(r[:117]) + "..."
+			}
 		}
 		sb.WriteString(fmt.Sprintf("  %-20s %s\n", t.Name(), desc))
 	}
@@ -230,7 +236,12 @@ func (b *DaemonBridge) GitDiff(args []string) (string, error) {
 	dir := b.workingDir
 	b.mu.Unlock()
 	gitArgs := append([]string{"diff"}, SanitizeGitDiffArgs(args)...)
-	cmd := exec.Command("git", gitArgs...)
+	// #4237: bounded context - a hung git (network mount, giant repo, lock
+	// wait) used to block the IM callback goroutine forever. Same pattern
+	// as inbound_shell.go / stt/local.go.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", gitArgs...)
 	if dir != "" {
 		cmd.Dir = dir
 	}

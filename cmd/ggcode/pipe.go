@@ -313,7 +313,20 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	// sink, keyed to the pipe working dir; skipped on cancellation to mirror
 	// the TUI's non-cancelled guard. Must never disturb the exit-code path.
 	if ctx.Err() == nil {
-		memory.CapturePreferences(workingDir, fullPrompt)
+		// #4237: the image-stdin branch of buildPipePrompt returns "" as
+		// fullPrompt (the text rides in blocks[0]) - capturing "" was a
+		// no-op, so "-p <image + 'answer in Chinese from now on'" never
+		// persisted the preference. Fall back to the block text.
+		captureText := fullPrompt
+		if strings.TrimSpace(captureText) == "" {
+			for _, blk := range imageBlocks {
+				if blk.Type == "text" && strings.TrimSpace(blk.Text) != "" {
+					captureText = blk.Text
+					break
+				}
+			}
+		}
+		memory.CapturePreferences(workingDir, captureText)
 	}
 
 	if agentErr != nil {
