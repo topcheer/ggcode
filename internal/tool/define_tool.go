@@ -122,14 +122,16 @@ func (t *DefineTool) Parameters() json.RawMessage {
 			"steps": {
 				"type": "array",
 				"description": "define only. Handler: 1-8 read-only tool calls [{tool:'grep', args:{pattern:'{{symbol}}'}}]. String values may contain {{param}} placeholders.",
+				"maxItems": 8,
 				"items": {
-					"type": "object",
-					"properties": {
-						"tool": {"type": "string"},
-						"args": {"type": "object"}
-					},
-					"required": ["tool"]
-				}
+				"type": "object",
+				"properties": {
+					"tool": {"type": "string"},
+					"args": {"type": "object", "additionalProperties": true, "maxProperties": 32}
+				},
+				"required": ["tool"],
+				"additionalProperties": false
+			}
 			},
 			"params": {
 				"type": "object",

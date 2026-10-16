@@ -123,19 +123,22 @@ func (t *MacroTool) Parameters() json.RawMessage {
 			"steps": {
 				"type": "array",
 				"description": "define only. Ordered tool calls: [{tool: 'git_status', args: {path: '.'}}]. Tool must be read-only; 1-8 steps.",
+				"maxItems": 8,
 				"items": {
 					"type": "object",
 					"properties": {
 						"tool": {"type": "string"},
-						"args": {"type": "object"}
+						"args": {"type": "object", "additionalProperties": true, "maxProperties": 32}
 					},
-					"required": ["tool"]
+					"required": ["tool"],
+					"additionalProperties": false
 				}
 			},
 			"args": {
 				"type": "array",
 				"description": "run only. Positional values substituted for {{1}}..{{9}} placeholders, max 9.",
-				"items": {"type": ["string", "number", "boolean"]}
+				"maxItems": 9,
+				"items": {"anyOf": [{"type": "string"}, {"type": "number"}, {"type": "boolean"}]}
 			}
 		},
 		"required": ["action"]
