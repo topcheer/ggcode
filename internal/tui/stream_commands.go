@@ -94,9 +94,13 @@ func (m *Model) streamStart(targets []string) (string, bool) {
 
 	// ViewFunc reads the cached view snapshot (thread-safe via shared pointer).
 	// Never calls m.View() directly — that would race with Bubble Tea.
+	// #4209: terminal size comes from the mirrored copy in the shared state —
+	// m.width/m.height are plain fields owned by the Bubble Tea goroutine and
+	// must not be read from the stream frameLoop goroutine (data race).
 	viewFunc := func() (string, stream.TerminalSize) {
 		snap, _ := m.streamViewState.getSnapshot()
-		return snap, stream.TerminalSize{Cols: m.width, Rows: m.height}
+		w, h := m.streamViewState.getSize()
+		return snap, stream.TerminalSize{Cols: w, Rows: h}
 	}
 
 	if err := mgr.Start(viewFunc); err != nil {

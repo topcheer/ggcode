@@ -15,6 +15,9 @@ func (m *Model) handleResize(width, height int) {
 	}
 	m.width = width
 	m.height = height
+	// #4209: mirror terminal size into the shared stream state so the stream
+	// frameLoop goroutine never reads m.width/m.height unsynchronized.
+	m.streamViewState.setSize(width, height)
 	m.lastResizeAt = time.Now()
 	viewportHeight := height - 5
 	if viewportHeight < 3 {

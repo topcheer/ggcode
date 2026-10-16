@@ -164,9 +164,12 @@ func (m *Model) updateStreamPanel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			mgr := stream.NewManager(cfg)
 			m.streamManager = mgr
+			// #4209: read terminal size from the shared mirrored state —
+			// the plain m.width/m.height fields race with handleResize.
 			viewFunc := func() (string, stream.TerminalSize) {
 				snap, _ := m.streamViewState.getSnapshot()
-				return snap, stream.TerminalSize{Cols: m.width, Rows: m.height}
+				w, h := m.streamViewState.getSize()
+				return snap, stream.TerminalSize{Cols: w, Rows: h}
 			}
 			if err := mgr.Start(viewFunc); err != nil {
 				m.streamManager = nil
