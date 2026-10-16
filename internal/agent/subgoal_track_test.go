@@ -51,8 +51,10 @@ func TestSubgoalRecordAndWarn(t *testing.T) {
 	s.recordToolCall("edit_file", `{"path": "auth_test.go"}`)
 	// Subgoals 3 and 4 unaddressed
 
-	// Need sgMinIterGap iterations before warning
-	warn := s.maybeWarn(1 + sgMinIterGap)
+	// Need sgMinIterGap iterations before warning. #4255: recordAssistantText
+	// now stores 1-based iters (this plan captured with iter=1 lands at 2),
+	// so the gap is measured from there.
+	warn := s.maybeWarn(2 + sgMinIterGap)
 	if warn == "" {
 		t.Fatal("expected warning for unaddressed subgoals")
 	}

@@ -142,6 +142,12 @@ func extractSubgoalKeywords(desc string) []string {
 // recordAssistantText captures the plan from agent text (only the first
 // numbered list with enough items).
 func (s *subgoalState) recordAssistantText(text string, iter int) {
+	// #4255: normalize to the 1-based radix maybeWarn's call site uses
+	// (agent.go passes i+1 there, i here). The mixed radix made
+	// currentIter-planIter read 1 higher than the true gap, so a 5-step
+	// sequential plan hit the "skipped subgoal" warning one iteration
+	// early and burned the one-shot warn quota (same family as #4241).
+	iter++
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Only capture the first plan
@@ -284,7 +290,10 @@ func (s *subgoalState) maybeWarn(currentIter int) string {
 		return ""
 	}
 	ratio := float64(unaddressed) / float64(trackable)
-	if ratio < sgUnaddressedThresh {
+	// #4255: the comment contract is ">40%" warn - ratio == 0.4 is not
+	// "more than", so it must return early too (strict comparison, not
+	// >=).
+	if ratio <= sgUnaddressedThresh {
 		return ""
 	}
 	s.fired = true

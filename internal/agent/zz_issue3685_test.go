@@ -29,7 +29,8 @@ func TestIssue3685_StrategyFixationEnumUnified(t *testing.T) {
 	if strategyFixationIsVerification("start_command") {
 		t.Fatal("start_command must NOT count as verification at launch (#3685-B reverse distortion)")
 	}
-	for _, name := range []string{"run_command", "bash", "powershell", "wait_command", "read_command_output", "code_health", "review_changes", "verify", "lsp_diagnostics"} {
+	// #4253: poll channels excluded with start_command - non-terminal.
+	for _, name := range []string{"run_command", "bash", "powershell", "code_health", "review_changes", "verify", "lsp_diagnostics"} {
 		if !strategyFixationIsVerification(name) {
 			t.Fatalf("%s must be a verification channel", name)
 		}

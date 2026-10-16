@@ -343,7 +343,10 @@ func TestStrategyFixationIsVerification(t *testing.T) {
 	// #3685-B: the set mirrors the causal-gate command channels MINUS
 	// start_command (its launch result only means "job started"; the real
 	// verification event for a background job is its terminal outcome).
-	tools := []string{"run_command", "bash", "powershell", "wait_command", "read_command_output", "code_health", "review_changes", "verify", "lsp_diagnostics"}
+	// #3685-B + #4253: bare verification excludes start_command (launch
+	// only) AND wait_command/read_command_output (non-terminal polls;
+	// their terminal outcomes arrive via the #2992 mirror branch).
+	tools := []string{"run_command", "bash", "powershell", "code_health", "review_changes", "verify", "lsp_diagnostics"}
 	for _, tool := range tools {
 		if !strategyFixationIsVerification(tool) {
 			t.Errorf("expected %s to be verification", tool)

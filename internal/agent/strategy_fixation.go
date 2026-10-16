@@ -240,8 +240,14 @@ func strategyFixationIsVerification(toolName string) bool {
 	case toolName == "run_command",
 		toolName == "bash",
 		toolName == "powershell",
-		toolName == "wait_command",
-		toolName == "read_command_output",
+		// #4253: wait_command/read_command_output REMOVED - they are
+		// non-terminal poll channels. Their "Still running..." output has
+		// IsError=false, so counting them cleared streaks on every poll
+		// (detector permanently blinded) and a terminal failure double-
+		// recorded via both this bare path and the gated #2992 mirror
+		// above, reversing the failure attribution. Same removal precedent
+		// as start_command in #3685-B: the real verification event is the
+		// job's TERMINAL outcome, wired in the #2992 branch.
 		toolName == "code_health",
 		toolName == "review_changes",
 		toolName == "verify",
