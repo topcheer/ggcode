@@ -57,8 +57,8 @@ func TestIssue2185SwitchModeDowngradeAndLevelUngated(t *testing.T) {
 			t.Fatalf("SwitchMode(%q) downgrade/level must stay ungated, got %v", name, err)
 		}
 	}
-	if m.mode != permission.AutoMode {
-		t.Fatalf("expected auto mode after ungated switch, got %v", m.mode)
+	if m.mode != permission.SupervisedMode {
+		t.Fatalf("expected supervised mode after ungated switch (auto normalizes), got %v", m.mode)
 	}
 }
 

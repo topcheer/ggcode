@@ -488,7 +488,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/untag":           "Remove tags from the session (e.g. /untag rust)",
 	"/tags":            "Show the current session's tags",
 	"/fork":            "Fork current conversation into a new session",
-	"/mode":            "Set permission mode (supervised|plan|auto|bypass|autopilot)",
+	"/mode":            "Set permission mode (supervised|bypass)",
 	"/allow":           "Always allow a specific tool",
 	"/export":          "Export session to markdown file",
 	"/export-trace":    "Export session execution trace as JSON (--otel for OTLP/GenAI format)",

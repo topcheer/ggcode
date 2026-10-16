@@ -477,9 +477,12 @@ func (c *Config) SaveSidebarPreference(visible bool) error {
 func (c *Config) SaveDefaultModePreference(mode string) error {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	switch mode {
-	case "supervised", "plan", "auto", "bypass", "autopilot":
+	// two-mode refactor: plan is tool-internal (a session must not boot
+	// into it); auto/autopilot persist as-is for compat but normalize at
+	// load time.
+	case "supervised", "auto", "bypass", "autopilot":
 	default:
-		return fmt.Errorf("default_mode %q must be one of supervised, plan, auto, bypass, autopilot", mode)
+		return fmt.Errorf("default_mode %q must be supervised or bypass (legacy aliases auto/autopilot normalize; plan is tool-internal)", mode)
 	}
 	if err := c.patchConfigFile(func(raw map[string]interface{}) {
 		raw["default_mode"] = mode

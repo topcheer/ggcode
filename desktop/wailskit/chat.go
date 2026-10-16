@@ -210,7 +210,9 @@ func NewChatBridge() (*ChatBridge, error) {
 	wd, _ := os.Getwd()
 	modeStr := cfg.DefaultMode
 	if modeStr == "" {
-		modeStr = "auto"
+		// two-mode refactor: canonical supervised default (legacy "auto"
+		// configs normalize via ParsePermissionMode below).
+		modeStr = "supervised"
 	}
 	return &ChatBridge{
 		cfg:            cfg,
@@ -1635,8 +1637,8 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	// pre-computed values without I/O. Same pattern as TUI's root.go.
 	agentruntime.InitGlobalSectionCollector(b.workingDir)
 
-	// Permission policy (auto mode)
-	mode := agentruntime.InteractivePermissionModeWithDefault(b.cfg, false, "auto")
+	// Permission policy (supervised default; two-mode refactor)
+	mode := agentruntime.InteractivePermissionModeWithDefault(b.cfg, false, "supervised")
 	b.permissionMode = mode
 	policy := agentruntime.BuildInteractivePermissionPolicy(b.cfg, b.workingDir, false)
 
@@ -2166,7 +2168,7 @@ func (p *desktopRuntimeProvider) RuntimePermissionMode() string {
 	// prompt's claimed auto mode on sessions that have not called
 	// SetPermissionMode yet. Recomputing with identical arguments is the
 	// single source of truth for the default.
-	return agentruntime.InteractivePermissionModeWithDefault(p.bridge.cfg, false, "auto").String()
+	return agentruntime.InteractivePermissionModeWithDefault(p.bridge.cfg, false, "supervised").String()
 }
 
 func (p *desktopRuntimeProvider) RuntimeVendor() string {

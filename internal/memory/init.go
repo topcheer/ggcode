@@ -230,7 +230,7 @@ func detectConventions(root string) []string {
 		lines = append(lines, "Configuration uses `vendor` / `endpoint` / `vendors` rather than the old `provider/providers` schema.")
 	}
 	if fileContains(filepath.Join(root, "internal/permission/mode.go"), "AutopilotMode") {
-		lines = append(lines, "Runtime modes include `supervised`, `plan`, `auto`, `bypass`, and `autopilot`.")
+		lines = append(lines, "Runtime permission modes are `supervised` and `bypass`; `auto`/`autopilot` are accepted legacy aliases, `plan` is tool-internal.")
 	}
 	if len(ProjectMemoryFilenames) > 0 {
 		lines = append(lines, fmt.Sprintf("Project memory files loaded at startup: `%s`.", strings.Join(ProjectMemoryFilenames, "`, `")))

@@ -119,7 +119,7 @@ func enCommandModule() map[string]string {
   /allow <tool>      Always allow a specific tool
   /plugins           List loaded plugins and their tools
   /image <path>      Attach an image file
-  /mode <mode>       Set agent mode (supervised|plan|auto|bypass|autopilot)
+  /mode <mode>       Set agent mode (supervised|bypass)
   /init              Generate AGENTS.md from the current project
   /agents            List sub-agents
   /agent <id>        Show sub-agent details
@@ -267,7 +267,7 @@ func zhCommandModule() map[string]string {
   /allow <tool>      永久允许某个工具
   /plugins           列出已加载插件及其工具
   /image <path>      附加图片文件
-  /mode <mode>       设置运行模式（supervised|plan|auto|bypass|autopilot）
+  /mode <mode>       设置运行模式（supervised|bypass；auto/autopilot 为兼容别名）
   /init              基于当前项目生成 AGENTS.md
   /agents            列出子 Agent
   /agent <id>        查看子 Agent 详情

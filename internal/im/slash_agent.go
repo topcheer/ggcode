@@ -103,7 +103,7 @@ func (b *DaemonBridge) SwitchMode(name string) error {
 	// missing config. Unknown mode names error instead of silently
 	// falling back to supervised.
 	if !permission.IsValidPermissionMode(name) {
-		return fmt.Errorf("unknown permission mode %q (valid: supervised, plan, auto, bypass, autopilot)", name)
+		return fmt.Errorf("unknown permission mode %q (valid: supervised, bypass; legacy aliases auto/autopilot normalize)", name)
 	}
 	newMode := permission.ParsePermissionMode(name)
 	if (newMode == permission.BypassMode || newMode == permission.AutopilotMode) &&

@@ -41,8 +41,9 @@ func (t *SwitchModeTool) Name() string { return "switch_mode" }
 
 func (t *SwitchModeTool) Description() string {
 	return "Switch the permission mode to control how tool calls are authorized. " +
-		"Modes: supervised (default, asks confirmation), plan (read-only), auto (safe ops auto-allowed), bypass (almost everything), autopilot (bypass + autonomous). " +
-		"Default to supervised or auto; only use bypass/autopilot when the user explicitly requests it. Always allowed in every mode."
+		"Modes: supervised (default — most calls flow, only extremely dangerous calls gated), bypass (nothing gated except system-level destructive commands; cruise control active). " +
+		"Only use bypass when the user explicitly requests it. Always allowed in every mode. " +
+		"Note: plan mode is tool-internal (enter_plan_mode/exit_plan_mode); 'auto' and 'autopilot' are legacy aliases that normalize to supervised/bypass respectively."
 }
 
 func (t *SwitchModeTool) Parameters() json.RawMessage {
@@ -51,7 +52,7 @@ func (t *SwitchModeTool) Parameters() json.RawMessage {
 		"properties": {
 			"mode": {
 				"type": "string",
-				"enum": ["supervised", "plan", "auto", "bypass", "autopilot"],
+				"enum": ["supervised", "bypass"],
 				"description": "The permission mode to switch to."
 			},
 			"description": {
@@ -72,8 +73,20 @@ func (t *SwitchModeTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	}
 
 	mode := strings.ToLower(strings.TrimSpace(args.Mode))
-	if !permission.IsValidPermissionMode(mode) {
-		return Result{IsError: true, Content: fmt.Sprintf("invalid mode %q. Valid modes: supervised, plan, auto, bypass, autopilot", args.Mode)}, nil
+	// Two-mode refactor: users (and the LLM on their behalf) may only
+	// switch between supervised and bypass. Legacy names auto/autopilot
+	// normalize silently (config compat); plan is tool-internal only
+	// (enter_plan_mode / exit_plan_mode).
+	switch mode {
+	case "auto":
+		mode = "supervised"
+	case "autopilot":
+		mode = "bypass"
+	case "plan":
+		return Result{IsError: true, Content: "plan mode cannot be switched into directly; it is entered via the enter_plan_mode tool and exited via exit_plan_mode"}, nil
+	case "supervised", "bypass":
+	default:
+		return Result{IsError: true, Content: fmt.Sprintf("invalid mode %q. Valid modes: supervised, bypass", args.Mode)}, nil
 	}
 
 	newMode := permission.ParsePermissionMode(mode)

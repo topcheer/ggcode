@@ -333,7 +333,7 @@ func viCatalog(key string) string {
 	case "lang.first_use.hint":
 		return " Tab/j/k di chuyển • Enter xác nhận • e/z phím tắt"
 	case "mode.current":
-		return "Chế độ hiện tại: %s\nCách dùng: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  Hỏi khi công cụ không có quy tắc rõ ràng\n  plan        Khám phá chỉ đọc; từ chối ghi và lệnh\n  auto        Cho phép thao tác an toàn, từ chối nguy hiểm\n  bypass      Cho phép gần như tất cả; chỉ dừng ở hành động quan trọng\n  autopilot   bypass + tiếp tục khi mô hình hỏi lại\n\n"
+		return "Chế độ hiện tại: %s\nCách dùng: /mode <supervised|bypass>\n  supervised  Hỏi khi công cụ không có quy tắc rõ ràng\n  plan        Khám phá chỉ đọc; từ chối ghi và lệnh\n  auto        Cho phép thao tác an toàn, từ chối nguy hiểm\n  bypass      Cho phép gần như tất cả; chỉ dừng ở hành động quan trọng\n  autopilot   bypass + tiếp tục khi mô hình hỏi lại\n\n"
 	case "mode.persist_failed":
 		return "Không thể lưu tùy chọn chế độ: %v"
 	case "input.placeholder":
@@ -1078,7 +1078,7 @@ Phiên & Lịch sử:
 Mô hình & Nhà cung cấp:
   /model [tên]       Mở bảng mô hình hoặc chuyển trực tiếp
   /provider [vendor] Mở trình quản lý nhà cung cấp
-  /mode <chế độ>     Đặt chế độ agent (supervised|plan|auto|bypass|autopilot)
+  /mode <chế độ>     Đặt chế độ agent (supervised|bypass)
 
 Phát triển:
   /diff [tùy chọn]   Hiện git diff trong chat (--cached, --stat, <tệp>)

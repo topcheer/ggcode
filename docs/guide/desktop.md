@@ -46,7 +46,7 @@ Download from GitHub Releases:
 ### Settings & Configuration
 - **Config editor** — edit vendor, endpoint, model, API key, and permission settings through a structured UI
 - **Provider picker** — switch between configured LLM providers visually
-- **Permission modes** — switch between supervised, plan, auto, bypass, and autopilot
+- **Permission modes** — switch between supervised and bypass (auto/autopilot are accepted legacy aliases)
 
 ### Integrations
 - **MCP browser** — explore connected MCP servers, their tools, prompts, and resources

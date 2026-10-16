@@ -7,11 +7,11 @@ interface Props {
   onComplete: () => void
 }
 
+// two-mode refactor: onboarding offers supervised and bypass only (plan is
+// tool-internal; auto/autopilot are legacy config aliases).
 const MODES = [
   { id: 'supervised', labelKey: 'onboarding.modeSupervised', descKey: 'onboarding.modeSupervisedDesc', color: '#eab308' },
-  { id: 'auto', labelKey: 'onboarding.modeAuto', descKey: 'onboarding.modeAutoDesc', color: '#22c55e' },
   { id: 'bypass', labelKey: 'onboarding.modeBypass', descKey: 'onboarding.modeBypassDesc', color: '#ef4444' },
-  { id: 'autopilot', labelKey: 'onboarding.modeAutopilot', descKey: 'onboarding.modeAutopilotDesc', color: '#a855f7' },
 ]
 
 interface VendorPreset {

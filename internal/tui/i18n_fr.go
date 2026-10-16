@@ -333,7 +333,7 @@ func frCatalog(key string) string {
 	case "lang.first_use.hint":
 		return " Tab/j/k déplacer • Enter confirmér • e/z raccourcis"
 	case "mode.current":
-		return "Mode actuel: %s\nUtilisation: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  Demander quand un outil n'a pas de règle explicite\n  plan        Exploration en lecture seule; refusér écritures et commandes\n  auto        Autorisér opérations sûres, refusér dangéréuses\n  bypass      Autorisér presque tout; n'arrêtér que pour actions critiques\n  autopilot   bypass + continuer quand le modèle demandé\n\n"
+		return "Mode actuel: %s\nUtilisation: /mode <supervised|bypass>\n  supervised  Defaut; la plupart des appels passent sans interruption - seuls les garde-fous demandent (destruction systeme, exfiltration d'identifiants, ecritures de porte derobee)\n  bypass      Surface de croisiere; tout est autorise sauf destruction systeme et ecritures de porte derobee\n  (auto/autopilot sont des alias heritage)\n"
 	case "mode.persist_failed":
 		return "Erreur lors de la sauvegardé de la préférence de mode: %v"
 	case "input.placeholder":
@@ -1082,7 +1082,7 @@ Session et Historique:
 Modèle et Fournisseur:
   /model [nom]       Ouvrir le panneau de modèles ou changer directement
   /provider [vendor] Ouvrir le gestionnaire de fournisseurs
-  /mode <mode>       Définir le mode de l'agent (supervised|plan|auto|bypass|autopilot)
+  /mode <mode>       Définir le mode de l'agent (supervised|bypass)
 
 Developpement:
   /diff [opts]       Afficher git diff dans le chat (--cached, --stat, <fichier>)

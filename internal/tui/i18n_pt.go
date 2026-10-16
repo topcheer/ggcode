@@ -56,7 +56,7 @@ func ptCatalog(key string) string {
 	case "slash.provider":
 		return "Abrir gerenciador de provedor"
 	case "slash.mode":
-		return "Definir modo do agente (supervised|plan|auto|bypass|autopilot)"
+		return "Definir modo do agente (supervised|bypass)"
 	case "slash.lang":
 		return "Escolher ou alternar idioma da interface"
 	case "slash.diff":
@@ -608,7 +608,7 @@ func ptCatalog(key string) string {
 	case "mode.approval.none":
 		return "sem paradas de aprovação"
 	case "mode.current":
-		return "Modo atual: %s\nUso: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  Perguntar quando uma ferramenta não tem regra explícita\n  plan        Exploração somente leitura; nega escritas e comandos\n  auto        Permite operações seguras, nega perigosas\n  bypass      Permite quase tudo; para apenas em ações críticas\n  autopilot   bypass + continua quando o modelo pede resposta\n\n"
+		return "Modo atual: %s\nUso: /mode <supervised|bypass>\n  supervised  Padrao; a maioria das chamadas flui sem prompts - apenas os pisos de seguranca perguntam (destruicao de sistema, exfiltracao de credenciais, escritas de backdoor)\n  bypass      Superficie de cruzeiro; tudo permitido exceto destruicao de sistema e escritas de backdoor\n  (auto/autopilot sao aliases legados)\n"
 	case "mode.persist_failed":
 		return "Falha ao persistir preferência de modo: %v"
 	case "mode.tools.open":
@@ -1278,7 +1278,7 @@ Modelo e Provedor:
   /model [nome]      Abrir painel de modelos ou alternar diretamente
   /provider [vendor] Abrir gerenciador de provedores
   /impersonate [p/m] Testar um provedor/modelo sem alterar a configuração
-  /mode <modo>       Definir modo do agente (supervised|plan|auto|bypass|autopilot)
+  /mode <modo>       Definir modo do agente (supervised|bypass)
   /goal [texto]      Mostrar, definir ou limpar objetivo persistente do autopilot
   /stream            Alternar modo de saída em stream
 

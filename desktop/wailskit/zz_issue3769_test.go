@@ -23,9 +23,9 @@ import (
 // view (instance default_mode) while picking up the global-side change.
 
 func TestIssue3769_SelfSaveDoesNotTriggerReload(t *testing.T) {
-	_, _ = setupConfigTestEnv(t, "default_mode: plan\nlanguage: zh\n")
+	_, _ = setupConfigTestEnv(t, "default_mode: bypass\nlanguage: zh\n")
 	cfg := GetGlobalConfig()
-	if cfg.DefaultMode != "plan" {
+	if cfg.DefaultMode != "bypass" {
 		t.Fatalf("fixture: merged default_mode = %q, want plan", cfg.DefaultMode)
 	}
 
@@ -42,7 +42,7 @@ func TestIssue3769_SelfSaveDoesNotTriggerReload(t *testing.T) {
 	after := globalCfg
 	globalMu.Unlock()
 
-	if after.DefaultMode != "plan" {
+	if after.DefaultMode != "bypass" {
 		t.Fatalf("poller after self-save replaced merged view: default_mode=%q", after.DefaultMode)
 	}
 	if !after.HasInstanceConfigAttached() {
@@ -51,9 +51,9 @@ func TestIssue3769_SelfSaveDoesNotTriggerReload(t *testing.T) {
 }
 
 func TestIssue3769_ExternalReloadKeepsMergedView(t *testing.T) {
-	globalPath, _ := setupConfigTestEnv(t, "default_mode: plan\nlanguage: zh\n")
+	globalPath, _ := setupConfigTestEnv(t, "default_mode: bypass\nlanguage: zh\n")
 	cfg := GetGlobalConfig()
-	if cfg.DefaultMode != "plan" {
+	if cfg.DefaultMode != "bypass" {
 		t.Fatalf("fixture: merged default_mode = %q", cfg.DefaultMode)
 	}
 
@@ -75,7 +75,7 @@ func TestIssue3769_ExternalReloadKeepsMergedView(t *testing.T) {
 	after := globalCfg // private read: we hold globalMu
 	globalMu.Unlock()
 
-	if after.DefaultMode != "plan" {
+	if after.DefaultMode != "bypass" {
 		t.Fatalf("external reload dropped instance override: default_mode=%q", after.DefaultMode)
 	}
 	if !after.HasInstanceConfigAttached() {

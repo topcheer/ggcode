@@ -365,7 +365,7 @@ func deCatalog(key string) string {
 
 	// --- Mode ---
 	case "mode.current":
-		return "Aktueller Modus: %s\nVerwendung: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  Fragen, wenn ein Werkzeug keine explizite Regel hat\n  plan        Nur-Lese-Erkundung; Schreiben und Befehle ablehnen\n  auto        Sichere Operationen erlauben, gefährliche ablehnen\n  bypass      Fast alles erlauben; nur bei kritischen Aktionen stoppen\n  autopilot   bypass + weitermachen, wenn das Modell zurückfragt\n\n"
+		return "Aktueller Modus: %s\nVerwendung: /mode <supervised|bypass>\n  supervised  Standard; die meisten Aufrufe laufen ohne Nachfrage - nur Sicherheitsboeden fragen (Systemzerstoerung, Credential-Exfil, Backdoor-Schreiben)\n  bypass      Cruise-Flaeche; fast alles erlaubt, ausser Systemzerstoerung und Backdoor-Schreiben\n  (auto/autopilot sind Legacy-Aliase)\n"
 	case "mode.persist_failed":
 		return "Modus-Einstellung konnte nicht gespeichert werden: %v"
 
@@ -1184,7 +1184,7 @@ Sitzung & Verlauf:
 Modell & Anbieter:
   /model [name]      Modell-Panel öffnen oder direkt wechseln
   /provider [vendor] Anbieter-Manager öffnen
-  /mode <mode>       Agent-Modus setzen (supervised|plan|auto|bypass|autopilot)
+  /mode <mode>       Agent-Modus setzen (supervised|bypass)
 
 Entwicklung:
   /diff [opts]       Git-Diff im Chat anzeigen (--cached, --stat, <file>)

@@ -337,7 +337,7 @@ func koCatalog(key string) string {
 	case "lang.first_use.hint":
 		return " Tab/j/k 이동 • Enter 확인 • e/z 단축키"
 	case "mode.current":
-		return "현재 모드: %s\n사용법: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  규칙이 없는 도구는 확인 후 실행\n  plan        읽기 전용 탐색; 쓰기와 명령 거부\n  auto        안전한 작업 허용, 위험 작업 거부\n  bypass      거의 모든 것 허용; 치명적 작업만 차단\n  autopilot   bypass + 되묻는 질문에도 계속 진행\n\n"
+		return "현재 모드: %s\n사용법: /mode <supervised|bypass>\n  supervised  기본값; 대부분 호출이 중단 없이 진행 - 안전 바닥(시스템 파괴/자격증명 유출/백도어 쓰기)만 확인\n  bypass      순항 면; 시스템 파괴와 백도어 쓰기 외 모두 허용\n  (auto/autopilot는 기존 별칭)\n"
 	case "mode.persist_failed":
 		return "모드 설정 저장 실패: %v"
 	case "input.placeholder":
@@ -1138,7 +1138,7 @@ func koCatalog(key string) string {
 모델 & 프로바이더:
   /model [name]      모델 패널 열기 또는 직접 전환
   /provider [vendor] 프로바이더 관리자 열기
-  /mode <mode>       에이전트 모드 설정 (supervised|plan|auto|bypass|autopilot)
+  /mode <mode>       에이전트 모드 설정 (supervised|bypass)
 
 개발:
   /diff [opts]       채팅에 git diff 표시 (--cached, --stat, <file>)

@@ -365,7 +365,7 @@ func ruCatalog(key string) string {
 
 	// --- Mode ---
 	case "mode.current":
-		return "Текущий режим: %s\nИспользование: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  Спрашивать, когда у инструмента нет явного правила\n  plan        Исследование только для чтения; отклонять запись и команды\n  auto        Разрешать безопасные операции, отклонять опасные\n  bypass      Разрешать почти всё; останавливаться только при критических действиях\n  autopilot   bypass + продолжать, когда модель переспрашивает\n\n"
+		return "Текущий режим: %s\nИспользование: /mode <supervised|bypass>\n  supervised  По умолчанию; большинство вызовов проходит без запросов - спрашивают только защитные барьеры (уничтожение системы, эксфильтрация ключей, записи бэкдоров)\n  bypass      Режим круиза; всё разрешено, кроме уничтожения системы и записей бэкдоров\n  (auto/autopilot - унаследованные псевдонимы)\n"
 	case "mode.persist_failed":
 		return "Не удалось сохранить настройку режима: %v"
 
@@ -1162,7 +1162,7 @@ func ruCatalog(key string) string {
 Модель и поставщик:
   /model [name]      Открыть панель моделей или переключить напрямую
   /provider [vendor] Открыть менеджер поставщиков
-  /mode <mode>       Установить режим агента (supervised|plan|auto|bypass|autopilot)
+  /mode <mode>       Установить режим агента (supervised|bypass)
 
 Разработка:
   /diff [opts]       Показать git diff в чате (--cached, --stat, <file>)

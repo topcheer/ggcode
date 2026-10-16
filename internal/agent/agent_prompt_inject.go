@@ -7,7 +7,6 @@ import (
 
 	"github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/debug"
-	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
@@ -49,7 +48,7 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 	// agent loses sight of its objective after summarization — only the
 	// strategist remembers it. This is the "Goal Mode" pattern (Codex CLI /goal):
 	// a persistent directive that survives compaction and interruptions.
-	if a.currentMode() == permission.AutopilotMode {
+	if a.currentMode().IsCruiseMode() {
 		if goal := a.getAutopilotGoal(); goal != "" {
 			dynamicParts = append(dynamicParts, fmt.Sprintf(
 				"⏵ ACTIVE GOAL (persistent — do not lose sight of this):\n%s\n\n"+

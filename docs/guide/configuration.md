@@ -26,7 +26,7 @@ Per-workspace overrides are stored in `~/.ggcode/instances/<hash>/`. Use `scope=
 | `model` | string | Model override (e.g. `gpt-4o`, `claude-sonnet-4-20250514`) |
 | `aux_model` | string | Optional cheaper model on the SAME endpoint for auxiliary LLM calls (context compaction summarization, autopilot strategist, health check). Task-tier model routing cuts cost without touching the primary loop. Empty = all calls use `model`. Construction failure degrades permanently to the main model. |
 | `api_key` | string | API key (use `${ENV_VAR}` syntax; stored in `keys.env`) |
-| `default_mode` | string | Permission mode for **new** sessions: `supervised` (default), `plan`, `auto`, `bypass`, `autopilot` |
+| `default_mode` | string | Permission mode for **new** sessions: `supervised` (default) or `bypass`. Legacy names `auto`/`autopilot` normalize to supervised/bypass; `plan` is tool-internal |
 | `language` | string | Interface language: `en` or `zh-CN` |
 | `max_iterations` | int | Agent loop limit per turn (0 = unlimited) |
 | `session_token_budget` | int | Max total tokens (input + output) per agent run, including sub-agent spend (spawn_agent / use_namedagent). Progressive warnings at 80%/95%, hard stop at 100%. |
