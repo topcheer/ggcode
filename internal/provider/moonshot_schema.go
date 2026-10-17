@@ -76,11 +76,34 @@ func containsASCII(s, sub string) bool {
 	return false
 }
 
-// normalizeMoonshotSchema returns params with every free-form object node
-// ({"type":"object"} lacking both "properties" and "additionalProperties")
-// given an explicit "additionalProperties": true. It is idempotent and never
-// narrows any schema: nodes that already declare properties or an
-// additionalProperties policy (including false) are left untouched.
+// normalizeMoonshotSchema returns params rewritten for moonshot-flavored
+// validators, in three passes (#4276 round 2, after live evidence that
+// pass 3 alone does not clear the "infinite recursion" rejection):
+//
+//  1. dereference: inline every "$ref" ("#/$defs/X" / "#/definitions/X"),
+//     depth-capped and budget-capped; a reference that would recurse forever
+//     (a cycle - exactly what walle's "detected infinite recursion without
+//     termination condition" flags), exceeds the caps, or cannot be resolved
+//     is replaced by the permissive fallback {"type":"object",
+//     "additionalProperties":true} while keeping sibling keywords.
+//  2. strip "$defs"/"definitions" - nothing references them any more, and
+//     walle requires client-side dereferencing anyway.
+//  3. every free-form object node ({"type":"object"} lacking both
+//     "properties" and "additionalProperties") gains an explicit
+//     "additionalProperties": true.
+//
+// It is idempotent and never narrows any schema: nodes that already declare
+// properties or an additionalProperties policy (including false) are left
+// untouched by pass 3, and pass 1 only removes indirection.
+//
+// Reference-graph semantics are modeled on MoonshotAI/walle (the open-source
+// implementation behind the API-side validator): cycles of $ref through
+// required hops - or array self-reference with minItems>=1 - have no finite
+// instance and are rejected. Rather than reproducing walle's exact
+// termination analysis, we cut EVERY cycle by construction (any $ref that
+// needs more than moonshotMaxRefDepth hops is replaced), which is a
+// superset defense: schemas walle would still accept are merely loosened
+// (dropped constraints on the deepest cut), never tightened.
 func normalizeMoonshotSchema(params json.RawMessage) json.RawMessage {
 	if len(params) == 0 || !json.Valid(params) {
 		return params
@@ -89,13 +112,208 @@ func normalizeMoonshotSchema(params json.RawMessage) json.RawMessage {
 	if err := json.Unmarshal(params, &doc); err != nil {
 		return params
 	}
-	if walkMoonshotSchema(doc) {
-		out, err := json.Marshal(doc)
-		if err == nil {
-			return out
+	root, _ := doc.(map[string]any)
+	derefBudget := moonshotDerefNodeBudget
+	var changed bool
+	if root != nil && containsKeyMoonshot(doc, "$ref") {
+		defs := collectMoonshotDefs(root)
+		doc = expandMoonshotRefs(doc, defs, 0, &derefBudget)
+		root, _ = doc.(map[string]any)
+		changed = true
+	}
+	if root != nil {
+		if _, ok := root["$defs"]; ok {
+			delete(root, "$defs")
+			changed = true
+		}
+		if _, ok := root["definitions"]; ok {
+			delete(root, "definitions")
+			changed = true
 		}
 	}
-	return params
+	if walkMoonshotSchema(doc) {
+		changed = true
+	}
+	if !changed {
+		return params
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return params
+	}
+	return out
+}
+
+// moonshotMaxRefDepth caps how many $ref hops may be inlined before the
+// fallback kicks in. Real-world schemas chain at most two or three defs;
+// anything beyond that is either a cycle or an adversarial diamond, both of
+// which must be cut for walle's termination check.
+const moonshotMaxRefDepth = 4
+
+// moonshotDerefNodeBudget caps the total number of nodes produced by pass 1
+// across the whole schema, bounding exponential diamond blow-up.
+const moonshotDerefNodeBudget = 8000
+
+// moonshotRefFallback is the permissive terminal schema substituted for
+// unresolvable, cyclic, or over-depth references.
+var moonshotRefFallback = map[string]any{
+	"type":                 "object",
+	"additionalProperties": true,
+}
+
+// containsKeyMoonshot reports whether the subtree contains any object key
+// equal to key. It is the cheap pre-pass that keeps ref-free schemas (all
+// builtin tools) on a single scan before walkMoonshotSchema.
+func containsKeyMoonshot(node any, key string) bool {
+	switch v := node.(type) {
+	case map[string]any:
+		if _, ok := v[key]; ok {
+			return true
+		}
+		for _, child := range v {
+			if containsKeyMoonshot(child, key) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if containsKeyMoonshot(child, key) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// collectMoonshotDefs gathers the root-level "$defs"/"definitions" tables
+// the $refs may point at. Nested defs tables are not supported (references
+// into them simply fail to resolve and hit the fallback).
+func collectMoonshotDefs(root map[string]any) map[string]any {
+	defs := make(map[string]any)
+	for _, table := range []string{"$defs", "definitions"} {
+		if m, ok := root[table].(map[string]any); ok {
+			for k, v := range m {
+				defs[k] = v
+			}
+		}
+	}
+	return defs
+}
+
+// resolveMoonshotRef parses "#/$defs/NAME" and "#/definitions/NAME".
+func resolveMoonshotRef(ref string) (string, bool) {
+	for _, prefix := range []string{"#/$defs/", "#/definitions/"} {
+		if len(ref) > len(prefix) && ref[:len(prefix)] == prefix {
+			return ref[len(prefix):], true
+		}
+	}
+	return "", false
+}
+
+// expandMoonshotRefs returns node with every $ref inlined. depth counts
+// inlined hops; budget counts nodes produced. Cycles surface as depth
+// exhaustion; diamonds as budget exhaustion; both terminate at the
+// fallback. Siblings of a $ref survive the merge (the inlined body wins on
+// key conflicts, since the referenced definition is the semantic base).
+func expandMoonshotRefs(node any, defs map[string]any, depth int, budget *int) any {
+	*budget--
+	if *budget < 0 {
+		return cloneMoonshotFallback()
+	}
+	switch v := node.(type) {
+	case map[string]any:
+		ref, hasRef := v["$ref"].(string)
+		if hasRef {
+			if depth >= moonshotMaxRefDepth {
+				return withFallbackSiblings(v)
+			}
+			name, ok := resolveMoonshotRef(ref)
+			target, found := defs[name]
+			if !ok || !found {
+				return withFallbackSiblings(v)
+			}
+			expanded := expandMoonshotRefs(deepCopyMoonshotValue(target), defs, depth+1, budget)
+			body, isMap := expanded.(map[string]any)
+			if !isMap {
+				return withFallbackSiblings(v)
+			}
+			// sibling keywords ride along on the inlined body.
+			for k, sv := range v {
+				if k == "$ref" {
+					continue
+				}
+				if _, exists := body[k]; !exists {
+					body[k] = sv
+				}
+			}
+			return body
+		}
+		out := make(map[string]any, len(v))
+		for k, child := range v {
+			// defs tables are consumed by collectMoonshotDefs; they are
+			// dropped at every level here (the resolver only reads the root
+			// table, so nothing can reference a nested one).
+			if k == "$defs" || k == "definitions" {
+				continue
+			}
+			out[k] = expandMoonshotRefs(child, defs, depth, budget)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, child := range v {
+			out[i] = expandMoonshotRefs(child, defs, depth, budget)
+		}
+		return out
+	default:
+		return node
+	}
+}
+
+// withFallbackSiblings replaces the "$ref" of a schema node with the
+// permissive fallback, keeping every sibling keyword.
+func withFallbackSiblings(v map[string]any) map[string]any {
+	out := make(map[string]any, len(v)+2)
+	for k, sv := range v {
+		if k == "$ref" {
+			continue
+		}
+		out[k] = sv
+	}
+	for k, fv := range moonshotRefFallback {
+		if _, exists := out[k]; !exists {
+			out[k] = fv
+		}
+	}
+	return out
+}
+
+func cloneMoonshotFallback() map[string]any {
+	out := make(map[string]any, len(moonshotRefFallback))
+	for k, v := range moonshotRefFallback {
+		out[k] = v
+	}
+	return out
+}
+
+// deepCopyMoonshotValue clones parsed-JSON values (maps, slices, scalars).
+func deepCopyMoonshotValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, child := range t {
+			out[k] = deepCopyMoonshotValue(child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, child := range t {
+			out[i] = deepCopyMoonshotValue(child)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 // walkMoonshotSchema recursively normalizes schema nodes and reports whether
