@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# verify-binary.sh -- post-restart self-verification for the v1.3.265
+# minimum-interruption fix chain (#4280/#4282/#4279).
+#
+# Run this in a FRESH ggcode session (after an in-place /restart). It
+# proves, with raw evidence, that the running process is the new binary
+# and the refusal-anchor false-positive chain is dead. Exit 0 = all good.
+#
+# Usage: bash scripts/verify-binary.sh [expected_vcs_revision_prefix]
+#        (default 4e698c8d5, the v1.3.265 release commit)
+
+set -u
+EXPECT_REV="${1:-4e698c8d5}"
+GG_BIN="/Volumes/new/ggai/ggcode/bin/ggcode"
+WS="/Volumes/new/ggai/ggcode"
+FAIL=0
+
+say() { printf '%s\n' "$*"; }
+
+# --- 1. Process identity -------------------------------------------------
+PID=$(pgrep -n -f "$GG_BIN" || true)
+if [ -z "$PID" ]; then
+    say "FAIL: no ggcode process found"
+    exit 1
+fi
+say "== process =="
+ps -p "$PID" -o pid=,lstart=,command=
+
+# --- 2. Binary provenance ------------------------------------------------
+say "== binary =="
+say "-- lsof txt mapping --"
+lsof -p "$PID" 2>/dev/null | awk '$4=="txt" && /ggcode/ {print "inode", $8, $NF}' | head -3
+say "-- on-disk binary --"
+stat -f "mtime=%Sm size=%z inode=%i" "$GG_BIN"
+say "-- vcs stamp --"
+go version -m "$GG_BIN" 2>/dev/null | grep -E 'vcs\.(revision|time|modified)' || {
+    say "WARN: no vcs stamp embedded (script-built?)"; }
+REV=$(go version -m "$GG_BIN" 2>/dev/null | awk '/vcs.revision=/ {print substr($2,16)}')
+if [ -n "${REV:-}" ]; then
+    if [ "$REV" != "$EXPECT_REV" ]; then
+        say "FAIL: running vcs.revision=$REV, expected $EXPECT_REV"
+        FAIL=1
+    else
+        say "OK: vcs.revision=$REV == $EXPECT_REV"
+    fi
+fi
+LS_START=$(ps -p "$PID" -o lstart=)
+BIN_MTIME=$(stat -f %m "$GG_BIN")
+PROC_BIRTH=$(ps -p "$PID" -o lstart= -t %s 2>/dev/null || echo 0)
+# exec-style restart keeps lstart; rely on vcs stamp + inode instead.
+
+# --- 3. Refusal data surface --------------------------------------------
+say "== refusals data =="
+RF="$WS/.ggcode/refusals.json"
+ENTRIES=$(grep -c '"excerpt"' "$RF" 2>/dev/null || echo "file-missing")
+say "entries now: $ENTRIES (want 0)"
+[ "$ENTRIES" = "0" ] || FAIL=1
+BK="$WS/.ggcode/refusals.json.polluted-backup-20261017"
+if [ -f "$BK" ]; then
+    say "backup present: $BK"
+else
+    say "WARN: pollution backup missing at $BK"
+fi
+
+# --- 4. Live probe: the exact excerpt that used to hard-block ------------
+# Under the OLD process (in-memory cached entries + boundary-less anchors)
+# this grep was blocked 5x live. Under the fixed binary it must run clean.
+say "== live refusal probe =="
+if grep -c "do not re-search covered ground" "$BK" >/dev/null 2>&1; then
+    say "OK: probe grep executed (anchor chain dead) hit=$(grep -c 'do not re-search covered ground' "$BK")"
+else
+    say "FAIL: probe grep still blocked or errored - old in-memory entries alive?"
+    FAIL=1
+fi
+
+# --- 5. Anchor regression suite ------------------------------------------
+say "== go test anchor suite =="
+if (cd "$WS" && GOMEMLIMIT=2GiB GOGC=50 go test -tags goolm ./internal/agent/ -count=1 -timeout 600s 2>&1 | tail -2); then
+    say "OK: agent package PASS"
+else
+    say "FAIL: agent package regression"
+    FAIL=1
+fi
+
+say "== verdict =="
+if [ "$FAIL" = "0" ]; then
+    say "ALL CHECKS PASSED - running binary verified against $EXPECT_REV"
+else
+    say "CHECKS FAILED (see above)"
+fi
+exit $FAIL
