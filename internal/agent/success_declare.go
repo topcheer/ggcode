@@ -94,6 +94,20 @@ var sdCaveatPhrases = []string{
 	"but first",
 	"caveat",
 	"note that",
+	// #4256 gap 1: "still work to be done: ..." is the passive-negation
+	// form of "isn't done" - the sentence LITERALLY says work remains, yet
+	// bare "done" matched the declaration table and the well-calibrated
+	// agent got a premature-success warning for telling the truth. As a
+	// CAVEAT (not negation: the lookbehind window ends before "done", so
+	// phrases containing "done" can never match there) the leading "to
+	// be" hedges the declaration in the windowed scan.
+	"to be done", "to be finished", "to be completed",
+	// #4256 gap 2: verification-intent framing. "Let me verify if the fix
+	// works" matched the bare "the fix works" declaration with no caveat
+	// veto - the verify framing means the outcome is UNKNOWN, the opposite
+	// of a completion claim.
+	"let me verify", "verify if", "verifying if", "verifying whether",
+	"check if", "checking if", "let me check",
 }
 
 // sdCaveatWindow is how many characters before/after the declaration
