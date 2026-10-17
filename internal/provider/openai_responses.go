@@ -1038,6 +1038,40 @@ func (p *OpenAIResponsesProvider) sendEvent(ctx context.Context, ch chan<- Strea
 	}
 }
 
+// sendTerminalEvent delivers the TERMINAL error of a stream. Unlike
+// sendEvent it prefers a non-blocking buffered send first: when the request
+// deadline has already fired, sendEvent's select races between a draining
+// consumer and the already-closed ctx.Done, dropping the final error event
+// ~50% of the time - the stream then ends silently instead of reporting
+// "context deadline exceeded" (CI flake on TestIssue2573StreamDeadline-
+// CoversFullStream, main run 39042845474). A terminal error is the last
+// event, so if the consumer is still draining the buffer has room and the
+// send cannot block; if the consumer abandoned the channel with a full
+// buffer, the ctx.Done fallback preserves the #4266 leak protection.
+func (p *OpenAIResponsesProvider) sendTerminalEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
+	select {
+	case ch <- ev:
+		return true
+	default:
+	}
+	select {
+	case ch <- ev:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// sendTerminal delivers a TERMINAL stream event (Error/Done). It must not
+// race the deadline: sendEvent's select can drop the very event that
+// explains WHY the stream ended when ctx is already done (both cases ready,
+// random pick) — the consumer then sees a bare channel close with no error
+// (zz_issue2573 stream-deadline flake). The channel is buffered and the
+// consumer drains until close, so a direct send cannot block indefinitely.
+func (p *OpenAIResponsesProvider) sendTerminal(ch chan<- StreamEvent, ev StreamEvent) {
+	ch <- ev
+}
+
 func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
 	req, err := p.buildRequest(messages, tools, true)
 	if err != nil {
@@ -1079,7 +1113,7 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 					continue
 				}
 				debug.Log("openai-responses", "CONNECT FATAL model=%s baseURL=%s attempt=%d/%d: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), err, err)
-				p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)})
+				p.sendTerminalEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)})
 				return
 			}
 			retry, scanErr := p.readResponsesStream(ctx, httpResp, ch)
@@ -1102,7 +1136,7 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 				return
 			}
 		}
-		p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %d retry attempts exhausted", p.policy.attempts())})
+		p.sendTerminalEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %d retry attempts exhausted", p.policy.attempts())})
 	})
 	return ch, nil
 }
@@ -1298,20 +1332,20 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 			return true, err
 		}
 		if ctx.Err() == nil {
-			p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)})
+			p.sendTerminal(ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)})
 		} else {
-			p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: ctx.Err()})
+			p.sendTerminal(ch, StreamEvent{Type: StreamEventError, Error: ctx.Err()})
 		}
 		return false, err
 	}
 	if !doneSent {
 		if ctx.Err() != nil {
-			p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: ctx.Err()})
+			p.sendTerminal(ch, StreamEvent{Type: StreamEventError, Error: ctx.Err()})
 			return false, ctx.Err()
 		}
 		// Stream closed without a terminal event: still emit Done so the
 		// agent loop finalizes the turn instead of hanging.
-		p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventDone})
+		p.sendTerminal(ch, StreamEvent{Type: StreamEventDone})
 	}
 	return false, nil
 }

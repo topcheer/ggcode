@@ -176,7 +176,28 @@ func TestIssue2573StreamDeadlineCoversFullStream(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		<-r.Context().Done() // hang until the client-side deadline kills the conn
+		// Keep the connection warm with periodic SSE comments until the
+		// client-side deadline kills it. A single unflushed hang relies on
+		// the OS write of the response head landing before the 300ms
+		// deadline fires; on slow CI runners the server goroutine can be
+		// descheduled, the conn torn down first, and the scanner sees a
+		// bare EOF instead of a deadline error - a pure timing flake
+		// (main run 39042845474, PR #4291 reruns). Flushing periodically
+		// keeps data flowing so the ONLY way the stream ends is the
+		// per-call deadline, which is what this test asserts.
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-ticker.C:
+				io.WriteString(w, ": keepalive\n\n")
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}
+		}
 	}))
 	defer srv.Close()
 
