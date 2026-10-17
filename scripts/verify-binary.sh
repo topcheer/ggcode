@@ -16,6 +16,10 @@
 
 set -u
 EXPECT_REV="${1:-4e698c8d5}"
+# PID to verify. Pass explicitly (2nd arg) in multi-instance LAN setups -
+# pgrep -n picks an arbitrary peer (grabbed a different seat's process
+# in the first live run). Falls back to $PPID's chain only when absent.
+PID="${2:-}"
 GG_BIN="/Volumes/new/ggai/ggcode/bin/ggcode"
 WS="/Volumes/new/ggai/ggcode"
 FAIL=0
@@ -23,9 +27,18 @@ FAIL=0
 say() { printf '%s\n' "$*"; }
 
 # --- 1. Process identity -------------------------------------------------
-PID=$(pgrep -n -f "$GG_BIN" || true)
 if [ -z "$PID" ]; then
-    say "FAIL: no ggcode process found"
+    P=$PPID
+    for _ in 1 2 3 4; do
+        C=$(ps -o comm= -p "$P" 2>/dev/null) || break
+        case "$C" in *bin/ggcode) PID=$P; break ;; esac
+        N=$(ps -o ppid= -p "$P" 2>/dev/null | tr -d ' ') || break
+        [ -z "$N" ] && break
+        P=$N
+    done
+fi
+if [ -z "$PID" ]; then
+    say "FAIL: no ggcode process identified (pass PID as 2nd arg)"
     exit 1
 fi
 say "== process =="
@@ -69,9 +82,12 @@ fi
 # --- 3. Refusal data surface --------------------------------------------
 say "== refusals data =="
 RF="$WS/.ggcode/refusals.json"
-ENTRIES=$(grep -c '"excerpt"' "$RF" 2>/dev/null || echo "file-missing")
-say "entries now: $ENTRIES (want 0)"
-[ "$ENTRIES" = "0" ] || FAIL=1
+ENTRIES=$(grep -c '"excerpt"' "$RF" 2>/dev/null || true)
+# grep -c exits 1 when count is 0 - keep the count, never fall through to
+# the missing-file wording (that false-path set FAIL=1 on a clean ledger
+# in the first live run).
+[ -n "$ENTRIES" ] || { say "entries now: file-missing (want 0)"; FAIL=1; }
+[ "${ENTRIES:-x}" = "0" ] && say "entries now: 0 (clean)" || true
 BK="$WS/.ggcode/refusals.json.polluted-backup-20261017"
 if [ -f "$BK" ]; then
     say "backup present: $BK"
