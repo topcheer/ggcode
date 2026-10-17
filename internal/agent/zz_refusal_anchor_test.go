@@ -61,7 +61,7 @@ func TestRefusalFlagsProductionPollutionExcerpts(t *testing.T) {
 // go test command using the literal -run flag.
 func TestCheckBlockedMidRunProseDoesNotBlockGoTest(t *testing.T) {
 	l := newRefusalLedger(t.TempDir())
-	l.record(`do not modify the auth module"，这条消息是否经过 recordConstraints？请追踪 mid-run 用户消息注入路径（agent`, "nl")
+	l.record(`do not modify the auth module"，这条消息是否经过 recordConstraints？请追踪 mid-run 用户消息注入路径（agent`, "nl", refusalKindDirect)
 	cmd := `{"command":"cd /x && go test -tags goolm ./internal/tui/ -run 'TestHandleRemoteInbound_IMApproval' -count=1 -timeout 120s 2>&1 | tail -2"}`
 	if msg := l.checkBlocked("run_command", cmd); msg != "" {
 		t.Fatalf("false-positive block persisted: %s", msg)
@@ -72,7 +72,7 @@ func TestCheckBlockedMidRunProseDoesNotBlockGoTest(t *testing.T) {
 // block a command that carries --force.
 func TestCheckBlockedRealFlagStillBlocks(t *testing.T) {
 	l := newRefusalLedger(t.TempDir())
-	l.record("never use --force push to main", "nl")
+	l.record("never use --force push to main", "nl", refusalKindDirect)
 	cmd := `{"command":"git push --force origin main"}`
 	if msg := l.checkBlocked("run_command", cmd); msg == "" || !strings.Contains(msg, "--force") {
 		t.Fatalf("expected --force refusal to block, got %q", msg)
