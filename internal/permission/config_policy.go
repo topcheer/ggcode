@@ -873,9 +873,59 @@ func trimQuoteRunes(tok string) string {
 	return tok
 }
 
+// interpreterQuoteOpening reports whether the single-quote body opening at
+// runes[qs] is an interpreter -c argument: the quote must DIRECTLY follow an
+// interpreter invocation (sh -c '...', powershell -Command '...' ...), i.e.
+// left of the opening quote we see [whitespace] (-c|-command|-e|/c)
+// [whitespace] <interpreter-word>. Only then does the quoted body merge into a
+// command line and a `>` inside it genuinely redirect (#4279 PoC). A global
+// substring check is wrong: a PS deploy chain whose TAIL runs `kubectl ... --
+// sh -c $cmd` also contains "sh -c" anywhere, while its EARLIER single-quoted
+// literals ('... > /src/home/.npmrc ...' as -replace pattern data) never
+// redirect - the #4273/#4290 blocker shape must stay Allow.
+func interpreterQuoteOpening(runes []rune, qs int) bool {
+	i := qs - 1
+	for i >= 0 && isSpaceRune(runes[i]) {
+		i--
+	}
+	// argument flag immediately left of the quote
+	flags := []string{"-c", "-command", "-e", "/c", "-ec"}
+	matched := false
+	for _, f := range flags {
+		if i-len(f)+1 >= 0 && strings.EqualFold(string(runes[i-len(f)+1:i+1]), f) {
+			i -= len(f)
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return false
+	}
+	for i >= 0 && isSpaceRune(runes[i]) {
+		i--
+	}
+	// interpreter word
+	start := i
+	for i >= 0 && !isSpaceRune(runes[i]) && runes[i] != ';' && runes[i] != '|' && runes[i] != '&' {
+		i--
+	}
+	word := strings.ToLower(string(runes[i+1 : start+1]))
+	word = strings.TrimSuffix(word, ".exe")
+	switch word {
+	case "sh", "bash", "zsh", "dash", "ksh", "pwsh", "powershell", "python", "python3", "perl", "ruby", "cmd", "node", "osascript":
+		return true
+	}
+	return false
+}
+
+func isSpaceRune(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+}
+
 func extractRedirectTargets(cmd string) []string {
 	var targets []string
 	var quote rune
+	quoteStart := 0
 	runes := []rune(cmd)
 	for i := 0; i < len(runes); i++ {
 		c := runes[i]
@@ -891,6 +941,12 @@ func extractRedirectTargets(cmd string) []string {
 			// subset only: single-quoted bodies (no variable expansion =>
 			// literal path) with absolute/home-anchored targets - exactly
 			// the paths the out-of-sandbox/sensitive gates key on.
+			// #4301/#4290 blocker refinement: the PoC shape is interpreter
+			// -c ('... > <path> ...') - quote content that MERGES into an
+			// outer command line. A single-quoted PS/bash string literal
+			// that only carries the > as DATA (right side is a plain data
+			// word, no interpreter prefix) is the #4273 deploy-chain shape:
+			// the > never redirects and must not trip the gate.
 			if c == '>' && quote == '\'' {
 				j := i
 				for j < len(runes) && runes[j] == '>' {
@@ -898,11 +954,13 @@ func extractRedirectTargets(cmd string) []string {
 				}
 				if j-i <= 2 {
 					if tok := scanRedirectToken(runes, j); isAbsolutePathish(tok) {
-						// #4279: a quoted-body target runs to the closing
-						// quote (not whitespace) - strip the trailing quote
-						// rune so suffix/path matchers see the literal path
-						// ("authorized_keys'" would miss every gate).
-						targets = append(targets, trimQuoteRunes(tok))
+						if interpreterQuoteOpening(runes, quoteStart) {
+							// #4279: a quoted-body target runs to the closing
+							// quote (not whitespace) - strip the trailing quote
+							// rune so suffix/path matchers see the literal path
+							// ("authorized_keys'" would miss every gate).
+							targets = append(targets, trimQuoteRunes(tok))
+						}
 					}
 				}
 				if j > i {
@@ -913,6 +971,7 @@ func extractRedirectTargets(cmd string) []string {
 		}
 		if c == '\'' || c == '"' {
 			quote = c
+			quoteStart = i
 			continue
 		}
 		if c != '>' {
