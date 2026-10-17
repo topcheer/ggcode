@@ -499,6 +499,7 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	// the new run's liveHistory (#504 guard defeated on the text path).
 	b.runGeneration++
 	b.activeRunGen = b.runGeneration // #550 E1: this run owns the finish path
+	runGen := b.runGeneration        // #4277: entry claim captured for the guarded persist refresh in sendMessageData
 	turnID, _ := b.startDesktopTurnLocked()
 	b.runSes = b.currentSes // #270: persist-path snapshot, same critical section as b.cancel
 	b.mu.Unlock()
@@ -598,7 +599,17 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	b.mu.Lock()
 	b.runSes = b.currentSes
 	b.mu.Unlock()
-	b.setRunPersistSnapshot()
+	// #4277: same #1181/#1701 family fix for the TEXT path - the mid-run
+	// setRunPersistSnapshot() re-bumped runGeneration unconditionally,
+	// double-bumping past the entry claim (#522) and letting a Cancel race
+	// steal the finish path (duplicate run_done / skipped persist). Only
+	// refresh the persist target while this run still owns the generation;
+	// never re-claim here.
+	b.mu.Lock()
+	if b.activeRunGen == runGen {
+		b.persistSession = b.currentSes
+	}
+	b.mu.Unlock()
 	// Rebind the per-session projection broker before every run so subsequent
 	// turns cannot inherit a stale broker callback/session binding.
 	b.bindTunnelProjectionSession()
@@ -636,7 +647,7 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	// #504: capture this run's generation so late events draining after a
 	// session clear / newer run self-drop in the callback instead of
 	// leaking into the new session's live history and frontend stream.
-	runGen := b.currentRunGeneration()
+	runGen = b.currentRunGeneration() // #4277: entry claim (no mid-run re-bump anymore, same value)
 	err := b.agent.RunStream(ctx, userMsg, func(ev provider.StreamEvent) {
 		// #1671 case 2: no outer OnStreamEvent gate here - emit() already
 		// nil-checks it internally before pushing to the frontend, but this
