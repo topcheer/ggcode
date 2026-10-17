@@ -331,6 +331,17 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 // wrapper layer only - this is the underlying-provider half. Every send in
 // the streamRead goroutine must go through here.
 func (p *GeminiProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
+	// #4295 family: same fix as openai_responses (#4293) - when the
+	// per-call deadline fires at the same instant the terminal error event
+	// is sent, the racing select below dropped the very error the deadline
+	// produced (silent stream close). Buffered channel + draining consumer
+	// makes a non-blocking send deterministic; only a full buffer falls
+	// through to the racing select (#3068 leak guard preserved).
+	select {
+	case ch <- ev:
+		return true
+	default:
+	}
 	select {
 	case ch <- ev:
 		return true
