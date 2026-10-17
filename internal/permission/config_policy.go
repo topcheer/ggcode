@@ -819,6 +819,9 @@ func matchesEnvPath(cmd string) bool {
 		if after == '[' {
 			continue // jsonpath filter: ].env[?(@.name==...)]
 		}
+		if after == '.' && strings.HasPrefix(cmd[pos:], ".env.example") {
+			continue // dotenv template, carries no secrets
+		}
 		var before byte = ' '
 		if pos > 0 {
 			before = cmd[pos-1]
