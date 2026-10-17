@@ -793,7 +793,7 @@ func GetImpersonationPresets() []ImpersonationPresetInfo {
 // (#67/#69 struct-overwrite family, 4th instance).
 func ApplyImpersonation(presetID, version string, customHeaders map[string]string) error {
 	globalMu.Lock()
-	chatSnap := activeChatBridge
+	chatSnap := GetChatBridge()
 	err := applyImpersonationLocked(presetID, version, customHeaders)
 	globalMu.Unlock()
 	if err != nil {

@@ -45,9 +45,7 @@ type MCPServerInfo struct {
 // session runs workspace servers, so changes never took effect (and removals
 // resurrected on reload).
 func loadSessionScopedConfig() (*config.Config, error) {
-	globalMu.RLock()
-	chat := activeChatBridge
-	globalMu.RUnlock()
+	chat := GetChatBridge()
 	return loadSessionScopedConfigFor(chat)
 }
 
@@ -73,9 +71,7 @@ func ListMCPServers() ([]MCPServerInfo, error) {
 	// load and the status lookup. The old code read activeChatBridge twice
 	// independently - a switchWorkspace in between spliced OLD workspace
 	// yaml config with NEW workspace connection state.
-	globalMu.RLock()
-	chatSnap := activeChatBridge
-	globalMu.RUnlock()
+	chatSnap := GetChatBridge()
 
 	cfg, err := loadSessionScopedConfigFor(chatSnap)
 	if err != nil {
@@ -128,9 +124,7 @@ func ListMCPServers() ([]MCPServerInfo, error) {
 
 func SetMCPServerEnabled(name string, enabled bool) bool {
 	disabled := !enabled
-	globalMu.RLock()
-	chat := activeChatBridge
-	globalMu.RUnlock()
+	chat := GetChatBridge()
 	scope := chatScope(chat)
 	if chat == nil || chat.mcpManager == nil {
 		// Persist the toggle FIRST so the UI state matches disk (#408):
@@ -201,9 +195,7 @@ func chatScope(chat *ChatBridge) string {
 }
 
 func ReconnectMCPServer(name string) bool {
-	globalMu.RLock()
-	chat := activeChatBridge
-	globalMu.RUnlock()
+	chat := GetChatBridge()
 	if chat == nil || chat.mcpManager == nil {
 		return false
 	}
@@ -213,9 +205,7 @@ func ReconnectMCPServer(name string) bool {
 // ForceReauthMCPServer deletes the server-name-specific OAuth credential and
 // triggers a reconnect. The next request will start a fresh OAuth flow.
 func ForceReauthMCPServer(name string) bool {
-	globalMu.RLock()
-	chat := activeChatBridge
-	globalMu.RUnlock()
+	chat := GetChatBridge()
 	if chat == nil || chat.mcpManager == nil {
 		return false
 	}
@@ -300,9 +290,7 @@ func AddMCPServer(values map[string]string) error {
 	defer mcpConfigWriteMu.Unlock()
 	// #458: snapshot the bridge once so the scope decision and the reload
 	// below see the same session even if a workspace switch interleaves.
-	globalMu.RLock()
-	chatSnap := activeChatBridge
-	globalMu.RUnlock()
+	chatSnap := GetChatBridge()
 	cfg, err := loadSessionScopedConfigFor(chatSnap)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -424,9 +412,7 @@ func RemoveMCPServer(name string) error {
 	// Without this, a switchWorkspace between loadSessionScopedConfig and the
 	// Disconnect below can leave the removed server connected in the old workspace
 	// while Disconnect operates on the new workspace's manager (#563).
-	globalMu.RLock()
-	chatSnap := activeChatBridge
-	globalMu.RUnlock()
+	chatSnap := GetChatBridge()
 	cfg, err := loadSessionScopedConfigFor(chatSnap)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
