@@ -245,17 +245,6 @@ type RemoteAgentMeta struct {
 	ProjectName string   // short project identifier
 }
 
-// RemoteAgentSummary returns a human-readable summary of other online
-// ggcode instances, suitable for injection into the system prompt.
-// Returns empty string if no other instances are online.
-func (t *RemoteTool) RemoteAgentSummary() string {
-	instances, err := t.discover()
-	if err != nil || len(instances) == 0 {
-		return ""
-	}
-	return FormatRemoteAgents(instances, nil)
-}
-
 // FormatRemoteAgents formats a list of discovered instances into a
 // system-prompt-friendly summary. Exported so non-RemoteTool callers
 // (e.g. daemon, desktop) can use it directly from a Registry.
