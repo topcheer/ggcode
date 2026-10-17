@@ -499,6 +499,7 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	// the new run's liveHistory (#504 guard defeated on the text path).
 	b.runGeneration++
 	b.activeRunGen = b.runGeneration // #550 E1: this run owns the finish path
+	runGen := b.runGeneration        // #4277: entry-claimed generation; the only bump this run performs
 	turnID, _ := b.startDesktopTurnLocked()
 	b.runSes = b.currentSes // #270: persist-path snapshot, same critical section as b.cancel
 	b.mu.Unlock()
@@ -598,7 +599,16 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	b.mu.Lock()
 	b.runSes = b.currentSes
 	b.mu.Unlock()
-	b.setRunPersistSnapshot()
+	// #4277: do NOT bump runGeneration here anymore (mirrors #1181 in
+	// SendContent and #1701 case 3 in SendHiddenText). The entry bump above
+	// claimed ownership; this path used to call setRunPersistSnapshot()
+	// which unconditionally bumped again. A Cancel-blind legacy run
+	// (InitAgent/ensureSession ignore ctx) re-bumping after a newer run
+	// started pushed the generation past the new run's captured runGen, so
+	// every one of its stream events was stale-dropped by emitIfCurrent
+	// (silent UI) and its reply was lost from both UI and JSONL. Only
+	// refresh the persist target while this run is still the owner.
+	b.refreshPersistTargetIfOwner(runGen)
 	// Rebind the per-session projection broker before every run so subsequent
 	// turns cannot inherit a stale broker callback/session binding.
 	b.bindTunnelProjectionSession()
@@ -633,10 +643,11 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 		b.lanchatHub.SetAgentBusy(true)
 	}
 
-	// #504: capture this run's generation so late events draining after a
-	// session clear / newer run self-drop in the callback instead of
-	// leaking into the new session's live history and frontend stream.
-	runGen := b.currentRunGeneration()
+	// #504/#4277: runGen was captured at entry under the lock — reuse it for
+	// the stream callback so late events draining after a session clear /
+	// newer run self-drop in the callback instead of leaking into the new
+	// session's live history and frontend stream. Re-reading here would race
+	// another entry bump in the second lock window (#1511 inversion).
 	err := b.agent.RunStream(ctx, userMsg, func(ev provider.StreamEvent) {
 		// #1671 case 2: no outer OnStreamEvent gate here - emit() already
 		// nil-checks it internally before pushing to the frontend, but this
@@ -785,6 +796,20 @@ func (b *ChatBridge) finishRun(err error) {
 }
 
 // ClearCurrentSession resets the current session so next chat creates a fresh one.
+// refreshPersistTargetIfOwner re-binds the per-run persist target while this
+// run is still the generation owner (#4277). It never bumps runGeneration:
+// the entry bump claimed ownership, and a superseded (Cancel-blind) run
+// re-bumping here would push the generation past a newer run's captured
+// runGen, silencing all of its stream events via the emitIfCurrent stale
+// drop. Mirrors the #1181 owner guard in SendContent.
+func (b *ChatBridge) refreshPersistTargetIfOwner(runGen uint64) {
+	b.mu.Lock()
+	if b.activeRunGen == runGen {
+		b.persistSession = b.runSes
+	}
+	b.mu.Unlock()
+}
+
 // setRunPersistSnapshot installs the per-run persist target for THIS run
 // only: a captured session + generation (#489). Replaces read-at-trigger
 // semantics for run-scoped persists; called after runSes is established.
