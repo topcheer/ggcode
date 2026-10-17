@@ -281,6 +281,16 @@ func NewCommandGate() *CommandGate {
 		// --- Destructive cron ---
 		{kind: "destructive", desc: "destructive cron job",
 			pattern: regexp.MustCompile(`(?i)crontab\s+.*\brm\s+-r`)},
+
+		// --- Obfuscated payload execution (#4273) ---
+		// The bare shell-substitution ASK rules matched syntax, not semantics:
+		// harmless `echo $(date)` / `${VAR}` interpolation asked constantly
+		// while carrying no danger of their own. The one capture surface those
+		// rules held that content rules miss: piping DECODED payloads into a
+		// shell. Keep that surface as an explicit content rule. Trailing \b
+		// per #815 (sh is a prefix of sha256sum/shasum/shfmt).
+		{kind: "injection", desc: "decoded payload piped to shell",
+			pattern: regexp.MustCompile(`(?i)\b(base64|openssl\s+enc\s+-d|xxd\s+-r\s+-p)\b[^\n]*\|\s*(ba)?sh\b`)},
 	}
 
 	// ================================================================

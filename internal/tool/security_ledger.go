@@ -37,6 +37,15 @@ type DenialEvent struct {
 // (one blocked attempt, then self-correction) never trips it.
 const denialEscalationThreshold = 3
 
+// downgradedAllowThreshold (#4273): rule kind "ask-allowed" events are NOT
+// denials - the command was downgraded to Allow in bypass/autopilot mode and
+// actually RAN. Reporting them as "denied N times" was factually wrong, and
+// with the old syntax-based injection rules a single build session rolled
+// the counter past 100 (user-measured 186). These events escalate separately
+// at a higher threshold with neutral wording: a review nudge, not a probing
+// accusation.
+const downgradedAllowThreshold = 10
+
 // maxLedgerEvents caps the ledger so a runaway loop cannot grow it unbounded;
 // escalation counting reads the full window before eviction, so the cap only
 // bounds memory, not detection coverage.
@@ -83,25 +92,59 @@ func (l *SecurityLedger) Escalation() string {
 			first[k] = i
 		}
 	}
+	// #4273: "ask-allowed" events are downgraded ALLOWS (the command ran),
+	// not denials - they must not win the denial ranking nor inherit the
+	// "was denied / sandbox-probing" wording. True denials rank first.
 	var worst key
 	worstN := 0
 	for k, n := range counts {
+		if k.kind == "ask-allowed" {
+			continue
+		}
 		if n > worstN {
 			worst, worstN = k, n
 		}
 	}
-	if worstN < denialEscalationThreshold {
+	if worstN >= denialEscalationThreshold {
+		return l.escalationFor(worst.denier, worst.kind, worstN, lastCmd[worst], false)
+	}
+	// No true-denial escalation: check the downgraded-allow group separately
+	// (#4273) at its own threshold with neutral wording.
+	var dworst key
+	dworstN := 0
+	for k, n := range counts {
+		if k.kind != "ask-allowed" {
+			continue
+		}
+		if n > dworstN {
+			dworst, dworstN = k, n
+		}
+	}
+	if dworstN < downgradedAllowThreshold {
 		return ""
 	}
+	return l.escalationFor(dworst.denier, dworst.kind, dworstN, lastCmd[dworst], true)
+}
+
+// escalationFor renders the notice for one escalation group. downgraded
+// selects the #4273 neutral wording for ask-allowed events (they ran, they
+// were not denied); the caller guarantees the group's threshold was met.
+// Caller holds l.mu.
+func (l *SecurityLedger) escalationFor(denier, kind string, n int, last string, downgraded bool) string {
 	// #3302: events are appended chronologically, so scanning from the
 	// head yields the EARLIEST matches - "Recent" must be the newest:
 	// walk in reverse and keep the last three (newest first).
 	var recent []string
 	for i := len(l.events) - 1; i >= 0 && len(recent) < 3; i-- {
 		e := l.events[i]
-		if e.Denier == worst.denier && e.RuleKind == worst.kind {
+		if e.Denier == denier && e.RuleKind == kind {
 			recent = append(recent, e.Command)
 		}
+	}
+	if downgraded {
+		return fmt.Sprintf(
+			"SECURITY NOTICE: %q was auto-approved %d times this session (Ask rule %q downgraded to Allow in bypass/autopilot mode - these commands RAN, they were not denied). Recent auto-approved commands: %s. Frequent downgrades of the same rule deserve a review - verify these commands match expectations.",
+			last, n, kind, clipCommandList(recent))
 	}
 	return fmt.Sprintf(
 		// #3302: the main sentence names the LAST DENIED COMMAND and the
@@ -111,7 +154,7 @@ func (l *SecurityLedger) Escalation() string {
 		// only appeared in the recent list - lastCmd was collected but
 		// never read).
 		"SECURITY ESCALATION: %q was denied %d times this session by the %s (rule %q via %s). Recent denied commands: %s. Repeated attempts to bypass a denial are a sandbox-probing pattern - stop varying the command, explain what you need to the user, or choose a permitted approach.",
-		lastCmd[worst], worstN, worst.denier, worst.kind, worst.denier, clipCommandList(recent))
+		last, n, denier, kind, denier, clipCommandList(recent))
 }
 
 // Events returns a copy of the recorded denials (newest last) for /security

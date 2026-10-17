@@ -14,9 +14,12 @@ import (
 // the highest-value sandbox-probing detection surface (#3281 reviewer
 // ruling: mandatory follow-up).
 
-// askProbeCmd hits the injection ask-rule ("$(..." command substitution)
-// while being harmless when actually executed in the end-to-end test.
-const askProbeCmd = "echo $(date)"
+// askProbeCmd hits a destructive ask-rule (rm -f) while being harmless
+// when actually executed in the end-to-end test (temp.txt does not exist,
+// -f silences the error). #4273: the probe deliberately avoids the
+// shell-substitution rules - PR #4238 downgrades them to warnings, and this
+// test must keep triggering a genuine Ask under both rule-table shapes.
+const askProbeCmd = "rm -f temp.txt"
 
 func TestIssue3282_BypassAskDowngradeRecordsLedger(t *testing.T) {
 	ledger := &SecurityLedger{}
@@ -36,8 +39,13 @@ func TestIssue3282_BypassAskDowngradeRecordsLedger(t *testing.T) {
 			t.Fatalf("event %d = denier=%q ruleKind=%q, want gate/ask-allowed", i, e.Denier, e.RuleKind)
 		}
 	}
-	if esc := ledger.Escalation(); !strings.Contains(esc, "SECURITY ESCALATION") {
-		t.Fatalf("3 downgraded asks must escalate (probing fingerprint), got: %q", esc)
+	// #4273: ask-allowed events are downgraded ALLOWS, not denials - three
+	// of them must NOT produce the "was denied / sandbox-probing" notice
+	// anymore (old behavior fired at threshold 3 with factually wrong
+	// wording; the downgraded-allow notice now needs 10 and is neutral -
+	// pinned in zz_issue4273_test.go).
+	if esc := ledger.Escalation(); esc != "" {
+		t.Fatalf("3 downgraded asks must not escalate (#4273), got: %q", esc)
 	}
 }
 
@@ -47,15 +55,20 @@ func TestIssue3282_EscalationSurfacesInGatePreWarning(t *testing.T) {
 	gate := NewCommandGate()
 
 	var last string
-	for i := 0; i < 3; i++ {
+	for i := 0; i < downgradedAllowThreshold; i++ {
 		_, pre, blocked := rc.applyCommandGate(gate, askProbeCmd)
 		if blocked != "" {
 			t.Fatalf("unexpected block: %s", blocked)
 		}
 		last = pre
 	}
-	if !strings.Contains(last, "SECURITY ESCALATION") {
-		t.Fatalf("3rd downgraded ask must surface the escalation notice via preWarning, got: %q", last)
+	// #4273: the downgraded-allow notice is a SECURITY NOTICE with neutral
+	// wording - it must never claim the commands were "denied".
+	if !strings.Contains(last, "SECURITY NOTICE") {
+		t.Fatalf("downgraded asks must surface the neutral notice via preWarning, got: %q", last)
+	}
+	if strings.Contains(last, "was denied") {
+		t.Fatalf("downgraded-allow notice must not use denial wording (#4273), got: %q", last)
 	}
 }
 
@@ -93,7 +106,7 @@ func TestIssue3282_EndToEndExecuteEscalationVisible(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < downgradedAllowThreshold; i++ {
 		res, err := rc.Execute(context.Background(), input)
 		if err != nil {
 			t.Fatalf("execute %d: %v", i+1, err)
@@ -101,8 +114,11 @@ func TestIssue3282_EndToEndExecuteEscalationVisible(t *testing.T) {
 		if res.IsError {
 			t.Fatalf("bypass downgrade must allow execution: %s", res.Content)
 		}
-		if i == 2 && !strings.Contains(res.Content, "SECURITY ESCALATION") {
-			t.Fatalf("3rd execute must carry the escalation notice in its result, got: %.200s", res.Content)
+		if i == downgradedAllowThreshold-1 && !strings.Contains(res.Content, "SECURITY NOTICE") {
+			t.Fatalf("Nth execute must carry the neutral downgraded-allow notice in its result, got: %.200s", res.Content)
+		}
+		if i == downgradedAllowThreshold-1 && strings.Contains(res.Content, "was denied") {
+			t.Fatalf("downgraded-allow notice must not use denial wording (#4273), got: %.200s", res.Content)
 		}
 	}
 }
