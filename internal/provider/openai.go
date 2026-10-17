@@ -1483,6 +1483,14 @@ func (p *OpenAIProvider) convertTools(tools []ToolDefinition) []openai.Tool {
 			debug.Log("openai", "WARNING: tool %q has invalid JSON schema (%d bytes), using empty object fallback", t.Name, len(params))
 			params = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
+		// #4276: moonshot-flavored endpoints reject free-form object
+		// schema nodes ({"type":"object"} with no properties and no
+		// additionalProperties) as "infinite recursion without termination
+		// condition". Normalize vendor-gated so every other endpoint is
+		// byte-identical.
+		if moonshotSchemaGateActive(p.baseURL, p.model) {
+			params = normalizeMoonshotSchema(params)
+		}
 		// Strict tool use (structured outputs): only allowlisted tools get
 		// `strict: true`, and only when their schema is strict-compatible.
 		// go-openai serializes Strict with omitempty, so a plain false never
