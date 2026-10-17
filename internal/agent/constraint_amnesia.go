@@ -121,10 +121,70 @@ var constraintPatterns = []*regexp.Regexp{
 
 // extractConstraints scans user text for explicit constraint directives.
 // Returns extracted constraint excerpts (deduplicated).
+// stripNonDirectiveConstraintText removes text shapes that are demonstrably NOT user
+// directives before constraint extraction runs (#4257): fenced code blocks
+// (pasted code/comments/test assertions), block quotes (pasted quotes), and
+// log-like lines (timestamp/level prefixed). Without this, a pasted compile
+// error or t.Skip string was promoted to a "user-specified constraint" and
+// the 13-iteration reminder pressured the agent to OBEY text the user never
+// wrote.
+func stripNonDirectiveConstraintText(text string) string {
+	lines := strings.Split(text, "\n")
+	var kept []string
+	inFence := false
+	for _, ln := range lines {
+		trimmed := strings.TrimSpace(ln)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue // inside a pasted code block
+		}
+		if strings.HasPrefix(trimmed, ">") {
+			continue // quoted/pasted text, not the user's own words
+		}
+		if isLogLikeLine(trimmed) {
+			continue // pasted log output
+		}
+		kept = append(kept, ln)
+	}
+	return strings.Join(kept, "\n")
+}
+
+// isLogLikeLine matches the common log/test-output prefixes: ISO timestamps,
+// [LEVEL] brackets, and "level=" structured fields.
+func isLogLikeLine(s string) bool {
+	if len(s) < 8 {
+		return false
+	}
+	// ISO-8601-ish start: 2026-10-16 or 2026/10/16.
+	if (len(s) >= 10 && s[4] == '-' && s[7] == '-') || (len(s) >= 10 && s[4] == '/' && s[7] == '/') {
+		return true
+	}
+	if strings.HasPrefix(s, "[") {
+		// [INFO]/[WARN]/[DEBUG]/[ERROR]-style level brackets.
+		for _, lvl := range []string{"[INFO", "[WARN", "[ERROR", "[DEBUG", "[FATAL", "[TRACE"} {
+			if strings.HasPrefix(s, lvl) {
+				return true
+			}
+		}
+	}
+	for _, lvl := range []string{"INFO ", "WARN ", "ERROR ", "DEBUG ", "TRACE ", "FATAL "} {
+		if strings.HasPrefix(s, lvl) {
+			return true
+		}
+	}
+	return strings.HasPrefix(s, "level=")
+}
+
 func extractConstraints(text string) []string {
 	if len(text) == 0 {
 		return nil
 	}
+	// #4257: source-shape filter BEFORE extraction - see
+	// stripNonDirectiveConstraintText.
+	text = stripNonDirectiveConstraintText(text)
 
 	var results []string
 	seen := make(map[string]bool)
