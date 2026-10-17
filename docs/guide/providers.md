@@ -24,6 +24,13 @@ ggcode ships with presets for common providers. Each preset includes a default e
 | GitHub Copilot | `github-copilot` | (uses GitHub OAuth) |
 | AI Gateway | `ai-gateway` | `https://aihubmix.com/v1` |
 
+> Note: Moonshot/Kimi endpoints validate tool JSON Schemas more strictly than
+> the official OpenAI API. ggcode automatically normalizes free-form object
+> schema nodes (adding an explicit `additionalProperties`) for requests it can
+> detect target a Moonshot backend (by base URL domain or model name), so
+> tools like `define_tool`/`macro` work out of the box. Other OpenAI-compatible
+> endpoints are sent the original schemas unchanged.
+
 ## Configuration
 
 ### Interactive (recommended)
