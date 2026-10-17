@@ -104,10 +104,9 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 	if gateResult.NeedsConfirmation() {
 		if t.isBypassMode() {
 			debug.Log("command-gate", "ASK→ALLOW (bypass mode): %s", gateResult.Reason)
-			// #3294: bypass-downgraded ask is a denial the ledger must see
-			// (same "ask-allowed" kind as run_command's #3283 hook, so the
-			// escalation threshold aggregates across both tools).
-			t.SecLedger.Record("gate", "ask-allowed", args.Command)
+			// #4273: no ledger Record - a downgraded-allow runs and is not a
+			// denial (same ruling as run_command). The BLOCKED path above
+			// records ("gate","block") separately.
 		} else {
 			// In non-bypass mode, treat Ask as Block for background jobs.
 			// #3294: that IS a denial (the command never starts) - record it
