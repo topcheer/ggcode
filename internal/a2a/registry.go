@@ -177,13 +177,6 @@ func (r *Registry) refreshCache() {
 	r.mu.Unlock()
 }
 
-// InvalidateDiscoverCache forces the next background refresh to do a fresh scan.
-func (r *Registry) InvalidateDiscoverCache() {
-	r.mu.Lock()
-	r.asyncCacheOK = false
-	r.mu.Unlock()
-}
-
 // SetCachedInstances manually sets the in-memory instance cache. This is
 // used by tests to inject instances without requiring real mDNS discovery.
 func (r *Registry) SetCachedInstances(instances []InstanceInfo) {
@@ -191,25 +184,6 @@ func (r *Registry) SetCachedInstances(instances []InstanceInfo) {
 	r.asyncCache = append([]InstanceInfo(nil), instances...)
 	r.asyncCacheOK = true
 	r.mu.Unlock()
-}
-
-// DiscoverByCapability returns instances whose metadata matches the given tag.
-// Tag can be a language name ("go", "typescript"), framework ("npm"), or partial workspace path.
-func (r *Registry) DiscoverByCapability(tag string) ([]InstanceInfo, error) {
-	all, err := r.Discover()
-	if err != nil {
-		return nil, err
-	}
-
-	tag = strings.ToLower(tag)
-	var matched []InstanceInfo
-	for _, inst := range all {
-		ws := strings.ToLower(inst.Workspace)
-		if strings.Contains(ws, tag) || strings.Contains(tag, filepath.Base(ws)) {
-			matched = append(matched, inst)
-		}
-	}
-	return matched, nil
 }
 
 // UpdateStatus refreshes the status field for this instance.
@@ -230,37 +204,6 @@ func GenerateInstanceID() string {
 	hostname, _ := os.Hostname()
 	pid := os.Getpid()
 	return fmt.Sprintf("ggcode-%s-%d-%d", hostname, pid, time.Now().UnixNano())
-}
-
-// SelfInfo returns the InstanceInfo for this instance (safe copy).
-func (r *Registry) SelfInfo() *InstanceInfo {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.selfInfo == nil {
-		return nil
-	}
-	info := *r.selfInfo
-	return &info
-}
-
-// ListAllInstances returns all known instances sorted by workspace name.
-func (r *Registry) ListAllInstances() ([]InstanceInfo, error) {
-	instances, err := r.Discover()
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(instances, func(i, j int) bool {
-		return instances[i].Workspace < instances[j].Workspace
-	})
-
-	// Prepend self if registered.
-	r.mu.Lock()
-	if r.selfInfo != nil {
-		instances = append([]InstanceInfo{*r.selfInfo}, instances...)
-	}
-	r.mu.Unlock()
-
-	return instances, nil
 }
 
 // ---------------------------------------------------------------------------
