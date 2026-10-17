@@ -301,14 +301,15 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		// take the same code path as SupervisedMode below.
 		fallthrough
 	case SupervisedMode:
-		// Supervised (two-mode refactor): most calls flow WITHOUT
-		// prompting. Gated floors only:
-		//   - commands: system-level destruction (IsExtremelyDangerous) or
-		//     credential exfiltration (IsNetworkExfiltrate) -> Ask
-		//   - file writes outside the writable sandbox -> Ask (the ~/.ssh,
-		//     ~/.aws, /etc/** tamper floor)
-		// The old "Ask for anything unspecified" default was the #1 source
-		// of over-conservative interruption and is gone: default is Allow.
+		// Supervised (two-mode refactor, #4279 trust-model convergence):
+		// most calls flow WITHOUT prompting. The gates that remain defend
+		// against prompt-injection-driven destruction, not against the model
+		// following a normal user prompt:
+		//   - system-level destruction (IsExtremelyDangerous)
+		//   - credential-payload exfiltration (narrow floor, same as bypass)
+		//   - sensitive-path writes/redirects (persistence backdoors)
+		// Ordinary out-of-sandbox writes and network use are Allow (the old
+		// sandbox-half and broad exfil gates were the #1 interruption sources).
 		if isCommandTool(toolName) {
 			// #713: audit every channel (command + terminal `text`); the
 			// mode-independent deny short-circuit at the top of Check has
@@ -317,21 +318,22 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				if p.detector.IsExtremelyDangerous(cmd) {
 					return Ask, nil
 				}
-				// Data egress requires human gating even in supervised (#194):
-				// a wildcard allow can cover the command word while the payload
-				// exfiltrates credentials. Guarded by the same user-configurable
-				// flag as the plan branch (review: guard consistency).
-				if p.networkDetector && IsNetworkExfiltrate(cmd) {
+				// Data egress (#194): converged to the credential-payload narrow
+				// floor per the #4279 trust-model ruling - ordinary network use
+				// by a normal user prompt is legitimate workflow; only an
+				// upload-direction transfer carrying a literal credential path
+				// asks (same floor as bypass).
+				if p.networkDetector && credentialPayloadExfil(cmd) {
+					debug.Log("permission", "credential-payload exfil gated in supervised mode")
 					return Ask, nil
 				}
-				// #711: redirect targets are file writes - hold them to the same
-				// persistence-backdoor floor as the bypass branch (#573-C):
-				// `> ~/.docker/config.json` or a LaunchAgents plist write via
-				// run_command must not bypass the write-tool sandbox gate.
+				// #711/#4279: redirect targets held to the sensitive-path-only
+				// floor (trust-model ruling: ordinary out-of-sandbox redirects
+				// are normal workflow, same convergence as bypass).
 				for _, tgt := range extractRedirectTargets(cmd) {
 					resolved := expandTilde(tgt)
-					if !p.sandbox.Allowed(resolved) || isSensitivePath(resolved) {
-						debug.Log("permission", "redirect to out-of-sandbox/sensitive path gated in supervised mode (#711)")
+					if isSensitivePath(resolved) {
+						debug.Log("permission", "redirect to sensitive path gated in supervised mode (#711)")
 						return Ask, nil
 					}
 				}
@@ -339,7 +341,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		}
 		if isWriteFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {
-				if path != "" && !p.sandbox.Allowed(path) {
+				if path != "" && isSensitivePath(path) {
 					return Ask, nil
 				}
 			}
