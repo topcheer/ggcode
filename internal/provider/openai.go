@@ -634,6 +634,15 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 // no-fallback production path. Every send in the ChatStream producer
 // goroutine must go through here.
 func (p *OpenAIProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
+	// #4295 family: same fix as openai_responses (#4293) / gemini - see
+	// the GeminiProvider.sendEvent comment. Non-blocking fast path keeps
+	// the terminal error deterministic; full-buffer falls through to the
+	// racing select (#3071 leak guard preserved).
+	select {
+	case ch <- ev:
+		return true
+	default:
+	}
 	select {
 	case ch <- ev:
 		return true
