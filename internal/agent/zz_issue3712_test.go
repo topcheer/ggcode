@@ -17,7 +17,7 @@ import "testing"
 
 func TestIssue3712ChineseLiftReleases(t *testing.T) {
 	l := newRefusalLedger(t.TempDir())
-	l.record("don't touch internal/auth/core.go", "nl")
+	l.record("don't touch internal/auth/core.go", "nl", refusalKindDirect)
 
 	cases := []struct {
 		name string
@@ -50,7 +50,7 @@ func TestIssue3712ChineseLiftReleases(t *testing.T) {
 		}
 		// Re-record so each case starts from one live entry.
 		if tc.want == 1 {
-			l.record("don't touch internal/auth/core.go", "nl")
+			l.record("don't touch internal/auth/core.go", "nl", refusalKindDirect)
 		}
 	}
 }

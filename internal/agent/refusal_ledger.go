@@ -33,6 +33,12 @@ package agent
 //   - release(): the user can lift a refusal conversationally ("ok, you
 //     can modify X now") - a release phrase overlapping an entry's targets
 //     removes it. ClearRefusals backs /refusals clear.
+//   - #4284 source discrimination: extraction runs only on DIRECT user
+//     prose - fenced code, quoted reply lines, log-shaped lines, and line
+//     comments are stripped first (stripNonDirectiveText), so a pasted
+//     code comment or log line never becomes a 30-day write block. Legacy
+//     entries are re-annotated at load; fragment-kind entries are
+//     advisory-only (never block).
 //   - English-only extraction in V1, matching the existing constraint
 //     extraction layer it extends.
 
@@ -59,8 +65,18 @@ const (
 type refusalEntry struct {
 	Excerpt string `json:"excerpt"`
 	Source  string `json:"source"` // "nl" | "approval-deny"
-	Ts      int64  `json:"ts"`
+	// Kind distinguishes text NATURE (#4284): a genuine user directive
+	// ("user-direct", enforced) from quoted/log/prompt debris that merely
+	// LOOKS like one ("fragment", advisory-only - displayed in /refusals,
+	// never blocks). Empty (legacy files) is re-annotated at load.
+	Kind string `json:"kind,omitempty"`
+	Ts   int64  `json:"ts"`
 }
+
+const (
+	refusalKindDirect   = "user-direct" // real user instruction - enters anchor extraction & enforcement
+	refusalKindFragment = "fragment"    // quoted text / tool output / prompt debris - advisory only
+)
 
 type refusalLedgerData struct {
 	Entries []refusalEntry `json:"entries"`
@@ -88,9 +104,24 @@ func (l *refusalLedger) load() {
 	if err != nil {
 		return
 	}
-	var d refusalLedgerData
-	if json.Unmarshal(raw, &d) == nil {
-		l.data = d
+	var rawLedger refusalLedgerData
+	if json.Unmarshal(raw, &rawLedger) == nil {
+		// #4284: legacy entries (no Kind) were recorded before source
+		// discrimination existed - production refusals.json was nearly all
+		// mis-entered code comments / quoted prompt fragments. Re-annotate by
+		// excerpt shape: comment/quote/log-shaped excerpts are downgraded to
+		// advisory-only. Deterministic, so an unsaved re-annotation simply
+		// re-applies on next load.
+		for i := range rawLedger.Entries {
+			if rawLedger.Entries[i].Kind == "" {
+				if refusalExcerptLooksNonDirective(rawLedger.Entries[i].Excerpt) {
+					rawLedger.Entries[i].Kind = refusalKindFragment
+				} else {
+					rawLedger.Entries[i].Kind = refusalKindDirect
+				}
+			}
+		}
+		l.data = rawLedger
 	}
 }
 
@@ -195,11 +226,55 @@ func refusalFlags(excerpt string) []string {
 	return out
 }
 
+// Non-directive shapes (#4284). The ledger turns extracted phrases into
+// 30-day cross-run write blocks, so material the user merely QUOTED or
+// PASTED must never enter with the same weight as their own words:
+//   - fenced code blocks (``` / ~~~ spans): code comments, embedded prompts
+//   - block-quote / reply-quote lines ("> ...") and table rows ("| ...")
+//   - log-like lines: ISO-timestamp prefixes, [LEVEL]/LEVEL/level= prefixes
+//   - line-comment lines ("// ...", "# ...", "-- ...")
+//
+// Deliberately conservative: only shapes that are near-certainly not the
+// user's own prose are stripped. Ambiguous forms (bullets, inline quotes)
+// are kept - a false strip would silently drop a REAL refusal.
+var refusalFencePattern = regexp.MustCompile("(?s)```.*?```|~~~.*?~~~")
+var refusalLogLinePattern = regexp.MustCompile(`(?i)^\s*(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}|\[?(?:trace|debug|info|notice|warn(?:ing)?|error|fatal|crit)\]?[\s:\]]|level=[a-z]+)\b`)
+var refusalQuoteLinePattern = regexp.MustCompile(`^\s*[>|].*`)
+
+// excerptNonDirectiveShape matches a single line/excerpt with a
+// near-certain non-directive SHAPE (code comment, quoted fragment, log
+// fragment). Used both for pre-extraction line filtering and for
+// re-annotating legacy entries whose kind is unknown. A leading "#" also
+// covers markdown headers / yaml comments inside pasted prompts.
+var excerptNonDirectiveShape = regexp.MustCompile(`^\s*(?://+|#|--|>|\|).*$|^(?:trace|debug|info|notice|warn(?:ing)?|error|fatal|crit)[\s:\]]`)
+
+func refusalExcerptLooksNonDirective(excerpt string) bool {
+	return excerptNonDirectiveShape.MatchString(strings.TrimSpace(excerpt))
+}
+
+// stripNonDirectiveText returns text with non-directive segments blanked
+// (line structure preserved; extraction regexes run on the result).
+func stripNonDirectiveText(text string) string {
+	text = refusalFencePattern.ReplaceAllString(text, "")
+	lines := strings.Split(text, "\n")
+	for i, ln := range lines {
+		if refusalLogLinePattern.MatchString(ln) ||
+			refusalQuoteLinePattern.MatchString(ln) ||
+			refusalExcerptLooksNonDirective(ln) {
+			lines[i] = ""
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // extractRefusals returns negation-form refusal excerpts from user text.
+// #4284: only DIRECT user instructions are extracted - quoted text, pasted
+// logs, and code comments are stripped first (see stripNonDirectiveText).
 func extractRefusals(text string) []string {
 	if len(text) == 0 {
 		return nil
 	}
+	text = stripNonDirectiveText(text)
 	matches := refusalNegatePattern.FindAllString(text, -1)
 	out := make([]string, 0, len(matches))
 	seen := map[string]bool{}
@@ -227,7 +302,7 @@ func extractRefusals(text string) []string {
 }
 
 // record persists refusals (idempotent by excerpt prefix). Never blocks.
-func (l *refusalLedger) record(excerpt, source string) {
+func (l *refusalLedger) record(excerpt, source, kind string) {
 	if l == nil || excerpt == "" {
 		return
 	}
@@ -240,7 +315,7 @@ func (l *refusalLedger) record(excerpt, source string) {
 		}
 	}
 	l.data.Entries = append(l.data.Entries, refusalEntry{
-		Excerpt: excerpt, Source: source, Ts: time.Now().Unix(),
+		Excerpt: excerpt, Source: source, Kind: kind, Ts: time.Now().Unix(),
 	})
 	if excess := len(l.data.Entries) - refusalMaxEntries; excess > 0 {
 		l.data.Entries = l.data.Entries[excess:]
@@ -358,6 +433,9 @@ func (l *refusalLedger) checkBlocked(tool string, args string) string {
 	defer l.mu.Unlock()
 	now := time.Now().Unix()
 	for _, e := range l.data.Entries {
+		if e.Kind == refusalKindFragment {
+			continue // #4284: quoted/log/prompt debris is advisory-only
+		}
 		if now-e.Ts > int64(refusalRecency.Seconds()) {
 			continue // expired; pruned lazily
 		}
@@ -466,8 +544,11 @@ func (l *refusalLedger) clear() {
 // recordUserRefusals extracts and persists NL refusals from user text.
 // Called on every user message, right after the advisory constraint layer.
 func (a *Agent) recordUserRefusals(userText string) {
+	// #4284: extraction itself is source-filtered (quoted text / pasted
+	// logs / code comments never produce entries); whatever survives IS a
+	// direct user instruction.
 	for _, ex := range extractRefusals(userText) {
-		a.refusalLedger.record(ex, "nl")
+		a.refusalLedger.record(ex, "nl", refusalKindDirect)
 	}
 }
 
@@ -516,7 +597,11 @@ func (a *Agent) RefusalSummary() string {
 		if now-e.Ts > int64(refusalRecency.Seconds()) {
 			continue
 		}
-		fmt.Fprintf(&sb, "  %d. [%s, %s] \"%s\"\n", i+1, e.Source, refusalAgeWords(now-e.Ts), e.Excerpt)
+		mark := ""
+		if e.Kind == refusalKindFragment {
+			mark = ", advisory-only"
+		}
+		fmt.Fprintf(&sb, "  %d. [%s%s, %s] \"%s\"\n", i+1, e.Source, mark, refusalAgeWords(now-e.Ts), e.Excerpt)
 	}
 	sb.WriteString("Lift one by saying e.g. \"ok, you can modify X now\"; wipe all with /refusals clear.")
 	return sb.String()
