@@ -126,7 +126,7 @@ Per-workspace A2A config via `.ggcode/a2a.yaml` in the workspace root.
 
 ## Security
 
-- A built-in default key (`ggcode-lan-a2a-v1`) is always active when no custom auth is configured — it ensures only ggcode instances can connect
+- A built-in default key (`ggcode-lan-a2a-v1`) is always active when no custom auth is configured — it ensures only ggcode instances can connect. Once any custom auth is configured (`api_keys` / OAuth2 / OIDC / mTLS), the built-in key is fully disabled so the public default cannot bypass your credentials
 - Multiple auth schemes can be enabled simultaneously (any matching scheme authenticates)
 - Without custom auth or lan_discovery, only localhost connections are accepted
 - API keys support `${ENV_VAR}` expansion and are stored in `keys.env`
