@@ -795,12 +795,18 @@ func isLoopbackHost(host string) bool {
 	return false
 }
 
-// EffectiveAPIKey returns the user-configured API key if set, otherwise
-// the built-in default key. This ensures that even without explicit auth
-// config, ggcode instances can authenticate to each other on a LAN.
+// EffectiveAPIKey returns the user-configured API key if set. The built-in
+// default key is only a fallback when NO authentication mechanism is
+// configured at all (LAN convenience). When api_keys / oauth2 / oidc / mTLS
+// is configured, returning the public default key here would merge it into
+// the server's accepted key list and let anyone who has read the source
+// bypass the configured credentials (#4259).
 func (c A2AConfig) EffectiveAPIKey() string {
 	if strings.TrimSpace(c.Auth.APIKey) != "" {
 		return c.Auth.APIKey
+	}
+	if c.HasAuth() {
+		return ""
 	}
 	return DefaultA2AAPIKey
 }
@@ -1754,11 +1760,18 @@ func (c *Config) Validate() error {
 	if c.DefaultMode != "" {
 		switch strings.ToLower(c.DefaultMode) {
 		// "auto"/"autopilot" are accepted legacy aliases (normalized to
-		// supervised/bypass at load); "plan" is tool-internal and rejected
-		// as a persistent default (a session must not boot into plan).
+		// supervised/bypass at consumption); "plan" is tool-internal.
 		case "supervised", "auto", "bypass", "autopilot":
+		case "plan":
+			// #4267: pre-two-mode-refactor binaries could persist
+			// default_mode: plan via /mode plan or the IM channel. It is
+			// tool-internal now and must not boot a session, but a stored
+			// legacy value must not brick every CLI entry point either.
+			// Normalize to supervised (same philosophy as auto/autopilot
+			// legacy handling) instead of failing Load.
+			c.DefaultMode = "supervised"
 		default:
-			return fmt.Errorf("default_mode %q must be supervised or bypass (legacy aliases auto/autopilot normalize; plan is tool-internal)", c.DefaultMode)
+			return fmt.Errorf("default_mode %q must be supervised or bypass (legacy aliases auto/autopilot normalize; stored plan normalizes to supervised)", c.DefaultMode)
 		}
 	}
 	if c.SubAgents.MaxConcurrent < 0 {

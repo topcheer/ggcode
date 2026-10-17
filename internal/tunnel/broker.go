@@ -1546,8 +1546,29 @@ func (b *Broker) PushToolResult(toolID, toolName, result string, isError bool) {
 		payload.Summary = present.Summary
 		payload.Payload = present.Payload
 		payload.PayloadMode = present.PayloadMode
+	} else {
+		applyTextPayloadFallback(&payload.Summary, &payload.Payload, &payload.PayloadMode, result)
 	}
 	b.enqueueWithStream(EventToolResult, toolID, payload)
+}
+
+// applyTextPayloadFallback fills Summary/Payload/PayloadMode for tools without
+// a dedicated presentation rule (read_file, grep, run_command, MCP tools, ...).
+// Without it the tunnel event carries only Result with empty payload fields,
+// leaving clients that render payload with no expandable full text (#4286).
+func applyTextPayloadFallback(summary, payload *string, payloadMode *string, result string) {
+	*summary = tunnelCompactSingleLine(result)
+	*payload = result
+	*payloadMode = "text"
+}
+
+func tunnelCompactSingleLine(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.Join(strings.Fields(s), " ")
+	if len([]rune(s)) > 120 {
+		return string([]rune(s)[:120]) + "..."
+	}
+	return s
 }
 
 // ─── Approval ───
@@ -1699,6 +1720,8 @@ func (b *Broker) PushSubagentToolResult(agentID, toolID, toolName, displayName, 
 		payload.Summary = present.Summary
 		payload.Payload = present.Payload
 		payload.PayloadMode = present.PayloadMode
+	} else {
+		applyTextPayloadFallback(&payload.Summary, &payload.Payload, &payload.PayloadMode, result)
 	}
 	b.enqueueWithStream(EventSubagentToolResult, streamID, SubagentToolResultData{
 		AgentID:     payload.AgentID,
@@ -1906,6 +1929,8 @@ func (b *Broker) seedHistoryDirect(messages []HistoryEntry) {
 				payload.Summary = present.Summary
 				payload.Payload = present.Payload
 				payload.PayloadMode = present.PayloadMode
+			} else {
+				applyTextPayloadFallback(&payload.Summary, &payload.Payload, &payload.PayloadMode, entry.Result)
 			}
 			b.enqueueWithStream(EventToolResult, entry.ToolID, payload)
 		case "error":

@@ -101,8 +101,13 @@ func TestR415_TimeBudgetRecordLifecycle(t *testing.T) {
 
 	// Budget shorter than test tolerance: after reset + first silent arm,
 	// wait a tick so elapsed >= budget fires the 95% (jump ordering).
+	// The tick is mandatory: two consecutive time.Now() calls can land on
+	// the same monotonic-clock tick under load, making elapsed == 0 < 1ns
+	// and skipping both thresholds (clock-resolution flake, seen on a
+	// busy evening host where worktree/CI runs passed by luck).
 	a.SetSessionTimeBudget(time.Nanosecond)
 	a.resetSessionTimeUsage()
+	time.Sleep(time.Millisecond)
 	// First record after reset: elapsed ~= 0, budget 1ns -> jumps past
 	// thresholds; urgent (95%) fires first by design, stop on the next.
 	msg, stop := a.RecordSessionTimeUsage()

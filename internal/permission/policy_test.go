@@ -121,12 +121,21 @@ func TestSandbox_ExactMatch(t *testing.T) {
 func TestConfigPolicy_DefaultAsk(t *testing.T) {
 	p := NewConfigPolicy(nil, nil)
 	// Use a non-read-only tool: read-only tools are now auto-allowed.
+	// #4279 trust-model convergence: default is Allow for ordinary writes
+	// (non-sensitive path); only sensitive-path writes ask.
 	d, err := p.Check("edit_file", json.RawMessage(`{"file_path":"/tmp/test"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d != Ask {
-		t.Errorf("expected Ask for unlisted write tool, got %s", d)
+	if d != Allow {
+		t.Errorf("expected Allow for ordinary unlisted write (#4279), got %s", d)
+	}
+	d2, err2 := p.Check("edit_file", json.RawMessage(`{"file_path":"/etc/hosts"}`))
+	if err2 != nil {
+		t.Fatal(err2)
+	}
+	if d2 != Ask {
+		t.Errorf("expected Ask for sensitive-path write, got %s", d2)
 	}
 }
 

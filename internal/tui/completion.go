@@ -388,6 +388,9 @@ var SlashCommands = []string{
 	// #2835: same omission family - /pin /style /goal have live handlers
 	// (commands.go dispatch) but never appeared in Tab completion.
 	"/pin", "/style", "/goal",
+	// #4268: third recurrence of the family - /interventions /refusals
+	// had live handlers and descriptions but were absent from this list.
+	"/interventions", "/refusals",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
