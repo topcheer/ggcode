@@ -8,6 +8,11 @@
 #
 # Usage: bash scripts/verify-binary.sh [expected_vcs_revision_prefix]
 #        (default 4e698c8d5, the v1.3.265 release commit)
+#
+# PRECONDITION: rebuild the binary from current main BEFORE /restart -
+#     git pull && go build -tags goolm -o bin/ggcode ./cmd/ggcode
+# The binary present at session handoff (79c4ec62e, built 19:04) predates
+# the anchor fix #4282 and will correctly FAIL the ancestry check.
 
 set -u
 EXPECT_REV="${1:-4e698c8d5}"
@@ -27,6 +32,9 @@ say "== process =="
 ps -p "$PID" -o pid=,lstart=,command=
 
 # --- 2. Binary provenance ------------------------------------------------
+# Fix-containing check is ANCESTRY, not equality: the tag commit must be
+# an ancestor of the binary's vcs.revision. (Observed trap: a build at
+# 79c4ec62e predates the anchor fix and must FAIL here.)
 say "== binary =="
 say "-- lsof txt mapping --"
 lsof -p "$PID" 2>/dev/null | awk '$4=="txt" && /ggcode/ {print "inode", $8, $NF}' | head -3
@@ -34,20 +42,29 @@ say "-- on-disk binary --"
 stat -f "mtime=%Sm size=%z inode=%i" "$GG_BIN"
 say "-- vcs stamp --"
 go version -m "$GG_BIN" 2>/dev/null | grep -E 'vcs\.(revision|time|modified)' || {
-    say "WARN: no vcs stamp embedded (script-built?)"; }
-REV=$(go version -m "$GG_BIN" 2>/dev/null | awk '/vcs.revision=/ {print substr($2,16)}')
+    say "FAIL: no vcs stamp embedded"; FAIL=1; }
+REV=$(go version -m "$GG_BIN" 2>/dev/null | awk '/vcs.revision=/ {print substr($2,14)}')
 if [ -n "${REV:-}" ]; then
-    if [ "$REV" != "$EXPECT_REV" ]; then
-        say "FAIL: running vcs.revision=$REV, expected $EXPECT_REV"
-        FAIL=1
+    if (cd "$WS" && git merge-base --is-ancestor "$EXPECT_REV" "$REV"); then
+        say "OK: $EXPECT_REV is ancestor of running $REV (fix chain embedded)"
     else
-        say "OK: vcs.revision=$REV == $EXPECT_REV"
+        say "FAIL: running vcs.revision=$REV does NOT contain $EXPECT_REV"
+        say "      rebuild first: git -C $WS pull && go build -tags goolm -o $GG_BIN ./cmd/ggcode"
+        FAIL=1
     fi
 fi
-LS_START=$(ps -p "$PID" -o lstart=)
-BIN_MTIME=$(stat -f %m "$GG_BIN")
-PROC_BIRTH=$(ps -p "$PID" -o lstart= -t %s 2>/dev/null || echo 0)
-# exec-style restart keeps lstart; rely on vcs stamp + inode instead.
+# vcs.modified=true means uncommitted changes were baked in: warn, do not
+# fail (tree dirt is routine on this shared multi-agent workspace).
+go version -m "$GG_BIN" 2>/dev/null | grep -q 'vcs.modified=true' && \
+    say "WARN: build had uncommitted changes (vcs.modified=true)"
+# Direct probe: a symbol introduced by the anchor fix (#4282). Absent in
+# builds predating it (e.g. 79c4ec62e) even when stamps confuse.
+if grep -a -q 'refusalFlags' "$GG_BIN" 2>/dev/null; then
+    say "OK: anchor-fix symbol probe hit (refusalFlags present)"
+else
+    say "FAIL: anchor-fix symbol probe miss - binary predates #4282"
+    FAIL=1
+fi
 
 # --- 3. Refusal data surface --------------------------------------------
 say "== refusals data =="
