@@ -330,7 +330,20 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 // (buffer of 64 fills, nobody ever returns). #2570/#602 fixed the fallback
 // wrapper layer only - this is the underlying-provider half. Every send in
 // the streamRead goroutine must go through here.
+// #4295 residual: same deadline-vs-terminal-error race #4293 fixed in
+// openai_responses.go - when the per-call deadline fires at the same instant
+// the terminal StreamEventError is sent, the old select had BOTH cases ready
+// and picked ctx.Done 50/50, dropping the very error the deadline produced
+// (stream ends silently instead of reporting the timeout). Non-blocking
+// fast path first (ch is buffered, consumer drains until close, so it
+// succeeds deterministically); only a full buffer (slow consumer) falls
+// through to the racing select, preserving the #3068 leak guard.
 func (p *GeminiProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
+	select {
+	case ch <- ev:
+		return true
+	default:
+	}
 	select {
 	case ch <- ev:
 		return true
