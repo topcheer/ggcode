@@ -126,3 +126,40 @@ func TestIssue4276_NormalizeHandlesAnyOfAndInvalidJSON(t *testing.T) {
 		t.Fatalf("invalid JSON must pass through, got %s", got)
 	}
 }
+
+// convertTools integration: the gate is wired in the request path, so a
+// moonshot-targeting provider normalizes free-form object nodes while any
+// other provider emits the original schema byte-for-byte.
+func TestIssue4276_ConvertToolsGateWiring(t *testing.T) {
+	freeForm := json.RawMessage(`{"type":"object","properties":{"steps":{"type":"array","items":{"type":"object","properties":{"tool":{"type":"string"},"args":{"type":"object"}},"required":["tool"]}}},"required":[]}`)
+	tools := []ToolDefinition{{Name: "define_tool", Description: "d", Parameters: freeForm}}
+
+	ms := (&OpenAIProvider{baseURL: "https://api.moonshot.cn/v1", model: "kimi-k2-0711-preview"}).convertTools(tools)
+	if len(ms) != 1 || ms[0].Function == nil {
+		t.Fatal("expected one converted tool")
+	}
+	msParams, merr := json.Marshal(ms[0].Function.Parameters)
+	if merr != nil {
+		t.Fatal(merr)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(msParams, &doc); err != nil {
+		t.Fatal(err)
+	}
+	args := doc["properties"].(map[string]any)["steps"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["args"].(map[string]any)
+	if args["additionalProperties"] != true {
+		t.Fatalf("moonshot request must normalize steps[].args, got %v", args)
+	}
+
+	other := (&OpenAIProvider{baseURL: "https://api.openai.com/v1", model: "gpt-5.2"}).convertTools(tools)
+	if len(other) != 1 || other[0].Function == nil {
+		t.Fatal("expected one converted tool")
+	}
+	otherParams, oerr := json.Marshal(other[0].Function.Parameters)
+	if oerr != nil {
+		t.Fatal(oerr)
+	}
+	if string(otherParams) != string(freeForm) {
+		t.Fatalf("non-moonshot request must emit original schema byte-for-byte, got %s", otherParams)
+	}
+}
