@@ -645,12 +645,22 @@ func isWriteFileTool(name string) bool {
 }
 
 func isCommandTool(name string) bool {
-	switch name {
-	// write_command_input removed (#197): its `input` field is arbitrary data
-	// written to a job's stdin (script bodies, docs, logs), not a shell
-	// command - pattern-matching it caused false Deny on normal content.
-	case "run_command", "start_command", "tmux", "ghostty", "warp", "kitty", "iterm2":
-		return true
+	// #4290: command-execution tool family. Windows shells register as
+	// display-name-cased "Bash"/"PowerShell" (display name and tool name are
+	// same-source on the Windows side), so comparison is case-insensitive
+	// (strings.EqualFold) rather than enumerating cased variants. wait_command/
+	// read_command_output only read existing job output and never execute new
+	// command text, so they stay out. write_command_input removed (#197): its
+	// `input` field is arbitrary data written to a job's stdin (script bodies,
+	// docs, logs), not a shell command - pattern-matching it caused false
+	// Deny on normal content.
+	for _, n := range [...]string{
+		"run_command", "start_command", "bash", "powershell",
+		"tmux", "ghostty", "warp", "kitty", "iterm2",
+	} {
+		if strings.EqualFold(name, n) {
+			return true
+		}
 	}
 	return false
 }
