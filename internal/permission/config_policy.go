@@ -227,22 +227,26 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				}
 				// #573-C: redirection targets are file writes - a shell
 				// redirect is the classic prompt-injection persistence path
-				// (`> ~/.ssh/authorized_keys`). Out-of-sandbox or sensitive
-				// targets gate.
+				// (`> ~/.ssh/authorized_keys`). Only sensitive targets gate
+				// (#4279: ordinary out-of-sandbox redirects are normal workflow,
+				// not backdoors - user-facing friction ruling).
 				for _, tgt := range extractRedirectTargets(cmd) {
 					resolved := expandTilde(tgt)
-					if !p.sandbox.Allowed(resolved) || isSensitivePath(resolved) {
-						debug.Log("permission", "redirect to out-of-sandbox/sensitive path gated in bypass mode (#573-C)")
+					if isSensitivePath(resolved) {
+						debug.Log("permission", "redirect to sensitive path gated in bypass mode (#573-C)")
 						return Ask, nil
 					}
 				}
 			}
 		}
-		// File-tool writes outside the writable sandbox gate (locks.md S5):
-		// ~/.aws/credentials, /etc/** etc. - same persistence-backdoor class.
+		// File-tool write gate (#4279): only sensitive-path writes gate in
+		// bypass - ~/.aws/credentials, /etc/** etc., the persistence-backdoor
+		// class. Ordinary writes outside the writable sandbox are normal
+		// workflow and no longer ask (user friction ruling; ED commands and
+		// credential-exfil floors above still apply).
 		if isWriteFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {
-				if path != "" && !p.sandbox.Allowed(path) {
+				if path != "" && isSensitivePath(path) {
 					return Ask, nil
 				}
 			}
@@ -536,6 +540,36 @@ func isSensitivePath(path string) bool {
 			}
 		}
 	}
+	// #4279: system persistence/backdoor paths. The bypass write gates now
+	// key on sensitivity alone (the out-of-sandbox half was dropped as daily
+	// friction), so this class must be explicit: system config trees and
+	// persistence-drop locations are backdoor-class regardless of sandbox.
+	sensitivePrefixes := []string{
+		"/etc/",                                            // hosts, sudoers, ssh/, cron.d/, systemd/ - system config & persistence
+		"/var/spool/cron/", "/var/cron/tabs/", "/etc/cron", // crontab drops
+		"/Library/LaunchAgents/", "/Library/LaunchDaemons/",
+		"/System/Library/LaunchAgents/", "/System/Library/LaunchDaemons/", // macOS persistence
+		"/usr/lib/systemd/system/", "/etc/systemd/", // Linux units
+		"/windows/system32/tasks/", "/windows/tasks/", // Windows scheduled tasks
+	}
+	if !pathFoldActive() {
+		// Case-sensitive filesystems (Linux): prefix match directly.
+		for _, p := range sensitivePrefixes {
+			if strings.HasPrefix(path, p) {
+				return true
+			}
+		}
+	} else {
+		for _, p := range sensitivePrefixes {
+			if pathHasPrefixFold(path, p) {
+				return true
+			}
+		}
+	}
+	// User-level launch agents (macOS per-user persistence).
+	if home != "" && (pathHasPrefixFold(path, home+"/Library/LaunchAgents/") || pathHasPrefixFold(path, home+"/Library/LaunchDaemons/")) {
+		return true
+	}
 	return false
 }
 
@@ -773,6 +807,19 @@ func isAbsolutePathish(tok string) bool {
 // file tools get (#573-C). Quoted sections are skipped so string literals
 // containing '>' don't fool the scanner; fd duplication (2>&1), process
 // substitution (>(cmd)) and sink devices (/dev/null) are excluded.
+// trimQuoteRunes strips leading/trailing single/double quote runes from a
+// scanned token (#4279): quoted-body redirect targets swallow the closing
+// quote because scanRedirectToken stops at whitespace/end, not quotes.
+func trimQuoteRunes(tok string) string {
+	for len(tok) > 0 && (tok[0] == '\'' || tok[0] == '"') {
+		tok = tok[1:]
+	}
+	for len(tok) > 0 && (tok[len(tok)-1] == '\'' || tok[len(tok)-1] == '"') {
+		tok = tok[:len(tok)-1]
+	}
+	return tok
+}
+
 func extractRedirectTargets(cmd string) []string {
 	var targets []string
 	var quote rune
@@ -798,7 +845,11 @@ func extractRedirectTargets(cmd string) []string {
 				}
 				if j-i <= 2 {
 					if tok := scanRedirectToken(runes, j); isAbsolutePathish(tok) {
-						targets = append(targets, tok)
+						// #4279: a quoted-body target runs to the closing
+						// quote (not whitespace) - strip the trailing quote
+						// rune so suffix/path matchers see the literal path
+						// ("authorized_keys'" would miss every gate).
+						targets = append(targets, trimQuoteRunes(tok))
 					}
 				}
 				if j > i {

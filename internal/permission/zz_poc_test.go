@@ -42,6 +42,16 @@ func TestPoCPlanRedirectBackdoor(t *testing.T) {
 			t.Fatalf("PoC: mode %v redirect to %s must Ask, got %v", mode, target, d)
 		}
 	}
+	// #4279 regression: the quoted-body target token must arrive at the
+	// gates WITHOUT the trailing quote rune (trimQuoteRunes) - otherwise
+	// every suffix/path matcher misses and the PoC above would Allow.
+	for _, mode := range []PermissionMode{PlanMode, BypassMode, SupervisedMode} {
+		p := NewConfigPolicyWithMode(nil, []string{"/workspace"}, mode)
+		d, err := p.Check("run_command", json.RawMessage(`{"command":"sh -c 'echo x > `+target+`'"}`))
+		if err != nil || d != Ask {
+			t.Fatalf("quote-trim regression: mode %v got %v err %v", mode, d, err)
+		}
+	}
 }
 
 // Watchdog narrow credential floor: bypass gates credential-payload
