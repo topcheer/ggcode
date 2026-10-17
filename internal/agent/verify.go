@@ -658,6 +658,11 @@ func (a *Agent) AutoVerifyEnabled() bool {
 // where the same hint (e.g. "use -tags goolm") appears on every go build call.
 const maxRuleInjectPerSession = 2
 
+// maxRulesPerInjection caps how many distinct rules may ride on ONE tool
+// result (#4293). Beyond this the block stops being a targeted hint and
+// becomes context noise that trains the agent to ignore it.
+const maxRulesPerInjection = 3
+
 // injectRulesIntoResult prepends matching rules to a tool result.
 // Rules are matched via two paths:
 //  1. Preventive: MatchingRulesForTool matches rule patterns against tool ARGS
@@ -679,7 +684,7 @@ func (a *Agent) injectRulesIntoResult(toolName string, args json.RawMessage, res
 	}
 
 	preventive := rs.MatchingRulesForTool(toolName, string(args))
-	reactive := rs.MatchingRulesForResult(resultContent)
+	reactive := rs.MatchingRulesForResult(resultContent, string(args))
 	matching := mergeRuleSets(preventive, reactive)
 	if len(matching) == 0 {
 		return resultContent
@@ -692,6 +697,9 @@ func (a *Agent) injectRulesIntoResult(toolName string, args json.RawMessage, res
 	}
 	var filtered []Rule
 	for _, r := range matching {
+		if len(filtered) >= maxRulesPerInjection {
+			break
+		}
 		if a.ruleInjectCount[r.ID] < maxRuleInjectPerSession {
 			filtered = append(filtered, r)
 			a.ruleInjectCount[r.ID]++

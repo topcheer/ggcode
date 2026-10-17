@@ -16,18 +16,35 @@ import (
 // This complements MatchingRulesForTool which matches proactively against
 // tool ARGS before the tool runs. Both paths can fire for the same tool call.
 //
+// Domain coupling (#4293): rules that declare an explicit ToolPattern
+// ("what command shape triggers this rule") must ALSO match the tool args on
+// the reactive path. Without this, an output-only match injects command-
+// shaped advice for commands that never had that shape — e.g. a "never run
+// rm -rf" rule firing on a git command whose output merely quoted the
+// harness's own destructive-operation banner ("rm -rf recursively force-
+// deletes ..."). Output-only matching stays available for rules without a
+// ToolPattern (pure error-shape rules like "cannot find package olm").
+//
+// Harness advisory blocks ([Rules ...], [Verify ...], DESTRUCTIVE ... banners)
+// are stripped before matching: those blocks quote danger keywords while
+// explaining them, and matching against them is self-referential — the safety
+// wrapper's own wording feeds the very rules that warn about that wording.
+//
 // Research basis: SICA's "learned rules as first-class citizens" pattern
 // (Robeyns et al. 2025, arXiv:2504.15228) — rules learned from past failures
 // should be available not just at run start, but reactively when the agent
 // encounters the same error class again.
-func (rs *RuleStore) MatchingRulesForResult(resultContent string) []Rule {
+func (rs *RuleStore) MatchingRulesForResult(resultContent, toolArgs string) []Rule {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	rs.load()
 
+	// Match against the payload, not the advisory wrapping.
+	cleaned := stripHarnessAdvisories(resultContent)
+
 	// Quick exit: only check if the result looks like an error
 	// (case-insensitive check for common error markers)
-	lowerResult := strings.ToLower(resultContent)
+	lowerResult := strings.ToLower(cleaned)
 	hasErrorMarker := strings.Contains(lowerResult, "error") ||
 		strings.Contains(lowerResult, "fail") ||
 		strings.Contains(lowerResult, "undefined") ||
@@ -47,13 +64,28 @@ func (rs *RuleStore) MatchingRulesForResult(resultContent string) []Rule {
 		if r.MatchPattern == "" {
 			continue
 		}
+		// Quality floor: LLM-learned patterns below this size are keyword
+		// fragments ("force", "rm ") that match unrelated prose far more
+		// often than the error class they were learned from.
+		if len(r.MatchPattern) < minMatchPatternLen {
+			continue
+		}
 		re, err := regexp.Compile(r.MatchPattern)
 		if err != nil {
 			continue
 		}
-		if re.MatchString(resultContent) {
-			result = append(result, r)
+		if !re.MatchString(cleaned) {
+			continue
 		}
+		// #4293 domain coupling: command-shaped rules must see the same
+		// shape in the args that actually ran.
+		if r.ToolPattern != "" {
+			tre, terr := regexp.Compile(r.ToolPattern)
+			if terr != nil || !tre.MatchString(toolArgs) {
+				continue
+			}
+		}
+		result = append(result, r)
 	}
 
 	if len(result) > 0 {
@@ -61,6 +93,56 @@ func (rs *RuleStore) MatchingRulesForResult(resultContent string) []Rule {
 	}
 
 	return result
+}
+
+// minMatchPatternLen is the reactive-path quality floor for learned
+// MatchPatterns. Patterns shorter than this cannot describe an error shape
+// precisely enough to be worth matching against arbitrary output.
+const minMatchPatternLen = 8
+
+// harnessAdvisoryPrefixes are fixed strings the harness prepends to tool
+// results (verification verdicts, rule injections, safety banners). They quote
+// danger keywords while explaining them, so they must not participate in
+// rule matching — otherwise the wrapper's own wording triggers the rules.
+var harnessAdvisoryPrefixes = []string{
+	"[rules — learned from past mistakes]",
+	"[verify]",
+	"[truncation advisory",
+	"[full original output",
+	"destructive git operation detected",
+	"critical:",
+	"risk:",
+	"safer alternative:",
+	"if this operation is intentional",
+	"security escalation:",
+	"untrusted tool output source:",
+}
+
+// stripHarnessAdvisories drops harness-generated advisory lines from a tool
+// result so reactive rule matching sees only the actual command payload and
+// its real output. Line-granularity is deliberate: banners are line-structured
+// and the payload lines in between (STDERR, exit codes) stay intact.
+func stripHarnessAdvisories(content string) string {
+	lines := strings.Split(content, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.ToLower(strings.TrimSpace(line))
+		drop := false
+		for _, p := range harnessAdvisoryPrefixes {
+			if strings.HasPrefix(trimmed, p) {
+				drop = true
+				break
+			}
+		}
+		if !drop && (strings.HasPrefix(trimmed, "\u26a0") || strings.HasPrefix(trimmed, "\u2192")) {
+			drop = true
+		}
+		if drop {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 // mergeRuleSets combines preventively-matched rules (from tool args) and
