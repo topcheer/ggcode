@@ -1405,7 +1405,13 @@ class _ToolResultCardState extends State<_ToolResultCard> {
               _buildMarkdownResult()
             else
               Text(
-                _expanded && _usesPayload ? widget.payload! : preview,
+                // Expanded state must show the FULL text: payload when the
+                // host sent a dedicated payload, else the complete result.
+                // Falling back to `preview` here made >120-char results
+                // permanently unreachable in the UI (#4286).
+                _expanded
+                    ? (_usesPayload ? widget.payload! : widget.result)
+                    : preview,
                 style: TextStyle(
                   color: widget.isError
                       ? AppColors.danger
