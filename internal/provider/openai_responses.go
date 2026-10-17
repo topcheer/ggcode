@@ -1026,6 +1026,30 @@ func (p *OpenAIResponsesProvider) sendEvent(ctx context.Context, ch chan<- Strea
 	}
 }
 
+// sendTerminalEvent delivers a terminal (Error/Done) event without racing
+// the context (#2573 flake followup): once the per-call deadline has fired,
+// a plain sendEvent select has BOTH cases ready and drops the terminal
+// event about half the time, so consumers observably end the stream with
+// no error at all. A non-blocking send first takes the buffered channel
+// whenever the consumer is still reading (the normal case); the ctx-aware
+// fallback only kicks in when the buffer is full, i.e. the consumer really
+// has stopped reading and parking forever would be the #4230 bug.
+func (p *OpenAIResponsesProvider) sendTerminalEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
+	select {
+	case ch <- ev:
+		return true
+	default:
+	}
+	select {
+	case ch <- ev:
+		return true
+	case <-ctx.Done():
+		// Last resort: consumer gone AND buffer full — dropping the event
+		// mirrors sendEvent's #4230 backpressure contract.
+		return false
+	}
+}
+
 func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
 	req, err := p.buildRequest(messages, tools, true)
 	if err != nil {
@@ -1286,20 +1310,20 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 			return true, err
 		}
 		if ctx.Err() == nil {
-			p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)})
+			p.sendTerminalEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)})
 		} else {
-			p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: ctx.Err()})
+			p.sendTerminalEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: ctx.Err()})
 		}
 		return false, err
 	}
 	if !doneSent {
 		if ctx.Err() != nil {
-			p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: ctx.Err()})
+			p.sendTerminalEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: ctx.Err()})
 			return false, ctx.Err()
 		}
 		// Stream closed without a terminal event: still emit Done so the
 		// agent loop finalizes the turn instead of hanging.
-		p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventDone})
+		p.sendTerminalEvent(ctx, ch, StreamEvent{Type: StreamEventDone})
 	}
 	return false, nil
 }

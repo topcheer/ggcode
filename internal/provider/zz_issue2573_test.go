@@ -175,12 +175,43 @@ func TestIssue2573StreamDeadlineCoversFullStream(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		<-r.Context().Done() // hang until the client-side deadline kills the conn
+		// Keep the connection warm with periodic SSE comments until the
+		// client-side deadline kills the conn. Two flake sources are
+		// deliberately avoided here:
+		//   1. A bare hang: on slow CI runners the first delta can be read
+		//      after a short deadline fires, breaking the "delta delivered"
+		//      assertion. The deadline below is sized far above worst-case
+		//      scheduling latency so the immediate first delta always wins.
+		//   2. Exiting the handler on r.Context().Done(): that closes the
+		//      body cleanly and the client scanner can observe EOF before
+		//      the transport's context-abort error, so the stream ends
+		//      without the deadline error event this test asserts. Instead
+		//      the handler keeps writing until the write itself fails on
+		//      the dead conn, which forces the client's read to abort via
+		//      context cancellation - the deterministic terminal path.
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for range ticker.C {
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
 	}))
 	defer srv.Close()
 
 	p := NewOpenAIResponsesProvider("sk-test", "gpt-5-codex", 1024, srv.URL+"/v1")
-	p.setCallPolicy(callPolicy{requestTimeout: 300 * time.Millisecond})
+	// #2573 flake hardening: the deadline must be far above worst-case
+	// CI scheduling latency so the immediate first delta ALWAYS lands
+	// before it (assert 1), while the keepalive above guarantees the
+	// stream stays open until the deadline fires (assert 2). A short
+	// deadline makes the two assertions race each other under load.
+	// The server never completes on its own, so any finite termination
+	// still proves the deadline is honored; the elapsed sanity bound
+	// scales with it.
+	p.setCallPolicy(callPolicy{requestTimeout: 2 * time.Second})
 
 	ch, err := p.ChatStream(context.Background(), []Message{
 		{Role: "user", Content: []ContentBlock{TextBlock("hi")}},
@@ -206,7 +237,7 @@ func TestIssue2573StreamDeadlineCoversFullStream(t *testing.T) {
 	if gotErr == nil || !strings.Contains(gotErr.Error(), "context deadline exceeded") {
 		t.Errorf("err = %v, want context deadline exceeded", gotErr)
 	}
-	if elapsed > 3*time.Second {
+	if elapsed > 6*time.Second {
 		t.Errorf("elapsed = %v, stream deadline not honored", elapsed)
 	}
 }
