@@ -227,22 +227,26 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				}
 				// #573-C: redirection targets are file writes - a shell
 				// redirect is the classic prompt-injection persistence path
-				// (`> ~/.ssh/authorized_keys`). Out-of-sandbox or sensitive
-				// targets gate.
+				// (`> ~/.ssh/authorized_keys`). Only sensitive targets gate
+				// (#4279: ordinary out-of-sandbox redirects are normal workflow,
+				// not backdoors - user-facing friction ruling).
 				for _, tgt := range extractRedirectTargets(cmd) {
 					resolved := expandTilde(tgt)
-					if !p.sandbox.Allowed(resolved) || isSensitivePath(resolved) {
-						debug.Log("permission", "redirect to out-of-sandbox/sensitive path gated in bypass mode (#573-C)")
+					if isSensitivePath(resolved) {
+						debug.Log("permission", "redirect to sensitive path gated in bypass mode (#573-C)")
 						return Ask, nil
 					}
 				}
 			}
 		}
-		// File-tool writes outside the writable sandbox gate (locks.md S5):
-		// ~/.aws/credentials, /etc/** etc. - same persistence-backdoor class.
+		// File-tool write gate (#4279): only sensitive-path writes gate in
+		// bypass - ~/.aws/credentials, /etc/** etc., the persistence-backdoor
+		// class. Ordinary writes outside the writable sandbox are normal
+		// workflow and no longer ask (user friction ruling; ED commands and
+		// credential-exfil floors above still apply).
 		if isWriteFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {
-				if path != "" && !p.sandbox.Allowed(path) {
+				if path != "" && isSensitivePath(path) {
 					return Ask, nil
 				}
 			}
@@ -297,14 +301,15 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		// take the same code path as SupervisedMode below.
 		fallthrough
 	case SupervisedMode:
-		// Supervised (two-mode refactor): most calls flow WITHOUT
-		// prompting. Gated floors only:
-		//   - commands: system-level destruction (IsExtremelyDangerous) or
-		//     credential exfiltration (IsNetworkExfiltrate) -> Ask
-		//   - file writes outside the writable sandbox -> Ask (the ~/.ssh,
-		//     ~/.aws, /etc/** tamper floor)
-		// The old "Ask for anything unspecified" default was the #1 source
-		// of over-conservative interruption and is gone: default is Allow.
+		// Supervised (two-mode refactor, #4279 trust-model convergence):
+		// most calls flow WITHOUT prompting. The gates that remain defend
+		// against prompt-injection-driven destruction, not against the model
+		// following a normal user prompt:
+		//   - system-level destruction (IsExtremelyDangerous)
+		//   - credential-payload exfiltration (narrow floor, same as bypass)
+		//   - sensitive-path writes/redirects (persistence backdoors)
+		// Ordinary out-of-sandbox writes and network use are Allow (the old
+		// sandbox-half and broad exfil gates were the #1 interruption sources).
 		if isCommandTool(toolName) {
 			// #713: audit every channel (command + terminal `text`); the
 			// mode-independent deny short-circuit at the top of Check has
@@ -313,21 +318,22 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				if p.detector.IsExtremelyDangerous(cmd) {
 					return Ask, nil
 				}
-				// Data egress requires human gating even in supervised (#194):
-				// a wildcard allow can cover the command word while the payload
-				// exfiltrates credentials. Guarded by the same user-configurable
-				// flag as the plan branch (review: guard consistency).
-				if p.networkDetector && IsNetworkExfiltrate(cmd) {
+				// Data egress (#194): converged to the credential-payload narrow
+				// floor per the #4279 trust-model ruling - ordinary network use
+				// by a normal user prompt is legitimate workflow; only an
+				// upload-direction transfer carrying a literal credential path
+				// asks (same floor as bypass).
+				if p.networkDetector && credentialPayloadExfil(cmd) {
+					debug.Log("permission", "credential-payload exfil gated in supervised mode")
 					return Ask, nil
 				}
-				// #711: redirect targets are file writes - hold them to the same
-				// persistence-backdoor floor as the bypass branch (#573-C):
-				// `> ~/.docker/config.json` or a LaunchAgents plist write via
-				// run_command must not bypass the write-tool sandbox gate.
+				// #711/#4279: redirect targets held to the sensitive-path-only
+				// floor (trust-model ruling: ordinary out-of-sandbox redirects
+				// are normal workflow, same convergence as bypass).
 				for _, tgt := range extractRedirectTargets(cmd) {
 					resolved := expandTilde(tgt)
-					if !p.sandbox.Allowed(resolved) || isSensitivePath(resolved) {
-						debug.Log("permission", "redirect to out-of-sandbox/sensitive path gated in supervised mode (#711)")
+					if isSensitivePath(resolved) {
+						debug.Log("permission", "redirect to sensitive path gated in supervised mode (#711)")
 						return Ask, nil
 					}
 				}
@@ -335,7 +341,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		}
 		if isWriteFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {
-				if path != "" && !p.sandbox.Allowed(path) {
+				if path != "" && isSensitivePath(path) {
 					return Ask, nil
 				}
 			}
@@ -535,6 +541,36 @@ func isSensitivePath(path string) bool {
 				return true
 			}
 		}
+	}
+	// #4279: system persistence/backdoor paths. The bypass write gates now
+	// key on sensitivity alone (the out-of-sandbox half was dropped as daily
+	// friction), so this class must be explicit: system config trees and
+	// persistence-drop locations are backdoor-class regardless of sandbox.
+	sensitivePrefixes := []string{
+		"/etc/",                                            // hosts, sudoers, ssh/, cron.d/, systemd/ - system config & persistence
+		"/var/spool/cron/", "/var/cron/tabs/", "/etc/cron", // crontab drops
+		"/Library/LaunchAgents/", "/Library/LaunchDaemons/",
+		"/System/Library/LaunchAgents/", "/System/Library/LaunchDaemons/", // macOS persistence
+		"/usr/lib/systemd/system/", "/etc/systemd/", // Linux units
+		"/windows/system32/tasks/", "/windows/tasks/", // Windows scheduled tasks
+	}
+	if !pathFoldActive() {
+		// Case-sensitive filesystems (Linux): prefix match directly.
+		for _, p := range sensitivePrefixes {
+			if strings.HasPrefix(path, p) {
+				return true
+			}
+		}
+	} else {
+		for _, p := range sensitivePrefixes {
+			if pathHasPrefixFold(path, p) {
+				return true
+			}
+		}
+	}
+	// User-level launch agents (macOS per-user persistence).
+	if home != "" && (pathHasPrefixFold(path, home+"/Library/LaunchAgents/") || pathHasPrefixFold(path, home+"/Library/LaunchDaemons/")) {
+		return true
 	}
 	return false
 }
@@ -752,13 +788,54 @@ func credentialPayloadExfil(cmd string) bool {
 	for _, pat := range []string{
 		"~/.ssh/", ".ssh/id", "~/.aws/", ".aws/credentials",
 		"~/.gnupg/", "/etc/shadow", "/etc/passwd",
-		"credentials.json", ".env",
+		"credentials.json",
 	} {
 		if strings.Contains(cmd, pat) {
 			return true
 		}
 	}
-	return false
+	return matchesEnvPath(cmd)
+}
+
+// matchesEnvPath reports whether cmd references a dotenv credential file
+// (.env, .env.local, ~/.env, ./env paths). A bare strings.Contains(cmd,
+// ".env") false-positives on Kubernetes jsonpath field access like
+// `.spec.containers[0].env[?(@.name==...)]` (#4279 screenshot case), so the
+// match requires a path-like boundary: the preceding byte must start a path
+// segment (not `]` or an identifier character) and the trailing byte must
+// continue a filename (not the `[` that opens a jsonpath filter).
+func matchesEnvPath(cmd string) bool {
+	for i := 0; ; {
+		idx := strings.Index(cmd[i:], ".env")
+		if idx < 0 {
+			return false
+		}
+		pos := i + idx
+		i = pos + 1
+		if pos+len(".env") >= len(cmd) {
+			return true // ".env" at end of command: filename reference
+		}
+		after := cmd[pos+len(".env")]
+		if after == '[' {
+			continue // jsonpath filter: ].env[?(@.name==...)]
+		}
+		if after == '.' && strings.HasPrefix(cmd[pos:], ".env.example") {
+			continue // dotenv template, carries no secrets
+		}
+		var before byte = ' '
+		if pos > 0 {
+			before = cmd[pos-1]
+		}
+		if before == ']' || before == '_' || isAlnumByte(before) {
+			continue // identifier boundary: foo.env, 0.env, ].env inside an expression
+		}
+		return true
+	}
+}
+
+// isAlnumByte reports whether b is an ASCII letter or digit.
+func isAlnumByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
 }
 
 // isAbsolutePathish reports whether tok is absolute or home-anchored - the
@@ -773,6 +850,19 @@ func isAbsolutePathish(tok string) bool {
 // file tools get (#573-C). Quoted sections are skipped so string literals
 // containing '>' don't fool the scanner; fd duplication (2>&1), process
 // substitution (>(cmd)) and sink devices (/dev/null) are excluded.
+// trimQuoteRunes strips leading/trailing single/double quote runes from a
+// scanned token (#4279): quoted-body redirect targets swallow the closing
+// quote because scanRedirectToken stops at whitespace/end, not quotes.
+func trimQuoteRunes(tok string) string {
+	for len(tok) > 0 && (tok[0] == '\'' || tok[0] == '"') {
+		tok = tok[1:]
+	}
+	for len(tok) > 0 && (tok[len(tok)-1] == '\'' || tok[len(tok)-1] == '"') {
+		tok = tok[:len(tok)-1]
+	}
+	return tok
+}
+
 func extractRedirectTargets(cmd string) []string {
 	var targets []string
 	var quote rune
@@ -798,7 +888,11 @@ func extractRedirectTargets(cmd string) []string {
 				}
 				if j-i <= 2 {
 					if tok := scanRedirectToken(runes, j); isAbsolutePathish(tok) {
-						targets = append(targets, tok)
+						// #4279: a quoted-body target runs to the closing
+						// quote (not whitespace) - strip the trailing quote
+						// rune so suffix/path matchers see the literal path
+						// ("authorized_keys'" would miss every gate).
+						targets = append(targets, trimQuoteRunes(tok))
 					}
 				}
 				if j > i {
