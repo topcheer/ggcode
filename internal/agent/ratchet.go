@@ -638,7 +638,14 @@ func categoryMatchesTool(category, toolName string) bool {
 	case "convention":
 		return toolName == "write_file" || toolName == "edit_file" || toolName == "multi_edit_file"
 	case "security":
-		return true
+		// #4293: security rules used to match EVERY tool, which made this
+		// category the loosest coupling in the store - a security rule with
+		// a broad ToolPattern fired on read/grep/lsp calls it had nothing to
+		// say about. Security lessons are about executing commands, writing
+		// files, and git history; scope them to those tool families.
+		return toolName == "run_command" || toolName == "start_command" ||
+			toolName == "write_file" || toolName == "edit_file" || toolName == "multi_edit_file" ||
+			strings.HasPrefix(toolName, "git_")
 	default:
 		return false
 	}
