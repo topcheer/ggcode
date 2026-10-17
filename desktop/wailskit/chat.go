@@ -4649,6 +4649,14 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	}
 
 	defer func() {
+		// #4252: this defer is registered AFTER restoreVision's (LIFO ->
+		// runs FIRST), so the queued-message chain used to replay entirely
+		// on the turn-scoped vision-downgrade model - violating the
+		// "switch for THIS run" promise. Restore the user's model before
+		// draining; the later deferred restoreVision() is idempotent and
+		// becomes a no-op.
+		restoreVision()
+
 		b.mu.Lock()
 		b.cancel = nil
 		b.mu.Unlock()
