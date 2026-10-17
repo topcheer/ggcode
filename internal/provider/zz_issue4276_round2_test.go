@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -136,5 +137,65 @@ func Test4276R2_RefFreeUnchanged(t *testing.T) {
 	out := string(normalizeMoonshotSchema(json.RawMessage(in)))
 	if out != in {
 		t.Fatalf("ref-free closed schema must be unchanged, got: %s", out)
+	}
+}
+
+// #4276 round 3: walle caps each tool schema at 120000 serialized bytes and
+// answers 400 "schema exceeds maximum allowed size" at root. Dereferencing
+// (pass 1) can inflate a schema with many refs to one big def; huge MCP tool
+// schemas can be over the cap on arrival. Both must degrade to the
+// permissive free-form object instead of failing every request in the
+// session.
+func Test4276R3_SizeGuardDegradesOversizedSchema(t *testing.T) {
+	// A natively huge schema (the real-world case: large MCP tool schemas
+	// arrive over the cap already, no deref inflation needed).
+	props := make([]string, 260)
+	sub := make([]string, 8)
+	for j := range sub {
+		sub[j] = fmt.Sprintf(`"s%d":{"type":"string","description":"this is padding to push the serialized schema size well beyond the wire cap for moonshot validators"}`, j)
+	}
+	for i := range props {
+		props[i] = fmt.Sprintf(`"p%03d":{"type":"object","properties":{%s}}`, i, strings.Join(sub, ","))
+	}
+	in := `{"type":"object","properties":{` + strings.Join(props, ",") + `}}`
+	if !json.Valid([]byte(in)) {
+		t.Fatalf("test fixture must be valid JSON")
+	}
+	if len(in) <= moonshotMaxSchemaBytes {
+		t.Fatalf("fixture must exceed the cap, got %d bytes", len(in))
+	}
+	out := normalizeMoonshotSchema(json.RawMessage(in))
+	var doc map[string]any
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("degraded schema not valid JSON: %v", err)
+	}
+	if doc["type"] != "object" || doc["additionalProperties"] != true {
+		t.Fatalf("oversized schema must degrade to free-form object, got: %s", out)
+	}
+	if _, has := doc["properties"]; has {
+		t.Fatal("degraded schema must not carry properties")
+	}
+	if raw, _ := json.Marshal(doc); len(raw) > 100 {
+		t.Fatalf("degraded schema must be tiny, got %d bytes", len(raw))
+	}
+}
+
+// A schema just under the cap keeps its full shape (guard must not fire early).
+func Test4276R3_SizeGuardKeepsUnderCap(t *testing.T) {
+	props := make([]string, 150) // ~60KB, safely under 100000
+	for i := range props {
+		props[i] = fmt.Sprintf(`"p%03d":{"$ref":"#/$defs/S"}`, i)
+	}
+	in := `{"type":"object","properties":{` + strings.Join(props, ",") + `},"$defs":{"S":{"type":"object","properties":{"x":{"type":"string"},"y":{"type":"string"},"z":{"type":"string"}}}}}`
+	out := normalizeMoonshotSchema(json.RawMessage(in))
+	var doc map[string]any
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("normalized schema not valid JSON: %v", err)
+	}
+	if _, has := doc["properties"]; !has {
+		t.Fatalf("under-cap schema must keep properties, got: %s", out)
+	}
+	if len(out) > moonshotMaxSchemaBytes {
+		t.Fatalf("under-cap schema must stay under the cap, got %d bytes", len(out))
 	}
 }

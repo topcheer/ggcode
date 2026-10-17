@@ -1,6 +1,10 @@
 package provider
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/topcheer/ggcode/internal/debug"
+)
 
 // Moonshot (Kimi) flavored-schema normalization (#4276).
 //
@@ -134,15 +138,33 @@ func normalizeMoonshotSchema(params json.RawMessage) json.RawMessage {
 	if walkMoonshotSchema(doc) {
 		changed = true
 	}
-	if !changed {
-		return params
-	}
 	out, err := json.Marshal(doc)
 	if err != nil {
 		return params
 	}
+	// Pass 4 (#4276 round 3): size guard. MoonshotAI/walle caps each tool
+	// schema at 120000 serialized bytes ("schema exceeds maximum allowed
+	// size" at root). Pass-1 dereferencing can inflate a schema whose
+	// $defs are referenced many times, and some MCP tool schemas are simply
+	// huge to begin with. Either way the tool must stay usable: degrade the
+	// parameters to the permissive free-form object (the tool-level
+	// description, which carries the calling convention, lives outside the
+	// parameters schema and is untouched). Runs regardless of `changed`:
+	// an untouched-but-oversized schema must still degrade.
+	if len(out) > moonshotMaxSchemaBytes {
+		debug.Log("provider", "moonshot normalize: tool schema %d bytes exceeds %d cap, degrading to free-form object", len(out), moonshotMaxSchemaBytes)
+		return json.RawMessage(`{"type":"object","additionalProperties":true}`)
+	}
+	if !changed {
+		return params
+	}
 	return out
 }
+
+// moonshotMaxSchemaBytes is the per-tool-parameters size cap for moonshot
+// endpoints. The walle default limit is 120000 serialized bytes; degrade
+// below that to leave serialization headroom.
+const moonshotMaxSchemaBytes = 100000
 
 // moonshotMaxRefDepth caps how many $ref hops may be inlined before the
 // fallback kicks in. Real-world schemas chain at most two or three defs;
