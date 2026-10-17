@@ -240,6 +240,14 @@ subagents:
 | `timeout` | duration | 0 (none) | Maximum duration for a sub-agent run |
 | `show_output` | bool | false | Whether to stream sub-agent events to the parent's UI |
 
+### Named Agents (project-scoped templates)
+
+Named agent templates (created via the `create_namedagent` tool) live under `~/.ggcode/subagents/<workspace-hash>/`. Additionally, any `*.json` template placed in `<workspace>/.ggcode/agents/` is loaded as a **project-scoped** template:
+
+- Project templates are committed to the repository and shared with the team (same JSON schema as `NamedAgentTemplate`).
+- A project template **shadows** a same-named user template (`List`/`Load`/`use_namedagent` see the project one).
+- `create_namedagent` (Save) and deletion refuse project-scoped names - edit or remove the committed file directly instead, so a user-side write can never be silently masked by the repo definition.
+
 See [Multi-Agent Modes](./multi-agent-modes.md) for the full architecture guide.
 
 ## Provider Failover

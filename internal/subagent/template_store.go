@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -34,6 +36,15 @@ type NamedAgentTemplate struct {
 // TemplateStore manages named agent templates on disk, scoped per workspace.
 type TemplateStore struct {
 	dir string
+	// projectDir holds repo-committable, team-shared templates from
+	// <workspace>/.ggcode/agents (r555: agents-as-code, mirrors the project-
+	// level .claude/agents convention and ggcode's own .ggcode/commands /
+	// .agents/skills precedents). Empty when the workspace has no such
+	// directory — behavior is then byte-identical to the home-only store.
+	// Project templates shadow same-named user templates; Save/Delete refuse
+	// project-scoped names so a user-side write can never be silently
+	// masked by (or destroy) the committed definition.
+	projectDir string
 	// mu serializes Save/Delete against each other (single-process domain).
 	// #3100 V2: Save's Load→collision-check→write and Delete's
 	// check-then-remove were TOCTOU-unsynchronized — two in-process callers
@@ -48,13 +59,22 @@ type TemplateStore struct {
 
 // NewTemplateStore creates a store for the given workspace.
 // Templates are stored under ~/.ggcode/subagents/<workspace-hash>/.
+// If the workspace contains a .ggcode/agents directory, those templates are
+// also visible (project-scoped, shadowing same-named user templates).
 func NewTemplateStore(workspace string) *TemplateStore {
 	home := config.HomeDir()
 	normalized := normalizeWorkspacePath(workspace)
 	h := sha256Hash(normalized)
-	return &TemplateStore{
+	s := &TemplateStore{
 		dir: filepath.Join(home, ".ggcode", "subagents", h),
 	}
+	if normalized != "" {
+		projectDir := filepath.Join(normalized, ".ggcode", "agents")
+		if info, err := os.Stat(projectDir); err == nil && info.IsDir() {
+			s.projectDir = projectDir
+		}
+	}
+	return s
 }
 
 // TemplateDir returns the on-disk directory where templates are stored.
@@ -67,6 +87,14 @@ func (s *TemplateStore) TemplateDir() string {
 func (s *TemplateStore) Save(t NamedAgentTemplate) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// r555: a project-scoped file at this name means the effective template
+	// comes from the repo, not the user library — writing here would create a
+	// permanently shadowed duplicate. Point the caller at the committed file.
+	if s.projectDir != "" {
+		if projectPath := filepath.Join(s.projectDir, sanitizeName(t.Name)+".json"); fileExists(projectPath) {
+			return fmt.Errorf("template %q is project-scoped (%s); edit that file directly or choose a different name", t.Name, projectPath)
+		}
+	}
 	if err := os.MkdirAll(s.dir, 0755); err != nil {
 		return fmt.Errorf("create subagent dir: %w", err)
 	}
@@ -138,9 +166,27 @@ func (s *TemplateStore) Load(name string) (NamedAgentTemplate, error) {
 	return s.loadByName(name)
 }
 
-// loadByName is the lock-free core of Load — callers hold s.mu.
+// loadByName is the lock-free core of Load — callers hold s.mu. Project
+// templates take priority; a miss (file absent) falls through to the user
+// library, while a present-but-broken project file surfaces its error.
 func (s *TemplateStore) loadByName(name string) (NamedAgentTemplate, error) {
-	path := filepath.Join(s.dir, sanitizeName(name)+".json")
+	if s.projectDir != "" {
+		t, err := loadTemplateFromDir(s.projectDir, name)
+		if err == nil {
+			return t, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return NamedAgentTemplate{}, err
+		}
+	}
+	return loadTemplateFromDir(s.dir, name)
+}
+
+// loadTemplateFromDir reads one template by name from a single directory,
+// applying the #230 collision guard. Read errors are wrapped with %w so
+// callers can distinguish a missing file via errors.Is(err, fs.ErrNotExist).
+func loadTemplateFromDir(dir, name string) (NamedAgentTemplate, error) {
+	path := filepath.Join(dir, sanitizeName(name)+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return NamedAgentTemplate{}, fmt.Errorf("load template %q: %w", name, err)
@@ -158,9 +204,47 @@ func (s *TemplateStore) loadByName(name string) (NamedAgentTemplate, error) {
 	return t, nil
 }
 
-// List returns all templates, sorted by name.
+// fileExists is a small helper for the project-scope guards in Save/Delete.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// List returns all templates, sorted by name. Project-scoped templates
+// shadow same-named user templates (normalized-name key).
 func (s *TemplateStore) List() ([]NamedAgentTemplate, error) {
-	entries, err := os.ReadDir(s.dir)
+	userTemplates, err := listTemplatesInDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	if s.projectDir == "" {
+		sortTemplates(userTemplates)
+		return userTemplates, nil
+	}
+	projectTemplates, err := listTemplatesInDir(s.projectDir)
+	if err != nil {
+		return nil, err
+	}
+	merged := make(map[string]NamedAgentTemplate, len(userTemplates)+len(projectTemplates))
+	for _, t := range userTemplates {
+		merged[templateKey(t.Name)] = t
+	}
+	for _, t := range projectTemplates {
+		merged[templateKey(t.Name)] = t // project wins on collision
+	}
+	result := make([]NamedAgentTemplate, 0, len(merged))
+	for _, t := range merged {
+		result = append(result, t)
+	}
+	sortTemplates(result)
+	return result, nil
+}
+
+// listTemplatesInDir reads every parseable *.json template in dir; a missing
+// directory is an empty list. Read/unmarshal failures are logged and skipped
+// (#3100: never let one bad file hide the rest).
+func listTemplatesInDir(dir string) ([]NamedAgentTemplate, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -172,34 +256,44 @@ func (s *TemplateStore) List() ([]NamedAgentTemplate, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(s.dir, entry.Name()))
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
 		if err != nil {
-			// #3100: a transient read failure silently dropped the template
-			// from the listing — surface it instead (List itself still
-			// succeeds; one unreadable file must not hide the rest).
 			debug.Log("subagent", "List: skipping unreadable template file %s: %v", entry.Name(), err)
 			continue
 		}
 		var t NamedAgentTemplate
 		if jerr := json.Unmarshal(data, &t); jerr != nil {
-			// #3100: ditto for an unparseable (e.g. half-written by an old
-			// non-atomic Save) file — log it instead of making the template
-			// vanish without a trace.
 			debug.Log("subagent", "List: skipping unparseable template file %s: %v", entry.Name(), jerr)
 			continue
 		}
 		result = append(result, t)
 	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Name < result[j].Name
-	})
 	return result, nil
+}
+
+func templateKey(name string) string {
+	return strings.TrimSpace(strings.ToLower(name))
+}
+
+func sortTemplates(ts []NamedAgentTemplate) {
+	sort.Slice(ts, func(i, j int) bool {
+		return ts[i].Name < ts[j].Name
+	})
 }
 
 // Delete removes a template by name.
 func (s *TemplateStore) Delete(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// r555: project-scoped templates live in the repo — deleting them from
+	// here would either fail on the user-library path or, worse, succeed at
+	// removing a shadowed user duplicate while leaving the project file in
+	// place. Point the caller at the committed file instead.
+	if s.projectDir != "" {
+		if projectPath := filepath.Join(s.projectDir, sanitizeName(name)+".json"); fileExists(projectPath) {
+			return fmt.Errorf("template %q is project-scoped (%s); remove that file from the repository instead", name, projectPath)
+		}
+	}
 	// #812: mirror Load's collision guard — 'Code Reviewer' and
 	// 'code_reviewer' sanitize to the same file; deleting the wrong casing
 	// permanently destroyed the other template and reported success.
