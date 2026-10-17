@@ -1026,6 +1026,29 @@ func (p *OpenAIResponsesProvider) sendEvent(ctx context.Context, ch chan<- Strea
 	}
 }
 
+// sendTerminalEvent is the terminal-only variant of sendEvent (#4294).
+// At a deadline both select arms of sendEvent are ready (buffer has room,
+// ctx is cancelled) so the runtime drops the terminal event ~50% of the
+// time: the consumer then sees a silent channel close and cannot tell a
+// deadline from a clean EOF - exactly the CI flake signature. Terminal
+// events MUST be delivered even when ctx is already done, so try the
+// non-blocking send first (buffer almost always has room); only when the
+// buffer is full fall back to the #4266 leak-safe select (a consumer that
+// stopped reading must never park the producer).
+func (p *OpenAIResponsesProvider) sendTerminalEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
+	select {
+	case ch <- ev:
+		return true
+	default:
+	}
+	select {
+	case ch <- ev:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
 	req, err := p.buildRequest(messages, tools, true)
 	if err != nil {
@@ -1061,13 +1084,13 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 						if sleepErr == errRetryBudgetExhausted {
 							sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
 						}
-						p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sleepErr})
+						p.sendTerminalEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sleepErr})
 						return
 					}
 					continue
 				}
 				debug.Log("openai-responses", "CONNECT FATAL model=%s baseURL=%s attempt=%d/%d: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), err, err)
-				p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)})
+				p.sendTerminalEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)})
 				return
 			}
 			retry, scanErr := p.readResponsesStream(ctx, httpResp, ch)
@@ -1086,11 +1109,11 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 				if sleepErr == errRetryBudgetExhausted {
 					sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, scanErr)
 				}
-				p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sleepErr})
+				p.sendTerminalEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sleepErr})
 				return
 			}
 		}
-		p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %d retry attempts exhausted", p.policy.attempts())})
+		p.sendTerminalEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %d retry attempts exhausted", p.policy.attempts())})
 	})
 	return ch, nil
 }
@@ -1244,7 +1267,7 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 			}
 		case "response.completed", "response.incomplete":
 			usage, stop := parseResponsesFinal(data)
-			if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: stop == "max_tokens" || ev.Type == "response.incomplete"}) {
+			if !p.sendTerminalEvent(ctx, ch, StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: stop == "max_tokens" || ev.Type == "response.incomplete"}) {
 				return false, ctx.Err()
 			}
 			doneSent = true
@@ -1261,7 +1284,7 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 			if msg == "" {
 				msg = "responses stream failed"
 			}
-			p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses: %s", msg)})
+			p.sendTerminalEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses: %s", msg)})
 			doneSent = true
 		case "error":
 			var errPayload struct {
@@ -1272,7 +1295,7 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 			if msg == "" {
 				msg = "responses stream error"
 			}
-			p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses: %s", msg)})
+			p.sendTerminalEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses: %s", msg)})
 			doneSent = true
 		}
 		if doneSent {
@@ -1286,9 +1309,9 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 			return true, err
 		}
 		if ctx.Err() == nil {
-			p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)})
+			p.sendTerminalEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)})
 		} else {
-			p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: ctx.Err()})
+			p.sendTerminalEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: ctx.Err()})
 		}
 		return false, err
 	}

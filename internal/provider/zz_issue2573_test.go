@@ -180,7 +180,13 @@ func TestIssue2573StreamDeadlineCoversFullStream(t *testing.T) {
 	defer srv.Close()
 
 	p := NewOpenAIResponsesProvider("sk-test", "gpt-5-codex", 1024, srv.URL+"/v1")
-	p.setCallPolicy(callPolicy{requestTimeout: 300 * time.Millisecond})
+	// #4294: the timeout is a WHOLE-CALL budget starting at ChatStream, not a
+	// post-first-byte deadline. On slow CI runners connection setup + handler
+	// scheduling can eat a 300ms budget before the "hel" delta is read,
+	// failing the text=="hel" assertion (pure timing, contract intact). 2s
+	// gives the delta ~7x headroom while still dying far before the server's
+	// eternal keepalive hang - what this test asserts.
+	p.setCallPolicy(callPolicy{requestTimeout: 2 * time.Second})
 
 	ch, err := p.ChatStream(context.Background(), []Message{
 		{Role: "user", Content: []ContentBlock{TextBlock("hi")}},
@@ -206,7 +212,7 @@ func TestIssue2573StreamDeadlineCoversFullStream(t *testing.T) {
 	if gotErr == nil || !strings.Contains(gotErr.Error(), "context deadline exceeded") {
 		t.Errorf("err = %v, want context deadline exceeded", gotErr)
 	}
-	if elapsed > 3*time.Second {
+	if elapsed > 5*time.Second {
 		t.Errorf("elapsed = %v, stream deadline not honored", elapsed)
 	}
 }
