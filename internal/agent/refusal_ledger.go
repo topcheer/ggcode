@@ -161,10 +161,39 @@ var refusalCmdWriteEvidence = regexp.MustCompile(
 	`(?:\d)?>{1,2}|&>|-delete\b|-exec(dir)?\b|-fprint\w*\b|-fls\b|--output(=|\s)`)
 
 // refusalPathPattern: path-like tokens (contain / or .ext), ≥4 chars.
-var refusalPathPattern = regexp.MustCompile(`[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_.-]+)+|(?:[A-Za-z0-9_-]+\.[A-Za-z0-9]{1,8})`)
+// #anchor-boundary: the extension branch is \b-anchored so an in-word
+// fragment ("xconfig.yaml" inside an identifier) does not yield
+// "config.yaml" as a match anchor.
+var refusalPathPattern = regexp.MustCompile(`\b[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_.-]+)+|\b[A-Za-z0-9_-]+\.[A-Za-z0-9]{1,8}\b`)
 
-// refusalFlagPattern: command-line flags, ≥3 chars incl. dash.
-var refusalFlagPattern = regexp.MustCompile(`--?[A-Za-z][A-Za-z0-9-]{2,}`)
+// refusalFlagToken is the character class a flag anchor may span after its
+// leading dash(es).
+var refusalFlagBody = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*`)
+
+// refusalFlags extracts flag-shaped anchors (-abc / --abc, ≥3 chars of
+// body) from excerpt TOKENS. #anchor-boundary: the old free-floating
+// `--?[A-Za-z][A-Za-z0-9-]{2,}` regex had no left boundary, so hyphenated
+// prose words ("mid-run", "re-search") leaked "-run"/"-search" as anchors
+// and then blocked any go test invocation using those literal flags - the
+// exact false-positive chain observed in production. A flag anchor only
+// counts when the dash is at token START.
+func refusalFlags(excerpt string) []string {
+	var out []string
+	for _, tok := range strings.Fields(excerpt) {
+		tok = strings.Trim(tok, "\"'`(),;:[]{}<>.")
+		if len(tok) < 4 || tok[0] != '-' {
+			continue
+		}
+		body := strings.TrimPrefix(tok[1:], "-")
+		m := refusalFlagBody.FindString(body)
+		if len(m) < 3 {
+			continue
+		}
+		dashes := len(tok) - len(body) // 1 or 2 leading dashes
+		out = append(out, strings.ToLower(tok[:dashes]+m))
+	}
+	return out
+}
 
 // extractRefusals returns negation-form refusal excerpts from user text.
 func extractRefusals(text string) []string {
@@ -297,9 +326,7 @@ func refusalTargets(excerpt string) []string {
 			out = append(out, strings.ToLower(p))
 		}
 	}
-	for _, f := range refusalFlagPattern.FindAllString(excerpt, -1) {
-		out = append(out, strings.ToLower(f))
-	}
+	out = append(out, refusalFlags(excerpt)...)
 	return out
 }
 
