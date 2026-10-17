@@ -645,11 +645,28 @@ func isWriteFileTool(name string) bool {
 }
 
 func isCommandTool(name string) bool {
-	switch name {
+	// #4290: match case-insensitively. The Windows shell tool reaches this
+	// policy layer as "Bash"/"PowerShell" (display-name-sourced, no
+	// lowercase normalization on that path), while the agent layer uses
+	// lowercase "bash"/"powershell". A case-sensitive exact list left every
+	// ConfigPolicy command floor (extremely-dangerous, credential-payload
+	// exfil, sensitive redirect) inert on Windows shells.
+	//
 	// write_command_input removed (#197): its `input` field is arbitrary data
 	// written to a job's stdin (script bodies, docs, logs), not a shell
 	// command - pattern-matching it caused false Deny on normal content.
-	case "run_command", "start_command", "tmux", "ghostty", "warp", "kitty", "iterm2":
+	// wait_command/read_command_output stay out: they only read existing job
+	// output and never carry new command text to execute.
+	switch {
+	case strings.EqualFold(name, "run_command"),
+		strings.EqualFold(name, "start_command"),
+		strings.EqualFold(name, "bash"),
+		strings.EqualFold(name, "powershell"),
+		strings.EqualFold(name, "tmux"),
+		strings.EqualFold(name, "ghostty"),
+		strings.EqualFold(name, "warp"),
+		strings.EqualFold(name, "kitty"),
+		strings.EqualFold(name, "iterm2"):
 		return true
 	}
 	return false
