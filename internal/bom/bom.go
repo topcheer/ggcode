@@ -1,6 +1,8 @@
-// Package bom builds a learning-artifact bill of materials: a read-only,
-// deterministic inventory of every persisted artifact that currently shapes
-// agent behavior - skills, staged skills, memories, and trajectory insights -
+// Package bom builds a bill of materials: a read-only, deterministic
+// inventory of every persisted artifact that currently shapes agent behavior
+// - skills, staged skills, memories, trajectory insights, and (via
+// BuildWithRuntime) the runtime execution components the OWASP Agent Control
+// Standard calls the AgBOM axis: resolved models, MCP servers, and plugins -
 // with content hash, source location, and the promotion gate each artifact
 // passed on its way in.
 //
@@ -30,6 +32,15 @@ const (
 	TypeSkillStaged = "skill-staged" // skill awaiting knight promotion (skills-staging/)
 	TypeMemory      = "memory"       // persisted memory entry (memory/*.md)
 	TypeTrajInsight = "traj-insight" // trajectory learnings ledger (trajectory-learnings.jsonl)
+
+	// Runtime component types (ACS AgBOM axis, r553 / OWASP Agent Control
+	// Standard 2026-09): the executable inventory a static SBOM cannot give -
+	// which model the agent thinks with and which external servers/plugins it
+	// is wired to right now.
+	TypeModel     = "model"      // resolved LLM model name (main + aux, deduped)
+	TypeMCPServer = "mcp-server" // configured MCP server connection
+	TypePlugin    = "plugin"     // configured plugin entry
+	TypeConfig    = "config"     // the config file itself (provenance anchor)
 )
 
 // Promotion gates (Entry.PromotionGate): the mechanism that admitted the
@@ -40,6 +51,7 @@ const (
 	GateHoldout       = "holdout"        // traj insight: shadow-holdout counterfactual Δ gate
 	GateAuto          = "auto"           // auto-saved memory (research-/build-/release-/preference-)
 	GateManual        = "manual"         // hand-written memory or skill
+	GateConfig        = "config"         // runtime component admitted via user config (ACS AgBOM axis)
 )
 
 // autoMemoryPrefixes are the memory key prefixes that the agent itself writes
@@ -96,6 +108,14 @@ func Build(workspace, home string) (*Report, error) {
 	scanTraj(rep, filepath.Join(workspace, ".ggcode", "trajectory-learnings.jsonl"), "project")
 	scanTraj(rep, filepath.Join(home, ".ggcode", "trajectory-learnings.jsonl"), "global")
 
+	finalize(rep)
+	return rep, nil
+}
+
+// finalize recounts per-type totals and sorts entries into the canonical
+// order (type, then scope, then name).
+func finalize(rep *Report) {
+	rep.Counts = map[string]int{}
 	for _, e := range rep.Entries {
 		rep.Counts[e.Type]++
 	}
@@ -109,6 +129,113 @@ func Build(workspace, home string) (*Report, error) {
 		}
 		return a.Name < b.Name
 	})
+}
+
+// RuntimeMCPServer is one configured MCP server connection, pre-mapped by the
+// caller (the bom package stays free of config-package dependencies).
+type RuntimeMCPServer struct {
+	Name       string
+	OriginPath string // config file the server was declared in ("" = main config)
+	Enabled    bool   // false when tombstoned (user-deleted)
+}
+
+// RuntimePlugin is one configured plugin entry.
+type RuntimePlugin struct {
+	Name string
+	Path string
+}
+
+// RuntimeConfig carries the resolved runtime components (models, MCP
+// servers, plugins) that the ACS AgBOM axis inventories. The cmd layer maps
+// the loaded config into this struct so this package stays lexical and
+// dependency-free.
+type RuntimeConfig struct {
+	ConfigPath string // provenance anchor: hashed as a whole file
+	Models     []string
+	MCPServers []RuntimeMCPServer
+	Plugins    []RuntimePlugin
+}
+
+// BuildWithRuntime extends Build with the ACS AgBOM runtime axis: models the
+// agent resolves to, MCP servers it is wired to, plugins it loads, plus the
+// config file itself as the provenance anchor. All runtime entries share the
+// whole-config-file hash as SHA256 (component-level provenance is the config
+// file's hash at scan time). A nil rc behaves exactly like Build.
+func BuildWithRuntime(workspace, home string, rc *RuntimeConfig) (*Report, error) {
+	rep, err := Build(workspace, home)
+	if err != nil {
+		return nil, err
+	}
+	if rc == nil {
+		return rep, nil
+	}
+	var (
+		cfgHash string
+		cfgSize int64
+		cfgMod  time.Time
+	)
+	if rc.ConfigPath != "" {
+		hash, size, err := hashFile(rc.ConfigPath)
+		if err != nil {
+			rep.Warnings = append(rep.Warnings, "config unreadable: "+rc.ConfigPath)
+		} else {
+			cfgHash, cfgSize = hash, size
+			if info, err := os.Stat(rc.ConfigPath); err == nil {
+				cfgMod = info.ModTime().UTC()
+			}
+		}
+	}
+	seen := map[string]bool{}
+	for _, m := range rc.Models {
+		m = strings.TrimSpace(m)
+		if m == "" || seen[strings.ToLower(m)] {
+			continue
+		}
+		seen[strings.ToLower(m)] = true
+		rep.Entries = append(rep.Entries, Entry{
+			Name: m, Type: TypeModel, Scope: "config", Path: rc.ConfigPath,
+			SHA256: cfgHash, Bytes: cfgSize, Modified: cfgMod,
+			Enabled: true, PromotionGate: GateConfig,
+		})
+	}
+	for _, s := range rc.MCPServers {
+		name := strings.TrimSpace(s.Name)
+		if name == "" {
+			continue
+		}
+		path := s.OriginPath
+		if path == "" {
+			path = rc.ConfigPath
+		}
+		rep.Entries = append(rep.Entries, Entry{
+			Name: name, Type: TypeMCPServer, Scope: "config", Path: path,
+			SHA256: cfgHash, Bytes: cfgSize, Modified: cfgMod,
+			Enabled: s.Enabled, PromotionGate: GateConfig,
+		})
+	}
+	for _, p := range rc.Plugins {
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			continue
+		}
+		path := p.Path
+		if path == "" {
+			path = rc.ConfigPath
+		}
+		rep.Entries = append(rep.Entries, Entry{
+			Name: name, Type: TypePlugin, Scope: "config", Path: path,
+			SHA256: cfgHash, Bytes: cfgSize, Modified: cfgMod,
+			Enabled: true, PromotionGate: GateConfig,
+		})
+	}
+	if rc.ConfigPath != "" && cfgHash != "" {
+		rep.Entries = append(rep.Entries, Entry{
+			Name: filepath.Base(rc.ConfigPath), Type: TypeConfig, Scope: "config", Path: rc.ConfigPath,
+			SHA256: cfgHash, Bytes: cfgSize, Modified: cfgMod,
+			Enabled: true, PromotionGate: GateConfig,
+		})
+	}
+	finalize(rep)
 	return rep, nil
 }
 

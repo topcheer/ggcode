@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/topcheer/ggcode/internal/bom"
+	"github.com/topcheer/ggcode/internal/config"
 )
 
 // newBOMCmd creates the "ggcode bom" subcommand: a read-only bill of materials
@@ -33,6 +34,18 @@ behavior into one deterministic inventory:
   memory        persisted memories (memory/*.md)              gate: auto|manual
   traj-insight  trajectory learnings (trajectory-learnings.jsonl) gate: holdout
 
+plus the runtime execution components (AgBOM axis, OWASP Agent Control
+Standard 2026-09):
+
+  model         resolved LLM models (model + aux_model, deduped)  gate: config
+  mcp-server    configured MCP server connections                 gate: config
+  plugin        configured plugin entries                          gate: config
+  config        the config file itself (provenance anchor)         gate: config
+
+Runtime components are read from the default user config; when the config
+cannot be loaded the report degrades to the learning-artifact inventory with
+a warning.
+
 Each entry carries a content hash (sha256, first 12 hex chars), size, source
 path, scope (project|global), and enable state. Read-only: nothing is written.
 
@@ -54,9 +67,37 @@ Examples:
 				}
 				home = h
 			}
-			rep, err := bom.Build(workspace, home)
+			// AgBOM axis (r553): map the loaded config into runtime components.
+			// A nil rc degrades to the plain learning-artifact inventory.
+			var rc *bom.RuntimeConfig
+			if cfgPath := config.ConfigPath(); cfgPath != "" {
+				if cfg, err := config.Load(cfgPath); err == nil {
+					rc = &bom.RuntimeConfig{ConfigPath: cfgPath}
+					for _, m := range []string{cfg.Model, cfg.AuxModel} {
+						if m != "" {
+							rc.Models = append(rc.Models, m)
+						}
+					}
+					dead := make(map[string]bool, len(cfg.DeletedMCPServers))
+					for _, n := range cfg.DeletedMCPServers {
+						dead[n] = true
+					}
+					for _, s := range cfg.MCPServers {
+						rc.MCPServers = append(rc.MCPServers, bom.RuntimeMCPServer{
+							Name: s.Name, Enabled: !dead[s.Name],
+						})
+					}
+					for _, p := range cfg.Plugins {
+						rc.Plugins = append(rc.Plugins, bom.RuntimePlugin{Name: p.Name, Path: p.Path})
+					}
+				}
+			}
+			rep, err := bom.BuildWithRuntime(workspace, home, rc)
 			if err != nil {
 				return fmt.Errorf("build bom: %w", err)
+			}
+			if rc == nil {
+				rep.Warnings = append(rep.Warnings, "runtime components unavailable: user config not loaded")
 			}
 			enc := json.NewEncoder(cmd.OutOrStdout())
 			enc.SetIndent("", "  ")
