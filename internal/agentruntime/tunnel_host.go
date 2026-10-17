@@ -302,7 +302,10 @@ func (h *TunnelHost) StartShare(cfg ShareConfig) (*ShareResult, error) {
 	}, nil
 }
 
-// StopShare tears down the active share session and broker.
+// StopShare tears down the active share session and broker WITHOUT emitting
+// the "sharing_stopped" event. It has no production callers (#4303); the
+// reachable teardown paths all use the graceful variant. Kept only as
+// exported-API compat; dead code pending cleanup-pool removal.
 func (h *TunnelHost) StopShare() {
 	h.mu.Lock()
 	ref := h.activeShare
