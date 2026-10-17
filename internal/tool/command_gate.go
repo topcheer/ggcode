@@ -206,17 +206,16 @@ func NewCommandGate() *CommandGate {
 	// ================================================================
 	g.askRules = []*gateRule{
 
-		// --- Command injection patterns (Claude Code style) ---
-		{kind: "injection", desc: "command substitution $() may hide nested commands",
-			pattern: regexp.MustCompile(`\$\(`)},
-		{kind: "injection", desc: "process substitution <() can bypass path checks",
-			pattern: regexp.MustCompile(`<\(`)},
-		{kind: "injection", desc: "process substitution >() can redirect output covertly",
-			pattern: regexp.MustCompile(`>\(`)},
-		{kind: "injection", desc: "backtick command substitution",
-			pattern: regexp.MustCompile("`.+`")},
-		{kind: "injection", desc: "parameter expansion ${} can execute code",
-			pattern: regexp.MustCompile(`\$\{`)},
+		// --- Command injection patterns (#4273 rewrite) ---
+		// The old five bare-symbol rules ($(), <(, >(`, ${) keyed on shell
+		// SYNTAX PRIMITIVES, which are ordinary composition in bash and
+		// DAILY syntax in PowerShell (${var}, $(...) subexpressions) - a
+		// legitimate deploy chain asked on every command. Nested dangerous
+		// commands are already covered by the content rules below ($(curl|sh)
+		// hits the pipe-to-shell rule, $(rm -rf) hits rm). The one real gap
+		// the bare rules caught - decode-then-shell - is now explicit:
+		{kind: "injection", desc: "decoded payload piped into shell",
+			pattern: regexp.MustCompile(`(?i)\b(base64|openssl\s+enc\s+-d|xxd\s+-r\s+-p)\b.*\|\s*(ba)?sh\b`)},
 
 		// --- Dangerous file operations ---
 		{kind: "destructive", desc: "recursive force delete",
