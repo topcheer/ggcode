@@ -31,3 +31,38 @@ func TestZZIssue4290IsCommandToolCaseInsensitive(t *testing.T) {
 		}
 	}
 }
+
+// #4301: the quoted-body redirect gate fires only when the single-quote body
+// DIRECTLY follows an interpreter invocation. Global "sh -c anywhere in the
+// command" was wrong (#4273 deploy chain tail runs `-- sh -c $cmd` while its
+// earlier PS literals carry `>` as data).
+func TestZZIssue4290InterpreterQuoteOpeningAdjacency(t *testing.T) {
+	adjacent := []struct {
+		cmd string
+		qs  int
+	}{
+		{"sh -c 'echo x > /t'", 6},
+		{"bash -c 'x > /t'", 8},
+		{"run pwsh -command 'x > /t'", 17},
+		{"python -c 'x > /t'", 10},
+		{"cmd /c 'x > /t'", 7},
+	}
+	for _, c := range adjacent {
+		if !interpreterQuoteOpening([]rune(c.cmd), c.qs) {
+			t.Errorf("interpreterQuoteOpening(%q) = false, want true (direct interpreter opening)", c.cmd)
+		}
+	}
+	// data literals: quote opens right after ordinary words (the #4273
+	// -replace pattern shape), even though "sh -c" appears elsewhere in cmd.
+	deploy := `$p -replace ' - node: printf > /src/home/.npmrc'; tail -- sh -c $cmd`
+	for qs, r := range deploy {
+		if r == '\'' {
+			if interpreterQuoteOpening([]rune(deploy), qs) {
+				t.Errorf("interpreterQuoteOpening(deploy, qs=%d) = true, want false (data literal, not interpreter arg)", qs)
+			}
+		}
+	}
+	if interpreterQuoteOpening([]rune("echo 'x > /t'"), 5) {
+		t.Errorf("interpreterQuoteOpening(echo literal) = true, want false (no interpreter)")
+	}
+}
