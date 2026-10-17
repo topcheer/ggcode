@@ -788,13 +788,51 @@ func credentialPayloadExfil(cmd string) bool {
 	for _, pat := range []string{
 		"~/.ssh/", ".ssh/id", "~/.aws/", ".aws/credentials",
 		"~/.gnupg/", "/etc/shadow", "/etc/passwd",
-		"credentials.json", ".env",
+		"credentials.json",
 	} {
 		if strings.Contains(cmd, pat) {
 			return true
 		}
 	}
-	return false
+	return matchesEnvPath(cmd)
+}
+
+// matchesEnvPath reports whether cmd references a dotenv credential file
+// (.env, .env.local, ~/.env, ./env paths). A bare strings.Contains(cmd,
+// ".env") false-positives on Kubernetes jsonpath field access like
+// `.spec.containers[0].env[?(@.name==...)]` (#4279 screenshot case), so the
+// match requires a path-like boundary: the preceding byte must start a path
+// segment (not `]` or an identifier character) and the trailing byte must
+// continue a filename (not the `[` that opens a jsonpath filter).
+func matchesEnvPath(cmd string) bool {
+	for i := 0; ; {
+		idx := strings.Index(cmd[i:], ".env")
+		if idx < 0 {
+			return false
+		}
+		pos := i + idx
+		i = pos + 1
+		if pos+len(".env") >= len(cmd) {
+			return true // ".env" at end of command: filename reference
+		}
+		after := cmd[pos+len(".env")]
+		if after == '[' {
+			continue // jsonpath filter: ].env[?(@.name==...)]
+		}
+		var before byte = ' '
+		if pos > 0 {
+			before = cmd[pos-1]
+		}
+		if before == ']' || before == '_' || isAlnumByte(before) {
+			continue // identifier boundary: foo.env, 0.env, ].env inside an expression
+		}
+		return true
+	}
+}
+
+// isAlnumByte reports whether b is an ASCII letter or digit.
+func isAlnumByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
 }
 
 // isAbsolutePathish reports whether tok is absolute or home-anchored - the
