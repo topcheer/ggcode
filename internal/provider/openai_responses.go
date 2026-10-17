@@ -1018,6 +1018,18 @@ func chatResponseFromPayload(payload *responsesPayload) *ChatResponse {
 // stops reading. Every send on the SSE (non-background) path must go
 // through here.
 func (p *OpenAIResponsesProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
+	// #flake (CI 39042845474/39042902916): when the deadline fires at the
+	// same instant the terminal error event is sent, the select below had
+	// BOTH cases ready and picked ctx.Done 50/50 - dropping the very error
+	// the deadline produced (consumer saw a silent close). ch is buffered
+	// and the consumer drains until close, so a non-blocking send succeeds
+	// deterministically here; only a full buffer (slow consumer) falls
+	// through to the racing select, preserving the #4266/#3068 leak guard.
+	select {
+	case ch <- ev:
+		return true
+	default:
+	}
 	select {
 	case ch <- ev:
 		return true
