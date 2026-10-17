@@ -702,15 +702,26 @@ func TestBypassMode_WriteOutsideSandboxAsks(t *testing.T) {
 	tmpDir := t.TempDir()
 	policy := NewConfigPolicyWithMode(nil, []string{tmpDir}, BypassMode)
 
-	// two-mode refactor: bypass keeps the persistence-backdoor floor
-	// (locks.md S5): out-of-sandbox file-tool writes still gate with Ask.
+	// #4279 (user ruling): the S5 floor converges to sensitive-paths only -
+	// /etc/passwd is sensitive, so it still gates.
 	outsideWriteInput := json.RawMessage(`{"file_path":"/etc/passwd","content":"malicious"}`)
 	d, err := policy.Check("write_file", outsideWriteInput)
 	if err != nil {
 		t.Errorf("Write check should not error: %v", err)
 	}
 	if d != Ask {
-		t.Errorf("BypassMode: write outside sandbox should be Ask (persistence-backdoor floor), got %v", d)
+		t.Errorf("BypassMode: sensitive-path write should be Ask (persistence-backdoor floor), got %v", d)
+	}
+
+	// #4279: ORDINARY out-of-sandbox writes are a daily-workflow norm and no
+	// longer ask in bypass.
+	ordinaryOutside := json.RawMessage(`{"file_path":"/tmp/ordinary-out.txt","content":"ok"}`)
+	d, err = policy.Check("write_file", ordinaryOutside)
+	if err != nil {
+		t.Errorf("Write check should not error: %v", err)
+	}
+	if d != Allow {
+		t.Errorf("BypassMode: ordinary out-of-sandbox write must Allow (#4279), got %v", d)
 	}
 
 	// Writing inside sandbox should allow

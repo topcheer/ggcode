@@ -44,7 +44,10 @@ func TestIssue573_C_BypassRedirectBackdoorPathsAsk(t *testing.T) {
 			{"echo x > ~/.bashrc", "bashrc overwrite"},
 			{"echo x > ~/.zshrc", "zshrc overwrite"},
 			{"echo x > /etc/hosts", "hosts overwrite"},
-			{"echo backdoor > /Users/whoever/.config/backdoor", "arbitrary out-of-sandbox write"},
+			// #4279 (user ruling): "echo backdoor > /Users/whoever/.config/backdoor"
+			// moved to the UNGATED set - an ordinary out-of-sandbox redirect,
+			// exactly what bypass users asked to unblock. The persistence
+			// floor keeps only the sensitive/system classes (all other rows).
 			{"cmd 2> /etc/cron.d/evil", "stderr redirect to cron"},
 			{"cmd &> ~/.profile", "stdout+stderr redirect to profile"},
 		} {

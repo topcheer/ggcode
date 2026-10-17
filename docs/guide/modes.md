@@ -28,7 +28,7 @@ Best for everyday work: near-zero interruptions, with hard floors against prompt
 Cruise control (goal + strategist oversight) rides on this mode. Nothing is gated except:
 
 - **System-level destructive commands**: Ask
-- **Persistence-backdoor writes**: shell redirects to out-of-sandbox **or** sensitive paths (`~/.ssh/authorized_keys`, `~/.bashrc`, `/etc/**`) and file-tool writes outside the sandbox - Ask. These are rare by construction and never a daily-interruption source.
+- **Persistence-backdoor writes**: shell redirects to **sensitive paths** (`~/.ssh/authorized_keys`, `~/.bashrc`, `/etc/**`) and file-tool writes to sensitive paths - Ask. #4279 (user ruling): ordinary out-of-sandbox writes and redirects no longer gate in bypass - they are a daily-workflow norm.
 - **Credential-payload uploads** (narrow watchdog floor): upload-direction transfers whose own command text references a credential location (`scp ~/.ssh/id_rsa host:`, `curl -d @~/.aws/credentials`) - Ask. Ordinary uploads are unaffected.
 
 Network exfiltration and sensitive-path **reads** are no longer gated in bypass (they were the top false-positive sources; the exfiltration floor remains in supervised).

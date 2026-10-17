@@ -227,22 +227,25 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				}
 				// #573-C: redirection targets are file writes - a shell
 				// redirect is the classic prompt-injection persistence path
-				// (`> ~/.ssh/authorized_keys`). Out-of-sandbox or sensitive
-				// targets gate.
+				// (`> ~/.ssh/authorized_keys`). #4279: ordinary (non-sensitive)
+				// redirects no longer gate in bypass - only the persistence-
+				// backdoor class (sensitive paths) keeps the Ask floor.
 				for _, tgt := range extractRedirectTargets(cmd) {
 					resolved := expandTilde(tgt)
-					if !p.sandbox.Allowed(resolved) || isSensitivePath(resolved) {
-						debug.Log("permission", "redirect to out-of-sandbox/sensitive path gated in bypass mode (#573-C)")
+					if isPersistenceBackdoorPath(resolved) {
+						debug.Log("permission", "redirect to sensitive path gated in bypass mode (#573-C/#4279)")
 						return Ask, nil
 					}
 				}
 			}
 		}
-		// File-tool writes outside the writable sandbox gate (locks.md S5):
-		// ~/.aws/credentials, /etc/** etc. - same persistence-backdoor class.
+		// #573-C + #4279: file-tool writes gate on the persistence-backdoor
+		// class ONLY (sensitive paths - ~/.aws/credentials, /etc/**). Ordinary
+		// out-of-sandbox writes are a daily-workflow norm in bypass and no
+		// longer ask (user ruling #4279).
 		if isWriteFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {
-				if path != "" && !p.sandbox.Allowed(path) {
+				if path != "" && isPersistenceBackdoorPath(path) {
 					return Ask, nil
 				}
 			}
@@ -491,6 +494,27 @@ func (p *ConfigPolicy) GetDecision(toolName string) Decision {
 // Comparison is case-insensitive on platforms with case-insensitive filesystems
 // (macOS APFS, Windows) so `/Users/zhanjU/.backdoorrc` cannot dodge the check
 // by flipping case (#573-G); Linux keeps byte-exact comparison.
+// isPersistenceBackdoorPath reports whether writing to path would install a
+// persistence backdoor: the sensitive-file class (isSensitivePath) plus
+// system configuration directories (/etc, /usr, /bin, /sbin, /Library) that
+// a sandbox-escape write previously covered. #4279 narrowed the bypass gate
+// from "anything outside the sandbox" to this predicate - ordinary
+// out-of-sandbox writes flow free, but the #573-C floor keeps its full
+// coverage (the old composite gate's /etc/** reach came from the sandbox
+// check, NOT from isSensitivePath).
+func isPersistenceBackdoorPath(path string) bool {
+	if isSensitivePath(path) {
+		return true
+	}
+	p := filepath.ToSlash(filepath.Clean(path))
+	for _, prefix := range []string{"/etc/", "/usr/", "/bin/", "/sbin/", "/private/etc/", "/Library/"} {
+		if pathHasPrefixFold(p, prefix) || pathEqualFold(p, strings.TrimSuffix(prefix, "/")) {
+			return true
+		}
+	}
+	return false
+}
+
 func isSensitivePath(path string) bool {
 	// Normalize separators before comparing: the suffix table and home
 	// prefix below use "/", but Windows paths carry "\" (filepath.Clean
@@ -875,7 +899,14 @@ func unquoteToken(tok string) string {
 			return tok[1 : len(tok)-1]
 		}
 	}
-	return tok
+	// #4279 (probe-verified): inside an interpreter -c body ('echo x >
+	// /path') the token scan stops at whitespace and keeps the body's
+	// CLOSING quote as a suffix ("/path'") - symmetric unquoting above
+	// never fires, and every suffix/prefix sensitive-path matcher silently
+	// misses ("authorized_keys'" != "authorized_keys"). The old composite
+	// gate hid this behind its sandbox term. Strip a trailing unmatched
+	// quote rune.
+	return strings.TrimRight(tok, "'\"")
 }
 
 // isDevSink reports whether a redirect target is a harmless device sink.
