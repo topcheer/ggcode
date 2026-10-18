@@ -525,10 +525,15 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	projectAutoMem := core.ProjectAutoMem
 	saveMemoryTool := core.SaveMemoryTool
 	startupAssets := core.StartupAssets
-	// Startup notices (sa-45): merge MCP gate/merge warnings with
-	// sleep-time consolidation findings and hand the combined list to the
-	// TUI so they render as system messages on the first frame.
-	startupNotices := append(core.StartupNotices, startupAssets.ConsolidationFindings...)
+	// Startup notices (sa-45): MCP gate/merge warnings render as system
+	// messages on the first frame. Sleep-time consolidation findings are
+	// deliberately NOT appended anymore: they are agent-facing advisory
+	// (already injected into the system prompt via RepairSuggestions,
+	// agentruntime/prompt.go) - showing them in the TUI only surfaced
+	// regex-level false positives (broken-path heuristics on tool names /
+	// cross-project paths) as user-visible noise. User stays in the loop
+	// when the agent acts on a suggestion (save_memory/delete_memory).
+	startupNotices := core.StartupNotices
 	autoFiles := startupAssets.AutoFiles
 	commandMgr := startupAssets.CommandManager
 	trace.Mark("build interactive runtime core")
