@@ -937,8 +937,6 @@ func jaCatalog(key string) string {
 		return "バインド済み: %d"
 	case "panel.qq.available":
 		return "利用可能: %d"
-	case "panel.qq.current_binding":
-		return "現在のバインド"
 	case "panel.qq.none":
 		return "（なし）"
 	case "panel.qq.default":

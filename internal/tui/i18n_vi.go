@@ -892,8 +892,6 @@ func viCatalog(key string) string {
 		return "Đã liên kết: %d"
 	case "panel.qq.available":
 		return "Khả dụng: %d"
-	case "panel.qq.current_binding":
-		return "Liên kết hiện tại"
 	case "panel.qq.none":
 		return "(không có)"
 	case "panel.qq.default":

@@ -1116,8 +1116,6 @@ func zhCatalog(key string) string {
 		return "已绑定：%d"
 	case "panel.qq.available":
 		return "可用：%d"
-	case "panel.qq.current_binding":
-		return "当前绑定"
 	case "panel.qq.none":
 		return "(无)"
 	case "panel.qq.default":

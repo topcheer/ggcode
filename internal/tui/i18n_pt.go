@@ -1143,8 +1143,6 @@ func ptCatalog(key string) string {
 		return "Enter criar bot • Esc cancelar"
 	case "panel.qq.created":
 		return "Criados: %d"
-	case "panel.qq.current_binding":
-		return "Vinculação Atual"
 	case "panel.qq.current_directory_channel":
 		return "Canal do Diretório Atual: %s"
 	case "panel.qq.current_directory_target":

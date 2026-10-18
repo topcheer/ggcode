@@ -976,8 +976,6 @@ func deCatalog(key string) string {
 		return "Gebunden: %d"
 	case "panel.qq.available":
 		return "Verfügbar: %d"
-	case "panel.qq.current_binding":
-		return "Aktuelle Bindung"
 	case "panel.qq.none":
 		return "(keine)"
 	case "panel.qq.default":
