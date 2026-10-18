@@ -167,9 +167,17 @@ func globalOnlyVendors(merged, globalSnapVendors map[string]VendorConfig) map[st
 		return merged
 	}
 	out := make(map[string]VendorConfig, len(merged))
-	for name, vc := range merged {
-		if _, isGlobal := globalSnapVendors[name]; isGlobal {
-			out[name] = vc
+	for name := range merged {
+		if gvc, isGlobal := globalSnapVendors[name]; isGlobal {
+			// #4262: a same-named vendor OVERRIDDEN by the instance merge
+			// (#2289 instance-wins) carries instance-sourced fields (api_key/
+			// base_url overrides); writing the merged struct to the global
+			// vendors.yaml/keys.env would leak the workspace-private key into
+			// the shared ~/.ggcode every other workspace loads. Write the
+			// snapshot's ORIGINAL struct instead. Runtime global edits are
+			// unaffected: they flow through SyncVendorToGlobalSnapshot (#368),
+			// which refreshes the snapshot before Save runs.
+			out[name] = gvc
 		}
 	}
 	return out
