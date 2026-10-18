@@ -121,10 +121,17 @@ var constraintPatterns = []*regexp.Regexp{
 
 // extractConstraints scans user text for explicit constraint directives.
 // Returns extracted constraint excerpts (deduplicated).
+// stripNonDirectiveText / isLogLikeLine are provided by refusal_ledger.go in
+// this package (single shared source-discimination helper, #4285); constraint
+// extraction reuses them (#4257).
+
 func extractConstraints(text string) []string {
 	if len(text) == 0 {
 		return nil
 	}
+	// #4257: source-shape filter BEFORE extraction - see
+	// stripNonDirectiveText.
+	text = stripNonDirectiveText(text)
 
 	var results []string
 	seen := make(map[string]bool)
