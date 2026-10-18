@@ -25,6 +25,14 @@ var instanceResetManagedKeys = []string{
 	"default_mode",
 	"max_iterations",
 	"allowed_dirs",
+	// #4315: hooks is managed as one unit by diffHooks, whose
+	// len(current)>0 guards drop a cleared (empty) hooks section from the
+	// delta entirely - the same resurrection hole as the scalars above,
+	// minus the reset-table backstop. Registering it here makes
+	// applyInstanceResets delete the whole on-disk hooks key when the
+	// user cleared it, so reload falls back to global inheritance
+	// (mergeHookConfig replace-per-kind: empty instance = global).
+	"hooks",
 }
 
 // instanceResetNestedKeys maps nested top-level keys to the scalar
