@@ -194,24 +194,6 @@ func zhCatalog(key string) string {
 		return "@ 可附加文件/目录 • Tab/Shift+Tab 切换 • Enter 应用"
 	case "hint.mode":
 		return "模式"
-	case "mode.approval.ask":
-		return "按需询问"
-	case "mode.approval.none":
-		return "不会停下来审批"
-	case "mode.approval.critical":
-		return "仅关键操作"
-	case "mode.tools.rules":
-		return "遵循工具规则"
-	case "mode.tools.readonly":
-		return "仅只读"
-	case "mode.tools.safe":
-		return "仅安全操作"
-	case "mode.tools.open":
-		return "几乎全部工具"
-	case "mode.agent.waits":
-		return "等待你决策"
-	case "mode.agent.autocontinue":
-		return "自动继续推进"
 	case "hint.enter_send":
 		return "Enter 发送"
 	case "hint.ctrlv_image":
