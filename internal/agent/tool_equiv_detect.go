@@ -95,12 +95,6 @@ func (s *toolEquivDetectState) reset() {
 	s.warnings = 0
 }
 
-// markExactMatch is retained as a no-op shim: raw-vs-normalized
-// cross-referencing now happens per-call inside recordCall (#494).
-func (s *toolEquivDetectState) markExactMatch(rawFp string) {
-	_ = rawFp
-}
-
 // mcpToolNamePrefix mirrors internal/tool's MCP adapter naming
 // (mcp__server__tool). MCP tool argument semantics are unknowable to builtin
 // detectors, so volatile-field stripping is disabled for them (#3631).
