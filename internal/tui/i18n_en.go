@@ -1103,8 +1103,6 @@ func enCatalog(key string) string {
 		return "Bound: %d"
 	case "panel.qq.available":
 		return "Available: %d"
-	case "panel.qq.current_binding":
-		return "Current Binding"
 	case "panel.qq.none":
 		return "(none)"
 	case "panel.qq.default":

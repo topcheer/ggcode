@@ -898,8 +898,6 @@ func koCatalog(key string) string {
 		return "바인딩됨: %d"
 	case "panel.qq.available":
 		return "사용 가능: %d"
-	case "panel.qq.current_binding":
-		return "현재 바인딩"
 	case "panel.qq.none":
 		return "(없음)"
 	case "panel.qq.default":

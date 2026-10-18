@@ -892,8 +892,6 @@ func frCatalog(key string) string {
 		return "Lies: %d"
 	case "panel.qq.available":
 		return "Disponibles: %d"
-	case "panel.qq.current_binding":
-		return "Liaison Actuelle"
 	case "panel.qq.none":
 		return "(aucun)"
 	case "panel.qq.default":

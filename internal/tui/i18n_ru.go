@@ -968,8 +968,6 @@ func ruCatalog(key string) string {
 		return "Привязано: %d"
 	case "panel.qq.available":
 		return "Доступно: %d"
-	case "panel.qq.current_binding":
-		return "Текущая привязка"
 	case "panel.qq.none":
 		return "(нет)"
 	case "panel.qq.default":

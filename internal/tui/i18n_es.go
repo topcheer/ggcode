@@ -892,8 +892,6 @@ func esCatalog(key string) string {
 		return "Vinculados: %d"
 	case "panel.qq.available":
 		return "Disponibles: %d"
-	case "panel.qq.current_binding":
-		return "Vinculación Actual"
 	case "panel.qq.none":
 		return "(ninguno)"
 	case "panel.qq.default":
