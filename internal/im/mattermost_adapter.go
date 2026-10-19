@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/textproto"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -467,30 +466,69 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 	}
 }
 
+// mattermostUsernameContChars is the set of characters that may CONTINUE a
+// Mattermost username past its end. The official charset is ^[a-z0-9.\-_]+$
+// (mattermost/server validUsernameChars), so a mention ends only where this
+// set does not continue. RE2 \b cannot express that: it is an ASCII word
+// boundary and can never fire after a trailing '-' or '.', silently dropping
+// every mention of bots named like "dev-" or "ops1." (#4322).
+const mattermostUsernameContChars = "abcdefghijklmnopqrstuvwxyz0123456789._-"
+
+// mattermostMentionEndsAt reports whether a mention needle ending at byte
+// index end is properly terminated: at end-of-text or followed by a character
+// that cannot continue a username. This is the boundary \b could not express
+// for names ending in '-' or '.' (#4322, pattern adopted from matrix #2749).
+func mattermostMentionEndsAt(text string, end int) bool {
+	return end >= len(text) || !strings.ContainsAny(string(text[end]), mattermostUsernameContChars)
+}
+
 func (a *mattermostAdapter) hasMention(text string) bool {
 	lower := strings.ToLower(text)
-	// Word-boundary match: bot name "al" must not fire on "@alex" (#963).
+	// Bot name "al" must not fire on "@alex" (#963), while usernames that
+	// legally end in '-' or '.' ("dev-", "ops1.") must still match (#4322):
+	// the boundary is a post-match continuation-char check, not \b.
 	for _, id := range []string{a.botUsername, a.botUserID} {
 		if id == "" {
 			continue
 		}
-		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(id) + `\b`)
-		if re.MatchString(lower) {
-			return true
+		needle := "@" + strings.ToLower(id)
+		for start := 0; ; {
+			i := strings.Index(lower[start:], needle)
+			if i < 0 {
+				break
+			}
+			at := start + i
+			if mattermostMentionEndsAt(lower, at+len(needle)) {
+				return true
+			}
+			start = at + 1
 		}
 	}
 	return false
 }
 
 func (a *mattermostAdapter) stripMention(text string) string {
-	// Strip @bot_username and @bot_user_id mentions, with word boundary so a
-	// short bot name ("al") doesn't carve text out of "@alex" (#963).
+	// Strip @bot_username and @bot_user_id mentions. A short bot name ("al")
+	// must not carve text out of "@alex" (#963), while names ending in '-' or
+	// '.' must still strip cleanly (#4322): boundary is the post-match
+	// continuation-char check, not \b.
 	for _, pattern := range []string{a.botUsername, a.botUserID} {
 		if pattern == "" {
 			continue
 		}
-		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(pattern) + `\b`)
-		text = re.ReplaceAllString(text, "")
+		needle := "@" + strings.ToLower(pattern)
+		var b strings.Builder
+		for i := 0; i < len(text); {
+			// Needles are ASCII ([a-z0-9._-]); per-byte ASCII fold keeps one
+			// coordinate system for matching and consuming bytes (#3572 lesson).
+			if n, ok := matrixASCIIFoldPrefix(text[i:], needle); ok && mattermostMentionEndsAt(text, i+n) {
+				i += n
+				continue
+			}
+			b.WriteByte(text[i])
+			i++
+		}
+		text = b.String()
 	}
 	return strings.TrimSpace(text)
 }
