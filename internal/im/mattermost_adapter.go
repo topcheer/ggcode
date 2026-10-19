@@ -404,6 +404,7 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 		if !isFree && a.requireMention {
 			hasMention := a.hasMention(messageText)
 			if !hasMention {
+				debug.Log("mattermost", "adapter=%s drop: no mention of @%s in channel %s", a.name, a.botUsername, channelID)
 				return
 			}
 			messageText = a.stripMention(messageText)
@@ -469,12 +470,17 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 
 func (a *mattermostAdapter) hasMention(text string) bool {
 	lower := strings.ToLower(text)
-	// Word-boundary match: bot name "al" must not fire on "@alex" (#963).
+	// Boundary match: bot name "al" must not fire on "@alex" (#963).
+	// The boundary is username-charset-aware, not ASCII \b: Mattermost
+	// usernames allow ^[a-z0-9.\-_]+$ and may legally end in "-" or ".",
+	// where RE2 \b can never match (both sides non-word chars) and real
+	// mentions were silently dropped (#4322). A mention ends only when the
+	// next char is NOT a username char.
 	for _, id := range []string{a.botUsername, a.botUserID} {
 		if id == "" {
 			continue
 		}
-		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(id) + `\b`)
+		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(id) + `(?:$|[^a-z0-9.\-_])`)
 		if re.MatchString(lower) {
 			return true
 		}
@@ -483,14 +489,16 @@ func (a *mattermostAdapter) hasMention(text string) bool {
 }
 
 func (a *mattermostAdapter) stripMention(text string) string {
-	// Strip @bot_username and @bot_user_id mentions, with word boundary so a
-	// short bot name ("al") doesn't carve text out of "@alex" (#963).
+	// Strip @bot_username and @bot_user_id mentions, with a username-charset
+	// boundary so a short bot name ("al") doesn't carve text out of "@alex"
+	// (#963) while names ending in "-"/"." still strip (#4322). The boundary
+	// char (when present) is captured and preserved in the replacement.
 	for _, pattern := range []string{a.botUsername, a.botUserID} {
 		if pattern == "" {
 			continue
 		}
-		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(pattern) + `\b`)
-		text = re.ReplaceAllString(text, "")
+		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(pattern) + `(?:$|([^a-z0-9.\-_]))`)
+		text = re.ReplaceAllString(text, "$1")
 	}
 	return strings.TrimSpace(text)
 }
