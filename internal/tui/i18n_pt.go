@@ -1119,8 +1119,6 @@ func ptCatalog(key string) string {
 		return "Vinculados: %d"
 	case "panel.qq.bound_directory":
 		return "Diretório Vinculado: %s"
-	case "panel.qq.channel":
-		return "Canal: %s"
 	case "panel.qq.create":
 		return "Criar"
 	case "panel.qq.create_example":
@@ -1135,8 +1133,6 @@ func ptCatalog(key string) string {
 		return "Canal do Diretório Atual: %s"
 	case "panel.qq.current_directory_target":
 		return "Alvo do Diretório Atual: %s"
-	case "panel.qq.default":
-		return "(padrão)"
 	case "panel.qq.details":
 		return "Detalhes"
 	case "panel.qq.directory":
@@ -1159,8 +1155,6 @@ func ptCatalog(key string) string {
 		return "Config do bot QQ deve ser: <bot-id> <appid> <appsecret>"
 	case "panel.qq.error.config_unavailable":
 		return "config indisponível"
-	case "panel.qq.error.disabled":
-		return "Bot QQ %q está desativado"
 	case "panel.qq.error.not_configured":
 		return "Bot QQ %q não está configurado"
 	case "panel.qq.error.not_online":
@@ -1207,8 +1201,6 @@ func ptCatalog(key string) string {
 		return "não iniciado"
 	case "panel.qq.status.unknown":
 		return "desconhecido"
-	case "panel.qq.target":
-		return "Alvo: %s"
 	case "panel.qq.transport":
 		return "Transporte: %s"
 	case "panel.qq.waiting_for_pairing":

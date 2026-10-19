@@ -886,14 +886,8 @@ func koCatalog(key string) string {
 		return "사용 가능: %d"
 	case "panel.qq.none":
 		return "(없음)"
-	case "panel.qq.default":
-		return "(기본값)"
 	case "panel.qq.adapter":
 		return "어댑터: %s"
-	case "panel.qq.target":
-		return "대상: %s"
-	case "panel.qq.channel":
-		return "채널: %s"
 	case "panel.qq.bot_list":
 		return "QQ 봇 목록"
 	case "panel.qq.no_bots":
@@ -968,8 +962,6 @@ func koCatalog(key string) string {
 		return "QQ 어댑터 이름이 필요합니다"
 	case "panel.qq.error.not_configured":
 		return "QQ 봇 %q이(가) 구성되지 않았습니다"
-	case "panel.qq.error.disabled":
-		return "QQ 봇 %q이(가) 비활성화되었습니다"
 	case "panel.qq.error.not_qq_adapter":
 		return "어댑터 %q은(는) QQ 봇이 아닙니다"
 	case "panel.qq.error.not_online":

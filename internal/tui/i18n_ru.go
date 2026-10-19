@@ -956,14 +956,8 @@ func ruCatalog(key string) string {
 		return "Доступно: %d"
 	case "panel.qq.none":
 		return "(нет)"
-	case "panel.qq.default":
-		return "(по умолчанию)"
 	case "panel.qq.adapter":
 		return "Адаптер: %s"
-	case "panel.qq.target":
-		return "Цель: %s"
-	case "panel.qq.channel":
-		return "Канал: %s"
 	case "panel.qq.bot_list":
 		return "Список QQ-ботов"
 	case "panel.qq.no_bots":
@@ -1038,8 +1032,6 @@ func ruCatalog(key string) string {
 		return "Требуется имя QQ-адаптера"
 	case "panel.qq.error.not_configured":
 		return "QQ-бот %q не настроен"
-	case "panel.qq.error.disabled":
-		return "QQ-бот %q отключён"
 	case "panel.qq.error.not_qq_adapter":
 		return "Адаптер %q не является QQ-ботом"
 	case "panel.qq.error.not_online":

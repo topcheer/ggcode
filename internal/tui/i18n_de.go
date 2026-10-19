@@ -964,14 +964,8 @@ func deCatalog(key string) string {
 		return "Verfügbar: %d"
 	case "panel.qq.none":
 		return "(keine)"
-	case "panel.qq.default":
-		return "(Standard)"
 	case "panel.qq.adapter":
 		return "Adapter: %s"
-	case "panel.qq.target":
-		return "Ziel: %s"
-	case "panel.qq.channel":
-		return "Kanal: %s"
 	case "panel.qq.bot_list":
 		return "QQ-Bot-Liste"
 	case "panel.qq.no_bots":
@@ -1046,8 +1040,6 @@ func deCatalog(key string) string {
 		return "QQ-Adaptername erforderlich"
 	case "panel.qq.error.not_configured":
 		return "QQ-Bot %q ist nicht konfiguriert"
-	case "panel.qq.error.disabled":
-		return "QQ-Bot %q ist deaktiviert"
 	case "panel.qq.error.not_qq_adapter":
 		return "Adapter %q ist kein QQ-Bot"
 	case "panel.qq.error.not_online":
