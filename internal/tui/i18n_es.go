@@ -214,26 +214,16 @@ func esCatalog(key string) string {
 		return "espera por usted"
 	case "mode.agent.autocontinue":
 		return "continúa solo"
-	case "hint.enter_send":
-		return "Enter enviar"
-	case "hint.ctrlv_image":
-		return "Ctrl+V / Ctrl+Shift+V pegar imagen"
 	case "hint.ctrlr_sidebar":
 		return "Ctrl+R barra lateral"
 	case "hint.help":
 		return "/? ayuda"
-	case "hint.add_context":
-		return "@ agregar contexto"
-	case "hint.scroll":
-		return "PgUp/PgDn desplazar"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab modo"
 	case "hint.ctrlc_cancel":
 		return "Ctrl+C cancelar"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C limpiar/salir"
-	case "hint.image_attached":
-		return "imagen adjunta"
 	case "hint.image_attached_count":
 		return "%d imagen(es) adjunta(s)"
 	case "hint.follow_panel":
@@ -546,14 +536,10 @@ func esCatalog(key string) string {
 		return "Comando personalizado /%s:\n"
 	case "command.mention_error":
 		return "Error de mención: %v"
-	case "session.list_failed":
-		return "Error al listar sesiónes: %v\n\n"
 	case "session.untitled":
 		return "sin titulo"
 	case "session.store_missing":
 		return "Almacen de sesiónes no configurado.\n\n"
-	case "session.none":
-		return "No se encontraron sesiónes.\n\n"
 	case "session.new":
 		return "Nueva sesión: %s\n\n"
 	case "session.resume":
@@ -574,8 +560,6 @@ func esCatalog(key string) string {
 		return "Error al deshacer: %v\n\n"
 	case "checkpoint.undid":
 		return "Deshecho %s en %s (checkpoint %s)\n"
-	case "checkpoint.none":
-		return "Sin checkpoints.\n\n"
 	case "files.disabled":
 		return "Puntos de control no habilitados.\n\n"
 	case "files.none":
@@ -636,14 +620,6 @@ func esCatalog(key string) string {
 		return "Lista de táreas eliminada.\n\n"
 	case "todo.clear_failed":
 		return "Error al limpiar táreas: %v\n\n"
-	case "todo.none":
-		return "No se encontro lista de táreas. Use la herramienta todo_write para crear una.\n\n"
-	case "todo.read_failed":
-		return "Error al leer táreas: %v\n\n"
-	case "todo.parse_failed":
-		return "Error al analizar táreas: %v\n\n"
-	case "todo.title":
-		return "Lista de táreas:\n%s\n\n"
 	case "bug.title":
 		return "=== Díagnósticos de Reporte de Errores ===\n\n"
 	case "bug.version":

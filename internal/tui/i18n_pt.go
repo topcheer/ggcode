@@ -113,8 +113,6 @@ func ptCatalog(key string) string {
 	// ── Session messages ──────────────────────────────────────────
 	case "session.untitled":
 		return "sem título"
-	case "session.none":
-		return "Nenhuma sessão encontrada."
 	case "session.new":
 		return "Nova sessão: %s"
 	case "session.resume":
@@ -151,8 +149,6 @@ func ptCatalog(key string) string {
 	// ── Checkpoint ────────────────────────────────────────────────
 	case "checkpoint.disabled":
 		return "Checkpoint não habilitado."
-	case "checkpoint.none":
-		return "Nenhum checkpoint."
 	case "checkpoint.undid":
 		return "Desfeito %s em %s (checkpoint %s)"
 
@@ -391,8 +387,6 @@ func ptCatalog(key string) string {
 		return "codificação AI nativa em terminal"
 
 	// ── Hints ─────────────────────────────────────────────────────
-	case "hint.add_context":
-		return "@ adicionar contexto"
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab alternar • Enter aplicar • Esc fechar"
 	case "hint.ctrlc_cancel":
@@ -401,24 +395,16 @@ func ptCatalog(key string) string {
 		return "Ctrl+C limpar/sair"
 	case "hint.ctrlr_sidebar":
 		return "Ctrl+R barra lateral"
-	case "hint.ctrlv_image":
-		return "Ctrl+V / Ctrl+Shift+V colar imagem"
-	case "hint.enter_send":
-		return "Enter enviar"
 	case "hint.follow_panel":
 		return "Ctrl+N acompanhar"
 	case "hint.help":
 		return "/? ajuda"
-	case "hint.image_attached":
-		return "imagem anexada"
 	case "hint.image_attached_count":
 		return "%d imagem(ns) anexada(s)"
 	case "hint.mention":
 		return "@ anexa arquivos/pastas • Tab/Shift+Tab alternar • Enter aplicar"
 	case "hint.mode":
 		return "modo"
-	case "hint.scroll":
-		return "PgUp/PgDn rolar"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab modo"
 	case "hint.unfollow_panel":
@@ -665,8 +651,6 @@ func ptCatalog(key string) string {
 		return "efêmera"
 	case "session.export_failed":
 		return "Erro ao exportar sessão: %v\n\n"
-	case "session.list_failed":
-		return "Erro ao listar sessões: %v\n\n"
 	case "session.resume_fallback":
 		return "Iniciando nova sessão em vez disso.\n\n"
 	case "session.store_missing":
@@ -771,14 +755,6 @@ func ptCatalog(key string) string {
 		return "Erro ao limpar todos: %v\n\n"
 	case "todo.cleared":
 		return "Lista de todos limpa.\n\n"
-	case "todo.none":
-		return "Nenhuma lista de todos encontrada. Use a ferramenta todo_write para criar uma.\n\n"
-	case "todo.parse_failed":
-		return "Erro ao analisar todos: %v\n\n"
-	case "todo.read_failed":
-		return "Erro ao ler todos: %v\n\n"
-	case "todo.title":
-		return "Lista de todos:\n%s\n\n"
 
 	// ── Tool ──────────────────────────────────────────────────────
 	case "tool.content":

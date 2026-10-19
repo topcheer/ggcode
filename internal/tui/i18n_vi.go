@@ -214,26 +214,16 @@ func viCatalog(key string) string {
 		return "chờ bạn"
 	case "mode.agent.autocontinue":
 		return "tiếp tục tự động"
-	case "hint.enter_send":
-		return "Enter gửi"
-	case "hint.ctrlv_image":
-		return "Ctrl+V / Ctrl+Shift+V dán ảnh"
 	case "hint.ctrlr_sidebar":
 		return "Ctrl+R thanh bên"
 	case "hint.help":
 		return "/? trợ giúp"
-	case "hint.add_context":
-		return "@ thêm ngữ cảnh"
-	case "hint.scroll":
-		return "PgUp/PgDn cuộn"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab chế độ"
 	case "hint.ctrlc_cancel":
 		return "Ctrl+C hủy"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C xóa/thoát"
-	case "hint.image_attached":
-		return "đã đính kèm ảnh"
 	case "hint.image_attached_count":
 		return "đã đính kèm %d ảnh"
 	case "hint.follow_panel":
@@ -546,14 +536,10 @@ func viCatalog(key string) string {
 		return "Lệnh tùy chỉnh /%s:\n"
 	case "command.mention_error":
 		return "Lỗi mở rộng mention: %v"
-	case "session.list_failed":
-		return "Lỗi liệt kê phiên: %v\n\n"
 	case "session.untitled":
 		return "không tiêu đề"
 	case "session.store_missing":
 		return "Kho phiên chưa được cấu hình.\n\n"
-	case "session.none":
-		return "Không tìm thấy phiên nào.\n\n"
 	case "session.new":
 		return "Phiên mới: %s\n\n"
 	case "session.resume":
@@ -574,8 +560,6 @@ func viCatalog(key string) string {
 		return "Hoàn tác thất bại: %v\n\n"
 	case "checkpoint.undid":
 		return "Đã hoàn tác %s trên %s (checkpoint %s)\n"
-	case "checkpoint.none":
-		return "Không có checkpoint.\n\n"
 	case "files.disabled":
 		return "Checkpoint chưa được bật.\n\n"
 	case "files.none":
@@ -636,14 +620,6 @@ func viCatalog(key string) string {
 		return "Danh sách todo đã được xóa.\n\n"
 	case "todo.clear_failed":
 		return "Lỗi xóa todo: %v\n\n"
-	case "todo.none":
-		return "Không tìm thấy danh sách todo. Dùng công cụ todo_write để tạo.\n\n"
-	case "todo.read_failed":
-		return "Lỗi đọc todo: %v\n\n"
-	case "todo.parse_failed":
-		return "Lỗi phân tích todo: %v\n\n"
-	case "todo.title":
-		return "Danh sách todo:\n%s\n\n"
 	case "bug.title":
 		return "=== Chẩn đoán báo cáo lỗi ===\n\n"
 	case "bug.version":
