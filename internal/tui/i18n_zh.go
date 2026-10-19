@@ -12,8 +12,6 @@ func zhCatalog(key string) string {
 		return "空闲"
 	case "agents.running":
 		return "%d 个运行中"
-	case "activity.idle":
-		return "空闲"
 	case "panel.conversation":
 		return "对话"
 	case "panel.composer":
@@ -162,10 +160,6 @@ func zhCatalog(key string) string {
 		return "文件"
 	case "label.directory":
 		return "目录"
-	case "context.unavailable":
-		return "暂无上下文数据"
-	case "metrics.empty":
-		return "暂无指标"
 	case "im.none":
 		return "未配置适配器"
 	case "im.summary":
@@ -180,14 +174,10 @@ func zhCatalog(key string) string {
 		return "已启用 • 重启后初始化"
 	case "im.status.not_started":
 		return "未启动"
-	case "context.until_compact":
-		return "后触发"
 	case "empty.ask":
 		return "你可以让我做重构、修复 bug、解释代码或补测试。"
 	case "empty.tips":
 		return "提示：用 @path 引用文件，/? 查看帮助，Shift+Tab 切换模式。"
-	case "startup.banner":
-		return "正在准备终端界面并过滤启动期的终端噪声。你现在就可以输入；一旦界面进入可交互状态，这个提示会自动消失。"
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab 切换 • Enter 应用 • Esc 关闭"
 	case "hint.mention":
@@ -250,8 +240,6 @@ func zhCatalog(key string) string {
 		return "该渠道因多次被拒绝，已被加入黑名单。"
 	case "queued.count":
 		return "%d 条排队中"
-	case "queued.output":
-		return "[已排队 %d 条待发送]\n\n"
 	case "interrupt.delivered":
 		return "[已送达当前运行，正在调整方向]\n"
 	case "status.thinking":
@@ -772,8 +760,6 @@ func zhCatalog(key string) string {
 		return "上下文管理器不可用。\n\n"
 	case "compact.failed":
 		return "压缩失败：%v\n\n"
-	case "compact.done":
-		return "已压缩对话历史。\n\n"
 	case "compact.done_with_stats":
 		return "已压缩对话历史（%d → %d tokens）。\n\n"
 	case "todo.cleared":
@@ -816,14 +802,8 @@ func zhCatalog(key string) string {
 		return "配置：model = %s\n\n"
 	case "config.provider_set":
 		return "配置：provider = %s\n\n"
-	case "config.language_set":
-		return "配置：language = %s\n\n"
 	case "config.unknown_key":
 		return "未知配置项：%s\n支持：model, provider, language\n\n"
-	case "config.title":
-		return "当前配置：\n"
-	case "status.title":
-		return "状态：\n"
 	case "panel.update":
 		return "更新"
 	case "label.version":
@@ -870,16 +850,8 @@ func zhCatalog(key string) string {
 		return "检测到系统中还有其他 ggcode 安装：\n%s\n如果 PATH 中另一个 ggcode 优先级更高，建议一并更新或调整 PATH 顺序。\n\n"
 	case "update.dual_scope":
 		return "警告：检测到用户级和系统级 ggcode 安装同时存在：\n  用户级：%s\n  系统级：%s\n这可能导致 PATH 冲突。建议从“设置 > 应用”中卸载其中一个。\n\n"
-	case "plugins.unavailable":
-		return "插件管理器不可用。\n\n"
-	case "plugins.none":
-		return "没有加载插件。\n\n"
-	case "plugins.title":
-		return "插件：\n"
 	case "mcp.none":
 		return "没有配置 MCP 服务器。\n\n"
-	case "mcp.title":
-		return "MCP 服务器：\n"
 	case "mcp.active_tools":
 		return "活动工具"
 	case "mcp.more":
@@ -888,10 +860,6 @@ func zhCatalog(key string) string {
 		return "用法：/image <path/to/file.png> 或 /image paste\n"
 	case "image.formats":
 		return "支持格式：PNG、JPEG、GIF、WebP（最大 20MB）\n\n"
-	case "image.attached":
-		return "已附加图片：%s\n"
-	case "image.attached_hint":
-		return "发送一条消息即可携带这张图片，或继续用 /image 再附加一张。\n\n"
 	case "image.clipboard_failed":
 		return "无法从剪贴板粘贴图片：%v"
 	case "image.clipboard_no_image_windows":
@@ -908,20 +876,6 @@ func zhCatalog(key string) string {
 		return "  %s [%s]%s - %s\n"
 	case "agents.hint":
 		return "\n使用 /agent <id> 查看详情，/agent cancel <id> 取消。\n\n"
-	case "agent.usage":
-		return "用法：/agent <id> 或 /agent cancel <id>\n\n"
-	case "agent.cancelled":
-		return "已取消子 Agent %s\n\n"
-	case "agent.cancel_failed":
-		return "无法取消 %s（未找到或未在运行）\n\n"
-	case "agent.not_found":
-		return "未找到子 Agent %s\n\n"
-	case "agent.title":
-		return "Agent：%s\n状态：%s\n任务：%s\n"
-	case "agent.result":
-		return "结果：%s\n"
-	case "agent.error":
-		return "错误：%v\n"
 	case "slash.help":
 		return "显示帮助"
 	case "slash.sessions":
@@ -1032,8 +986,6 @@ func zhCatalog(key string) string {
 		return "删除"
 	case "hooks.edit":
 		return "编辑"
-	case "hooks.toggleInject":
-		return "切换注入"
 	case "hooks.close":
 		return "Esc: 关闭"
 	case "hooks.event.onUserMessage":
