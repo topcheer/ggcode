@@ -15,8 +15,6 @@ func deCatalog(key string) string {
 	// --- Agents ---
 	case "agents.idle":
 		return "inaktiv"
-	case "agents.running":
-		return "%d aktiv"
 	case "cron.firing":
 		return "⏰ Cron-Job ausgelöst"
 	case "activity.idle":
@@ -107,32 +105,16 @@ func deCatalog(key string) string {
 		return "Sitzung"
 	case "label.agents":
 		return "Agenten"
-	case "label.cwd":
-		return "Verz."
 	case "label.branch":
 		return "Branch"
 	case "label.context":
 		return "Kontext"
 	case "label.skills":
 		return "Fähigkeiten"
-	case "label.activity":
-		return "Aktivität"
-	case "label.window":
-		return "Fenster"
-	case "label.usage":
-		return "Nutzung"
-	case "label.compact":
-		return "kompakt"
 	case "label.total":
 		return "gesamt"
 	case "label.cost":
 		return "gesch. Kosten"
-	case "label.approval_policy":
-		return "Genehmigung"
-	case "label.tool_policy":
-		return "Werkzeuge"
-	case "label.agent_policy":
-		return "Agent"
 	case "label.tool":
 		return "Werkzeug"
 	case "label.input":
@@ -145,28 +127,6 @@ func deCatalog(key string) string {
 		return "Cache-Schreiben"
 	case "label.cache_hit":
 		return "Cache-Treffer"
-	case "label.turns":
-		return "Züge"
-	case "label.avg_ttft":
-		return "Ø TTFT"
-	case "label.p95_ttft":
-		return "p95 TTFT"
-	case "label.avg_duration":
-		return "Ø Dauer"
-	case "label.p95_duration":
-		return "p95 Dauer"
-	case "label.avg_think":
-		return "Ø Denken"
-	case "label.avg_tps":
-		return "Ø TPS"
-	case "label.p95_tps":
-		return "P95 TPS"
-	case "label.fail_rate":
-		return "Fehlerrate"
-	case "label.slow_tools":
-		return "langsame Werkz."
-	case "label.recent_turns":
-		return "aktuelle Züge"
 	case "label.file":
 		return "Datei"
 	case "label.directory":
@@ -304,24 +264,6 @@ func deCatalog(key string) string {
 	// --- Tools ---
 	case "status.tools_used":
 		return "%d Werkzeuge verwendet"
-	case "tool.done":
-		return "fertig"
-	case "tool.failed":
-		return "fehlgeschlagen"
-	case "tool.no_output":
-		return "keine Ausgabe"
-	case "tool.output":
-		return "ausgabe"
-	case "tool.content":
-		return "inhalt"
-	case "tool.match":
-		return "treffer"
-	case "tool.matches":
-		return "treffer"
-	case "tool.entry":
-		return "eintrag"
-	case "tool.result":
-		return "ergebnis"
 
 	// --- Approval ---
 	case "approval.rejected":
@@ -650,12 +592,6 @@ func deCatalog(key string) string {
 	// --- Memory ---
 	case "memory.auto_unavailable":
 		return "Auto-Memory nicht initialisiert.\n\n"
-	case "memory.list_failed":
-		return "Fehler beim Auflisten der Erinnerungen: %v\n\n"
-	case "memory.none":
-		return "Keine Auto-Erinnerungen gespeichert.\n\n"
-	case "memory.auto_title":
-		return "Auto-Erinnerungen:\n"
 	case "memory.clear_failed":
 		return "Fehler beim Löschen der Erinnerungen: %v\n\n"
 	case "memory.cleared":
@@ -674,18 +610,6 @@ func deCatalog(key string) string {
 		return "Memory %q restored to prompt injection.\n\n"
 	case "memory.restore_failed":
 		return "Error restoring memory: %v\n\n"
-	case "memory.title":
-		return "Memory:\n"
-	case "memory.project":
-		return "Projekt-Memory:\n"
-	case "memory.project_none":
-		return "  Keine Projekt-Memory-Dateien geladen.\n"
-	case "memory.auto":
-		return "Auto-Memory:\n"
-	case "memory.auto_none":
-		return "  Keine Auto-Erinnerungen geladen.\n"
-	case "memory.usage":
-		return "\nVerwendung: /memory [list|clear]\n\n"
 
 	// --- Compact ---
 	case "compact.unavailable":
@@ -824,16 +748,6 @@ func deCatalog(key string) string {
 		return "Kein Bild in der Zwischenablage gefunden. Unter Windows wird Ctrl+V oft vom Terminal abgefangen. Versuchen Sie Ctrl+Shift+V oder /image paste."
 
 	// --- Agents ---
-	case "agents.unavailable":
-		return "Sub-Agent-Manager nicht konfiguriert.\n\n"
-	case "agents.none":
-		return "Noch keine Sub-Agenten erstellt.\nVerwendung: Die LLM kann das spawn_agent Werkzeug verwenden, um Sub-Agenten zu erstellen.\n\n"
-	case "agents.title":
-		return "%d Sub-Agent(en):\n"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.hint":
-		return "\n/agent <id> für Details verwenden, /agent cancel <id> zum Abbrechen.\n\n"
 	case "agent.usage":
 		return "Verwendung: /agent <id> oder /agent cancel <id>\n\n"
 	case "agent.cancelled":

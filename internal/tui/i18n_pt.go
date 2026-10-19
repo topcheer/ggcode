@@ -15,8 +15,6 @@ func ptCatalog(key string) string {
 		return "Endpoint"
 	case "label.session":
 		return "Sessão"
-	case "label.tools":
-		return "Ferramentas"
 	case "label.context":
 		return "Contexto"
 	case "label.cost":
@@ -163,12 +161,6 @@ func ptCatalog(key string) string {
 		return "Arquivos modificados pelo agente (%d arquivos, %d edições):"
 
 	// ── Memory ────────────────────────────────────────────────────
-	case "memory.none":
-		return "Nenhuma memória automática salva."
-	case "memory.title":
-		return "Memória:"
-	case "memory.auto_title":
-		return "Memórias Automáticas:"
 	case "memory.cleared":
 		return "Todas as memórias automáticas foram limpas."
 	case "memory.forget_usage":
@@ -245,20 +237,8 @@ func ptCatalog(key string) string {
 		return "Agente: %s\nStatus: %s\nTarefa: %s\n"
 	case "agent.usage":
 		return "Uso: /agent <id> ou /agent cancel <id>\n\n"
-	case "agents.hint":
-		return "\nUse /agent <id> para detalhes, /agent cancel <id> para cancelar.\n\n"
 	case "agents.idle":
 		return "inativo"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.none":
-		return "Nenhum sub-agente criado ainda.\nUso: o LLM pode usar a ferramenta spawn_agent para criar sub-agentes.\n\n"
-	case "agents.running":
-		return "%d em execução"
-	case "agents.title":
-		return "%d sub-agente(s):\n"
-	case "agents.unavailable":
-		return "Gerenciador de sub-agentes não configurado.\n\n"
 
 	// ── Approval ──────────────────────────────────────────────────
 	case "approval.accept":
@@ -465,24 +445,8 @@ func ptCatalog(key string) string {
 		return "Knight não está disponível"
 
 	// ── Labels ────────────────────────────────────────────────────
-	case "label.activity":
-		return "atividade"
-	case "label.agent_policy":
-		return "agente"
 	case "label.agents":
 		return "agentes"
-	case "label.approval_policy":
-		return "aprovação"
-	case "label.avg_duration":
-		return "duração média"
-	case "label.avg_think":
-		return "think médio"
-	case "label.avg_tps":
-		return "tps médio"
-	case "label.p95_tps":
-		return "p95 tps"
-	case "label.avg_ttft":
-		return "ttft médio"
 	case "label.branch":
 		return "branch"
 	case "label.cache_hit":
@@ -491,14 +455,8 @@ func ptCatalog(key string) string {
 		return "leitura cache"
 	case "label.cache_write":
 		return "escrita cache"
-	case "label.compact":
-		return "compactar"
-	case "label.cwd":
-		return "cwd"
 	case "label.directory":
 		return "diretório"
-	case "label.fail_rate":
-		return "taxa falha"
 	case "label.file":
 		return "arquivo"
 	case "label.input":
@@ -507,30 +465,14 @@ func ptCatalog(key string) string {
 		return "Mais recente"
 	case "label.output":
 		return "saída"
-	case "label.p95_duration":
-		return "p95 duração"
-	case "label.p95_ttft":
-		return "p95 ttft"
-	case "label.recent_turns":
-		return "turnos recentes"
 	case "label.skills":
 		return "skills"
-	case "label.slow_tools":
-		return "ferr. lentas"
 	case "label.tool":
 		return "ferramenta"
-	case "label.tool_policy":
-		return "ferramentas"
 	case "label.total":
 		return "total"
-	case "label.turns":
-		return "turnos"
-	case "label.usage":
-		return "uso"
 	case "label.version":
 		return "Versão"
-	case "label.window":
-		return "janela"
 
 	// ── LAN Chat ──────────────────────────────────────────────────
 	case "lanchat.unavailable":
@@ -565,22 +507,10 @@ func ptCatalog(key string) string {
 		return "Servidores MCP:\n"
 
 	// ── Memory ────────────────────────────────────────────────────
-	case "memory.auto":
-		return "Memória Automática:\n"
-	case "memory.auto_none":
-		return "  Nenhuma memória automática carregada.\n"
 	case "memory.auto_unavailable":
 		return "Memória automática não inicializada.\n\n"
 	case "memory.clear_failed":
 		return "Erro ao limpar memórias: %v\n\n"
-	case "memory.list_failed":
-		return "Erro ao listar memórias: %v\n\n"
-	case "memory.project":
-		return "Memória do Projeto:\n"
-	case "memory.project_none":
-		return "  Nenhum arquivo de memória do projeto carregado.\n"
-	case "memory.usage":
-		return "\nUso: /memory [list|clear]\n\n"
 
 	// ── Metrics ───────────────────────────────────────────────────
 	case "metrics.empty":
@@ -781,24 +711,6 @@ func ptCatalog(key string) string {
 		return "Lista de todos:\n%s\n\n"
 
 	// ── Tool ──────────────────────────────────────────────────────
-	case "tool.content":
-		return "conteúdo"
-	case "tool.done":
-		return "concluído"
-	case "tool.entry":
-		return "entrada"
-	case "tool.failed":
-		return "falhou"
-	case "tool.match":
-		return "correspondência"
-	case "tool.matches":
-		return "correspondências"
-	case "tool.no_output":
-		return "sem saída"
-	case "tool.output":
-		return "saída"
-	case "tool.result":
-		return "resultado"
 
 	// ── Tunnel ────────────────────────────────────────────────────
 	case "tunnel.mobile_connected":
