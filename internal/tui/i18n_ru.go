@@ -602,12 +602,6 @@ func ruCatalog(key string) string {
 		return "Хранилище сессий не настроено.\n\n"
 	case "session.none":
 		return "Сессии не найдены.\n\n"
-	case "session.list.title":
-		return "Сессии:\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  (%s)\n"
-	case "session.list.hint":
-		return "\nИспользуйте /resume <id> для продолжения сессии\n\n"
 	case "session.new":
 		return "Новая сессия: %s\n\n"
 	case "session.resume":
@@ -644,12 +638,6 @@ func ruCatalog(key string) string {
 		return "  %s  %d правок  последняя: %s%s\n"
 	case "files.hint":
 		return "\nИспользуйте /undo для отмены последней правки, /checkpoints для деталей.\n\n"
-	case "checkpoint.list.title":
-		return "Контрольные точки (%d):\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.hint":
-		return "\nИспользуйте /undo для отмены последней.\n\n"
 
 	// --- Memory ---
 	case "memory.auto_unavailable":
@@ -958,8 +946,6 @@ func ruCatalog(key string) string {
 	// --- QQ panel ---
 	case "panel.qq.directory":
 		return "Каталог"
-	case "panel.qq.runtime":
-		return "Среда"
 	case "panel.qq.bots":
 		return "QQ-боты"
 	case "panel.qq.created":

@@ -554,12 +554,6 @@ func viCatalog(key string) string {
 		return "Kho phiên chưa được cấu hình.\n\n"
 	case "session.none":
 		return "Không tìm thấy phiên nào.\n\n"
-	case "session.list.title":
-		return "Phiên:\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  (%s)\n"
-	case "session.list.hint":
-		return "\nDùng /resume <id> để tiếp tục phiên\n\n"
 	case "session.new":
 		return "Phiên mới: %s\n\n"
 	case "session.resume":
@@ -592,12 +586,6 @@ func viCatalog(key string) string {
 		return "  %s  %d lần sửa  cuối: %s%s\n"
 	case "files.hint":
 		return "\nDùng /undo để hoàn tác lần sửa gần nhất, /checkpoints để xem chi tiết.\n\n"
-	case "checkpoint.list.title":
-		return "Checkpoint (%d):\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.hint":
-		return "\nDùng /undo để hoàn tác lần sửa gần nhất.\n\n"
 	case "memory.auto_unavailable":
 		return "Auto memory chưa được khởi tạo.\n\n"
 	case "memory.list_failed":
@@ -882,8 +870,6 @@ func viCatalog(key string) string {
 		return "Mở bảng kênh IM thống nhất"
 	case "panel.qq.directory":
 		return "Thư mục"
-	case "panel.qq.runtime":
-		return "Runtime"
 	case "panel.qq.bots":
 		return "QQ Bot"
 	case "panel.qq.created":

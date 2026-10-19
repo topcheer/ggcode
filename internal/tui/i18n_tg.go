@@ -7,7 +7,6 @@ func init() {
 func enTGModule() map[string]string {
 	return map[string]string{
 		"panel.tg.directory":                 "Directory",
-		"panel.tg.runtime":                   "Runtime",
 		"panel.tg.bots":                      "Telegram Bots",
 		"panel.tg.created":                   "Created: %d",
 		"panel.tg.bound":                     "Bound: %d",
@@ -65,7 +64,6 @@ func enTGModule() map[string]string {
 func zhTGModule() map[string]string {
 	return map[string]string{
 		"panel.tg.directory":                 "目录",
-		"panel.tg.runtime":                   "运行时",
 		"panel.tg.bots":                      "Telegram 机器人",
 		"panel.tg.created":                   "已创建：%d",
 		"panel.tg.bound":                     "已绑定：%d",

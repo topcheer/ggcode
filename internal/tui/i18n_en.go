@@ -621,12 +621,6 @@ func enCatalog(key string) string {
 		return "Session store not configured.\n\n"
 	case "session.none":
 		return "No sessions found.\n\n"
-	case "session.list.title":
-		return "Sessions:\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  (%s)\n"
-	case "session.list.hint":
-		return "\nUse /resume <id> to continue a session\n\n"
 	case "session.new":
 		return "New session: %s\n\n"
 	case "session.resume":
@@ -679,12 +673,6 @@ func enCatalog(key string) string {
 		return "  %s  %d edits  last: %s%s\n"
 	case "files.hint":
 		return "\nUse /undo to revert the most recent edit, /redo to re-apply, /checkpoints for details.\n\n"
-	case "checkpoint.list.title":
-		return "Checkpoints (%d):\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.hint":
-		return "\nUse /undo to revert the most recent, /redo to re-apply.\n\n"
 	case "memory.auto_unavailable":
 		return "Auto memory not initialized.\n\n"
 	case "traj.no_workspace":
@@ -1093,8 +1081,6 @@ func enCatalog(key string) string {
 		return "Open unified IM channels panel"
 	case "panel.qq.directory":
 		return "Directory"
-	case "panel.qq.runtime":
-		return "Runtime"
 	case "panel.qq.bots":
 		return "QQ Bots"
 	case "panel.qq.created":

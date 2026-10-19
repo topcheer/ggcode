@@ -632,12 +632,6 @@ func zhCatalog(key string) string {
 		return "未配置会话存储。\n\n"
 	case "session.none":
 		return "没有找到会话。\n\n"
-	case "session.list.title":
-		return "会话列表：\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  （%s）\n"
-	case "session.list.hint":
-		return "\n使用 /resume <id> 继续某个会话\n\n"
 	case "session.new":
 		return "新会话：%s\n\n"
 	case "session.resume":
@@ -690,12 +684,6 @@ func zhCatalog(key string) string {
 		return "  %s  %d 次编辑  最后: %s%s\n"
 	case "files.hint":
 		return "\n使用 /undo 撤销最近一次编辑，/redo 重做，/checkpoints 查看详情。\n\n"
-	case "checkpoint.list.title":
-		return "检查点（%d）：\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.hint":
-		return "\n使用 /undo 回滚最近一次修改，/redo 重做。\n\n"
 	case "memory.auto_unavailable":
 		return "自动记忆未初始化。\n\n"
 	case "traj.no_workspace":
@@ -1106,8 +1094,6 @@ func zhCatalog(key string) string {
 		return "查看（/traj）或清空（/traj clear）注入系统提示的历史经验学习库"
 	case "panel.qq.directory":
 		return "目录"
-	case "panel.qq.runtime":
-		return "运行时"
 	case "panel.qq.bots":
 		return "QQ 机器人"
 	case "panel.qq.created":

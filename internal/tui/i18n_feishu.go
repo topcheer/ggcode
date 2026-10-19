@@ -7,7 +7,6 @@ func init() {
 func enFeishuModule() map[string]string {
 	return map[string]string{
 		"panel.feishu.directory":                 "Directory",
-		"panel.feishu.runtime":                   "Runtime",
 		"panel.feishu.bots":                      "Feishu Bots",
 		"panel.feishu.created":                   "Created: %d",
 		"panel.feishu.bound":                     "Bound: %d",
@@ -53,9 +52,6 @@ func enFeishuModule() map[string]string {
 		"panel.feishu.error.not_feishu_adapter":  "adapter %q is not a Feishu bot",
 		"panel.feishu.error.not_online":          "Feishu bot %q is not online",
 		"panel.feishu.error.not_online_detail":   "Feishu bot %q is not online: %s",
-		"panel.feishu.runtime.available":         "available",
-		"panel.feishu.runtime.disabled":          "disabled (set im.enabled: true and restart ggcode)",
-		"panel.feishu.runtime.not_started":       "not started (restart ggcode to initialize IM runtime)",
 		"panel.feishu.status.not_started":        "not started",
 		"panel.feishu.status.unknown":            "unknown",
 	}
@@ -64,7 +60,6 @@ func enFeishuModule() map[string]string {
 func zhFeishuModule() map[string]string {
 	return map[string]string{
 		"panel.feishu.directory":                 "目录",
-		"panel.feishu.runtime":                   "运行时",
 		"panel.feishu.bots":                      "飞书机器人",
 		"panel.feishu.created":                   "已创建：%d",
 		"panel.feishu.bound":                     "已绑定：%d",
@@ -110,9 +105,6 @@ func zhFeishuModule() map[string]string {
 		"panel.feishu.error.not_feishu_adapter":  "适配器 %q 不是飞书机器人",
 		"panel.feishu.error.not_online":          "飞书机器人 %q 未上线",
 		"panel.feishu.error.not_online_detail":   "飞书机器人 %q 未上线：%s",
-		"panel.feishu.runtime.available":         "可用",
-		"panel.feishu.runtime.disabled":          "已禁用（设置 im.enabled: true 并重启 ggcode）",
-		"panel.feishu.runtime.not_started":       "未启动（重启 ggcode 以初始化 IM 运行时）",
 		"panel.feishu.status.not_started":        "未启动",
 		"panel.feishu.status.unknown":            "未知",
 	}

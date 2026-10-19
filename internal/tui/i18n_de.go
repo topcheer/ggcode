@@ -610,12 +610,6 @@ func deCatalog(key string) string {
 		return "Sitzungsspeicher nicht konfiguriert.\n\n"
 	case "session.none":
 		return "Keine Sitzungen gefunden.\n\n"
-	case "session.list.title":
-		return "Sitzungen:\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  (%s)\n"
-	case "session.list.hint":
-		return "\n/resume <id> verwenden, um eine Sitzung fortzusetzen\n\n"
 	case "session.new":
 		return "Neue Sitzung: %s\n\n"
 	case "session.resume":
@@ -652,12 +646,6 @@ func deCatalog(key string) string {
 		return "  %s  %d Bearb.  zuletzt: %s%s\n"
 	case "files.hint":
 		return "\n/undo verwenden, um die letzte Bearbeitung rückgängig zu machen, /checkpoints für Details.\n\n"
-	case "checkpoint.list.title":
-		return "Checkpoints (%d):\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.hint":
-		return "\n/undo verwenden, um die letzte rückgängig zu machen.\n\n"
 
 	// --- Memory ---
 	case "memory.auto_unavailable":
@@ -966,8 +954,6 @@ func deCatalog(key string) string {
 	// --- QQ panel ---
 	case "panel.qq.directory":
 		return "Verzeichnis"
-	case "panel.qq.runtime":
-		return "Laufzeit"
 	case "panel.qq.bots":
 		return "QQ-Bots"
 	case "panel.qq.created":

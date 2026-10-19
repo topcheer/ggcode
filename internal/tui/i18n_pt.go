@@ -115,10 +115,6 @@ func ptCatalog(key string) string {
 		return "sem título"
 	case "session.none":
 		return "Nenhuma sessão encontrada."
-	case "session.list.title":
-		return "Sessões:"
-	case "session.list.hint":
-		return "\nUse /resume <id> para continuar uma sessão"
 	case "session.new":
 		return "Nova sessão: %s"
 	case "session.resume":
@@ -287,12 +283,6 @@ func ptCatalog(key string) string {
 		return "Pressione Ctrl-C ou Esc novamente para cancelar o agente em execução.\n\n"
 
 	// ── Checkpoint ────────────────────────────────────────────────
-	case "checkpoint.list.hint":
-		return "\nUse /undo para reverter o mais recente.\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.title":
-		return "Checkpoints (%d):\n\n"
 	case "checkpoint.undo_failed":
 		return "Desfazer falhou: %v\n\n"
 
@@ -675,8 +665,6 @@ func ptCatalog(key string) string {
 		return "efêmera"
 	case "session.export_failed":
 		return "Erro ao exportar sessão: %v\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  (%s)\n"
 	case "session.list_failed":
 		return "Erro ao listar sessões: %v\n\n"
 	case "session.resume_fallback":
@@ -1203,8 +1191,6 @@ func ptCatalog(key string) string {
 		return "Ocupado por: %s"
 	case "panel.qq.qr_code":
 		return "QR Code:"
-	case "panel.qq.runtime":
-		return "Runtime"
 	case "panel.qq.runtime.available":
 		return "disponível"
 	case "panel.qq.runtime.disabled":

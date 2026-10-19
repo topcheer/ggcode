@@ -554,12 +554,6 @@ func esCatalog(key string) string {
 		return "Almacen de sesiónes no configurado.\n\n"
 	case "session.none":
 		return "No se encontraron sesiónes.\n\n"
-	case "session.list.title":
-		return "Sesiónes:\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  (%s)\n"
-	case "session.list.hint":
-		return "\nUse /resume <id> para continúar una sesión\n\n"
 	case "session.new":
 		return "Nueva sesión: %s\n\n"
 	case "session.resume":
@@ -592,12 +586,6 @@ func esCatalog(key string) string {
 		return "  %s  %d ediciónes  último: %s%s\n"
 	case "files.hint":
 		return "\nUse /undo para revertir la edición más reciente, /checkpoints para detalles.\n\n"
-	case "checkpoint.list.title":
-		return "Checkpoints (%d):\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.hint":
-		return "\nUse /undo para revertir el más reciente.\n\n"
 	case "memory.auto_unavailable":
 		return "Memoria automatica no inicializada.\n\n"
 	case "memory.list_failed":
@@ -882,8 +870,6 @@ func esCatalog(key string) string {
 		return "Abrir panel unificado de canales IM"
 	case "panel.qq.directory":
 		return "Directorio"
-	case "panel.qq.runtime":
-		return "Runtime"
 	case "panel.qq.bots":
 		return "Bots QQ"
 	case "panel.qq.created":

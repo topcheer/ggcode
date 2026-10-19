@@ -7,7 +7,6 @@ func init() {
 func enQQModule() map[string]string {
 	return map[string]string{
 		"panel.qq.directory":                 "Directory",
-		"panel.qq.runtime":                   "Runtime",
 		"panel.qq.bots":                      "QQ Bots",
 		"panel.qq.created":                   "Created: %d",
 		"panel.qq.bound":                     "Bound: %d",
@@ -67,7 +66,6 @@ func enQQModule() map[string]string {
 func zhQQModule() map[string]string {
 	return map[string]string{
 		"panel.qq.directory":                 "目录",
-		"panel.qq.runtime":                   "运行时",
 		"panel.qq.bots":                      "QQ 机器人",
 		"panel.qq.created":                   "已创建：%d",
 		"panel.qq.bound":                     "已绑定：%d",
