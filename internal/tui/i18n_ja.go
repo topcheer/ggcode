@@ -597,12 +597,6 @@ func jaCatalog(key string) string {
 		return "セッションストアが設定されていません。\n\n"
 	case "session.none":
 		return "セッションが見つかりません。\n\n"
-	case "session.list.title":
-		return "セッション一覧:\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  (%s)\n"
-	case "session.list.hint":
-		return "\n/resume <ID> でセッションを再開できます\n\n"
 	case "session.new":
 		return "新しいセッション: %s\n\n"
 	case "session.resume":
@@ -637,12 +631,6 @@ func jaCatalog(key string) string {
 		return "  %s  %d 回編集  最終: %s%s\n"
 	case "files.hint":
 		return "ファイルを選択"
-	case "checkpoint.list.title":
-		return "チェックポイント (%d):\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.hint":
-		return "チェックポイントを選択してロールバック (Esc でキャンセル)"
 	case "memory.auto_unavailable":
 		return "自動メモリが初期化されていません。\n\n"
 	case "memory.list_failed":
@@ -927,8 +915,6 @@ func jaCatalog(key string) string {
 		return "IMアダプタを管理"
 	case "panel.qq.directory":
 		return "ディレクトリ"
-	case "panel.qq.runtime":
-		return "ランタイム"
 	case "panel.qq.bots":
 		return "QQボット"
 	case "panel.qq.created":

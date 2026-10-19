@@ -554,12 +554,6 @@ func frCatalog(key string) string {
 		return "Stockâge de sessions non configuré.\n\n"
 	case "session.none":
 		return "Aucune session trouvée.\n\n"
-	case "session.list.title":
-		return "Sessions:\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  (%s)\n"
-	case "session.list.hint":
-		return "\nUtilisez /resume <id> pour reprendre une session\n\n"
 	case "session.new":
 		return "Nouvelle session: %s\n\n"
 	case "session.resume":
@@ -592,12 +586,6 @@ func frCatalog(key string) string {
 		return "  %s  %d éditions  dernier: %s%s\n"
 	case "files.hint":
 		return "\nUtilisez /undo pour annulér l'édition la plus récente, /checkpoints pour les détails.\n\n"
-	case "checkpoint.list.title":
-		return "Checkpoints (%d):\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.hint":
-		return "\nUtilisez /undo pour annulér le plus récent.\n\n"
 	case "memory.auto_unavailable":
 		return "Mémoire automatique non initialisée.\n\n"
 	case "memory.list_failed":
@@ -882,8 +870,6 @@ func frCatalog(key string) string {
 		return "Ouvrir le panneau unifie des canaux IM"
 	case "panel.qq.directory":
 		return "Répertoire"
-	case "panel.qq.runtime":
-		return "Runtime"
 	case "panel.qq.bots":
 		return "Bots QQ"
 	case "panel.qq.created":

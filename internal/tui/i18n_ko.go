@@ -558,12 +558,6 @@ func koCatalog(key string) string {
 		return "세션 저장소가 구성되지 않았습니다.\n\n"
 	case "session.none":
 		return "세션을 찾을 수 없습니다.\n\n"
-	case "session.list.title":
-		return "세션:\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  (%s)\n"
-	case "session.list.hint":
-		return "\n/resume <id>로 세션을 계속하세요\n\n"
 	case "session.new":
 		return "새 세션: %s\n\n"
 	case "session.resume":
@@ -596,12 +590,6 @@ func koCatalog(key string) string {
 		return "  %s  %d회 편집  마지막: %s%s\n"
 	case "files.hint":
 		return "파일 선택"
-	case "checkpoint.list.title":
-		return "체크포인트 (%d):\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.hint":
-		return "\n/undo로 가장 최근 항목을 되돌리세요\n\n"
 	case "memory.auto_unavailable":
 		return "자동 메모리가 초기화되지 않았습니다.\n\n"
 	case "memory.list_failed":
@@ -888,8 +876,6 @@ func koCatalog(key string) string {
 		return "IM 어댑터 관리"
 	case "panel.qq.directory":
 		return "디렉토리"
-	case "panel.qq.runtime":
-		return "런타임"
 	case "panel.qq.bots":
 		return "QQ 봇"
 	case "panel.qq.created":

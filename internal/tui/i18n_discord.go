@@ -7,7 +7,6 @@ func init() {
 func enDiscordModule() map[string]string {
 	return map[string]string{
 		"panel.discord.directory":                 "Directory",
-		"panel.discord.runtime":                   "Runtime",
 		"panel.discord.bots":                      "Discord Bots",
 		"panel.discord.created":                   "Created: %d",
 		"panel.discord.bound":                     "Bound: %d",
@@ -53,9 +52,6 @@ func enDiscordModule() map[string]string {
 		"panel.discord.error.not_discord_adapter": "adapter %q is not a Discord bot",
 		"panel.discord.error.not_online":          "Discord bot %q is not online",
 		"panel.discord.error.not_online_detail":   "Discord bot %q is not online: %s",
-		"panel.discord.runtime.available":         "available",
-		"panel.discord.runtime.disabled":          "disabled (set im.enabled: true and restart ggcode)",
-		"panel.discord.runtime.not_started":       "not started (restart ggcode to initialize IM runtime)",
 		"panel.discord.status.not_started":        "not started",
 		"panel.discord.status.unknown":            "unknown",
 	}
@@ -64,7 +60,6 @@ func enDiscordModule() map[string]string {
 func zhDiscordModule() map[string]string {
 	return map[string]string{
 		"panel.discord.directory":                 "目录",
-		"panel.discord.runtime":                   "运行时",
 		"panel.discord.bots":                      "Discord 机器人",
 		"panel.discord.created":                   "已创建：%d",
 		"panel.discord.bound":                     "已绑定：%d",
@@ -110,9 +105,6 @@ func zhDiscordModule() map[string]string {
 		"panel.discord.error.not_discord_adapter": "适配器 %q 不是 Discord 机器人",
 		"panel.discord.error.not_online":          "Discord 机器人 %q 未上线",
 		"panel.discord.error.not_online_detail":   "Discord 机器人 %q 未上线：%s",
-		"panel.discord.runtime.available":         "可用",
-		"panel.discord.runtime.disabled":          "已禁用（设置 im.enabled: true 并重启 ggcode）",
-		"panel.discord.runtime.not_started":       "未启动（重启 ggcode 以初始化 IM 运行时）",
 		"panel.discord.status.not_started":        "未启动",
 		"panel.discord.status.unknown":            "未知",
 	}

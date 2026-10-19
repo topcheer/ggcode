@@ -7,7 +7,6 @@ func init() {
 func enDingtalkModule() map[string]string {
 	return map[string]string{
 		"panel.dingtalk.directory":                  "Directory",
-		"panel.dingtalk.runtime":                    "Runtime",
 		"panel.dingtalk.bots":                       "DingTalk Bots",
 		"panel.dingtalk.created":                    "Created: %d",
 		"panel.dingtalk.bound":                      "Bound: %d",
@@ -53,9 +52,6 @@ func enDingtalkModule() map[string]string {
 		"panel.dingtalk.error.not_dingtalk_adapter": "adapter %q is not a DingTalk bot",
 		"panel.dingtalk.error.not_online":           "DingTalk bot %q is not online",
 		"panel.dingtalk.error.not_online_detail":    "DingTalk bot %q is not online: %s",
-		"panel.dingtalk.runtime.available":          "available",
-		"panel.dingtalk.runtime.disabled":           "disabled (set im.enabled: true and restart ggcode)",
-		"panel.dingtalk.runtime.not_started":        "not started (restart ggcode to initialize IM runtime)",
 		"panel.dingtalk.status.not_started":         "not started",
 		"panel.dingtalk.status.unknown":             "unknown",
 	}
@@ -64,7 +60,6 @@ func enDingtalkModule() map[string]string {
 func zhDingtalkModule() map[string]string {
 	return map[string]string{
 		"panel.dingtalk.directory":                  "目录",
-		"panel.dingtalk.runtime":                    "运行时",
 		"panel.dingtalk.bots":                       "钉钉机器人",
 		"panel.dingtalk.created":                    "已创建：%d",
 		"panel.dingtalk.bound":                      "已绑定：%d",
@@ -110,9 +105,6 @@ func zhDingtalkModule() map[string]string {
 		"panel.dingtalk.error.not_dingtalk_adapter": "适配器 %q 不是钉钉机器人",
 		"panel.dingtalk.error.not_online":           "钉钉机器人 %q 未上线",
 		"panel.dingtalk.error.not_online_detail":    "钉钉机器人 %q 未上线：%s",
-		"panel.dingtalk.runtime.available":          "可用",
-		"panel.dingtalk.runtime.disabled":           "已禁用（设置 im.enabled: true 并重启 ggcode）",
-		"panel.dingtalk.runtime.not_started":        "未启动（重启 ggcode 以初始化 IM 运行时）",
 		"panel.dingtalk.status.not_started":         "未启动",
 		"panel.dingtalk.status.unknown":             "未知",
 	}

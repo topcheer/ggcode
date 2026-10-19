@@ -7,7 +7,6 @@ func init() {
 func enSlackModule() map[string]string {
 	return map[string]string{
 		"panel.slack.directory":                 "Directory",
-		"panel.slack.runtime":                   "Runtime",
 		"panel.slack.bots":                      "Slack Bots",
 		"panel.slack.created":                   "Created: %d",
 		"panel.slack.bound":                     "Bound: %d",
@@ -53,9 +52,6 @@ func enSlackModule() map[string]string {
 		"panel.slack.error.not_slack_adapter":   "adapter %q is not a Slack bot",
 		"panel.slack.error.not_online":          "Slack bot %q is not online",
 		"panel.slack.error.not_online_detail":   "Slack bot %q is not online: %s",
-		"panel.slack.runtime.available":         "available",
-		"panel.slack.runtime.disabled":          "disabled (set im.enabled: true and restart ggcode)",
-		"panel.slack.runtime.not_started":       "not started (restart ggcode to initialize IM runtime)",
 		"panel.slack.status.not_started":        "not started",
 		"panel.slack.status.unknown":            "unknown",
 	}
@@ -64,7 +60,6 @@ func enSlackModule() map[string]string {
 func zhSlackModule() map[string]string {
 	return map[string]string{
 		"panel.slack.directory":                 "目录",
-		"panel.slack.runtime":                   "运行时",
 		"panel.slack.bots":                      "Slack 机器人",
 		"panel.slack.created":                   "已创建：%d",
 		"panel.slack.bound":                     "已绑定：%d",
@@ -110,9 +105,6 @@ func zhSlackModule() map[string]string {
 		"panel.slack.error.not_slack_adapter":   "适配器 %q 不是 Slack 机器人",
 		"panel.slack.error.not_online":          "Slack 机器人 %q 未上线",
 		"panel.slack.error.not_online_detail":   "Slack 机器人 %q 未上线：%s",
-		"panel.slack.runtime.available":         "可用",
-		"panel.slack.runtime.disabled":          "已禁用（设置 im.enabled: true 并重启 ggcode）",
-		"panel.slack.runtime.not_started":       "未启动（重启 ggcode 以初始化 IM 运行时）",
 		"panel.slack.status.not_started":        "未启动",
 		"panel.slack.status.unknown":            "未知",
 	}
