@@ -831,8 +831,6 @@ func ptCatalog(key string) string {
 		return "Atualização instalada. Nota: ggcode foi instalado via winget.\nExecute `winget upgrade ggcode` para manter o winget sincronizado.\n\n"
 	case "update.preparing":
 		return "Preparando atualização"
-	case "update.restart_failed":
-		return "Atualização preparada, mas reinício falhou: %v\n\n"
 	case "update.sidebar_hint":
 		return "Nova versão disponível. Execute /update."
 	case "update.unavailable":
@@ -855,8 +853,6 @@ func ptCatalog(key string) string {
 		return "Nenhum envio anterior para editar."
 	case "command.edit_ready":
 		return "Último envio carregado — edite e pressione Enter para enviar."
-	case "command.mention_error":
-		return "Erro de expansão de menção: %v"
 	case "command.model_failed":
 		return "Falha ao trocar modelo: %v\n\n"
 	case "command.provider_current":
@@ -881,10 +877,6 @@ func ptCatalog(key string) string {
 		return "Skill %s só pode ser invocada pelo agente."
 	case "command.usage.allow":
 		return "Uso: /allow <nome-ferramenta>\n\n"
-	case "command.usage.export":
-		return "Uso: /export <id-sessão>\n\n"
-	case "command.usage.resume":
-		return "Uso: /resume <id-sessão>\n\n"
 
 	// ── Files ─────────────────────────────────────────────────────
 	case "files.disabled":
@@ -901,22 +893,12 @@ func ptCatalog(key string) string {
 		return "Falha ao resolver destino de inicialização: %v\n\n"
 
 	// ── Panel ─────────────────────────────────────────────────────
-	case "panel.agent_status":
-		return "Status do agente"
 	case "panel.approval_required":
 		return "Aprovação necessária"
 	case "panel.bypass_approval":
 		return "Aprovação modo bypass"
 	case "panel.commands":
 		return "Comandos:"
-	case "panel.composer":
-		return "Compositor"
-	case "panel.composer_locked":
-		return "Compositor bloqueado"
-	case "panel.context":
-		return "Contexto"
-	case "panel.conversation":
-		return "Conversa"
 	case "panel.files":
 		return "Arquivos:"
 	case "panel.im":
@@ -949,10 +931,6 @@ func ptCatalog(key string) string {
 		return "Falha ao reconectar %s: %s"
 	case "panel.mcp.uninstalling":
 		return "Desinstalando %s..."
-	case "panel.metrics":
-		return "Métricas"
-	case "panel.mode_policy":
-		return "Política de modo"
 	case "panel.model.context_applied":
 		return "Aplicado context_window=%d, max_tokens=%d (salvo)"
 	case "panel.model.context_cleared":
@@ -1011,8 +989,6 @@ func ptCatalog(key string) string {
 		return "mostrando %d/%d modelos"
 	case "panel.provider.active_draft":
 		return "Rascunho ativo"
-	case "panel.provider.api_key":
-		return "Chave de API"
 	case "panel.provider.api_key.configured":
 		return "configurada"
 	case "panel.provider.api_key.missing":
@@ -1107,8 +1083,6 @@ func ptCatalog(key string) string {
 		return "Adaptador: %s"
 	case "panel.qq.available":
 		return "Disponíveis: %d"
-	case "panel.qq.bind_channel":
-		return "Vincular Canal"
 	case "panel.qq.bot_input":
 		return "Bot QQ: %s"
 	case "panel.qq.bot_list":
@@ -1145,8 +1119,6 @@ func ptCatalog(key string) string {
 		return "Ativo"
 	case "panel.qq.entry.available":
 		return "Disponível"
-	case "panel.qq.entry.bound":
-		return "Vinculado"
 	case "panel.qq.entry.bound_other":
 		return "Vinculado: %s"
 	case "panel.qq.entry.muted":
@@ -1189,18 +1161,12 @@ func ptCatalog(key string) string {
 		return "(nenhum)"
 	case "panel.qq.occupied_by":
 		return "Ocupado por: %s"
-	case "panel.qq.qr_code":
-		return "QR Code:"
 	case "panel.qq.runtime.available":
 		return "disponível"
 	case "panel.qq.runtime.disabled":
 		return "desativado (defina im.enabled: true e reinicie o ggcode)"
 	case "panel.qq.runtime.not_started":
 		return "não iniciado (reinicie o ggcode para inicializar o runtime IM)"
-	case "panel.qq.scan_hint":
-		return "Escaneie o QR code, adicione o bot, depois envie uma mensagem para iniciar o pareamento."
-	case "panel.qq.share_link":
-		return "Link de Compartilhamento:"
 	case "panel.qq.status":
 		return "Status: %s"
 	case "panel.qq.status.not_started":
@@ -1231,8 +1197,6 @@ func ptCatalog(key string) string {
 		return "Ferramentas de %s inalteradas (%d ferramentas)."
 	case "panel.mcp.refreshed":
 		return "%s atualizado: %d ferramentas."
-	case "panel.startup":
-		return "Inicializando"
 	case "panel.update":
 		return "Atualizar"
 	case "help.text":

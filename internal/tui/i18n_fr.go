@@ -18,26 +18,12 @@ func frCatalog(key string) string {
 		return "⏰ Tâche cron déclenchée"
 	case "activity.idle":
 		return "inactif"
-	case "panel.conversation":
-		return "Conversation"
-	case "panel.composer":
-		return "Éditeur"
-	case "panel.composer_locked":
-		return "Éditeur verrouillé"
 	case "panel.commands":
 		return "Commandes:"
 	case "panel.files":
 		return "Fichiers:"
-	case "panel.agent_status":
-		return "Statut de l'agent"
-	case "panel.mode_policy":
-		return "Politique de mode"
 	case "panel.session_usage":
 		return "Utilisation session"
-	case "panel.metrics":
-		return "Métriques"
-	case "panel.context":
-		return "Contexte"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -80,8 +66,6 @@ func frCatalog(key string) string {
 		return "Outils de %s inchangés (%d outils)."
 	case "panel.mcp.refreshed":
 		return "%s actualisé : %d outils."
-	case "panel.startup":
-		return "Initialisation"
 	case "panel.approval_required":
 		return "Approbation requise"
 	case "panel.bypass_approval":
@@ -368,8 +352,6 @@ func frCatalog(key string) string {
 		return "Auth"
 	case "panel.provider.env_var":
 		return "Variable d'environnement"
-	case "panel.provider.api_key":
-		return "API key"
 	case "panel.provider.api_key.missing":
 		return "manquant"
 	case "panel.provider.api_key.configured":
@@ -506,10 +488,6 @@ func frCatalog(key string) string {
 		return "Saisissez /help pour voir les commandes disponibles\n\n"
 	case "command.usage.allow":
 		return "Usâge: /allow <nom-outil>\n\n"
-	case "command.usage.resume":
-		return "Usâge: /resume <id-session>\n\n"
-	case "command.usage.export":
-		return "Usâge: /export <id-session>\n\n"
 	case "init.resolve_failed":
 		return "Erreur de resolution de la cible d'init: %v\n\n"
 	case "init.generate_failed":
@@ -544,8 +522,6 @@ func frCatalog(key string) string {
 		return "✓ %s désormais toujours autorisé\n\n"
 	case "command.custom":
 		return "Commande personnalisée /%s:\n"
-	case "command.mention_error":
-		return "Erreur de mention: %v"
 	case "session.list_failed":
 		return "Erreur lors du listâge des sessions: %v\n\n"
 	case "session.untitled":
@@ -704,8 +680,6 @@ func frCatalog(key string) string {
 		return "Préparation de la mise à jour"
 	case "update.failed":
 		return "Mise à jour échouée: %v\n\n"
-	case "update.restart_failed":
-		return "Mise à jour préparée, mais erreur de redémarrage: %v\n\n"
 	case "update.pm_hint.brew":
 		return "Mise à jour installée. Note : ggcode a été installé via Homebrew.\nExécutez `brew upgrade ggcode` pour garder Homebrew synchronisé.\n\n"
 	case "update.pm_hint.scoop":
@@ -894,8 +868,6 @@ func frCatalog(key string) string {
 		return "Aucun bot QQ configuré."
 	case "panel.qq.entry.available":
 		return "Disponible"
-	case "panel.qq.entry.bound":
-		return "Lie"
 	case "panel.qq.entry.active":
 		return "Actif"
 	case "panel.qq.entry.bound_other":
@@ -934,14 +906,6 @@ func frCatalog(key string) string {
 		return "Enter créer bot • Esc annulér"
 	case "panel.qq.actions_hint":
 		return "j/k déplacer • d désactiver/activer • Enter ou b lier bot • c lier canal • x délier canal • u délier bot • i créer bot • e modifier config • q afficher QR • Esc fermér"
-	case "panel.qq.bind_channel":
-		return "Lier Canal"
-	case "panel.qq.scan_hint":
-		return "Scannez le code QR, ajoutéz le bot, puis envoyéz un messâge pour démarrer la liaison."
-	case "panel.qq.qr_code":
-		return "Code QR:"
-	case "panel.qq.share_link":
-		return "Lien de Partâge:"
 	case "panel.qq.message.no_bot":
 		return "Aucun bot QQ disponible."
 	case "panel.qq.message.bound_success":
