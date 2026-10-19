@@ -10,8 +10,6 @@ func zhCatalog(key string) string {
 		return "临时会话"
 	case "agents.idle":
 		return "空闲"
-	case "agents.running":
-		return "%d 个运行中"
 	case "activity.idle":
 		return "空闲"
 	case "panel.conversation":
@@ -98,32 +96,16 @@ func zhCatalog(key string) string {
 		return "会话"
 	case "label.agents":
 		return "子 Agent"
-	case "label.cwd":
-		return "目录"
 	case "label.branch":
 		return "分支"
 	case "label.context":
 		return "上下文"
 	case "label.skills":
 		return "技能"
-	case "label.activity":
-		return "活动"
-	case "label.window":
-		return "窗口"
-	case "label.usage":
-		return "占用"
-	case "label.compact":
-		return "压缩"
 	case "label.total":
 		return "总计"
 	case "label.cost":
 		return "预估费用"
-	case "label.approval_policy":
-		return "审批"
-	case "label.tool_policy":
-		return "工具"
-	case "label.agent_policy":
-		return "行为"
 	case "label.tool":
 		return "工具"
 	case "label.input":
@@ -136,28 +118,6 @@ func zhCatalog(key string) string {
 		return "缓存写"
 	case "label.cache_hit":
 		return "缓存命中"
-	case "label.turns":
-		return "轮次"
-	case "label.avg_ttft":
-		return "平均首字"
-	case "label.p95_ttft":
-		return "P95首字"
-	case "label.avg_duration":
-		return "平均时长"
-	case "label.p95_duration":
-		return "P95时长"
-	case "label.avg_think":
-		return "平均思考"
-	case "label.avg_tps":
-		return "平均解码"
-	case "label.p95_tps":
-		return "P95解码"
-	case "label.fail_rate":
-		return "失败率"
-	case "label.slow_tools":
-		return "慢工具"
-	case "label.recent_turns":
-		return "最近轮次"
 	case "label.file":
 		return "文件"
 	case "label.directory":
@@ -300,24 +260,6 @@ func zhCatalog(key string) string {
 		return "  ↑↓←→ 切换  Esc 关闭"
 	case "status.tools_used":
 		return "已调用 %d 个工具"
-	case "tool.done":
-		return "完成"
-	case "tool.failed":
-		return "失败"
-	case "tool.no_output":
-		return "无输出"
-	case "tool.output":
-		return "输出"
-	case "tool.content":
-		return "内容"
-	case "tool.match":
-		return "匹配"
-	case "tool.matches":
-		return "匹配"
-	case "tool.entry":
-		return "项"
-	case "tool.result":
-		return "结果"
 	case "approval.rejected":
 		return "  已拒绝。\n"
 	case "approval.allow":
@@ -732,12 +674,6 @@ func zhCatalog(key string) string {
 		return "已导出 %d 条学习到 %s"
 	case "traj.imported":
 		return "已导入 %d 条新学习（重复已跳过）"
-	case "memory.list_failed":
-		return "列出记忆失败：%v\n\n"
-	case "memory.none":
-		return "没有自动记忆。\n\n"
-	case "memory.auto_title":
-		return "自动记忆：\n"
 	case "memory.clear_failed":
 		return "清空记忆失败：%v\n\n"
 	case "memory.cleared":
@@ -756,18 +692,6 @@ func zhCatalog(key string) string {
 		return "记忆 %q 已恢复注入。\n\n"
 	case "memory.restore_failed":
 		return "恢复记忆失败: %v\n\n"
-	case "memory.title":
-		return "记忆：\n"
-	case "memory.project":
-		return "项目记忆：\n"
-	case "memory.project_none":
-		return "  未加载项目记忆文件。\n"
-	case "memory.auto":
-		return "自动记忆：\n"
-	case "memory.auto_none":
-		return "  未加载自动记忆。\n"
-	case "memory.usage":
-		return "\n用法：/memory [list|clear]\n\n"
 	case "compact.unavailable":
 		return "上下文管理器不可用。\n\n"
 	case "compact.failed":
@@ -842,8 +766,6 @@ func zhCatalog(key string) string {
 		return "尚未检查"
 	case "update.restarting":
 		return "正在重启以应用更新..."
-	case "label.tools":
-		return "工具调用"
 	case "label.active":
 		return "进行中"
 	case "label.tasks":
@@ -898,16 +820,6 @@ func zhCatalog(key string) string {
 		return "剪贴板中没有找到图片。Windows 终端通常会拦截 Ctrl+V，请尝试 Ctrl+Shift+V 或输入 /image paste。"
 	case "cron.firing":
 		return "⏰ 定时任务触发"
-	case "agents.unavailable":
-		return "子 Agent 管理器未配置。\n\n"
-	case "agents.none":
-		return "还没有创建子 Agent。\n用法：LLM 可以使用 spawn_agent 工具创建子 Agent。\n\n"
-	case "agents.title":
-		return "%d 个子 Agent：\n"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.hint":
-		return "\n使用 /agent <id> 查看详情，/agent cancel <id> 取消。\n\n"
 	case "agent.usage":
 		return "用法：/agent <id> 或 /agent cancel <id>\n\n"
 	case "agent.cancelled":
@@ -1018,24 +930,10 @@ func zhCatalog(key string) string {
 		return "暂存变更并用 AI 从 diff 生成提交信息"
 	case "slash.hooks":
 		return "打开 hooks 配置面板"
-	case "hooks.title":
-		return "Hooks 配置"
 	case "hooks.events":
 		return "事件"
-	case "hooks.hooks":
-		return "Hooks"
 	case "hooks.noHooks":
 		return "（此事件暂无 hooks）"
-	case "hooks.add":
-		return "+ 添加 Hook"
-	case "hooks.delete":
-		return "删除"
-	case "hooks.edit":
-		return "编辑"
-	case "hooks.toggleInject":
-		return "切换注入"
-	case "hooks.close":
-		return "Esc: 关闭"
 	case "hooks.event.onUserMessage":
 		return "用户消息时"
 	case "hooks.event.preToolUse":
@@ -1072,8 +970,6 @@ func zhCatalog(key string) string {
 		return "hook 已更新"
 	case "hooks.msg.toggled":
 		return "inject_output 已切换"
-	case "hooks.msg.saved":
-		return "hooks 已保存到配置"
 	case "hooks.addTitle":
 		return " 添加 Hook "
 	case "hooks.editTitle":

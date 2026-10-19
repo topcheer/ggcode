@@ -11,8 +11,6 @@ func jaCatalog(key string) string {
 		return "一時的"
 	case "agents.idle":
 		return "アイドル"
-	case "agents.running":
-		return "%d 実行中"
 	case "cron.firing":
 		return "実行中"
 	case "activity.idle":
@@ -99,32 +97,16 @@ func jaCatalog(key string) string {
 		return "セッション"
 	case "label.agents":
 		return "エージェント"
-	case "label.cwd":
-		return "作業ディレクトリ"
 	case "label.branch":
 		return "ブランチ"
 	case "label.context":
 		return "コンテキスト"
 	case "label.skills":
 		return "スキル"
-	case "label.activity":
-		return "アクティビティ"
-	case "label.window":
-		return "ウィンドウ"
-	case "label.usage":
-		return "使用量"
-	case "label.compact":
-		return "圧縮"
 	case "label.total":
 		return "合計"
 	case "label.cost":
 		return "コスト"
-	case "label.approval_policy":
-		return "承認"
-	case "label.tool_policy":
-		return "ツール"
-	case "label.agent_policy":
-		return "エージェント"
 	case "label.tool":
 		return "ツール"
 	case "label.input":
@@ -137,28 +119,6 @@ func jaCatalog(key string) string {
 		return "キャッシュ書込"
 	case "label.cache_hit":
 		return "キャッシュヒット"
-	case "label.turns":
-		return "ターン"
-	case "label.avg_ttft":
-		return "平均TTFT"
-	case "label.p95_ttft":
-		return "P95 TTFT"
-	case "label.avg_duration":
-		return "平均時間"
-	case "label.p95_duration":
-		return "P95時間"
-	case "label.avg_think":
-		return "平均思考"
-	case "label.avg_tps":
-		return "平均TPS"
-	case "label.p95_tps":
-		return "P95 TPS"
-	case "label.fail_rate":
-		return "失敗率"
-	case "label.slow_tools":
-		return "低速ツール"
-	case "label.recent_turns":
-		return "最近のターン"
 	case "label.file":
 		return "ファイル"
 	case "label.directory":
@@ -279,24 +239,6 @@ func jaCatalog(key string) string {
 		return "  ↑↓←→ 切替  Esc 閉じる"
 	case "status.tools_used":
 		return "ツール %d 回使用"
-	case "tool.done":
-		return "完了"
-	case "tool.failed":
-		return "失敗"
-	case "tool.no_output":
-		return "出力なし"
-	case "tool.output":
-		return "出力"
-	case "tool.content":
-		return "内容"
-	case "tool.match":
-		return "一致"
-	case "tool.matches":
-		return "一致"
-	case "tool.entry":
-		return "エントリ"
-	case "tool.result":
-		return "結果"
 	case "approval.rejected":
 		return "拒否されました"
 	case "approval.allow":
@@ -633,12 +575,6 @@ func jaCatalog(key string) string {
 		return "ファイルを選択"
 	case "memory.auto_unavailable":
 		return "自動メモリが初期化されていません。\n\n"
-	case "memory.list_failed":
-		return "メモリ一覧の取得エラー: %v\n\n"
-	case "memory.none":
-		return "メモリがありません"
-	case "memory.auto_title":
-		return "自動メモリ:\n"
 	case "memory.clear_failed":
 		return "メモリのクリアエラー: %v\n\n"
 	case "memory.cleared":
@@ -657,18 +593,6 @@ func jaCatalog(key string) string {
 		return "Memory %q restored to prompt injection.\n\n"
 	case "memory.restore_failed":
 		return "Error restoring memory: %v\n\n"
-	case "memory.title":
-		return "メモリ"
-	case "memory.project":
-		return "プロジェクト"
-	case "memory.project_none":
-		return "  プロジェクトメモリファイルが読み込まれていません。\n"
-	case "memory.auto":
-		return "自動メモリ:\n"
-	case "memory.auto_none":
-		return "  自動メモリが読み込まれていません。\n"
-	case "memory.usage":
-		return "\n使用法: /memory [list|clear]\n\n"
 	case "compact.unavailable":
 		return "コンテキストマネージャーが利用できません。\n\n"
 	case "compact.failed":
@@ -789,16 +713,6 @@ func jaCatalog(key string) string {
 		return "クリップボードから画像を貼り付けできませんでした: %v"
 	case "image.clipboard_no_image_windows":
 		return "クリップボードに画像が見つかりません。WindowsではCtrl+Vが端末に遮断されることがあります。Ctrl+Shift+Vまたは/image pasteを試してください。"
-	case "agents.unavailable":
-		return "サブエージェント管理が利用できません"
-	case "agents.none":
-		return "アクティブなサブエージェントがありません"
-	case "agents.title":
-		return "%d 個のサブエージェント:\n"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.hint":
-		return "タブでサブエージェントを選択、Enter で送信"
 	case "agent.usage":
 		return "使用法: /agent <id> または /agent cancel <id>\n\n"
 	case "agent.cancelled":
