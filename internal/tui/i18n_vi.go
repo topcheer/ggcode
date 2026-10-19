@@ -18,26 +18,12 @@ func viCatalog(key string) string {
 		return "Cron job đã kích hoạt"
 	case "activity.idle":
 		return "chờ"
-	case "panel.conversation":
-		return "Hội thoại"
-	case "panel.composer":
-		return "Soạn thảo"
-	case "panel.composer_locked":
-		return "Soạn thảo đã khóa"
 	case "panel.commands":
 		return "Lệnh:"
 	case "panel.files":
 		return "Tệp:"
-	case "panel.agent_status":
-		return "Trạng thái agent"
-	case "panel.mode_policy":
-		return "Chính sách chế độ"
 	case "panel.session_usage":
 		return "Sử dụng phiên"
-	case "panel.metrics":
-		return "Chỉ số"
-	case "panel.context":
-		return "Ngữ cảnh"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -80,8 +66,6 @@ func viCatalog(key string) string {
 		return "Công cụ của %s không thay đổi (%d công cụ)."
 	case "panel.mcp.refreshed":
 		return "Đã làm mới %s: %d công cụ."
-	case "panel.startup":
-		return "Đang khởi tạo"
 	case "panel.approval_required":
 		return "Cần phê duyệt"
 	case "panel.bypass_approval":
@@ -368,8 +352,6 @@ func viCatalog(key string) string {
 		return "Xác thực"
 	case "panel.provider.env_var":
 		return "Biến môi trường"
-	case "panel.provider.api_key":
-		return "API key"
 	case "panel.provider.api_key.missing":
 		return "thiếu"
 	case "panel.provider.api_key.configured":
@@ -506,10 +488,6 @@ func viCatalog(key string) string {
 		return "Gõ /help để xem lệnh có sẵn\n\n"
 	case "command.usage.allow":
 		return "Cách dùng: /allow <tên-công-cụ>\n\n"
-	case "command.usage.resume":
-		return "Cách dùng: /resume <id-phiên>\n\n"
-	case "command.usage.export":
-		return "Cách dùng: /export <id-phiên>\n\n"
 	case "init.resolve_failed":
 		return "Không thể giải quyết mục tiêu init: %v\n\n"
 	case "init.generate_failed":
@@ -544,8 +522,6 @@ func viCatalog(key string) string {
 		return "✓ %s hiện được luôn cho phép\n\n"
 	case "command.custom":
 		return "Lệnh tùy chỉnh /%s:\n"
-	case "command.mention_error":
-		return "Lỗi mở rộng mention: %v"
 	case "session.list_failed":
 		return "Lỗi liệt kê phiên: %v\n\n"
 	case "session.untitled":
@@ -704,8 +680,6 @@ func viCatalog(key string) string {
 		return "Đang chuẩn bị cập nhật"
 	case "update.failed":
 		return "Cập nhật thất bại: %v\n\n"
-	case "update.restart_failed":
-		return "Cập nhật đã chuẩn bị, nhưng khởi động lại thất bại: %v\n\n"
 	case "update.pm_hint.brew":
 		return "Đã cài đặt cập nhật. Lưu ý: ggcode được cài qua Homebrew.\nChạy `brew upgrade ggcode` để đồng bộ Homebrew.\n\n"
 	case "update.pm_hint.scoop":
@@ -894,8 +868,6 @@ func viCatalog(key string) string {
 		return "Chưa cấu hình QQ bot nào."
 	case "panel.qq.entry.available":
 		return "Khả dụng"
-	case "panel.qq.entry.bound":
-		return "Đã liên kết"
 	case "panel.qq.entry.active":
 		return "Hoạt động"
 	case "panel.qq.entry.bound_other":
@@ -934,14 +906,6 @@ func viCatalog(key string) string {
 		return "Enter tạo bot • Esc hủy"
 	case "panel.qq.actions_hint":
 		return "j/k di chuyển • d tắt/bật • Enter hoặc b liên kết bot • c liên kết kênh • x hủy liên kết kênh • u hủy liên kết bot • i tạo bot • e sửa cấu hình • q hiện QR • Esc đóng"
-	case "panel.qq.bind_channel":
-		return "Liên kết kênh"
-	case "panel.qq.scan_hint":
-		return "Quét mã QR, thêm bot, sau đó gửi tin nhắn để bắt đầu ghép nối."
-	case "panel.qq.qr_code":
-		return "Mã QR:"
-	case "panel.qq.share_link":
-		return "Liên kết chia sẻ:"
 	case "panel.qq.message.no_bot":
 		return "Không có QQ bot khả dụng."
 	case "panel.qq.message.bound_success":

@@ -18,26 +18,12 @@ func esCatalog(key string) string {
 		return "⏰ tarea cron activada"
 	case "activity.idle":
 		return "inactivo"
-	case "panel.conversation":
-		return "Conversación"
-	case "panel.composer":
-		return "Editor"
-	case "panel.composer_locked":
-		return "Editor bloqueado"
 	case "panel.commands":
 		return "Comandos:"
 	case "panel.files":
 		return "Archivos:"
-	case "panel.agent_status":
-		return "Estado del agente"
-	case "panel.mode_policy":
-		return "Política de modo"
 	case "panel.session_usage":
 		return "Uso de sesión"
-	case "panel.metrics":
-		return "Métricas"
-	case "panel.context":
-		return "Contexto"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -80,8 +66,6 @@ func esCatalog(key string) string {
 		return "Herramientas de %s sin cambios (%d herramientas)."
 	case "panel.mcp.refreshed":
 		return "%s actualizado: %d herramientas."
-	case "panel.startup":
-		return "Inicializando"
 	case "panel.approval_required":
 		return "Aprobación requerida"
 	case "panel.bypass_approval":
@@ -368,8 +352,6 @@ func esCatalog(key string) string {
 		return "Auth"
 	case "panel.provider.env_var":
 		return "Variable de entorno"
-	case "panel.provider.api_key":
-		return "API key"
 	case "panel.provider.api_key.missing":
 		return "faltante"
 	case "panel.provider.api_key.configured":
@@ -506,10 +488,6 @@ func esCatalog(key string) string {
 		return "Escriba /help para ver los comandos disponibles\n\n"
 	case "command.usage.allow":
 		return "Uso: /allow <nombre-herramienta>\n\n"
-	case "command.usage.resume":
-		return "Uso: /resume <id-sesión>\n\n"
-	case "command.usage.export":
-		return "Uso: /export <id-sesión>\n\n"
 	case "init.resolve_failed":
 		return "Error al resolver el objetivo de init: %v\n\n"
 	case "init.generate_failed":
@@ -544,8 +522,6 @@ func esCatalog(key string) string {
 		return "✓ %s ahora siempre permitido\n\n"
 	case "command.custom":
 		return "Comando personalizado /%s:\n"
-	case "command.mention_error":
-		return "Error de mención: %v"
 	case "session.list_failed":
 		return "Error al listar sesiónes: %v\n\n"
 	case "session.untitled":
@@ -704,8 +680,6 @@ func esCatalog(key string) string {
 		return "Preparando actualización"
 	case "update.failed":
 		return "Actualización fallida: %v\n\n"
-	case "update.restart_failed":
-		return "Actualización preparada, pero error al reiniciar: %v\n\n"
 	case "update.pm_hint.brew":
 		return "Actualización instalada. Nota: ggcode fue instalado via Homebrew.\nEjecute `brew upgrade ggcode` para mantener Homebrew sincronizado.\n\n"
 	case "update.pm_hint.scoop":
@@ -894,8 +868,6 @@ func esCatalog(key string) string {
 		return "Sin bots QQ configurados."
 	case "panel.qq.entry.available":
 		return "Disponible"
-	case "panel.qq.entry.bound":
-		return "Vinculado"
 	case "panel.qq.entry.active":
 		return "Activo"
 	case "panel.qq.entry.bound_other":
@@ -934,14 +906,6 @@ func esCatalog(key string) string {
 		return "Enter crear bot • Esc cancelar"
 	case "panel.qq.actions_hint":
 		return "j/k mover • d desactivar/activar • Enter o b vincular bot • c vincular canal • x desvincular canal • u desvincular bot • i crear bot • e editar config • q mostrar QR • Esc cerrar"
-	case "panel.qq.bind_channel":
-		return "Vincular Canal"
-	case "panel.qq.scan_hint":
-		return "Escanee el código QR, agregue el bot, luego envie un mensaje para iniciar la vinculación."
-	case "panel.qq.qr_code":
-		return "Código QR:"
-	case "panel.qq.share_link":
-		return "Enlace de Compartir:"
 	case "panel.qq.message.no_bot":
 		return "Sin bot QQ disponible."
 	case "panel.qq.message.bound_success":

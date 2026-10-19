@@ -23,26 +23,12 @@ func ruCatalog(key string) string {
 		return "ожидание"
 
 	// --- Panel ---
-	case "panel.conversation":
-		return "Беседа"
-	case "panel.composer":
-		return "Ввод"
-	case "panel.composer_locked":
-		return "Ввод заблокирован"
 	case "panel.commands":
 		return "Команды:"
 	case "panel.files":
 		return "Файлы:"
-	case "panel.agent_status":
-		return "Статус агента"
-	case "panel.mode_policy":
-		return "Политика режима"
 	case "panel.session_usage":
 		return "Использование сессии"
-	case "panel.metrics":
-		return "Метрики"
-	case "panel.context":
-		return "Контекст"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -85,8 +71,6 @@ func ruCatalog(key string) string {
 		return "Инструменты %s не изменились (%d шт.)."
 	case "panel.mcp.refreshed":
 		return "%s обновлён: инструментов: %d."
-	case "panel.startup":
-		return "Инициализация"
 	case "panel.approval_required":
 		return "Требуется подтверждение"
 	case "panel.bypass_approval":
@@ -406,8 +390,6 @@ func ruCatalog(key string) string {
 		return "Аутентификация"
 	case "panel.provider.env_var":
 		return "Переменная окружения"
-	case "panel.provider.api_key":
-		return "API-ключ"
 	case "panel.provider.api_key.missing":
 		return "отсутствует"
 	case "panel.provider.api_key.configured":
@@ -548,10 +530,6 @@ func ruCatalog(key string) string {
 		return "Введите /help для списка доступных команд\n\n"
 	case "command.usage.allow":
 		return "Использование: /allow <имя_инструмента>\n\n"
-	case "command.usage.resume":
-		return "Использование: /resume <id_сессии>\n\n"
-	case "command.usage.export":
-		return "Использование: /export <id_сессии>\n\n"
 
 	// --- Init ---
 	case "init.resolve_failed":
@@ -590,8 +568,6 @@ func ruCatalog(key string) string {
 		return "✓ %s теперь всегда разрешён\n\n"
 	case "command.custom":
 		return "Пользовательская команда /%s:\n"
-	case "command.mention_error":
-		return "Ошибка расширения упоминания: %v"
 
 	// --- Sessions ---
 	case "session.list_failed":
@@ -768,8 +744,6 @@ func ruCatalog(key string) string {
 		return "Подготовка обновления"
 	case "update.failed":
 		return "Обновление не удалось: %v\n\n"
-	case "update.restart_failed":
-		return "Обновление подготовлено, но перезапуск не удался: %v\n\n"
 	case "update.pm_hint.brew":
 		return "Обновление установлено. Примечание: ggcode был установлен через Homebrew.\nВыполните `brew upgrade ggcode`, чтобы синхронизировать Homebrew.\n\n"
 	case "update.pm_hint.scoop":
@@ -970,8 +944,6 @@ func ruCatalog(key string) string {
 		return "QQ-боты не настроены."
 	case "panel.qq.entry.available":
 		return "Доступен"
-	case "panel.qq.entry.bound":
-		return "Привязан"
 	case "panel.qq.entry.active":
 		return "Активен"
 	case "panel.qq.entry.bound_other":
@@ -1010,14 +982,6 @@ func ruCatalog(key string) string {
 		return "Enter создать бота • Esc отмена"
 	case "panel.qq.actions_hint":
 		return "j/k перемещение • d откл./вкл. • Enter или b привязать бота • c привязать канал • x отвязать канал • u отвязать бота • i создать бота • e правка конфигурации • q показать QR • Esc закрыть"
-	case "panel.qq.bind_channel":
-		return "Привязать канал"
-	case "panel.qq.scan_hint":
-		return "Отсканируйте QR-код, добавьте бота, затем отправьте сообщение для начала сопряжения."
-	case "panel.qq.qr_code":
-		return "QR-код:"
-	case "panel.qq.share_link":
-		return "Ссылка:"
 	case "panel.qq.message.no_bot":
 		return "Нет доступных QQ-ботов."
 	case "panel.qq.message.bound_success":

@@ -17,26 +17,12 @@ func jaCatalog(key string) string {
 		return "実行中"
 	case "activity.idle":
 		return "アイドル"
-	case "panel.conversation":
-		return "会話"
-	case "panel.composer":
-		return "入力"
-	case "panel.composer_locked":
-		return "ロック中"
 	case "panel.commands":
 		return "コマンド"
 	case "panel.files":
 		return "ファイル"
-	case "panel.agent_status":
-		return "エージェント状態"
-	case "panel.mode_policy":
-		return "モード"
 	case "panel.session_usage":
 		return "セッション使用量"
-	case "panel.metrics":
-		return "メトリクス"
-	case "panel.context":
-		return "コンテキスト"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -79,8 +65,6 @@ func jaCatalog(key string) string {
 		return "%s のツールに変更はありません（%d 件）。"
 	case "panel.mcp.refreshed":
 		return "%s を更新しました：%d 件のツール。"
-	case "panel.startup":
-		return "起動中..."
 	case "panel.approval_required":
 		return "承認が必要"
 	case "panel.bypass_approval":
@@ -373,8 +357,6 @@ func jaCatalog(key string) string {
 		return "認証"
 	case "panel.provider.env_var":
 		return "環境変数"
-	case "panel.provider.api_key":
-		return "APIキー"
 	case "panel.provider.api_key.missing":
 		return "未設定"
 	case "panel.provider.api_key.configured":
@@ -547,10 +529,6 @@ func jaCatalog(key string) string {
 		return "/helpでコマンド一覧を表示\n\n"
 	case "command.usage.allow":
 		return "使用法: /allow <ツール名>\n\n"
-	case "command.usage.resume":
-		return "使用法: /resume <セッションID>\n\n"
-	case "command.usage.export":
-		return "使用法: /export <セッションID>\n\n"
 	case "init.resolve_failed":
 		return "初期化ターゲットの解決に失敗しました: %v\n\n"
 	case "init.generate_failed":
@@ -587,8 +565,6 @@ func jaCatalog(key string) string {
 		return "✓ %s を永久許可に設定しました\n\n"
 	case "command.custom":
 		return "カスタムコマンド /%s:\n"
-	case "command.mention_error":
-		return "メンション展開エラー: %v"
 	case "session.list_failed":
 		return "セッション一覧の取得エラー: %v\n\n"
 	case "session.untitled":
@@ -749,8 +725,6 @@ func jaCatalog(key string) string {
 		return "アップデート準備中"
 	case "update.failed":
 		return "更新に失敗しました: %v"
-	case "update.restart_failed":
-		return "アップデートの準備が完了しましたが、再起動に失敗しました: %v\n\n"
 	case "update.pm_hint.brew":
 		return "アップデートがインストールされました。注意: ggcode は Homebrew 経由でインストールされています。\nHomebrew を同期するには `brew upgrade ggcode` を実行してください。\n\n"
 	case "update.pm_hint.scoop":
@@ -939,8 +913,6 @@ func jaCatalog(key string) string {
 		return "QQ Botが設定されていません。"
 	case "panel.qq.entry.available":
 		return "利用可能"
-	case "panel.qq.entry.bound":
-		return "バインド済み"
 	case "panel.qq.entry.active":
 		return "アクティブ"
 	case "panel.qq.entry.bound_other":
@@ -979,14 +951,6 @@ func jaCatalog(key string) string {
 		return "Enter でBot作成 • Esc でキャンセル"
 	case "panel.qq.actions_hint":
 		return "j/k 移動 • d 無効/有効 • Enter または b でBotバインド • c でチャネルバインド • x でチャネルバインド解除 • u でBotバインド解除 • i でBot作成 • e 設定編集 • q QR表示 • Esc で閉じる"
-	case "panel.qq.bind_channel":
-		return "チャネルをバインド"
-	case "panel.qq.scan_hint":
-		return "QRコードをスキャンし、Botを追加して、メッセージを送信してペアリングを開始してください。"
-	case "panel.qq.qr_code":
-		return "QRコード:"
-	case "panel.qq.share_link":
-		return "共有リンク:"
 	case "panel.qq.message.no_bot":
 		return "利用可能なQQ Botがありません。"
 	case "panel.qq.message.bound_success":
