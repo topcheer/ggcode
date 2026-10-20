@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -139,11 +140,17 @@ func (am *AutoMemory) DeleteMemory(key string) error {
 	if err := os.MkdirAll(hdir, 0755); err != nil {
 		return err
 	}
-	tomb := filepath.Join(hdir, safe+".tombstone")
+	// #4334: each deletion gets its OWN timestamp-suffixed tombstone. The
+	// old single-path write overwrote the previous deletion instant on a
+	// delete->recreate->delete sequence, so ReadMemoryAsOf could not see the
+	// first deleted gap. The read side unions these with the legacy
+	// single-tombstone file (which still records one valid instant).
+	now := time.Now()
+	tomb := filepath.Join(hdir, safe+".tombstone."+strconv.FormatInt(now.UnixNano(), 10))
 	if err := os.WriteFile(tomb, []byte(key+"\n"), 0o644); err != nil {
 		return err
 	}
-	if err := os.Chtimes(tomb, time.Now(), time.Now()); err != nil {
+	if err := os.Chtimes(tomb, now, now); err != nil {
 		return err
 	}
 	// sa-85: drop the provenance/usage record so deleted keys do not
