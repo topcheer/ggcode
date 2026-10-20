@@ -16,8 +16,6 @@ func frCatalog(key string) string {
 		return "%d en cours"
 	case "cron.firing":
 		return "⏰ Tâche cron déclenchée"
-	case "activity.idle":
-		return "inactif"
 	case "panel.conversation":
 		return "Conversation"
 	case "panel.composer":
@@ -164,10 +162,6 @@ func frCatalog(key string) string {
 		return "fichier"
 	case "label.directory":
 		return "répertoire"
-	case "context.unavailable":
-		return "Pas encore de données de contexte"
-	case "metrics.empty":
-		return "Pas encore de métriques"
 	case "im.none":
 		return "Aucun adapteur configuré"
 	case "im.summary":
@@ -182,14 +176,10 @@ func frCatalog(key string) string {
 		return "active • redémarréz pour initialisér"
 	case "im.status.not_started":
 		return "non démarré"
-	case "context.until_compact":
-		return "restant"
 	case "empty.ask":
 		return "Demandez un refactoring, une correction de bug, une explication ou des tests."
 	case "empty.tips":
 		return "Astuces: utiliséz @chemin pour inclure des fichiers, /? pour l'aide, et Shift+Tab pour changer de mode."
-	case "startup.banner":
-		return "Préparation de l'interface terminal et filtrâge du bruit de démarrâge. Vous pouvez saisir immediatement; cette bannière disparaitra une fois le démarrâge terminé."
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab naviguer • Enter appliquér • Esc fermér"
 	case "hint.mention":
@@ -242,8 +232,6 @@ func frCatalog(key string) string {
 		return "Ctrl+N ne plus suivre"
 	case "queued.count":
 		return "%d en fîle"
-	case "queued.output":
-		return "[en fîle %d en attente]\n\n"
 	case "interrupt.delivered":
 		return "[livre a l'exécution active; reexamen du plan]\n"
 	case "status.thinking":
@@ -628,8 +616,6 @@ func frCatalog(key string) string {
 		return "Gestionnaire de contexte non disponible.\n\n"
 	case "compact.failed":
 		return "Erreur de compactâge: %v\n\n"
-	case "compact.done":
-		return "Historique de conversation compacté.\n\n"
 	case "compact.done_with_stats":
 		return "Historique de conversation compacté (%d → %d tokens).\n\n"
 	case "todo.cleared":
@@ -672,14 +658,8 @@ func frCatalog(key string) string {
 		return "Config: modèle = %s\n\n"
 	case "config.provider_set":
 		return "Config: fournisseur = %s\n\n"
-	case "config.language_set":
-		return "Config: langue = %s\n\n"
 	case "config.unknown_key":
 		return "Cle de config inconnue: %s\nSupportées: model, provider, languâge\n\n"
-	case "config.title":
-		return "Configuration Actuelle:\n"
-	case "status.title":
-		return "Statut:\n"
 	case "panel.update":
 		return "Mise à jour"
 	case "label.version":
@@ -718,16 +698,8 @@ func frCatalog(key string) string {
 		return "Autres installations de ggcode détectées sur ce système:\n%s\nSi un ggcode différent apparaît en premier dans PATH, envisagez de le mettre à jour aussi ou d'ajuster l'ordre de PATH.\n\n"
 	case "update.dual_scope":
 		return "Attention: Installations utilisateur et système de ggcode trouvées:\n  Utilisateur: %s\n  Système: %s\nCela peut causer des conflits de PATH. Envisagez de désinstaller une via Paramètres > Applications.\n\n"
-	case "plugins.unavailable":
-		return "Gestionnaire de plugins non disponible.\n\n"
-	case "plugins.none":
-		return "Aucun plugin chargé.\n\n"
-	case "plugins.title":
-		return "Plugins:\n"
 	case "mcp.none":
 		return "Aucun serveur MCP configuré.\n\n"
-	case "mcp.title":
-		return "Serveurs MCP:\n"
 	case "mcp.active_tools":
 		return "Outils actifs"
 	case "mcp.more":
@@ -736,10 +708,6 @@ func frCatalog(key string) string {
 		return "Usâge: /imâge <chemin/vers/fichier.png> ou /imâge paste\n"
 	case "image.formats":
 		return "Formats supportes: PNG, JPEG, GIF, WebP (max 20MB)\n\n"
-	case "image.attached":
-		return "Imâge jointe: %s\n"
-	case "image.attached_hint":
-		return "Envoyéz un messâge pour inclure l'imâge, ou /imâge pour en joindre une autre.\n\n"
 	case "image.clipboard_failed":
 		return "Impossible de coller une imâge du presse-papiers: %v"
 	case "image.clipboard_no_image_windows":
@@ -754,20 +722,6 @@ func frCatalog(key string) string {
 		return "  %s [%s]%s - %s\n"
 	case "agents.hint":
 		return "\nUtilisez /agent <id> pour les détails, /agent cancel <id> pour annulér.\n\n"
-	case "agent.usage":
-		return "Usâge: /agent <id> ou /agent cancel <id>\n\n"
-	case "agent.cancelled":
-		return "Sous-agent %s annulé\n\n"
-	case "agent.cancel_failed":
-		return "Impossible d'annulér %s (introuvable ou pas en cours)\n\n"
-	case "agent.not_found":
-		return "Sous-agent %s introuvable\n\n"
-	case "agent.title":
-		return "Agent: %s\nStatut: %s\nTâche: %s\n"
-	case "agent.result":
-		return "Résultat: %s\n"
-	case "agent.error":
-		return "Erreur: %v\n"
 	case "slash.help":
 		return "Afficher le messâge d'aide"
 	case "slash.sessions":

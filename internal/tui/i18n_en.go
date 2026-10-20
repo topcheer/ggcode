@@ -14,8 +14,6 @@ func enCatalog(key string) string {
 		return "%d running"
 	case "cron.firing":
 		return "⏰ Cron job triggered"
-	case "activity.idle":
-		return "idle"
 	case "panel.conversation":
 		return "Conversation"
 	case "panel.composer":
@@ -164,10 +162,6 @@ func enCatalog(key string) string {
 		return "file"
 	case "label.directory":
 		return "directory"
-	case "context.unavailable":
-		return "No context data yet"
-	case "metrics.empty":
-		return "No metrics yet"
 	case "im.none":
 		return "No adapters configured"
 	case "im.summary":
@@ -182,14 +176,10 @@ func enCatalog(key string) string {
 		return "enabled • restart to initialize"
 	case "im.status.not_started":
 		return "not started"
-	case "context.until_compact":
-		return "left"
 	case "empty.ask":
 		return "Ask for a refactor, bug fix, explanation, or tests."
 	case "empty.tips":
 		return "Tips: use @path to include files, /? for help, and Shift+Tab to change mode."
-	case "startup.banner":
-		return "Preparing the terminal UI and filtering startup terminal noise. You can type right away; this banner disappears once startup settles."
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab cycle • Enter apply • Esc close"
 	case "hint.mention":
@@ -242,8 +232,6 @@ func enCatalog(key string) string {
 		return "Ctrl+N unfollow"
 	case "queued.count":
 		return "%d queued"
-	case "queued.output":
-		return "[queued %d pending]\n\n"
 	case "interrupt.delivered":
 		return "[delivered to active run; revising plan]\n"
 	case "status.thinking":
@@ -761,8 +749,6 @@ func enCatalog(key string) string {
 		return "Context manager not available.\n\n"
 	case "compact.failed":
 		return "Compact failed: %v\n\n"
-	case "compact.done":
-		return "Conversation history compacted.\n\n"
 	case "compact.done_with_stats":
 		return "Conversation history compacted (%d → %d tokens).\n\n"
 	case "todo.cleared":
@@ -805,14 +791,8 @@ func enCatalog(key string) string {
 		return "Config: model = %s\n\n"
 	case "config.provider_set":
 		return "Config: provider = %s\n\n"
-	case "config.language_set":
-		return "Config: language = %s\n\n"
 	case "config.unknown_key":
 		return "Unknown config key: %s\nSupported: model, provider, language\n\n"
-	case "config.title":
-		return "Current Configuration:\n"
-	case "status.title":
-		return "Status:\n"
 	case "panel.update":
 		return "Update"
 	case "label.version":
@@ -859,16 +839,8 @@ func enCatalog(key string) string {
 		return "Other ggcode installations detected on this system:\n%s\nIf a different ggcode appears first in PATH, consider updating it too or adjusting PATH order.\n\n"
 	case "update.dual_scope":
 		return "Warning: Both user and system-wide ggcode installations found:\n  User: %s\n  System: %s\nThis may cause PATH conflicts. Consider uninstalling one from Settings > Apps.\n\n"
-	case "plugins.unavailable":
-		return "Plugin manager not available.\n\n"
-	case "plugins.none":
-		return "No plugins loaded.\n\n"
-	case "plugins.title":
-		return "Plugins:\n"
 	case "mcp.none":
 		return "No MCP servers configured.\n\n"
-	case "mcp.title":
-		return "MCP Servers:\n"
 	case "mcp.active_tools":
 		return "Active tools"
 	case "mcp.more":
@@ -877,10 +849,6 @@ func enCatalog(key string) string {
 		return "Usage: /image <path/to/file.png> or /image paste\n"
 	case "image.formats":
 		return "Supported formats: PNG, JPEG, GIF, WebP (max 20MB)\n\n"
-	case "image.attached":
-		return "Image attached: %s\n"
-	case "image.attached_hint":
-		return "Send a message to include the image, or /image to attach another.\n\n"
 	case "image.clipboard_failed":
 		return "Could not paste an image from the clipboard: %v"
 	case "image.clipboard_no_image_windows":
@@ -895,20 +863,6 @@ func enCatalog(key string) string {
 		return "  %s [%s]%s - %s\n"
 	case "agents.hint":
 		return "\nUse /agent <id> for details, /agent cancel <id> to cancel.\n\n"
-	case "agent.usage":
-		return "Usage: /agent <id> or /agent cancel <id>\n\n"
-	case "agent.cancelled":
-		return "Cancelled sub-agent %s\n\n"
-	case "agent.cancel_failed":
-		return "Could not cancel %s (not found or not running)\n\n"
-	case "agent.not_found":
-		return "Sub-agent %s not found\n\n"
-	case "agent.title":
-		return "Agent: %s\nStatus: %s\nTask: %s\n"
-	case "agent.result":
-		return "Result: %s\n"
-	case "agent.error":
-		return "Error: %v\n"
 	case "slash.help":
 		return "Show help message"
 	case "slash.sessions":
@@ -1017,8 +971,6 @@ func enCatalog(key string) string {
 		return "Delete"
 	case "hooks.edit":
 		return "Edit"
-	case "hooks.toggleInject":
-		return "Toggle Inject"
 	case "hooks.close":
 		return "Esc: Close"
 	case "hooks.event.onUserMessage":
