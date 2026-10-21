@@ -189,18 +189,27 @@ var refusalAuthorizePattern = regexp.MustCompile(
 var refusalReadOnlyCmdPattern = regexp.MustCompile(
 	`^\s*(?:git\s+(?:status|log|diff|show|blame)|grep|rg|cat|head|tail|ls|find|wc|file|stat|which|pwd|echo)\b`)
 
-// refusalCmdWriteEvidence (#3484): shapes that make an otherwise
+// refusalCmdWriteEvidence (#3484/#4338): shapes that make an otherwise
 // read-only-prefixed command a writer. Any occurrence disqualifies the
 // read-only exemption:
 //   - `>` / `>>` / `1>` / `2>` / `&>` output redirection (covers `echo x > f`,
 //     `cat a > b`, `head -n5 f > f` self-truncation, `git log > f`)
 //   - find write-flags: -delete, -exec/-execdir, -fprint*/-fls
 //   - git --output=<file> (log/diff/show write their output to a file)
+//   - #4338: mid-command write vectors past the read-only prefix -
+//     pipe-to-writer consumers (tee/sponge/truncate/cpio/dd of=), xargs
+//     feeding a destructive writer, and compound separators (`;`, `&&`,
+//     `||`) chaining into one. Without these the prefix exemption
+//     fail-opened: `cat a | tee config.yaml`, `pwd && rm config.yaml`.
 //
 // `>>` and fd-prefixed forms are subsumed by the bare `>` alternative.
 // Heredoc `<<` contains no `>` and is input-side only - not matched.
 var refusalCmdWriteEvidence = regexp.MustCompile(
-	`(?:\d)?>{1,2}|&>|-delete\b|-exec(dir)?\b|-fprint\w*\b|-fls\b|--output(=|\s)`)
+	`(?:\d)?>{1,2}|&>|-delete\b|-exec(dir)?\b|-fprint\w*\b|-fls\b|--output(=|\s)` +
+		`|\b(?:tee|sponge|truncate|cpio)\b` +
+		`|\bdd\s+[^;|]*\bof=` +
+		`|\bxargs\s+(?:rm|rmdir|mv|cp|chmod|chown|truncate|shred|dd|ln|mkdir|touch|tee)\b` +
+		`|(?:;|&&|\|\|)\s*(?:rm|rmdir|mv|cp|chmod|chown|truncate|shred|dd|tee|sponge|ln|mkdir|touch)\b`)
 
 // refusalPathPattern: path-like tokens (contain / or .ext), ≥4 chars.
 // #anchor-boundary: the extension branch is \b-anchored so an in-word
