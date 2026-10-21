@@ -21,6 +21,7 @@ func TestIssue4344ResidualWriteVectorsPattern(t *testing.T) {
 		"cat list.txt | perl -ne 'unlink'",
 		"find . -name '*.log' | xargs /bin/rm", // path-qualified writer
 		"ls | xargs env rm",                    // env-wrapped writer
+		"find . | xargs sudo rm",               // sudo-wrapped writer (#4344 delta re-review)
 		"find . | xargs sh -c 'rm -f $0'",      // xargs shell
 		"cat f | ssh host 'rm -f x'",           // remote sink, no redirect
 		"echo done; sh cleanup.sh",             // ';' into shell

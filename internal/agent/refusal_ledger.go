@@ -212,7 +212,7 @@ var refusalCmdWriteEvidence = regexp.MustCompile(
 	`(?:\d)?>{1,2}|&>|-delete\b|-exec(dir)?\b|-fprint\w*\b|-fls\b|--output(=|\s)` +
 		`|\b(?:tee|sponge|truncate|cpio)\b` +
 		`|\bdd\s+[^;|]*\bof=` +
-		`|\bxargs\s+(?:\S*/|env\s+)?(?:rm|rmdir|mv|cp|chmod|chown|truncate|shred|dd|ln|mkdir|touch|tee|sh|bash)\b` +
+		`|\bxargs\s+(?:\S*/|env\s+|sudo\s+)?(?:rm|rmdir|mv|cp|chmod|chown|truncate|shred|dd|ln|mkdir|touch|tee|sh|bash)\b` +
 		`|(?:;|&&|\|\||\||\n)\s*(?:rm|rmdir|mv|cp|chmod|chown|truncate|shred|dd|tee|sponge|ln|mkdir|touch|sh|bash|zsh)\b` +
 		`|(?:\||\n|;|&&|\|\|)\s*(?:python\d?|perl|ruby|node|ssh)\b`)
 
