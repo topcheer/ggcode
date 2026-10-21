@@ -140,8 +140,19 @@ func (l *refusalLedger) saveLocked() {
 // refusalNegatePattern matches negation-form refusals only (the advisory
 // layer also extracts "only use X"-style constraints; those are directives,
 // not refusals, and do not belong in an enforcement ledger).
+// #4340: the leave-alone gap is [^\n]{0,40} (line-bounded only, matching
+// the reaffirm pattern's own leave-gap convention at L161-style
+// `leave\s+[^\n]{0,10}alone`). The old [^n]{0,5} made the branch
+// functionally dead - the gap holds two spaces plus the object, so {0,5}
+// capped objects at 3 chars, and [^n] excluded every object containing "n"
+// (main, config, nginx...). A [^.\n] gap would have repeated the same trap
+// for dotted filenames (config.yaml, main.go) - the most common real
+// objects - so the period is allowed inside the gap like the reaffirm side.
+// Pronoun-object entries ("leave them alone") record but anchor nothing:
+// refusalPathPattern needs a path separator or dotted extension, so the
+// widened gap adds no false-block surface.
 var refusalNegatePattern = regexp.MustCompile(
-	`(?i)(?:don'?t|do not|never|no new|avoid|must not|should not|stop using|leave\b[^n]{0,5}alone|don'?t touch)\b[^\n.]{4,120}`)
+	`(?i)(?:don'?t|do not|never|no new|avoid|must not|should not|stop using|leave\b[^\n]{0,40}alone|don'?t touch)\b[^\n.]{4,120}`)
 
 // releasePattern matches conversational lift phrases.
 // #3712: CJK lift words must live OUTSIDE the \b group - Go regexp \b is
