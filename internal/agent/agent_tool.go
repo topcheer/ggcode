@@ -1639,18 +1639,6 @@ func simStripPaddedLineNumberPrefixes(text, content string) string {
 	return strings.Join(lines, "\n")
 }
 
-func simStripAllLineNumberPrefixes(text string) string {
-	lines := simTrimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
-	for i, l := range lines {
-		if simReadFileLineNumberOnlyRE.MatchString(l) {
-			lines[i] = ""
-			continue
-		}
-		lines[i] = simLineNumberPrefixRE.ReplaceAllString(l, "")
-	}
-	return strings.Join(lines, "\n")
-}
-
 func simTrimDanglingReadFileLineNumberOnlyLines(lines []string) []string {
 	if len(lines) == 0 {
 		return lines
