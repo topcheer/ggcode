@@ -20,6 +20,7 @@
 package runeval
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -530,16 +531,27 @@ func isCorrectionSignal(text string) bool {
 // canonicalJSON normalizes raw input JSON so semantically identical inputs
 // (key order/whitespace differences) hash to the same key. Non-JSON inputs
 // degrade to the raw string.
+//
+// Numbers decode via json.Number (UseNumber) so integers > 2^53 keep their
+// exact digits: decoding into float64 rounds adjacent large integers into
+// the same canonical string, colliding distinct calls into one callKey and
+// inflating /runreport duplicate/waste counts (#4341).
 func canonicalJSON(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return "{}"
 	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
+	if err := dec.Decode(&v); err != nil {
 		return string(raw)
 	}
+	if dec.More() {
+		return string(raw) // trailing garbage: not a single JSON value
+	}
 	// encoding/json marshals map[string]any with sorted keys, giving a
-	// stable canonical form without extra dependencies.
+	// stable canonical form without extra dependencies. json.Number values
+	// marshal verbatim, preserving integer precision.
 	out, err := json.Marshal(v)
 	if err != nil {
 		return string(raw)
