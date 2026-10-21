@@ -737,7 +737,7 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 	// result (by contract, grep.go), and the hint path was gated on
 	// IsError alone. Successful results of the search/LSP tools now also
 	// go through toolFallbackHint; the hint itself decides via
-	// isEmptyToolResult / lspFallbackHint (non-empty successes return ""
+	// lspFallbackHint (non-empty successes return ""
 	// unchanged, so no other tool or success path is affected).
 	// #3673: this is now the SINGLE engine for zero-match success hints
 	// (agent.go's toolFallbackCheck is IsError-gated again) and the
@@ -1635,18 +1635,6 @@ func simStripPaddedLineNumberPrefixes(text, content string) string {
 				lines[i] = simBareLineNumberPrefixRE.ReplaceAllString(l, "")
 			}
 		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func simStripAllLineNumberPrefixes(text string) string {
-	lines := simTrimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
-	for i, l := range lines {
-		if simReadFileLineNumberOnlyRE.MatchString(l) {
-			lines[i] = ""
-			continue
-		}
-		lines[i] = simLineNumberPrefixRE.ReplaceAllString(l, "")
 	}
 	return strings.Join(lines, "\n")
 }
