@@ -1867,16 +1867,6 @@ func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, b
 	return validIdx, cleaned
 }
 
-// loadSessionFull loads a session with fullLoad=true, bypassing time-windowed
-// message loading. This is used for validation before deletion (e.g., in
-// pruneInvalidIndexEntries) to ensure we don't delete sessions that have user
-// interaction merely because their tail messages don't include a user message.
-// Uses a lightweight clone to avoid racing on s.fullLoad.
-func (s *JSONLStore) loadSessionFull(id string) (*Session, error) {
-	clone := &JSONLStore{dir: s.dir, fullLoad: true}
-	return clone.loadSession(id)
-}
-
 // RepairIndex scans the sessions directory and reconciles with the index.
 // It is safe to call from a goroutine (fire-and-forget). The caller must
 // NOT hold the index flock — this function acquires it.
