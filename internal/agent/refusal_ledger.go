@@ -140,8 +140,15 @@ func (l *refusalLedger) saveLocked() {
 // refusalNegatePattern matches negation-form refusals only (the advisory
 // layer also extracts "only use X"-style constraints; those are directives,
 // not refusals, and do not belong in an enforcement ledger).
+// #4340: the "leave X alone" arm is `[^\n]{0,40}` - the old
+// `[^n]{0,5}` gap only ever admitted ≤3-char n-free objects ("leave it
+// alone"), silently dropping every real target ("leave config.yaml alone",
+// "leave them alone") so the 30-day block never engaged for this phrasing.
+// The gap must allow `.` (filenames are dotted) - only `\n` caps it at a
+// line boundary and the 40-char cap keeps it tight; the trailing
+// `[^\n.]{4,120}` still bounds the excerpt tail at sentence punctuation.
 var refusalNegatePattern = regexp.MustCompile(
-	`(?i)(?:don'?t|do not|never|no new|avoid|must not|should not|stop using|leave\b[^n]{0,5}alone|don'?t touch)\b[^\n.]{4,120}`)
+	`(?i)(?:don'?t|do not|never|no new|avoid|must not|should not|stop using|leave\b[^\n]{0,40}alone|don'?t touch)\b[^\n.]{4,120}`)
 
 // releasePattern matches conversational lift phrases.
 // #3712: CJK lift words must live OUTSIDE the \b group - Go regexp \b is
@@ -158,7 +165,7 @@ var refusalReleasePattern = regexp.MustCompile(
 // ASCII word boundary and never matches beside CJK runes, so 别/保持 etc.
 // must live outside the \b group or they silently fail to veto).
 var refusalReaffirmPattern = regexp.MustCompile(
-	`(?i)\b(?:don'?t|do not|never|no\s+new|avoid|must not|should not|stop using|still\s+(?:do(?:n'?t)?|not)?\b|stays?\b|keep\s+(?:avoiding|out|away|it\s+that\s+way)|leave\s+[^\n]{0,10}alone|untouched|off[- ]limits|forbidden|not\s+allowed|prohibited)\b|不许|别碰|不要|禁止|继续(?:别|不|不要|禁止|远离?|保持)|保持(?:现状|不动|原样|别动)`)
+	`(?i)\b(?:don'?t|do not|never|no\s+new|avoid|must not|should not|stop using|still\s+(?:do(?:n'?t)?|not)?\b|stays?\b|keep\s+(?:avoiding|out|away|it\s+that\s+way)|leave\s+[^\n]{0,40}alone|untouched|off[- ]limits|forbidden|not\s+allowed|prohibited)\b|不许|别碰|不要|禁止|继续(?:别|不|不要|禁止|远离?|保持)|保持(?:现状|不动|原样|别动)`)
 
 // #3469 weak/strong lift split: bare "ok/fine/alright" prefixes are too
 // weak to release on their own (reaffirmations routinely start with
@@ -190,6 +197,14 @@ var refusalReadOnlyCmdPattern = regexp.MustCompile(
 //     feeding a destructive writer, and compound separators (`;`, `&&`,
 //     `||`) chaining into one. Without these the prefix exemption
 //     fail-opened: `cat a | tee config.yaml`, `pwd && rm config.yaml`.
+//   - #4344: #4338 was writer-enumeration and missed combination shapes:
+//     newline as a separator (multi-line `echo hi\nrm x`), interpreter /
+//     remote sinks after a separator (`| sh`, `| bash`, `| python -c`,
+//     `| ssh host 'rm f'` with no redirect for the `>` arm to catch), and
+//     xargs feeding a path-qualified or env-wrapped writer
+//     (`xargs /bin/rm`, `xargs env rm`, `xargs sh -c`). Any of these
+//     disqualifies the exemption; over-flagging only costs falling through
+//     to normal anchor matching.
 //
 // `>>` and fd-prefixed forms are subsumed by the bare `>` alternative.
 // Heredoc `<<` contains no `>` and is input-side only - not matched.
@@ -197,8 +212,9 @@ var refusalCmdWriteEvidence = regexp.MustCompile(
 	`(?:\d)?>{1,2}|&>|-delete\b|-exec(dir)?\b|-fprint\w*\b|-fls\b|--output(=|\s)` +
 		`|\b(?:tee|sponge|truncate|cpio)\b` +
 		`|\bdd\s+[^;|]*\bof=` +
-		`|\bxargs\s+(?:rm|rmdir|mv|cp|chmod|chown|truncate|shred|dd|ln|mkdir|touch|tee)\b` +
-		`|(?:;|&&|\|\|)\s*(?:rm|rmdir|mv|cp|chmod|chown|truncate|shred|dd|tee|sponge|ln|mkdir|touch)\b`)
+		`|\bxargs\s+(?:\S*/|env\s+)?(?:rm|rmdir|mv|cp|chmod|chown|truncate|shred|dd|ln|mkdir|touch|tee|sh|bash)\b` +
+		`|(?:;|&&|\|\||\||\n)\s*(?:rm|rmdir|mv|cp|chmod|chown|truncate|shred|dd|tee|sponge|ln|mkdir|touch|sh|bash|zsh)\b` +
+		`|(?:\||\n|;|&&|\|\|)\s*(?:python\d?|perl|ruby|node|ssh)\b`)
 
 // refusalPathPattern: path-like tokens (contain / or .ext), ≥4 chars.
 // #anchor-boundary: the extension branch is \b-anchored so an in-word
