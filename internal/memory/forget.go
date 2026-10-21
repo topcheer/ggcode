@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -137,15 +136,4 @@ func (am *AutoMemory) ListForgotten() []string {
 		out = append(out, fmt.Sprintf("%s (forgotten %s ago)", it.key, time.Since(it.at).Round(time.Minute)))
 	}
 	return out
-}
-
-// forgottenLine returns one display line for a forgotten key, or "" when
-// the key is not forgotten. Used by list views that annotate entries.
-func (am *AutoMemory) forgottenLine(key string) string {
-	f := am.loadForgotten()
-	at, ok := f.Entries[key]
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(fmt.Sprintf("%s [forgotten %s ago]", key, time.Since(at).Round(time.Minute)))
 }
