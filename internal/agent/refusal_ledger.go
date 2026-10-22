@@ -201,6 +201,14 @@ var refusalReadOnlyCmdPattern = regexp.MustCompile(
 //     feeding a destructive writer, and compound separators (`;`, `&&`,
 //     `||`) chaining into one. Without these the prefix exemption
 //     fail-opened: `cat a | tee config.yaml`, `pwd && rm config.yaml`.
+//   - #4344: #4338 was writer-enumeration and missed combination shapes:
+//     newline as a separator (multi-line `echo hi\nrm x`), interpreter /
+//     remote sinks after a separator (`| sh`, `| bash`, `| python -c`,
+//     `| ssh host 'rm f'` with no redirect for the `>` arm to catch), and
+//     xargs feeding a path-qualified or env/sudo-wrapped writer
+//     (`xargs /bin/rm`, `xargs env rm`, `xargs sudo rm`, `xargs sh -c`).
+//     Any of these disqualifies the exemption; over-flagging only costs
+//     falling through to normal anchor matching.
 //
 // `>>` and fd-prefixed forms are subsumed by the bare `>` alternative.
 // Heredoc `<<` contains no `>` and is input-side only - not matched.
@@ -208,8 +216,9 @@ var refusalCmdWriteEvidence = regexp.MustCompile(
 	`(?:\d)?>{1,2}|&>|-delete\b|-exec(dir)?\b|-fprint\w*\b|-fls\b|--output(=|\s)` +
 		`|\b(?:tee|sponge|truncate|cpio)\b` +
 		`|\bdd\s+[^;|]*\bof=` +
-		`|\bxargs\s+(?:rm|rmdir|mv|cp|chmod|chown|truncate|shred|dd|ln|mkdir|touch|tee)\b` +
-		`|(?:;|&&|\|\|)\s*(?:rm|rmdir|mv|cp|chmod|chown|truncate|shred|dd|tee|sponge|ln|mkdir|touch)\b`)
+		`|\bxargs\s+(?:\S*/|env\s+|sudo\s+)?(?:rm|rmdir|mv|cp|chmod|chown|truncate|shred|dd|ln|mkdir|touch|tee|sh|bash)\b` +
+		`|(?:;|&&|\|\||\||\n)\s*(?:rm|rmdir|mv|cp|chmod|chown|truncate|shred|dd|tee|sponge|ln|mkdir|touch|sh|bash|zsh)\b` +
+		`|(?:\||\n|;|&&|\|\|)\s*(?:python\d?|perl|ruby|node|ssh)\b`)
 
 // refusalPathPattern: path-like tokens (contain / or .ext), ≥4 chars.
 // #anchor-boundary: the extension branch is \b-anchored so an in-word
