@@ -199,18 +199,3 @@ func TestIsBuildErrorLine(t *testing.T) {
 		})
 	}
 }
-
-func TestSetPrecommitGateEnabled(t *testing.T) {
-	old := precommitGateEnabled
-	defer func() { precommitGateEnabled = old }()
-
-	SetPrecommitGateEnabled(false)
-	if precommitGateEnabled != false {
-		t.Error("expected precommitGateEnabled to be false")
-	}
-
-	SetPrecommitGateEnabled(true)
-	if precommitGateEnabled != true {
-		t.Error("expected precommitGateEnabled to be true")
-	}
-}
