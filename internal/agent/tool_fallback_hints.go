@@ -141,16 +141,6 @@ func lspFallbackHint(lowerErr string) string {
 	return ""
 }
 
-// isEmptyToolResult checks if the error indicates no results were found.
-// #3673-A: "not found" and "empty" removed - a successful search result's
-// content IS the searched file's content, and ordinary source lines carry
-// those words constantly ("// err is not found here", "// list is empty").
-// Kept phrases are the explicit no-match sentinels only.
-func isEmptyToolResult(s string) bool {
-	return strings.Contains(s, "no match") || strings.Contains(s, "no result") ||
-		strings.Contains(s, "no symbol")
-}
-
 // isZeroMatchSuccess reports whether a SUCCESS (non-error) tool result is a
 // zero-match outcome for a search-class tool (#3641). grep/search_files
 // render "No matches found" as a successful empty result, so IsError-gated
