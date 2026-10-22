@@ -1,7 +1,6 @@
 package tool
 
 import (
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -386,27 +385,4 @@ func MergeFileGuards(sandbox AllowedPathChecker, guard *FileGuard, workingDir st
 		}
 		return true
 	}
-}
-
-// LoadProtectedPatternsFromFile reads protected patterns from a .ggcode/protect file.
-// This is a simple newline-delimited format, # for comments.
-// Returns nil if the file doesn't exist (use defaults).
-func LoadProtectedPatternsFromFile(workspaceDir string) []string {
-	if workspaceDir == "" {
-		return nil
-	}
-	path := filepath.Join(workspaceDir, ".ggcode", "protect")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var patterns []string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		patterns = append(patterns, line)
-	}
-	return patterns
 }
