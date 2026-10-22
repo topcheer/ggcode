@@ -234,7 +234,12 @@ func (c *Client) KillPane(ctx context.Context, paneID string) error {
 }
 
 func (c *Client) ListPaneIDs(ctx context.Context) (map[string]struct{}, error) {
-	out, err := c.output(ctx, "list-panes", "-F", "#{pane_id}")
+	// #4372: -a enumerates ALL panes on the server. Without it list-panes
+	// only covers the target (current) window, so Refresh marked every
+	// managed pane living in another window as stale - CaptureAll skipped
+	// them and Restore re-created duplicates. Pane ids (%N) are globally
+	// unique, so widening the scope introduces no ambiguity.
+	out, err := c.output(ctx, "list-panes", "-a", "-F", "#{pane_id}")
 	if err != nil {
 		return nil, err
 	}
