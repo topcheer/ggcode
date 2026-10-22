@@ -220,26 +220,16 @@ func deCatalog(key string) string {
 		return "macht weiter"
 
 	// --- Hints ---
-	case "hint.enter_send":
-		return "Enter senden"
-	case "hint.ctrlv_image":
-		return "Ctrl+V / Ctrl+Shift+V Bild einfügen"
 	case "hint.ctrlr_sidebar":
 		return "Ctrl+R Seitenleiste"
 	case "hint.help":
 		return "/? Hilfe"
-	case "hint.add_context":
-		return "@ Kontext hinzufügen"
-	case "hint.scroll":
-		return "PgUp/PgDn scrollen"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab Modus"
 	case "hint.ctrlc_cancel":
 		return "Ctrl+C abbrechen"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C löschen/beenden"
-	case "hint.image_attached":
-		return "Bild angehängt"
 	case "hint.image_attached_count":
 		return "%d Bild(er) angehängt"
 	case "hint.follow_panel":
@@ -590,14 +580,10 @@ func deCatalog(key string) string {
 		return "Erwähnungserweiterungsfehler: %v"
 
 	// --- Sessions ---
-	case "session.list_failed":
-		return "Fehler beim Auflisten von Sitzungen: %v\n\n"
 	case "session.untitled":
 		return "unbenannt"
 	case "session.store_missing":
 		return "Sitzungsspeicher nicht konfiguriert.\n\n"
-	case "session.none":
-		return "Keine Sitzungen gefunden.\n\n"
 	case "session.new":
 		return "Neue Sitzung: %s\n\n"
 	case "session.resume":
@@ -620,8 +606,6 @@ func deCatalog(key string) string {
 		return "Rückgängig fehlgeschlagen: %v\n\n"
 	case "checkpoint.undid":
 		return "Rückgängig gemacht: %s auf %s (Checkpoint %s)\n"
-	case "checkpoint.none":
-		return "Keine Checkpoints.\n\n"
 
 	// --- Files ---
 	case "files.disabled":
@@ -688,14 +672,6 @@ func deCatalog(key string) string {
 		return "Todo-Liste gelöscht.\n\n"
 	case "todo.clear_failed":
 		return "Fehler beim Löschen der Todos: %v\n\n"
-	case "todo.none":
-		return "Keine Todo-Liste gefunden. Verwenden Sie das todo_write Werkzeug, um eine zu erstellen.\n\n"
-	case "todo.read_failed":
-		return "Fehler beim Lesen der Todos: %v\n\n"
-	case "todo.parse_failed":
-		return "Fehler beim Parsen der Todos: %v\n\n"
-	case "todo.title":
-		return "Todo-Liste:\n%s\n\n"
 
 	// --- Bug report ---
 	case "bug.title":

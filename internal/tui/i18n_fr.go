@@ -204,26 +204,16 @@ func frCatalog(key string) string {
 		return "attend votre action"
 	case "mode.agent.autocontinue":
 		return "continue seul"
-	case "hint.enter_send":
-		return "Enter envoyér"
-	case "hint.ctrlv_image":
-		return "Ctrl+V / Ctrl+Shift+V coller imâge"
 	case "hint.ctrlr_sidebar":
 		return "Ctrl+R barre laterale"
 	case "hint.help":
 		return "/? aide"
-	case "hint.add_context":
-		return "@ ajoutér contexte"
-	case "hint.scroll":
-		return "PgUp/PgDn défîler"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab mode"
 	case "hint.ctrlc_cancel":
 		return "Ctrl+C annulér"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C effacér/quitter"
-	case "hint.image_attached":
-		return "imâge jointe"
 	case "hint.image_attached_count":
 		return "%d imâge(s) jointe(s)"
 	case "hint.follow_panel":
@@ -534,14 +524,10 @@ func frCatalog(key string) string {
 		return "Commande personnalisée /%s:\n"
 	case "command.mention_error":
 		return "Erreur de mention: %v"
-	case "session.list_failed":
-		return "Erreur lors du listâge des sessions: %v\n\n"
 	case "session.untitled":
 		return "sans titre"
 	case "session.store_missing":
 		return "Stockâge de sessions non configuré.\n\n"
-	case "session.none":
-		return "Aucune session trouvée.\n\n"
 	case "session.new":
 		return "Nouvelle session: %s\n\n"
 	case "session.resume":
@@ -562,8 +548,6 @@ func frCatalog(key string) string {
 		return "Erreur d'annulation: %v\n\n"
 	case "checkpoint.undid":
 		return "Annulé %s sur %s (checkpoint %s)\n"
-	case "checkpoint.none":
-		return "Aucun checkpoint.\n\n"
 	case "files.disabled":
 		return "Points de contrôle non actives.\n\n"
 	case "files.none":
@@ -622,14 +606,6 @@ func frCatalog(key string) string {
 		return "Liste de tâches supprimée.\n\n"
 	case "todo.clear_failed":
 		return "Erreur lors du nettoyâge des tâches: %v\n\n"
-	case "todo.none":
-		return "Aucune liste de tâches trouvée. Utilisez l'outil todo_write pour en créer une.\n\n"
-	case "todo.read_failed":
-		return "Erreur de lecture des tâches: %v\n\n"
-	case "todo.parse_failed":
-		return "Erreur d'analysé des tâches: %v\n\n"
-	case "todo.title":
-		return "Liste de tâches:\n%s\n\n"
 	case "bug.title":
 		return "=== Diagnostics de Rapport de Bug ===\n\n"
 	case "bug.version":
