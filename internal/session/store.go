@@ -1639,7 +1639,14 @@ func (s *JSONLStore) List() ([]*Session, error) {
 	}
 
 	if len(idx) == 0 {
+		// #4353: repairIndex fully parses every on-disk session (~48s on a
+		// real store per the runMaintenance note). Doing that under s.mu queues
+		// every concurrent Load/Save behind the scan — the same startup-white-
+		// screen regression runMaintenance was de-locked for. Drop the lock for
+		// the scan and re-acquire before reading back the rebuilt index.
+		s.mu.Unlock()
 		changed, err := s.repairIndex(idx)
+		s.mu.Lock()
 		if err != nil {
 			return nil, err
 		}
@@ -2130,7 +2137,11 @@ func (s *JSONLStore) LatestForWorkspace(workspace string) (*Session, error) {
 		}
 	}
 	if !hasWorkspace {
+		// #4353: same de-locked repair as List — repairIndex fully parses
+		// every on-disk session; never hold s.mu across it.
+		s.mu.Unlock()
 		changed, repairErr := s.repairIndex(idx)
+		s.mu.Lock()
 		if repairErr != nil {
 			debug.Log("session", "LatestForWorkspace: repairIndex error: %v", repairErr)
 		}
@@ -2188,7 +2199,11 @@ func (s *JSONLStore) ListForWorkspace(workspace string) ([]*Session, error) {
 		}
 	}
 	if !hasWorkspace {
+		// #4353: same de-locked repair as List — repairIndex fully parses
+		// every on-disk session; never hold s.mu across it.
+		s.mu.Unlock()
 		changed, repairErr := s.repairIndex(idx)
+		s.mu.Lock()
 		if repairErr != nil {
 			debug.Log("session", "ListForWorkspace: repairIndex error: %v", repairErr)
 		}
