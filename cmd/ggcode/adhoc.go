@@ -76,17 +76,6 @@ const (
 	adhocEnvRetryAlways   = "GGCODE_LLM_RETRY_ALWAYS"
 )
 
-// adhocEnvTouched reports whether any GGCODE_LLM_* provider variable is set
-// (used for the partial-pair diagnostic: env half-set deserves a hint).
-func adhocEnvTouched() bool {
-	for _, k := range []string{adhocEnvBaseURL, adhocEnvModel, adhocEnvAPIKey, adhocEnvProtocol, adhocEnvContextWindow, adhocEnvMaxTokens, adhocEnvRetryAlways} {
-		if strings.TrimSpace(os.Getenv(k)) != "" {
-			return true
-		}
-	}
-	return false
-}
-
 // synthesizeAdhocConfig builds the in-memory Config for ad-hoc mode. It must
 // never touch the filesystem: no load, no save path is viable later either,
 // because root.go passes cfgFile="" which disables the hot-reload watcher and
