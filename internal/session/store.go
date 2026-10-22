@@ -1629,6 +1629,27 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	return ses, nil
 }
 
+// repairIndexOutsideLock runs the potentially long repairIndex disk scan
+// WITHOUT holding s.mu (#4353: a full repair parses every unindexed
+// session file on disk - runMaintenance measured ~48s on a real store and
+// was itself de-locked for exactly this reason). It releases s.mu, scans
+// under the index flock, re-acquires s.mu, and returns the (possibly
+// reloaded) index. Callers must hold s.mu on entry; it is still held on
+// return, so a plain deferred Unlock stays balanced. Concurrent repairs
+// serialize on the index flock and are idempotent.
+func (s *JSONLStore) repairIndexOutsideLock(idx []indexEntry) ([]indexEntry, error) {
+	s.mu.Unlock()
+	changed, err := s.repairIndex(idx)
+	s.mu.Lock()
+	if err != nil {
+		return idx, err
+	}
+	if changed {
+		return s.loadIndex()
+	}
+	return idx, nil
+}
+
 // List returns all sessions sorted by UpdatedAt descending (uses index for speed).
 func (s *JSONLStore) List() ([]*Session, error) {
 	s.mu.Lock()
@@ -1639,15 +1660,10 @@ func (s *JSONLStore) List() ([]*Session, error) {
 	}
 
 	if len(idx) == 0 {
-		changed, err := s.repairIndex(idx)
+		// #4353: full disk scan must not run under s.mu.
+		idx, err = s.repairIndexOutsideLock(idx)
 		if err != nil {
 			return nil, err
-		}
-		if changed {
-			idx, err = s.loadIndex()
-			if err != nil {
-				return nil, err
-			}
 		}
 	}
 
@@ -2130,15 +2146,12 @@ func (s *JSONLStore) LatestForWorkspace(workspace string) (*Session, error) {
 		}
 	}
 	if !hasWorkspace {
-		changed, repairErr := s.repairIndex(idx)
+		// #4353: full disk scan must not run under s.mu.
+		repaired, repairErr := s.repairIndexOutsideLock(idx)
 		if repairErr != nil {
 			debug.Log("session", "LatestForWorkspace: repairIndex error: %v", repairErr)
-		}
-		if changed {
-			idx, err = s.loadIndex()
-			if err != nil {
-				return nil, err
-			}
+		} else {
+			idx = repaired
 		}
 	}
 
@@ -2188,15 +2201,12 @@ func (s *JSONLStore) ListForWorkspace(workspace string) ([]*Session, error) {
 		}
 	}
 	if !hasWorkspace {
-		changed, repairErr := s.repairIndex(idx)
+		// #4353: full disk scan must not run under s.mu.
+		repaired, repairErr := s.repairIndexOutsideLock(idx)
 		if repairErr != nil {
 			debug.Log("session", "ListForWorkspace: repairIndex error: %v", repairErr)
-		}
-		if changed {
-			idx, err = s.loadIndex()
-			if err != nil {
-				return nil, err
-			}
+		} else {
+			idx = repaired
 		}
 	}
 
