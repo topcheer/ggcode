@@ -62,11 +62,6 @@ func (c *Client) SetDelegation(onBehalfOf, intent string) {
 	c.mu.Unlock()
 }
 
-// WithDelegation is the ClientOption form of SetDelegation.
-func WithDelegation(onBehalfOf, intent string) ClientOption {
-	return func(c *Client) { c.SetDelegation(onBehalfOf, intent) }
-}
-
 // injectDelegationMeta merges the delegation declaration into msg.Metadata.
 // It never fails the send: on malformed pre-existing metadata the injection
 // is skipped and logged — a cosmetic declaration must not break delivery.
