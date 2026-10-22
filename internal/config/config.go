@@ -1939,6 +1939,16 @@ func BuildSystemPrompt(extraPrompt, workingDir, language string, toolNames []str
 
 	var sb strings.Builder
 	sb.WriteString(DefaultSystemPrompt)
+	// GGCODE_NO_COAUTHOR opts out of the automatic Co-Authored-By trailer
+	// (see internal/tool coAuthorInjectionDisabled). Drop the prompt-side
+	// directive too, otherwise the model keeps hand-writing the trailer and
+	// the env var is meaningless.
+	if os.Getenv("GGCODE_NO_COAUTHOR") != "" {
+		s := sb.String()
+		s = strings.ReplaceAll(s, "- Always include \"Co-Authored-By: ggcode <noreply@ggcode.dev>\" in git commit messages.\n", "")
+		sb.Reset()
+		sb.WriteString(s)
+	}
 
 	if extraPrompt != "" {
 		sb.WriteString("\n\n## Extra instructions\n")
