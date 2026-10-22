@@ -1043,14 +1043,8 @@ func enCatalog(key string) string {
 		return "Available: %d"
 	case "panel.qq.none":
 		return "(none)"
-	case "panel.qq.default":
-		return "(default)"
 	case "panel.qq.adapter":
 		return "Adapter: %s"
-	case "panel.qq.target":
-		return "Target: %s"
-	case "panel.qq.channel":
-		return "Channel: %s"
 	case "panel.qq.bot_list":
 		return "QQ Bot List"
 	case "panel.qq.no_bots":
@@ -1123,8 +1117,6 @@ func enCatalog(key string) string {
 		return "QQ adapter name is required"
 	case "panel.qq.error.not_configured":
 		return "QQ bot %q is not configured"
-	case "panel.qq.error.disabled":
-		return "QQ bot %q is disabled"
 	case "panel.qq.error.not_qq_adapter":
 		return "adapter %q is not a QQ bot"
 	case "panel.qq.error.not_online":
