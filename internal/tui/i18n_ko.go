@@ -190,24 +190,6 @@ func koCatalog(key string) string {
 		return "@ 파일/폴더 첨부 • Tab/Shift+Tab 전환 • Enter 적용"
 	case "hint.mode":
 		return "모드"
-	case "mode.approval.ask":
-		return "매번 확인"
-	case "mode.approval.none":
-		return "승인 불필요"
-	case "mode.approval.critical":
-		return "중요 작업만 확인"
-	case "mode.tools.rules":
-		return "도구 규칙"
-	case "mode.tools.readonly":
-		return "읽기 전용"
-	case "mode.tools.safe":
-		return "안전"
-	case "mode.tools.open":
-		return "열림"
-	case "mode.agent.waits":
-		return "에이전트 대기"
-	case "mode.agent.autocontinue":
-		return "자동 계속"
 	case "hint.enter_send":
 		return "Enter로 전송"
 	case "hint.ctrlv_image":

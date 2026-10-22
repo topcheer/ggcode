@@ -186,24 +186,6 @@ func esCatalog(key string) string {
 		return "@ adjunta archivos/carpetas • Tab/Shift+Tab ciclo • Enter aplicar"
 	case "hint.mode":
 		return "modo"
-	case "mode.approval.ask":
-		return "preguntar según sea necesario"
-	case "mode.approval.none":
-		return "sin paradas de aprobación"
-	case "mode.approval.critical":
-		return "solo críticas"
-	case "mode.tools.rules":
-		return "seguir reglas de herramientas"
-	case "mode.tools.readonly":
-		return "solo lectura"
-	case "mode.tools.safe":
-		return "solo operaciónes seguras"
-	case "mode.tools.open":
-		return "casí todas las herramientas"
-	case "mode.agent.waits":
-		return "espera por usted"
-	case "mode.agent.autocontinue":
-		return "continúa solo"
 	case "hint.enter_send":
 		return "Enter enviar"
 	case "hint.ctrlv_image":
