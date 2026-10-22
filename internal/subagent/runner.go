@@ -398,8 +398,6 @@ func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
 
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	timer := time.NewTimer(500 * time.Millisecond)
-	defer timer.Stop()
 
 	for {
 		sa.mu.Lock()
@@ -412,19 +410,32 @@ func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
 		case StatusCompleted:
 			return result, nil
 		case StatusFailed, StatusCancelled:
-			// Grace: if the runner's Complete backfill is still in flight,
-			// give it a moment to land before returning a possibly empty result.
+			// #4358: post-signal grace. The entry-pre-created 500ms timer had
+			// always fired (buffered in timer.C) — or lost the first-come race
+			// against an already-closed done — by the time a real agent reached
+			// this branch, so the grace was effectively 0ms and the
+			// Cancel-then-Complete backfill window stayed open. Wait for the
+			// done signal first, then start a FRESH short grace timer, then
+			// re-read Result and Error.
 			if done != nil {
 				select {
 				case <-done:
-				case <-timer.C:
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
+				grace := time.NewTimer(200 * time.Millisecond)
+				defer grace.Stop()
+				select {
+				case <-grace.C:
 				case <-ctx.Done():
 					return "", ctx.Err()
 				}
 			}
-			// Re-read after the grace window.
+			// Re-read after the grace window — Result for the backfill (#713),
+			// Error for consistency with the Complete path (#4358).
 			sa.mu.Lock()
 			result = sa.Result
+			err = sa.Error
 			sa.mu.Unlock()
 			return result, err
 		}
