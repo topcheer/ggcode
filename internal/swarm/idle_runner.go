@@ -278,6 +278,15 @@ func tryClaimPendingTask(
 			// Another teammate beat us — continue to next task.
 			continue
 		}
+		// #4367: record the board ID IMMEDIATELY after the claim succeeds and
+		// BEFORE any panic-capable call below (probe consumption, onEvent
+		// callback, prompt building). The #1688 panic rollback keys off
+		// CurrentTaskID; writing it late re-opened the exact window that fix
+		// closed — a panic in between read "" and left the task stuck
+		// in_progress forever (claim only scans pending, BlockedBy deadlock).
+		tm.mu.Lock()
+		tm.CurrentTaskID = claimed.ID // #1688: panic rollback needs the board ID
+		tm.mu.Unlock()
 		// #3245: the claim is REAL now - spend the armed probe slot (if
 		// any) exactly here. Gate passes that never reached a claim left
 		// the circuit OPEN+expired so a later tick can still probe; only
@@ -291,9 +300,6 @@ func tryClaimPendingTask(
 		// completed dependencies (dep-chain blackboard sharing).
 		prompt := buildTaskPrompt(claimed) + depFindingsPrompt(tmMgr, claimed)
 
-		tm.mu.Lock()
-		tm.CurrentTaskID = claimed.ID // #1688: panic rollback needs the board ID
-		tm.mu.Unlock()
 		tm.setStatus(TeammateWorking)
 		tm.setCurrentTask(util.Truncate(claimed.Subject, 100))
 
@@ -316,7 +322,11 @@ func tryClaimPendingTask(
 		if ctx.Err() != nil {
 			pending := task.StatusPending
 			owner := ""
-			tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &pending, Owner: &owner})
+			if _, err := tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &pending, Owner: &owner}); err != nil {
+				// #4367: not-found means the task was deleted concurrently; any
+				// other failure would strand the task in_progress invisibly.
+				debug.Log("swarm", "teammate %s ctx-cancel rollback of task %s failed: %v", tm.ID, claimed.ID, err)
+			}
 			if onEvent != nil {
 				onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
 			}
@@ -337,10 +347,12 @@ func tryClaimPendingTask(
 				errMsg := util.Truncate(taskErr.Error(), 200)
 				meta := map[string]string{"permanent_error": fc.String(), "error": errMsg}
 				meta = attachAttribution(meta, buildFailureAttribution(tm, claimed.ID, taskErr)) // sa-90 step-level attribution
-				tmMgr.Update(claimed.ID, task.UpdateOptions{
+				if _, err := tmMgr.Update(claimed.ID, task.UpdateOptions{
 					Status:   &completed,
 					Metadata: meta,
-				})
+				}); err != nil {
+					debug.Log("swarm", "teammate %s permanent-failure park of task %s failed: %v", tm.ID, claimed.ID, err)
+				}
 				debug.Log("swarm", "teammate %s task %s permanently failed (%s): %v",
 					tm.ID, claimed.ID, fc, taskErr)
 			} else {
@@ -365,25 +377,34 @@ func tryClaimPendingTask(
 						"retry_attempts":  strconv.Itoa(attempts),
 					}
 					meta = attachAttribution(meta, buildFailureAttribution(tm, claimed.ID, taskErr)) // sa-90 step-level attribution
-					tmMgr.Update(claimed.ID, task.UpdateOptions{
+					if _, err := tmMgr.Update(claimed.ID, task.UpdateOptions{
 						Status:   &completed,
 						Metadata: meta,
-					})
+					}); err != nil {
+						debug.Log("swarm", "teammate %s max-retries park of task %s failed: %v", tm.ID, claimed.ID, err)
+					}
 					debug.Log("swarm", "teammate %s task %s exceeded %d transient retries, parking as completed(max_retries): %v",
 						tm.ID, claimed.ID, maxTransientTaskRetries, taskErr)
 				} else {
 					pending := task.StatusPending
 					owner := ""
-					tmMgr.Update(claimed.ID, task.UpdateOptions{
+					if _, err := tmMgr.Update(claimed.ID, task.UpdateOptions{
 						Status:   &pending,
 						Owner:    &owner,
 						Metadata: map[string]string{"retry_attempts": strconv.Itoa(attempts)},
-					})
+					}); err != nil {
+						debug.Log("swarm", "teammate %s transient rollback of task %s failed: %v", tm.ID, claimed.ID, err)
+					}
 				}
 			}
 		} else {
 			completed := task.StatusCompleted
-			tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed})
+			if _, err := tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed}); err != nil {
+				// #4367: the success path must not strand a finished task on the
+				// board invisibly; not-found (concurrent delete) is the realistic
+				// error today, but persistence failures would land here too.
+				debug.Log("swarm", "teammate %s completion of task %s failed: %v", tm.ID, claimed.ID, err)
+			}
 			// Persist the final output on the board so dependent tasks
 			// claimed later inherit the findings (dep-chain blackboard).
 			persistTaskResult(tmMgr, claimed.ID, result)
