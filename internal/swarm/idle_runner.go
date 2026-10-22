@@ -278,6 +278,16 @@ func tryClaimPendingTask(
 			// Another teammate beat us — continue to next task.
 			continue
 		}
+		// #4367: write CurrentTaskID IMMEDIATELY after the claim succeeds and
+		// BEFORE any code that can panic (probe consumption, onEvent callbacks,
+		// prompt building). The panic-recovery defer's rollbackClaimedTask is
+		// keyed on this field; writing it late re-opened exactly the window
+		// #1688 closed — a panic in between read an empty ID, rolled back
+		// nothing, and left the task in_progress forever with every BlockedBy
+		// dependent deadlocked.
+		tm.mu.Lock()
+		tm.CurrentTaskID = claimed.ID
+		tm.mu.Unlock()
 		// #3245: the claim is REAL now - spend the armed probe slot (if
 		// any) exactly here. Gate passes that never reached a claim left
 		// the circuit OPEN+expired so a later tick can still probe; only
@@ -291,9 +301,6 @@ func tryClaimPendingTask(
 		// completed dependencies (dep-chain blackboard sharing).
 		prompt := buildTaskPrompt(claimed) + depFindingsPrompt(tmMgr, claimed)
 
-		tm.mu.Lock()
-		tm.CurrentTaskID = claimed.ID // #1688: panic rollback needs the board ID
-		tm.mu.Unlock()
 		tm.setStatus(TeammateWorking)
 		tm.setCurrentTask(util.Truncate(claimed.Subject, 100))
 
@@ -316,7 +323,9 @@ func tryClaimPendingTask(
 		if ctx.Err() != nil {
 			pending := task.StatusPending
 			owner := ""
-			tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &pending, Owner: &owner})
+			if _, err := tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &pending, Owner: &owner}); err != nil {
+				debug.Log("swarm", "teammate %s ctx-cancel rollback of task %s failed: %v", tm.ID, claimed.ID, err)
+			}
 			if onEvent != nil {
 				onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
 			}
@@ -337,10 +346,12 @@ func tryClaimPendingTask(
 				errMsg := util.Truncate(taskErr.Error(), 200)
 				meta := map[string]string{"permanent_error": fc.String(), "error": errMsg}
 				meta = attachAttribution(meta, buildFailureAttribution(tm, claimed.ID, taskErr)) // sa-90 step-level attribution
-				tmMgr.Update(claimed.ID, task.UpdateOptions{
+				if _, err := tmMgr.Update(claimed.ID, task.UpdateOptions{
 					Status:   &completed,
 					Metadata: meta,
-				})
+				}); err != nil {
+					debug.Log("swarm", "teammate %s park of task %s as completed(%s) failed: %v", tm.ID, claimed.ID, fc, err)
+				}
 				debug.Log("swarm", "teammate %s task %s permanently failed (%s): %v",
 					tm.ID, claimed.ID, fc, taskErr)
 			} else {
@@ -365,25 +376,31 @@ func tryClaimPendingTask(
 						"retry_attempts":  strconv.Itoa(attempts),
 					}
 					meta = attachAttribution(meta, buildFailureAttribution(tm, claimed.ID, taskErr)) // sa-90 step-level attribution
-					tmMgr.Update(claimed.ID, task.UpdateOptions{
+					if _, err := tmMgr.Update(claimed.ID, task.UpdateOptions{
 						Status:   &completed,
 						Metadata: meta,
-					})
+					}); err != nil {
+						debug.Log("swarm", "teammate %s park of task %s as completed(max_retries) failed: %v", tm.ID, claimed.ID, err)
+					}
 					debug.Log("swarm", "teammate %s task %s exceeded %d transient retries, parking as completed(max_retries): %v",
 						tm.ID, claimed.ID, maxTransientTaskRetries, taskErr)
 				} else {
 					pending := task.StatusPending
 					owner := ""
-					tmMgr.Update(claimed.ID, task.UpdateOptions{
+					if _, err := tmMgr.Update(claimed.ID, task.UpdateOptions{
 						Status:   &pending,
 						Owner:    &owner,
 						Metadata: map[string]string{"retry_attempts": strconv.Itoa(attempts)},
-					})
+					}); err != nil {
+						debug.Log("swarm", "teammate %s transient rollback of task %s failed: %v", tm.ID, claimed.ID, err)
+					}
 				}
 			}
 		} else {
 			completed := task.StatusCompleted
-			tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed})
+			if _, err := tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed}); err != nil {
+				debug.Log("swarm", "teammate %s completion of task %s failed: %v", tm.ID, claimed.ID, err)
+			}
 			// Persist the final output on the board so dependent tasks
 			// claimed later inherit the findings (dep-chain blackboard).
 			persistTaskResult(tmMgr, claimed.ID, result)
@@ -663,7 +680,7 @@ func allBlockersComplete(tmMgr *task.Manager, tk task.Task) bool {
 	for _, blockerID := range tk.BlockedBy {
 		blocker, ok := tmMgr.Get(blockerID)
 		if !ok {
-			// Blocker doesn't exist (deleted?) — treat as unmet dependency.
+			// Blocker doesn't exist (deleted?) - treat as unmet dependency.
 			return false
 		}
 		if blocker.Status != task.StatusCompleted {
