@@ -185,6 +185,12 @@ func coerceInteger(val json.RawMessage) (json.RawMessage, bool) {
 	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
 		return json.RawMessage(strconv.FormatInt(n, 10)), true
 	}
+	// #4376: float-form integer literals ("9007199254740993.0", "...e0")
+	// lose precision through the float64 round-trip below — 2^53+1 silently
+	// becomes 2^53. Rewrite them to exact plain decimal first.
+	if d := exactDecimal(s); d != "" {
+		return json.RawMessage(d), true
+	}
 	// Tolerate "42.0" — models sometimes send floats for integer fields.
 	if f, err := strconv.ParseFloat(s, 64); err == nil {
 		// Guard against overflow: converting out-of-range floats (e.g. "1e300")
@@ -217,6 +223,12 @@ func coerceNumber(val json.RawMessage) (json.RawMessage, bool) {
 	if s == "" {
 		return val, false
 	}
+	// #4376: integer-valued strings must bypass the float64 round-trip —
+	// ParseFloat+FormatFloat silently turns 2^53+1 into 2^53 for MCP tools
+	// whose schema declares "number" but whose values are large integer IDs.
+	if d := exactDecimal(s); d != "" {
+		return json.RawMessage(d), true
+	}
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		return val, false
@@ -231,6 +243,86 @@ func coerceNumber(val json.RawMessage) (json.RawMessage, bool) {
 		return val, false
 	}
 	return json.RawMessage(strconv.FormatFloat(f, 'f', -1, 64)), true
+}
+
+// exactDecimal rewrites an integer-valued decimal literal — including
+// float forms like "42.0", "1e3" or "9007199254740993.0" — into its exact
+// plain-decimal representation, so callers can ParseInt without a lossy
+// float64 round-trip (#4376). Returns "" when s is not such a literal or
+// the exact value is out of int64 range (callers then fall back to float,
+// preserving pre-existing behavior for those inputs).
+func exactDecimal(s string) string {
+	neg := false
+	if strings.HasPrefix(s, "-") {
+		neg = true
+		s = s[1:]
+	}
+	// Optional leading + ("+42.0") is legal for strconv.ParseFloat and must
+	// be handled here too or such strings silently skip the exact path.
+	s = strings.TrimPrefix(s, "+")
+	if s == "" {
+		return ""
+	}
+	mant, exp := s, 0
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		mant = s[:i]
+		e, err := strconv.Atoi(s[i+1:])
+		if err != nil {
+			return ""
+		}
+		exp = e
+	}
+	intPart, fracPart := mant, ""
+	if i := strings.IndexByte(mant, '.'); i >= 0 {
+		intPart, fracPart = mant[:i], mant[i+1:]
+	}
+	if intPart == "" || !allDigits(intPart) || !allDigits(fracPart) {
+		return ""
+	}
+	digits := intPart + fracPart
+	point := len(intPart) + exp // decimal point position within digits
+	if point < 0 || point > len(digits)+20 {
+		// point < 0: value < 1 (only integral if all zeros — reject, callers'
+		// float path with its integrality guard handles absurd "0e-5" inputs
+		// exactly as before). Cap exponent expansion to keep this O(1)-ish.
+		return ""
+	}
+	if point < len(digits) && !allZero(digits[point:]) {
+		return "" // non-integral (e.g. "3.14", "1.5e1") — not our case
+	}
+	for len(digits) < point {
+		digits += "0"
+	}
+	out := digits[:point]
+	if out == "" {
+		return ""
+	}
+	if neg {
+		out = "-" + out
+	}
+	// Exact range check: ParseInt both validates and is the caller's parse.
+	if _, err := strconv.ParseInt(out, 10, 64); err != nil {
+		return ""
+	}
+	return out
+}
+
+func allDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func allZero(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] != '0' {
+			return false
+		}
+	}
+	return true
 }
 
 // coerceBoolean converts string-encoded booleans to actual booleans.
