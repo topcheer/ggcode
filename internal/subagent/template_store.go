@@ -44,6 +44,10 @@ type TemplateStore struct {
 	// writer's file internally consistent; last-writer-wins across processes
 	// is the documented boundary.
 	mu sync.Mutex
+
+	// touchOnce throttles the liveness refresh below to one attempt per
+	// store instance, so repeated Loads don't pay a Chtimes syscall each.
+	touchOnce sync.Once
 }
 
 // NewTemplateStore creates a store for the given workspace.
@@ -155,6 +159,16 @@ func (s *TemplateStore) loadByName(name string) (NamedAgentTemplate, error) {
 	if t.Name != "" && strings.TrimSpace(strings.ToLower(t.Name)) != strings.TrimSpace(strings.ToLower(name)) {
 		return NamedAgentTemplate{}, fmt.Errorf("load template %q: filename collision with %q", name, t.Name)
 	}
+	// #4362: SweepStaleWorkspaceDirs uses the workspace dir's mtime as its
+	// liveness signal, but a successful Load never refreshed it — a template
+	// that was read regularly but not rewritten for 90d was silently RemoveAll'd
+	// as soon as any OTHER workspace started a sweep. Refresh the dir mtime on
+	// the first successful hit per store instance (best-effort, throttled).
+	s.touchOnce.Do(func() {
+		if err := os.Chtimes(s.dir, time.Now(), time.Now()); err != nil {
+			debug.Log("subagent", "template dir mtime refresh failed for %s: %v", s.dir, err)
+		}
+	})
 	return t, nil
 }
 
