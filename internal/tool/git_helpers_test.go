@@ -114,6 +114,21 @@ func TestInjectCoAuthorTrailer(t *testing.T) {
 	}
 }
 
+func TestInjectCoAuthorTrailerDisabled(t *testing.T) {
+	t.Setenv("GGCODE_NO_COAUTHOR", "1")
+	if !coAuthorInjectionDisabled() {
+		t.Fatal("coAuthorInjectionDisabled() = false, want true with GGCODE_NO_COAUTHOR set")
+	}
+	original := `git commit -m "feat: add feature"`
+	if got := injectCoAuthorTrailer(original); got != original {
+		t.Errorf("expected no injection when disabled, got: %s", got)
+	}
+	// No -m path must also pass through untouched.
+	if got := injectCoAuthorTrailer("git commit"); got != "git commit" {
+		t.Errorf("expected no --trailer injection when disabled, got: %s", got)
+	}
+}
+
 func TestIsBinaryFile(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_binary_test_*")
 	defer os.RemoveAll(dir)
