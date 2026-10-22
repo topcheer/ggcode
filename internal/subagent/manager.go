@@ -221,9 +221,18 @@ func (s *SubAgent) appendEvent(ev AgentEvent) {
 				}
 			}
 			remaining := s.events[dropIdx:]
-			if savedText.Len() > 0 && len(remaining) > 0 && remaining[0].Type == AgentEventText {
-				// Merge dropped text into the first remaining text event.
-				remaining[0].Text = savedText.String() + remaining[0].Text
+			if savedText.Len() > 0 && len(remaining) > 0 {
+				if remaining[0].Type == AgentEventText {
+					// Merge dropped text into the first remaining text event.
+					remaining[0].Text = savedText.String() + remaining[0].Text
+				} else {
+					// The first remaining event is not text (e.g. reasoning in
+					// an interleaved text/reasoning stream): keep the salvaged
+					// text as its own Text event instead of silently dropping
+					// it (#4359).
+					salvaged := AgentEvent{Type: AgentEventText, Text: savedText.String(), Time: now}
+					remaining = append([]AgentEvent{salvaged}, remaining...)
+				}
 			}
 			s.events = remaining
 		} else {
