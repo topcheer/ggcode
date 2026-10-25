@@ -52,6 +52,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 )
 
 const (
@@ -307,19 +308,63 @@ func stripNonDirectiveText(text string) string {
 	return strings.Join(lines, "\n")
 }
 
+// inlineQuotedContext reports whether the negate-pattern match at
+// text[start:end] is wrapped in inline quotes in the surrounding
+// sentence (#4398). Two shapes:
+//   - an opening quote directly before the match (`"don't touch ...`)
+//   - the match truncated at a period inside a dotted filename, with the
+//     closing quote just past the truncation point
+//     (`"don't touch config.yaml"` matched only `don't touch config`)
+const inlineQuoteTailWindow = 8
+
+func inlineQuotedContext(text string, start, end int) bool {
+	if start > 0 {
+		if prev := text[start-1]; prev == '"' || prev == '`' {
+			return true
+		}
+	}
+	if end < len(text) && text[end] == '.' {
+		tail := text[end:]
+		if len(tail) > inlineQuoteTailWindow {
+			tail = tail[:inlineQuoteTailWindow]
+		}
+		if strings.ContainsAny(tail, "\"`") {
+			return true
+		}
+	}
+	return false
+}
+
 // extractRefusals returns negation-form refusal excerpts from user text.
 // #4284: only DIRECT user instructions are extracted - quoted text, pasted
 // logs, and code comments are stripped first (see stripNonDirectiveText).
 func extractRefusals(text string) []string {
+	out := extractRefusalCandidates(text)
+	excerpts := make([]string, 0, len(out))
+	for _, c := range out {
+		excerpts = append(excerpts, c.Excerpt)
+	}
+	return excerpts
+}
+
+// refusalCandidate pairs an extracted excerpt with the #4398 discussion
+// verdict (inline-quote escape: quoted/CJK-discussed negation text must
+// not enter the ledger as a user-direct hard block).
+type refusalCandidate struct {
+	Excerpt   string
+	Discussed bool
+}
+
+func extractRefusalCandidates(text string) []refusalCandidate {
 	if len(text) == 0 {
 		return nil
 	}
 	text = stripNonDirectiveText(text)
-	matches := refusalNegatePattern.FindAllString(text, -1)
-	out := make([]string, 0, len(matches))
+	locs := refusalNegatePattern.FindAllStringIndex(text, -1)
+	out := make([]refusalCandidate, 0, len(locs))
 	seen := map[string]bool{}
-	for _, m := range matches {
-		e := strings.TrimSpace(m)
+	for _, loc := range locs {
+		e := strings.TrimSpace(text[loc[0]:loc[1]])
 		if len(e) > refusalExcerptLen {
 			r := []rune(e)
 			cut := refusalExcerptLen
@@ -328,15 +373,15 @@ func extractRefusals(text string) []string {
 			}
 			e = string(r[:cut]) + "..."
 		}
-		key := strings.ToLower(e)
-		if len(key) > 40 {
-			key = key[:40]
-		}
+		key := refusalKey(e)
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		out = append(out, e)
+		out = append(out, refusalCandidate{
+			Excerpt:   e,
+			Discussed: excerptLooksDiscussed(e) || inlineQuotedContext(text, loc[0], loc[1]),
+		})
 	}
 	return out
 }
@@ -349,8 +394,17 @@ func (l *refusalLedger) record(excerpt, source, kind string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	key := refusalKey(excerpt)
-	for _, e := range l.data.Entries {
+	for i, e := range l.data.Entries {
 		if refusalKey(e.Excerpt) == key {
+			// #4398: first-come-wins let an inline-quoted DISCUSSION entry
+			// (fragment) swallow the user's later REAL directive that dedupes
+			// to the same key. A direct record upgrades a stored fragment;
+			// the reverse never downgrades.
+			if kind == refusalKindDirect && e.Kind != refusalKindDirect {
+				l.data.Entries[i].Kind = refusalKindDirect
+				l.data.Entries[i].Ts = time.Now().Unix()
+				l.saveLocked()
+			}
 			return // already persisted
 		}
 	}
@@ -584,14 +638,51 @@ func (l *refusalLedger) clear() {
 	l.saveLocked()
 }
 
+// excerptLooksDiscussed reports whether a negate-pattern excerpt carries
+// discussion/quote markers rather than being the user's own directive
+// (#4398). The #4284 line-shape strip only catches line-LEADING quote
+// shapes; INLINE quoting ("行内说 \"don't touch config\" 这类拒绝...",
+// backtick regex source like `don'?t`, negation keywords inside CJK
+// analysis prose) escaped it entirely and entered the ledger as
+// user-direct - production data showed 13/15 entries polluted. Such
+// excerpts are downgraded to the advisory-only fragment kind: still
+// visible in /refusals, never hard-blocking.
+//
+// Signals (any one suffices; all are near-certain discussion markers for
+// ENGLISH negation keywords):
+//   - a backtick: code/regex/test material quoting the pattern itself
+//   - a straight double quote inside the excerpt: the phrase was wrapped
+//     in quotes mid-sentence
+//   - CJK runes: the English negate pattern matched inside Chinese
+//     discussion prose; real Chinese directives use the CJK refusal
+//     dictionary (不许/别碰/不要), not English keywords
+func excerptLooksDiscussed(ex string) bool {
+	if strings.Contains(ex, "`") || strings.Contains(ex, "\"") {
+		return true
+	}
+	for _, r := range ex {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
+}
+
 // recordUserRefusals extracts and persists NL refusals from user text.
 // Called on every user message, right after the advisory constraint layer.
 func (a *Agent) recordUserRefusals(userText string) {
 	// #4284: extraction itself is source-filtered (quoted text / pasted
 	// logs / code comments never produce entries); whatever survives IS a
 	// direct user instruction.
-	for _, ex := range extractRefusals(userText) {
-		a.refusalLedger.record(ex, "nl", refusalKindDirect)
+	// #4398: ...except inline-quoted discussion, which the line-shape
+	// strip cannot see - those survive extraction but are downgraded to
+	// the advisory-only fragment kind here.
+	for _, c := range extractRefusalCandidates(userText) {
+		kind := refusalKindDirect
+		if c.Discussed {
+			kind = refusalKindFragment
+		}
+		a.refusalLedger.record(c.Excerpt, "nl", kind)
 	}
 }
 
