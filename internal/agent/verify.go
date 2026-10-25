@@ -594,6 +594,28 @@ func isNonFailureExit(command string, code int) bool {
 	return code == 5 && strings.Contains(command, "pytest")
 }
 
+// zeroFailSummary reports a passing "0 failed"/"0 failures" summary
+// with a left digit boundary, so real failure summaries like "10 failed,
+// 2 passed" (or 20/100...) are not swallowed by the #4403 success-
+// negation filter (#4415 V1).
+func zeroFailSummary(lower string) bool {
+	for _, pat := range []string{"0 failed", "0 failures"} {
+		idx := 0
+		for {
+			i := strings.Index(lower[idx:], pat)
+			if i < 0 {
+				break
+			}
+			at := idx + i
+			if at == 0 || (lower[at-1] < '0' || lower[at-1] > '9') {
+				return true
+			}
+			idx = at + 1
+		}
+	}
+	return false
+}
+
 // extractErrorLines pulls likely error lines from build/test output.
 func extractErrorLines(output string) []string {
 	var errors []string
@@ -605,14 +627,21 @@ func extractErrorLines(output string) []string {
 		// echoes into the ratchet learning pipeline: "0 failed, 3 passed"
 		// summaries from passing packages, "without error" prose, and
 		// "--fail-fast" argument echoes all generalized into bogus rules.
-		if strings.Contains(lower, "0 failed") || strings.Contains(lower, "0 failures") ||
+		// #4415 V1: the first cut over-filtered - "0 failed" as a bare
+		// substring also swallowed "10 failed, 2 passed" (and 20/100...),
+		// and the HasPrefix("-") flag filter swallowed go test's standard
+		// "--- FAIL: TestX" per-test failure lines (only the package-level
+		// FAIL summary survived). Left-digit-boundary the zero counts and
+		// keep "--- " test-output markers out of the flag-echo filter.
+		if zeroFailSummary(lower) ||
 			strings.Contains(lower, "no error") || strings.Contains(lower, "without error") {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "-") &&
+		if strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "--- ") &&
 			(strings.Contains(lower, "fail") || strings.Contains(lower, "error")) {
 			// flag/argument echo (e.g. "--fail-fast", "-errorflags"), not
-			// command output.
+			// command output. "--- FAIL:"/"--- PASS:" test markers carry a
+			// space and are real output.
 			continue
 		}
 		if strings.Contains(lower, "error") || strings.Contains(lower, "fail") ||
