@@ -58,7 +58,7 @@ func (p *OpenAIProvider) ModelName() string { return p.model }
 // CloneWithModel returns a shallow copy of this provider with a different model.
 // Used by named subagents to run with a model override.
 func (p *OpenAIProvider) CloneWithModel(model string) Provider {
-	return &OpenAIProvider{
+	clone := &OpenAIProvider{
 		client:    p.client,
 		model:     model,
 		maxTokens: p.maxTokens,
@@ -77,7 +77,16 @@ func (p *OpenAIProvider) CloneWithModel(model string) Provider {
 		baseURL:         p.baseURL,
 		transport:       p.transport,
 		logprobs:        p.logprobs,
+		// #4419: same trap as #3066 (anthropic) - a struct literal silently
+		// dropped these two. responseSchema zero-value = structured-output
+		// constraint silently lost on model-override subagents; the
+		// atomic.Pointer literal copy carries only zero state.
+		responseSchema: append(json.RawMessage(nil), p.responseSchema...),
 	}
+	if ov := p.samplingOverride.Load(); ov != nil {
+		clone.samplingOverride.Store(ov)
+	}
+	return clone
 }
 
 // SetAdaptiveCap installs (or replaces) the adaptive max-output-tokens cap.
