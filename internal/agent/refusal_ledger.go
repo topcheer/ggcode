@@ -654,8 +654,14 @@ func (l *refusalLedger) clear() {
 //   - a straight double quote inside the excerpt: the phrase was wrapped
 //     in quotes mid-sentence
 //   - CJK runes: the English negate pattern matched inside Chinese
-//     discussion prose; real Chinese directives use the CJK refusal
-//     dictionary (不许/别碰/不要), not English keywords
+//     discussion prose. NOTE (#4415 V2): there is NO CJK extraction
+//     branch - refusalNegatePattern is English-only and the CJK words
+//     (不许/别碰/不要) only exist on the reaffirm/release side - so pure
+//     Chinese directives ("不要修改 config.yaml") are never EXTRACTED
+//     into the ledger at all. That is a pre-existing coverage gap, not a
+//     regression of this filter; the Han signal therefore cannot lose a
+//     real CJK refusal it never saw. Adding a CJK negate branch is a
+//     separate work item.
 func excerptLooksDiscussed(ex string) bool {
 	if strings.Contains(ex, "`") || strings.Contains(ex, "\"") {
 		return true
