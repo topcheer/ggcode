@@ -446,7 +446,7 @@ func (t WriteCommandInputTool) Execute(ctx context.Context, input json.RawMessag
 	if args.AppendNewline != nil {
 		appendNewline = *args.AppendNewline
 	}
-	snap, err := t.Manager.Write(args.JobID, args.Input, appendNewline)
+	snap, err := t.Manager.Write(ctx, args.JobID, args.Input, appendNewline)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}

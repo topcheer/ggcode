@@ -118,7 +118,7 @@ func TestCommandJobManagerWriteInput(t *testing.T) {
 		t.Fatalf("start command job: %v", err)
 	}
 
-	if _, err := mgr.Write(started.ID, "hello async", true); err != nil {
+	if _, err := mgr.Write(context.Background(), started.ID, "hello async", true); err != nil {
 		t.Fatalf("write command input: %v", err)
 	}
 
@@ -145,7 +145,7 @@ func TestCommandJobManagerWriteInputFailsForStoppedJob(t *testing.T) {
 	if _, err := mgr.Wait(context.Background(), started.ID, 2*time.Second, 20, 0); err != nil {
 		t.Fatalf("wait command job: %v", err)
 	}
-	if _, err := mgr.Write(started.ID, "late input", true); err == nil {
+	if _, err := mgr.Write(context.Background(), started.ID, "late input", true); err == nil {
 		t.Fatal("expected write to completed command job to fail")
 	}
 }
@@ -264,8 +264,10 @@ func TestSnapshotTotalLinesExcludesPartial(t *testing.T) {
 		t.Fatalf("since_line=1 polling must return the merged line, got %q", s.Lines)
 	}
 
-	if _, err := mgr.Stop(started.ID); err != nil {
-		t.Fatalf("stop: %v", err)
+	// #4431: the job has already completed by now, so Stop must honor its
+	// documented contract and return an error instead of silently succeeding.
+	if _, err := mgr.Stop(started.ID); err == nil {
+		t.Fatal("stop on completed job must return an error (#4431)")
 	}
 }
 

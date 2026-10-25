@@ -494,7 +494,7 @@ func (m *CommandJobManager) Stop(id string) (CommandJobSnapshot, error) {
 	return m.snapshot(job), nil
 }
 
-func (m *CommandJobManager) Write(id, input string, appendNewline bool) (CommandJobSnapshot, error) {
+func (m *CommandJobManager) Write(ctx context.Context, id, input string, appendNewline bool) (CommandJobSnapshot, error) {
 	job, err := m.get(id)
 	if err != nil {
 		return CommandJobSnapshot{}, err
@@ -512,8 +512,26 @@ func (m *CommandJobManager) Write(id, input string, appendNewline bool) (Command
 	if appendNewline {
 		input += "\n"
 	}
-	if _, err := io.WriteString(stdin, input); err != nil {
-		return CommandJobSnapshot{}, fmt.Errorf("write command input: %w", err)
+	// #4431: a child that never reads stdin (pipe buffer full) blocks
+	// io.WriteString forever - the raw Write cannot be interrupted by ctx
+	// cancellation alone, so run it in its own goroutine and select. On
+	// cancellation close the pipe fd: the stuck writer then returns
+	// ErrClosed instead of leaking, and we reap it before returning.
+	type writeResult struct{ err error }
+	done := make(chan writeResult, 1)
+	safego.Go("tool.commandJob.write", func() {
+		_, werr := io.WriteString(stdin, input)
+		done <- writeResult{werr}
+	})
+	select {
+	case r := <-done:
+		if r.err != nil {
+			return CommandJobSnapshot{}, fmt.Errorf("write command input: %w", r.err)
+		}
+	case <-ctx.Done():
+		_ = stdin.Close()
+		<-done
+		return CommandJobSnapshot{}, fmt.Errorf("write command input: %w", ctx.Err())
 	}
 	return m.snapshot(job), nil
 }
@@ -943,7 +961,15 @@ func jobSnapshotStatus(job *CommandJob) CommandJobStatus {
 func stopCommandJob(job *CommandJob) error {
 	job.mu.Lock()
 	cancel := job.cancel
+	status := job.Status
 	job.mu.Unlock()
+	// #4431: honor stop_command's documented contract - stopping an
+	// already completed job returns an error. It used to silently
+	// succeed: cancel() on a dead ctx is a no-op and job.done is already
+	// closed, so the select below fell through to nil immediately.
+	if status != CommandJobRunning {
+		return fmt.Errorf("command job %q is %s, not running", job.ID, status)
+	}
 	if cancel == nil {
 		return nil
 	}
