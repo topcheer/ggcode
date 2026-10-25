@@ -1703,7 +1703,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// err chain plus the sentinel so timeout-aborted runs skip
 		// reflection/failure-attribution like user cancellations do.
 		isCancelled := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-			errors.Is(err, ErrSessionTimeout) ||
+			errors.Is(err, ErrSessionTimeout) || errors.Is(err, ErrSessionBudgetExhausted) ||
 			(err == nil && ctx.Err() != nil && (errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded)))
 		if !isCancelled {
 			a.maybeReflect(runStats)
@@ -6009,6 +6009,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		})
 		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ErrSessionTimeout})
 		return ErrSessionTimeout
+	}
+	// #4421: a budget stop armed on the FINAL iteration is swallowed by
+	// the loop condition (i++ fails, the loop-top gate never runs) and
+	// fell through to the generic "max iterations (N) reached" error -
+	// headless callers then misclassified a budget truncation as spin-out,
+	// exactly what #4409 set out to fix. Same dedicated summary + sentinel
+	// as the loop-top gate.
+	if sessionBudgetStop {
+		runStats.finalize(nil) // compute Duration for the summary
+		summary := runStats.Summary()
+		onEvent(provider.StreamEvent{
+			Type: provider.StreamEventText,
+			Text: fmt.Sprintf("\nSession budget exhausted (token/cost/delegated/time limit reached). No further LLM calls this run. Summary: %s.\nYour task may be partially complete - review the changes above. You can continue by sending a follow-up message or raising the session budget.", summary),
+		})
+		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ErrSessionBudgetExhausted})
+		debug.Log("session-token-budget", "budget stop armed on final iteration; sentinel surfaced post-loop (#4421)")
+		return ErrSessionBudgetExhausted
 	}
 	// #3778: guidance that landed on the final iteration was persisted but
 	// never consumed in-run. Report the real reason - NOT the generic
