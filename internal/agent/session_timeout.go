@@ -23,6 +23,14 @@ var ErrSessionTimeout = errors.New("session wall-clock timeout exceeded")
 // normal completion.
 var ErrGuidanceAtBudget = errors.New("mid-run guidance arrived at iteration budget: not consumed this run, will be consumed next run")
 
+// ErrSessionBudgetExhausted is the sentinel error returned when an agent
+// run is hard-stopped by a session budget gate (token / cost / delegated
+// / time budget, #4409). Returning nil here made headless callers (cron,
+// sub-agents, ACP loops) misjudge half-finished work as successful
+// completion - the last silent truncation path; the wall-clock timeout
+// (#611) and guidance-at-budget (#3778) paths already return sentinels.
+var ErrSessionBudgetExhausted = errors.New("session budget exhausted (token/cost/delegated/time limit reached)")
+
 // Session Wall-Clock Timeout
 //
 // Research basis: While ggcode has iteration limits (maxIter), tool call budgets,

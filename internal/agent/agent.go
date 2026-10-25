@@ -2229,9 +2229,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// break sits at the loop TOP so the arming iteration's tool calls
 		// complete first (no stranded tool_use).
 		if sessionBudgetStop {
-			runStats.finalize(nil)
-			debug.Log("session-token-budget", "winding down: no further LLM calls (budget stop gate)")
-			return nil
+			// #4409: budget exhaustion is NOT success. The old `return nil`
+			// was the last silent truncation path: headless callers (cron,
+			// sub-agents, ACP) judge completion by err and misjudged
+			// half-finished work as done. Mirror the session-timeout
+			// pattern (#611): dedicated summary + sentinel error. Note the
+			// injected summarize guidance never got an LLM response (the
+			// break sits at the loop top), so the summary is stats-based.
+			runStats.finalize(nil) // compute Duration for the summary
+			summary := runStats.Summary()
+			onEvent(provider.StreamEvent{
+				Type: provider.StreamEventText,
+				Text: fmt.Sprintf("\nSession budget exhausted (token/cost/delegated/time limit reached). No further LLM calls this run. Summary: %s.\nYour task may be partially complete - review the changes above. You can continue by sending a follow-up message or raising the session budget.", summary),
+			})
+			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ErrSessionBudgetExhausted})
+			debug.Log("session-token-budget", "winding down: no further LLM calls (budget stop gate, sentinel returned)")
+			return ErrSessionBudgetExhausted
 		}
 		runStats.Iterations = i + 1
 		if err := ctx.Err(); err != nil {
