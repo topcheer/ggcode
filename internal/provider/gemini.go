@@ -40,7 +40,7 @@ func (p *GeminiProvider) ModelName() string { return p.model }
 
 // CloneWithModel returns a shallow copy of this provider with a different model.
 func (p *GeminiProvider) CloneWithModel(model string) Provider {
-	return &GeminiProvider{
+	clone := &GeminiProvider{
 		client:    p.client,
 		model:     model,
 		maxTokens: p.maxTokens,
@@ -56,7 +56,19 @@ func (p *GeminiProvider) CloneWithModel(model string) Provider {
 		serverTools:     append([]ServerToolConfig(nil), p.serverTools...),
 		policy:          p.policy,
 		logprobs:        p.logprobs,
+		// #4419: these two were silently dropped by the struct literal -
+		// the same trap #3066 fixed for anthropic. responseSchema is a
+		// plain slice (zero-value = constraint silently lost);
+		// samplingOverride is an atomic.Pointer whose literal copy carries
+		// only zero state. Clone AFTER the literal via Load/Store.
+		responseSchema: append(json.RawMessage(nil), p.responseSchema...),
 	}
+	// #4419/#3066: atomic.Pointer must be carried via Load/Store AFTER the
+	// literal - a struct-literal copy only carries zero state.
+	if ov := p.samplingOverride.Load(); ov != nil {
+		clone.samplingOverride.Store(ov)
+	}
+	return clone
 }
 
 // SetReasoningEffort sets the reasoning effort, which maps to Gemini's
