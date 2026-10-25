@@ -4129,6 +4129,10 @@ func parseA2ATimeout(s string) time.Duration {
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
+		// #4397: silent fallback is undiagnosable (same fix as the
+		// cmd/ggcode twin) - name the rejected value and the default
+		// actually used.
+		fmt.Fprintf(os.Stderr, "warning: invalid a2a.task_timeout %q (%v), using default %v\n", s, err, 5*time.Minute)
 		return 5 * time.Minute
 	}
 	return d
