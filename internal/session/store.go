@@ -1972,7 +1972,16 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 					debug.Log("session", "repairIndex: keeping orphan session %s — on-disk check unknown: %v", id, hasErr)
 					newIdx = append(newIdx, sessionToIndexEntry(ses))
 				} else if !interacted {
-					_ = os.Remove(s.sessionPath(id))
+					// #1307 discipline (same as pruneInvalidIndexEntries above):
+					// never swallow a failed Remove. If the unlink fails (permission,
+					// read-only mount, Windows file-in-use) the orphan stays on disk
+					// and is retried on the next repair pass; skipping the changed
+					// flag keeps a stuck file from forcing an index rewrite every
+					// round (#4357). A vanished file (IsNotExist race) is success.
+					if rmErr := os.Remove(s.sessionPath(id)); rmErr != nil && !os.IsNotExist(rmErr) {
+						debug.Log("session", "repairIndex: remove failed for orphan %s, keeping it un-indexed for the next pass: %v", id, rmErr)
+						continue
+					}
 				} else {
 					newIdx = append(newIdx, sessionToIndexEntry(ses))
 				}
