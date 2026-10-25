@@ -502,13 +502,20 @@ func (h *TunnelHost) Close() {
 		mgr.Stop()
 	}
 
-	// Stop the active share's tunnel session first (relay connection).
-	if ref != nil && ref.session != nil {
-		ref.session.Stop()
-	}
-	// Gracefully stop any active share so relay and mobile clients are notified
+	// #4412: order matters - the graceful-stop event (sharing_stopped) is
+	// DELIVERED over the relay websocket (the broker's session IS the relay
+	// connection). The old order tore the session down first, so the event
+	// could never be sent: the waiter hung and every Close blocked for the
+	// full 2s timeout while mobile clients stayed uninformed. Stop the
+	// share BEFORE the session; StopSharingGracefully itself waits for
+	// delivery, then stops the broker and destroys the session gracefully.
 	if online != nil {
 		online.StopSharingGracefully(2 * time.Second)
+	}
+	// Belt-and-suspenders: Stop is idempotent for an already-destroyed
+	// session and covers the path where no graceful stop ran.
+	if ref != nil && ref.session != nil {
+		ref.session.Stop()
 	}
 }
 
@@ -706,9 +713,15 @@ func (h *TunnelHost) markActive() {
 }
 
 func (h *TunnelHost) rollover(broker *tunnel.Broker, startNew bool) {
+	// #4412: claim the finalize flag ATOMICALLY with the read. The old
+	// check-act spanned two lock windows: two concurrent publishers (agent
+	// stream callback vs tunnel/IM inbound) could both read
+	// needsFinalize=true and each fire PushTextDone - a duplicate finalize
+	// event. Claim-and-clear in one window makes the push exactly-once.
 	h.mu.Lock()
 	msgID := h.currentMsgID
 	finalize := h.needsFinalize
+	h.needsFinalize = false
 	h.mu.Unlock()
 	if broker == nil || msgID == "" {
 		return
@@ -719,11 +732,6 @@ func (h *TunnelHost) rollover(broker *tunnel.Broker, startNew bool) {
 	if startNew {
 		h.mu.Lock()
 		h.currentMsgID = broker.NextMessageID()
-		h.needsFinalize = false
-		h.mu.Unlock()
-	} else {
-		h.mu.Lock()
-		h.needsFinalize = false
 		h.mu.Unlock()
 	}
 }
