@@ -274,16 +274,29 @@ func (m *CodeIndexManager) tryLock() bool {
 		_ = f.Close()
 		return false
 	}
+	// #4428: lockFile is guarded by m.mu - Stop() can call unlock() from
+	// an arbitrary goroutine while a lock-holding path (initial build /
+	// lazyLoad / rebuildDirty) is between tryLock and unlock, so the bare
+	// field write/read here was a data race (race-detector class).
+	// Verified at fix time: no caller reaches tryLock with m.mu held
+	// (all seven call sites release before locking), so taking m.mu here
+	// cannot self-deadlock.
+	m.mu.Lock()
 	m.lockFile = f
+	m.mu.Unlock()
 	return true
 }
 
-// unlock releases the cross-process lock.
+// unlock releases the cross-process lock. #4428: m.mu guards the
+// lockFile field read/write (same rationale as tryLock).
 func (m *CodeIndexManager) unlock() {
-	if m.lockFile != nil {
-		unlockFileExcl(m.lockFile)
-		_ = m.lockFile.Close()
-		m.lockFile = nil
+	m.mu.Lock()
+	f := m.lockFile
+	m.lockFile = nil
+	m.mu.Unlock()
+	if f != nil {
+		unlockFileExcl(f)
+		_ = f.Close()
 	}
 }
 
@@ -1004,6 +1017,16 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 	}
 	idx = clone
 
+	// #4428: the append branch below now enforces the same total-terms
+	// budget as the build path (codeIndexMaxTotalTermsOverride) - the
+	// dirty channel previously grew the persisted corpus without any
+	// cap, the exact budget bypass the #1625 fix closed for full builds.
+	totalTerms := 0
+	for _, d := range idx.docs {
+		totalTerms += d.length
+	}
+	maxTerms := codeIndexMaxTotalTermsOverride()
+
 	debug.Log("codeindex", "%s incremental: %d files changed", reason, len(dirty))
 	start := time.Now()
 
@@ -1045,6 +1068,15 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 		if info.IsDir() || info.Size() > codeIndexMaxFileSize {
 			continue
 		}
+		// #4428: the dirty channel (MarkDirty passes through write_file /
+		// edit_file paths verbatim) previously appended ANY file below the
+		// size cap - .png/.lock/.bin written via write_file got tokenized
+		// and persisted into the BM25 corpus, while the full-scan path has
+		// always filtered on isCodeFile. Same predicate here so the dirty
+		// channel and the full scan share one corpus standard.
+		if !isCodeFile(absPath) {
+			continue
+		}
 
 		data, err := os.ReadFile(absPath)
 		if err != nil {
@@ -1063,6 +1095,13 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 			updated++
 		} else {
 			// New file: append.
+			if maxTerms > 0 && totalTerms+len(terms) > maxTerms {
+				// #4428: corpus budget - same cap the build path applies per
+				// file; the dirty channel must not be an unbounded side door.
+				debug.Log("codeindex", "incremental append skipped, term budget reached: %s", relPath)
+				continue
+			}
+			totalTerms += len(terms)
 			idx.docs = append(idx.docs, newDoc)
 			docIdx[relPath] = len(idx.docs) - 1
 			for term := range newTF {
