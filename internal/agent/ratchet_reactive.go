@@ -110,8 +110,10 @@ var harnessAdvisoryPrefixes = []string{
 	"[truncation advisory",
 	"[full original output",
 	"destructive git operation detected",
-	"critical:",
-	"risk:",
+	// #4391: harness CRITICAL banners always carry a bracketed tag
+	// ("CRITICAL: [discard_all]") - anchoring on the bracket keeps a
+	// linter's bare "Critical: severity high" payload line intact.
+	"critical: [",
 	"safer alternative:",
 	"if this operation is intentional",
 	"security escalation:",
@@ -125,6 +127,7 @@ var harnessAdvisoryPrefixes = []string{
 func stripHarnessAdvisories(content string) string {
 	lines := strings.Split(content, "\n")
 	kept := make([]string, 0, len(lines))
+	prevDropped := false
 	for _, line := range lines {
 		trimmed := strings.ToLower(strings.TrimSpace(line))
 		drop := false
@@ -137,6 +140,16 @@ func stripHarnessAdvisories(content string) string {
 		if !drop && (strings.HasPrefix(trimmed, "\u26a0") || strings.HasPrefix(trimmed, "\u2192")) {
 			drop = true
 		}
+		// #4391: an indented line right after a dropped advisory line is
+		// that banner's continuation ("  Risk: ...", "  Safer alternative:
+		// ..." under DESTRUCTIVE/CRITICAL banners). It belongs to the
+		// harness, not the payload. The bare "risk:" prefix was removed so
+		// audit-tool "Risk: high" output stays matchable; this rule covers
+		// the banner continuation lines instead.
+		if !drop && prevDropped && line != strings.TrimLeft(line, " \t") {
+			drop = true
+		}
+		prevDropped = drop
 		if drop {
 			continue
 		}
