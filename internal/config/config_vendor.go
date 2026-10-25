@@ -154,7 +154,9 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 	// (no deadline / provider-wide retry default).
 	requestTimeout := time.Duration(0)
 	maxRetries := 0
+	mlPresent := false
 	if ml, ok := ep.ModelLimits[model]; ok {
+		mlPresent = true
 		maxTokens = ml.MaxTokens
 		contextWindow = ml.ContextWindow
 		requestTimeout = ml.RequestTimeout
@@ -163,11 +165,19 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 	if maxTokens == 0 {
 		maxTokens = ep.MaxTokens
 	}
-	if requestTimeout <= 0 {
-		requestTimeout = ep.RequestTimeout
-	}
-	if maxRetries <= 0 {
-		maxRetries = ep.MaxRetries
+	if !mlPresent {
+		// #4408-C2: the documented contract (config.go EndpointConfig/
+		// ModelLimits comments) is "a model_limits entry takes priority,
+		// 0 = none" - an explicit per-model 0 must NOT be overridden by the
+		// endpoint-level value, or there is no way to disable the timeout
+		// for a single model under a 45s endpoint. Inherit endpoint values
+		// only when no model_limits entry exists at all.
+		if requestTimeout <= 0 {
+			requestTimeout = ep.RequestTimeout
+		}
+		if maxRetries <= 0 {
+			maxRetries = ep.MaxRetries
+		}
 	}
 	if maxTokens == 0 {
 		maxTokens = inferMaxOutputTokens(model, ep.Protocol)
@@ -610,19 +620,31 @@ func (c *Config) RemoveEndpoint(vendor, endpoint string) error {
 			}
 		}
 		if c.Endpoint == "" {
-			// No endpoints left under this vendor - fall back to another vendor.
-			for name, v := range c.Vendors {
-				if name == vendor {
+			// No endpoints left under this vendor - fall back to another
+			// vendor. #4407: deterministic successor per #1422-B2 - bare map
+			// iteration picked a RANDOM survivor and the caller's saveConfig()
+			// persisted the random pick as permanent config. Lowest vendor
+			// name, then lowest endpoint name under it.
+			otherVendors := make([]string, 0, len(c.Vendors))
+			for vName := range c.Vendors {
+				if vName == vendor {
 					continue
 				}
-				for epName := range v.Endpoints {
-					c.Vendor = name
-					c.Endpoint = epName
-					break
+				otherVendors = append(otherVendors, vName)
+			}
+			sort.Strings(otherVendors)
+			for _, vName := range otherVendors {
+				eps := make([]string, 0, len(c.Vendors[vName].Endpoints))
+				for epName := range c.Vendors[vName].Endpoints {
+					eps = append(eps, epName)
 				}
-				if c.Endpoint != "" {
-					break
+				if len(eps) == 0 {
+					continue
 				}
+				sort.Strings(eps)
+				c.Vendor = vName
+				c.Endpoint = eps[0]
+				break
 			}
 		}
 	}
@@ -692,15 +714,31 @@ func (c *Config) RemoveVendor(name string) error {
 	if c.Vendor == name {
 		c.Vendor = ""
 		c.Endpoint = ""
-		for vName, v := range c.Vendors {
-			for epName := range v.Endpoints {
-				c.Vendor = vName
-				c.Endpoint = epName
-				break
+		// #4407: deterministic successor per #1422-B2 - the old bare map
+		// iteration selected a RANDOM surviving vendor/endpoint and the
+		// caller's saveConfig() persisted the random pick as permanent
+		// config; a randomly-selected vendor with a dead key then failed
+		// silently. Lowest vendor name, then lowest endpoint name.
+		vNames := make([]string, 0, len(c.Vendors))
+		for vName := range c.Vendors {
+			if vName == name {
+				continue
 			}
-			if c.Endpoint != "" {
-				break
+			vNames = append(vNames, vName)
+		}
+		sort.Strings(vNames)
+		for _, vName := range vNames {
+			eps := make([]string, 0, len(c.Vendors[vName].Endpoints))
+			for epName := range c.Vendors[vName].Endpoints {
+				eps = append(eps, epName)
 			}
+			if len(eps) == 0 {
+				continue
+			}
+			sort.Strings(eps)
+			c.Vendor = vName
+			c.Endpoint = eps[0]
+			break
 		}
 	}
 	return nil
