@@ -98,11 +98,17 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 	// otherwise RestoreKey reports success for an entry that no longer
 	// exists on disk (ghost-restore).
 	if len(digestedForgotten) > 0 {
-		f := am.loadForgotten()
-		for _, k := range digestedForgotten {
-			delete(f.Entries, k)
-		}
-		if err := am.saveForgotten(f); err != nil {
+		// #4413: same locked RMW as /memory forget - the old unlocked
+		// load→delete→save here could overwrite a forget mark recorded by
+		// the user in the same window (startup GC runs on a background
+		// goroutine), resurrecting a just-forgotten entry into injection.
+		err := am.mutateForgotten(func(f *userForgotten) bool {
+			for _, k := range digestedForgotten {
+				delete(f.Entries, k)
+			}
+			return true
+		})
+		if err != nil {
 			debug.Log("memory", "GC: failed to prune forget sidecar: %v", err)
 		}
 	}

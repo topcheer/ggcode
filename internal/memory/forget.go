@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Instruction-driven per-entry forgetting (r10, sa-160).
@@ -37,6 +39,35 @@ const forgottenFileName = "user-forgotten.json"
 type userForgotten struct {
 	// Entries maps the filename stem -> time the user forgot it.
 	Entries map[string]time.Time `json:"entries"`
+}
+
+// mutateForgotten performs a LOCKED read-modify-write on the forget
+// sidecar (#4413). It was the package's only unlocked RMW: the startup GC
+// runs on a background goroutine (safego.Go in agentruntime startup) and
+// its load→delete→save could overwrite a /memory forget mark recorded in
+// the same window - the mark was lost and the entry resurrected into
+// prompt injection, silently contradicting the user's intent. Same belt
+// as the usage sidecar: per-path writeMu (#1752) serializes in-process
+// RMWs; util.FileLock adds cross-process protection (r401 GAP-B) and
+// fails open on lock-infrastructure faults (knight precedent).
+func (am *AutoMemory) mutateForgotten(mutate func(f *userForgotten) bool) error {
+	path := filepath.Join(am.dir, forgottenFileName)
+	muAny, _ := writeMu.LoadOrStore(path, &sync.Mutex{})
+	mu := muAny.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if unlock, err := util.FileLock(am.dir + ".lock"); err == nil {
+		defer unlock()
+	} else {
+		debug.Log("memory", "forget sidecar filelock degraded to unlocked write: %v", err)
+	}
+
+	f := am.loadForgotten()
+	if !mutate(&f) {
+		return nil // no change requested
+	}
+	return am.saveForgotten(f)
 }
 
 // loadForgotten reads the sidecar (best-effort; missing file = nothing
@@ -93,12 +124,13 @@ func (am *AutoMemory) ForgetKey(key string) error {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return fmt.Errorf("memory %q not found", key)
 	}
-	f := am.loadForgotten()
-	if _, dup := f.Entries[safe]; dup {
-		return nil // idempotent: already forgotten
-	}
-	f.Entries[safe] = time.Now()
-	if err := am.saveForgotten(f); err != nil {
+	if err := am.mutateForgotten(func(f *userForgotten) bool {
+		if _, dup := f.Entries[safe]; dup {
+			return false // idempotent: already forgotten
+		}
+		f.Entries[safe] = time.Now()
+		return true
+	}); err != nil {
 		return err
 	}
 	debug.Log("memory", "forget: marked %q as user-forgotten (GC will digest)", safe)
@@ -110,12 +142,21 @@ func (am *AutoMemory) ForgetKey(key string) error {
 // a key that was never forgotten or has already been digested by GC.
 func (am *AutoMemory) RestoreKey(key string) error {
 	safe := disambiguateKey(key, sanitizeKey(key))
-	f := am.loadForgotten()
-	if _, ok := f.Entries[safe]; !ok {
+	restored := false
+	if err := am.mutateForgotten(func(f *userForgotten) bool {
+		if _, ok := f.Entries[safe]; !ok {
+			return false // nothing to restore - caller reports the error
+		}
+		delete(f.Entries, safe)
+		restored = true
+		return true
+	}); err != nil {
+		return err
+	}
+	if !restored {
 		return fmt.Errorf("memory %q is not forgotten", key)
 	}
-	delete(f.Entries, safe)
-	return am.saveForgotten(f)
+	return nil
 }
 
 // ListForgotten returns the forgotten keys, oldest first, formatted as
