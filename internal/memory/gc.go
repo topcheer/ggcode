@@ -61,7 +61,7 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 	for k := range forgotten {
 		delete(activeKeys, k)
 	}
-	var digestedForgotten []string
+	var digestedForgotten, forgetUsageKeys []string
 
 	stats := GCStats{Total: len(metas)}
 
@@ -104,12 +104,25 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 		}
 		if forgotten[m.Key] {
 			stats.ForgottenRemoved++
-			am.ForgetUsage(m.Key) // drop sidecar ghosts, same as DeleteMemory
+			// #4426: ForgetUsage itself FileLocks the SAME path (usage.go
+			// r401) - calling it inside the GC lock window is a same-flock
+			// self-conflict (flock conflicts per open-file-description, so
+			// two fds in one process still block): acquireWithRetry busy-
+			// waited the FULL 10s timeout per digested entry, fail-open,
+			// and the held lock also dragged OTHER processes' writes into
+			// their 10s timeouts. Defer to after unlockGC below, same
+			// guard as the sidecar prune.
+			forgetUsageKeys = append(forgetUsageKeys, m.Key)
 			digestedForgotten = append(digestedForgotten, m.Key)
 		}
 	}
 	if gcLocked {
 		unlockGC()
+	}
+	// #4426: outside the GC lock window - ForgetUsage re-acquires the lock
+	// itself (drop sidecar ghosts, same as DeleteMemory).
+	for _, k := range forgetUsageKeys {
+		am.ForgetUsage(k)
 	}
 
 	// The forget sidecar must not keep marks for files GC just digested -
