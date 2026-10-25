@@ -264,7 +264,10 @@ func TestSnapshotTotalLinesExcludesPartial(t *testing.T) {
 		t.Fatalf("since_line=1 polling must return the merged line, got %q", s.Lines)
 	}
 
-	if _, err := mgr.Stop(started.ID); err != nil {
+	// #4431: Stop on a finished job returns an explicit error (tool
+	// contract); if the quick command has not exited yet, Stop succeeds
+	// normally. Both outcomes are legal - this is inherently racy.
+	if _, err := mgr.Stop(started.ID); err != nil && !strings.Contains(err.Error(), "already finished") {
 		t.Fatalf("stop: %v", err)
 	}
 }

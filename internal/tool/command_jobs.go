@@ -512,11 +512,39 @@ func (m *CommandJobManager) Write(id, input string, appendNewline bool) (Command
 	if appendNewline {
 		input += "\n"
 	}
-	if _, err := io.WriteString(stdin, input); err != nil {
-		return CommandJobSnapshot{}, fmt.Errorf("write command input: %w", err)
+	// #4431: a blocking pipe write can never observe ctx — if the child stops
+	// reading stdin and the 64KB pipe buffer fills, io.WriteString hung the
+	// tool call forever (goroutine + write leak on cancel). Bound the write:
+	// a stuck child gets cancelled via job.cancel so the blocked WriteString
+	// returns with the pipe, and the caller gets a clear timeout error.
+	writeDone := make(chan error, 1)
+	go func() {
+		_, werr := io.WriteString(stdin, input)
+		writeDone <- werr
+	}()
+	select {
+	case werr := <-writeDone:
+		if werr != nil {
+			return CommandJobSnapshot{}, fmt.Errorf("write command input: %w", werr)
+		}
+	case <-time.After(commandStdinWriteTimeout):
+		// Unblock the writer goroutine: cancelling the job's context kills
+		// the child process, which closes the pipe and releases the write.
+		job.mu.Lock()
+		cancel := job.cancel
+		job.mu.Unlock()
+		if cancel != nil {
+			cancel()
+			<-writeDone // pipe closed by child exit; returns promptly
+		}
+		return CommandJobSnapshot{}, fmt.Errorf("write command input timed out after %s (child not reading stdin; job cancelled)", commandStdinWriteTimeout)
 	}
 	return m.snapshot(job), nil
 }
+
+// commandStdinWriteTimeout bounds a blocking stdin write against a child that
+// stopped reading input (#4431).
+const commandStdinWriteTimeout = 10 * time.Second
 
 func (m *CommandJobManager) newJob(command string, timeout time.Duration, cancel context.CancelFunc) *CommandJob {
 	m.mu.Lock()
@@ -943,9 +971,14 @@ func jobSnapshotStatus(job *CommandJob) CommandJobStatus {
 func stopCommandJob(job *CommandJob) error {
 	job.mu.Lock()
 	cancel := job.cancel
+	status := job.Status
 	job.mu.Unlock()
-	if cancel == nil {
-		return nil
+	// #4431: the stop_command tool documents that stopping an already
+	// completed or unknown job returns an error; silently returning success
+	// on a finished job misled agents relying on that contract. cancel is nil
+	// only for unit-test constructions; treat it the same as finished.
+	if cancel == nil || status != CommandJobRunning {
+		return fmt.Errorf("command job %q already finished (status: %s)", job.ID, status)
 	}
 	cancel()
 	select {
