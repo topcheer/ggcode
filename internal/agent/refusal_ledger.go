@@ -169,8 +169,12 @@ var refusalReleasePattern = regexp.MustCompile(
 // English terms are \b-bounded; CJK terms are NOT (Go regexp \b is an
 // ASCII word boundary and never matches beside CJK runes, so 别/保持 etc.
 // must live outside the \b group or they silently fail to veto).
+// #4399-A: the negation group after `still` is REQUIRED, not optional -
+// the old `(?:...)?` let bare "still" match (empty group + \b between the
+// space and the next word) and veto legitimate releases like "ok, you can
+// still modify config.yaml now". Intent (above) is "still don't/still not".
 var refusalReaffirmPattern = regexp.MustCompile(
-	`(?i)\b(?:don'?t|do not|never|no\s+new|avoid|must not|should not|stop using|still\s+(?:do(?:n'?t)?|not)?\b|stays?\b|keep\s+(?:avoiding|out|away|it\s+that\s+way)|leave\s+[^\n]{0,40}alone|untouched|off[- ]limits|forbidden|not\s+allowed|prohibited)\b|不许|别碰|不要|禁止|继续(?:别|不|不要|禁止|远离?|保持)|保持(?:现状|不动|原样|别动)`)
+	`(?i)\b(?:don'?t|do not|never|no\s+new|avoid|must not|should not|stop using|still\s+(?:do(?:n'?t)?|not)\b|stays?\b|keep\s+(?:avoiding|out|away|it\s+that\s+way)|leave\s+[^\n]{0,40}alone|untouched|off[- ]limits|forbidden|not\s+allowed|prohibited)\b|不许|别碰|不要|禁止|继续(?:别|不|不要|禁止|远离?|保持)|保持(?:现状|不动|原样|别动)`)
 
 // #3469 weak/strong lift split: bare "ok/fine/alright" prefixes are too
 // weak to release on their own (reaffirmations routinely start with
@@ -181,8 +185,14 @@ var refusalStrongLiftPattern = regexp.MustCompile(
 	`(?i)\b(?:go ahead|you (?:may|can) now|you(?:'re| are) (?:allowed|free) to|lift(?:ed)?)\b|解除|允许|可以了`)
 
 // #3712: CJK words outside the \b group (see refusalReleasePattern note).
+// #4399-B: `now`/`again`/`can` are removed - they are time fillers and
+// question-form modals with no authorization semantics, yet they satisfied
+// the authorize gate of the weak-lift path, letting read-only chatter like
+// "ok, now take a look at config.yaml" silently delete a 30-day block.
+// Real modal authorization ("you may/can now ...") already lives in
+// refusalStrongLiftPattern and stands alone without this gate.
 var refusalAuthorizePattern = regexp.MustCompile(
-	`(?i)\b(?:can|may|now|go ahead|allowed|free to|resume|again|touch|modify|edit|write|use)\b|可以|动了?|改了?|碰`)
+	`(?i)\b(?:may|go ahead|allowed|free to|resume|touch|modify|edit|write|use)\b|可以|动了?|改了?|碰`)
 
 // #3469 (note): provably read-only command shapes are not write-class
 // actions; blocking "grep foo build/" on a "build/" refusal target would
@@ -449,7 +459,10 @@ func (l *refusalLedger) checkBlocked(tool string, args string) string {
 	// (`echo x > f`, `cat a > b`, `find . -name f -delete`, `git log --output=f`).
 	// Any write evidence in the command disqualifies the exemption and the
 	// call falls through to normal entry matching (fail-closed).
-	if tool == "run_command" {
+	// #4400: start_command shares the command match domain (and the
+	// write-tools registration) with run_command, so the read-only exemption
+	// must cover it too - `tail -f` never mutates the refusal target.
+	if tool == "run_command" || tool == "start_command" {
 		var rc struct {
 			Command string `json:"command"`
 		}
