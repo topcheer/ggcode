@@ -390,10 +390,15 @@ func patchMCPServerConfig(base, patch MCPServerConfig) MCPServerConfig {
 	if patch.Type != "" {
 		merged.Type = patch.Type
 	}
-	if patch.Command != "" {
+	if patch.CommandClear {
+		// #4386: explicit clear sentinel beats the keep-old-value default.
+		merged.Command = ""
+	} else if patch.Command != "" {
 		merged.Command = patch.Command
 	}
-	if patch.URL != "" {
+	if patch.URLClear {
+		merged.URL = ""
+	} else if patch.URL != "" {
 		merged.URL = patch.URL
 	}
 	if patch.Args != nil {
