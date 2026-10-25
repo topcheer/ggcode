@@ -13,9 +13,12 @@ package config
 // so the reset actually reaches the file. When every override is reset the
 // merged file becomes empty and SaveInstance removes it altogether.
 //
-// Only top-level scalar-family keys are handled. Nested structures (ui, im,
-// vendors, ...) have partial-reset semantics of their own and are left to
-// their dedicated diff helpers.
+// Only top-level scalar-family keys are handled here. Nested structures
+// (ui, im, ...) have partial-reset semantics of their own and are left to
+// their dedicated diff helpers. vendors/a2a are additionally governed
+// below (#4411): their diff helpers only record additions/changes, so a
+// deleted or reverted override leaves no trace in the delta and the
+// deep-merge would resurrect the stale on-disk copy (#2106 family).
 var instanceResetManagedKeys = []string{
 	"vendor",
 	"endpoint",
@@ -48,6 +51,12 @@ var instanceResetNestedKeys = map[string][]string{
 	"knight":    {"trust_level", "daily_token_budget", "idle_delay_sec"},
 	"subagents": {"max_concurrent", "timeout"},
 	"swarm":     {"max_teammates_per_team", "teammate_timeout", "inbox_size", "poll_interval"},
+	// #4411: diffA2A only records fields where current != global. A field
+	// edited back to the global default disappears from the delta while the
+	// stale on-disk value survives the deep-merge and resurrects on reload -
+	// the same #2936 hole one level down. Known boundary: a2a.auth.* is a
+	// second nesting level this one-level table does not reach.
+	"a2a": {"disabled", "port", "host", "max_tasks", "task_timeout"},
 }
 
 // applyInstanceResets adds nil deletion markers to delta for managed keys
@@ -106,6 +115,32 @@ func applyInstanceResets(existingRaw, delta map[string]interface{}, instanceFiel
 				continue // explicit override (possibly an explicit zero)
 			}
 			deltaSection[sk] = nil // nested reset - delete from disk
+		}
+	}
+
+	// vendors (#4411): dynamic key-level deletion. diffVendors only
+	// records vendors that still override global (added or changed); a
+	// vendor deleted outright - or edited back to equal global - leaves
+	// no delta trace, and its len(current)==0 early return drops the
+	// whole section. Every on-disk vendor key absent from the section
+	// delta is therefore a stale override and gets a nil marker, so the
+	// deep-merge deletes it per-key instead of resurrecting a zombie
+	// vendor whose keys.env secret was already cleared by RemoveVendor.
+	if instanceFields["vendors"] {
+		if diskSection, ok := existingRaw["vendors"].(map[string]interface{}); ok && len(diskSection) > 0 {
+			deltaSection, inDelta := delta["vendors"].(map[string]interface{})
+			if !inDelta {
+				// All overrides gone but stale keys remain on disk -
+				// create the section delta to carry the deletions.
+				deltaSection = map[string]interface{}{}
+				delta["vendors"] = deltaSection
+			}
+			for k := range diskSection {
+				if _, kept := deltaSection[k]; kept {
+					continue // still an explicit override
+				}
+				deltaSection[k] = nil // stale override - delete from disk
+			}
 		}
 	}
 }
