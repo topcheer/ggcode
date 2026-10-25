@@ -2833,8 +2833,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// a single empty reply exited as silent success. The #4201 false-
 		// positive defense is carried entirely by the textBuf/Message.Content
 		// emptiness checks, so dropping the conjunct reintroduces nothing.
+		// #4392: thinking-only responses must count as empty. textBuf only
+		// accumulates StreamEventText, but assembly PREPENDS thinking blocks
+		// into resp.Message.Content, so the old `len(Content) == 0` conjunct
+		// was always false for a thinking-only reply (DeepSeek R1-style
+		// reasoning-then-stop through zero-usage gateways) - nudge skipped,
+		// strike never incremented, cron/subagent callers got silent false
+		// success (#1672 family). Judge emptiness semantically instead.
 		if resp.Usage.OutputTokens == 0 && len(toolCalls) == 0 &&
-			strings.TrimSpace(textBuf) == "" && len(resp.Message.Content) == 0 {
+			strings.TrimSpace(textBuf) == "" && !hasNonThinkingContent(resp.Message.Content) {
 			// Complete policy block (no partial text, no output tokens): the
 			// request was rejected by a provider safety filter. An empty-response
 			// nudge would just re-trigger the same filter - report and stop (#266).
@@ -6338,4 +6345,26 @@ func (a *Agent) fillCancelledToolResults(pending []provider.ToolCallDelta, resul
 			Content: *results,
 		})
 	}
+}
+
+// hasNonThinkingContent reports whether any content block carries real
+// output (non-blank text or a tool_use), as opposed to thinking-only
+// blocks. Used by the empty-response guard in the agent loop (#4392):
+// response assembly prepends thinking blocks into Message.Content, so raw
+// len(Content) cannot distinguish a thinking-only reply (which must count
+// as empty) from a substantive one.
+func hasNonThinkingContent(blocks []provider.ContentBlock) bool {
+	for _, b := range blocks {
+		switch b.Type {
+		case "thinking", "redacted_thinking":
+			continue
+		case "tool_use":
+			return true
+		default:
+			if strings.TrimSpace(b.Text) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }

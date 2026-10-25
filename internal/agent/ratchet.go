@@ -207,6 +207,20 @@ func (rs *RuleStore) MatchErrors(errors []string) (matched []string, unmatched [
 	for _, errMsg := range errors {
 		found := false
 		for i := range rs.rules {
+			// #4389: same quality floor as the reactive path
+			// (minMatchPatternLen). A non-empty pattern shorter than the
+			// floor is a keyword fragment ("fail") that matches almost any
+			// error output - counting it as a match starves real rule
+			// extraction (the error looks handled) while the rule can never
+			// be injected reactively, the #1008 count-but-invisible shape.
+			// Empty MatchPattern must be skipped too: compilePattern("")
+			// yields a match-everything regex, so user_edit /
+			// preventive-only rules (keyed on ToolPattern alone, r444)
+			// swallowed EVERY error as matched - same #1008 family found by
+			// the #4389 regression test.
+			if rs.rules[i].MatchPattern == "" || len(rs.rules[i].MatchPattern) < minMatchPatternLen {
+				continue
+			}
 			re, err := rs.compilePattern(rs.rules[i].MatchPattern)
 			if err != nil {
 				continue
@@ -292,6 +306,18 @@ func (rs *RuleStore) AddRule(r Rule) {
 	// rules out of the 60-slot LRU. Normalize (trim + lower) and fall back
 	// to "convention" for anything unrecognized.
 	r.Category = normalizeRuleCategory(r.Category)
+
+	// #4389: reject degenerate short patterns at the door. The reactive
+	// path refuses to inject rules with a MatchPattern below
+	// minMatchPatternLen, so admitting them here creates rules that only
+	// accrue HitCount and pollute the 60-slot LRU without ever being
+	// injectable. Empty MatchPattern stays legal: user_edit and
+	// preventive-only rules are keyed on ToolPattern alone.
+	if r.MatchPattern != "" && len(r.MatchPattern) < minMatchPatternLen {
+		debug.Log("ratchet", "rejected short MatchPattern rule (%d chars < %d): %q",
+			len(r.MatchPattern), minMatchPatternLen, r.MatchPattern)
+		return
+	}
 
 	// Check for semantic duplicates before adding.
 	// #3229: user_edit rules generated from a fixed template tokenize to
@@ -416,8 +442,17 @@ func (rs *RuleStore) DeduplicateRules() int {
 	for i := 1; i < len(rs.rules); i++ {
 		isDup := false
 		for j := range kept {
+			// #4390: 0.55 merged rule pairs that AddRule had just judged
+			// distinct at its 0.75 enqueue gate - the store contradicted
+			// itself, silently dropping the merged rule's MatchPattern and
+			// FixHint. Align with AddRule's single similarity verdict, and
+			// honor the same #3229 user_edit identity guard: two user_edit
+			// rules bound to different files are distinct by definition.
+			if userEditIdentityDistinct(kept[j], rs.rules[i]) {
+				continue
+			}
 			sim := ruleSimilarity(kept[j], rs.rules[i])
-			if sim >= 0.55 {
+			if sim >= 0.75 {
 				// Merge into the kept rule: sum hit counts, keep latest LastSeen.
 				// #1011: the previous unconditional assignment ran BEFORE this
 				// comparison, making the After check dead (both sides equal) and
