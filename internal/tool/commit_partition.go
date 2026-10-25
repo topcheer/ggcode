@@ -119,7 +119,9 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 		currentDel = 0
 	}
 
-	for _, line := range strings.Split(diffOutput, "\n") {
+	lines := strings.Split(diffOutput, "\n")
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
 		// #3164: capture-and-clear the header-adjacency flag for THIS line
 		// before any branch consumes it.
 		afterOld := prevWasOldHeader
@@ -189,7 +191,15 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 			newLineNum = 0
 			continue
 		}
-		if m := diffOldFileHeader.FindStringSubmatch(line); m != nil {
+		// #4433: a real old-side header is ALWAYS immediately followed by a
+		// "+++" line; without that adjacency check, deleted content like
+		// "-- a/foo" (content "-- a/foo" + its own '-' prefix) was consumed
+		// as a header - the removal was skipped, lastOldFile was polluted,
+		// and a following "+++ b/x"-shaped content line vanished via
+		// prevWasOldHeader. Non-adjacent matches fall through to the content
+		// counters below, exactly what the #3164 comment prescribes.
+		if m := diffOldFileHeader.FindStringSubmatch(line); m != nil &&
+			i+1 < len(lines) && strings.HasPrefix(lines[i+1], "+++ ") {
 			lastOldFile = m[1]
 			prevWasOldHeader = true
 			continue
