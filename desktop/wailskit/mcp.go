@@ -328,6 +328,17 @@ func AddMCPServer(values map[string]string) error {
 		Command: values["command"],
 		URL:     values["url"],
 	}
+	// #4386: command/url had no clear-channel twin of #1434-B's args_clear /
+	// #979's env_clear - clearing the field in the form saved
+	// "successfully" (an empty string reads as "not provided" at the patch
+	// layer) while the old command/url silently resurrected on reopen. An
+	// emptied (or explicitly *_clear-flagged) field now sets the sentinel.
+	if isTruthyFormFlag(values["command_clear"]) || values["command"] == "" {
+		serverCfg.CommandClear = true
+	}
+	if isTruthyFormFlag(values["url_clear"]) || values["url"] == "" {
+		serverCfg.URLClear = true
+	}
 
 	// Parse args from space-separated string with quote awareness.
 	// strings.Fields splits quoted paths containing spaces (e.g. "/Users/John Doe/").
