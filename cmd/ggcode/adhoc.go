@@ -184,12 +184,23 @@ func loadConfigForRun(cfgFile string, f *adhocLLMFlags) (*config.Config, error) 
 }
 
 // adhocInt resolves an int override: flag (non-zero) wins over env.
+// #4393: an explicitly-set but invalid env value (unparseable like "64k",
+// or non-positive like "0"/"-5") warns on stderr instead of silently
+// falling back to the default - the fallback is correct, but a typo'd
+// setting that never takes effect must be diagnosable (same class as the
+// #4216 half-pair warning; stderr survives pipe mode).
 func adhocInt(flagVal int, envKey string) int {
 	if flagVal > 0 {
 		return flagVal
 	}
 	if raw := strings.TrimSpace(os.Getenv(envKey)); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+		v, err := strconv.Atoi(raw)
+		switch {
+		case err != nil:
+			fmt.Fprintf(os.Stderr, "WARNING: ignoring invalid %s=%q (%v) - using the default instead\n", envKey, raw, err)
+		case v <= 0:
+			fmt.Fprintf(os.Stderr, "WARNING: ignoring invalid %s=%q (must be a positive integer) - using the default instead\n", envKey, raw)
+		default:
 			return v
 		}
 	}
