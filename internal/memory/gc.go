@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // GCStats holds statistics from a garbage collection run.
@@ -64,6 +65,20 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 
 	stats := GCStats{Total: len(metas)}
 
+	// #4416: hold the cross-process memory file lock across the re-stat
+	// mtime guard AND the Remove below. SaveMemory renames under this same
+	// lock (auto.go r401 GAP-B); without it, a rename landing in the
+	// Stat→Remove micro-window passed the stale-mtime guard and the freshly
+	// saved file was deleted permanently (the tmp had already been consumed
+	// by the rename - no archive, no tombstone, unrecoverable). Fail-open
+	// matches the save paths' posture (GC must not block on lock faults).
+	// Released explicitly before the sidecar prune below, which acquires
+	// the same lock via lockForgottenWrite (same-flock self-deadlock guard).
+	unlockGC, lockErr := util.FileLock(am.dir + ".lock")
+	gcLocked := lockErr == nil
+	if !gcLocked {
+		debug.Log("memory", "GC: filelock failed, degraded to unlocked delete: %v", lockErr)
+	}
 	for _, m := range metas {
 		if activeKeys[m.Key] {
 			continue
@@ -93,11 +108,18 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 			digestedForgotten = append(digestedForgotten, m.Key)
 		}
 	}
+	if gcLocked {
+		unlockGC()
+	}
 
-	// The forget sidecar must not keep marks for files GC just digested —
+	// The forget sidecar must not keep marks for files GC just digested -
 	// otherwise RestoreKey reports success for an entry that no longer
 	// exists on disk (ghost-restore).
 	if len(digestedForgotten) > 0 {
+		// #4413: this prune is itself a sidecar RMW - run it under the same
+		// write lock as ForgetKey/RestoreKey (acquired fresh: the GC lock
+		// above was already released).
+		unlock := am.lockForgottenWrite()
 		f := am.loadForgotten()
 		for _, k := range digestedForgotten {
 			delete(f.Entries, k)
@@ -105,6 +127,7 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 		if err := am.saveForgotten(f); err != nil {
 			debug.Log("memory", "GC: failed to prune forget sidecar: %v", err)
 		}
+		unlock()
 	}
 
 	removed := stats.ExpiredRemoved + stats.DedupRemoved + stats.ForgottenRemoved
