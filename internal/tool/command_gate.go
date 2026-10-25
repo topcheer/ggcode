@@ -98,7 +98,13 @@ func NewCommandGate() *CommandGate {
 	// routine build hygiene (rm -rf /tmp/build-cache) was hard-Blocked as
 	// root destruction. Keep only genuine catastrophic roots; /tmp and
 	// /var/folders style caches are deliberate non-members.
-	rmP := `(?:(~|/home|/Users|/etc|/var|/usr|/bin|/sbin|/lib|/boot)\b|/dev/)`
+	// #4430: `~` is not a word character, so the old `~\b` anchor only ever
+	// matched `~word` spellings - `~/` and a bare `~` NEVER hit, letting
+	// `rm --recursive ~ --force` through entirely (same dead-anchor family as
+	// #817). Split `~` into its own boundary form (`~` followed by a slash,
+	// whitespace, or end-of-input) and keep `\b` only for the letter-ending
+	// directory roots, where it is correct.
+	rmP := `(?:(~(?:/|\s|$)|/home\b|/Users\b|/etc\b|/var\b|/usr\b|/bin\b|/sbin\b|/lib\b|/boot\b)|/dev/)`
 	// #436: newline is a shell command separator too — the gap class must
 	// not cross it, else a benign multi-line script (`# comment` + `rm -f x`
 	// + `grep -r ... /etc`) let the grep segment contribute -r and /etc to
@@ -117,7 +123,7 @@ func NewCommandGate() *CommandGate {
 		// script-writing heredocs).
 		{kind: "catastrophic", desc: "recursive force delete of root/critical directory", quotedInert: true,
 			benignPrefixes: []string{"/var/folders", "/private/var/folders", "/tmp/"},
-			pattern:        regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive\s+--force|--force\s+--recursive)\s+(/(\s|$)|~/|/home/?|/Users/?|/etc/?|/var/?|/usr/?|/bin/?|/sbin/?|/lib/?|/boot/?|System|Applications|/dev/)`)},
+			pattern:        regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive\s+--force|--force\s+--recursive)\s+(/(\s|$)|~(?:/|\s|$)|/home/?|/Users/?|/etc/?|/var/?|/usr/?|/bin/?|/sbin/?|/lib/?|/boot/?|System|Applications|/dev/)`)},
 		{kind: "catastrophic", desc: "recursive force delete (alternate flag order)", quotedInert: true,
 			benignPrefixes: []string{"/var/folders", "/private/var/folders", "/tmp/"},
 			// Long-flag alternation uses literal --recursive/--force: inside a
@@ -446,14 +452,32 @@ func blankQuotedAndHeredocs(cmd string) string {
 			continue
 		}
 		out = append(out, blankQuotes(line))
-		if m := heredocOpenerRe.FindStringSubmatch(line); m != nil {
-			heredoc = m[1]
+		if hd, ok := heredocDelimiter(line); ok {
+			heredoc = hd
 		}
 	}
 	return strings.Join(out, "\n")
 }
 
 var heredocOpenerRe = regexp.MustCompile(`<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)`)
+
+// heredocDelimiter extracts the heredoc terminator word from a line, rejecting
+// here-string openers (#4430). RE2 has no lookarounds, so `cat <<< EOF` still
+// yields a <<-shaped match starting at the SECOND `<`; treating it as a heredoc
+// opener blanked the following lines into the inert view, downgrading a
+// catastrophic `rm -rf /etc` from Block to Ask even though here-string bodies
+// are a single word the shell never spans lines for. A genuine heredoc match
+// never starts right after another `<`.
+func heredocDelimiter(line string) (string, bool) {
+	loc := heredocOpenerRe.FindStringSubmatchIndex(line)
+	if loc == nil {
+		return "", false
+	}
+	if loc[0] > 0 && line[loc[0]-1] == '<' {
+		return "", false // part of a <<< here-string (or deeper < run)
+	}
+	return line[loc[2]:loc[3]], true
+}
 
 // blankQuotes replaces quoted interiors (single/double) with a space.
 func blankQuotes(line string) string {
@@ -501,21 +525,29 @@ func unwrapSimpleQuotedTokens(cmd string) string {
 			out = append(out, line)
 			continue
 		}
-		// The heredoc delimiter's quotes carry meaning (quoted = no
-		// expansion in body) - shield opener quotes from unwrapping.
-		shielded := heredocOpenerRe.ReplaceAllStringFunc(line, func(m string) string {
-			return strings.NewReplacer(`"`, "\x01", "'", "\x02").Replace(m)
-		})
-		shielded = simpleQuotedTokenRe.ReplaceAllString(shielded, "$1$2")
-		out = append(out, strings.NewReplacer("\x01", `"`, "\x02", "'").Replace(shielded))
-		if m := heredocOpenerRe.FindStringSubmatch(line); m != nil && len(m) > 1 {
-			heredoc = m[1]
+		sh := shieldHeredocQuotes(line)
+		sh = simpleQuotedTokenRe.ReplaceAllString(sh, "$1$2")
+		out = append(out, unshieldHeredocQuotes(sh))
+		if hd, ok := heredocDelimiter(line); ok {
+			heredoc = hd
 		}
 	}
 	return strings.Join(out, "\n")
 }
 
 var simpleQuotedTokenRe = regexp.MustCompile(`"([^"\s]+)"|'([^'\s]+)'`)
+
+// shieldHeredocQuotes masks the quotes around a heredoc delimiter so the
+// unwrapping pass below leaves them alone (quoted delimiter = no expansion).
+func shieldHeredocQuotes(line string) string {
+	return heredocOpenerRe.ReplaceAllStringFunc(line, func(m string) string {
+		return strings.NewReplacer(`"`, "\x01", "'", "\x02").Replace(m)
+	})
+}
+
+func unshieldHeredocQuotes(line string) string {
+	return strings.NewReplacer("\x01", `"`, "\x02", "'").Replace(line)
+}
 
 // gateMatchViews returns every normalized view the Block/Ask pattern layers
 // must match against (#436 separator view + #3125 unwrapped-flag view).
