@@ -108,6 +108,12 @@ var sdCaveatPhrases = []string{
 	// of a completion claim.
 	"let me verify", "verify if", "verifying if", "verifying whether",
 	"check if", "checking if", "let me check",
+	// #4401: "make sure" is the same verification-intent framing in a
+	// different verb suit. "Running tests to make sure everything is done."
+	// matched bare "done" with no caveat in the window - the sentence says
+	// verification is IN PROGRESS, and it also burned the run's single
+	// first-declaration slot (#364).
+	"make sure", "making sure",
 }
 
 // sdCaveatWindow is how many characters before/after the declaration

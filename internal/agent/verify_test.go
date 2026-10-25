@@ -4,6 +4,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -129,7 +131,19 @@ func TestExecuteVerifyCommand_PytestNoTestsSkips(t *testing.T) {
 	// pytest exits 5 when no tests are collected ("no tests ran"). That is
 	// "nothing to verify", not a code defect - must be a skip, not a failure
 	// that would inject errors and trigger auto-repair loops.
-	result := a.executeVerifyCommand(context.Background(), "python3 -m pytest --co -q /tmp/definitely-no-tests-here-xyz 2>/dev/null || exit 5")
+	// #4402: the old shape `... 2>/dev/null || exit 5` synthesized exit 5
+	// via a COMPOUND command - exactly the silent-green-chain pattern the
+	// new guard rejects (`go test; pytest` swallowing a real failure).
+	// Use a stub pytest binary in PATH instead: a SIMPLE command that
+	// exits 5, preserving the integration semantics.
+	binDir := t.TempDir()
+	stub := filepath.Join(binDir, "pytest")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 5\n"), 0755); err != nil {
+		t.Skipf("cannot write stub pytest: %v", err)
+	}
+	pathEnv := binDir + string(os.PathListSeparator) + os.Getenv("PATH")
+	t.Setenv("PATH", pathEnv)
+	result := a.executeVerifyCommand(context.Background(), "pytest --co -q /tmp/definitely-no-tests-here-xyz")
 	if !result.Passed {
 		t.Errorf("expected pass (skip) for pytest no-tests exit 5, got errors: %v", result.Errors)
 	}

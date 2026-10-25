@@ -584,6 +584,13 @@ func isNonFailureExit(command string, code int) bool {
 		return true
 	}
 	// pytest exit 5: no tests were collected - not a code defect.
+	// #4402: same compound-command guard as the 127 branch above (#1522
+	// case B) - `go test ./pkg; pytest` with a go compile failure exits 5
+	// from the pytest tail (0 collected); without the guard the real
+	// failure was swallowed into Passed=true ("silent green chain").
+	if strings.ContainsAny(command, "||;&&") {
+		return false
+	}
 	return code == 5 && strings.Contains(command, "pytest")
 }
 
@@ -594,6 +601,20 @@ func extractErrorLines(output string) []string {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		lower := strings.ToLower(trimmed)
+		// #4403: bare substring matching pulled success negations and flag
+		// echoes into the ratchet learning pipeline: "0 failed, 3 passed"
+		// summaries from passing packages, "without error" prose, and
+		// "--fail-fast" argument echoes all generalized into bogus rules.
+		if strings.Contains(lower, "0 failed") || strings.Contains(lower, "0 failures") ||
+			strings.Contains(lower, "no error") || strings.Contains(lower, "without error") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "-") &&
+			(strings.Contains(lower, "fail") || strings.Contains(lower, "error")) {
+			// flag/argument echo (e.g. "--fail-fast", "-errorflags"), not
+			// command output.
+			continue
+		}
 		if strings.Contains(lower, "error") || strings.Contains(lower, "fail") ||
 			strings.Contains(lower, "undefined:") || strings.Contains(lower, "cannot find") ||
 			strings.Contains(lower, "panic:") || strings.Contains(lower, "fatal") {
