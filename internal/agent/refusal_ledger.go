@@ -141,8 +141,9 @@ func (l *refusalLedger) saveLocked() {
 // layer also extracts "only use X"-style constraints; those are directives,
 // not refusals, and do not belong in an enforcement ledger).
 // #4340: the leave-alone gap is [^\n]{0,40} (line-bounded only, matching
-// the reaffirm pattern's own leave-gap convention at L161-style
-// `leave\s+[^\n]{0,10}alone`). The old [^n]{0,5} made the branch
+// the reaffirm pattern's leave-gap arm, widened in lockstep to
+// `leave\s+[^\n]{0,40}alone` so a strong-lift release carrying the
+// long-object phrasing is still vetoed). The old [^n]{0,5} made the branch
 // functionally dead - the gap holds two spaces plus the object, so {0,5}
 // capped objects at 3 chars, and [^n] excluded every object containing "n"
 // (main, config, nginx...). A [^.\n] gap would have repeated the same trap
@@ -169,7 +170,7 @@ var refusalReleasePattern = regexp.MustCompile(
 // ASCII word boundary and never matches beside CJK runes, so 别/保持 etc.
 // must live outside the \b group or they silently fail to veto).
 var refusalReaffirmPattern = regexp.MustCompile(
-	`(?i)\b(?:don'?t|do not|never|no\s+new|avoid|must not|should not|stop using|still\s+(?:do(?:n'?t)?|not)?\b|stays?\b|keep\s+(?:avoiding|out|away|it\s+that\s+way)|leave\s+[^\n]{0,10}alone|untouched|off[- ]limits|forbidden|not\s+allowed|prohibited)\b|不许|别碰|不要|禁止|继续(?:别|不|不要|禁止|远离?|保持)|保持(?:现状|不动|原样|别动)`)
+	`(?i)\b(?:don'?t|do not|never|no\s+new|avoid|must not|should not|stop using|still\s+(?:do(?:n'?t)?|not)?\b|stays?\b|keep\s+(?:avoiding|out|away|it\s+that\s+way)|leave\s+[^\n]{0,40}alone|untouched|off[- ]limits|forbidden|not\s+allowed|prohibited)\b|不许|别碰|不要|禁止|继续(?:别|不|不要|禁止|远离?|保持)|保持(?:现状|不动|原样|别动)`)
 
 // #3469 weak/strong lift split: bare "ok/fine/alright" prefixes are too
 // weak to release on their own (reaffirmations routinely start with
