@@ -323,6 +323,59 @@ func stripAllLineNumberPrefixes(text string) string {
 	return strings.Join(lines, "\n")
 }
 
+// stripAllLineNumberPrefixesGuarded strips reader-artifact number prefixes
+// from a whole file only when a clear majority of its non-empty lines carry
+// the prefix (#4442). Without the guard, a TSV/log file whose real lines
+// start with digits+TAB gets stripped, corrupting lenient occurrence
+// recounts. Mirrors the majority rule of stripLineNumberPrefix.
+func stripAllLineNumberPrefixesGuarded(text string) string {
+	matched, nonEmpty := 0, 0
+	for _, l := range strings.Split(text, "\n") {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		nonEmpty++
+		if lineNumberPrefixRE.MatchString(l) || readFileLineNumberOnlyRE.MatchString(l) {
+			matched++
+		}
+	}
+	if matched < 2 || matched < (nonEmpty/2+1) {
+		return text
+	}
+	return stripAllLineNumberPrefixes(text)
+}
+
+// countLineAligned counts non-overlapping occurrences of probe in text
+// where every occurrence starts at a line boundary (#4442). A bare
+// strings.Count would let a multi-line probe match mid-line across a line
+// break, inflating the count and rejecting a unique edit as ambiguous.
+func countLineAligned(text, probe string) int {
+	if probe == "" {
+		return 0
+	}
+	probeLines := strings.Split(probe, "\n")
+	n := len(probeLines)
+	textLines := strings.Split(text, "\n")
+	count := 0
+	for i := 0; i+n <= len(textLines); i++ {
+		if textLines[i] != probeLines[0] {
+			continue
+		}
+		ok := true
+		for j := 1; j < n; j++ {
+			if textLines[i+j] != probeLines[j] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			count++
+			i += n - 1 // skip past this match (non-overlapping)
+		}
+	}
+	return count
+}
+
 // paddedLineNumberPrefixRE is the readFileRange output shape with at least
 // one leading space - the padding the reader always emits when
 // right-aligning line numbers (#3854).
@@ -735,9 +788,16 @@ func lenientRecountRaw(content, rawOld, transform string) (int, []int) {
 	}
 	// line-numbers-stripped: count against a prefix-stripped copy of the
 	// file, line-aligned, mirroring the transform's own matching form.
+	// #4442: (a) stripping the whole FILE needs the same majority guard as
+	// stripLineNumberPrefix: a TSV/log file whose real lines start with
+	// digits+TAB must not be stripped, or the recount diverges from the
+	// true occurrence count and rejects a genuinely unique edit;
+	// (b) counting must be line-aligned, not a bare substring count: a
+	// multi-line probe could otherwise match mid-line across a line break
+	// and inflate the count.
 	if strings.Contains(transform, "line-numbers-stripped") {
-		strippedFile := stripAllLineNumberPrefixes(content)
-		return strings.Count(strippedFile, probe), nil
+		strippedFile := stripAllLineNumberPrefixesGuarded(content)
+		return countLineAligned(strippedFile, probe), nil
 	}
 	trimmedOld := make([]string, 0, strings.Count(probe, "\n")+1)
 	// #821: the counting pass previously trimmed BOTH sides on every line,
