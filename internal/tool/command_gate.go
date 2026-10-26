@@ -390,9 +390,13 @@ func (g *CommandGate) Check(cmd string) GateResult {
 	}
 
 	// ---- Apply cleaning rules ----
+	// #4430 Bug4: clean rules apply ONLY to unquoted spans. The previous
+	// raw ReplaceAllString carved `GIT_PAGER=cat'` out of `echo
+	// 'GIT_PAGER=cat'`, leaving `echo '` -- an unbalanced quote that turns a
+	// benign command into corrupt shell.
 	cleaned := cmd
 	for _, rule := range g.cleanRules {
-		cleaned = rule.pattern.ReplaceAllString(cleaned, "")
+		cleaned = replaceUnquoted(cleaned, rule.pattern)
 	}
 	result.CleanedCmd = strings.TrimSpace(cleaned)
 
@@ -1099,22 +1103,79 @@ func infiniteCommandSuggestion(bin string) string {
 // #3125: matches the same multi-view normalization as Check — previously
 // it matched only the raw cmd, so quote-wrapped flags bypassed it too.
 func (g *CommandGate) IsDestructive(cmd string) bool {
+	// #4430 Bug3: mirror Check's layer semantics exactly -- quotedInert
+	// rules evaluate ONLY the quote/heredoc-inert view (quoted argument
+	// TEXT is never executed and must not mark a command destructive),
+	// and benignPrefixes rewrite applies to both layers. Previously the
+	// raw view made `grep 'rm -rf /etc' README.md` destructive for danger
+	// assessors while benign /var/folders temp-cache paths leaked too.
 	views := gateMatchViews(cmd)
-	for _, rule := range g.blockRules {
-		for _, v := range views {
-			if rule.pattern.MatchString(v) {
-				return true
+	inertCmd := blankQuotedAndHeredocs(cmd)
+	match := func(rules []*gateRule) bool {
+		for _, rule := range rules {
+			targets := views
+			if rule.quotedInert {
+				targets = []string{inertCmd}
+			}
+			for _, t := range targets {
+				for _, bp := range rule.benignPrefixes {
+					t = strings.ReplaceAll(t, bp, "/benign/")
+				}
+				if rule.pattern.MatchString(t) {
+					return true
+				}
 			}
 		}
+		return false
 	}
-	for _, rule := range g.askRules {
-		for _, v := range views {
-			if rule.pattern.MatchString(v) {
-				return true
+	return match(g.blockRules) || match(g.askRules)
+}
+
+// replaceUnquoted applies re only to the unquoted spans of cmd, leaving
+// quoted interiors and heredoc bodies verbatim (#4430 Bug4). Scanning
+// mirrors blankQuotes: single/double quotes toggle spans, backslash
+// escapes are not special.
+func replaceUnquoted(cmd string, re *regexp.Regexp) string {
+	lines := strings.Split(cmd, "\n")
+	out := make([]string, 0, len(lines))
+	heredoc := ""
+	for _, line := range lines {
+		if heredoc != "" {
+			out = append(out, line)
+			if strings.TrimSpace(line) == heredoc {
+				heredoc = ""
+			}
+			continue
+		}
+		var b, unq strings.Builder
+		quote := byte(0)
+		flush := func() {
+			b.WriteString(re.ReplaceAllString(unq.String(), ""))
+			unq.Reset()
+		}
+		for i := 0; i < len(line); i++ {
+			c := line[i]
+			switch {
+			case quote != 0:
+				b.WriteByte(c)
+				if c == quote {
+					quote = 0
+				}
+			case c == '"' || c == '\'':
+				flush()
+				quote = c
+				b.WriteByte(c)
+			default:
+				unq.WriteByte(c)
 			}
 		}
+		flush()
+		out = append(out, b.String())
+		if hd, ok := heredocDelimiter(line); ok {
+			heredoc = hd
+		}
 	}
-	return false
+	return strings.Join(out, "\n")
 }
 
 // splitSemicolons splits a command on unquoted semicolons.
