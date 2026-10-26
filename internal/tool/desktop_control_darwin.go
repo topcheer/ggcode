@@ -446,10 +446,21 @@ func modifierClick(ctx context.Context, x, y int, modifiers, button string) (Res
 		return Result{}, err
 	}
 	// Same event-type encoding as mouseClick: the CGEventType encodes the
-	// button, mouseButton stays .left for left/right.
+	// button; the middle button additionally needs mouseButton .center.
+	// #4440: middle was silently left-clicked here (the #1665/#3876 fixes
+	// only covered the plain click path), and unknown buttons erred the
+	// same way - mirror mouseClick's full button mapping instead.
 	downType, upType := ".leftMouseDown", ".leftMouseUp"
-	if button == "right" {
+	swiftButton := ".left"
+	switch button {
+	case "right":
 		downType, upType = ".rightMouseDown", ".rightMouseUp"
+	case "middle":
+		downType, upType = ".otherMouseDown", ".otherMouseUp"
+		swiftButton = ".center"
+	case "", "left":
+	default:
+		return Result{}, fmt.Errorf("unsupported button %q (supported: left, right, middle)", button)
 	}
 	// Map to CGEventFlags raw values: these overlap-free masks can be OR-ed.
 	var flags uint64
@@ -472,14 +483,14 @@ import CoreGraphics
 let point = CGPoint(x: %d, y: %d)
 let flags = CGEventFlags(rawValue: %d)
 let eDown = CGEvent(mouseEventSource: nil, mouseType: %s,
-                    mouseCursorPosition: point, mouseButton: .left)
+                    mouseCursorPosition: point, mouseButton: %s)
 eDown?.flags = flags
 eDown?.post(tap: .cghidEventTap)
 let eUp = CGEvent(mouseEventSource: nil, mouseType: %s,
-                  mouseCursorPosition: point, mouseButton: .left)
+                  mouseCursorPosition: point, mouseButton: %s)
 eUp?.flags = flags
 eUp?.post(tap: .cghidEventTap)
-`, x, y, flags, downType, upType))
+`, x, y, flags, downType, swiftButton, upType, swiftButton))
 }
 
 // mousePosition returns the current cursor position in logical pixels.
@@ -525,13 +536,20 @@ func setWindowBounds(ctx context.Context, p desktopParams) (Result, error) {
 	if p.ToX <= 0 || p.ToY <= 0 {
 		return Result{}, fmt.Errorf("set_window_bounds requires positive to_x (width) and to_y (height)")
 	}
+	// #4440: honor p.App (same #2587 fix shape as menuSelect) - the old
+	// script hardcoded the frontmost process, so set_window_bounds(app:
+	// "Safari") silently moved the frontmost Chrome window and reported OK.
+	target := "(first process whose frontmost is true)"
+	if name := strings.TrimSpace(p.App); name != "" {
+		target = fmt.Sprintf("(first application process whose name is %s)", applescriptQuote(name))
+	}
 	return appleScriptResult(ctx, fmt.Sprintf(`
 tell application "System Events"
-  tell (first process whose frontmost is true)
+  tell %s
     set position of front window to {%d, %d}
     set size of front window to {%d, %d}
   end tell
-end tell`, p.X, p.Y, p.ToX, p.ToY))
+end tell`, target, p.X, p.Y, p.ToX, p.ToY))
 }
 
 // menuSelect clicks a menu bar item by path, e.g. "File > Export…".
@@ -773,10 +791,19 @@ func findAndClick(ctx context.Context, searchText string, maxDepth int) (Result,
 func waitAndClick(ctx context.Context, searchText string, maxDepth, timeoutMs int) (Result, error) {
 	deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
 	pollInterval := 200 * time.Millisecond
-	for time.Now().Before(deadline) {
+	// #4440: timeoutMs <= 0 previously meant the loop body never ran - an
+	// immediately-visible element still reported "Timed out". Poll at
+	// least once regardless of the deadline.
+	lastDetail := ""
+	for first := true; first || time.Now().Before(deadline); first = false {
 		res, err := findAndClick(ctx, searchText, maxDepth)
 		if err == nil && !strings.Contains(res.Content, "No UI element") && !strings.Contains(res.Content, "none had clickable") {
 			return res, nil
+		}
+		// #4440: keep the real failure reason (osascript error, missing
+		// accessibility permission) instead of masking it as a timeout.
+		if err != nil {
+			lastDetail = fmt.Sprintf(": last error: %v", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -784,14 +811,23 @@ func waitAndClick(ctx context.Context, searchText string, maxDepth, timeoutMs in
 		case <-time.After(pollInterval):
 		}
 	}
-	return Result{IsError: true, Content: fmt.Sprintf("Timed out waiting for element %q after %dms", searchText, timeoutMs)}, nil // #4091: consumers gate on IsError (termGuard, spec memo)
+	return Result{IsError: true, Content: fmt.Sprintf("Timed out waiting for element %q after %dms%s", searchText, timeoutMs, lastDetail)}, nil // #4091: consumers gate on IsError (termGuard, spec memo)
 }
 
 // runJXA runs a JavaScript for Automation script via osascript.
 func runJXA(ctx context.Context, script string) (Result, error) {
 	cmd := exec.CommandContext(ctx, "osascript", "-l", "JavaScript", "-e", script)
+	// #4440: Output() discarded stderr; appleScriptResult already
+	// appends it (#2587) - JXA failures kept the same diagnostic gap.
 	out, err := cmd.Output()
 	if err != nil {
+		var stderr string
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = string(ee.Stderr)
+		}
+		if stderr != "" {
+			return Result{}, fmt.Errorf("JXA failed: %w\n%s", err, stderr)
+		}
 		return Result{}, fmt.Errorf("JXA failed: %w (ensure Terminal/your app has Accessibility permissions in System Settings > Privacy & Security)", err)
 	}
 	result := strings.TrimSpace(string(out))

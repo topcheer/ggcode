@@ -296,9 +296,23 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		if p.ToX <= 0 || p.ToY <= 0 {
 			return Result{}, fmt.Errorf("set_window_bounds requires positive to_x (width) and to_y (height)")
 		}
-		h, err := findWindowByTitle(p.Text)
-		if err != nil {
-			return Result{}, err
+		// #4440: unify the empty-text semantics with the other platforms -
+		// empty text now targets the FOREGROUND window (this used to hard-
+		// error while Linux fell back to the active window: one instruction,
+		// opposite behaviors per platform).
+		var h uintptr
+		if strings.TrimSpace(p.Text) == "" {
+			fh, _, _ := user32.NewProc("GetForegroundWindow").Call()
+			if fh == 0 {
+				return Result{}, fmt.Errorf("no foreground window to move")
+			}
+			h = fh
+		} else {
+			var err error
+			h, err = findWindowByTitle(p.Text)
+			if err != nil {
+				return Result{}, err
+			}
 		}
 		r, _, _ := pMoveWindow.Call(uintptr(h), uintptr(int32(p.X)), uintptr(int32(p.Y)),
 			uintptr(int32(p.ToX)), uintptr(int32(p.ToY)), 1)
@@ -602,9 +616,17 @@ func winModifierClick(ctx context.Context, x, y int, modifierSpec, button string
 	}
 	// #3876: honor the schema button contract ("right" was silently
 	// left-clicked, same breach as #1665 fixed for plain click).
+	// #4440: middle was still silently left-clicked (only the plain click
+	// path had it), and unknown buttons erred the same way.
 	var down, up uint32 = mouseLeftDown, mouseLeftUp
-	if button == "right" {
+	switch button {
+	case "right":
 		down, up = mouseRightDown, mouseRightUp
+	case "middle":
+		down, up = mouseMiddleDown, mouseMiddleUp
+	case "", "left":
+	default:
+		return Result{}, fmt.Errorf("unsupported button %q (supported: left, right, middle)", button)
 	}
 	vsx, vsy, vsw, vsh := virtualScreen()
 	var inputs []winINPUT

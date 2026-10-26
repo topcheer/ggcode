@@ -312,22 +312,30 @@ func (t DesktopControlTool) Execute(ctx context.Context, input json.RawMessage) 
 	if err := json.Unmarshal(input, &params); err != nil {
 		return Result{}, fmt.Errorf("parse params: %w", err)
 	}
+	clampDesktopDefaults(&params)
+	return executeDesktopControl(ctx, params)
+}
+
+// clampDesktopDefaults applies the documented defaults for Button,
+// Direction, Amount, MaxDepth and TimeoutMs. #4440: the zero-checks became
+// lower-bounds - schema "minimum" constraints are not enforced by
+// json.Unmarshal, so negative values used to flow through untouched.
+func clampDesktopDefaults(params *desktopParams) {
 	if params.Button == "" {
 		params.Button = "left"
 	}
 	if params.Direction == "" {
 		params.Direction = "down"
 	}
-	if params.Amount == 0 {
+	if params.Amount < 1 {
 		params.Amount = 1
 	}
-	if params.MaxDepth == 0 {
+	if params.MaxDepth < 1 {
 		params.MaxDepth = 8
 	}
-	if params.TimeoutMs == 0 {
+	if params.TimeoutMs < 1 {
 		params.TimeoutMs = 5000
 	}
-	return executeDesktopControl(ctx, params)
 }
 
 // unknownAlphaKeyName reports whether key looks like a mistyped key NAME
