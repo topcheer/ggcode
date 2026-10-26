@@ -251,7 +251,12 @@ func (t *DefineTool) doCall(ctx context.Context, name string, params map[string]
 		Required   []string               `json:"required"`
 	}
 	if len(def.ParamsSchema) > 0 {
-		_ = json.Unmarshal(def.ParamsSchema, &schemaDoc)
+		// #4436: fail closed - a corrupted embedded schema previously fell
+		// through with a zero-value schemaDoc, silently skipping required-param
+		// validation and the unknown-param typo guard.
+		if err := json.Unmarshal(def.ParamsSchema, &schemaDoc); err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("tool %q has an invalid params schema (corrupted definition?): %v", def.Name, err)}, nil
+		}
 	}
 	for _, req := range schemaDoc.Required {
 		if _, ok := params[req]; !ok {

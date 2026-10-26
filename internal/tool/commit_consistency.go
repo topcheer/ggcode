@@ -62,7 +62,7 @@ func AnalyzeMessageDiffConsistency(message, diffOutput string) string {
 	if strings.TrimSpace(message) == "" || strings.TrimSpace(diffOutput) == "" {
 		return ""
 	}
-	files, symbols, diffLower := parseDiffFacts(diffOutput)
+	files, oldFiles, symbols, diffLower := parseDiffFacts(diffOutput)
 
 	var findings []string
 
@@ -71,6 +71,10 @@ func AnalyzeMessageDiffConsistency(message, diffOutput string) string {
 	for _, tok := range msgFileTokenRe.FindAllString(message, -1) {
 		base := pathBase(tok)
 		if _, ok := files[base]; ok {
+			continue
+		}
+		// #4436: rename source names are legitimate message references.
+		if _, ok := oldFiles[base]; ok {
 			continue
 		}
 		// #3448: filter abbreviation-shaped tokens ("e.g", "i.e", "a.m",
@@ -128,7 +132,15 @@ func AnalyzeMessageDiffConsistency(message, diffOutput string) string {
 
 	// Rule 3: coverage — a large multi-file diff whose message references
 	// none of the changed files reads like a description of different work.
-	if len(files) >= minDiffFilesForCoverage && !mentionsAnyFile(message, files) {
+	// #4436: rename source names count as references too (union).
+	allFiles := make(map[string]struct{}, len(files)+len(oldFiles))
+	for f := range files {
+		allFiles[f] = struct{}{}
+	}
+	for f := range oldFiles {
+		allFiles[f] = struct{}{}
+	}
+	if len(files) >= minDiffFilesForCoverage && !mentionsAnyFile(message, allFiles) {
 		findings = append(findings, fmt.Sprintf(
 			"staged diff touches %d files but the commit message references none of them — is the message describing this change?", len(files)))
 	}
@@ -142,8 +154,12 @@ func AnalyzeMessageDiffConsistency(message, diffOutput string) string {
 
 // parseDiffFacts extracts the changed-file basenames, changed top-level
 // symbol names, and a lowercased blob of the whole diff for substring probes.
-func parseDiffFacts(diffOutput string) (files map[string]struct{}, symbols map[string]struct{}, lower string) {
+// files counts each changed file once (renames count as the new name, #4433);
+// oldFiles holds rename source basenames so message references to the OLD
+// name ("rename handler.go to api.go") do not read as phantoms (#4436).
+func parseDiffFacts(diffOutput string) (files map[string]struct{}, oldFiles map[string]struct{}, symbols map[string]struct{}, lower string) {
 	files = map[string]struct{}{}
+	oldFiles = map[string]struct{}{}
 	symbols = map[string]struct{}{}
 	for _, line := range strings.Split(diffOutput, "\n") {
 		if m := diffHeaderRe.FindStringSubmatch(line); m != nil {
@@ -163,8 +179,12 @@ func parseDiffFacts(diffOutput string) (files map[string]struct{}, symbols map[s
 			// #4433: a rename header (old side != new side) counts the file
 			// ONCE - both sides used to be added, so 3 pure renames inflated
 			// len(files) to 6 and tripped the minDiffFilesForCoverage gate.
+			// #4436: the OLD name still goes to oldFiles so "rename handler.go
+			// to api.go" does not flag handler.go as a phantom file.
 			if oldB == newB {
 				files[oldB] = struct{}{}
+			} else {
+				oldFiles[oldB] = struct{}{}
 			}
 			continue
 		}
@@ -172,7 +192,7 @@ func parseDiffFacts(diffOutput string) (files map[string]struct{}, symbols map[s
 			symbols[m[1]] = struct{}{}
 		}
 	}
-	return files, symbols, strings.ToLower(diffOutput)
+	return files, oldFiles, symbols, strings.ToLower(diffOutput)
 }
 
 // gitUnquotePath reverses git's diff-header quoting for the escapes that
