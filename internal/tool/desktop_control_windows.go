@@ -155,6 +155,22 @@ func mouseEventInput(flags uint32, dx, dy int32) winINPUT {
 	return in
 }
 
+// wheelEventInput builds a MOUSEEVENTF_WHEEL event. Win32 reads the wheel
+// delta from MOUSEINPUT.mouseData — dx/dy are meaningless for wheel events.
+// #4459: the old call passed the delta as dy while mouseData stayed 0, so
+// SendInput delivered zero-delta wheel events: scroll silently no-opped
+// while reporting OK (the #189 direction fix never reached mouseData).
+func wheelEventInput(delta int32) winINPUT {
+	mi := winMOUSEINPUT{
+		MouseData: uint32(delta),
+		DwFlags:   mouseWheel,
+	}
+	var in winINPUT
+	in.Type = inputMouse
+	copy(in.U[:], (*[32]byte)(unsafe.Pointer(&mi))[:])
+	return in
+}
+
 func keyEventInput(vk uint16, flags uint32) winINPUT {
 	ki := winKEYBDINPUT{
 		Vk:    vk,
@@ -601,7 +617,7 @@ func winScroll(ctx context.Context, direction string, amount int) (Result, error
 	}
 	var inputs []winINPUT
 	for i := 0; i < amount; i++ {
-		inputs = append(inputs, mouseEventInput(mouseWheel, 0, d))
+		inputs = append(inputs, wheelEventInput(d))
 	}
 	if err := sendInput(inputs); err != nil {
 		return Result{}, err
@@ -702,14 +718,26 @@ func winOpenApp(ctx context.Context, p desktopParams) (Result, error) {
 	if target == "" {
 		return Result{}, fmt.Errorf("%s requires 'text'", p.Action)
 	}
-	cmdline := target
+	// #4459: keep app/target as SEPARATE argv tokens. The old form joined
+	// them into one quoted string, so `start "" "msedge https://x"` looked
+	// for an executable literally named "msedge https://x" — open+app and
+	// multi-word launch_app were both unconditionally broken (a #1673
+	// regression: the quoting fix was meant for bare URLs only). Go quotes
+	// each token as needed when building the cmd.exe command line, so
+	// injection via '&'/'^' stays closed while args split correctly.
+	var argv []string
 	if app := strings.TrimSpace(p.App); app != "" {
-		cmdline = app + " " + target
+		argv = append(argv, app)
 	}
-	if err := runWindowsCommand(ctx, cmdline); err != nil {
+	if p.Action == "launch_app" {
+		argv = append(argv, strings.Fields(target)...)
+	} else {
+		argv = append(argv, target)
+	}
+	if err := runWindowsCommand(ctx, argv...); err != nil {
 		return Result{}, err
 	}
-	return Result{Content: "OK: " + cmdline}, nil
+	return Result{Content: "OK: " + strings.Join(argv, " ")}, nil
 }
 
 func winListWindows() (Result, error) {
@@ -740,13 +768,15 @@ func keyEventInputWithScan(scan uint16, flags uint32) winINPUT {
 	return in
 }
 
-func runWindowsCommand(ctx context.Context, cmdline string) error {
-	// Use cmd /c start "" <cmdline> so URLs and documents open via
+func runWindowsCommand(ctx context.Context, argv ...string) error {
+	// Use cmd /c start "" <argv...> so URLs and documents open via
 	// shell associations, matching the macOS `open` semantics.
-	// #1673: pass the target as a QUOTED single argv. The old unquoted
-	// form let cmd.exe re-parse the whole string - URLs with '&' split
-	// into commands, '^' escaped, and spaced paths broke into arguments.
-	c := exec.CommandContext(ctx, "cmd", "/c", "start", "", `"`+cmdline+`"`)
+	// #1673: each token is passed as its own argv entry — Go quotes it
+	// when spaces require it, so cmd.exe never re-parses '&'/'^' inside
+	// a URL, while app+target still split into program and argument
+	// (#4459; the old single-quoted-string form broke open+app).
+	startArgs := append([]string{"/c", "start", ""}, argv...)
+	c := exec.CommandContext(ctx, "cmd", startArgs...)
 	if out, err := c.CombinedOutput(); err != nil {
 		return fmt.Errorf("start failed: %w\n%s", err, string(out))
 	}

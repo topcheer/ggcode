@@ -156,7 +156,8 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 			// #4440: xdotool chaining defaults to %@ = ALL matches, so a broad
 			// --name pattern moved and resized every matching window at once.
 			// %1 scopes both follow-up commands to the FIRST match only.
-			base = []string{"search", "--name", p.Text, "windowmove", "%1"}
+			// #4459: literal-regex the pattern too — "." must not match all.
+			base = []string{"search", "--name", xdLiteralPattern(p.Text), "windowmove", "%1"}
 		}
 		args := append(base, fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y),
 			"windowsize", "%1", fmt.Sprintf("%d", p.ToX), fmt.Sprintf("%d", p.ToY))
@@ -179,7 +180,9 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		} else if p.Action == "minimize_window" {
 			verb = "windowminimize"
 		}
-		return xdotoolResult(ctx, "search", "--name", p.Text, verb, "%@")
+		// #4459: pass the pattern as a LITERAL regex — "."/".*"/"^" must not
+		// fan the chained %@ verb out to every window on the desktop.
+		return xdotoolResult(ctx, "search", "--name", xdLiteralPattern(p.Text), verb, "%@")
 	case "maximize_window":
 		// Use the target window name when provided; fall back to the active
 		// window so we never maximize every visible window (empty pattern
@@ -189,7 +192,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		// "make sure it's maximized" must not UN-maximize the window.
 		// Matches Windows ShowWindow(swMaximize) semantics.
 		if strings.TrimSpace(p.Text) != "" {
-			return xdotoolResult(ctx, "search", "--name", p.Text, "windowstate", "--add", "--maximized", "%@")
+			return xdotoolResult(ctx, "search", "--name", xdLiteralPattern(p.Text), "windowstate", "--add", "--maximized", "%@")
 		}
 		return xdotoolResult(ctx, "getactivewindow", "windowstate", "--add", "--maximized")
 
@@ -215,7 +218,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		if strings.TrimSpace(p.Text) == "" {
 			return Result{}, fmt.Errorf("quit_app requires 'text' (app name); refusing to run: empty pattern matches ALL windows")
 		}
-		return xdotoolResult(ctx, "search", "--class", p.Text, "windowclose", "%@")
+		return xdotoolResult(ctx, "search", "--class", xdLiteralPattern(p.Text), "windowclose", "%@")
 	case "list_apps":
 		return wmctrlResult(ctx, "-l")
 	case "active_app":
@@ -414,9 +417,13 @@ func ydoModifierClick(ctx context.Context, x, y int, modifierSpec, button string
 		return Result{}, err
 	}
 	// #3876: 0xC0=BTN_LEFT, 0xC1=BTN_RIGHT in ydotool's linux/uapi codes.
-	clickCode := "0xC0"
-	if button == "right" {
-		clickCode = "0xC1"
+	// #4459: middle was silently left-clicked and unknown buttons fell
+	// through the same way — the #4440 fix covered X11/darwin/windows
+	// modifier_click but missed this Wayland twin. ydoClickCode mirrors
+	// the full mapping and rejects unknown buttons.
+	clickCode, err := ydoClickCode(button)
+	if err != nil {
+		return Result{}, err
 	}
 	cmds := [][]string{ydoMoveArgs(x, y)}
 	for _, m := range mods {
@@ -484,11 +491,10 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 		// ydotool click bitmask: low bits = button (0 left, 1 right, 2
 		// middle); 0x40 = down-only, 0x80 = up-only. The old -d/-u flags do
 		// not exist upstream and 0xC0 always performs a full click (#191).
-		button := 0x0
-		if p.Button == "right" {
-			button = 0x1
-		} else if p.Button == "middle" {
-			button = 0x2
+		// #4459: unknown buttons used to silently fall to BTN_LEFT here.
+		button, err := ydoButtonMask(p.Button)
+		if err != nil {
+			return Result{}, err
 		}
 		mode := 0x40
 		if p.Action == "mouse_up" {
