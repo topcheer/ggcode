@@ -115,9 +115,17 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		}
 		// #3876: honor the schema button contract ("right" was silently
 		// left-clicked, same breach as #1665 fixed for plain click).
+		// #4440: middle was still silently left-clicked, and unknown
+		// buttons erred the same way.
 		clickBtn := "1"
-		if p.Button == "right" {
+		switch p.Button {
+		case "right":
 			clickBtn = "3"
+		case "middle":
+			clickBtn = "2"
+		case "", "left":
+		default:
+			return Result{}, fmt.Errorf("unsupported button %q (supported: left, right, middle)", p.Button)
 		}
 		args = append(args, "click", clickBtn)
 		for i := len(mods) - 1; i >= 0; i-- {
@@ -145,10 +153,13 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		// Target the named window when given; otherwise the active window.
 		base := []string{"getactivewindow"}
 		if strings.TrimSpace(p.Text) != "" {
-			base = []string{"search", "--name", p.Text}
+			// #4440: xdotool chaining defaults to %@ = ALL matches, so a broad
+			// --name pattern moved and resized every matching window at once.
+			// %1 scopes both follow-up commands to the FIRST match only.
+			base = []string{"search", "--name", p.Text, "windowmove", "%1"}
 		}
-		args := append(base, "windowmove", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y),
-			"windowsize", fmt.Sprintf("%d", p.ToX), fmt.Sprintf("%d", p.ToY))
+		args := append(base, fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y),
+			"windowsize", "%1", fmt.Sprintf("%d", p.ToX), fmt.Sprintf("%d", p.ToY))
 		return xdotoolResult(ctx, args...)
 	case "list_windows":
 		// "." matches any non-empty window name; an empty regex in xdotool
