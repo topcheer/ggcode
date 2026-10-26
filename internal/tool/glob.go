@@ -89,7 +89,7 @@ func (t Glob) Execute(ctx context.Context, input json.RawMessage) (Result, error
 		matches = walkGlob(args.Directory, args.Pattern, tracked)
 	} else if tracked != nil {
 		// Filter by gitignore
-		filtered := filterByTracked(matches, tracked)
+		filtered := filterByTracked(matches, args.Directory, tracked)
 		matches = filtered
 	}
 
@@ -134,15 +134,20 @@ func (t Glob) Execute(ctx context.Context, input json.RawMessage) (Result, error
 }
 
 // filterByTracked removes files not in the git-tracked set.
-func filterByTracked(matches []string, tracked map[string]struct{}) []string {
+// tracked keys are slash-separated paths relative to baseDir (git ls-files
+// output), so membership must be an exact relative-path lookup, not a
+// suffix match. HasSuffix(".../build/main.go", "main.go") is true even when
+// only the root main.go is tracked, which let ignored/untracked files slip
+// through the gitignore filter.
+func filterByTracked(matches []string, baseDir string, tracked map[string]struct{}) []string {
 	var filtered []string
 	for _, m := range matches {
-		// tracked keys are relative paths; m may be absolute
-		for key := range tracked {
-			if strings.HasSuffix(m, key) {
-				filtered = append(filtered, m)
-				break
-			}
+		rel, err := filepath.Rel(baseDir, m)
+		if err != nil {
+			continue
+		}
+		if _, ok := tracked[filepath.ToSlash(rel)]; ok {
+			filtered = append(filtered, m)
 		}
 	}
 	return filtered
