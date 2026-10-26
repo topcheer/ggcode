@@ -349,6 +349,15 @@ end tell`, escapedText)
 }
 
 func (b *iosBackend) swipe(ctx context.Context, device, ref string, x, y, endX, endY int) (Result, error) {
+	// #4457: mirror the tap guard (#843) and the Android swipe fix
+	// (#1694 case 2) - this signature receives ref but never used it, so a
+	// ref-only swipe ran (0,0)->(0,0) and reported success.
+	if ref != "" {
+		return Result{IsError: true, Content: "element reference requires a prior snapshot - swipe with explicit start/end coordinates"}, nil
+	}
+	if x == 0 && y == 0 && endX == 0 && endY == 0 {
+		return Result{IsError: true, Content: "swipe requires explicit start/end coordinates (got all zeros)"}, nil
+	}
 	// #841: discrete clicks are full press+release cycles - iOS never
 	// recognizes them as a pan. Build a sustained mouse down -> move ->
 	// mouse up drag via System Events.
