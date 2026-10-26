@@ -1046,9 +1046,24 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 			}
 		}
 		absPath := filepath.Join(m.workingDir, relPath)
+		// #4435: skip-dir filter - the full scan (isSkipDir) and cache load
+		// (isInSkipDir) both exclude node_modules/vendor/dist/... but the dirty
+		// channel previously indexed write_file vendor/foo.go verbatim, polluting
+		// and persisting the corpus. Same directory standard here (checked before
+		// Stat: a file under a skip dir is irrelevant either way).
+		if isInSkipDir(relPath) {
+			continue
+		}
 		info, err := os.Stat(absPath)
 		if err != nil {
-			// File deleted or inaccessible: remove from index.
+			// #4435: only a confirmed deletion removes the doc from the index.
+			// EACCES/EPERM/transient IO errors previously fell into this branch and
+			// silently evicted existing documents.
+			if !os.IsNotExist(err) {
+				debug.Log("codeindex", "dirty stat error (kept in index): %s: %v", relPath, err)
+				continue
+			}
+			// File deleted: remove from index.
 			if di, ok := docIdx[relPath]; ok {
 				m.removeDocFromIndex(idx, di)
 				delete(docIdx, relPath)
@@ -1083,6 +1098,13 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 			continue
 		}
 		terms := tokenizeForIndex(string(data))
+		// #4435: match doBuild - a file whose content yields zero terms (empty
+		// file, all-whitespace) must not enter the corpus: loadDiskCache drops
+		// empty-tf docs on restart, so indexing them here makes the build and
+		// load paths disagree and skews BM25 average length.
+		if len(terms) == 0 {
+			continue
+		}
 		newTF := make(map[string]int, len(terms))
 		for _, t := range terms {
 			newTF[t]++
