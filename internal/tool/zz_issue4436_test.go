@@ -9,6 +9,9 @@ package tool
 // existing suite; no deterministic unit seam without heavy harnesses.
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -58,6 +61,31 @@ func TestIssue4436DiffScanQuotedFileHeaderUnquoted(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("debug stmt in quoted-path file must be attributed to \"my file.go\", issues: %+v", issues)
+	}
+}
+
+func TestIssue4436DefineToolInvalidSchemaFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".ggcode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Hand-edited store: params_schema is not valid JSON. The old code
+	// swallowed the unmarshal error and ran the tool with BOTH the
+	// required-param and unknown-param validations silently disabled.
+	store := `{"entries":{"t1":{"name":"t1","params_schema":"{invalid","steps":[{"tool":"read_file","args":{"path":"/x"}}]}}}`
+	if err := os.WriteFile(filepath.Join(dir, ".ggcode", "define_tools.json"), []byte(store), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := &DefineTool{WorkingDir: dir, Registry: &Registry{}}
+	res, err := tool.doCall(context.Background(), "t1", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("doCall: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("invalid params_schema must fail closed, got success: %+v", res)
+	}
+	if !strings.Contains(res.Content, "invalid params schema") {
+		t.Fatalf("unexpected error content: %q", res.Content)
 	}
 }
 
