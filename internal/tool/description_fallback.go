@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // InjectDescriptionFallback inspects the tool schema for a "description"
@@ -97,8 +98,11 @@ func deriveActivityLabel(toolName string, args map[string]json.RawMessage) strin
 		s = strings.TrimSpace(s)
 		// Collapse whitespace and newlines so multi-line blobs stay single-line.
 		s = strings.Join(strings.Fields(s), " ")
-		if len(s) > 60 {
-			s = s[:57] + "..."
+		// #4438: truncate by RUNE, not byte - a byte slice cut multi-byte
+		// characters (CJK paths/commands) in half, emitting invalid UTF-8
+		// into the UI activity label.
+		if utf8.RuneCountInString(s) > 60 {
+			s = string([]rune(s)[:57]) + "..."
 		}
 		return fmt.Sprintf("%s %s", toolName, s)
 	}
