@@ -257,6 +257,27 @@ func (t FileOps) executeOne(action, source, destination string, recursive bool) 
 			return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: fmt.Sprintf("create destination dir error: %v", err)}
 		}
 
+		// #4445: refuse to silently overwrite an existing destination.
+		// os.Rename atomically replaces an existing regular file on Unix and
+		// the cross-device fallback clobbers it via os.WriteFile, so both
+		// paths destroy data with status:"ok" and no warning - unlike
+		// write_file, which guards this same case three ways. Fail closed:
+		// the caller must remove the destination first or pick another path.
+		if _, err := os.Lstat(destination); err == nil {
+			return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: "destination already exists; move refuses to silently overwrite it (delete the destination first or choose a different path)"}
+		} else if !os.IsNotExist(err) {
+			return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: fmt.Sprintf("stat destination error: %v", err)}
+		}
+
+		// Capture the source's tracked-read state BEFORE the rename: once
+		// os.Rename succeeds the source no longer exists, normalizePath falls
+		// back to the lexical key (macOS /var vs /private/var), and the
+		// resolved key recorded at read time would never match (#4445).
+		// Removing the old entry here also deletes the resolved key that a
+		// post-rename RemoveTracking would miss.
+		srcSeen := defaultFileTracker.HasBeenSeen(source)
+		defaultFileTracker.RemoveTracking(source)
+
 		// Use rename for atomic move when possible. Fall back to copy+remove
 		// for cross-device moves.
 		if err := os.Rename(source, destination); err != nil {
@@ -273,9 +294,13 @@ func (t FileOps) executeOne(action, source, destination string, recursive bool) 
 			}
 		}
 
-		// Update tracker: remove old path, record new path.
-		defaultFileTracker.RemoveTracking(source)
-		defaultFileTracker.RecordRead(destination)
+		// Carry the read-state over to the new path ONLY if the source was
+		// actually tracked. Unconditionally RecordRead(destination) fabricated
+		// a read for a file this run never read, masking overwrite footprints
+		// (#4445).
+		if srcSeen {
+			defaultFileTracker.RecordRead(destination)
+		}
 		return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "ok"}
 
 	case "mkdir":
