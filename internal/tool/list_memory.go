@@ -98,6 +98,7 @@ func (t *ListMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 			}
 			asOf = tm
 		}
+		asOfMissed := []string{}
 		for _, s := range scopes {
 			if s.mem == nil {
 				continue
@@ -115,13 +116,25 @@ func (t *ListMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 					return Result{IsError: true, Content: fmt.Sprintf("as_of read failed: %v", rerr)}, nil
 				}
 				if !ok {
-					return Result{Content: fmt.Sprintf("[%s] %q did not exist at %s", s.label, params.Key, params.AsOf)}, nil
+					// #4455: the CURRENT project-global shadowing must not
+					// cut a point-in-time lookup short - the project key
+					// may not have existed at as_of while a global
+					// version did. Fall through to the next scope; the
+					// did-not-exist verdict is only issued after every
+					// scope was checked.
+					asOfMissed = append(asOfMissed, s.label)
+					continue
 				}
 				return Result{Content: fmt.Sprintf("[%s] %s @ as_of %s (version held since %s):\n%s",
 					s.label, params.Key, params.AsOf, held.Format(time.RFC3339), content)}, nil
 			}
 			vers := s.mem.HistoryVersions(params.Key)
 			return Result{Content: fmt.Sprintf("[%s] %s (%d archived version(s)):\n%s", s.label, params.Key, len(vers), cur)}, nil
+		}
+		if params.AsOf != "" && len(asOfMissed) > 0 {
+			// #4455: every scope checked at the requested point in time had
+			// no version of the key held then.
+			return Result{Content: fmt.Sprintf("%q did not exist at %s (checked scope(s): %s)", params.Key, params.AsOf, strings.Join(asOfMissed, ", "))}, nil
 		}
 		return Result{IsError: true, Content: fmt.Sprintf("key %q not found in scope %q", params.Key, params.Scope)}, nil
 	}
