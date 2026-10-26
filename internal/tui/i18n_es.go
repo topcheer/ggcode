@@ -816,14 +816,8 @@ func esCatalog(key string) string {
 		return "Disponibles: %d"
 	case "panel.qq.none":
 		return "(ninguno)"
-	case "panel.qq.default":
-		return "(predeterminado)"
 	case "panel.qq.adapter":
 		return "Adaptador: %s"
-	case "panel.qq.target":
-		return "Objetivo: %s"
-	case "panel.qq.channel":
-		return "Canal: %s"
 	case "panel.qq.bot_list":
 		return "Lista de Bots QQ"
 	case "panel.qq.no_bots":
@@ -898,8 +892,6 @@ func esCatalog(key string) string {
 		return "Se requiere el nombre del adaptador QQ"
 	case "panel.qq.error.not_configured":
 		return "El bot QQ %q no está configurado"
-	case "panel.qq.error.disabled":
-		return "El bot QQ %q está deshabilitado"
 	case "panel.qq.error.not_qq_adapter":
 		return "el adaptador %q no es un bot QQ"
 	case "panel.qq.error.not_online":

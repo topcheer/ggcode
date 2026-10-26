@@ -1038,14 +1038,8 @@ func zhCatalog(key string) string {
 		return "可用：%d"
 	case "panel.qq.none":
 		return "(无)"
-	case "panel.qq.default":
-		return "(默认)"
 	case "panel.qq.adapter":
 		return "机器人：%s"
-	case "panel.qq.target":
-		return "目标：%s"
-	case "panel.qq.channel":
-		return "渠道：%s"
 	case "panel.qq.bot_list":
 		return "QQ 机器人列表"
 	case "panel.qq.no_bots":
@@ -1118,8 +1112,6 @@ func zhCatalog(key string) string {
 		return "QQ 适配器名称不能为空"
 	case "panel.qq.error.not_configured":
 		return "QQ 机器人 %q 未配置"
-	case "panel.qq.error.disabled":
-		return "QQ 机器人 %q 已禁用"
 	case "panel.qq.error.not_qq_adapter":
 		return "适配器 %q 不是 QQ 机器人"
 	case "panel.qq.error.not_online":

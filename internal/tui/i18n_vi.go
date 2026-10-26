@@ -816,14 +816,8 @@ func viCatalog(key string) string {
 		return "Khả dụng: %d"
 	case "panel.qq.none":
 		return "(không có)"
-	case "panel.qq.default":
-		return "(mặc định)"
 	case "panel.qq.adapter":
 		return "Adapter: %s"
-	case "panel.qq.target":
-		return "Mục tiêu: %s"
-	case "panel.qq.channel":
-		return "Kênh: %s"
 	case "panel.qq.bot_list":
 		return "Danh sách QQ Bot"
 	case "panel.qq.no_bots":
@@ -898,8 +892,6 @@ func viCatalog(key string) string {
 		return "Tên QQ adapter là bắt buộc"
 	case "panel.qq.error.not_configured":
 		return "QQ bot %q chưa được cấu hình"
-	case "panel.qq.error.disabled":
-		return "QQ bot %q đã bị tắt"
 	case "panel.qq.error.not_qq_adapter":
 		return "adapter %q không phải là QQ bot"
 	case "panel.qq.error.not_online":

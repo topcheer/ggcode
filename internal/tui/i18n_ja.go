@@ -861,14 +861,8 @@ func jaCatalog(key string) string {
 		return "利用可能: %d"
 	case "panel.qq.none":
 		return "（なし）"
-	case "panel.qq.default":
-		return "（デフォルト）"
 	case "panel.qq.adapter":
 		return "アダプタ: %s"
-	case "panel.qq.target":
-		return "ターゲット: %s"
-	case "panel.qq.channel":
-		return "チャネル: %s"
 	case "panel.qq.bot_list":
 		return "QQ Bot リスト"
 	case "panel.qq.no_bots":
@@ -943,8 +937,6 @@ func jaCatalog(key string) string {
 		return "QQアダプタ名が必要です"
 	case "panel.qq.error.not_configured":
 		return "QQ Bot %q は設定されていません"
-	case "panel.qq.error.disabled":
-		return "QQ Bot %q は無効です"
 	case "panel.qq.error.not_qq_adapter":
 		return "アダプタ %q はQQ Botではありません"
 	case "panel.qq.error.not_online":
