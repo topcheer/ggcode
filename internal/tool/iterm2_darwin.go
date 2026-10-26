@@ -4,6 +4,7 @@ package tool
 
 import (
 	"context"
+	"encoding/base64"
 
 	"fmt"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -483,6 +484,14 @@ func (t *Iterm2Tool) executeSendKey(ctx context.Context, sessionID, key, modifie
 
 	var data string
 	if seq, ok := escMap[keyLower]; ok {
+		// #4450: the escMap branch used to ignore modifiers entirely,
+		// sending the bare sequence while the Result still claimed
+		// "modifiers+key sent" - a #2625-style false success. Modifier
+		// escapes for these keys are not implemented; fail explicitly
+		// instead of silently sending the wrong keystroke.
+		if strings.TrimSpace(modifiers) != "" {
+			return Result{IsError: true, Content: fmt.Sprintf("iterm2 send_key: unsupported key combo: %s+%s (modifiers are only supported with single-character keys)", modifiers, key)}
+		}
 		data = seq
 	} else if len(key) == 1 {
 		// Single character - apply modifier transformations
@@ -557,6 +566,15 @@ func (t *Iterm2Tool) executeResize(ctx context.Context, sessionID, axis string, 
 	ax := strings.ToLower(strings.TrimSpace(axis))
 	if ax == "" {
 		ax = "horizontal"
+	}
+	// #4450: any unrecognized value used to fall into the vertical else
+	// branch while the success message echoed the caller's typo back
+	// ("grew width by 20" while actually adding rows). Mirror kitty's
+	// explicit whitelist (kitty_impl.go resize).
+	switch ax {
+	case "horizontal", "vertical":
+	default:
+		return Result{IsError: true, Content: fmt.Sprintf("invalid axis %q (use horizontal or vertical)", axis)}
 	}
 
 	// Use iTerm2's native AppleScript to adjust columns/rows directly.
@@ -718,7 +736,7 @@ func (t *Iterm2Tool) executeBadge(ctx context.Context, sessionID, badgeText stri
 		return Result{Content: "iterm2 badge cleared"}
 	}
 
-	err := t.iterm2WriteToTTY(ctx, sessionID, fmt.Sprintf("\033]1337;SetBadgeFormat=%s\007", badgeText))
+	err := t.iterm2WriteToTTY(ctx, sessionID, fmt.Sprintf("\033]1337;SetBadgeFormat=%s\007", base64.StdEncoding.EncodeToString([]byte(badgeText))))
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 badge failed: %v", err)}
 	}
