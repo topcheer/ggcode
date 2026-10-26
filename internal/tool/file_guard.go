@@ -196,24 +196,6 @@ func matchGlob(pattern, name string) (bool, error) {
 	return matched, nil
 }
 
-// matchGlobSegments reports whether every path SEGMENT of name matches the
-// corresponding pattern segment via filepath.Match (#445). The old prefix
-// comparison used == / HasPrefix literal matching, so patterns like
-// src/*-gen/** silently failed to protect (protection is fail-open).
-func matchGlobSegments(pattern, name string) bool {
-	pSegs := strings.Split(pattern, "/")
-	nSegs := strings.Split(name, "/")
-	if len(pSegs) != len(nSegs) {
-		return false
-	}
-	for i, p := range pSegs {
-		if !matchSegFS(p, nSegs[i]) { // #1683: FS-aware fold
-			return false
-		}
-	}
-	return true
-}
-
 // matchDoubleStar handles glob patterns containing **.
 // "src/**" matches anything under src/.
 // "src/**/test" matches src/a/test, src/a/b/test, etc.
