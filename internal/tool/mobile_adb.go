@@ -303,6 +303,13 @@ func (a *androidBackend) typeText(ctx context.Context, device, ref, text string,
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+	// #4457: adb input text has NO escape syntax - AOSP Input.java
+	// unconditionally decodes %s back to a space on the device. A literal
+	// %s in user text would silently arrive as a space while we report
+	// success. Refuse instead of corrupting the payload.
+	if strings.Contains(text, "%s") {
+		return Result{IsError: true, Content: fmt.Sprintf("text contains literal %%s, which adb input text cannot type (the device would decode it to a space and corrupt the payload) - use clipboard paste or type in segments without %%s")}, nil
+	}
 	// #1330: modern adb (shell v2) joins args and runs them through the
 	// device-side /bin/sh, so metacharacters (;, $(), backticks, |, &&)
 	// executed as shell on the device. Single-quote the whole text with
@@ -447,12 +454,26 @@ func parseAndroidUIXML(xmlData string) *uiElement {
 		return nil
 	}
 
-	// Build root from first node
-	root := parseAndroidNode(nodes[0][1])
+	// Build root from first non-nil node. (#4457: parseAndroidNode returns
+	// nil when a node has no label AND an unparseable Rect - uiautomator
+	// dumps malformed XML like this when bounds are missing or an attribute
+	// value contains '>' and the outer regex truncates the attr list. The
+	// old code only nil-checked children; a nil root panicked on the append
+	// below.)
+	var root *uiElement
+	first := 0
+	for ; first < len(nodes); first++ {
+		if root = parseAndroidNode(nodes[first][1]); root != nil {
+			break
+		}
+	}
+	if root == nil {
+		return nil
+	}
 	// Android XML is a flat list but hierarchical via parent pointers.
 	// In practice, uiautomator dump creates a nested hierarchy.
 	// For simplicity, we flatten into root's children.
-	for i := 1; i < len(nodes); i++ {
+	for i := first + 1; i < len(nodes); i++ {
 		child := parseAndroidNode(nodes[i][1])
 		if child != nil {
 			root.Children = append(root.Children, child)
