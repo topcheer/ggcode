@@ -114,6 +114,21 @@ func TestGlobRecursivePattern(t *testing.T) {
 	}
 }
 
+func TestFilterByTrackedExactKeyNotSuffix(t *testing.T) {
+	dir := t.TempDir()
+	// Only root main.go is tracked; build/main.go and xxmain.go are NOT.
+	tracked := map[string]struct{}{"main.go": {}}
+	matches := []string{
+		filepath.Join(dir, "main.go"),
+		filepath.Join(dir, "build", "main.go"),
+		filepath.Join(dir, "xxmain.go"),
+	}
+	got := filterByTracked(matches, dir, tracked)
+	if len(got) != 1 || got[0] != filepath.Join(dir, "main.go") {
+		t.Errorf("expected only root main.go, got %v", got)
+	}
+}
+
 func TestGlobDescriptionClarifiesPathOnlyUse(t *testing.T) {
 	tool := Glob{}
 	for _, want := range []string{"only need file paths", "search_files or grep", "search file contents"} {
