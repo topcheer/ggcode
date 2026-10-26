@@ -251,7 +251,13 @@ func (t *DefineTool) doCall(ctx context.Context, name string, params map[string]
 		Required   []string               `json:"required"`
 	}
 	if len(def.ParamsSchema) > 0 {
-		_ = json.Unmarshal(def.ParamsSchema, &schemaDoc)
+		// #4436: fail closed. A hand-edited on-disk store can persist an
+		// invalid params_schema JSON blob; swallowing the unmarshal error
+		// zeroed Properties/Required and silently disabled BOTH the
+		// required-param check and the unknown-param rejection below.
+		if err := json.Unmarshal(def.ParamsSchema, &schemaDoc); err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("defined tool %q has an invalid params schema (not valid JSON): %v", name, err)}, nil
+		}
 	}
 	for _, req := range schemaDoc.Required {
 		if _, ok := params[req]; !ok {

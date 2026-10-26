@@ -62,7 +62,7 @@ func AnalyzeMessageDiffConsistency(message, diffOutput string) string {
 	if strings.TrimSpace(message) == "" || strings.TrimSpace(diffOutput) == "" {
 		return ""
 	}
-	files, symbols, diffLower := parseDiffFacts(diffOutput)
+	files, symbols, renameOlds, diffLower := parseDiffFacts(diffOutput)
 
 	var findings []string
 
@@ -71,6 +71,11 @@ func AnalyzeMessageDiffConsistency(message, diffOutput string) string {
 	for _, tok := range msgFileTokenRe.FindAllString(message, -1) {
 		base := pathBase(tok)
 		if _, ok := files[base]; ok {
+			continue
+		}
+		// #4436: the old side of a rename is not a phantom - the diff header
+		// names it, the change touches it.
+		if _, ok := renameOlds[base]; ok {
 			continue
 		}
 		// #3448: filter abbreviation-shaped tokens ("e.g", "i.e", "a.m",
@@ -142,9 +147,14 @@ func AnalyzeMessageDiffConsistency(message, diffOutput string) string {
 
 // parseDiffFacts extracts the changed-file basenames, changed top-level
 // symbol names, and a lowercased blob of the whole diff for substring probes.
-func parseDiffFacts(diffOutput string) (files map[string]struct{}, symbols map[string]struct{}, lower string) {
+// renameOlds carries the OLD-side basenames of cross-path renames (#4436):
+// they are real subjects of the change for Rule 1 phantom checking, but are
+// kept OUT of files so the minDiffFilesForCoverage gate keeps its #4433
+// new-side-only semantics (3 pure renames stay 3, not 6).
+func parseDiffFacts(diffOutput string) (files map[string]struct{}, symbols map[string]struct{}, renameOlds map[string]struct{}, lower string) {
 	files = map[string]struct{}{}
 	symbols = map[string]struct{}{}
+	renameOlds = map[string]struct{}{}
 	for _, line := range strings.Split(diffOutput, "\n") {
 		if m := diffHeaderRe.FindStringSubmatch(line); m != nil {
 			// #4433: quoted alternative is pair (1,3), bare is (2,4).
@@ -160,11 +170,14 @@ func parseDiffFacts(diffOutput string) (files map[string]struct{}, symbols map[s
 			oldB := pathBase(gitUnquotePath(oldPath))
 			newB := pathBase(gitUnquotePath(newPath))
 			files[newB] = struct{}{}
-			// #4433: a rename header (old side != new side) counts the file
-			// ONCE - both sides used to be added, so 3 pure renames inflated
-			// len(files) to 6 and tripped the minDiffFilesForCoverage gate.
-			if oldB == newB {
-				files[oldB] = struct{}{}
+			// #4433: a rename counts ONCE in files (both sides used to be
+			// added, so 3 pure renames inflated len(files) to 6 and tripped
+			// the minDiffFilesForCoverage gate).
+			// #4436: the old side of a cross-path rename is a real subject of
+			// the change ("rename handler.go to api.go") - route it to
+			// renameOlds so Rule 1 does not flag it as a phantom mention.
+			if oldB != newB {
+				renameOlds[oldB] = struct{}{}
 			}
 			continue
 		}
@@ -172,7 +185,7 @@ func parseDiffFacts(diffOutput string) (files map[string]struct{}, symbols map[s
 			symbols[m[1]] = struct{}{}
 		}
 	}
-	return files, symbols, strings.ToLower(diffOutput)
+	return files, symbols, renameOlds, strings.ToLower(diffOutput)
 }
 
 // gitUnquotePath reverses git's diff-header quoting for the escapes that

@@ -165,9 +165,15 @@ func AnalyzeStagingQuality(diffOutput string) string {
 	fileSet := make(map[string]bool)
 	for _, line := range strings.Split(diffOutput, "\n") {
 		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
-			fileSet[m[1]] = true
+			// #4436: +++ b/"quoted path" captures the literal quotes - strip
+			// them so the artifact check sees the real path.
+			fileSet[unquoteDiffHeaderPath(m[1])] = true
 		} else if m := diffGitHeader.FindStringSubmatch(line); m != nil {
-			fileSet[m[1]] = true
+			path := m[1]
+			if path == "" {
+				path = m[2]
+			}
+			fileSet[gitUnquotePath(path)] = true
 		}
 	}
 
@@ -321,7 +327,23 @@ func stagingPatternMatch(path, pattern string) bool {
 
 // diffGitHeader matches the b/ side of `diff --git a/X b/Y` headers -
 // the only reliable path source for binary and pure-rename diffs (#1704).
-var diffGitHeader = regexp.MustCompile(`^diff --git a/\S+ b/(\S+)`)
+// #4436: git quotes paths with spaces as "b/foo bar.go"; the old bare
+// \S+ capture missed those lines (and any quoted a/ side) entirely,
+// silently skipping artifact checks for such files. Quoted side ->
+// capture 1, bare side -> capture 2 (same shape as #4433 diffHeaderRe).
+var diffGitHeader = regexp.MustCompile(`^diff --git (?:"a/[^"]+"|a/\S+) (?:"b/([^"]+)"|b/(\S+))`)
+
+// diffGitHeaderPath picks the b/ side from a diffGitHeader match (#4436):
+// the quoted form lands in m[1], the bare form in m[2]. Consumers written
+// against the old single-group regex read m[1] unconditionally and lost
+// every bare path when the quoted alternative was added.
+func diffGitHeaderPath(m []string) string {
+	p := m[1]
+	if p == "" {
+		p = m[2]
+	}
+	return unquoteDiffHeaderPath(p)
+}
 
 // formatStagingIssues formats staging quality issues into a human-readable warning.
 func formatStagingIssues(issues []StagingIssue) string {

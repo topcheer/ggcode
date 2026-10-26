@@ -15,7 +15,7 @@ func TestIssue4433QuotedAndSpacedHeadersParsed(t *testing.T) {
 	diff := "diff --git \"a/\\344\\270\\255.go\" \"b/\\344\\270\\255.go\"\n" +
 		"index 111..222 100644\n" +
 		"--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"
-	files, _, _ := parseDiffFacts(diff)
+	files, _, _, _ := parseDiffFacts(diff)
 	if _, ok := files["中.go"]; !ok {
 		t.Fatalf("quoted non-ASCII basename missing: %v", files)
 	}
@@ -23,14 +23,14 @@ func TestIssue4433QuotedAndSpacedHeadersParsed(t *testing.T) {
 	// Space-containing path (git always quotes it).
 	spaced := "diff --git \"a/foo bar.go\" \"b/foo bar.go\"\n" +
 		"--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"
-	files2, _, _ := parseDiffFacts(spaced)
+	files2, _, _, _ := parseDiffFacts(spaced)
 	if _, ok := files2["foo bar.go"]; !ok {
 		t.Fatalf("quoted spaced basename missing: %v", files2)
 	}
 
 	// Plain paths keep working.
 	plain := "diff --git a/plain.go b/plain.go\n"
-	files3, _, _ := parseDiffFacts(plain)
+	files3, _, _, _ := parseDiffFacts(plain)
 	if _, ok := files3["plain.go"]; !ok {
 		t.Fatalf("plain basename missing: %v", files3)
 	}
@@ -62,7 +62,7 @@ func TestIssue4433RenameHeadersCountedOnce(t *testing.T) {
 		sb.WriteString("diff --git a/" + parts[0] + " b/" + parts[1] + "\n")
 		sb.WriteString("similarity index 100%\nrename from " + parts[0] + "\nrename to " + parts[1] + "\n")
 	}
-	files, _, _ := parseDiffFacts(sb.String())
+	files, _, _, _ := parseDiffFacts(sb.String())
 	if len(files) != 3 {
 		t.Fatalf("3 renames must yield 3 files, got %d: %v", len(files), files)
 	}

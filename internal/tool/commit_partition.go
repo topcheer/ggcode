@@ -130,7 +130,7 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 		// only anchor for pure mode-change hunks (same pattern as
 		// parseDiffStats in commit_analyzer.go).
 		if m := diffGitHeader.FindStringSubmatch(line); m != nil && len(m) > 1 {
-			lastGitPath = m[1]
+			lastGitPath = diffGitHeaderPath(m)
 		}
 		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
 			// #3126: a rename+edit hunk emits "rename to x" AND a

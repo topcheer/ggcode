@@ -106,6 +106,18 @@ var testFilePattern = regexp.MustCompile(`(_test\.go|\.test\.[jt]sx?|\.spec\.[jt
 var diffFileHeader = regexp.MustCompile(`^\+\+\+\s+b/(.+)`)
 var diffOldFileHeader = regexp.MustCompile(`^---\s+a/(.+)`)
 
+// unquoteDiffHeaderPath normalizes a captured diff-header path (#4436):
+// git quotes paths with spaces/non-ASCII as "my file.go"; the (.+) capture
+// keeps the outer quote pair, and gitUnquotePath only reverses the escape
+// sequences INSIDE (\344, \", \\) - it never strips the pair. Strip it
+// first, then unescape.
+func unquoteDiffHeaderPath(p string) string {
+	if len(p) >= 2 && strings.HasPrefix(p, `"`) && strings.HasSuffix(p, `"`) {
+		p = p[1 : len(p)-1]
+	}
+	return gitUnquotePath(p)
+}
+
 // #3133: accept BOTH plain hunks (@@ -a,b +c,d @@) and combined-diff
 // hunks (@@@ -a,b -c,d +e,f @@@ - emitted for unmerged paths during
 // cherry-pick/rebase conflicts). The capture is the start line of the
@@ -149,7 +161,9 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 	for _, line := range lines {
 		// Track current file from "+++ b/file" headers.
 		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
-			currentFile = m[1]
+			// #4436: +++ b/"quoted path" carries literal quotes in the
+			// capture; unquote so issue attribution lands on the real file.
+			currentFile = unquoteDiffHeaderPath(m[1])
 			isTestFile = testFilePattern.MatchString(currentFile)
 			continue
 		}

@@ -6,12 +6,17 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
 // ACPAgentRegistry is an interface for discovering and using ACP agents.
+// delegateWorkingDirMu serializes ClientManager.SetWorkingDir+Get pairs
+// across concurrent delegate calls (#4436 Bug 4).
+var delegateWorkingDirMu sync.Mutex
+
 // Implemented by acp.ClientManager to avoid circular imports.
 type ACPAgentRegistry interface {
 	Available() []string
@@ -214,11 +219,18 @@ func (t DelegateTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 			workingDir = dir
 		}
 	}
+	// #4436: SetWorkingDir mutates the SHARED ClientManager cwd that Get
+	// reads when lazily creating a client. Two parallel delegates into
+	// different worktrees could interleave (A.set, B.set, A.get) and spawn
+	// A's agent in B's directory. Serializing the set+get pair closes the
+	// window; the spawned client then carries its own workingDir
+	// (acp/client.go), unaffected by later SetWorkingDir calls.
+	delegateWorkingDirMu.Lock()
 	if workingDir != "" {
 		t.Manager.SetWorkingDir(workingDir)
 	}
-
 	client, err := t.Manager.Get(ctx, params.Agent)
+	delegateWorkingDirMu.Unlock()
 	if err != nil {
 		return Result{Content: fmt.Sprintf("Agent %q is not available: %v", params.Agent, err), IsError: true}, nil
 	}
@@ -268,6 +280,18 @@ func (t DelegateTool) executeAsync(
 
 	safego.Go("delegate-tool", func() {
 		defer client.Close()
+		// #4436: mgr.Complete is called on the normal and error paths
+		// below, but a PANIC inside the PromptStream callback bypasses
+		// both - safego.Recover logs and swallows it, leaving the task
+		// permanently "running" and wait_agent hanging forever. This
+		// defer backstop completes any run that fell through, panics
+		// included. mgr.Complete on an already-completed id is a no-op.
+		completed := false
+		defer func() {
+			if !completed {
+				mgr.Complete(id, "", fmt.Errorf("delegate stream ended without completion (recovered panic; see logs)"))
+			}
+		}()
 
 		runCtx, cancel := context.WithCancel(mgr.RootContext())
 		if !mgr.SetCancel(id, cancel) {
@@ -363,6 +387,7 @@ func (t DelegateTool) executeAsync(
 				})
 			}
 			mgr.Notify(id)
+			completed = true
 			mgr.Complete(id, "", err)
 			return
 		}
@@ -371,6 +396,7 @@ func (t DelegateTool) executeAsync(
 		} else if strings.TrimSpace(latestResult.Text) == "" {
 			latestResult.Text = streamedText.String()
 		}
+		completed = true
 		mgr.Complete(id, formatDelegateOutput(title, latestResult), nil)
 	})
 
