@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -191,6 +192,48 @@ func holdKeyDurationClamp(ms int) (int, error) {
 // any platform. The linux-only executor (desktop_control_linux.go) consumes
 // them. ydotool event codes follow linux/input-event-codes.h as used by the
 // ydotool README: BTN_LEFT=0xC0, BTN_RIGHT=0xC1.
+
+// ydoClickCode maps the schema button enum to the ydotool click event
+// code (BTN_LEFT=0xC0, BTN_RIGHT=0xC1, BTN_MIDDLE=0xC2). Pure and
+// platform-untagged (x11ButtonCode precedent) so the #4459 middle-button
+// mapping is unit-testable on every CI runner.
+func ydoClickCode(button string) (string, error) {
+	switch button {
+	case "", "left":
+		return "0xC0", nil
+	case "right":
+		return "0xC1", nil
+	case "middle":
+		return "0xC2", nil
+	default:
+		return "", fmt.Errorf("unsupported button %q (supported: left, right, middle)", button)
+	}
+}
+
+// ydoButtonMask maps the schema button enum to the ydotool click bitmask
+// low bits (0 left, 1 right, 2 middle) used by the down-only/up-only forms.
+func ydoButtonMask(button string) (int, error) {
+	switch button {
+	case "", "left":
+		return 0x0, nil
+	case "right":
+		return 0x1, nil
+	case "middle":
+		return 0x2, nil
+	default:
+		return 0, fmt.Errorf("unsupported button %q (supported: left, right, middle)", button)
+	}
+}
+
+// xdLiteralPattern renders a window-title substring as a literal POSIX
+// regex for xdotool search. The schema documents `text` as a "title
+// substring", but xdotool compiles it as a REGEX — a bare "." or ".*"
+// slipped past the #349 empty-string guard and matched EVERY window,
+// so `%@` closed/minimized the whole desktop session (#4459). Quoting
+// the metacharacters restores the documented literal-substring contract.
+func xdLiteralPattern(p string) string {
+	return regexp.QuoteMeta(strings.TrimSpace(p))
+}
 
 // ydoMoveArgs returns the argv to move the cursor absolutely.
 func ydoMoveArgs(x, y int) []string {
