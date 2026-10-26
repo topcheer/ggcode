@@ -186,24 +186,6 @@ func enCatalog(key string) string {
 		return "@ attaches files/folders • Tab/Shift+Tab cycle • Enter apply"
 	case "hint.mode":
 		return "mode"
-	case "mode.approval.ask":
-		return "ask as needed"
-	case "mode.approval.none":
-		return "no approval stops"
-	case "mode.approval.critical":
-		return "critical only"
-	case "mode.tools.rules":
-		return "follow tool rules"
-	case "mode.tools.readonly":
-		return "read-only only"
-	case "mode.tools.safe":
-		return "safe ops only"
-	case "mode.tools.open":
-		return "almost all tools"
-	case "mode.agent.waits":
-		return "waits for you"
-	case "mode.agent.autocontinue":
-		return "keeps going"
 	case "hint.enter_send":
 		return "Enter send"
 	case "hint.ctrlv_image":

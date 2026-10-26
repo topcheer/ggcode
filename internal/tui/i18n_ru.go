@@ -200,24 +200,6 @@ func ruCatalog(key string) string {
 		return "Режим"
 
 	// --- Mode approval ---
-	case "mode.approval.ask":
-		return "спрашивать при необходимости"
-	case "mode.approval.none":
-		return "без остановок для подтверждения"
-	case "mode.approval.critical":
-		return "только критические"
-	case "mode.tools.rules":
-		return "следовать правилам инструментов"
-	case "mode.tools.readonly":
-		return "только чтение"
-	case "mode.tools.safe":
-		return "только безопасные операции"
-	case "mode.tools.open":
-		return "почти все инструменты"
-	case "mode.agent.waits":
-		return "ожидает вас"
-	case "mode.agent.autocontinue":
-		return "продолжает работу"
 
 	// --- Hints ---
 	case "hint.enter_send":

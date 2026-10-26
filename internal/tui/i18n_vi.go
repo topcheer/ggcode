@@ -186,24 +186,6 @@ func viCatalog(key string) string {
 		return "@ đính kèm tệp/thư mục • Tab/Shift+Tab xoay vòng • Enter áp dụng"
 	case "hint.mode":
 		return "chế độ"
-	case "mode.approval.ask":
-		return "hỏi khi cần"
-	case "mode.approval.none":
-		return "không điểm dừng phê duyệt"
-	case "mode.approval.critical":
-		return "chỉ quan trọng"
-	case "mode.tools.rules":
-		return "theo quy tắc công cụ"
-	case "mode.tools.readonly":
-		return "chỉ đọc"
-	case "mode.tools.safe":
-		return "chỉ thao tác an toàn"
-	case "mode.tools.open":
-		return "gần như tất cả công cụ"
-	case "mode.agent.waits":
-		return "chờ bạn"
-	case "mode.agent.autocontinue":
-		return "tiếp tục tự động"
 	case "hint.enter_send":
 		return "Enter gửi"
 	case "hint.ctrlv_image":

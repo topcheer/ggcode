@@ -200,24 +200,6 @@ func deCatalog(key string) string {
 		return "Modus"
 
 	// --- Mode approval ---
-	case "mode.approval.ask":
-		return "bei Bedarf fragen"
-	case "mode.approval.none":
-		return "keine Genehmigungs-Stopps"
-	case "mode.approval.critical":
-		return "nur kritische"
-	case "mode.tools.rules":
-		return "Werkzeugregeln befolgen"
-	case "mode.tools.readonly":
-		return "nur Lesezugriff"
-	case "mode.tools.safe":
-		return "nur sichere Operationen"
-	case "mode.tools.open":
-		return "fast alle Werkzeuge"
-	case "mode.agent.waits":
-		return "wartet auf Sie"
-	case "mode.agent.autocontinue":
-		return "macht weiter"
 
 	// --- Hints ---
 	case "hint.enter_send":

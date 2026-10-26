@@ -186,24 +186,6 @@ func frCatalog(key string) string {
 		return "@ joindre fichiers/dossiers • Tab/Shift+Tab naviguer • Enter appliquér"
 	case "hint.mode":
 		return "mode"
-	case "mode.approval.ask":
-		return "demandér si nécessaire"
-	case "mode.approval.none":
-		return "sans arrêt d'approbation"
-	case "mode.approval.critical":
-		return "critiques uniquement"
-	case "mode.tools.rules":
-		return "suivre les règles d'outils"
-	case "mode.tools.readonly":
-		return "lecture seule"
-	case "mode.tools.safe":
-		return "opérations sûres uniquement"
-	case "mode.tools.open":
-		return "presque tous les outils"
-	case "mode.agent.waits":
-		return "attend votre action"
-	case "mode.agent.autocontinue":
-		return "continue seul"
 	case "hint.enter_send":
 		return "Enter envoyér"
 	case "hint.ctrlv_image":
