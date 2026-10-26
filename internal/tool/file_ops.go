@@ -281,12 +281,25 @@ func (t FileOps) executeOne(action, source, destination string, recursive bool) 
 		// Use rename for atomic move when possible. Fall back to copy+remove
 		// for cross-device moves.
 		if err := os.Rename(source, destination); err != nil {
+			// #4448: every failure return below leaves the file physically at
+			// SOURCE, but the pre-rename RemoveTracking already dropped its
+			// read-state - a later write_file to the source then false-positived
+			// the blind-write warning ("overwriting without having read it")
+			// for a file the agent HAD read. Restore the tracked state on
+			// failure; on success the conditional RecordRead(destination)
+			// below carries it over.
+			if srcSeen {
+				defaultFileTracker.RecordRead(source)
+			}
 			// Cross-device link error: fall back to copy + delete.
 			if isCrossDeviceError(err) {
 				if err := copyRecursive(source, destination); err != nil {
 					return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: fmt.Sprintf("cross-device copy error: %v", err)}
 				}
 				if err := os.RemoveAll(source); err != nil {
+					// Source still exists (remove failed): its read-state restore
+					// above matches the physical state. The destination copy ALSO
+					// exists - leave it untracked (it was never read).
 					return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: fmt.Sprintf("moved but failed to remove source: %v", err)}
 				}
 			} else {
