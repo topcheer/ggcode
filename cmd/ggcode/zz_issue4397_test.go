@@ -12,7 +12,7 @@ package main
 
 import (
 	"bytes"
-	"os"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -31,14 +31,16 @@ func TestIssue4397_ParseA2ATimeoutWarnsOnInvalidValue(t *testing.T) {
 		{"5", 5 * time.Minute, true},       // missing unit
 	}
 	for _, c := range cases {
-		orig := os.Stderr
-		r, w, _ := os.Pipe()
-		os.Stderr = w
-		got := parseA2ATimeout(c.in)
-		w.Close()
-		os.Stderr = orig
+		// Capture via the injectable a2aTimeoutWarnf instead of swapping the
+		// global os.Stderr - the swap raced with concurrent stderr writers
+		// under CI parallelism (intermittent main flake, reviewer report).
 		var buf bytes.Buffer
-		_, _ = buf.ReadFrom(r)
+		orig := a2aTimeoutWarnf
+		a2aTimeoutWarnf = func(format string, args ...any) {
+			fmt.Fprintf(&buf, format, args...)
+		}
+		got := parseA2ATimeout(c.in)
+		a2aTimeoutWarnf = orig
 		if got != c.wantDur {
 			t.Fatalf("parseA2ATimeout(%q) = %v, want %v", c.in, got, c.wantDur)
 		}
