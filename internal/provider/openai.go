@@ -891,6 +891,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							// delta has nothing to disambiguate — default to 0 instead
 							// of silently discarding the whole turn's tool call.
 							idx = 0
+							// #4471: those same relays may stream parallel tool calls
+							// one chunk each; collapsing every chunk into slot 0 silently
+							// merges distinct calls (ID last-write-wins, arguments
+							// byte-concatenated into invalid JSON). When the delta
+							// carries an ID, keep distinct IDs in distinct slots.
+							idx = resolveNoIndexToolCallSlot(toolCalls, tc.ID)
 						} else {
 							// Multiple calls without index cannot be located safely.
 							debug.Log("openai", "dropping tool-call delta without index (multi-call delta, id=%s name=%s)", tc.ID, tc.Function.Name)
@@ -977,6 +983,13 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						OutputTokens:      estimateTokensFromChars(outputChars),
 						PromptTokensTotal: inputTokens,
 					}
+				} else if usage.OutputTokens == 0 && outputChars > 0 {
+					// #4472: the #1286 zero guard only rejects chunks where every
+					// field is zero, so a prompt-only usage chunk (two-phase relays)
+					// materializes usage with OutputTokens==0 and suppresses this
+					// estimation fallback - silently zeroing cost/budget/compaction
+					// accounting while real output streamed. Backfill the estimate.
+					usage.OutputTokens = estimateTokensFromChars(outputChars)
 				}
 				var confidence *float64 // sa-74
 				if logprobN > 0 {
@@ -996,6 +1009,41 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	})
 
 	return ch, nil
+}
+
+// resolveNoIndexToolCallSlot locates the accumulator slot for a
+// single-element tool-call delta that omits index (#722 minimal relays).
+// #4471: those relays may stream parallel calls one chunk each - when the
+// delta carries an ID, reuse the slot with the same ID, or open a fresh
+// slot when slot 0 already belongs to a different ID; never merge two
+// distinct calls into one accumulator (corrupts arguments JSON).
+func resolveNoIndexToolCallSlot(toolCalls map[int]*ToolCallDelta, id string) int {
+	idx := 0
+	if id == "" {
+		return idx
+	}
+	for i, ex := range toolCalls {
+		if ex != nil && ex.ID == id {
+			return i
+		}
+	}
+	if ex0 := toolCalls[0]; ex0 != nil && ex0.ID != "" && ex0.ID != id {
+		return nextToolCallSlot(toolCalls)
+	}
+	return idx
+}
+
+// nextToolCallSlot returns the next free slot index for a tool-call delta
+// whose ID matches no existing slot (#4471: relays omitting index may
+// stream parallel calls one chunk each; distinct IDs must not share a slot).
+func nextToolCallSlot(toolCalls map[int]*ToolCallDelta) int {
+	max := -1
+	for k := range toolCalls {
+		if k > max {
+			max = k
+		}
+	}
+	return max + 1
 }
 
 func openAIUsage(usage openai.Usage) TokenUsage {
