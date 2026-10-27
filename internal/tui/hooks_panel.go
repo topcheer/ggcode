@@ -98,9 +98,11 @@ func (m *Model) getEventHooks(eventIdx int) []hooks.Hook {
 }
 
 func (m *Model) saveHooksConfig(cfg hooks.HookConfig) {
-	if m.agent != nil {
-		m.agent.SetHookConfig(cfg)
-	}
+	// #4491: persist FIRST, apply to the live agent second. The old order
+	// (SetHookConfig -> Save) left the agent running the new hooks after a
+	// Save failure (disk full/permissions, #1371) with no disk record -
+	// an in-memory/disk split that vanished on restart. Save-first keeps
+	// the failure path side-effect free.
 	if m.config != nil {
 		m.config.Hooks = cfg
 		if err := m.config.Save(); err != nil {
@@ -111,6 +113,9 @@ func (m *Model) saveHooksConfig(cfg hooks.HookConfig) {
 			return
 		}
 		m.hooksPanel.message = ""
+	}
+	if m.agent != nil {
+		m.agent.SetHookConfig(cfg)
 	}
 }
 
@@ -392,14 +397,21 @@ func (m *Model) handleHooksEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if p.editingNew {
 			hooksList = append(hooksList, h)
 			p.selectedHook = len(hooksList) - 1
-			p.message = tr(m.language, "hooks.msg.added")
 		} else {
 			if p.selectedHook < len(hooksList) {
 				hooksList[p.selectedHook] = h
-				p.message = tr(m.language, "hooks.msg.updated")
 			}
 		}
+		// #4491: set the confirmation message AFTER setEventHooks - its
+		// saveHooksConfig success path clears m.hooksPanel.message, which
+		// used to wipe the added/updated feedback the user never saw (the
+		// d/enter paths already follow this order).
 		m.setEventHooks(p.selectedEvent, hooksList)
+		if p.editingNew {
+			p.message = tr(m.language, "hooks.msg.added")
+		} else {
+			p.message = tr(m.language, "hooks.msg.updated")
+		}
 		p.editMode = false
 
 	case "backspace":
