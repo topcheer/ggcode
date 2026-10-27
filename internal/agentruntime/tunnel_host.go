@@ -517,6 +517,15 @@ func (h *TunnelHost) Close() {
 	if ref != nil && ref.session != nil {
 		ref.session.Stop()
 	}
+	// #4503: after DetachOnlineBroker, onlineBroker is nil but the active
+	// share's broker is still alive - the old Close only stopped
+	// ref.session (the relay client) and never ref.broker, leaking its
+	// outLoop goroutine, textTick timer and textDone channel until process
+	// exit. Broker.Stop is idempotent, so this is safe on every path (the
+	// graceful stop above already destroyed the online broker).
+	if ref != nil && ref.broker != nil {
+		ref.broker.Stop()
+	}
 }
 
 // OnlineBroker returns the current online broker, or nil.
