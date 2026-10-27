@@ -11,7 +11,9 @@ package extpane
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +22,6 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
-	"io"
 )
 
 // Backend abstracts a terminal's tab creation/destruction.
@@ -137,6 +138,29 @@ func (m *Manager) goBackend(fn func()) {
 	})
 }
 
+// isTransientCreateTabErr reports whether a CreateTab failure is a known
+// transient that is safe to retry. #4485: the #1369 retryBudget was
+// effectively dead code for CreateTab - every error, including the 5s
+// context deadline (subprocess killed before the tab was built, e.g. a
+// briefly busy tmux server), went straight to failPermanent and silently
+// disabled the agent's panels for the whole TUI session. Context
+// cancellation is transient for the same reason: the caller gave up, the
+// tab was not created. Anything else keeps the conservative permanent
+// path - runaway protection, the tab may exist despite the error.
+func isTransientCreateTabErr(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
+// isHookBackupUsable reports whether the after-new-window hook backup
+// read succeeded and the hook may therefore be suppressed. #4485: the
+// old flow unconditionally ran set-hook -u even when show-hooks had
+// failed - one transient read failure permanently destroyed the user's
+// GLOBAL hook, because restore early-returns on the empty saved value.
+// Better to skip suppression entirely than to delete unbackupable config.
+func isHookBackupUsable(showErr error) bool {
+	return showErr == nil
+}
+
 // EnsurePane creates a tab + log file for the given agent if one doesn't exist yet.
 // Uses a `creating` set to prevent duplicate tab creation during the
 // backend call. #1722 case 3: the call is SYNCHRONOUS on the Update
@@ -222,8 +246,18 @@ func (m *Manager) EnsurePane(agentID, name, kind string) {
 	defer cancel()
 	tabID, err := m.backend.CreateTab(ctx, title, logPath)
 	if err != nil {
-		// #1369: tab MAY exist despite the error (runaway) - permanent.
-		failPermanent("extpane: create tab failed for %s: %v", agentID, err)
+		// #4485: classify the failure per #1369's design. A timeout (or
+		// caller-side cancel) is a known transient - the subprocess was
+		// killed before the tab was built, so retrying is safe and consumes
+		// the bounded retryBudget instead of silently disabling the agent's
+		// panels for the whole TUI session. Permanent stays reserved for
+		// runaway-protection errors where the tab may exist despite the err.
+		if isTransientCreateTabErr(err) {
+			fail("extpane: create tab transiently failed for %s: %v", agentID, err)
+		} else {
+			// #1369: tab MAY exist despite the error (runaway) - permanent.
+			failPermanent("extpane: create tab failed for %s: %v", agentID, err)
+		}
 		f.Close()
 		os.Remove(logPath)
 		return
