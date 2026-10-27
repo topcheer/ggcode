@@ -93,16 +93,19 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 			debug.Log("memory", "GC: %s modified after snapshot (concurrent writer); keeping", m.Key)
 			continue
 		}
-		if err := os.Remove(path); err != nil {
-			debug.Log("memory", "GC: failed to remove %s: %v", path, err)
-			continue
-		}
-		if m.Category == CategoryTransient {
-			stats.ExpiredRemoved++
-		} else if m.Category == CategoryEvolving {
-			stats.DedupRemoved++
-		}
+		// #4469: a user-forgotten entry is a DeleteMemory-equivalent,
+		// user-intent deletion - it must satisfy the same #3880 interval
+		// contract. The old path did a plain os.Remove: the final live
+		// version was never archived (unrecoverable loss) and no tombstone
+		// was written, so ReadMemoryAsOf time-traveled past the forget to
+		// stale .history content. Delete via archive+tombstone instead
+		// (the archive rename IS the removal). On failure keep the forget
+		// mark and retry next GC run - fail-closed beats silent data loss.
 		if forgotten[m.Key] {
+			if err := am.archiveAndTombstone(m.Key, path, m.Key); err != nil {
+				debug.Log("memory", "GC: forget-digest contract delete failed for %s (will retry next run): %v", m.Key, err)
+				continue
+			}
 			stats.ForgottenRemoved++
 			// #4426: ForgetUsage itself FileLocks the SAME path (usage.go
 			// r401) - calling it inside the GC lock window is a same-flock
@@ -114,6 +117,16 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 			// guard as the sidecar prune.
 			forgetUsageKeys = append(forgetUsageKeys, m.Key)
 			digestedForgotten = append(digestedForgotten, m.Key)
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			debug.Log("memory", "GC: failed to remove %s: %v", path, err)
+			continue
+		}
+		if m.Category == CategoryTransient {
+			stats.ExpiredRemoved++
+		} else if m.Category == CategoryEvolving {
+			stats.DedupRemoved++
 		}
 	}
 	if gcLocked {
@@ -152,23 +165,12 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 	return stats
 }
 
-// DeleteMemory removes a single memory entry by key. Returns an error if the
-// file does not exist or cannot be removed.
-func (am *AutoMemory) DeleteMemory(key string) error {
-	// #775: must resolve the filename exactly like SaveMemory, otherwise the
-	// hash-suffixed file written for a non-injective key can never be deleted.
-	safe := disambiguateKey(key, sanitizeKey(key))
-	path := filepath.Join(am.dir, safe+".md")
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return fmt.Errorf("memory %q not found", key)
-	}
-	// #3880: make the deletion visible to the as_of interval model.
-	// Archive the live version (rename preserves its mtime, so pre-delete
-	// as_of reads still resolve to it) and write a tombstone whose mtime is
-	// the deletion instant; ReadMemoryAsOf returns found=false from that
-	// moment. Without it, delete left only older archived versions and any
-	// as_of AFTER the deletion time-traveled back to stale content -
-	// breaking the "exact version that held at that instant" contract.
+// archiveAndTombstone implements the #3880 deletion contract shared by
+// DeleteMemory and GC's forget-digest path (#4469): it archives the live
+// version (the rename IS the removal - no separate os.Remove is needed)
+// and writes a #4334 timestamp-suffixed tombstone so ReadMemoryAsOf sees
+// the deletion gap instead of time-traveling to older archived content.
+func (am *AutoMemory) archiveAndTombstone(safe, path, key string) error {
 	if _, err := am.archiveVersion(safe, path); err != nil {
 		return err
 	}
@@ -186,7 +188,27 @@ func (am *AutoMemory) DeleteMemory(key string) error {
 	if err := os.WriteFile(tomb, []byte(key+"\n"), 0o644); err != nil {
 		return err
 	}
-	if err := os.Chtimes(tomb, now, now); err != nil {
+	return os.Chtimes(tomb, now, now)
+}
+
+// DeleteMemory removes a single memory entry by key. Returns an error if the
+// file does not exist or cannot be removed.
+func (am *AutoMemory) DeleteMemory(key string) error {
+	// #775: must resolve the filename exactly like SaveMemory, otherwise the
+	// hash-suffixed file written for a non-injective key can never be deleted.
+	safe := disambiguateKey(key, sanitizeKey(key))
+	path := filepath.Join(am.dir, safe+".md")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return fmt.Errorf("memory %q not found", key)
+	}
+	// #3880: make the deletion visible to the as_of interval model.
+	// Archive the live version (rename preserves its mtime, so pre-delete
+	// as_of reads still resolve to it) and write a tombstone whose mtime is
+	// the deletion instant; ReadMemoryAsOf returns found=false from that
+	// moment. Without it, delete left only older archived versions and any
+	// as_of AFTER the deletion time-traveled back to stale content -
+	// breaking the "exact version that held at that instant" contract.
+	if err := am.archiveAndTombstone(safe, path, key); err != nil {
 		return err
 	}
 	// sa-85: drop the provenance/usage record so deleted keys do not
