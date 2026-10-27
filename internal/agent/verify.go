@@ -633,8 +633,7 @@ func extractErrorLines(output string) []string {
 		// "--- FAIL: TestX" per-test failure lines (only the package-level
 		// FAIL summary survived). Left-digit-boundary the zero counts and
 		// keep "--- " test-output markers out of the flag-echo filter.
-		if zeroFailSummary(lower) ||
-			strings.Contains(lower, "no error") || strings.Contains(lower, "without error") {
+		if zeroFailSummary(lower) || isNoErrorNoiseLine(lower) {
 			continue
 		}
 		if strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "--- ") &&
@@ -653,6 +652,35 @@ func extractErrorLines(output string) []string {
 		}
 	}
 	return errors
+}
+
+// isNoErrorNoiseLine reports whether a trimmed output line is a bare
+// success-negation ("no errors") line rather than a real error line.
+// #4524: substring matching here silently swallowed real diagnostics like
+// "Error: function has no error handling" (govet/staticcheck phrasing),
+// starving ratchet learning and auto-repair of the root cause. Only exact
+// whole-line forms are noise; any line that says more than the negation
+// itself stays eligible as an error line.
+func isNoErrorNoiseLine(lower string) bool {
+	switch lower {
+	case "no error", "no errors", "without error", "without errors",
+		"0 errors", "found 0 errors", "compilation finished without errors":
+		return true
+	}
+	// Suffix form with a leading subject, e.g. "vet: no errors" or
+	// "go build: no errors" — allow a short single-word ": " prefix but
+	// nothing that itself carries content (prose before the colon means
+	// real output).
+	const maxPrefixLen = 24
+	if idx := strings.Index(lower, ": "); idx > 0 && idx < maxPrefixLen &&
+		!strings.ContainsRune(lower[:idx], ' ') {
+		tail := strings.TrimSpace(lower[idx+2:])
+		switch tail {
+		case "no error", "no errors", "without error", "without errors":
+			return true
+		}
+	}
+	return false
 }
 
 // extractText pulls text content from a message.
@@ -894,7 +922,9 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 	}
 
 	// Budget remains — inject errors into context and signal continue.
-	a.verifyProgress(fmt.Sprintf("Verification failed — auto-repairing (attempt %d/%d)…", retryCount+1, maxSyncVerifyRetries))
+	// #4524: the denominator is maxSyncVerifyRetries+1 (4), matching L845's
+	// loop bound and the exhaustion notice — the counter runs 1..4.
+	a.verifyProgress(fmt.Sprintf("Verification failed — auto-repairing (attempt %d/%d)…", retryCount+1, maxSyncVerifyRetries+1))
 
 	errorSummary := fmt.Sprintf("Verification failed with the following command:\n```\n%s\n```\n\nErrors:\n", cmd)
 	for _, e := range result.Errors {
