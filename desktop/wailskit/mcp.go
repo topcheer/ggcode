@@ -305,10 +305,17 @@ func AddMCPServer(values map[string]string) error {
 	// a form defaulting to "stdio" must not silently flip an http/ws server.
 	// UpsertMCPServer patches only non-zero fields, so an explicit empty type
 	// keeps the stored value; new servers still default to stdio.
+	// #4496: look the server up in the EFFECTIVE set (yaml ∪ Claude-migrated,
+	// same MergeStartupServersWithDeleted union the runtime and the panel's
+	// ListMCPServers use), not just cfg.MCPServers. Editing a migrated-only
+	// http server with no type in the form used to find existing==nil,
+	// default to stdio, and the yaml write + stdio validation then evicted
+	// the working server from the runtime entirely (#249 covered yaml only).
 	var existing *config.MCPServerConfig
-	for i := range cfg.MCPServers {
-		if cfg.MCPServers[i].Name == name {
-			existing = &cfg.MCPServers[i]
+	for _, ms := range effectiveSessionServers(chatSnap, cfg) {
+		if ms.Name == name {
+			m := ms
+			existing = &m
 			break
 		}
 	}
