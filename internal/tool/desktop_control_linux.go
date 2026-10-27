@@ -362,7 +362,24 @@ func atspiLocate(ctx context.Context, p desktopParams) (Result, error) {
 	for {
 		els, err := atspiRun(ctx, p.MaxDepth)
 		if err != nil {
-			return Result{}, err
+			// #4478: an AT-SPI probe error is routinely transient - the target
+			// app has not registered its a11y tree yet, or the DBus bridge is
+			// still coming up. That start-up window is exactly what
+			// wait_and_click exists to ride out; bailing out on the first
+			// probe error made it no better than a one-shot find_and_click.
+			// Keep polling until the deadline; only ctx cancellation aborts.
+			if p.Action != "wait_and_click" || ctx.Err() != nil {
+				return Result{}, err
+			}
+			if time.Now().After(deadline) {
+				return Result{}, fmt.Errorf("no element matching %q reachable before timeout (last probe error: %v)", p.Text, err)
+			}
+			select {
+			case <-ctx.Done():
+				return Result{}, ctx.Err()
+			case <-time.After(300 * time.Millisecond):
+			}
+			continue
 		}
 		matches := atspiFind(els, p.Text)
 		if len(matches) > 0 {

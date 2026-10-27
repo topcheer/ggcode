@@ -424,6 +424,38 @@ func swiftStringLiteral(s string) string {
 	return b.String()
 }
 
+// jxaStringLiteral escapes a Go string for safe embedding inside a
+// JavaScript (JXA) double-quoted string literal. Backslash and quote are
+// escaped, control characters become \n/\r/\t or a JS \uXXXX escape, and
+// every other rune (BMP or astral, emoji included) is written through as
+// raw UTF-8. #4478: Go's %q emits Go-only \U escapes for astral runes,
+// which JXA rejects with a SyntaxError - UI labels with emoji made every
+// find_element/find_and_click/wait_and_click probe fail.
+func jxaStringLiteral(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if r < 0x20 {
+				fmt.Fprintf(&b, `\u%04X`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return b.String()
+}
+
 // runSwiftCGEvent runs an inline Swift script that uses CoreGraphics
 // CGEvent API for mouse events. Zero external dependencies — swift
 // and CoreGraphics are pre-installed on every macOS system.
@@ -696,7 +728,7 @@ ObjC.import('AppKit');
   var se = Application('System Events');
   var proc = se.processes.whose({frontmost: true})[0];
   if (!proc) return JSON.stringify({error: "no frontmost process"});
-  var search = %q;
+  var search = "%s";
   var results = [];
   var maxDepth = %d;
 
@@ -746,7 +778,7 @@ ObjC.import('AppKit');
   walk(proc, 0, "");
   return JSON.stringify(results, null, 2);
 })();
-`, searchText, maxDepth)
+`, jxaStringLiteral(searchText), maxDepth)
 	return runJXA(ctx, script)
 }
 
