@@ -2893,8 +2893,18 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 		}
 		b.mu.Lock()
 		if th := b.tunnelHost; th != nil {
+			// #4495: currentSes is a raw snapshot - it is nil until the first
+			// session is created. A phone connecting to the share tunnel on a
+			// cold start (no message sent yet) panicked here on the bare
+			// .Title deref while holding b.mu. Zero-value the session-derived
+			// fields instead; cf. the cur != nil gate before BindSession below
+			// and pushTunnelSessionInfo.
+			var title string
+			if currentSes != nil {
+				title = currentSes.Title
+			}
 			th.SetSessionInfo(tunnel.SessionInfoData{
-				Title:     currentSes.Title,
+				Title:     title,
 				Workspace: b.workingDir,
 				Model:     model,
 				Provider:  vendorName,
