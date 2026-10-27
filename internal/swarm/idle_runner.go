@@ -552,6 +552,11 @@ func executeTask(
 	var output strings.Builder
 	var textBuf strings.Builder // accumulate text chunks into turn-level events
 	lastToolName := ""
+	// #4474: some providers/relays surface a non-fatal failure as an
+	// in-stream Error event yet still return nil from RunStream. Track the
+	// first such error so the task is not reported Completed with the error
+	// text persisted as findings for dependents to inherit.
+	var streamErr error
 	flushText := func() {
 		if textBuf.Len() == 0 {
 			return
@@ -642,6 +647,9 @@ func executeTask(
 		case provider.StreamEventError:
 			flushText()
 			output.WriteString(fmt.Sprintf("\n[error: %v]", event.Error))
+			if streamErr == nil {
+				streamErr = event.Error
+			}
 			tm.appendEvent(TeammateEvent{
 				Type:    TeammateEventError,
 				Text:    fmt.Sprintf("%v", event.Error),
@@ -651,13 +659,23 @@ func executeTask(
 	})
 	flushText()
 
+	// #4474: promote the tracked in-stream error so the claim path's
+	// transient/permanent classification (and the breaker accounting below)
+	// sees it; otherwise the task is marked Completed and persistTaskResult
+	// stores the error text as this task's findings.
+	if err == nil && streamErr != nil {
+		err = streamErr
+	}
+
 	if err != nil {
 		debug.Log("swarm", "teammate %s RunStream error: %v output_len=%d", tm.ID, err, output.Len())
 		if subCtx.Err() == context.DeadlineExceeded {
 			output.WriteString("\n[timeout: task exceeded time limit]")
 		} else if subCtx.Err() == context.Canceled {
 			output.WriteString("\n[cancelled]")
-		} else {
+		} else if streamErr == nil {
+			// (when streamErr != nil the in-stream handler above already
+			// appended the matching [error: ...] line - do not duplicate it)
 			output.WriteString(fmt.Sprintf("\n[error: %v]", err))
 		}
 	}
