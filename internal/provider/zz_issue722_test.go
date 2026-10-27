@@ -267,6 +267,7 @@ func TestIssue722_ToolCallDeltaNilIndex(t *testing.T) {
 		chunks       []string
 		wantToolCall bool
 		wantToolName string
+		wantCount    int // default 1 when wantToolCall; >1 for parallel survivors (#4535)
 		description  string
 	}{
 		{
@@ -280,13 +281,19 @@ func TestIssue722_ToolCallDeltaNilIndex(t *testing.T) {
 			description:  "minimal relay omitting index on a single-call delta must not discard the tool call",
 		},
 		{
-			name: "multiple tool calls without index stay dropped",
+			// #4535 supersedes the old "stay dropped" contract: multi-call
+			// deltas whose entries carry IDs are now resolved by ID (same as
+			// the single-delta #4471 path). Only index-less AND ID-less
+			// entries remain dropped (covered in zz_issue4535_test.go).
+			name: "multiple tool calls without index resolve by ID",
 			chunks: []string{
 				`{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"fn_one","arguments":"{}"}},{"id":"call_2","type":"function","function":{"name":"fn_two","arguments":"{}"}}]},"finish_reason":null}]}`,
 				`{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
 			},
-			wantToolCall: false,
-			description:  "multi-call deltas without index cannot be located safely and remain dropped",
+			wantToolCall: true,
+			wantToolName: "fn_one",
+			wantCount:    2,
+			description:  "multi-call delta without index but with IDs resolves by ID instead of dropping",
 		},
 		{
 			name: "indexed tool calls still work",
@@ -342,8 +349,11 @@ func TestIssue722_ToolCallDeltaNilIndex(t *testing.T) {
 				t.Fatalf("%s: no Done event", tc.description)
 			}
 			if tc.wantToolCall {
-				if len(toolCalls) != 1 {
-					t.Fatalf("%s: got %d tool calls, want 1", tc.description, len(toolCalls))
+				if tc.wantCount == 0 {
+					tc.wantCount = 1
+				}
+				if len(toolCalls) != tc.wantCount {
+					t.Fatalf("%s: got %d tool calls, want %d", tc.description, len(toolCalls), tc.wantCount)
 				}
 				if toolCalls[0].Name != tc.wantToolName {
 					t.Fatalf("%s: tool name = %q, want %q", tc.description, toolCalls[0].Name, tc.wantToolName)
