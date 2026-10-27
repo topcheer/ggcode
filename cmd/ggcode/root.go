@@ -653,7 +653,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	buildCurrentSystemPrompt := func() (string, []string) {
 		// Remote agents info is injected dynamically via systemPromptInjector
 		// (lanchat peers), not baked into the static prompt.
-		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, "")
+		// #4502: detect git status LAZILY at every prompt build - the old
+		// closure captured the startup-time snapshot, so refreshAgentSystemPrompt
+		// (save_memory, knight reload, skills ticker) kept injecting a stale
+		// branch/dirty-count after mid-session commits and checkouts, while the
+		// sub-agent builder below detects live. Same freshness on both paths.
+		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, detectGitStatus(workingDir), "")
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
 	trace.Mark(fmt.Sprintf("build initial system prompt skills=%d bytes=%d", len(promptSkillRefs), len(systemPrompt)))
