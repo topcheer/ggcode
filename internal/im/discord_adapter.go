@@ -593,16 +593,25 @@ func (a *discordAdapter) Send(ctx context.Context, binding ChannelBinding, event
 
 	// Extract images from text and send them first
 	images, remainingText := ExtractImagesFromText(content)
+	sentImages := 0
 	for _, img := range images {
 		if err := a.sendExtractedImage(ctx, channelID, img); err != nil {
 			debug.Log("discord", "adapter=%s image send failed: %v", a.name, err)
+			continue
 		}
+		sentImages++
 	}
 
 	// Send remaining text
 	remainingText = strings.TrimSpace(remainingText)
 	if remainingText == "" {
-		return nil
+		if len(images) > 0 && sentImages == 0 {
+			// #4464: an image-only message whose sends all failed must not
+			// be silently dropped - fall back to the original markdown text.
+			remainingText = content
+		} else {
+			return nil
+		}
 	}
 	chunks := splitDiscordMessage(remainingText, discordMaxTextLen)
 	for i, chunk := range chunks {

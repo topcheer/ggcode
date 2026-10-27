@@ -929,6 +929,7 @@ func (a *matrixAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 
 	// Extract images from markdown text and send them as m.image events.
 	images, remainingText := ExtractImagesFromText(text)
+	sentImages := 0
 	for i, img := range images {
 		data, mimeType, err := a.resolveImageToBytes(ctx, img)
 		if err != nil {
@@ -938,6 +939,7 @@ func (a *matrixAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		if err := a.sendImage(ctx, chatID, binding.ThreadID, data, mimeType); err != nil {
 			debug.Log("matrix", "adapter=%s image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
 		} else {
+			sentImages++
 			debug.Log("matrix", "adapter=%s image sent [%d/%d] mime=%s size=%d", a.name, i+1, len(images), mimeType, len(data))
 		}
 		// Rate limit between image sends
@@ -949,7 +951,13 @@ func (a *matrixAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	}
 
 	if remainingText == "" {
-		return nil
+		if len(images) > 0 && sentImages == 0 {
+			// #4464: an image-only message whose sends all failed must not
+			// be silently dropped - fall back to the original markdown text.
+			remainingText = text
+		} else {
+			return nil
+		}
 	}
 
 	debug.Log("matrix", "adapter=%s send room=%s kind=%s len=%d images=%d", a.name, chatID, event.Kind, len(remainingText), len(images))
