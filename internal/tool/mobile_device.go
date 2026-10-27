@@ -158,7 +158,10 @@ func (t *MobileDeviceTool) Execute(ctx context.Context, input json.RawMessage) (
 	if p.Quality == 0 {
 		p.Quality = 85
 	}
-	if p.Lines == 0 {
+	if p.Lines < 1 {
+		// #4482: only Lines == 0 was normalized before - a negative value
+		// (LLM-generated or a JSON typo) passed through and made the
+		// tail-trim slice underflow panic in both backends.
 		p.Lines = 100
 	}
 

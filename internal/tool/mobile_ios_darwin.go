@@ -12,13 +12,18 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 // iosBackend implements mobileBackend using xcrun simctl on macOS.
 // Only compiled on darwin platforms.
 type iosBackend struct {
-	xcrunPath  string
+	xcrunPath string
+	// #4482: cachedUDID is read/written from defaultDevice(), which
+	// parallel tool-execution batches can call concurrently - guard it
+	// (Go memory model / -race CI).
+	mu         sync.Mutex
 	cachedUDID string
 }
 
@@ -31,9 +36,12 @@ func newIOSBackend() *iosBackend {
 }
 
 func (b *iosBackend) defaultDevice() string {
+	b.mu.Lock()
 	if b.cachedUDID != "" {
+		defer b.mu.Unlock()
 		return b.cachedUDID
 	}
+	b.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	out, _, err := runCommand(ctx, 10*time.Second, b.xcrunPath, "simctl", "list", "devices", "available", "--json")
@@ -54,7 +62,9 @@ func (b *iosBackend) defaultDevice() string {
 	for _, devs := range list.Devices {
 		for _, d := range devs {
 			if d.State == "Booted" {
+				b.mu.Lock()
 				b.cachedUDID = d.UDID
+				b.mu.Unlock()
 				return d.UDID
 			}
 		}
