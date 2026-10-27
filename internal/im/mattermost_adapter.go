@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/textproto"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -354,7 +353,54 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 		return
 	}
 
-	// Dedup
+	// Dedup check (read-only). #4465: the seen write is deferred until every
+	// filter (allowed-users, mention gating, empty text) has passed; writing
+	// it here would only burn dedup capacity on messages that get filtered
+	// again on replay, and a >1k/5min filtered burst could evict live
+	// postIDs from the window (duplicate agent replies on WS replay).
+	a.mu.Lock()
+	if _, seen := a.seen[postID]; seen {
+		a.mu.Unlock()
+		return
+	}
+	a.mu.Unlock()
+
+	channelID, _ := post["channel_id"].(string)
+	channelTypeRaw, _ := data["channel_type"].(string)
+	messageText, _ := post["message"].(string)
+	senderName, _ := data["sender_name"].(string)
+	senderName = strings.TrimPrefix(senderName, "@")
+
+	// Determine if DM
+	isDM := channelTypeRaw == "D"
+
+	// Allowed users check
+	if len(a.allowedUsers) > 0 && !entryMatches(a.allowedUsers, userID) {
+		debug.Log("mattermost", "adapter=%s user %s not in allowed list", a.name, userID)
+		return
+	}
+
+	// Mention gating for non-DM channels
+	if !isDM {
+		isFree := entryMatches(a.freeChannels, channelID)
+		if !isFree && a.requireMention {
+			hasMention := a.hasMention(messageText)
+			if !hasMention {
+				// #4322: previously this drop was silent, making trailing "-"/"."
+				// usernames undiagnosable; keep a debug trace for the rest.
+				debug.Log("mattermost", "adapter=%s channel %s message without mention dropped", a.name, channelID)
+				return
+			}
+			messageText = a.stripMention(messageText)
+		}
+	}
+
+	if strings.TrimSpace(messageText) == "" {
+		return
+	}
+
+	// #4465: all filters passed - mark seen now (re-checked under the lock so
+	// two concurrent replays of the same post cannot both proceed).
 	a.mu.Lock()
 	if _, seen := a.seen[postID]; seen {
 		a.mu.Unlock()
@@ -382,38 +428,6 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 		}
 	}
 	a.mu.Unlock()
-
-	channelID, _ := post["channel_id"].(string)
-	channelTypeRaw, _ := data["channel_type"].(string)
-	messageText, _ := post["message"].(string)
-	senderName, _ := data["sender_name"].(string)
-	senderName = strings.TrimPrefix(senderName, "@")
-
-	// Determine if DM
-	isDM := channelTypeRaw == "D"
-
-	// Allowed users check
-	if len(a.allowedUsers) > 0 && !entryMatches(a.allowedUsers, userID) {
-		debug.Log("mattermost", "adapter=%s user %s not in allowed list", a.name, userID)
-		return
-	}
-
-	// Mention gating for non-DM channels
-	if !isDM {
-		isFree := entryMatches(a.freeChannels, channelID)
-		if !isFree && a.requireMention {
-			hasMention := a.hasMention(messageText)
-			if !hasMention {
-				debug.Log("mattermost", "adapter=%s drop: no mention of @%s in channel %s", a.name, a.botUsername, channelID)
-				return
-			}
-			messageText = a.stripMention(messageText)
-		}
-	}
-
-	if strings.TrimSpace(messageText) == "" {
-		return
-	}
 
 	// Thread support
 	threadID, _ := post["root_id"].(string)
@@ -468,20 +482,72 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 	}
 }
 
+// mattermostUsernameContChars are the characters that may legally continue
+// a Mattermost username after a prefix (#4322): server charset is
+// ^[a-z0-9.\-_]+$ (mattermost/server validUsernameChars), so if the byte
+// following a candidate match is one of these, the match is a strict PREFIX
+// of a longer username and must not count.
+const mattermostUsernameContChars = "abcdefghijklmnopqrstuvwxyz0123456789._-"
+
+// mattermostIsUsernameContByte reports whether b may continue a username.
+func mattermostIsUsernameContByte(b byte) bool {
+	return strings.IndexByte(mattermostUsernameContChars, b) >= 0
+}
+
+// mentionsMattermostHandle reports whether text contains "@handle" NOT
+// followed by a legal username continuation character. RE2's \b is an
+// ASCII word boundary that can never match when the handle ends with "-"
+// or "." (legal username endings like "dev-", "ops1."), so the boundary is
+// a post-match check instead (#4322, same fix shape as Matrix #2749).
+// The short-name guard from #963 is preserved: "al" does not match "@alex"
+// because "e" is a continuation byte.
+func mentionsMattermostHandle(lower, handle string) bool {
+	needle := "@" + strings.ToLower(handle)
+	for start := 0; ; {
+		i := strings.Index(lower[start:], needle)
+		if i < 0 {
+			return false
+		}
+		at := start + i
+		end := at + len(needle)
+		if end >= len(lower) || !mattermostIsUsernameContByte(lower[end]) {
+			return true
+		}
+		start = at + 1
+	}
+}
+
+// stripMattermostHandle removes "@handle" occurrences that are not
+// prefixes of a longer username (same boundary rule as
+// mentionsMattermostHandle). Case-insensitive matching happens in the
+// ORIGINAL text's coordinate system via the package-wide ASCII fold
+// (#3572 lesson: never locate in ToLower and consume in the original).
+func stripMattermostHandle(text, handle string) string {
+	needle := "@" + strings.ToLower(handle)
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		if n, ok := matrixASCIIFoldPrefix(text[i:], needle); ok {
+			end := i + n
+			if end >= len(text) || !mattermostIsUsernameContByte(text[end]) {
+				i = end // skip the mention
+				continue
+			}
+		}
+		b.WriteByte(text[i])
+		i++
+	}
+	return b.String()
+}
+
 func (a *mattermostAdapter) hasMention(text string) bool {
 	lower := strings.ToLower(text)
-	// Boundary match: bot name "al" must not fire on "@alex" (#963).
-	// The boundary is username-charset-aware, not ASCII \b: Mattermost
-	// usernames allow ^[a-z0-9.\-_]+$ and may legally end in "-" or ".",
-	// where RE2 \b can never match (both sides non-word chars) and real
-	// mentions were silently dropped (#4322). A mention ends only when the
-	// next char is NOT a username char.
+	// Username-boundary match: bot name "al" must not fire on "@alex"
+	// (#963), while trailing "-"/"." usernames still match (#4322).
 	for _, id := range []string{a.botUsername, a.botUserID} {
 		if id == "" {
 			continue
 		}
-		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(id) + `(?:$|[^a-z0-9.\-_])`)
-		if re.MatchString(lower) {
+		if mentionsMattermostHandle(lower, id) {
 			return true
 		}
 	}
@@ -489,16 +555,14 @@ func (a *mattermostAdapter) hasMention(text string) bool {
 }
 
 func (a *mattermostAdapter) stripMention(text string) string {
-	// Strip @bot_username and @bot_user_id mentions, with a username-charset
-	// boundary so a short bot name ("al") doesn't carve text out of "@alex"
-	// (#963) while names ending in "-"/"." still strip (#4322). The boundary
-	// char (when present) is captured and preserved in the replacement.
-	for _, pattern := range []string{a.botUsername, a.botUserID} {
-		if pattern == "" {
+	// Strip @bot_username and @bot_user_id mentions, with a username
+	// boundary so a short bot name ("al") doesn't carve text out of
+	// "@alex" (#963) while non-word endings "\b" missed still strip (#4322).
+	for _, handle := range []string{a.botUsername, a.botUserID} {
+		if handle == "" {
 			continue
 		}
-		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(pattern) + `(?:$|([^a-z0-9.\-_]))`)
-		text = re.ReplaceAllString(text, "$1")
+		text = stripMattermostHandle(text, handle)
 	}
 	return strings.TrimSpace(text)
 }
@@ -542,7 +606,14 @@ func (a *mattermostAdapter) Send(ctx context.Context, binding ChannelBinding, ev
 	}
 
 	if remainingText == "" && len(fileIDs) == 0 {
-		return nil
+		if len(images) > 0 {
+			// #4464: every image failed to resolve/upload and nothing
+			// readable remains - fall back to the original markdown text
+			// instead of silently dropping the message.
+			remainingText = text
+		} else {
+			return nil
+		}
 	}
 	return a.sendTextWithFiles(ctx, chatID, binding.ThreadID, remainingText, fileIDs)
 }
