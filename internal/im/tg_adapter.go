@@ -590,11 +590,13 @@ func (a *tgAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 
 	// Extract images from text and send them as photos
 	images, remainingText := ExtractImagesFromText(content)
+	sentImages := 0
 	for i, img := range images {
 		if err := a.sendExtractedImage(ctx, channelID, img, ""); err != nil {
 			debug.Log("tg", "adapter=%s image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
 			continue
 		}
+		sentImages++
 		// #1242: every delivered photo must respect the ~1 msg/s per-chat
 		// limit — back-to-back multi-image replies and the photo→text
 		// transition otherwise burst past it and Telegram 429s the send
@@ -608,6 +610,12 @@ func (a *tgAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 
 	// Send remaining text
 	remainingText = strings.TrimSpace(remainingText)
+	if remainingText == "" && len(images) > 0 && sentImages == 0 {
+		// #4464: every image failed and nothing remained — fall back to the
+		// original markdown instead of silently dropping the message.
+		debug.Log("tg", "adapter=%s all %d image(s) failed and no text remains; falling back to raw markdown", a.name, len(images))
+		remainingText = content
+	}
 	if remainingText != "" {
 		messages, err := a.formatMessages(remainingText)
 		if err != nil {

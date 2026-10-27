@@ -705,14 +705,23 @@ func (a *slackAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 
 	// Extract images from text and upload them first
 	images, remainingText := ExtractImagesFromText(content)
+	sentImages := 0
 	for _, img := range images {
 		if err := a.sendExtractedImage(ctx, channelID, binding.ThreadID, img); err != nil {
 			debug.Log("slack", "adapter=%s image upload failed: %v", a.name, err)
+		} else {
+			sentImages++
 		}
 	}
 
 	// Send remaining text (converted to mrkdwn)
 	remainingText = strings.TrimSpace(remainingText)
+	if remainingText == "" && len(images) > 0 && sentImages == 0 {
+		// #4464: every image failed and nothing remained — fall back to the
+		// original markdown instead of silently dropping the message.
+		debug.Log("slack", "adapter=%s all %d image(s) failed and no text remains; falling back to raw markdown", a.name, len(images))
+		remainingText = content
+	}
 	if remainingText == "" {
 		return nil
 	}

@@ -354,32 +354,15 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 		return
 	}
 
-	// Dedup
+	// Dedup check only — the seen MARK moves to after every filter passes
+	// (#4465): marking here meant filtered-out posts (not-allowed sender,
+	// no mention, empty text) consumed dedup capacity for zero benefit, and
+	// a >1000-post filtered burst evicted live postIDs, so a WS replay
+	// re-processed legitimate messages into duplicate agent replies.
 	a.mu.Lock()
 	if _, seen := a.seen[postID]; seen {
 		a.mu.Unlock()
 		return
-	}
-	a.seen[postID] = time.Now()
-	if len(a.seen) > mattermostDedupMaxSize {
-		cutoff := time.Now().Add(-5 * time.Minute)
-		for k, t := range a.seen {
-			if t.Before(cutoff) {
-				delete(a.seen, k)
-			}
-		}
-		// Burst within the 5-minute window can still leave the map oversized;
-		// evict oldest entries until back under the cap (#963).
-		for len(a.seen) > mattermostDedupMaxSize {
-			oldestKey := ""
-			var oldestTime time.Time
-			for k, t := range a.seen {
-				if oldestKey == "" || t.Before(oldestTime) {
-					oldestKey, oldestTime = k, t
-				}
-			}
-			delete(a.seen, oldestKey)
-		}
 	}
 	a.mu.Unlock()
 
@@ -414,6 +397,33 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 	if strings.TrimSpace(messageText) == "" {
 		return
 	}
+
+	// Every filter passed — NOW mark the post seen (#4465). Filtered-out
+	// posts no longer consume dedup capacity; replays of filtered content
+	// are still cheaply rejected by the filters themselves.
+	a.mu.Lock()
+	a.seen[postID] = time.Now()
+	if len(a.seen) > mattermostDedupMaxSize {
+		cutoff := time.Now().Add(-5 * time.Minute)
+		for k, t := range a.seen {
+			if t.Before(cutoff) {
+				delete(a.seen, k)
+			}
+		}
+		// Burst within the 5-minute window can still leave the map oversized;
+		// evict oldest entries until back under the cap (#963).
+		for len(a.seen) > mattermostDedupMaxSize {
+			oldestKey := ""
+			var oldestTime time.Time
+			for k, t := range a.seen {
+				if oldestKey == "" || t.Before(oldestTime) {
+					oldestKey, oldestTime = k, t
+				}
+			}
+			delete(a.seen, oldestKey)
+		}
+	}
+	a.mu.Unlock()
 
 	// Thread support
 	threadID, _ := post["root_id"].(string)
@@ -542,7 +552,17 @@ func (a *mattermostAdapter) Send(ctx context.Context, binding ChannelBinding, ev
 	}
 
 	if remainingText == "" && len(fileIDs) == 0 {
-		return nil
+		if len(images) > 0 {
+			// #4464: every image failed and the markdown image syntax had
+			// consumed the whole text — returning nil silently dropped the
+			// message while Send reported success. Fall back to the original
+			// markdown so the recipient sees what was meant (and the failure
+			// stays diagnosable instead of debug-log-only).
+			debug.Log("mattermost", "adapter=%s all %d image(s) failed and no text remains; falling back to raw markdown", a.name, len(images))
+			remainingText = text
+		} else {
+			return nil
+		}
 	}
 	return a.sendTextWithFiles(ctx, chatID, binding.ThreadID, remainingText, fileIDs)
 }
