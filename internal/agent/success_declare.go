@@ -234,8 +234,24 @@ func sdHasNegationBefore(lowerText string, declIdx int) bool {
 	}
 	window := lowerText[start:declIdx]
 	for _, n := range sdNegationPatterns {
-		if strings.Contains(window, n) {
-			return true
+		from := 0
+		for {
+			idx := strings.Index(window[from:], n)
+			if idx < 0 {
+				break
+			}
+			idx += from
+			// #4539: a negation only vetoes the declaration when it sits
+			// in the SAME sentence - "We fixed the bug that was not working.
+			// The task is done." is a legitimate claim (the not-working bug
+			// belongs to the previous sentence), not a negated one. The
+			// trailing caveat branch has always had this boundary check; the
+			// lookbehind window was a bare Contains, so cross-sentence
+			// negations killed the run's only declaration.
+			if !strings.ContainsAny(window[idx+len(n):], ".;\n") {
+				return true
+			}
+			from = idx + 1
 		}
 	}
 	return false
@@ -477,7 +493,25 @@ func sdHasCaveatWindowed(lowerText string, declStart, declEnd int) bool {
 		}
 
 		if absIdx < declStart {
-			return true // leading hedge
+			// #4539: leading hedges only veto within the declaration's own
+			// sentence, mirroring the trailing branch. "However, see caveats
+			// below. The task is complete." is the documented wrap-up shape
+			// (L79-83) - the caveat lives in its own previous sentence and
+			// must not kill the claim.
+			caveatEnd := absIdx + len(caveat)
+			if caveatEnd >= declStart {
+				// #4256: the caveat phrase OVERLAPS the declaration itself
+				// ("still work to be done" vs the bare "done" declaration) -
+				// same sentence by construction, and the hedging framing is
+				// the whole point of that table entry.
+				return true
+			}
+			between := lowerText[caveatEnd:declStart]
+			if !strings.ContainsAny(between, ".;\n") {
+				return true // same-sentence leading hedge
+			}
+			// Cross-sentence leading hedge: not a hedge against THIS claim.
+			continue
 		}
 		// Trailing: veto only if still in the declaration's own sentence.
 		between := lowerText[declEnd:absIdx]
