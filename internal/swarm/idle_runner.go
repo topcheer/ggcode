@@ -551,6 +551,12 @@ func executeTask(
 
 	var output strings.Builder
 	var textBuf strings.Builder // accumulate text chunks into turn-level events
+	// #4474: a provider may report a fatal failure as an in-stream
+	// StreamEventError while RunStream itself returns nil. Capture it so
+	// executeTask returns non-nil err — otherwise the claim path marks the
+	// task Completed and persistTaskResult stores the "[error: ...]" text
+	// as task findings that dependent tasks then consume as input.
+	var streamErr error
 	lastToolName := ""
 	flushText := func() {
 		if textBuf.Len() == 0 {
@@ -642,6 +648,9 @@ func executeTask(
 		case provider.StreamEventError:
 			flushText()
 			output.WriteString(fmt.Sprintf("\n[error: %v]", event.Error))
+			if event.Error != nil {
+				streamErr = event.Error
+			}
 			tm.appendEvent(TeammateEvent{
 				Type:    TeammateEventError,
 				Text:    fmt.Sprintf("%v", event.Error),
@@ -663,6 +672,13 @@ func executeTask(
 	}
 
 	debug.Log("swarm", "teammate %s task complete output_len=%d", tm.ID, output.Len())
+	// #4474: propagate an in-stream error AFTER the append block above so
+	// the "[error: ...]" line is not duplicated in the output. This routes
+	// the task into the existing failure machinery (transient retry / park,
+	// breaker accounting) instead of the fake-Completed success branch.
+	if err == nil && streamErr != nil {
+		err = streamErr
+	}
 	// r455: breaker accounting. Cancellation (shutdown/team teardown)
 	// is not a teammate failure; deadline/other errors are.
 	recordTeammateTaskResult(tm.ID, err != nil && !errors.Is(subCtx.Err(), context.Canceled))
