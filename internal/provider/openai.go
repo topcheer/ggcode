@@ -750,6 +750,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			}
 
 			toolCalls := make(map[int]*ToolCallDelta)
+			// #4471: implicit slot resolution state for no-index single-call
+			// deltas (#722 minimal relays): a CHANGING non-empty tc.ID means the
+			// relay moved on to the next parallel call - hand out a fresh slot
+			// instead of merging every call into slot 0.
+			implicitToolCallID := ""
+			implicitToolCallIdx := 0
 			var reasoningBuf strings.Builder
 			emitted := false
 			retry := false
@@ -890,7 +896,11 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							// index, but minimal relays omit it. A single call in the
 							// delta has nothing to disambiguate — default to 0 instead
 							// of silently discarding the whole turn's tool call.
-							idx = 0
+							// #4471: consecutive single-call deltas with CHANGING IDs are
+							// parallel calls; resolve via nextImplicitToolCallSlot so
+							// each new ID lands in its own slot.
+							implicitToolCallIdx, implicitToolCallID = nextImplicitToolCallSlot(implicitToolCallID, implicitToolCallIdx, tc.ID)
+							idx = implicitToolCallIdx
 						} else {
 							// Multiple calls without index cannot be located safely.
 							debug.Log("openai", "dropping tool-call delta without index (multi-call delta, id=%s name=%s)", tc.ID, tc.Function.Name)
@@ -977,6 +987,14 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						OutputTokens:      estimateTokensFromChars(outputChars),
 						PromptTokensTotal: inputTokens,
 					}
+				} else if usageNeedsOutputEstimate(usage, outputChars) {
+					// #4472: two-phase relays send a prompt-only usage chunk (e.g.
+					// prompt_tokens=500, completion_tokens=0); the materialized usage
+					// suppressed the usage==nil estimation branch above while the
+					// stream actually produced output - keep the estimate for the
+					// missing output side (#1286 intent: no non-nil-but-undercounted
+					// usage).
+					usage.OutputTokens = estimateTokensFromChars(outputChars)
 				}
 				var confidence *float64 // sa-74
 				if logprobN > 0 {
@@ -996,6 +1014,30 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	})
 
 	return ch, nil
+}
+
+// nextImplicitToolCallSlot resolves the slot index for a single tool-call
+// delta without an explicit index (#722 minimal relays). #4471: when the
+// delta carries a non-empty ID that DIFFERS from the previous implicit
+// delta's ID, the relay has moved on to the next parallel call - allocate a
+// fresh slot so consecutive parallel calls are not merged into slot 0.
+// Same-ID repeats (argument fragments) keep the current slot.
+func nextImplicitToolCallSlot(prevID string, prevIdx int, id string) (idx int, curID string) {
+	if id != "" && id != prevID {
+		if prevID != "" {
+			prevIdx++
+		}
+		return prevIdx, id
+	}
+	return prevIdx, prevID
+}
+
+// usageNeedsOutputEstimate reports whether the accumulated stream usage is
+// missing the output side while the stream actually produced output (#4472:
+// a prompt-only usage chunk materialized usage and suppressed the
+// estimation fallback, so Done reported OutputTokens=0 despite output).
+func usageNeedsOutputEstimate(u *TokenUsage, outputChars int) bool {
+	return u != nil && u.OutputTokens == 0 && outputChars > 0
 }
 
 func openAIUsage(usage openai.Usage) TokenUsage {
