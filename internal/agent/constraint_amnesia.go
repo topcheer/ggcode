@@ -116,7 +116,7 @@ var constraintPatterns = []*regexp.Regexp{
 	// Requirement constraints: "needs to be", "has to", "it's important that"
 	regexp.MustCompile(`(?i)\b(?:needs? to be|has to be|it'?s important that|make sure|ensure that)\b[^\n.]{5,70}`),
 	// Scope restrictions: "stay in", "limit to", "keep within"
-	regexp.MustCompile(`(?i)\b(?:stay in|limit (?:to|changes to)|keep within|don'?t touch|leave\b[^n]{0,5}alone)\b[^\n.]{3,60}`),
+	regexp.MustCompile(`(?i)\b(?:stay in|limit (?:to|changes to)|keep within|don'?t touch|leave\b[^\n.]{0,20}alone)\b[^\n.]{3,60}`),
 }
 
 // extractConstraints scans user text for explicit constraint directives.

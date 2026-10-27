@@ -446,6 +446,14 @@ func UpdateConfig(values map[string]interface{}) error {
 	}
 	impersonationRequested := false
 	var pendingImpersonationPreset *provider.ImpersonationPreset
+	// #4499: CustomVersion is an independent field (the snapshot side and
+	// ApplyImpersonation both treat it as such) - its only consumer used to
+	// sit INSIDE the impersonatePreset branch, so a form submitting just the
+	// changed version (omitting the unchanged preset) silently dropped the
+	// update. Consume it unconditionally when present.
+	if cv, ok := values["impersonateCustomVersion"].(string); ok {
+		cfg.Impersonation.CustomVersion = cv
+	}
 	if v, ok := values["impersonatePreset"].(string); ok {
 		// #1815 case 2: this path must go through the same validation and
 		// package-global update as ApplyImpersonation. Writing cfg directly
@@ -464,22 +472,9 @@ func UpdateConfig(values map[string]interface{}) error {
 				}
 			}
 		}
-		// #3852 B: CustomVersion must be written BEFORE the runtime activation
-		// below so the activated headers pin the new version - the old order
-		// activated the runtime with the stale version while persisting the
-		// new one to disk, so impersonated header version numbers stayed
-		// wrong until the next unrelated config change.
-		if cv, ok := values["impersonateCustomVersion"].(string); ok {
-			cfg.Impersonation.CustomVersion = cv
-		}
-		// Preserve CustomHeaders/CustomVersion already in cfg; version falls
-		// back to the persisted one so SetActiveImpersonation sees the same
-		// state the next cold init would rebuild from.
-		// #4387: defer provider.SetActiveImpersonation until after cfg.Save()
-		// succeeds (applied below) - activating first left the runtime
-		// impersonated with the new preset when Save failed (disk
-		// full/permissions), a session-long runtime/disk fork violating the
-		// #740 failure-atomicity contract.
+		// #3852 B note: the CustomVersion write moved to the standalone block
+		// above (#4499); the version is on cfg before any runtime activation
+		// below, preserving the #3852 ordering contract.
 		impersonationRequested = true
 		pendingImpersonationPreset = preset
 		cfg.Impersonation.Preset = v
