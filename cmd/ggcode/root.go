@@ -1511,6 +1511,16 @@ func parseA2ATimeout(s string) time.Duration {
 		fmt.Fprintf(os.Stderr, "warning: invalid a2a.task_timeout %q (%v), using default %v\n", s, err, 5*time.Minute)
 		return 5 * time.Minute
 	}
+	if d <= 0 {
+		// #4462: ParseDuration accepts "-5m" and the handler-side guards
+		// only cover timeout == 0, so a negative value reached
+		// time.NewTimer and fired instantly - every A2A task timed out
+		// (-32060) the moment it started, with nothing pointing at the
+		// config. Normalize non-positive to the default, same shape as
+		// parseA2AMaxTasks (#1422-A), and keep it diagnosable per #4397.
+		fmt.Fprintf(os.Stderr, "warning: non-positive a2a.task_timeout %q (%v), using default %v\n", s, d, 5*time.Minute)
+		return 5 * time.Minute
+	}
 	return d
 }
 
