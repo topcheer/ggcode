@@ -1095,6 +1095,15 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 			updated++
 		} else {
 			// New file: append.
+			// #4476: file-count cap, same ceiling the full scan enforces via
+			// SkipAll at codeIndexMaxFiles. Without it, files beyond the
+			// lexicographic 50k cut that entered via the dirty channel were
+			// invisible to the next periodic scan (found[] never saw them),
+			// so the scan flagged them as deleted and persisted the removal.
+			if len(idx.docs) >= codeIndexMaxFiles {
+				debug.Log("codeindex", "incremental append skipped, file cap reached: %s", relPath)
+				continue
+			}
 			if maxTerms > 0 && totalTerms+len(terms) > maxTerms {
 				// #4428: corpus budget - same cap the build path applies per
 				// file; the dirty channel must not be an unbounded side door.
@@ -1263,6 +1272,12 @@ func (m *CodeIndexManager) FilePathFuzzy(query string, maxResults int) []string 
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].score > results[j].score
 	})
+	// #4476: guard the same way Search does (maxResults <= 0 → 10) -
+	// a negative maxResults made len(results) > maxResults always true
+	// and results[:maxResults] panicked on the negative bound.
+	if maxResults <= 0 {
+		maxResults = 10
+	}
 	if len(results) > maxResults {
 		results = results[:maxResults]
 	}
