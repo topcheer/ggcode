@@ -564,7 +564,16 @@ func xmlAttr(attrs, name string) string {
 
 // trimTree removes deeply nested empty nodes to keep output token-efficient.
 func trimTree(el *uiElement, depth int) {
-	if el == nil || depth > 8 {
+	if el == nil {
+		return
+	}
+	// #4480: at depth > 8 the old code just returned, leaving the 9th-level
+	// node's ENTIRE subtree unpruned - the opposite of the "avoid excessive
+	// depth" intent (every descendant survived, only the recursion stopped).
+	// Keep the node itself (its parent already filtered it in) but cut the
+	// subtree: clear Children instead of returning untouched.
+	if depth > 8 {
+		el.Children = nil
 		return
 	}
 	filtered := el.Children[:0]
