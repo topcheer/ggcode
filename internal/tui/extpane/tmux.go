@@ -41,13 +41,19 @@ func (t *tmuxBackend) CreateTab(ctx context.Context, title, logfile string) (str
 	// Save the current hook value so we can restore it.
 	savedHook, showErr := runTmux(ctx, "show-hooks", "-g", "after-new-window")
 	savedHook = strings.TrimSpace(savedHook)
-	if showErr != nil {
-		// #890: previously the error was discarded, leaving savedHook empty,
-		// so restore was silently skipped — but the unset below still ran.
-		debug.Log("extpane", "show-hooks failed, will still unset+restore best-effort: %v", showErr)
+	// #4485: only suppress when we hold a verified backup. The old flow
+	// unconditionally ran set-hook -u below even when show-hooks failed
+	// (old tmux without named show-hooks, busy server, ctx near deadline) -
+	// one transient read failure permanently deleted the user's GLOBAL
+	// after-new-window hook, because restore early-returns on the empty
+	// saved value. Skip suppression entirely: a rename-prompt config glitch
+	// for one tab is nothing against destroying unbackupable user config.
+	if !isHookBackupUsable(showErr) {
+		debug.Log("extpane", "show-hooks failed, skipping hook suppression to preserve user hook: %v", showErr)
+	} else {
+		// Unset the hook globally.
+		_, _ = runTmux(ctx, "set-hook", "-g", "-u", "after-new-window")
 	}
-	// Unset the hook globally.
-	_, _ = runTmux(ctx, "set-hook", "-g", "-u", "after-new-window")
 
 	// #890: restore via defer — an early return (new-window failure) used
 	// to skip the restore entirely, permanently losing the user's GLOBAL
