@@ -320,11 +320,7 @@ func tryClaimPendingTask(
 		tm.setLastResult(result)
 
 		if ctx.Err() != nil {
-			pending := task.StatusPending
-			owner := ""
-			if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &pending, Owner: &owner}); uerr != nil {
-				debug.Log("swarm", "teammate %s ctx-cancel rollback of %s failed: %v", tm.ID, claimed.ID, uerr)
-			}
+			ctxCancelRollbackTask(tmMgr, claimed, tm)
 			if onEvent != nil {
 				onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
 			}
@@ -518,6 +514,40 @@ func rollbackClaimedTask(mgr *Manager, team *Team, tm *Teammate) {
 	owner := ""
 	if _, uerr := board.Update(taskID, task.UpdateOptions{ExpectedStatus: &inProgress, Status: &pending, Owner: &owner, Metadata: map[string]string{"retry_attempts": strconv.Itoa(attempts)}}); uerr != nil {
 		debug.Log("swarm", "panic rollback failed task=%s err=%v", taskID, uerr)
+	}
+}
+
+// ctxCancelRollbackTask releases a claimed task when the teammate's ctx is
+// cancelled (team shutdown) - the idle loop's counterpart of
+// rollbackClaimedTask's panic path.
+//
+// #4541 (a #2579 gap in the same file): the rollback is guarded with
+// ExpectedStatus=in_progress - it must only ever act on a task THIS teammate
+// is still running. External writers can set the task terminal during the
+// minutes executeTask runs (team_review_decide approve, a manual /task
+// command, a durable-board RestoreJSON snapshot restore); the old unguarded
+// write flipped completed tasks back to pending, and they were re-claimed
+// and re-executed. A failed guard (task no longer in_progress) is the
+// correct no-op: log only. #2118: increment retry_attempts so cap-bypassing
+// revive loops are visible on the board, as rollbackClaimedTask does.
+func ctxCancelRollbackTask(tmMgr *task.Manager, claimed task.Task, tm *Teammate) {
+	inProgress := task.StatusInProgress
+	pending := task.StatusPending
+	owner := ""
+	attempts := 0
+	if v, ok := claimed.Metadata["retry_attempts"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			attempts = n
+		}
+	}
+	attempts++
+	if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{
+		ExpectedStatus: &inProgress,
+		Status:         &pending,
+		Owner:          &owner,
+		Metadata:       map[string]string{"retry_attempts": strconv.Itoa(attempts)},
+	}); uerr != nil {
+		debug.Log("swarm", "teammate %s ctx-cancel rollback of %s skipped: %v (task changed externally)", tm.ID, claimed.ID, uerr)
 	}
 }
 
