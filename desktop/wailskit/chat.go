@@ -3172,7 +3172,24 @@ func (b *ChatBridge) RequestAskUser(ctx context.Context, requestID string, req t
 	// agent tool call forever. Bound the wait exactly like RequestApproval.
 	askCtx, cancelAsk := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Minute)
 	defer cancelAsk()
-	return b.interactions.AwaitAskUser(askCtx, request)
+	resp, err := b.interactions.AwaitAskUser(askCtx, request)
+	if askCtx.Err() != nil {
+		// #4493 (the #4250 pattern RequestApproval already follows): the
+		// timeout closed the wait on the AGENT side only - the desktop
+		// questionnaire modal and the mobile ask-user card keyed to this ID
+		// kept showing "waiting" forever, and a late tap looked accepted
+		// while being silently dropped. Emit the close events so neither
+		// end hangs.
+		if b.OnStreamEvent != nil {
+			raw, _ := json.Marshal(map[string]string{"requestID": requestID, "reason": "timeout"})
+			b.OnStreamEvent("ask_user:cancel", raw)
+		}
+		agentruntime.PushTunnelAskUserResult(b.currentTunnelBroker(), requestID, agentruntime.TunnelStateUpdate{
+			HasStatus: true,
+			Status:    tunnel.StatusBusy,
+		})
+	}
+	return resp, err
 }
 
 // RespondApproval delivers a desktop-originated approval decision to the
@@ -3252,6 +3269,17 @@ func (b *ChatBridge) PendingApprovalRequest() (string, string, bool) {
 // waiting channel.
 func (b *ChatBridge) RespondAskUser(requestID string, response tool.AskUserResponse) {
 	if _, ok := b.interactions.ResolveAskUser(requestID, response); !ok {
+		// #4493: a late desktop answer after the #1023 timeout (or any other
+		// close) was dropped silently - the user saw their click accepted.
+		// Tell both ends the request is gone (#4250 stale pattern).
+		if b.OnStreamEvent != nil {
+			raw, _ := json.Marshal(map[string]string{"requestID": requestID, "reason": "stale"})
+			b.OnStreamEvent("ask_user:cancel", raw)
+		}
+		agentruntime.PushTunnelAskUserResult(b.currentTunnelBroker(), requestID, agentruntime.TunnelStateUpdate{
+			HasStatus: true,
+			Status:    tunnel.StatusBusy,
+		})
 		return
 	}
 
@@ -3331,6 +3359,12 @@ func (b *ChatBridge) HandleMobileAskUserResponse(data tunnel.AskUserResponseData
 	}
 	response := agentruntime.BuildAskUserResponseFromTunnel(req.Request, data.Status, data.Answers)
 	if _, ok := b.interactions.ResolveAskUser(data.ID, response); !ok {
+		// #4493: symmetric stale feedback for the MOBILE side - a late tap
+		// after timeout was dropped with no UI feedback. Close the card.
+		agentruntime.PushTunnelAskUserResult(b.currentTunnelBroker(), data.ID, agentruntime.TunnelStateUpdate{
+			HasStatus: true,
+			Status:    tunnel.StatusBusy,
+		})
 		return
 	}
 
@@ -3781,17 +3815,18 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	b.mu.Lock()
 	b.runSes = b.currentSes
 	b.mu.Unlock()
-	// #1701 case 3: setRunPersistSnapshot bumps runGeneration itself; the
-	// re-read above raced another run's bump between the two lock windows
-	// and could capture THAT generation, defeating emitIfCurrent - the
-	// same inversion #1511 removed from the text main path. Hold the lock
-	// across bump-and-capture so runGen is exactly the generation this
-	// run created (#1181 guard pattern).
+	// #4494: do NOT bump runGeneration here — this run claimed ownership at
+	// entry (the bump above startDesktopTurnLocked). The old unconditional
+	// #1701-style bump re-claimed ownership after the long InitAgent window:
+	// a Cancel racing between entry and here finished against the OLD
+	// generation while the re-bump re-took the finish path - double run_done
+	// and the real run's persistRunMessages skipped (#1181/#1511 forbid this
+	// pattern; SendContent L4736 uses the same guarded refresh). Only refresh
+	// the persist target while this run is still the owner.
 	b.mu.Lock()
-	b.runGeneration++
-	b.activeRunGen = b.runGeneration
-	b.persistSession = b.runSes
-	runGen = b.runGeneration
+	if b.activeRunGen == runGen {
+		b.persistSession = b.runSes
+	}
 	b.mu.Unlock()
 	err := b.agent.RunStream(ctx, text, func(ev provider.StreamEvent) {
 		b.emitIfCurrent(runGen, ev)
