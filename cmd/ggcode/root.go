@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1308,11 +1309,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		case "rollback":
 			return knightAgent.RollbackSkill(skillName)
 		case "record_effectiveness":
-			score := 3
-			if v, ok := params["score"]; ok {
-				if f, ok := v.(float64); ok {
-					score = int(f)
-				}
+			score, err := parseKnightScore(params)
+			if err != nil {
+				return err
 			}
 			knightAgent.RecordSkillEffectiveness(skillName, score)
 			return nil
@@ -1512,6 +1511,34 @@ func parseA2ATimeout(s string) time.Duration {
 		return 5 * time.Minute
 	}
 	return d
+}
+
+// knightScoreMin/Max fix the effectiveness scale: the tracker's own
+// contract is "adds an effectiveness score (1-5)" (usage_tracker.go
+// RecordEffectiveness).
+const (
+	knightScoreMin = 1
+	knightScoreMax = 5
+)
+
+// parseKnightScore extracts and validates the record_effectiveness score.
+// #4463: the webui handler is the only gate - RecordSkillEffectiveness
+// forwards, the tracker appends, avgScore averages the raw values, so an
+// out-of-range score ("-100", "1e9") poisoned the persisted last-10
+// statistics and every scheduling decision built on them. Scores round
+// instead of truncate (JSON numbers arrive as float64; int(4.9) silently
+// recorded a 4). Missing/invalid-typed score falls back to the neutral 3.
+func parseKnightScore(params map[string]interface{}) (int, error) {
+	score := 3
+	if v, ok := params["score"]; ok {
+		if f, ok := v.(float64); ok {
+			score = int(math.Round(f))
+		}
+	}
+	if score < knightScoreMin || score > knightScoreMax {
+		return 0, fmt.Errorf("invalid score %d: must be %d-%d", score, knightScoreMin, knightScoreMax)
+	}
+	return score, nil
 }
 
 func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, workingDir string) (*a2a.Server, *a2a.Registry, *a2a.TaskHandler, func(), error) {
