@@ -118,12 +118,17 @@ func (r *Registry) Discover() ([]InstanceInfo, error) {
 	}
 
 	// Update cache.
+	// #4501: store a private copy and return a separate one - returning
+	// the cached slice itself (or caching the returned slice) let any
+	// caller-side in-place mutation (sort.Slice, field edits) leak into the
+	// cache and race concurrent readers. CachedInstances/SetCachedInstances
+	// already defensively copy; these two sites were the gaps.
 	r.mu.Lock()
-	r.asyncCache = instances
+	r.asyncCache = append([]InstanceInfo(nil), instances...)
 	r.asyncCacheOK = true
 	r.mu.Unlock()
 
-	return instances, nil
+	return append([]InstanceInfo(nil), instances...), nil
 }
 
 // CachedInstances returns the last background-refreshed instance list without
@@ -290,7 +295,11 @@ func scanWorkspaceSignals(dir string) ([]string, bool) {
 		case ".java":
 			langSet["java"] = true
 		}
-		if strings.Contains(name, "_test.") || strings.Contains(name, "test.") || strings.HasSuffix(name, "_test.go") || strings.Contains(name, ".test.") || strings.Contains(name, ".spec.") {
+		// #4500: drop the bare "test." substring - it matched ordinary
+		// files like latest.go / contest.go / protest.go (lat-est.-go) and
+		// flipped HasTests to a false true in the agent card. The precise
+		// _test. / _test.go / .test. / .spec. conditions cover real cases.
+		if strings.Contains(name, "_test.") || strings.HasSuffix(name, "_test.go") || strings.Contains(name, ".test.") || strings.Contains(name, ".spec.") {
 			hasTests = true
 		}
 		return nil
