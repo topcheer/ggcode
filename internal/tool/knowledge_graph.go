@@ -196,7 +196,7 @@ func (t *KnowledgeGraphTool) doAdd(s *kgStore, p *kgParams) (Result, error) {
 		idWasAuto = true
 	}
 	if len(id) > 80 {
-		id = id[:80]
+		id = kgTruncateID(id, 80) // #4479: rune-safe cut, never mid-rune
 	}
 	// #1692 case 4: slugify is lowercase + strip-non-[a-z0-9-], so "C++ API"
 	// and "c api" both become "c-api" - the second add hit the partial-
@@ -211,10 +211,7 @@ func (t *KnowledgeGraphTool) doAdd(s *kgStore, p *kgParams) (Result, error) {
 				break
 			}
 			suffix := fmt.Sprintf("-%d", i)
-			base := id
-			if len(base)+len(suffix) > 80 {
-				base = base[:80-len(suffix)]
-			}
+			base := kgTruncateID(id, 80-len(suffix)) // #4479: rune-safe
 			id = base + suffix
 		}
 	}
@@ -645,6 +642,20 @@ func (t *KnowledgeGraphTool) save(s *kgStore) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	// #4479: every agent/worktree holds its own cloned instance with a
+	// cache that never re-reads the file, so a blind overwrite here
+	// silently dropped the other instance's writes (lost update). Re-read
+	// the on-disk store and union it into s before persisting: nodes by
+	// ID (ours wins on conflict - it is the newer edit), edges by full
+	// value. Concurrent delete-vs-add still resolves to "kept", which is
+	// the no-loss side of the trade; the alternative (version check)
+	// would reject legitimate writes instead.
+	if data, err := os.ReadFile(t.kgPath()); err == nil {
+		var disk kgStore
+		if json.Unmarshal(data, &disk) == nil {
+			mergeKgStores(s, &disk)
+		}
+	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
@@ -655,6 +666,57 @@ func (t *KnowledgeGraphTool) save(s *kgStore) error {
 	}
 	t.cache = s
 	return os.Rename(tmp, t.kgPath())
+}
+
+// kgTruncateID cuts s to at most maxBytes without splitting a multi-byte
+// rune (#4479: a byte-level cut produced invalid UTF-8 IDs that json.Marshal
+// then rewrote to U+FFFD, breaking lookups after a save/load round-trip).
+func kgTruncateID(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
+}
+
+// mergeKgStores unions disk into s (the in-memory store about to be saved).
+// Nodes: ours wins on ID conflict (it is the newer edit); nodes only present
+// on disk (written concurrently by another agent instance) are carried over.
+// Edges are keyed by (from, to, type): when memory holds ANY edge with that
+// key - including a soft-invalidated one - the memory version(s) win and the
+// disk copy is skipped, so an invalidation is never resurrected by the merge.
+// Disk edges with a key memory has never seen are appended unchanged,
+// preserving the other writer's bi-temporal intervals.
+func mergeKgStores(s, disk *kgStore) {
+	if s.Nodes == nil {
+		s.Nodes = make(map[string]*kgNode)
+	}
+	for id, n := range disk.Nodes {
+		if _, ok := s.Nodes[id]; !ok {
+			copied := *n
+			s.Nodes[id] = &copied
+		}
+	}
+	if len(disk.Edges) == 0 {
+		return
+	}
+	have := make(map[string]struct{}, len(s.Edges))
+	for _, e := range s.Edges {
+		have[e.From+"\x00"+e.To+"\x00"+e.Type] = struct{}{}
+	}
+	for _, e := range disk.Edges {
+		key := e.From + "\x00" + e.To + "\x00" + e.Type
+		if _, dup := have[key]; !dup {
+			s.Edges = append(s.Edges, e)
+			have[key] = struct{}{}
+		}
+	}
 }
 
 // --- Helpers ---
