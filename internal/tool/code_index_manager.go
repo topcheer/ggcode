@@ -41,6 +41,7 @@ type CodeIndexManager struct {
 	indexPath    string           // disk cache path
 	workingDir   string
 	stopCh       chan struct{}
+	stopOnce     sync.Once
 	rebuildCh    chan struct{}              // signaled by MarkDirty to trigger immediate debounced rebuild
 	lockFile     *os.File                   // cross-process flock handle
 	onReady      func(stats CodeIndexStats) // optional callback when index build completes
@@ -1409,12 +1410,12 @@ func (m *CodeIndexManager) Stats() CodeIndexStats {
 
 // Stop shuts down the background dirty-check goroutine and releases the lock.
 func (m *CodeIndexManager) Stop() {
-	select {
-	case <-m.stopCh:
-		// already closed
-	default:
-		close(m.stopCh)
-	}
+	// #4542: the old select-default check-then-close was not atomic - two
+	// concurrent first callers (TUI shutdown racing a SIGINT handler) could
+	// both take the default branch and the second close panicked. sync.Once
+	// makes Stop idempotent and race-free; m.unlock below stays unconditional
+	// because it already tolerates a non-held lock.
+	m.stopOnce.Do(func() { close(m.stopCh) })
 	m.unlock()
 }
 
