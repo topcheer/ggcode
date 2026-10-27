@@ -16,6 +16,11 @@ func TestIssue4524_NoErrorNoiseLineAnchored(t *testing.T) {
 		"no error", "No Errors", "without error", "WITHOUT ERRORS",
 		"0 errors", "found 0 errors", "compilation finished without errors",
 		"vet: no errors", "build: no error",
+		// #4524 follow-up: prefix-form tails must mirror the whole-line
+		// forms (initial cut missed these — "vet: 0 errors" was reported
+		// as a real error line).
+		"vet: 0 errors", "eslint: no errors found", "golangci: no errors reported",
+		"tool: 0 errors, 0 warnings",
 	}
 	for _, in := range noise {
 		lower := strings.ToLower(strings.TrimSpace(in))

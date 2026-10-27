@@ -662,23 +662,32 @@ func extractErrorLines(output string) []string {
 // whole-line forms are noise; any line that says more than the negation
 // itself stays eligible as an error line.
 func isNoErrorNoiseLine(lower string) bool {
-	switch lower {
-	case "no error", "no errors", "without error", "without errors",
-		"0 errors", "found 0 errors", "compilation finished without errors":
+	if noErrorNoiseTail(lower) {
 		return true
 	}
 	// Suffix form with a leading subject, e.g. "vet: no errors" or
 	// "go build: no errors" — allow a short single-word ": " prefix but
 	// nothing that itself carries content (prose before the colon means
-	// real output).
+	// real output). The tail forms mirror the whole-line forms so common
+	// tool summaries like "vet: 0 errors" or "eslint: no errors found"
+	// stay noise (they carry no diagnosis).
 	const maxPrefixLen = 24
 	if idx := strings.Index(lower, ": "); idx > 0 && idx < maxPrefixLen &&
 		!strings.ContainsRune(lower[:idx], ' ') {
-		tail := strings.TrimSpace(lower[idx+2:])
-		switch tail {
-		case "no error", "no errors", "without error", "without errors":
-			return true
-		}
+		return noErrorNoiseTail(strings.TrimSpace(lower[idx+2:]))
+	}
+	return false
+}
+
+// noErrorNoiseTail reports whether the text is a pure success-negation
+// phrase. Both the whole-line and "tool: <phrase>" prefix paths share it.
+func noErrorNoiseTail(s string) bool {
+	switch s {
+	case "no error", "no errors", "without error", "without errors",
+		"0 errors", "found 0 errors", "compilation finished without errors",
+		"no errors found", "no errors reported", "no error found",
+		"0 errors, 0 warnings", "found 0 issues":
+		return true
 	}
 	return false
 }
