@@ -5667,8 +5667,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// backgrounded `git checkout main && go test` must not slip the
 			// gate either (the command text is fixed at launch; no need to
 			// also gate the later read_command_output).
+			// #4583: bash/powershell are the third command channel (same
+			// `command` field, see L5206/L5482/L5527) - they must pass the
+			// same tree-mutation gate.
 			if (isWTMutatingTool(tc.Name) ||
-				((tc.Name == "run_command" || tc.Name == "start_command") && runCommandMutatesTree(string(tc.Arguments)))) && !result.IsError {
+				((tc.Name == "run_command" || tc.Name == "start_command" || tc.Name == "bash" || tc.Name == "powershell") && runCommandMutatesTree(string(tc.Arguments)))) && !result.IsError {
 				if wtMsg := a.wtInvalidation.checkMutation(tc.Name, string(tc.Arguments)); wtMsg != "" {
 					debug.Log("agent", "Iteration %d: working-tree invalidation detector triggered", i+1)
 					a.appendGuidance(&result, wtMsg)
