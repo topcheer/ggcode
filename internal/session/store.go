@@ -1252,6 +1252,11 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 				lastCpLastMsgID = rec.CheckpointLastMsgID
 				lastCpTokens = rec.CheckpointTokens
 				haveCheckpoint = true
+				// #4536: a new-format checkpoint supersedes any earlier legacy
+				// snapshot. If we kept lastCpMessages, a missing/corrupted summary
+				// message would silently fall through (L1502) into the stale
+				// legacy branch instead of the no-checkpoint recent-messages path.
+				lastCpMessages = nil
 				// postCPEntries are NOT cleared — we'll filter by ID later.
 			} else if len(rec.CheckpointMessages) > 0 {
 				// Legacy checkpoint: migrate — find summary message, write to JSONL.
