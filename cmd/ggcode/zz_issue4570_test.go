@@ -17,7 +17,9 @@ import (
 func TestIssue4570_ReplBuilderDetectsGitLazily(t *testing.T) {
 	src, err := os.ReadFile("root.go")
 	if err != nil {
-		t.Skip("source not readable in this environment")
+		// Fail loudly, never skip: a source-pin test that silently skips on
+		// read failure would neutralize its own verification signal.
+		t.Fatalf("#4570 pin test cannot read root.go: %v", err)
 	}
 	s := string(src)
 
