@@ -222,9 +222,11 @@ func detectWorkspaceMeta(dir string) WorkspaceMeta {
 		HasGit:    false,
 	}
 
-	// Check for git.
+	// Check for git. In a worktree or submodule, .git is a FILE pointing at
+	// the real gitdir ("gitdir: ..."), not a directory - both mean the
+	// workspace is a git repository (#4562).
 	gitDir := filepath.Join(dir, ".git")
-	if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
+	if _, err := os.Stat(gitDir); err == nil {
 		meta.HasGit = true
 	}
 
