@@ -58,7 +58,7 @@ var ErrSessionBudgetExhausted = errors.New("session budget exhausted (token/cost
 //   - Progressive warnings at 80% and 95% of the timeout
 //   - Graceful stop at 100% with a clear convergence message
 //   - Configurable via session_timeout config option (0 = disabled)
-//   - Default: 0 (disabled) for interactive; 30m for autopilot
+//   - Default: 0 (disabled) for interactive; 600m for autopilot
 //   - Non-blocking: relies on existing ctx cancellation, no goroutine needed
 //   - Works alongside (not instead of) iteration/tool/token budgets
 
@@ -74,8 +74,16 @@ const (
 
 // sessionTimeoutState tracks wall-clock elapsed time for the current run.
 type sessionTimeoutState struct {
-	// timeout is the maximum wall-clock duration for a single run. 0 = disabled.
+	// timeout is the CONFIGURED maximum wall-clock duration. 0 = follow
+	// mode defaults. The old autopilot write-back leaked the 600-minute
+	// default into this field across runs (#4514) - it is now never
+	// mutated by start().
 	timeout time.Duration
+
+	// runTimeout is the effective timeout resolved for the CURRENT run
+	// (configured value, or the autopilot default when applicable). It is
+	// recomputed at every start(); 0 means the current run is unbounded.
+	runTimeout time.Duration
 
 	// startTime is when RunStreamWithContent began (set at run start).
 	startTime time.Time
@@ -90,16 +98,19 @@ func newSessionTimeoutState(timeout time.Duration) *sessionTimeoutState {
 	return &sessionTimeoutState{timeout: timeout}
 }
 
-// start records the beginning of a new agent run. If the timeout is unset (0)
-// but the agent is in autopilot mode, a default timeout is applied.
+// start records the beginning of a new agent run. The timeout for THIS
+// run is resolved per-call via effectiveTimeout (#4514): the old code
+// wrote the 600-minute autopilot default back into s.timeout, and since a
+// state is created once per Agent, every later interactive run on the same
+// Agent inherited the leaked ceiling. The field now stays as configured
+// (0 = follow config); the resolved value lives in runTimeout only.
 func (s *sessionTimeoutState) start(isAutopilot bool) {
 	if s == nil {
 		return
 	}
-	if s.timeout <= 0 && isAutopilot {
-		s.timeout = defaultAutopilotSessionTimeout
-	}
-	if s.timeout <= 0 {
+	runTimeout := effectiveTimeout(s.timeout, isAutopilot)
+	s.runTimeout = runTimeout // always refresh: a stale prior-run value must not survive (#4514)
+	if runTimeout <= 0 {
 		return
 	}
 	s.startTime = time.Now()
@@ -116,34 +127,34 @@ func (s *sessionTimeoutState) start(isAutopilot bool) {
 // session turn (same rationale as the toolCallBudget hard stop, #367/#611).
 // Returns empty string if no action is needed.
 func (s *sessionTimeoutState) check() string {
-	if s == nil || s.timeout <= 0 || s.startTime.IsZero() {
+	if s == nil || s.runTimeout <= 0 || s.startTime.IsZero() {
 		return ""
 	}
 
 	elapsed := time.Since(s.startTime)
-	ratio := float64(elapsed) / float64(s.timeout)
+	ratio := float64(elapsed) / float64(s.runTimeout)
 
 	if ratio >= 1.0 {
 		return fmt.Sprintf(
 			"[session-timeout] Wall-clock limit of %s reached (elapsed: %s). "+
 				"Stopping the agent loop to prevent unbounded resource consumption.",
-			s.timeout.Round(time.Second), elapsed.Round(time.Second),
+			s.runTimeout.Round(time.Second), elapsed.Round(time.Second),
 		)
 	}
 
 	if ratio >= 0.95 && !s.warned95 {
 		s.warned95 = true
-		remaining := s.timeout - elapsed
+		remaining := s.runTimeout - elapsed
 		return fmt.Sprintf(
 			"[session-timeout] 95%% of the %s wall-clock budget consumed (%.0fs remaining). "+
 				"Prioritize completing the current task — finalize changes and run verification now.",
-			s.timeout.Round(time.Second), remaining.Seconds(),
+			s.runTimeout.Round(time.Second), remaining.Seconds(),
 		)
 	}
 
 	if ratio >= 0.80 && !s.warned80 {
 		s.warned80 = true
-		remaining := s.timeout - elapsed
+		remaining := s.runTimeout - elapsed
 		debug.Log("session-timeout", "80%% warning at %s elapsed, %s remaining", elapsed.Round(time.Second), remaining.Round(time.Second))
 		return fmt.Sprintf(
 			"[session-timeout] 80%% of the %s wall-clock budget consumed (%.0fs remaining). "+
