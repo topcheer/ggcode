@@ -1260,6 +1260,12 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 				lastCpLastMsgID = "" // legacy checkpoints don't have last_msg_id
 				lastCpTokens = rec.CheckpointTokens
 				postCPEntries = nil
+				// #4591: symmetric to #4536 — a legacy checkpoint supersedes any
+				// earlier new-format one. Without clearing lastCpSummaryMsgID, a
+				// late-flushed summary record (persisted after this legacy line)
+				// would make the summary branch resurrect the stale new-format
+				// summary over this newer snapshot.
+				lastCpSummaryMsgID = ""
 				haveCheckpoint = true
 			}
 		case "usage":
