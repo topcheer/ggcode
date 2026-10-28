@@ -2706,7 +2706,8 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 	}
 	defer f.Close()
 
-	enc := json.NewEncoder(f)
+	buf := &bytes.Buffer{}
+	enc := json.NewEncoder(buf)
 	enc.SetEscapeHTML(false)
 	meta := jsonlRecord{
 		Type:                 "meta",
@@ -2731,11 +2732,56 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 		ForkPoint:            ses.ForkPoint,
 	}
 	if err := enc.Encode(meta); err != nil {
-		os.Remove(path)
+		// #4538: between our O_EXCL create and this encode/write, another
+		// process sharing the sessions dir may have appended records via
+		// appendRecordLines (which flocks path+".flock" and writes into our
+		// just-created file). Unconditionally removing the path would delete
+		// those records while their writer believes the append succeeded —
+		// silent cross-process data loss. Only remove when the file provably
+		// still contains nothing beyond what we could have written ourselves.
+		removeCreatedFileIfUnappended(path, 0)
+		return err
+	}
+	if _, err := f.Write(buf.Bytes()); err != nil {
+		// #4538: same guard — a partial write may have landed, but nothing
+		// beyond buf.Len() bytes can be ours.
+		removeCreatedFileIfUnappended(path, int64(buf.Len()))
 		return err
 	}
 
 	return s.updateIndex(ses)
+}
+
+// removeCreatedFileIfUnappended removes a just-created session file after a
+// failed write, but ONLY when no other process appended to it. It acquires
+// the per-session cross-process flock (the same sidecar appendRecordLines
+// holds) and compares the file size against selfBytes — the maximum number
+// of bytes our own failed write could have produced. If the file grew past
+// that, another process's records are present and the file is preserved
+// (a partial meta line is dropped by load; deleted records are not).
+func removeCreatedFileIfUnappended(path string, selfBytes int64) {
+	unlock, lockErr := lockSessionFile(path)
+	if lockErr != nil {
+		// Cannot prove the file is ours-only; leaving it is the safe side.
+		debug.Log("session", "EnsureMeta cleanup: failed to acquire session lock for %s: %v", path, lockErr)
+		return
+	}
+	defer unlock()
+	fi, statErr := os.Stat(path)
+	if statErr != nil {
+		if !os.IsNotExist(statErr) {
+			debug.Log("session", "EnsureMeta cleanup: stat %s: %v", path, statErr)
+		}
+		return
+	}
+	if fi.Size() > selfBytes {
+		// Another process appended records after our create — keep them.
+		debug.Log("session", "EnsureMeta cleanup: %s has %d bytes (> %d self bytes); keeping file with concurrent appends", path, fi.Size(), selfBytes)
+		return
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		debug.Log("session", "EnsureMeta cleanup: remove %s: %v", path, err)
+	}
 }
 
 // NewSession creates a new Session with a generated ID.
