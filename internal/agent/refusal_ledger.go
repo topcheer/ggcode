@@ -153,8 +153,17 @@ func (l *refusalLedger) saveLocked() {
 // Pronoun-object entries ("leave them alone") record but anchor nothing:
 // refusalPathPattern needs a path separator or dotted extension, so the
 // widened gap adds no false-block surface.
+// #4510: the trailing OBJECT arm had the same dot trap the gap above
+// documents - "don't touch config.yaml" truncated to "...config" and the
+// dotted filename never became an anchor (fail-open for the most common
+// refusal shape). The arm now ends with an OPTIONAL dotted-extension
+// segment (`(?:\.[A-Za-z0-9]{1,8}\b)?`) so exactly one trailing extension
+// rides along: sentence periods still terminate the match (multi-sentence
+// lines keep yielding one candidate per sentence, as the negation test
+// expects) while config.yaml/main.go survive intact - and the dedup keys
+// of quoted-discussion vs real-directive forms stay identical (#4398).
 var refusalNegatePattern = regexp.MustCompile(
-	`(?i)(?:don'?t|do not|never|no new|avoid|must not|should not|stop using|leave\b[^\n]{0,40}alone|don'?t touch)\b[^\n.]{4,120}`)
+	`(?i)(?:don'?t|do not|never|no new|avoid|must not|should not|stop using|leave\b[^\n]{0,40}alone|don'?t touch)\b[^\n.]{4,120}(?:\.[A-Za-z0-9]{1,8}\b)?`)
 
 // releasePattern matches conversational lift phrases.
 // #3712: CJK lift words must live OUTSIDE the \b group - Go regexp \b is
