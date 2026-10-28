@@ -272,10 +272,20 @@ func (a *slackAdapter) connectAndServe(ctx context.Context) error {
 				event, _ := payload["event"].(map[string]any)
 				if event != nil {
 					eventType, _ := event["type"].(string)
-					if eventType == "message" {
-						a.handleMessage(ctx, event)
-					} else if eventType == "app_mention" {
-						a.handleMessage(ctx, event)
+					if eventType == "message" || eventType == "app_mention" {
+						// #4528: handleMessage ran synchronously INSIDE the
+						// read loop (ffmpeg STT, attachment downloads,
+						// HandleInbound) - while it ran, ReadMessage never
+						// returned, the pong handler could not renew the read
+						// deadline, and past slackWSReadTimeout the next read
+						// errored into a reconnect. Worse, the envelope was
+						// already acked, so Slack never redelivered: messages
+						// arriving in the blocked window were lost for real.
+						// Dedup already happened above (before this point), so
+						// processing asynchronously is idempotent-safe; the ack
+						// stays here on the read loop.
+						ev := event
+						safego.Go("im.slack.envelope", func() { a.handleMessage(ctx, ev) })
 					}
 				}
 			}
