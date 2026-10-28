@@ -482,8 +482,17 @@ func sdHasCaveatWindowed(lowerText string, declStart, declEnd int) bool {
 		}
 		trimmed := strings.TrimSpace(lowerText[negStart:absIdx])
 		negated := false
+		// #4556: word-boundary check - bare HasSuffix matched "piano"->"no",
+		// "cannot"→"not" and wrongly neutralized the caveat.
+		isWordByte := func(b byte) bool {
+			return b >= 'a' && b <= 'z' || b >= '0' && b <= '9'
+		}
 		for _, neg := range []string{"no", "not", "nothing", "none", "without", "zero"} {
-			if strings.HasSuffix(trimmed, neg) {
+			if !strings.HasSuffix(trimmed, neg) {
+				continue
+			}
+			cut := len(trimmed) - len(neg)
+			if cut == 0 || !isWordByte(trimmed[cut-1]) {
 				negated = true
 				break
 			}
