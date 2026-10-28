@@ -193,7 +193,10 @@ func (k *KittyTool) executeSplit(ctx context.Context, windowID int, direction st
 
 	// Size bias: kitty uses --bias N where N is 1-100 (the new window's share).
 	// We map our size percentage directly.
-	if size > 0 && size < 100 {
+	if size > 100 {
+		return Result{IsError: true, Content: fmt.Sprintf("size must be 1-100 (new window's share), got %d", size)}
+	}
+	if size > 0 {
 		args = append(args, fmt.Sprintf("--bias=%d", size))
 	}
 
@@ -219,7 +222,7 @@ func (k *KittyTool) executeSplit(ctx context.Context, windowID int, direction st
 	}
 
 	sizeInfo := ""
-	if size > 0 && size < 100 {
+	if size > 0 && size <= 100 {
 		sizeInfo = fmt.Sprintf(", size=%d%%", size)
 	}
 	if dir == "left" || dir == "up" {
