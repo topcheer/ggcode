@@ -324,7 +324,7 @@ func (m *CodeIndexManager) loadDiskCache() {
 		if len(d.TF) == 0 {
 			continue
 		}
-		doc := bm25Doc{path: d.Path, tf: d.TF, length: d.Length}
+		doc := bm25Doc{path: d.Path, tf: d.TF, length: d.Length, mtime: d.Mtime}
 		idx.docs = append(idx.docs, doc)
 		totalLength += d.Length
 		for term := range d.TF {
@@ -439,6 +439,7 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 					path:   relPath,
 					tf:     cached.TF,
 					length: cached.Length,
+					mtime:  mtime,
 				})
 				totalTerms += len(cached.TF)
 				totalLength += cached.Length
@@ -469,6 +470,7 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 			path:   relPath,
 			tf:     tf,
 			length: len(terms),
+			mtime:  mtime,
 		})
 		totalTerms += len(tf)
 		totalLength += len(terms)
@@ -668,15 +670,20 @@ func (m *CodeIndexManager) persistIndex(ctx context.Context, docs []bm25Doc) {
 		UpdatedAt:  time.Now(),
 		Docs:       make([]persistedDoc, 0, len(docs)),
 	}
+	// #4573: write the BUILD-TIME mtime captured when each doc's content
+	// was read (doBuild/rebuildDirty), never a re-Stat here. The old
+	// re-Stat closed a TOCTOU window the width of the whole build: a file
+	// rewritten after ReadFile but before persist recorded {new mtime,
+	// old TF} on disk - and since both the next build's cache check and the
+	// periodic external scan compare mtimes, the stale TF was reused
+	// FOREVER (until the file changed again). With the build-time value,
+	// a mid-build rewrite leaves the cached mtime at the OLD value, so the
+	// next build/scan sees the mismatch and re-tokenizes - the classic
+	// self-healing behavior.
 	for _, doc := range docs {
-		absPath := filepath.Join(m.workingDir, doc.path)
-		info, err := os.Stat(absPath)
-		if err != nil {
-			continue
-		}
 		pi.Docs = append(pi.Docs, persistedDoc{
 			Path:   doc.path,
-			Mtime:  info.ModTime().Unix(),
+			Mtime:  doc.mtime,
 			TF:     doc.tf,
 			Length: doc.length,
 		})
@@ -1088,7 +1095,7 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 		for _, t := range terms {
 			newTF[t]++
 		}
-		newDoc := bm25Doc{path: relPath, tf: newTF, length: len(terms)}
+		newDoc := bm25Doc{path: relPath, tf: newTF, length: len(terms), mtime: info.ModTime().Unix()}
 
 		if i, ok := docIdx[relPath]; ok {
 			// Existing doc: replace in-place.
