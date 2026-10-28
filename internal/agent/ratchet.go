@@ -713,8 +713,28 @@ func (rs *RuleStore) evict() {
 	})
 	evictCount := len(rs.rules) - rs.maxRules
 	toEvict := make(map[int]bool)
-	for i := 0; i < evictCount; i++ {
+	// #4511: honor the staleRuleMinHits promise - rules with at least that
+	// many hits are never evicted by the recency-weighted score, so a
+	// high-signal rule merely idle for staleRuleThreshold is not crowded
+	// out by a single-hit newcomer (score is HitCount/(1+days): 3 hits at
+	// 100d scores ~0.03 vs 0.5 for a day-old single hit). If EVERY rule is
+	// protected (pathological), fall back to pure lowest-score eviction -
+	// an unbounded store is worse than breaking the promise.
+	picked := 0
+	for i := 0; i < len(scores) && picked < evictCount; i++ {
+		if rs.rules[scores[i].idx].HitCount >= staleRuleMinHits {
+			continue
+		}
 		toEvict[scores[i].idx] = true
+		picked++
+	}
+	if picked < evictCount {
+		for i := 0; i < len(scores) && picked < evictCount; i++ {
+			if !toEvict[scores[i].idx] {
+				toEvict[scores[i].idx] = true
+				picked++
+			}
+		}
 	}
 	var kept []Rule
 	for i, r := range rs.rules {
