@@ -616,6 +616,68 @@ func zeroFailSummary(lower string) bool {
 	return false
 }
 
+// isNegationProse reports whether the phrase occurs as a standalone
+// success assertion (word-boundary "no error(s)"/"without error(s)"),
+// NOT inside a larger failure message. #4555: pytest assertions like
+// "AssertionError: expected error, got no error" carry "no error" as
+// part of the failure context and must survive the noise filter; only
+// lines where the phrase stands as its own sentence/summary ("no errors",
+// "completed without error", "exit without error: clean") are noise.
+// Word boundary + left colon/quote independence keeps "got no error"
+// (phrase preceded by other prose words) out of the exemption.
+// isNegationProseAt reports whether the phrase occurs with word
+// boundaries as its own word sequence (optionally pluralized: "no errors",
+// "without errors"). #4555: bare strings.Contains swallowed pytest
+// assertion lines like "AssertionError: expected error, got no error".
+func isNegationProseAt(lower, phrase string) bool {
+	idx := 0
+	for {
+		i := strings.Index(lower[idx:], phrase)
+		if i < 0 {
+			return false
+		}
+		at := idx + i
+		end := at + len(phrase)
+		// Absorb a trailing plural so "no errors" still counts.
+		if end < len(lower) && lower[end] == 's' {
+			end++
+		}
+		// Left boundary: start of line, or a non-letter (space/punct).
+		leftOK := at == 0 || !sdIsLowerAZ(lower[at-1])
+		// Right boundary: end of line, or a non-letter.
+		rightOK := end >= len(lower) || !sdIsLowerAZ(lower[end])
+		if leftOK && rightOK {
+			return true
+		}
+		idx = at + 1
+	}
+}
+
+// carriesFailureContext reports whether the line carries failure-message
+// context around an otherwise-clean negation phrase, marking it as
+// assertion/prose content rather than a standalone success summary (#4555).
+func carriesFailureContext(lower string) bool {
+	for _, m := range []string{"assert", "expected", "got ", "runtimeerror", "exception"} {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeDiffBody reports whether a "-"-prefixed line is a unified diff
+// deletion body (e.g. "-errors.New(...)") rather than a flag echo (#4555).
+func looksLikeDiffBody(trimmed string) bool {
+	// Diff deletion bodies contain code punctuation typical of source lines:
+	// balanced call parens, quoted strings, or dot-qualified identifiers.
+	if strings.Count(trimmed, "(") > 0 && strings.Count(trimmed, ")") > 0 {
+		return true
+	}
+	return strings.Contains(trimmed, "\"") || strings.Contains(trimmed, ".")
+}
+
+func sdIsLowerAZ(b byte) bool { return b >= 'a' && b <= 'z' }
+
 // extractErrorLines pulls likely error lines from build/test output.
 func extractErrorLines(output string) []string {
 	var errors []string
@@ -633,15 +695,24 @@ func extractErrorLines(output string) []string {
 		// "--- FAIL: TestX" per-test failure lines (only the package-level
 		// FAIL summary survived). Left-digit-boundary the zero counts and
 		// keep "--- " test-output markers out of the flag-echo filter.
-		if zeroFailSummary(lower) ||
-			strings.Contains(lower, "no error") || strings.Contains(lower, "without error") {
+		if zeroFailSummary(lower) {
+			// #4555: "0 failed, 1 errored" merged-count lines lost the
+			// errored count to whole-line dropping; keep the line and let
+			// the per-segment filter below decide (segments without a real
+			// failure signal simply don't match the capture predicates).
+			continue
+		}
+		if (isNegationProseAt(lower, "no error") || isNegationProseAt(lower, "without error")) &&
+			!carriesFailureContext(lower) {
 			continue
 		}
 		if strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "--- ") &&
+			!looksLikeDiffBody(trimmed) &&
 			(strings.Contains(lower, "fail") || strings.Contains(lower, "error")) {
 			// flag/argument echo (e.g. "--fail-fast", "-errorflags"), not
 			// command output. "--- FAIL:"/"--- PASS:" test markers carry a
-			// space and are real output.
+			// space and are real output; diff deletion bodies like
+			// "-errors.New(...)" are unified-diff context, not echoes (#4555).
 			continue
 		}
 		if strings.Contains(lower, "error") || strings.Contains(lower, "fail") ||

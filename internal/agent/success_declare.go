@@ -483,9 +483,24 @@ func sdHasCaveatWindowed(lowerText string, declStart, declEnd int) bool {
 		trimmed := strings.TrimSpace(lowerText[negStart:absIdx])
 		negated := false
 		for _, neg := range []string{"no", "not", "nothing", "none", "without", "zero"} {
-			if strings.HasSuffix(trimmed, neg) {
+			if trimmed == neg {
 				negated = true
 				break
+			}
+			// #4556: the negator must be the whole word directly before the
+			// caveat. Bare HasSuffix matched "with piano however..." (suffix
+			// "no") and "I cannot however..." (suffix "not"), skipping the
+			// caveat and logging hedged declarations as unhedged. Require a
+			// non-word character before the negator, mirroring the boundary
+			// rule of sdPhraseAtWordBoundary (#4522).
+			if strings.HasSuffix(trimmed, neg) {
+				at := len(trimmed) - len(neg) - 1
+				b := trimmed[at]
+				isWordByte := b >= 'a' && b <= 'z' || b >= '0' && b <= '9'
+				if !isWordByte {
+					negated = true
+					break
+				}
 			}
 		}
 		if negated {
