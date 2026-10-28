@@ -222,9 +222,16 @@ func detectWorkspaceMeta(dir string) WorkspaceMeta {
 		HasGit:    false,
 	}
 
-	// Check for git.
+	// Check for git. #4562: a git worktree or submodule has a .git FILE
+	// (a "gitdir: ..." pointer), not a directory - the old info.IsDir()
+	// requirement misreported HasGit=false there, which blocked the
+	// git-ops skill in handler.go and exposed has_git=false on the agent
+	// card. Any .git entry (file or dir) means this is a git repository.
+	// ProjName intentionally stays filepath.Base(dir): for worktree-based
+	// instances the worktree name IS the instance identity used by A2A
+	// targets, so no repo-name resolution is done here.
 	gitDir := filepath.Join(dir, ".git")
-	if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
+	if _, err := os.Stat(gitDir); err == nil {
 		meta.HasGit = true
 	}
 
