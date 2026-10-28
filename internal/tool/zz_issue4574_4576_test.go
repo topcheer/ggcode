@@ -72,7 +72,7 @@ func TestIssue4575_ScreenshotLabelsPNGTruthfully(t *testing.T) {
 	// regression back to the caller-requested format fails loudly.
 	src, err := os.ReadFile("mobile_adb.go")
 	if err != nil {
-		t.Skip("source not readable in this test environment")
+		t.Fatalf("mobile_adb.go must be readable from the package test dir: %v", err)
 	}
 	if !strings.Contains(string(src), `imageResult(data, "png", quality,`) {
 		t.Fatal("Android screenshot must pin format to \"png\" (#4575): PNG-only capture must never be labeled image/jpeg")
