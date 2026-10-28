@@ -176,7 +176,15 @@ func (a *tgAdapter) connectAndServe(ctx context.Context) error {
 			return fmt.Errorf("poll updates: %w", err)
 		}
 		for _, update := range updates {
-			a.handleUpdate(ctx, update)
+			// #4526: isolate per-update panics. handleUpdate had no
+			// recover of its own - a malformed update that panicked tore
+			// down the whole safego.Go("im.tg.run") wrapper, killing the
+			// backoff loop too: the adapter stayed dead until process
+			// restart. safego.Run is synchronous, so update ordering is
+			// preserved; one bad update now costs a log line, not the
+			// connection.
+			u := update
+			safego.Run("im.tg.update", func() { a.handleUpdate(ctx, u) })
 		}
 	}
 }

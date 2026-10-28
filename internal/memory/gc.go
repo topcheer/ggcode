@@ -57,6 +57,18 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 	// GC is the only physical deleter (#779 doctrine), so the forget mark
 	// takes effect on disk here. RestoreKey before this run still saves
 	// the entry; after it, only re-saving recreates it.
+	// #4525: the forgotten set was read BEFORE the FileLock below, so a
+	// RestoreKey completing in the lock-free window still got its key
+	// archived+tombstoned by the stale snapshot (RestoreKey only touches
+	// the sidecar - the md mtime guard cannot see it). Re-read the set
+	// AFTER acquiring the lock: loadForgotten is a pure sidecar read with
+	// no flock acquisition, so calling it under the held FileLock cannot
+	// self-deadlock.
+	unlockGC, lockErr := util.FileLock(am.dir + ".lock")
+	gcLocked := lockErr == nil
+	if !gcLocked {
+		debug.Log("memory", "GC: filelock failed, degraded to unlocked delete: %v", lockErr)
+	}
 	forgotten := am.ForgottenSet()
 	for k := range forgotten {
 		delete(activeKeys, k)
@@ -74,11 +86,6 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 	// matches the save paths' posture (GC must not block on lock faults).
 	// Released explicitly before the sidecar prune below, which acquires
 	// the same lock via lockForgottenWrite (same-flock self-deadlock guard).
-	unlockGC, lockErr := util.FileLock(am.dir + ".lock")
-	gcLocked := lockErr == nil
-	if !gcLocked {
-		debug.Log("memory", "GC: filelock failed, degraded to unlocked delete: %v", lockErr)
-	}
 	for _, m := range metas {
 		if activeKeys[m.Key] {
 			continue
