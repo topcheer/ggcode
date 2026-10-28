@@ -409,11 +409,18 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 			truncated = true
 			break
 		}
-		select {
-		case <-ctx.Done():
-			debug.Log("codeindex", "build timed out after indexing %d files", indexed)
-			return
-		default:
+		if ctx.Err() != nil {
+			// #4545: publish the completed subset instead of returning early.
+			// The early return skipped persist+publish and left
+			// started=true / ready=false with nothing on disk - MarkDirty was
+			// swallowed by rebuildDirty's !ready gate, the periodic check
+			// bailed on index==nil, and the process never got an index. A
+			// timeout now truncates like the term budget does: publish what
+			// was indexed so far. (plain break exits the for loop; inside a
+			// select case it would only exit the select)
+			debug.Log("codeindex", "build timed out after %d files - publishing the indexed subset", indexed)
+			truncated = true
+			break
 		}
 
 		info, err := os.Stat(absPath)
@@ -1039,9 +1046,12 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 	// budget as the build path (codeIndexMaxTotalTermsOverride) - the
 	// dirty channel previously grew the persisted corpus without any
 	// cap, the exact budget bypass the #1625 fix closed for full builds.
+	// #4545: count DISTINCT terms (len(tf)), the same unit doBuild and the
+	// persisted cache use - the old d.length token-total unit split the
+	// budget into two magnitudes for the same cap.
 	totalTerms := 0
 	for _, d := range idx.docs {
-		totalTerms += d.length
+		totalTerms += len(d.tf)
 	}
 	maxTerms := codeIndexMaxTotalTermsOverride()
 
@@ -1109,6 +1119,18 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 
 		if i, ok := docIdx[relPath]; ok {
 			// Existing doc: replace in-place.
+			// #4545: the replace path used to skip the term budget entirely
+			// - repeatedly editing an already-indexed large file grew the
+			// index past maxTerms (#4428 side door). Check the budget on
+			// the distinct-term delta; a shrinking edit frees budget.
+			if maxTerms > 0 {
+				delta := len(newTF) - len(idx.docs[i].tf)
+				if totalTerms+delta > maxTerms {
+					debug.Log("codeindex", "incremental replace skipped, term budget reached: %s", relPath)
+					continue
+				}
+			}
+			totalTerms += len(newTF) - len(idx.docs[i].tf)
 			m.replaceDocInIndex(idx, i, newDoc)
 			updated++
 		} else {
@@ -1122,13 +1144,14 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 				debug.Log("codeindex", "incremental append skipped, file cap reached: %s", relPath)
 				continue
 			}
-			if maxTerms > 0 && totalTerms+len(terms) > maxTerms {
+			if maxTerms > 0 && totalTerms+len(newTF) > maxTerms {
 				// #4428: corpus budget - same cap the build path applies per
 				// file; the dirty channel must not be an unbounded side door.
+				// #4545: distinct terms (len(tf)), unified with doBuild.
 				debug.Log("codeindex", "incremental append skipped, term budget reached: %s", relPath)
 				continue
 			}
-			totalTerms += len(terms)
+			totalTerms += len(newTF)
 			idx.docs = append(idx.docs, newDoc)
 			docIdx[relPath] = len(idx.docs) - 1
 			for term := range newTF {
@@ -1425,15 +1448,20 @@ func (m *CodeIndexManager) Stats() CodeIndexStats {
 	return m.stats
 }
 
-// Stop shuts down the background dirty-check goroutine and releases the lock.
+// Stop shuts down the background dirty-check goroutine. #4545: it no
+// longer releases the flock - the unconditional unlock closed the lock fd
+// out from under an in-flight builder (rebuildDirty / lazyLoad / the
+// initial build all hold the lock only transiently and release it
+// themselves via defer), whose own unlock then became a nil no-op while
+// another instance acquired the lock and built concurrently over the same
+// indexPath. Every tryLock site owns its unlock; Stop only signals
+// shutdown.
 func (m *CodeIndexManager) Stop() {
 	// #4542: the old select-default check-then-close was not atomic - two
 	// concurrent first callers (TUI shutdown racing a SIGINT handler) could
 	// both take the default branch and the second close panicked. sync.Once
-	// makes Stop idempotent and race-free; m.unlock below stays unconditional
-	// because it already tolerates a non-held lock.
+	// makes Stop idempotent and race-free.
 	m.stopOnce.Do(func() { close(m.stopCh) })
-	m.unlock()
 }
 
 // lazyLoad starts a background disk-cache reload if the index was released
