@@ -2303,13 +2303,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			continue
 		}
 		// P1-1: push newly-finished sub-agent runs into context at the same
-		// boundary so the loop never has to poll blindly. One merged notice;
-		// budget edge handled like #3778 (persisted but unreached in-run).
-		if a.injectSubagentCompletions() {
-			if a.maxIter > 0 && i == a.maxIter-1 {
-				guidanceAtBudget = true
-			}
-		}
+		// boundary so the loop never has to poll blindly. One merged notice.
+		// #4516: unlike the guidance path above, there is NO continue here -
+		// the notice IS consumed by this iteration's ensurePromptSendable /
+		// Messages() / streamChatResponse below. Setting guidanceAtBudget on
+		// the final iteration claimed "no budget left to act on it ...
+		// consumed first on the next run" - the exact opposite of what
+		// happens - and callers keyed on errors.Is(ErrGuidanceAtBudget)
+		// could misjudge the run as unconsumed. No flag: the notice reached
+		// an LLM call this run.
+		a.injectSubagentCompletions()
 		if err := a.maybeAutoCompact(ctx, onEvent, &transientCompactWarned); err != nil {
 			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
 			return err
@@ -2907,6 +2910,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			continue
 		}
 		consecutiveEmptyResponses = 0
+		// Trajectory health synthesizer (metacognitive layer): record
+		// per-iteration tool activity stats for composite health scoring.
+		// #4515: this used to live INSIDE the len(toolCalls)==0 branch below,
+		// where toolCalls is always empty - countToolTypes scored 0/0, len()
+		// 0, and pure tool runs never grew iterations, so the composite
+		// health score was built from zero-activity samples only (every
+		// dimension dead). Record EVERY iteration so real tool activity
+		// feeds the scorer.
+		if a.trajectoryHealth != nil {
+			eCnt, rCnt := countToolTypes(toolCalls)
+			assCnt := 0 // assumption tracking removed
+			a.trajectoryHealth.recordIteration(eCnt, 0, len(toolCalls), rCnt, assCnt)
+		}
 		// No tool calls → done unless autopilot should continue with best-effort assumptions.
 		if len(toolCalls) == 0 {
 			// Truncated response recovery: the LLM hit the output token limit
@@ -3278,13 +3294,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// rapid-fire chain). Detection itself happens on the tool-call
 			// path (see beginBatch wiring); recordStep(false) never fires.
 			a.mindlessAction.recordStep(len(assistantText), false)
-			// Trajectory health synthesizer (metacognitive layer): record
-			// per-iteration tool activity stats for composite health scoring.
-			if a.trajectoryHealth != nil {
-				eCnt, rCnt := countToolTypes(toolCalls)
-				assCnt := 0 // assumption tracking removed
-				a.trajectoryHealth.recordIteration(eCnt, 0, len(toolCalls), rCnt, assCnt)
-			}
 			// Trajectory health warning: when composite score exceeds threshold,
 			// inject holistic guidance about accumulating risk.
 			if healthHint := a.maybeWarnTrajectoryHealth(); healthHint != "" {
