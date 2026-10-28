@@ -559,6 +559,12 @@ func (c *Config) AddEndpoint(vendor, endpointName, protocol, baseURL, apiKey str
 			// #1435-A: same as AddVendor - persist, or the key lives only
 			// in this process and onboarding loops on fresh terminals.
 			if err := writeKeysEnv(map[string]string{envVarName: apiKey}); err != nil {
+				// #4507: roll the env var back, or a read-only/full keys.env
+				// dir left the PLAINTEXT key in process env while the vendor
+				// never made it into c.Vendors - NeedsOnboard's LookupEnv then
+				// saw a ghost key and split onboarding state from config
+				// state for the life of the process.
+				os.Unsetenv(envVarName)
 				return fmt.Errorf("persisting API key for %s/%s: %w", vendor, endpointName, err)
 			}
 			ep.APIKey = "${" + envVarName + "}"
@@ -680,6 +686,9 @@ func (c *Config) AddVendor(name, displayName, apiKey string) error {
 			// key on every launch. Save()'s migration only moves PLAINTEXT
 			// keys, so the ${VAR} reference path had no persistence owner.
 			if err := writeKeysEnv(map[string]string{envVarName: apiKey}); err != nil {
+				// #4507: same fail-atomic rollback as AddEndpoint - no ghost
+				// plaintext key in process env when the vendor was not added.
+				os.Unsetenv(envVarName)
 				return fmt.Errorf("persisting API key for vendor %q: %w", name, err)
 			}
 			syncVendorKeyEnv(name, apiKey) // #2105: keep both historic names in lockstep
