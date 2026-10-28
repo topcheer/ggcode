@@ -1543,15 +1543,32 @@ func (a *tgAdapter) SendInteractive(ctx context.Context, binding ChannelBinding,
 		})
 	}
 
-	// Convert markdown to Telegram format
+	// Convert markdown to Telegram format.
+	// #4527: formatMessages may split into multiple chunks (>4096 chars);
+	// the old code took only messages[0].Text and silently dropped the
+	// tail. Loop-send the leading chunks via sendTextMessage (same pattern
+	// as the plain-text path, rate-limit delay included) and attach the
+	// inline keyboard to the LAST chunk, so the buttons sit under the full
+	// message. Entity mode (parseMode == "") also carries the entities so
+	// bold/code formatting survives - sendTextMessage already does this,
+	// and the keyboard chunk below mirrors it.
 	messages, _ := a.formatMessages(msg.Text)
-	textContent := ""
-	if len(messages) > 0 {
-		textContent = messages[0].Text
+	if len(messages) == 0 {
+		messages = []tgmd.Message{{Text: msg.Text}}
 	}
-	if textContent == "" {
-		textContent = msg.Text
+	for i := 0; i < len(messages)-1; i++ {
+		if i > 0 {
+			select {
+			case <-time.After(tgInterMessageDelay):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		if err := a.sendTextMessage(ctx, chatID, messages[i], ""); err != nil {
+			return "", err
+		}
 	}
+	textContent := messages[len(messages)-1].Text
 
 	path := fmt.Sprintf(tgSendMessagePath, a.botToken)
 	body := map[string]any{
@@ -1564,6 +1581,11 @@ func (a *tgAdapter) SendInteractive(ctx context.Context, binding ChannelBinding,
 	}
 	if a.parseMode != "" {
 		body["parse_mode"] = a.parseMode
+	} else if len(messages[len(messages)-1].Entities) > 0 {
+		// #4527: entity mode must carry the entities, mirroring
+		// sendTextMessage - without them the button message goes out as
+		// plain text and all formatting is lost.
+		body["entities"] = tgEntitiesToRaw(messages[len(messages)-1].Entities)
 	}
 
 	var respData map[string]any
