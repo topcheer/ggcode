@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -468,17 +469,26 @@ func TestCopyRecursiveSymlinkCycle(t *testing.T) {
 // TestIsCrossDeviceErrorForms pins #1684 case 2: errno check plus the
 // Windows ERROR_NOT_SAME_DEVICE text (which mentions neither "cross-device"
 // nor "EXDEV") so the copy+remove fallback fires there too.
+// #4602 fallout: os.Rename failures are always *os.LinkError, so the text
+// fallback matches only LinkError.Err (the errno description) - the full
+// message embeds caller-controlled paths ("EXDEV.md" flipped unrelated
+// failures into the cross-device fallback).
 func TestIsCrossDeviceErrorForms(t *testing.T) {
 	if !isCrossDeviceError(syscall.EXDEV) {
 		t.Fatal("errno EXDEV must be recognized")
 	}
-	if !isCrossDeviceError(fmt.Errorf("rename /a /b: The system cannot move the file to a different disk drive.")) {
+	if !isCrossDeviceError(&os.LinkError{Op: "rename", Old: "/a", New: "/b", Err: errors.New("The system cannot move the file to a different disk drive.")}) {
 		t.Fatal("Windows different-disk-drive text must be recognized")
 	}
-	if !isCrossDeviceError(fmt.Errorf("rename /a /b: invalid cross-device link")) {
+	if !isCrossDeviceError(&os.LinkError{Op: "rename", Old: "/a", New: "/b", Err: errors.New("invalid cross-device link")}) {
 		t.Fatal("Linux cross-device text must stay recognized")
 	}
 	if isCrossDeviceError(nil) || isCrossDeviceError(fmt.Errorf("permission denied")) {
 		t.Fatal("unrelated errors must not match")
+	}
+	// #4602: a path component containing "EXDEV" (or "cross-device") must
+	// not make an unrelated errno classify as cross-device.
+	if isCrossDeviceError(&os.LinkError{Op: "rename", Old: "/tmp/EXDEV-tests/f.md", New: "/tmp/b/f.md", Err: syscall.EACCES}) {
+		t.Fatal("path substring 'EXDEV' must not flip a permission-denied failure into the cross-device fallback")
 	}
 }

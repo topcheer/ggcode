@@ -17,6 +17,11 @@ const (
 	maxFileOpsPaths = 50
 )
 
+// osRename is a test seam over os.Rename (issue #4602): cross-device
+// renames cannot be created portably inside t.TempDir, so tests swap this
+// to inject a syscall.EXDEV error and exercise the fallback branch.
+var osRename = os.Rename
+
 // FileOps performs batch file-system operations (delete, move/rename, mkdir)
 // in a single tool call with sandbox enforcement and file-tracker integration.
 //
@@ -297,8 +302,10 @@ func (t FileOps) executeOne(action, source, destination string, recursive bool) 
 		defaultFileTracker.RemoveTracking(source)
 
 		// Use rename for atomic move when possible. Fall back to copy+remove
-		// for cross-device moves.
-		if err := os.Rename(source, destination); err != nil {
+		// for cross-device moves. osRename is a package-level seam so tests can
+		// inject the EXDEV error (issue #4602) - real cross-device renames
+		// cannot be created portably inside t.TempDir().
+		if err := osRename(source, destination); err != nil {
 			// #4448: every failure return below leaves the file physically at
 			// SOURCE, but the pre-rename RemoveTracking already dropped its
 			// read-state - a later write_file to the source then false-positived
@@ -327,6 +334,12 @@ func (t FileOps) executeOne(action, source, destination string, recursive bool) 
 					// exists - leave it untracked (it was never read).
 					return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: fmt.Sprintf("moved but failed to remove source: %v", err)}
 				}
+				// #4602: the source is now physically gone, but the #4448
+				// restore above re-recorded its read-state. Without this clear a
+				// later externally-recreated file at the source path would be
+				// treated as "already read" and the blind-write warning for
+				// overwriting it would be silently suppressed.
+				defaultFileTracker.RemoveTracking(source)
 			} else {
 				return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: fmt.Sprintf("rename error: %v", err)}
 			}
@@ -371,10 +384,21 @@ func isCrossDeviceError(err error) bool {
 	if errors.Is(err, syscall.EXDEV) {
 		return true
 	}
-	msg := err.Error()
-	// "invalid cross-device link" (Linux) or "cross-device renamed" or errno EXDEV.
-	return strings.Contains(msg, "cross-device") || strings.Contains(msg, "EXDEV") ||
-		strings.Contains(msg, "different disk drive")
+	// #4602 (fallout found while testing): the text fallback used to scan the
+	// FULL error message, which embeds both file paths. Path components are
+	// caller-controlled - a file named e.g. "EXDEV.md" or a directory like
+	// "cross-device-tests/" made EVERY rename failure (permission denied,
+	// ENOENT, ...) classify as cross-device, silently rerouting it into the
+	// copy+delete fallback. Match only the underlying errno description,
+	// which never contains paths.
+	var le *os.LinkError
+	if errors.As(err, &le) {
+		msg := le.Err.Error()
+		// "invalid cross-device link" (Linux) or "cross-device renamed" or errno EXDEV.
+		return strings.Contains(msg, "cross-device") || strings.Contains(msg, "EXDEV") ||
+			strings.Contains(msg, "different disk drive")
+	}
+	return false
 }
 
 // copyDirEntry copies one child of a directory tree during copyDirTree.
