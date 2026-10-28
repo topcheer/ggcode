@@ -102,6 +102,34 @@ func TestLanChatSendStarTriggersBroadcast(t *testing.T) {
 	}
 }
 
+// Issue #4553: a "*" anywhere in the recipient list triggers a broadcast -
+// previously only a single-element ["*"] list did, so ["*", "node-x"] silently
+// skipped the wildcard as unresolvable and the broadcast intent was lost.
+func TestLanChatSendStarInMixedListTriggersBroadcast(t *testing.T) {
+	tool, hub := newTestLanChatTool(t)
+
+	hub.HandlePresence(lanchat.Participant{
+		NodeID:    "node-bob",
+		HumanNick: "bob_dev",
+		AgentNick: "bob_dev_agent",
+		Endpoint:  "http://localhost:2",
+		Online:    true,
+	})
+
+	result, err := tool.doSend(context.Background(), "hello", []string{"*", "node-bob"}, false, "")
+	if err != nil {
+		t.Fatalf("doSend with mixed '*' list returned error: %v", err)
+	}
+	// Must take the broadcast_all path: no unresolved-skip report, and the
+	// result text should be a broadcast summary rather than a DM receipt.
+	if strings.Contains(result.Content, "could not be resolved") {
+		t.Errorf("'*' in mixed list should broadcast, not resolve-and-skip: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "Broadcast") && !strings.Contains(result.Content, "broadcast") {
+		t.Errorf("expected broadcast result for mixed '*' list, got: %s", result.Content)
+	}
+}
+
 func TestLanChatSendEmptyNodeIDTriggersError(t *testing.T) {
 	tool, _ := newTestLanChatTool(t)
 
