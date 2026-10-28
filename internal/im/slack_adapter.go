@@ -349,8 +349,11 @@ func (a *slackAdapter) authTest(ctx context.Context) error {
 	a.mu.Lock()
 	a.botUserID, _ = result["user_id"].(string)
 	a.botID, _ = result["bot_id"].(string)
+	// #4529: read the logged value from the local we just wrote - logging
+	// a.botUserID after the Unlock re-read the field unsynchronized.
+	botUserID := a.botUserID
 	a.mu.Unlock()
-	debug.Log("slack", "adapter=%s auth OK botUserID=%s", a.name, a.botUserID)
+	debug.Log("slack", "adapter=%s auth OK botUserID=%s", a.name, botUserID)
 	return nil
 }
 
@@ -925,9 +928,16 @@ func (a *slackAdapter) publishState(healthy bool, status, lastErr string) {
 	if a.manager == nil {
 		return
 	}
+	// #4529: snapshot botUserID under the adapter lock - publishState runs
+	// on the RTM read-loop goroutine while authTest (connect/reconnect
+	// goroutine) writes it under a.mu; the bare read was a data race whose
+	// visible symptom was an empty/stale ContactURI during reconnect.
+	a.mu.RLock()
+	botUserID := a.botUserID
+	a.mu.RUnlock()
 	contactURI := ""
-	if a.botUserID != "" {
-		contactURI = "https://slack.com/app_redirect?channel=" + a.botUserID
+	if botUserID != "" {
+		contactURI = "https://slack.com/app_redirect?channel=" + botUserID
 	}
 	a.manager.PublishAdapterState(AdapterState{
 		Name:       a.name,
