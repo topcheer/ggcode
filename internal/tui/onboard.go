@@ -287,8 +287,14 @@ func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 			}
 		}
 
-		// Collect custom provider if user entered one
-		if strings.TrimSpace(om.customFields[0].Value()) != "" {
+		// Collect custom provider if user entered one. #4600: require BOTH
+		// name and url - the guard used to check name only, so a half-filled
+		// Custom step (name entered, Esc'd back, preset picked instead)
+		// leaked a residual CustomProvider with an empty BaseURL that
+		// overrode the user's preset choice. buildCustomResolved already
+		// treats url=="" as "no custom endpoint"; this aligns the collection
+		// guard with it.
+		if strings.TrimSpace(om.customFields[0].Value()) != "" && strings.TrimSpace(om.customFields[1].Value()) != "" {
 			r.CustomProvider = &CustomProviderConfig{
 				Name:     strings.TrimSpace(om.customFields[0].Value()),
 				Protocol: customProtocols[om.customProtocolIdx],
