@@ -558,10 +558,14 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 		all = append(all, releaseCmds...)
 		if err := runArgvSeq(ctx, all); err != nil {
 			// runArgvSeq stops at the first failure (ctx cancel kills the
-			// sleep); re-issue the release sequence on a background context
-			// so modifiers do not stay pressed at the compositor level. Mirrors
-			// holdKeyX11's ctx.Done() protection (#192).
-			_ = runArgvSeq(context.Background(), releaseCmds)
+			// sleep); re-issue the release sequence on a bounded background
+			// context so modifiers do not stay pressed at the compositor
+			// level. #4546: bound it - ydotoold half-dead used to hang this
+			// synchronous Execute path forever (best-effort release must not
+			// become a permanent hang). Mirrors holdKeyX11's recovery.
+			rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer rcancel()
+			_ = runArgvSeq(rctx, releaseCmds)
 			return Result{}, err
 		}
 		return Result{Content: "OK"}, nil
@@ -669,7 +673,17 @@ func runAppResult(ctx context.Context, name string, args ...string) (Result, err
 	// exec does not go through a shell: name must be the bare executable
 	// and every argument a separate argv entry. Concatenating them into one
 	// string makes exec look for a file literally named "xdg-open <url>".
-	cmd := exec.CommandContext(ctx, name, args...)
+	//
+	// #4546: exec.Command, NOT exec.CommandContext - this is fire-and-forget
+	// (the background Wait below is zombie reaping, not result tracking),
+	// but CommandContext kills the child when ctx fires. Parallel tool calls
+	// run under a 30s WithTimeout (parallel_tools.go), so a GUI app launched
+	// via launch_app/open was SIGKILLed 30 seconds after the tool had already
+	// returned OK. The ctx parameter stays in the signature for interface
+	// consistency; it must not gate the child's lifetime. The darwin path
+	// uses `open` which exits immediately, so this is Linux-only.
+	_ = ctx
+	cmd := exec.Command(name, args...)
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -698,8 +712,12 @@ func holdKeyX11(ctx context.Context, p desktopParams) (Result, error) {
 	select {
 	case <-ctx.Done():
 		// Always attempt release so a cancelled context doesn't leave the
-		// key stuck down.
-		_, _ = exec.CommandContext(context.Background(), "xdotool", "keyup", p.Text).Output()
+		// key stuck down. #4546: bound the best-effort release - a half-dead
+		// X server used to hang this synchronous path forever; killed-mid-
+		// release is still better than a permanent hang.
+		rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer rcancel()
+		_, _ = exec.CommandContext(rctx, "xdotool", "keyup", p.Text).Output()
 		return Result{}, ctx.Err()
 	case <-time.After(time.Duration(duration) * time.Millisecond):
 	}
