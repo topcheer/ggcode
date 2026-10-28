@@ -18,7 +18,9 @@ import (
 func TestIssue4573_PersistUsesBuildTimeMtime(t *testing.T) {
 	cim, err := os.ReadFile("code_index_manager.go")
 	if err != nil {
-		t.Skip("source not readable in this environment")
+		// Fail loudly, never skip: a source-pin test that silently skips on
+		// read failure would neutralize its own verification signal.
+		t.Fatalf("#4573 pin test cannot read code_index_manager.go: %v", err)
 	}
 	mgr := string(cim)
 
@@ -48,7 +50,7 @@ func TestIssue4573_PersistUsesBuildTimeMtime(t *testing.T) {
 	// bm25Doc must declare the field.
 	bm, err := os.ReadFile("bm25.go")
 	if err != nil {
-		t.Skip("bm25.go not readable")
+		t.Fatalf("#4573 pin test cannot read bm25.go: %v", err)
 	}
 	if !strings.Contains(string(bm), "mtime int64") {
 		t.Fatal("#4573: bm25Doc must carry the build-time mtime for persistIndex")
