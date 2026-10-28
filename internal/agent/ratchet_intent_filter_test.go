@@ -16,8 +16,9 @@ func mkIntentRule(rule, taskType string, hits int, lastSeen time.Time) Rule {
 }
 
 // TestTopRulesForPromptFiltered_PrefersSameIntent verifies the core P1
-// behavior: when at least 2 rules share the run's task type, injection
-// is restricted to them; other-type rules no longer consume slots.
+// behavior: when at least 2 rules share the run's task type, those rules
+// lead the injection (#4512 mixed quota: the global ranking fills the
+// remaining slots instead of being displaced).
 func TestTopRulesForPromptFiltered_PrefersSameIntent(t *testing.T) {
 	rs := &RuleStore{path: t.TempDir(), maxRules: defaultMaxRules,
 		regexCache: make(map[string]*regexp.Regexp)}
@@ -31,8 +32,11 @@ func TestTopRulesForPromptFiltered_PrefersSameIntent(t *testing.T) {
 	if !strings.Contains(got, "always run gofmt") || !strings.Contains(got, "verify the exact error line") {
 		t.Fatalf("same-intent rules must inject, got:\n%s", got)
 	}
-	if strings.Contains(got, "release-lesson") || strings.Contains(got, "test-lesson") {
-		t.Fatalf("other-intent rules must not pollute bugfix injection, got:\n%s", got)
+	if !strings.Contains(got, "release-lesson") || !strings.Contains(got, "test-lesson") {
+		t.Fatalf("high-hit global rules must fill the non-reserved slots (#4512), got:\n%s", got)
+	}
+	if strings.Index(got, "always run gofmt") > strings.Index(got, "release-lesson") {
+		t.Fatalf("same-intent rules must lead the mixed view, got:\n%s", got)
 	}
 }
 

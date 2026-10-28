@@ -569,18 +569,39 @@ func (rs *RuleStore) topRulesForPrompt(maxRules int, filterIntent string) string
 		return ""
 	}
 
-	// Intent view is only adopted when the same-type subset is rich
-	// enough to fill a meaningful prompt slice; otherwise fall back to
-	// the global ranking so thin stores keep injecting their best rules.
-	if useIntent && len(intentActive) >= 2 {
-		active = intentActive
-	}
-
 	// Sort by combined score descending (small N, insertion sort)
-	for i := 1; i < len(active); i++ {
-		for j := i; j > 0 && active[j].score > active[j-1].score; j-- {
-			active[j], active[j-1] = active[j-1], active[j]
+	sortByScore := func(s []ruleScore) {
+		for i := 1; i < len(s); i++ {
+			for j := i; j > 0 && s[j].score > s[j-1].score; j-- {
+				s[j], s[j-1] = s[j-1], s[j]
+			}
 		}
+	}
+	sortByScore(active)
+
+	// Intent view is only adopted when the same-type subset is rich
+	// enough to fill a meaningful prompt slice (#4512 mixed quota): the
+	// intent rules may claim at most half the quota, and the remaining
+	// slots are filled from the global ranking, so a thin 2-rule intent
+	// subset can no longer fully displace the high-hit global rules the
+	// way a full subset swap did.
+	if useIntent && len(intentActive) >= 2 {
+		sortByScore(intentActive)
+		intentKeep := len(intentActive)
+		if maxRules > 0 && intentKeep > maxRules/2 {
+			intentKeep = maxRules / 2
+		}
+		intentSet := make(map[string]bool, intentKeep)
+		for _, sc := range intentActive[:intentKeep] {
+			intentSet[sc.rule] = true
+		}
+		fill := make([]ruleScore, 0, len(active))
+		for _, sc := range active {
+			if !intentSet[sc.rule] {
+				fill = append(fill, sc)
+			}
+		}
+		active = append(intentActive[:intentKeep:intentKeep], fill...)
 	}
 
 	if maxRules > 0 && len(active) > maxRules {
