@@ -615,6 +615,12 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 			OutputTokens:      estimateTokensFromChars(len(choice.Message.Content)),
 			PromptTokensTotal: inputTokens,
 		}
+	} else if usage.OutputTokens == 0 && len(choice.Message.Content) > 0 {
+		// #4563: prompt-only usage (PromptTokens>0, CompletionTokens==0) from
+		// relays that report usage before generating - the non-streaming
+		// counterpart of the streaming #4472 backfill. Without this the
+		// compaction summarizer's cost/budget accounting understates output.
+		usage.OutputTokens = estimateTokensFromChars(len(choice.Message.Content))
 	}
 
 	// #1484-C: normalize finish_reason into the anthropic value family so
@@ -983,13 +989,26 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						OutputTokens:      estimateTokensFromChars(outputChars),
 						PromptTokensTotal: inputTokens,
 					}
-				} else if usage.OutputTokens == 0 && outputChars > 0 {
-					// #4472: the #1286 zero guard only rejects chunks where every
-					// field is zero, so a prompt-only usage chunk (two-phase relays)
-					// materializes usage with OutputTokens==0 and suppresses this
-					// estimation fallback - silently zeroing cost/budget/compaction
-					// accounting while real output streamed. Backfill the estimate.
-					usage.OutputTokens = estimateTokensFromChars(outputChars)
+				} else {
+					if usage.OutputTokens == 0 && outputChars > 0 {
+						// #4472: the #1286 zero guard only rejects chunks where every
+						// field is zero, so a prompt-only usage chunk (two-phase relays)
+						// materializes usage with OutputTokens==0 and suppresses this
+						// estimation fallback - silently zeroing cost/budget/compaction
+						// accounting while real output streamed. Backfill the estimate.
+						usage.OutputTokens = estimateTokensFromChars(outputChars)
+					}
+					if usage.InputTokens == 0 {
+						// #4563: the mirror gap - a completion-only usage chunk
+						// (Output>0, Input==0) materializes usage, which skips the
+						// usage==nil estimation fallback above and leaves
+						// InputTokens permanently 0. Backfill via CountTokens so
+						// cost/budget accounting does not understate the prompt side.
+						if it, err := p.CountTokens(ctx, messages); err == nil {
+							usage.InputTokens = it
+							usage.PromptTokensTotal = it
+						}
+					}
 				}
 				var confidence *float64 // sa-74
 				if logprobN > 0 {
