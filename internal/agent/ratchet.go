@@ -330,7 +330,16 @@ func (rs *RuleStore) AddRule(r Rule) {
 			continue
 		}
 		if ruleSimilarity(rs.rules[i], r) >= 0.75 {
-			// Merge into existing rule: bump hit count and update LastSeen
+			// Merge into existing rule: bump hit count and update LastSeen.
+			// #4595: keep the incoming rule's MatchPattern/FixHint when the
+			// existing rule never had one - merging used to silently drop
+			// them, losing auto-verify/injection data on the first merge.
+			if rs.rules[i].MatchPattern == "" && r.MatchPattern != "" {
+				rs.rules[i].MatchPattern = r.MatchPattern
+			}
+			if rs.rules[i].FixHint == "" && r.FixHint != "" {
+				rs.rules[i].FixHint = r.FixHint
+			}
 			rs.rules[i].HitCount += r.HitCount
 			rs.rules[i].LastSeen = r.LastSeen
 			debug.Log("ratchet", "merged duplicate rule into %s (similarity >= 0.75): %s", rs.rules[i].ID, r.Rule)
@@ -376,10 +385,15 @@ func ruleSimilarity(a, b Rule) float64 {
 	union := len(tokensA) + len(tokensB) - intersection
 	base := float64(intersection) / float64(union)
 
-	// If both rules target the same tool pattern, boost similarity.
-	// Rules like "run gofmt before commit" vs "run gofmt before staging"
-	// have low Jaccard but are clearly the same concept.
-	if a.ToolPattern == b.ToolPattern && a.ToolPattern != "" {
+	// If both rules target the same tool pattern AND already look
+	// semantically related, boost similarity. Rules like "run gofmt before
+	// commit" vs "run gofmt before staging" have low Jaccard but are the
+	// same concept. #4595: the bonus is gated on base >= 0.3 - without the
+	// gate, any two rules sharing a broad ToolPattern (e.g. git_commit.*
+	// or go build|go test) merged at Jaccard 0.45, silently swallowing
+	// semantically unrelated lessons and dropping their MatchPattern/
+	// FixHint in the merge.
+	if a.ToolPattern == b.ToolPattern && a.ToolPattern != "" && base >= 0.3 {
 		base += 0.3
 	}
 	return base
