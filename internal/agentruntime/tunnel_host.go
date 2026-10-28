@@ -483,6 +483,11 @@ func (h *TunnelHost) Close() {
 	h.mu.Lock()
 	online := h.onlineBroker
 	ref := h.activeShare
+	// #4565: capture the offline projection broker (NewBroker(nil)) before
+	// nilling the field - Close only stopped the online/ref brokers (#4503)
+	// and leaked projBroker's senderLoop/textFlushLoop goroutines and its
+	// 300ms ticker for the life of the process on every runtime teardown.
+	proj := h.projBroker
 	// #1501: mirror StopShare's upgrade-manager teardown. Broker.Stop never
 	// touches the P2P transport, so StopSharingGracefully cannot compensate -
 	// without this, a session switch via repl.SetCore with an active
@@ -525,6 +530,11 @@ func (h *TunnelHost) Close() {
 	// graceful stop above already destroyed the online broker).
 	if ref != nil && ref.broker != nil {
 		ref.broker.Stop()
+	}
+	// #4565: same leak shape for the offline projection broker - Stop is
+	// idempotent (sync.Once), safe even if a caller already stopped it.
+	if proj != nil {
+		proj.Stop()
 	}
 }
 
