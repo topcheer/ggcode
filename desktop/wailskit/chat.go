@@ -3746,6 +3746,7 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	// run's generation, defeating the emitIfCurrent guard.
 	b.runGeneration++
 	b.activeRunGen = b.runGeneration // #550 E1: this run owns the finish path
+	runGen := b.runGeneration        // #4494: capture at entry - the ONLY generation this run owns
 	// #522: same desktop-turn obligation as sendMessageData (#514) —
 	// without it run_done carries the previous turn's (or empty) turn_id
 	// and liveHistory appends this run's reply onto the stale turn's
@@ -3784,24 +3785,23 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 		}
 	}
 
-	runGen := b.currentRunGeneration() // #504: see emitIfCurrent
 	// #594: hidden-text runs need the persist binding too — this path sets
 	// runSes+generation at run start but never installed the per-run
 	// persist target, so hidden/system prompts never reached disk either.
+	//
+	// #4494 (mirrors SendContent's #1181 fix): do NOT bump runGeneration
+	// here anymore — this run claimed ownership at entry (before the
+	// potentially slow InitAgent). The old re-bump stole the finish path:
+	// a Cancel racing between entry and this point finished the cancelled
+	// run against the OLD generation while the re-bump re-claimed
+	// ownership, so both finishers emitted run_done and the real run's
+	// persistRunMessages was skipped. Only refresh the persist target while
+	// this run is still the owner (nothing superseded it mid-init).
 	b.mu.Lock()
 	b.runSes = b.currentSes
-	b.mu.Unlock()
-	// #1701 case 3: setRunPersistSnapshot bumps runGeneration itself; the
-	// re-read above raced another run's bump between the two lock windows
-	// and could capture THAT generation, defeating emitIfCurrent - the
-	// same inversion #1511 removed from the text main path. Hold the lock
-	// across bump-and-capture so runGen is exactly the generation this
-	// run created (#1181 guard pattern).
-	b.mu.Lock()
-	b.runGeneration++
-	b.activeRunGen = b.runGeneration
-	b.persistSession = b.runSes
-	runGen = b.runGeneration
+	if b.activeRunGen == runGen {
+		b.persistSession = b.runSes
+	}
 	b.mu.Unlock()
 	err := b.agent.RunStream(ctx, text, func(ev provider.StreamEvent) {
 		b.emitIfCurrent(runGen, ev)
