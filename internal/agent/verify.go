@@ -86,6 +86,13 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 	if len(runStats.FilesEdited) > 0 {
 		a.verifyProgress("Choosing scoped verification…")
 		cmd = a.llmDecideVerifyCommand(ctx, runStats.FilesEdited)
+		if cmd == skipVerifyCommand {
+			// #4523: the oracle explicitly decided no verification applies
+			// (e.g. markdown-only edits). Do NOT override with the
+			// detectBuildSystem fallback.
+			debug.Log("verify", "async: skipping - oracle decided no verification applies")
+			return
+		}
 	}
 	if cmd == "" {
 		cmd = detectBuildSystem(workingDir)
@@ -298,6 +305,13 @@ Scoping rules - verification must be proportional to the change:
 	return sysText + summary
 }
 
+// skipVerifyCommand is the sentinel llmDecideVerifyCommand returns for an
+// EXPLICIT oracle SKIP decision (#4523) - distinct from "" (no decision
+// obtained: provider failure/empty output), so callers do not override a
+// deliberate "no verification applies" with the detectBuildSystem
+// fallback (a full make verify-ci on a docs-only change).
+const skipVerifyCommand = "\x00SKIP"
+
 // llmDecideVerifyCommand asks the LLM to output a single verification command
 // for the CHANGED FILES of the current run. Returns empty string if no
 // verification is needed or the oracle is unavailable.
@@ -384,7 +398,15 @@ func (a *Agent) llmDecideVerifyCommand(ctx context.Context, changedFiles []strin
 	a.emitUsageWithSource(resp.Usage, "verify")
 
 	cmd := stripCodeFence(strings.TrimSpace(extractText(resp.Message)))
-	if strings.EqualFold(cmd, "SKIP") || cmd == "" {
+	if strings.EqualFold(cmd, "SKIP") {
+		// #4523: an explicit SKIP is a DECISION (e.g. markdown-only edits
+		// need no build/test) - surfacing the sentinel keeps the callers
+		// from overriding it with the detectBuildSystem fallback (a full
+		// repo make verify-ci on a docs change). Provider failure and empty
+		// output still return "" (no decision obtained → fallback is right).
+		return skipVerifyCommand
+	}
+	if cmd == "" {
 		return ""
 	}
 
@@ -890,6 +912,12 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 		start := time.Now()
 		cmd = a.llmDecideVerifyCommand(ctx, runStats.FilesEdited)
 		debug.Log("verify", "sync: oracle chose verify command in %s: %q", time.Since(start), cmd)
+		if cmd == skipVerifyCommand {
+			// #4523: explicit oracle SKIP - same exit as "no command
+			// determined", but WITHOUT the detectBuildSystem override.
+			debug.Log("verify", "sync: skipping - oracle decided no verification applies")
+			return false, false
+		}
 	}
 	if cmd == "" {
 		cmd = detectBuildSystem(workingDir)
