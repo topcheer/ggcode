@@ -289,6 +289,17 @@ func (m *Manager) WriteText(agentID, text string) {
 		m.mu.Unlock()
 		return
 	}
+	// #4579: flushAll/flushAgent skip Done panes, so a late teammate_text
+	// event that lands after HandleDone would sit in the buffer forever
+	// (dropped at the 30s grace close). The immediate paths
+	// (WriteTextImmediate/WriteToolCall/WriteToolResult) have no Done
+	// check and keep writing - mirror that: write through now. Safe under
+	// the mutex, same as HandleDone's own final flush.
+	if ep.Done {
+		writeExtCapped(ep, text)
+		m.mu.Unlock()
+		return
+	}
 	ep.buffer.WriteString(text)
 	ep.dirty = true
 	m.mu.Unlock()

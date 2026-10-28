@@ -382,7 +382,13 @@ func (m *Model) createDiscordAdapterCmd(spec string) tea.Cmd {
 							// then retry - same shape as dingtalk_panel's sentinel
 							// branch. The old path rolled back on the enable-needed
 							// error instead of routing it.
-							return m.discordEnableMutation(name, nil)
+							// #4580: pass a success callback - next=nil made the
+							// auto-enable path return no message, so the panel
+							// never showed the added_bot confirmation and users
+							// re-submitted a working binding.
+							return m.discordEnableMutation(name, func(m *Model) tea.Msg {
+								return discordBindResultMsg{message: m.t("panel.discord.message.added_bot", name)}
+							})
 						}
 						return rollback(err)
 					}

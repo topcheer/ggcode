@@ -382,7 +382,10 @@ func (m *Model) createDingtalkAdapterCmd(spec string) tea.Cmd {
 					if err := m.startDingtalkAdapterIfNeeded(name); err != nil {
 						if errors.Is(err, errDingtalkEnableNeeded) {
 							// #1719 case 1: enable on the Update loop, then retry.
-							return m.dingtalkEnableMutation(name, nil)
+							// #4580: success callback (discord-side fix, mirrored).
+							return m.dingtalkEnableMutation(name, func(m *Model) tea.Msg {
+								return dingtalkBindResultMsg{message: m.t("panel.dingtalk.message.added_bot", name)}
+							})
 						}
 						return rollback(err)
 					}

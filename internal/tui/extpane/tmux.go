@@ -82,7 +82,10 @@ func (t *tmuxBackend) CreateTab(ctx context.Context, title, logfile string) (str
 	defer restore()
 
 	args := []string{
-		"new-window", "-P", "-F", "#{window_id}",
+		// #4578: -d creates the window in the BACKGROUND - without it tmux
+		// selects the new window immediately, yanking the user's view off
+		// the ggcode TUI on every agent spawn. -P still prints window_id.
+		"new-window", "-d", "-P", "-F", "#{window_id}",
 		"-n", title,
 		"tail", "-f", logfile,
 	}
