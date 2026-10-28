@@ -155,6 +155,7 @@ func detectMissedSkills(workingDir string, stats agent.RunStats) {
 		}
 	}
 	if len(hits) == 0 {
+		maybeExpireRoutingHealthSentinel(workingDir)
 		return
 	}
 	autoMem := memory.NewProjectAutoMemory(workingDir)
@@ -179,6 +180,53 @@ func detectMissedSkills(workingDir string, stats agent.RunStats) {
 		return
 	}
 	debug.Log("tui", "missed-skill: recorded %d missed-skill notice(s): %v", len(hits), hits)
+}
+
+// maybeExpireRoutingHealthSentinel strips a stale "# routing-health"
+// sentinel from the missed-skills key when the conditions that wrote it
+// no longer hold (#4597): the sentinel is derived state recomputed on
+// every write, but before this fix the only write trigger was a NEW
+// missed-skill hit: once the user shrank the library below the warn
+// threshold, the early return above left the outdated warning injected
+// into every subsequent session forever. Called exactly on the
+// no-hits path; when the notice is still warranted the key is left
+// untouched (its numbers refresh on the next real write).
+func maybeExpireRoutingHealthSentinel(workingDir string) {
+	autoMem := memory.NewProjectAutoMemory(workingDir)
+	if autoMem == nil {
+		return
+	}
+	existing, err := autoMem.LoadKey(missedSkillMemoryKey)
+	if err != nil {
+		return // #1388: unreadable key, never blind-overwrite
+	}
+	trimmed := strings.TrimSpace(existing)
+	if trimmed == "" || !strings.Contains(trimmed, "# routing-health") {
+		return
+	}
+	notices := 0
+	for _, l := range strings.Split(trimmed, "\n") {
+		if l != "" && !strings.HasPrefix(l, "#") {
+			notices++
+		}
+	}
+	if skillRoutingHealthNotice(len(userSkillNames(workingDir)), notices) != "" {
+		return // still warranted; leave for the next real write to refresh
+	}
+	var kept []string
+	for _, l := range strings.Split(trimmed, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "# routing-health") {
+			continue
+		}
+		kept = append(kept, l)
+	}
+	cleaned := strings.TrimSpace(strings.Join(kept, "\n"))
+	if cleaned == trimmed {
+		return
+	}
+	if err := autoMem.SaveMemoryWithSource(missedSkillMemoryKey, cleaned, "missed-skill"); err != nil {
+		debug.Log("tui", "missed-skill: sentinel cleanup save failed: %v", err)
+	}
 }
 
 // mergeMissedSkills appends hits not already present, deduping by
