@@ -109,7 +109,7 @@ func (t *MobileDeviceTool) Parameters() json.RawMessage {
     "format": {
       "type": "string",
       "enum": ["png", "jpeg"],
-      "description": "Screenshot format.",
+      "description": "Screenshot format. Android always captures PNG (format/quality apply to iOS only).",
       "default": "png"
     },
     "quality": {
