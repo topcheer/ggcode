@@ -873,6 +873,15 @@ func (m *CodeIndexManager) scanForExternalChanges() {
 
 	found := make(map[string]bool)
 	newDirty := 0
+	// #4548: whether the walk hit the 50k cap and stopped early. A
+	// truncated walk has NOT seen every directory - files beyond the cut
+	// are simply absent from found, and the old deletion loop below read
+	// that absence as deletion, persisted the removal, and re-added the
+	// files next tick: index membership oscillated add/remove across the
+	// 50k boundary every 5 minutes (full re-tokenize + rewrite per cycle).
+	// #4476/#1669 capped only the append side; this is the deletion
+	// counterpart.
+	walkTruncated := false
 
 	_ = filepath.WalkDir(m.workingDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -903,6 +912,7 @@ func (m *CodeIndexManager) scanForExternalChanges() {
 		// walk must not blow the corpus size just because it has no
 		// builder phase.
 		if len(found) >= codeIndexMaxFiles {
+			walkTruncated = true
 			return filepath.SkipAll
 		}
 		relPath, _ := filepath.Rel(m.workingDir, path)
@@ -926,12 +936,19 @@ func (m *CodeIndexManager) scanForExternalChanges() {
 	})
 
 	// Check for deleted files (in index but not on disk).
-	for p := range indexedPaths {
-		if !found[p] {
-			m.mu.Lock()
-			m.dirtyFiles[p] = -1 // -1 signals deletion
-			m.mu.Unlock()
-			newDirty++
+	// #4548: skip entirely when the walk was truncated - absence from a
+	// partial found set is not evidence of deletion. Deletion detection
+	// resumes on the first untruncated tick.
+	if walkTruncated {
+		debug.Log("codeindex", "periodic scan truncated at file cap - deletion detection skipped this cycle (#4548)")
+	} else {
+		for p := range indexedPaths {
+			if !found[p] {
+				m.mu.Lock()
+				m.dirtyFiles[p] = -1 // -1 signals deletion
+				m.mu.Unlock()
+				newDirty++
+			}
 		}
 	}
 
