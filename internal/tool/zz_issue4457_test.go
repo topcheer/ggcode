@@ -56,7 +56,7 @@ func TestIssue4457_AndroidTypeTextLiteralPercentS(t *testing.T) {
 func TestIssue4457_IOSSwipeRefAndZeroGuards(t *testing.T) {
 	b := &iosBackend{}
 	// ref-only swipe: must refuse before touching osascript.
-	res, err := b.swipe(context.Background(), "", "@e3", 0, 0, 0, 0)
+	res, err := b.swipe(context.Background(), "", "@e3", 0, 0, intPtr(0), intPtr(0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestIssue4457_IOSSwipeRefAndZeroGuards(t *testing.T) {
 		t.Fatalf("ref-only swipe must be refused (#4457), got: %s", res.Content)
 	}
 	// all-zero coordinates without ref: must refuse too.
-	res, err = b.swipe(context.Background(), "", "", 0, 0, 0, 0)
+	res, err = b.swipe(context.Background(), "", "", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,3 +72,6 @@ func TestIssue4457_IOSSwipeRefAndZeroGuards(t *testing.T) {
 		t.Fatalf("all-zero swipe must be refused (#4457), got: %s", res.Content)
 	}
 }
+
+// intPtr is a test helper for the pointer-valued swipe coordinates (#4576).
+func intPtr(v int) *int { return &v }

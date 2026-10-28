@@ -251,8 +251,13 @@ func (a *androidBackend) screenshot(ctx context.Context, device, format string, 
 		return Result{Content: fmt.Sprintf("Screenshot captured (%d bytes, PNG).", len(data))}, nil
 	}
 
-	return imageResult(data, format, quality,
-		fmt.Sprintf("Screenshot captured (%d bytes, %s). The image is included for visual analysis.", len(data), strings.ToUpper(format))), nil
+	// #4575: adb screencap -p always emits PNG and no transcoding happens
+	// here - honoring the format/quality args produced PNG bytes labeled
+	// image/jpeg with a "JPEG" description, contradicting the schema
+	// contract and strict decoders. Return PNG truthfully; quality is
+	// documented as PNG-only on this backend.
+	return imageResult(data, "png", quality,
+		fmt.Sprintf("Screenshot captured (%d bytes, PNG). The image is included for visual analysis.", len(data))), nil
 }
 
 func (a *androidBackend) tap(ctx context.Context, device, ref string, x, y int) (Result, error) {
@@ -327,7 +332,7 @@ func (a *androidBackend) typeText(ctx context.Context, device, ref, text string,
 	return Result{Content: fmt.Sprintf("Typed: %q", text)}, nil
 }
 
-func (a *androidBackend) swipe(ctx context.Context, device, ref string, x, y, endX, endY int) (Result, error) {
+func (a *androidBackend) swipe(ctx context.Context, device, ref string, x, y int, endX, endY *int) (Result, error) {
 	// #1694 case 2: a ref-only swipe used to run (0,0)->(0,0) and report
 	// success. Resolve the ref to the element center as the swipe START.
 	if ref != "" {
@@ -337,14 +342,20 @@ func (a *androidBackend) swipe(ctx context.Context, device, ref string, x, y, en
 		}
 		x, y = cx, cy
 	}
+	// #4576: #1694 only fixed the START; a missing end still swiped to
+	// (0,0) - from the element center straight into the top-left corner,
+	// then reported success. Both ends must be explicit.
+	if endX == nil || endY == nil {
+		return Result{IsError: true, Content: "swipe requires end_x and end_y (the swipe destination); provide both explicitly"}, nil
+	}
 	args := adbDeviceArgs(device)
 	args = append(args, "shell", "input", "swipe",
-		strconv.Itoa(x), strconv.Itoa(y), strconv.Itoa(endX), strconv.Itoa(endY), "300")
+		strconv.Itoa(x), strconv.Itoa(y), strconv.Itoa(*endX), strconv.Itoa(*endY), "300")
 	_, stderr, err := runCommand(ctx, 10*time.Second, a.adbPath, args...)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("swipe failed: %v\n%s", err, stderr)}, nil
 	}
-	return Result{Content: fmt.Sprintf("Swiped from (%d,%d) to (%d,%d).", x, y, endX, endY)}, nil
+	return Result{Content: fmt.Sprintf("Swiped from (%d,%d) to (%d,%d).", x, y, *endX, *endY)}, nil
 }
 
 func (a *androidBackend) press(ctx context.Context, device, key string) (Result, error) {

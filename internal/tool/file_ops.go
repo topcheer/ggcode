@@ -257,7 +257,13 @@ func (t FileOps) executeOne(action, source, destination string, recursive bool) 
 	case "move":
 		// Check source existence. #4551: capture info - the tracking
 		// migration below needs to know whether the source is a directory.
-		info, err := os.Stat(source)
+		// #4574: Lstat, not Stat - Stat FOLLOWS symlinks, so a dangling
+		// link (its target deleted) reported "source does not exist" and
+		// the link could never be moved, though os.Rename moves the link
+		// entry itself. Lstat sees the link; info.IsDir() is false for a
+		// link, so no subtree migration fires (correct - links have no
+		// tracked children of their own).
+		info, err := os.Lstat(source)
 		if err != nil {
 			if os.IsNotExist(err) {
 				return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: "source does not exist"}
