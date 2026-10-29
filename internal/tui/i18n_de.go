@@ -17,8 +17,6 @@ func deCatalog(key string) string {
 		return "inaktiv"
 	case "cron.firing":
 		return "⏰ Cron-Job ausgelöst"
-	case "activity.idle":
-		return "inaktiv"
 
 	// --- Panel ---
 	case "panel.conversation":
@@ -133,10 +131,6 @@ func deCatalog(key string) string {
 		return "Verzeichnis"
 
 	// --- Context & metrics ---
-	case "context.unavailable":
-		return "Noch keine Kontextdaten"
-	case "metrics.empty":
-		return "Noch keine Metriken"
 	case "im.none":
 		return "Keine Adapter konfiguriert"
 	case "im.summary":
@@ -151,16 +145,12 @@ func deCatalog(key string) string {
 		return "aktiviert • Neustart zum Initialisieren"
 	case "im.status.not_started":
 		return "nicht gestartet"
-	case "context.until_compact":
-		return "übrig"
 
 	// --- Empty ---
 	case "empty.ask":
 		return "Fragen Sie nach einem Refactor, Bugfix, Erklärung oder Tests."
 	case "empty.tips":
 		return "Tipps: @pfad für Dateien, /? für Hilfe, Shift+Tab zum Moduswechsel."
-	case "startup.banner":
-		return "Terminal-UI wird vorbereitet und Start-Terminalrauschen wird gefiltert. Sie können sofort tippen; dieser Banner verschwindet, sobald der Start abgeschlossen ist."
 
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab wechseln • Enter anwenden • Esc schließen"
@@ -170,24 +160,6 @@ func deCatalog(key string) string {
 		return "Modus"
 
 	// --- Mode approval ---
-	case "mode.approval.ask":
-		return "bei Bedarf fragen"
-	case "mode.approval.none":
-		return "keine Genehmigungs-Stopps"
-	case "mode.approval.critical":
-		return "nur kritische"
-	case "mode.tools.rules":
-		return "Werkzeugregeln befolgen"
-	case "mode.tools.readonly":
-		return "nur Lesezugriff"
-	case "mode.tools.safe":
-		return "nur sichere Operationen"
-	case "mode.tools.open":
-		return "fast alle Werkzeuge"
-	case "mode.agent.waits":
-		return "wartet auf Sie"
-	case "mode.agent.autocontinue":
-		return "macht weiter"
 
 	// --- Hints ---
 	case "hint.enter_send":
@@ -220,8 +192,6 @@ func deCatalog(key string) string {
 	// --- Queued ---
 	case "queued.count":
 		return "%d eingereiht"
-	case "queued.output":
-		return "[eingereiht %d ausstehend]\n\n"
 	case "interrupt.delivered":
 		return "[an aktiven Lauf geliefert; Plan wird überarbeitet]\n"
 
@@ -616,8 +586,6 @@ func deCatalog(key string) string {
 		return "Kontext-Manager nicht verfügbar.\n\n"
 	case "compact.failed":
 		return "Komprimierung fehlgeschlagen: %v\n\n"
-	case "compact.done":
-		return "Unterhaltungsverlauf komprimiert.\n\n"
 	case "compact.done_with_stats":
 		return "Unterhaltungsverlauf komprimiert (%d → %d Tokens).\n\n"
 
@@ -666,14 +634,8 @@ func deCatalog(key string) string {
 		return "Konfig: model = %s\n\n"
 	case "config.provider_set":
 		return "Konfig: anbieter = %s\n\n"
-	case "config.language_set":
-		return "Konfig: sprache = %s\n\n"
 	case "config.unknown_key":
 		return "Unbekannter Konfig-Schlüssel: %s\nUnterstützt: model, provider, language\n\n"
-	case "config.title":
-		return "Aktuelle Konfiguration:\n"
-	case "status.title":
-		return "Status:\n"
 
 	// --- Update ---
 	case "panel.update":
@@ -716,18 +678,10 @@ func deCatalog(key string) string {
 		return "Warnung: Sowohl Benutzer- als auch systemweite ggcode-Installationen gefunden:\n  Benutzer: %s\n  System: %s\nDies kann zu PATH-Konflikten führen. Erwägen Sie, eine über Einstellungen > Apps zu deinstallieren.\n\n"
 
 	// --- Plugins ---
-	case "plugins.unavailable":
-		return "Plugin-Manager nicht verfügbar.\n\n"
-	case "plugins.none":
-		return "Keine Plugins geladen.\n\n"
-	case "plugins.title":
-		return "Plugins:\n"
 
 	// --- MCP ---
 	case "mcp.none":
 		return "Keine MCP-Server konfiguriert.\n\n"
-	case "mcp.title":
-		return "MCP-Server:\n"
 	case "mcp.active_tools":
 		return "Aktive Werkzeuge"
 	case "mcp.more":
@@ -738,30 +692,12 @@ func deCatalog(key string) string {
 		return "Verwendung: /image <pfad/zur/datei.png> oder /image paste\n"
 	case "image.formats":
 		return "Unterstützte Formate: PNG, JPEG, GIF, WebP (max. 20MB)\n\n"
-	case "image.attached":
-		return "Bild angehängt: %s\n"
-	case "image.attached_hint":
-		return "Nachricht senden, um das Bild einzuschließen, oder /image für ein weiteres.\n\n"
 	case "image.clipboard_failed":
 		return "Bild konnte nicht aus der Zwischenablage eingefügt werden: %v"
 	case "image.clipboard_no_image_windows":
 		return "Kein Bild in der Zwischenablage gefunden. Unter Windows wird Ctrl+V oft vom Terminal abgefangen. Versuchen Sie Ctrl+Shift+V oder /image paste."
 
 	// --- Agents ---
-	case "agent.usage":
-		return "Verwendung: /agent <id> oder /agent cancel <id>\n\n"
-	case "agent.cancelled":
-		return "Sub-Agent %s abgebrochen\n\n"
-	case "agent.cancel_failed":
-		return "%s konnte nicht abgebrochen werden (nicht gefunden oder nicht aktiv)\n\n"
-	case "agent.not_found":
-		return "Sub-Agent %s nicht gefunden\n\n"
-	case "agent.title":
-		return "Agent: %s\nStatus: %s\nAufgabe: %s\n"
-	case "agent.result":
-		return "Ergebnis: %s\n"
-	case "agent.error":
-		return "Fehler: %v\n"
 
 	// --- Slash command descriptions ---
 	case "slash.help":
@@ -878,14 +814,8 @@ func deCatalog(key string) string {
 		return "Verfügbar: %d"
 	case "panel.qq.none":
 		return "(keine)"
-	case "panel.qq.default":
-		return "(Standard)"
 	case "panel.qq.adapter":
 		return "Adapter: %s"
-	case "panel.qq.target":
-		return "Ziel: %s"
-	case "panel.qq.channel":
-		return "Kanal: %s"
 	case "panel.qq.bot_list":
 		return "QQ-Bot-Liste"
 	case "panel.qq.no_bots":
@@ -960,8 +890,6 @@ func deCatalog(key string) string {
 		return "QQ-Adaptername erforderlich"
 	case "panel.qq.error.not_configured":
 		return "QQ-Bot %q ist nicht konfiguriert"
-	case "panel.qq.error.disabled":
-		return "QQ-Bot %q ist deaktiviert"
 	case "panel.qq.error.not_qq_adapter":
 		return "Adapter %q ist kein QQ-Bot"
 	case "panel.qq.error.not_online":

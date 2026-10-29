@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // snapshotVersion is the schema version of the persisted task board.
@@ -93,6 +95,14 @@ func (m *Manager) RestoreJSON(data []byte) error {
 		if pt.ID == "" {
 			continue
 		}
+		// #4370: a hand-merged/edited snapshot can carry duplicate IDs - the
+		// map write below would silently drop every earlier duplicate and
+		// return nil. Keep the first occurrence (deterministic) and log the
+		// skip, mirroring the hand-edited-nextID defense further down.
+		if _, dup := rebuilt[pt.ID]; dup {
+			debug.Log("task", "restore: duplicate task id %s skipped", pt.ID)
+			continue
+		}
 		t := &Task{
 			ID:          pt.ID,
 			Subject:     pt.Subject,
@@ -114,6 +124,18 @@ func (m *Manager) RestoreJSON(data []byte) error {
 			for k, v := range pt.Metadata {
 				t.Metadata[k] = v
 			}
+		}
+		// #4370: normalize statuses from older writers/external tools instead
+		// of persisting them through: an invalid status (empty string, old
+		// spelling) silently counts as pending in digestStats and as nothing
+		// in BoardStats, gets re-injected into the digest every round, and is
+		// re-persisted by SnapshotJSON - a round trip that never heals. The
+		// write path (manager.go Create/Update) already validates; restore
+		// now holds the same line, best-effort: keep the task, reset the
+		// status to pending.
+		if !IsValidStatus(string(pt.Status)) {
+			debug.Log("task", "restore: task %s has invalid status %q, normalized to pending", pt.ID, pt.Status)
+			t.Status = StatusPending
 		}
 		rebuilt[pt.ID] = t
 	}

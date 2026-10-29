@@ -216,10 +216,12 @@ func TestTopRulesForPrompt_RecencyWeighting(t *testing.T) {
 	rs := NewRuleStore(dir)
 
 	// Rule A: high hit count but very stale
+	// (#4389: MatchPattern must be >= minMatchPatternLen - AddRule now
+	// rejects keyword fragments, so test data uses full-length patterns.)
 	rs.AddRule(Rule{
 		Category:     "build",
 		Rule:         "stale high-hit rule",
-		MatchPattern: "stale",
+		MatchPattern: "stale_rule_pattern",
 	})
 	rs.mu.Lock()
 	rs.load()
@@ -231,7 +233,7 @@ func TestTopRulesForPrompt_RecencyWeighting(t *testing.T) {
 	rs.AddRule(Rule{
 		Category:     "test",
 		Rule:         "recent low-hit rule",
-		MatchPattern: "recent",
+		MatchPattern: "recent_rule_pattern",
 	})
 	rs.mu.Lock()
 	rs.load()

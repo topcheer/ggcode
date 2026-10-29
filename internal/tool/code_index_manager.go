@@ -41,6 +41,7 @@ type CodeIndexManager struct {
 	indexPath    string           // disk cache path
 	workingDir   string
 	stopCh       chan struct{}
+	stopOnce     sync.Once
 	rebuildCh    chan struct{}              // signaled by MarkDirty to trigger immediate debounced rebuild
 	lockFile     *os.File                   // cross-process flock handle
 	onReady      func(stats CodeIndexStats) // optional callback when index build completes
@@ -274,16 +275,29 @@ func (m *CodeIndexManager) tryLock() bool {
 		_ = f.Close()
 		return false
 	}
+	// #4428: lockFile is guarded by m.mu - Stop() can call unlock() from
+	// an arbitrary goroutine while a lock-holding path (initial build /
+	// lazyLoad / rebuildDirty) is between tryLock and unlock, so the bare
+	// field write/read here was a data race (race-detector class).
+	// Verified at fix time: no caller reaches tryLock with m.mu held
+	// (all seven call sites release before locking), so taking m.mu here
+	// cannot self-deadlock.
+	m.mu.Lock()
 	m.lockFile = f
+	m.mu.Unlock()
 	return true
 }
 
-// unlock releases the cross-process lock.
+// unlock releases the cross-process lock. #4428: m.mu guards the
+// lockFile field read/write (same rationale as tryLock).
 func (m *CodeIndexManager) unlock() {
-	if m.lockFile != nil {
-		unlockFileExcl(m.lockFile)
-		_ = m.lockFile.Close()
-		m.lockFile = nil
+	m.mu.Lock()
+	f := m.lockFile
+	m.lockFile = nil
+	m.mu.Unlock()
+	if f != nil {
+		unlockFileExcl(f)
+		_ = f.Close()
 	}
 }
 
@@ -395,11 +409,18 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 			truncated = true
 			break
 		}
-		select {
-		case <-ctx.Done():
-			debug.Log("codeindex", "build timed out after indexing %d files", indexed)
-			return
-		default:
+		if ctx.Err() != nil {
+			// #4545: publish the completed subset instead of returning early.
+			// The early return skipped persist+publish and left
+			// started=true / ready=false with nothing on disk - MarkDirty was
+			// swallowed by rebuildDirty's !ready gate, the periodic check
+			// bailed on index==nil, and the process never got an index. A
+			// timeout now truncates like the term budget does: publish what
+			// was indexed so far. (plain break exits the for loop; inside a
+			// select case it would only exit the select)
+			debug.Log("codeindex", "build timed out after %d files - publishing the indexed subset", indexed)
+			truncated = true
+			break
 		}
 
 		info, err := os.Stat(absPath)
@@ -859,6 +880,15 @@ func (m *CodeIndexManager) scanForExternalChanges() {
 
 	found := make(map[string]bool)
 	newDirty := 0
+	// #4548: whether the walk hit the 50k cap and stopped early. A
+	// truncated walk has NOT seen every directory - files beyond the cut
+	// are simply absent from found, and the old deletion loop below read
+	// that absence as deletion, persisted the removal, and re-added the
+	// files next tick: index membership oscillated add/remove across the
+	// 50k boundary every 5 minutes (full re-tokenize + rewrite per cycle).
+	// #4476/#1669 capped only the append side; this is the deletion
+	// counterpart.
+	walkTruncated := false
 
 	_ = filepath.WalkDir(m.workingDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -889,6 +919,7 @@ func (m *CodeIndexManager) scanForExternalChanges() {
 		// walk must not blow the corpus size just because it has no
 		// builder phase.
 		if len(found) >= codeIndexMaxFiles {
+			walkTruncated = true
 			return filepath.SkipAll
 		}
 		relPath, _ := filepath.Rel(m.workingDir, path)
@@ -912,12 +943,19 @@ func (m *CodeIndexManager) scanForExternalChanges() {
 	})
 
 	// Check for deleted files (in index but not on disk).
-	for p := range indexedPaths {
-		if !found[p] {
-			m.mu.Lock()
-			m.dirtyFiles[p] = -1 // -1 signals deletion
-			m.mu.Unlock()
-			newDirty++
+	// #4548: skip entirely when the walk was truncated - absence from a
+	// partial found set is not evidence of deletion. Deletion detection
+	// resumes on the first untruncated tick.
+	if walkTruncated {
+		debug.Log("codeindex", "periodic scan truncated at file cap - deletion detection skipped this cycle (#4548)")
+	} else {
+		for p := range indexedPaths {
+			if !found[p] {
+				m.mu.Lock()
+				m.dirtyFiles[p] = -1 // -1 signals deletion
+				m.mu.Unlock()
+				newDirty++
+			}
 		}
 	}
 
@@ -1004,6 +1042,19 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 	}
 	idx = clone
 
+	// #4428: the append branch below now enforces the same total-terms
+	// budget as the build path (codeIndexMaxTotalTermsOverride) - the
+	// dirty channel previously grew the persisted corpus without any
+	// cap, the exact budget bypass the #1625 fix closed for full builds.
+	// #4545: count DISTINCT terms (len(tf)), the same unit doBuild and the
+	// persisted cache use - the old d.length token-total unit split the
+	// budget into two magnitudes for the same cap.
+	totalTerms := 0
+	for _, d := range idx.docs {
+		totalTerms += len(d.tf)
+	}
+	maxTerms := codeIndexMaxTotalTermsOverride()
+
 	debug.Log("codeindex", "%s incremental: %d files changed", reason, len(dirty))
 	start := time.Now()
 
@@ -1045,6 +1096,15 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 		if info.IsDir() || info.Size() > codeIndexMaxFileSize {
 			continue
 		}
+		// #4428: the dirty channel (MarkDirty passes through write_file /
+		// edit_file paths verbatim) previously appended ANY file below the
+		// size cap - .png/.lock/.bin written via write_file got tokenized
+		// and persisted into the BM25 corpus, while the full-scan path has
+		// always filtered on isCodeFile. Same predicate here so the dirty
+		// channel and the full scan share one corpus standard.
+		if !isCodeFile(absPath) {
+			continue
+		}
 
 		data, err := os.ReadFile(absPath)
 		if err != nil {
@@ -1059,10 +1119,39 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 
 		if i, ok := docIdx[relPath]; ok {
 			// Existing doc: replace in-place.
+			// #4545: the replace path used to skip the term budget entirely
+			// - repeatedly editing an already-indexed large file grew the
+			// index past maxTerms (#4428 side door). Check the budget on
+			// the distinct-term delta; a shrinking edit frees budget.
+			if maxTerms > 0 {
+				delta := len(newTF) - len(idx.docs[i].tf)
+				if totalTerms+delta > maxTerms {
+					debug.Log("codeindex", "incremental replace skipped, term budget reached: %s", relPath)
+					continue
+				}
+			}
+			totalTerms += len(newTF) - len(idx.docs[i].tf)
 			m.replaceDocInIndex(idx, i, newDoc)
 			updated++
 		} else {
 			// New file: append.
+			// #4476: file-count cap, same ceiling the full scan enforces via
+			// SkipAll at codeIndexMaxFiles. Without it, files beyond the
+			// lexicographic 50k cut that entered via the dirty channel were
+			// invisible to the next periodic scan (found[] never saw them),
+			// so the scan flagged them as deleted and persisted the removal.
+			if len(idx.docs) >= codeIndexMaxFiles {
+				debug.Log("codeindex", "incremental append skipped, file cap reached: %s", relPath)
+				continue
+			}
+			if maxTerms > 0 && totalTerms+len(newTF) > maxTerms {
+				// #4428: corpus budget - same cap the build path applies per
+				// file; the dirty channel must not be an unbounded side door.
+				// #4545: distinct terms (len(tf)), unified with doBuild.
+				debug.Log("codeindex", "incremental append skipped, term budget reached: %s", relPath)
+				continue
+			}
+			totalTerms += len(newTF)
 			idx.docs = append(idx.docs, newDoc)
 			docIdx[relPath] = len(idx.docs) - 1
 			for term := range newTF {
@@ -1224,6 +1313,12 @@ func (m *CodeIndexManager) FilePathFuzzy(query string, maxResults int) []string 
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].score > results[j].score
 	})
+	// #4476: guard the same way Search does (maxResults <= 0 → 10) -
+	// a negative maxResults made len(results) > maxResults always true
+	// and results[:maxResults] panicked on the negative bound.
+	if maxResults <= 0 {
+		maxResults = 10
+	}
 	if len(results) > maxResults {
 		results = results[:maxResults]
 	}
@@ -1353,15 +1448,20 @@ func (m *CodeIndexManager) Stats() CodeIndexStats {
 	return m.stats
 }
 
-// Stop shuts down the background dirty-check goroutine and releases the lock.
+// Stop shuts down the background dirty-check goroutine. #4545: it no
+// longer releases the flock - the unconditional unlock closed the lock fd
+// out from under an in-flight builder (rebuildDirty / lazyLoad / the
+// initial build all hold the lock only transiently and release it
+// themselves via defer), whose own unlock then became a nil no-op while
+// another instance acquired the lock and built concurrently over the same
+// indexPath. Every tryLock site owns its unlock; Stop only signals
+// shutdown.
 func (m *CodeIndexManager) Stop() {
-	select {
-	case <-m.stopCh:
-		// already closed
-	default:
-		close(m.stopCh)
-	}
-	m.unlock()
+	// #4542: the old select-default check-then-close was not atomic - two
+	// concurrent first callers (TUI shutdown racing a SIGINT handler) could
+	// both take the default branch and the second close panicked. sync.Once
+	// makes Stop idempotent and race-free.
+	m.stopOnce.Do(func() { close(m.stopCh) })
 }
 
 // lazyLoad starts a background disk-cache reload if the index was released

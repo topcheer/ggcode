@@ -52,7 +52,7 @@ func (b *iosBackend) typeText(ctx context.Context, device, ref, text string, x, 
 	return Result{IsError: true, Content: "iOS simulator support requires macOS"}, nil
 }
 
-func (b *iosBackend) swipe(ctx context.Context, device, ref string, x, y, endX, endY int) (Result, error) {
+func (b *iosBackend) swipe(ctx context.Context, device, ref string, x, y int, endX, endY *int) (Result, error) {
 	return Result{IsError: true, Content: "iOS simulator support requires macOS"}, nil
 }
 

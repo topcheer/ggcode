@@ -441,6 +441,13 @@ func (m *Manager) SetPairingStore(store PairingStateStore) error {
 func (m *Manager) SetBridge(bridge Bridge) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// #4587: detaching the outgoing bridge unblocks any adapter goroutine
+	// still parked in SubmitInboundMessage on the OLD program (already quit
+	// or replaced). Bridges opt in by implementing detach(); unknown
+	// implementations are left alone.
+	if old, ok := m.bridge.(interface{ detach() }); ok {
+		old.detach()
+	}
 	m.bridge = bridge
 }
 

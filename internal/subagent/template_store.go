@@ -34,6 +34,9 @@ type NamedAgentTemplate struct {
 // TemplateStore manages named agent templates on disk, scoped per workspace.
 type TemplateStore struct {
 	dir string
+	// touchOnce guards the #4362 read-liveness Chtimes (at most one per
+	// process per store instance).
+	touchOnce sync.Once
 	// mu serializes Save/Delete against each other (single-process domain).
 	// #3100 V2: Save's Load→collision-check→write and Delete's
 	// check-then-remove were TOCTOU-unsynchronized — two in-process callers
@@ -155,6 +158,21 @@ func (s *TemplateStore) loadByName(name string) (NamedAgentTemplate, error) {
 	if t.Name != "" && strings.TrimSpace(strings.ToLower(t.Name)) != strings.TrimSpace(strings.ToLower(name)) {
 		return NamedAgentTemplate{}, fmt.Errorf("load template %q: filename collision with %q", name, t.Name)
 	}
+	// #4362: refresh the STORE DIR mtime on successful reads (best-effort,
+	// at most once per process). SweepStaleWorkspaceDirs treats dir mtime as
+	// the liveness signal, but Load/List never touched it - a template that
+	// was created once and then only READ for >90d was silently removed by
+	// the next startup sweep started from ANY other workspace. Touching the
+	// dir on read keeps read-only usage alive; the once-guard avoids paying
+	// a Chtimes syscall on every single Load.
+	s.touchOnce.Do(func() {
+		now := time.Now()
+		if err := os.Chtimes(s.dir, now, now); err != nil {
+			// Best-effort liveness signal only - a failure must never fail
+			// the load itself.
+			debug.Log("subagent", "template store: Chtimes liveness touch failed for %s: %v", s.dir, err)
+		}
+	})
 	return t, nil
 }
 

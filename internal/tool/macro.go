@@ -225,8 +225,21 @@ func (t *MacroTool) doRun(ctx context.Context, name string, runArgsRaw json.RawM
 	}
 	var runArgs []string
 	if len(runArgsRaw) > 0 {
-		if err := json.Unmarshal(runArgsRaw, &runArgs); err != nil {
+		// #4455: the schema allows string/number/boolean items but the old
+		// unmarshal targeted []string, so a schema-legal args:[3] always
+		// failed with the misleading "array of scalars" error. Normalize
+		// scalars via fmt.Sprint instead (arrays/objects stay rejected).
+		var raw []any
+		if err := json.Unmarshal(runArgsRaw, &raw); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("args must be an array of scalars: %v", err)}, nil
+		}
+		for _, v := range raw {
+			switch v.(type) {
+			case string, float64, bool, nil:
+				runArgs = append(runArgs, fmt.Sprint(v))
+			default:
+				return Result{IsError: true, Content: "args must be an array of scalars (string, number, boolean); nested arrays/objects are not supported"}, nil
+			}
 		}
 	}
 	if len(runArgs) > macroMaxArgs {
@@ -299,18 +312,26 @@ func expandMacroArgs(template json.RawMessage, runArgs []string) (json.RawMessag
 	if len(template) == 0 {
 		return json.RawMessage("{}"), nil
 	}
-	out := string(template)
-	for i, v := range runArgs {
-		ph := fmt.Sprintf("{{%d}}", i+1)
-		esc, err := json.Marshal(v)
-		if err != nil {
-			return nil, err
+	// #4455: the old loop did sequential strings.ReplaceAll, so a value
+	// containing a literal {{2}} was itself substituted by a later round -
+	// non-one-shot expansion. Single pass: scan the ORIGINAL template and
+	// replace every {{N}} in place, never rescanning substituted text.
+	placeholderRe := regexp.MustCompile(`\{\{([1-9])\}\}`)
+	out := placeholderRe.ReplaceAllStringFunc(string(template), func(m string) string {
+		// m is exactly 5 bytes: {{, digit, }}
+		n := int(m[2] - '0')
+		if n <= len(runArgs) {
+			esc, err := json.Marshal(runArgs[n-1])
+			if err != nil {
+				// unreachable for strings; keep the raw value on error
+				return m
+			}
+			return strings.Trim(string(esc), `"`)
 		}
-		out = strings.ReplaceAll(out, ph, strings.Trim(string(esc), `"`))
-	}
-	// Reject leftover placeholders beyond supplied args? No: a template
-	// may intentionally keep a literal {{7}} for a later arg that this run
-	// did not supply; the tool will see it as a literal string.
+		// Unsupplied arg: keep the literal placeholder (same as the old
+		// leftover-placeholder comment documents).
+		return m
+	})
 	return json.RawMessage(out), nil
 }
 

@@ -17,8 +17,6 @@ func ruCatalog(key string) string {
 		return "ожидание"
 	case "cron.firing":
 		return "⏰ Сработала задача cron"
-	case "activity.idle":
-		return "ожидание"
 
 	// --- Panel ---
 	case "panel.conversation":
@@ -133,10 +131,6 @@ func ruCatalog(key string) string {
 		return "Каталог"
 
 	// --- Context & metrics ---
-	case "context.unavailable":
-		return "Данные контекста пока недоступны"
-	case "metrics.empty":
-		return "Метрики пока недоступны"
 	case "im.none":
 		return "Адаптеры не настроены"
 	case "im.summary":
@@ -151,16 +145,12 @@ func ruCatalog(key string) string {
 		return "включено • перезапустите для инициализации"
 	case "im.status.not_started":
 		return "не запущено"
-	case "context.until_compact":
-		return "осталось"
 
 	// --- Empty ---
 	case "empty.ask":
 		return "Запросите рефакторинг, исправление бага, объяснение или тесты."
 	case "empty.tips":
 		return "Подсказки: @путь для файлов, /? для справки, Shift+Tab для смены режима."
-	case "startup.banner":
-		return "Подготовка интерфейса терминала и фильтрация шумов запуска. Вы можете начать вводить сразу; этот баннер исчезнет после завершения инициализации."
 
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab переключать • Enter применить • Esc закрыть"
@@ -170,24 +160,6 @@ func ruCatalog(key string) string {
 		return "Режим"
 
 	// --- Mode approval ---
-	case "mode.approval.ask":
-		return "спрашивать при необходимости"
-	case "mode.approval.none":
-		return "без остановок для подтверждения"
-	case "mode.approval.critical":
-		return "только критические"
-	case "mode.tools.rules":
-		return "следовать правилам инструментов"
-	case "mode.tools.readonly":
-		return "только чтение"
-	case "mode.tools.safe":
-		return "только безопасные операции"
-	case "mode.tools.open":
-		return "почти все инструменты"
-	case "mode.agent.waits":
-		return "ожидает вас"
-	case "mode.agent.autocontinue":
-		return "продолжает работу"
 
 	// --- Hints ---
 	case "hint.enter_send":
@@ -220,8 +192,6 @@ func ruCatalog(key string) string {
 	// --- Queued ---
 	case "queued.count":
 		return "%d в очереди"
-	case "queued.output":
-		return "[в очереди %d ожидающих]\n\n"
 	case "interrupt.delivered":
 		return "[доставлено в активный запуск; план пересматривается]\n"
 
@@ -608,8 +578,6 @@ func ruCatalog(key string) string {
 		return "Менеджер контекста недоступен.\n\n"
 	case "compact.failed":
 		return "Компактация не удалась: %v\n\n"
-	case "compact.done":
-		return "История беседы скомпактирована.\n\n"
 	case "compact.done_with_stats":
 		return "История беседы скомпактирована (%d → %d токенов).\n\n"
 
@@ -658,14 +626,8 @@ func ruCatalog(key string) string {
 		return "Конфиг: model = %s\n\n"
 	case "config.provider_set":
 		return "Конфиг: поставщик = %s\n\n"
-	case "config.language_set":
-		return "Конфиг: язык = %s\n\n"
 	case "config.unknown_key":
 		return "Неизвестный ключ конфигурации: %s\nПоддерживаются: model, provider, language\n\n"
-	case "config.title":
-		return "Текущая конфигурация:\n"
-	case "status.title":
-		return "Статус:\n"
 
 	// --- Update ---
 	case "panel.update":
@@ -708,18 +670,10 @@ func ruCatalog(key string) string {
 		return "Предупреждение: Найдены как пользовательская, так и системная установки ggcode:\n  Пользовательская: %s\n  Системная: %s\nЭто может привести к конфликтам PATH. Рассмотрите удаление одной через Настройки > Приложения.\n\n"
 
 	// --- Plugins ---
-	case "plugins.unavailable":
-		return "Менеджер плагинов недоступен.\n\n"
-	case "plugins.none":
-		return "Плагины не загружены.\n\n"
-	case "plugins.title":
-		return "Плагины:\n"
 
 	// --- MCP ---
 	case "mcp.none":
 		return "MCP-серверы не настроены.\n\n"
-	case "mcp.title":
-		return "MCP-серверы:\n"
 	case "mcp.active_tools":
 		return "Активные инструменты"
 	case "mcp.more":
@@ -730,30 +684,12 @@ func ruCatalog(key string) string {
 		return "Использование: /image <путь/к/файлу.png> или /image paste\n"
 	case "image.formats":
 		return "Поддерживаемые форматы: PNG, JPEG, GIF, WebP (макс. 20МБ)\n\n"
-	case "image.attached":
-		return "Изображение прикреплено: %s\n"
-	case "image.attached_hint":
-		return "Отправьте сообщение, чтобы включить изображение, или /image для ещё одного.\n\n"
 	case "image.clipboard_failed":
 		return "Не удалось вставить изображение из буфера обмена: %v"
 	case "image.clipboard_no_image_windows":
 		return "Изображение в буфере обмена не найдено. В Windows Ctrl+V часто перехватывается терминалом. Попробуйте Ctrl+Shift+V или /image paste."
 
 	// --- Agents ---
-	case "agent.usage":
-		return "Использование: /agent <id> или /agent cancel <id>\n\n"
-	case "agent.cancelled":
-		return "Суб-агент %s отменён\n\n"
-	case "agent.cancel_failed":
-		return "Не удалось отменить %s (не найден или не активен)\n\n"
-	case "agent.not_found":
-		return "Суб-агент %s не найден\n\n"
-	case "agent.title":
-		return "Агент: %s\nСтатус: %s\nЗадача: %s\n"
-	case "agent.result":
-		return "Результат: %s\n"
-	case "agent.error":
-		return "Ошибка: %v\n"
 
 	// --- Slash command descriptions ---
 	case "slash.help":
@@ -870,14 +806,8 @@ func ruCatalog(key string) string {
 		return "Доступно: %d"
 	case "panel.qq.none":
 		return "(нет)"
-	case "panel.qq.default":
-		return "(по умолчанию)"
 	case "panel.qq.adapter":
 		return "Адаптер: %s"
-	case "panel.qq.target":
-		return "Цель: %s"
-	case "panel.qq.channel":
-		return "Канал: %s"
 	case "panel.qq.bot_list":
 		return "Список QQ-ботов"
 	case "panel.qq.no_bots":
@@ -952,8 +882,6 @@ func ruCatalog(key string) string {
 		return "Требуется имя QQ-адаптера"
 	case "panel.qq.error.not_configured":
 		return "QQ-бот %q не настроен"
-	case "panel.qq.error.disabled":
-		return "QQ-бот %q отключён"
 	case "panel.qq.error.not_qq_adapter":
 		return "Адаптер %q не является QQ-ботом"
 	case "panel.qq.error.not_online":

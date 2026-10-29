@@ -219,24 +219,8 @@ func ptCatalog(key string) string {
 		return " y = criar AGENTS.md • n/Esc = pular"
 
 	// ── Activity ──────────────────────────────────────────────────
-	case "activity.idle":
-		return "inativo"
 
 	// ── Agent ─────────────────────────────────────────────────────
-	case "agent.cancel_failed":
-		return "Não foi possível cancelar %s (não encontrado ou não em execução)\n\n"
-	case "agent.cancelled":
-		return "Sub-agente %s cancelado\n\n"
-	case "agent.error":
-		return "Erro: %v\n"
-	case "agent.not_found":
-		return "Sub-agente %s não encontrado\n\n"
-	case "agent.result":
-		return "Resultado: %s\n"
-	case "agent.title":
-		return "Agente: %s\nStatus: %s\nTarefa: %s\n"
-	case "agent.usage":
-		return "Uso: /agent <id> ou /agent cancel <id>\n\n"
 	case "agents.idle":
 		return "inativo"
 
@@ -267,10 +251,6 @@ func ptCatalog(key string) string {
 		return "Desfazer falhou: %v\n\n"
 
 	// ── Context ───────────────────────────────────────────────────
-	case "context.unavailable":
-		return "Sem dados de contexto ainda"
-	case "context.until_compact":
-		return "restante"
 
 	// ── Cron ──────────────────────────────────────────────────────
 	case "cron.firing":
@@ -309,8 +289,6 @@ func ptCatalog(key string) string {
 		return "Versão: %s\n"
 
 	// ── Compact ───────────────────────────────────────────────────
-	case "compact.done":
-		return "Histórico de conversa compactado.\n\n"
 	case "compact.done_with_stats":
 		return "Histórico de conversa compactado (%d → %d tokens).\n\n"
 	case "compact.failed":
@@ -321,8 +299,6 @@ func ptCatalog(key string) string {
 	// ── Config ────────────────────────────────────────────────────
 	case "config.instance_unavailable":
 		return "Configuração de instância não disponível para este workspace"
-	case "config.language_set":
-		return "Config: idioma = %s\n\n"
 	case "config.model_set":
 		return "Config: modelo = %s\n\n"
 	case "config.not_loaded":
@@ -343,8 +319,6 @@ func ptCatalog(key string) string {
 		return "Global"
 	case "config.scope_instance":
 		return "Instância"
-	case "config.title":
-		return "Configuração Atual:\n"
 	case "config.unknown_key":
 		return "Chave de config desconhecida: %s\nSuportadas: model, provider, language\n\n"
 	case "config.usage":
@@ -405,10 +379,6 @@ func ptCatalog(key string) string {
 		return "Ctrl+N parar de acompanhar"
 
 	// ── Image ─────────────────────────────────────────────────────
-	case "image.attached":
-		return "Imagem anexada: %s\n"
-	case "image.attached_hint":
-		return "Envie uma mensagem para incluir a imagem, ou /image para anexar outra.\n\n"
 	case "image.clipboard_failed":
 		return "Não foi possível colar uma imagem da área de transferência: %v"
 	case "image.clipboard_no_image_windows":
@@ -503,8 +473,6 @@ func ptCatalog(key string) string {
 		return "… %d mais • /mcp"
 	case "mcp.none":
 		return "Nenhum servidor MCP configurado.\n\n"
-	case "mcp.title":
-		return "Servidores MCP:\n"
 
 	// ── Memory ────────────────────────────────────────────────────
 	case "memory.auto_unavailable":
@@ -513,32 +481,12 @@ func ptCatalog(key string) string {
 		return "Erro ao limpar memórias: %v\n\n"
 
 	// ── Metrics ───────────────────────────────────────────────────
-	case "metrics.empty":
-		return "Sem métricas ainda"
 
 	// ── Mode details ──────────────────────────────────────────────
-	case "mode.agent.autocontinue":
-		return "continua automaticamente"
-	case "mode.agent.waits":
-		return "espera por você"
-	case "mode.approval.ask":
-		return "perguntar conforme necessário"
-	case "mode.approval.critical":
-		return "apenas crítico"
-	case "mode.approval.none":
-		return "sem paradas de aprovação"
 	case "mode.current":
 		return "Modo atual: %s\nUso: /mode <supervised|bypass>\n  supervised  Padrao; a maioria das chamadas flui sem prompts - apenas os pisos de seguranca perguntam (destruicao de sistema, exfiltracao de credenciais, escritas de backdoor)\n  bypass      Superficie de cruzeiro; tudo permitido exceto destruicao de sistema e escritas de backdoor\n  (auto/autopilot sao aliases legados)\n"
 	case "mode.persist_failed":
 		return "Falha ao persistir preferência de modo: %v"
-	case "mode.tools.open":
-		return "quase todas as ferramentas"
-	case "mode.tools.readonly":
-		return "apenas leitura"
-	case "mode.tools.rules":
-		return "seguir regras de ferramentas"
-	case "mode.tools.safe":
-		return "apenas operações seguras"
 
 	// ── Pairing ───────────────────────────────────────────────────
 	case "pairing.blacklisted":
@@ -547,18 +495,10 @@ func ptCatalog(key string) string {
 		return "A solicitação de pareamento atual foi rejeitada. Inicie novamente para continuar."
 
 	// ── Plugins ───────────────────────────────────────────────────
-	case "plugins.none":
-		return "Nenhum plugin carregado.\n\n"
-	case "plugins.title":
-		return "Plugins:\n"
-	case "plugins.unavailable":
-		return "Gerenciador de plugins não disponível.\n\n"
 
 	// ── Queued ────────────────────────────────────────────────────
 	case "queued.count":
 		return "%d na fila"
-	case "queued.output":
-		return "[%d na fila pendentes]\n\n"
 
 	// ── Reasoning ─────────────────────────────────────────────────
 	case "reasoning.effort.set":
@@ -677,8 +617,6 @@ func ptCatalog(key string) string {
 		return "Gerenciar vinculação do canal WhatsApp"
 
 	// ── Startup ───────────────────────────────────────────────────
-	case "startup.banner":
-		return "Preparando a interface do terminal e filtrando ruído de inicialização. Você pode digitar imediatamente; este banner desaparece quando a inicialização estabilizar."
 
 	// ── Status ────────────────────────────────────────────────────
 	case "status.cancelling":
@@ -689,8 +627,6 @@ func ptCatalog(key string) string {
 		return "Comprimindo contexto..."
 	case "status.thinking":
 		return "Pensando..."
-	case "status.title":
-		return "Status:\n"
 	case "status.tools_used":
 		return "%d ferramentas usadas"
 	case "status.writing":
@@ -1031,8 +967,6 @@ func ptCatalog(key string) string {
 		return "Vinculados: %d"
 	case "panel.qq.bound_directory":
 		return "Diretório Vinculado: %s"
-	case "panel.qq.channel":
-		return "Canal: %s"
 	case "panel.qq.create":
 		return "Criar"
 	case "panel.qq.create_example":
@@ -1047,8 +981,6 @@ func ptCatalog(key string) string {
 		return "Canal do Diretório Atual: %s"
 	case "panel.qq.current_directory_target":
 		return "Alvo do Diretório Atual: %s"
-	case "panel.qq.default":
-		return "(padrão)"
 	case "panel.qq.details":
 		return "Detalhes"
 	case "panel.qq.directory":
@@ -1071,8 +1003,6 @@ func ptCatalog(key string) string {
 		return "Config do bot QQ deve ser: <bot-id> <appid> <appsecret>"
 	case "panel.qq.error.config_unavailable":
 		return "config indisponível"
-	case "panel.qq.error.disabled":
-		return "Bot QQ %q está desativado"
 	case "panel.qq.error.not_configured":
 		return "Bot QQ %q não está configurado"
 	case "panel.qq.error.not_online":
@@ -1119,8 +1049,6 @@ func ptCatalog(key string) string {
 		return "não iniciado"
 	case "panel.qq.status.unknown":
 		return "desconhecido"
-	case "panel.qq.target":
-		return "Alvo: %s"
 	case "panel.qq.transport":
 		return "Transporte: %s"
 	case "panel.qq.waiting_for_pairing":

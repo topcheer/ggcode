@@ -50,24 +50,6 @@ func (m *ClientManager) SetWorkingDir(dir string) {
 	}
 }
 
-func (m *ClientManager) SetPermissionHandler(h PermissionHandler) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.onPermission = h
-	for _, client := range m.clients {
-		client.SetPermissionHandler(h)
-	}
-}
-
-func (m *ClientManager) SetApprovalHandler(h ApprovalHandler) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.onApproval = h
-	for _, client := range m.clients {
-		client.SetApprovalHandler(h)
-	}
-}
-
 // Available returns the list of available agent names.
 func (m *ClientManager) Available() []string {
 	m.mu.RLock()

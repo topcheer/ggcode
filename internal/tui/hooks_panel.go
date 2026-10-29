@@ -98,12 +98,20 @@ func (m *Model) getEventHooks(eventIdx int) []hooks.Hook {
 }
 
 func (m *Model) saveHooksConfig(cfg hooks.HookConfig) {
-	if m.agent != nil {
-		m.agent.SetHookConfig(cfg)
-	}
+	// #4491: persist FIRST, apply to the live agent second. The old order
+	// (SetHookConfig -> Save) left the agent running the new hooks after a
+	// Save failure (disk full/permissions, #1371) with no disk record -
+	// an in-memory/disk split that vanished on restart. Save-first keeps
+	// the failure path side-effect free.
 	if m.config != nil {
+		// #4581: capture the prior value - Save() failing must not leave
+		// the unconfirmed hooks in m.config: other panels (im_panel,
+		// commands_slash) reuse this config and a later successful Save()
+		// would write the hooks the user believes were rejected.
+		oldHooks := m.config.Hooks
 		m.config.Hooks = cfg
 		if err := m.config.Save(); err != nil {
+			m.config.Hooks = oldHooks
 			// #1371: silent debug.Log failures left users believing their
 			// hooks were saved - surface it in the panel status line.
 			m.hooksPanel.message = "save failed: " + fmt.Sprintf("%v", err)
@@ -111,6 +119,9 @@ func (m *Model) saveHooksConfig(cfg hooks.HookConfig) {
 			return
 		}
 		m.hooksPanel.message = ""
+	}
+	if m.agent != nil {
+		m.agent.SetHookConfig(cfg)
 	}
 }
 
@@ -263,7 +274,15 @@ func (m Model) renderHooksEditForm() string {
 	if !p.editingNew {
 		boxTitle = tr(m.language, "hooks.editTitle")
 	}
-	return m.renderContextBox(boxTitle, sb.String(), lipgloss.Color("13"))
+	// #4581: the edit form is the ONLY surface while editMode is on, but
+	// the status message (validation errors, save failures) rendered only
+	// in the list view - ValidateHooks failures looked like Enter did
+	// nothing. Append it here too.
+	content := sb.String()
+	if p.message != "" {
+		content += "\n" + p.message
+	}
+	return m.renderContextBox(boxTitle, content, lipgloss.Color("13"))
 }
 
 func (m *Model) handleHooksPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
@@ -392,14 +411,28 @@ func (m *Model) handleHooksEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if p.editingNew {
 			hooksList = append(hooksList, h)
 			p.selectedHook = len(hooksList) - 1
+		} else {
+			// #4581: an out-of-range index (config hot-reload shrank the
+			// list while the editor was open) silently dropped the edit yet
+			// still reported "updated" - report and stay in the editor,
+			// matching the "e" entry-point guard.
+			if p.selectedHook >= len(hooksList) {
+				p.message = tr(m.language, "hooks.msg.updated") + ": stale selection - hook list changed, reselect and retry"
+				m.hooksPanel = p
+				return *m, nil
+			}
+			hooksList[p.selectedHook] = h
+		}
+		// #4491: set the confirmation message AFTER setEventHooks - its
+		// saveHooksConfig success path clears m.hooksPanel.message, which
+		// used to wipe the added/updated feedback the user never saw (the
+		// d/enter paths already follow this order).
+		m.setEventHooks(p.selectedEvent, hooksList)
+		if p.editingNew {
 			p.message = tr(m.language, "hooks.msg.added")
 		} else {
-			if p.selectedHook < len(hooksList) {
-				hooksList[p.selectedHook] = h
-				p.message = tr(m.language, "hooks.msg.updated")
-			}
+			p.message = tr(m.language, "hooks.msg.updated")
 		}
-		m.setEventHooks(p.selectedEvent, hooksList)
 		p.editMode = false
 
 	case "backspace":

@@ -18,8 +18,6 @@ func koCatalog(key string) string {
 		return "대기 중"
 	case "cron.firing":
 		return "실행 중"
-	case "activity.idle":
-		return "대기 중"
 	case "panel.conversation":
 		return "대화"
 	case "panel.composer":
@@ -128,10 +126,6 @@ func koCatalog(key string) string {
 		return "파일"
 	case "label.directory":
 		return "디렉토리"
-	case "context.unavailable":
-		return "아직 컨텍스트 데이터가 없습니다"
-	case "metrics.empty":
-		return "메트릭이 없습니다"
 	case "im.none":
 		return "IM 어댑터 없음"
 	case "im.summary":
@@ -146,38 +140,16 @@ func koCatalog(key string) string {
 		return "활성화됨 • 초기화하려면 재시작"
 	case "im.status.not_started":
 		return "시작되지 않음"
-	case "context.until_compact":
-		return "남음"
 	case "empty.ask":
 		return "리팩토링, 버그 수정, 설명 또는 테스트를 요청하세요."
 	case "empty.tips":
 		return "팁: @path로 파일 포함, /?로 도움말, Shift+Tab으로 모드 변경."
-	case "startup.banner":
-		return "터미널 UI를 준비하고 시작 터미널 노이즈를 필터링하는 중입니다. 지금 바로 입력할 수 있으며, 시작이 완료되면 이 배너가 사라집니다."
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab 전환 • Enter 적용 • Esc 닫기"
 	case "hint.mention":
 		return "@ 파일/폴더 첨부 • Tab/Shift+Tab 전환 • Enter 적용"
 	case "hint.mode":
 		return "모드"
-	case "mode.approval.ask":
-		return "매번 확인"
-	case "mode.approval.none":
-		return "승인 불필요"
-	case "mode.approval.critical":
-		return "중요 작업만 확인"
-	case "mode.tools.rules":
-		return "도구 규칙"
-	case "mode.tools.readonly":
-		return "읽기 전용"
-	case "mode.tools.safe":
-		return "안전"
-	case "mode.tools.open":
-		return "열림"
-	case "mode.agent.waits":
-		return "에이전트 대기"
-	case "mode.agent.autocontinue":
-		return "자동 계속"
 	case "hint.enter_send":
 		return "Enter로 전송"
 	case "hint.ctrlv_image":
@@ -206,8 +178,6 @@ func koCatalog(key string) string {
 		return "Ctrl+N 언팔로우"
 	case "queued.count":
 		return "%d개 대기 중"
-	case "queued.output":
-		return "[대기 %d 보류 중]\n\n"
 	case "interrupt.delivered":
 		return "[활성 실행에 전달됨; 계획 수정 중]\n"
 	case "status.thinking":
@@ -556,8 +526,6 @@ func koCatalog(key string) string {
 		return "컨텍스트 관리자를 사용할 수 없습니다.\n\n"
 	case "compact.failed":
 		return "압축 실패: %v\n\n"
-	case "compact.done":
-		return "압축 완료"
 	case "compact.done_with_stats":
 		return "대화 기록이 압축되었습니다 (%d → %d 토큰).\n\n"
 	case "todo.cleared":
@@ -600,14 +568,8 @@ func koCatalog(key string) string {
 		return "설정: 모델 = %s\n\n"
 	case "config.provider_set":
 		return "설정: 제공자 = %s\n\n"
-	case "config.language_set":
-		return "설정: 언어 = %s\n\n"
 	case "config.unknown_key":
 		return "알 수 없는 설정 키: %s\n지원됨: model, provider, language\n\n"
-	case "config.title":
-		return "현재 설정:\n"
-	case "status.title":
-		return "상태:\n"
 	case "panel.update":
 		return "업데이트"
 	case "label.version":
@@ -646,16 +608,8 @@ func koCatalog(key string) string {
 		return "이 시스템에서 다른 ggcode 설치가 감지되었습니다:\n%s\n다른 ggcode가 PATH에 먼저 나타나면 함께 업데이트하거나 PATH 순서를 조정하세요.\n\n"
 	case "update.dual_scope":
 		return "경고: 사용자 및 시스템 전체 ggcode 설치가 모두 발견되었습니다:\n  사용자: %s\n  시스템: %s\nPATH 충돌이 발생할 수 있습니다. 설정 > 앱에서 하나를 제거하는 것을 고려하세요.\n\n"
-	case "plugins.unavailable":
-		return "플러그인 관리자를 사용할 수 없습니다.\n\n"
-	case "plugins.none":
-		return "로드된 플러그인이 없습니다.\n\n"
-	case "plugins.title":
-		return "플러그인:\n"
 	case "mcp.none":
 		return "구성된 MCP 서버가 없습니다.\n\n"
-	case "mcp.title":
-		return "MCP 서버:\n"
 	case "mcp.active_tools":
 		return "활성 도구"
 	case "mcp.more":
@@ -664,30 +618,10 @@ func koCatalog(key string) string {
 		return "사용법: /image <경로/파일.png> 또는 /image paste\n"
 	case "image.formats":
 		return "지원 형식: PNG, JPEG, GIF, WebP (최대 20MB)\n\n"
-	case "image.attached":
-		return "이미지 첨부됨: %s\n"
-	case "image.attached_hint":
-		return "메시지를 보내 이미지를 포함하거나, /image로 다른 이미지를 첨부하세요.\n\n"
 	case "image.clipboard_failed":
 		return "클립보드에서 이미지를 붙여널 수 없습니다: %v"
 	case "image.clipboard_no_image_windows":
 		return "클립보드에서 이미지를 찾을 수 없습니다. Windows에서는 Ctrl+V가 종종 가로채집니다."
-	case "agent.usage":
-		return "사용법: /agent <id> 또는 /agent cancel <id>\n\n"
-	case "agent.cancelled":
-		// #1373: en baseline takes the agent id - the verb-less ko text
-		// silently dropped it in Sprintf.
-		return "하위 에이전트 %s 취소됨\n\n"
-	case "agent.cancel_failed":
-		return "%s을(를) 취소할 수 없습니다 (찾을 수 없거나 실행 중이 아님)\n\n"
-	case "agent.not_found":
-		return "서브에이전트 %s을(를) 찾을 수 없습니다\n\n"
-	case "agent.title":
-		return "에이전트: %s\n상태: %s\n작업: %s\n"
-	case "agent.result":
-		return "결과: %s\n"
-	case "agent.error":
-		return "오류: %v\n"
 	case "slash.help":
 		return "도움말 표시"
 	case "slash.sessions":
@@ -800,14 +734,8 @@ func koCatalog(key string) string {
 		return "사용 가능: %d"
 	case "panel.qq.none":
 		return "(없음)"
-	case "panel.qq.default":
-		return "(기본값)"
 	case "panel.qq.adapter":
 		return "어댑터: %s"
-	case "panel.qq.target":
-		return "대상: %s"
-	case "panel.qq.channel":
-		return "채널: %s"
 	case "panel.qq.bot_list":
 		return "QQ 봇 목록"
 	case "panel.qq.no_bots":
@@ -882,8 +810,6 @@ func koCatalog(key string) string {
 		return "QQ 어댑터 이름이 필요합니다"
 	case "panel.qq.error.not_configured":
 		return "QQ 봇 %q이(가) 구성되지 않았습니다"
-	case "panel.qq.error.disabled":
-		return "QQ 봇 %q이(가) 비활성화되었습니다"
 	case "panel.qq.error.not_qq_adapter":
 		return "어댑터 %q은(는) QQ 봇이 아닙니다"
 	case "panel.qq.error.not_online":
