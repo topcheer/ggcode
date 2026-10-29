@@ -32,6 +32,20 @@ func SetConfig(cfg *config.Config) {
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	globalCfg = cfg
+	// #4497: re-baseline the sync watcher on the (possibly new) workspace's
+	// file. startConfigFileSync's sync.Once only ever stats the FIRST
+	// workspace's config; after a switch the poller compared the new path's
+	// mtime against the OLD file's baseline - an external edit with a
+	// not-newer mtime never triggered a reload, and the next desktop save
+	// clobbered it with the stale in-memory snapshot (#1847 across
+	// workspaces). noteConfigFileSaved re-stats under our lock; if the new
+	// file does not exist yet, drop the baseline flag so its first
+	// appearance establishes a fresh one.
+	if st, err := os.Stat(trackedConfigPathLocked()); err == nil {
+		cfgFileLastMod, cfgFileLastModOnce = st.ModTime(), true
+	} else {
+		cfgFileLastModOnce = false
+	}
 	startConfigFileSync()
 }
 
