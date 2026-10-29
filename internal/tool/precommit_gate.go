@@ -48,11 +48,6 @@ const precommitMaxErrors = 10
 // Defaults to true. Can be disabled via configuration.
 var precommitGateEnabled = true
 
-// SetPrecommitGateEnabled enables or disables the pre-commit build gate globally.
-func SetPrecommitGateEnabled(enabled bool) {
-	precommitGateEnabled = enabled
-}
-
 // precommitBuildCheck runs a fast project-wide build verification before
 // committing. Returns an advisory warning string if the build fails, or empty
 // string if the build passes, is disabled, or cannot be determined.

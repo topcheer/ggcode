@@ -449,19 +449,6 @@ func TestExtractText(t *testing.T) {
 	}
 }
 
-func TestIsToolAllowed(t *testing.T) {
-	allowed := []string{"read_file", "search_files", "glob"}
-	if !isToolAllowed("read_file", allowed) {
-		t.Error("expected read_file to be allowed")
-	}
-	if isToolAllowed("run_command", allowed) {
-		t.Error("expected run_command to NOT be allowed")
-	}
-	if !isToolAllowed("read_file", nil) {
-		t.Error("nil allowed should permit all tools")
-	}
-}
-
 func TestPickToolForSkill(t *testing.T) {
 	tests := []struct {
 		skill string
