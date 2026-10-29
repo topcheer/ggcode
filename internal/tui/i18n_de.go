@@ -15,32 +15,16 @@ func deCatalog(key string) string {
 	// --- Agents ---
 	case "agents.idle":
 		return "inaktiv"
-	case "agents.running":
-		return "%d aktiv"
 	case "cron.firing":
 		return "⏰ Cron-Job ausgelöst"
 
 	// --- Panel ---
-	case "panel.conversation":
-		return "Unterhaltung"
-	case "panel.composer":
-		return "Eingabe"
-	case "panel.composer_locked":
-		return "Eingabe gesperrt"
 	case "panel.commands":
 		return "Befehle:"
 	case "panel.files":
 		return "Dateien:"
-	case "panel.agent_status":
-		return "Agent-Status"
-	case "panel.mode_policy":
-		return "Modus-Richtlinie"
 	case "panel.session_usage":
 		return "Sitzungsnutzung"
-	case "panel.metrics":
-		return "Metriken"
-	case "panel.context":
-		return "Kontext"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -83,8 +67,6 @@ func deCatalog(key string) string {
 		return "Tools für %s unverändert (%d Tools)."
 	case "panel.mcp.refreshed":
 		return "%s aktualisiert: %d Tools."
-	case "panel.startup":
-		return "Initialisierung"
 	case "panel.approval_required":
 		return "Genehmigung erforderlich"
 	case "panel.bypass_approval":
@@ -105,32 +87,16 @@ func deCatalog(key string) string {
 		return "Sitzung"
 	case "label.agents":
 		return "Agenten"
-	case "label.cwd":
-		return "Verz."
 	case "label.branch":
 		return "Branch"
 	case "label.context":
 		return "Kontext"
 	case "label.skills":
 		return "Fähigkeiten"
-	case "label.activity":
-		return "Aktivität"
-	case "label.window":
-		return "Fenster"
-	case "label.usage":
-		return "Nutzung"
-	case "label.compact":
-		return "kompakt"
 	case "label.total":
 		return "gesamt"
 	case "label.cost":
 		return "gesch. Kosten"
-	case "label.approval_policy":
-		return "Genehmigung"
-	case "label.tool_policy":
-		return "Werkzeuge"
-	case "label.agent_policy":
-		return "Agent"
 	case "label.tool":
 		return "Werkzeug"
 	case "label.input":
@@ -143,28 +109,6 @@ func deCatalog(key string) string {
 		return "Cache-Schreiben"
 	case "label.cache_hit":
 		return "Cache-Treffer"
-	case "label.turns":
-		return "Züge"
-	case "label.avg_ttft":
-		return "Ø TTFT"
-	case "label.p95_ttft":
-		return "p95 TTFT"
-	case "label.avg_duration":
-		return "Ø Dauer"
-	case "label.p95_duration":
-		return "p95 Dauer"
-	case "label.avg_think":
-		return "Ø Denken"
-	case "label.avg_tps":
-		return "Ø TPS"
-	case "label.p95_tps":
-		return "P95 TPS"
-	case "label.fail_rate":
-		return "Fehlerrate"
-	case "label.slow_tools":
-		return "langsame Werkz."
-	case "label.recent_turns":
-		return "aktuelle Züge"
 	case "label.file":
 		return "Datei"
 	case "label.directory":
@@ -274,24 +218,6 @@ func deCatalog(key string) string {
 	// --- Tools ---
 	case "status.tools_used":
 		return "%d Werkzeuge verwendet"
-	case "tool.done":
-		return "fertig"
-	case "tool.failed":
-		return "fehlgeschlagen"
-	case "tool.no_output":
-		return "keine Ausgabe"
-	case "tool.output":
-		return "ausgabe"
-	case "tool.content":
-		return "inhalt"
-	case "tool.match":
-		return "treffer"
-	case "tool.matches":
-		return "treffer"
-	case "tool.entry":
-		return "eintrag"
-	case "tool.result":
-		return "ergebnis"
 
 	// --- Approval ---
 	case "approval.rejected":
@@ -376,8 +302,6 @@ func deCatalog(key string) string {
 		return "Auth"
 	case "panel.provider.env_var":
 		return "Env-Var"
-	case "panel.provider.api_key":
-		return "API-Schlüssel"
 	case "panel.provider.api_key.missing":
 		return "fehlt"
 	case "panel.provider.api_key.configured":
@@ -526,10 +450,6 @@ func deCatalog(key string) string {
 		return "/help für verfügbare Befehle eingeben\n\n"
 	case "command.usage.allow":
 		return "Verwendung: /allow <werkzeugname>\n\n"
-	case "command.usage.resume":
-		return "Verwendung: /resume <sitzungs-id>\n\n"
-	case "command.usage.export":
-		return "Verwendung: /export <sitzungs-id>\n\n"
 
 	// --- Init ---
 	case "init.resolve_failed":
@@ -568,8 +488,6 @@ func deCatalog(key string) string {
 		return "✓ %s ist jetzt immer erlaubt\n\n"
 	case "command.custom":
 		return "Benutzerdefinierter Befehl /%s:\n"
-	case "command.mention_error":
-		return "Erwähnungserweiterungsfehler: %v"
 
 	// --- Sessions ---
 	case "session.list_failed":
@@ -620,12 +538,6 @@ func deCatalog(key string) string {
 	// --- Memory ---
 	case "memory.auto_unavailable":
 		return "Auto-Memory nicht initialisiert.\n\n"
-	case "memory.list_failed":
-		return "Fehler beim Auflisten der Erinnerungen: %v\n\n"
-	case "memory.none":
-		return "Keine Auto-Erinnerungen gespeichert.\n\n"
-	case "memory.auto_title":
-		return "Auto-Erinnerungen:\n"
 	case "memory.clear_failed":
 		return "Fehler beim Löschen der Erinnerungen: %v\n\n"
 	case "memory.cleared":
@@ -644,18 +556,6 @@ func deCatalog(key string) string {
 		return "Memory %q restored to prompt injection.\n\n"
 	case "memory.restore_failed":
 		return "Error restoring memory: %v\n\n"
-	case "memory.title":
-		return "Memory:\n"
-	case "memory.project":
-		return "Projekt-Memory:\n"
-	case "memory.project_none":
-		return "  Keine Projekt-Memory-Dateien geladen.\n"
-	case "memory.auto":
-		return "Auto-Memory:\n"
-	case "memory.auto_none":
-		return "  Keine Auto-Erinnerungen geladen.\n"
-	case "memory.usage":
-		return "\nVerwendung: /memory [list|clear]\n\n"
 
 	// --- Compact ---
 	case "compact.unavailable":
@@ -738,8 +638,6 @@ func deCatalog(key string) string {
 		return "Update wird vorbereitet"
 	case "update.failed":
 		return "Update fehlgeschlagen: %v\n\n"
-	case "update.restart_failed":
-		return "Update vorbereitet, aber Neustart fehlgeschlagen: %v\n\n"
 	case "update.pm_hint.brew":
 		return "Update installiert. Hinweis: ggcode wurde über Homebrew installiert.\nFühren Sie `brew upgrade ggcode` aus, um Homebrew synchron zu halten.\n\n"
 	case "update.pm_hint.scoop":
@@ -774,16 +672,6 @@ func deCatalog(key string) string {
 		return "Kein Bild in der Zwischenablage gefunden. Unter Windows wird Ctrl+V oft vom Terminal abgefangen. Versuchen Sie Ctrl+Shift+V oder /image paste."
 
 	// --- Agents ---
-	case "agents.unavailable":
-		return "Sub-Agent-Manager nicht konfiguriert.\n\n"
-	case "agents.none":
-		return "Noch keine Sub-Agenten erstellt.\nVerwendung: Die LLM kann das spawn_agent Werkzeug verwenden, um Sub-Agenten zu erstellen.\n\n"
-	case "agents.title":
-		return "%d Sub-Agent(en):\n"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.hint":
-		return "\n/agent <id> für Details verwenden, /agent cancel <id> zum Abbrechen.\n\n"
 
 	// --- Slash command descriptions ---
 	case "slash.help":
@@ -908,8 +796,6 @@ func deCatalog(key string) string {
 		return "Keine QQ-Bots konfiguriert."
 	case "panel.qq.entry.available":
 		return "Verfügbar"
-	case "panel.qq.entry.bound":
-		return "Gebunden"
 	case "panel.qq.entry.active":
 		return "Aktiv"
 	case "panel.qq.entry.bound_other":
@@ -948,14 +834,6 @@ func deCatalog(key string) string {
 		return "Enter Bot erstellen • Esc abbrechen"
 	case "panel.qq.actions_hint":
 		return "j/k bewegen • d deaktivieren/aktivieren • Enter oder b Bot binden • c Kanal binden • x Kanal lösen • u Bot lösen • i Bot erstellen • e Konfig bearbeiten • q QR zeigen • Esc schließen"
-	case "panel.qq.bind_channel":
-		return "Kanal binden"
-	case "panel.qq.scan_hint":
-		return "QR-Code scannen, Bot hinzufügen, dann eine Nachricht senden, um das Pairing zu starten."
-	case "panel.qq.qr_code":
-		return "QR-Code:"
-	case "panel.qq.share_link":
-		return "Freigabe-Link:"
 	case "panel.qq.message.no_bot":
 		return "Kein QQ-Bot verfügbar."
 	case "panel.qq.message.bound_success":

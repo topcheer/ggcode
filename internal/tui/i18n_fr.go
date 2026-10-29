@@ -12,8 +12,6 @@ func frCatalog(key string) string {
 		return "éphémère"
 	case "agents.idle":
 		return "inactif"
-	case "agents.running":
-		return "%d en cours"
 	case "cron.firing":
 		return "⏰ Tâche cron déclenchée"
 	case "panel.conversation":
@@ -26,16 +24,8 @@ func frCatalog(key string) string {
 		return "Commandes:"
 	case "panel.files":
 		return "Fichiers:"
-	case "panel.agent_status":
-		return "Statut de l'agent"
-	case "panel.mode_policy":
-		return "Politique de mode"
 	case "panel.session_usage":
 		return "Utilisation session"
-	case "panel.metrics":
-		return "Métriques"
-	case "panel.context":
-		return "Contexte"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -78,8 +68,6 @@ func frCatalog(key string) string {
 		return "Outils de %s inchangés (%d outils)."
 	case "panel.mcp.refreshed":
 		return "%s actualisé : %d outils."
-	case "panel.startup":
-		return "Initialisation"
 	case "panel.approval_required":
 		return "Approbation requise"
 	case "panel.bypass_approval":
@@ -98,32 +86,16 @@ func frCatalog(key string) string {
 		return "session"
 	case "label.agents":
 		return "agents"
-	case "label.cwd":
-		return "rép. courant"
 	case "label.branch":
 		return "branche"
 	case "label.context":
 		return "contexte"
 	case "label.skills":
 		return "compétences"
-	case "label.activity":
-		return "activité"
-	case "label.window":
-		return "fenêtre"
-	case "label.usage":
-		return "utilisation"
-	case "label.compact":
-		return "compact"
 	case "label.total":
 		return "total"
 	case "label.cost":
 		return "coût est."
-	case "label.approval_policy":
-		return "approbation"
-	case "label.tool_policy":
-		return "outils"
-	case "label.agent_policy":
-		return "agent"
 	case "label.tool":
 		return "outil"
 	case "label.input":
@@ -136,28 +108,6 @@ func frCatalog(key string) string {
 		return "écriture cache"
 	case "label.cache_hit":
 		return "hits cache"
-	case "label.turns":
-		return "tours"
-	case "label.avg_ttft":
-		return "ttft moyen"
-	case "label.p95_ttft":
-		return "ttft p95"
-	case "label.avg_duration":
-		return "dur. moyenne"
-	case "label.p95_duration":
-		return "dur. p95"
-	case "label.avg_think":
-		return "réflex. moyenne"
-	case "label.avg_tps":
-		return "tps moyen"
-	case "label.p95_tps":
-		return "p95 tps"
-	case "label.fail_rate":
-		return "taux échec"
-	case "label.slow_tools":
-		return "outils lents"
-	case "label.recent_turns":
-		return "tours récents"
 	case "label.file":
 		return "fichier"
 	case "label.directory":
@@ -250,24 +200,6 @@ func frCatalog(key string) string {
 		return "  ↑↓←→ changer  Esc fermér"
 	case "status.tools_used":
 		return "%d outils utilisés"
-	case "tool.done":
-		return "terminé"
-	case "tool.failed":
-		return "échoué"
-	case "tool.no_output":
-		return "sans sortie"
-	case "tool.output":
-		return "sortie"
-	case "tool.content":
-		return "contenu"
-	case "tool.match":
-		return "correspondance"
-	case "tool.matches":
-		return "correspondances"
-	case "tool.entry":
-		return "entrée"
-	case "tool.result":
-		return "résultat"
 	case "approval.rejected":
 		return "  Rejeté.\n"
 	case "approval.allow":
@@ -338,8 +270,6 @@ func frCatalog(key string) string {
 		return "Auth"
 	case "panel.provider.env_var":
 		return "Variable d'environnement"
-	case "panel.provider.api_key":
-		return "API key"
 	case "panel.provider.api_key.missing":
 		return "manquant"
 	case "panel.provider.api_key.configured":
@@ -476,10 +406,6 @@ func frCatalog(key string) string {
 		return "Saisissez /help pour voir les commandes disponibles\n\n"
 	case "command.usage.allow":
 		return "Usâge: /allow <nom-outil>\n\n"
-	case "command.usage.resume":
-		return "Usâge: /resume <id-session>\n\n"
-	case "command.usage.export":
-		return "Usâge: /export <id-session>\n\n"
 	case "init.resolve_failed":
 		return "Erreur de resolution de la cible d'init: %v\n\n"
 	case "init.generate_failed":
@@ -514,8 +440,6 @@ func frCatalog(key string) string {
 		return "✓ %s désormais toujours autorisé\n\n"
 	case "command.custom":
 		return "Commande personnalisée /%s:\n"
-	case "command.mention_error":
-		return "Erreur de mention: %v"
 	case "session.list_failed":
 		return "Erreur lors du listâge des sessions: %v\n\n"
 	case "session.untitled":
@@ -558,12 +482,6 @@ func frCatalog(key string) string {
 		return "\nUtilisez /undo pour annulér l'édition la plus récente, /checkpoints pour les détails.\n\n"
 	case "memory.auto_unavailable":
 		return "Mémoire automatique non initialisée.\n\n"
-	case "memory.list_failed":
-		return "Erreur lors du listâge des mémoires: %v\n\n"
-	case "memory.none":
-		return "Aucune mémoire automatique sauvegardée.\n\n"
-	case "memory.auto_title":
-		return "Mémoires Automatiques:\n"
 	case "memory.clear_failed":
 		return "Erreur lors du nettoyâge des mémoires: %v\n\n"
 	case "memory.cleared":
@@ -582,18 +500,6 @@ func frCatalog(key string) string {
 		return "Memory %q restored to prompt injection.\n\n"
 	case "memory.restore_failed":
 		return "Error restoring memory: %v\n\n"
-	case "memory.title":
-		return "Mémoire:\n"
-	case "memory.project":
-		return "Mémoire du Projet:\n"
-	case "memory.project_none":
-		return "  Aucun fichier de mémoire de projet chargé.\n"
-	case "memory.auto":
-		return "Mémoire Automatique:\n"
-	case "memory.auto_none":
-		return "  Aucune mémoire automatique chargée.\n"
-	case "memory.usage":
-		return "\nUsâge: /memory [list|clear]\n\n"
 	case "compact.unavailable":
 		return "Gestionnaire de contexte non disponible.\n\n"
 	case "compact.failed":
@@ -666,8 +572,6 @@ func frCatalog(key string) string {
 		return "Préparation de la mise à jour"
 	case "update.failed":
 		return "Mise à jour échouée: %v\n\n"
-	case "update.restart_failed":
-		return "Mise à jour préparée, mais erreur de redémarrage: %v\n\n"
 	case "update.pm_hint.brew":
 		return "Mise à jour installée. Note : ggcode a été installé via Homebrew.\nExécutez `brew upgrade ggcode` pour garder Homebrew synchronisé.\n\n"
 	case "update.pm_hint.scoop":
@@ -694,16 +598,6 @@ func frCatalog(key string) string {
 		return "Impossible de coller une imâge du presse-papiers: %v"
 	case "image.clipboard_no_image_windows":
 		return "Aucune imâge dans le presse-papiers. Sous Windows, Ctrl+V est souvent intercepte par le terminal. Essayez Ctrl+Shift+V ou /imâge paste."
-	case "agents.unavailable":
-		return "Gestionnaire de sous-agents non configuré.\n\n"
-	case "agents.none":
-		return "Aucun sous-agent créé pour le moment.\nUsâge: le LLM peut utilisér l'outil spawn_agent pour créer des sous-agents.\n\n"
-	case "agents.title":
-		return "%d sous-agent(s):\n"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.hint":
-		return "\nUtilisez /agent <id> pour les détails, /agent cancel <id> pour annulér.\n\n"
 	case "slash.help":
 		return "Afficher le messâge d'aide"
 	case "slash.sessions":
@@ -824,8 +718,6 @@ func frCatalog(key string) string {
 		return "Aucun bot QQ configuré."
 	case "panel.qq.entry.available":
 		return "Disponible"
-	case "panel.qq.entry.bound":
-		return "Lie"
 	case "panel.qq.entry.active":
 		return "Actif"
 	case "panel.qq.entry.bound_other":
@@ -864,14 +756,6 @@ func frCatalog(key string) string {
 		return "Enter créer bot • Esc annulér"
 	case "panel.qq.actions_hint":
 		return "j/k déplacer • d désactiver/activer • Enter ou b lier bot • c lier canal • x délier canal • u délier bot • i créer bot • e modifier config • q afficher QR • Esc fermér"
-	case "panel.qq.bind_channel":
-		return "Lier Canal"
-	case "panel.qq.scan_hint":
-		return "Scannez le code QR, ajoutéz le bot, puis envoyéz un messâge pour démarrer la liaison."
-	case "panel.qq.qr_code":
-		return "Code QR:"
-	case "panel.qq.share_link":
-		return "Lien de Partâge:"
 	case "panel.qq.message.no_bot":
 		return "Aucun bot QQ disponible."
 	case "panel.qq.message.bound_success":

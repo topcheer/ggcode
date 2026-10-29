@@ -15,32 +15,16 @@ func ruCatalog(key string) string {
 	// --- Agents ---
 	case "agents.idle":
 		return "ожидание"
-	case "agents.running":
-		return "%d активных"
 	case "cron.firing":
 		return "⏰ Сработала задача cron"
 
 	// --- Panel ---
-	case "panel.conversation":
-		return "Беседа"
-	case "panel.composer":
-		return "Ввод"
-	case "panel.composer_locked":
-		return "Ввод заблокирован"
 	case "panel.commands":
 		return "Команды:"
 	case "panel.files":
 		return "Файлы:"
-	case "panel.agent_status":
-		return "Статус агента"
-	case "panel.mode_policy":
-		return "Политика режима"
 	case "panel.session_usage":
 		return "Использование сессии"
-	case "panel.metrics":
-		return "Метрики"
-	case "panel.context":
-		return "Контекст"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -83,8 +67,6 @@ func ruCatalog(key string) string {
 		return "Инструменты %s не изменились (%d шт.)."
 	case "panel.mcp.refreshed":
 		return "%s обновлён: инструментов: %d."
-	case "panel.startup":
-		return "Инициализация"
 	case "panel.approval_required":
 		return "Требуется подтверждение"
 	case "panel.bypass_approval":
@@ -105,32 +87,16 @@ func ruCatalog(key string) string {
 		return "Сессия"
 	case "label.agents":
 		return "Агенты"
-	case "label.cwd":
-		return "Дир."
 	case "label.branch":
 		return "Ветвь"
 	case "label.context":
 		return "Контекст"
 	case "label.skills":
 		return "Навыки"
-	case "label.activity":
-		return "Активность"
-	case "label.window":
-		return "Окно"
-	case "label.usage":
-		return "Использ."
-	case "label.compact":
-		return "компакт."
 	case "label.total":
 		return "всего"
 	case "label.cost":
 		return "оц. стоимость"
-	case "label.approval_policy":
-		return "Подтверждение"
-	case "label.tool_policy":
-		return "Инструменты"
-	case "label.agent_policy":
-		return "Агент"
 	case "label.tool":
 		return "Инструмент"
 	case "label.input":
@@ -143,28 +109,6 @@ func ruCatalog(key string) string {
 		return "Запись кэша"
 	case "label.cache_hit":
 		return "Попадание кэша"
-	case "label.turns":
-		return "Ходы"
-	case "label.avg_ttft":
-		return "Ø TTFT"
-	case "label.p95_ttft":
-		return "p95 TTFT"
-	case "label.avg_duration":
-		return "Ø длительность"
-	case "label.p95_duration":
-		return "p95 длительность"
-	case "label.avg_think":
-		return "Ø размышление"
-	case "label.avg_tps":
-		return "Ø TPS"
-	case "label.p95_tps":
-		return "P95 TPS"
-	case "label.fail_rate":
-		return "Уровень ошибок"
-	case "label.slow_tools":
-		return "медл. инструменты"
-	case "label.recent_turns":
-		return "недавние ходы"
 	case "label.file":
 		return "Файл"
 	case "label.directory":
@@ -274,24 +218,6 @@ func ruCatalog(key string) string {
 	// --- Tools ---
 	case "status.tools_used":
 		return "%d инструментов использовано"
-	case "tool.done":
-		return "готово"
-	case "tool.failed":
-		return "ошибка"
-	case "tool.no_output":
-		return "нет вывода"
-	case "tool.output":
-		return "вывод"
-	case "tool.content":
-		return "содержимое"
-	case "tool.match":
-		return "совпадение"
-	case "tool.matches":
-		return "совпадений"
-	case "tool.entry":
-		return "запись"
-	case "tool.result":
-		return "результат"
 
 	// --- Approval ---
 	case "approval.rejected":
@@ -376,8 +302,6 @@ func ruCatalog(key string) string {
 		return "Аутентификация"
 	case "panel.provider.env_var":
 		return "Переменная окружения"
-	case "panel.provider.api_key":
-		return "API-ключ"
 	case "panel.provider.api_key.missing":
 		return "отсутствует"
 	case "panel.provider.api_key.configured":
@@ -518,10 +442,6 @@ func ruCatalog(key string) string {
 		return "Введите /help для списка доступных команд\n\n"
 	case "command.usage.allow":
 		return "Использование: /allow <имя_инструмента>\n\n"
-	case "command.usage.resume":
-		return "Использование: /resume <id_сессии>\n\n"
-	case "command.usage.export":
-		return "Использование: /export <id_сессии>\n\n"
 
 	// --- Init ---
 	case "init.resolve_failed":
@@ -560,8 +480,6 @@ func ruCatalog(key string) string {
 		return "✓ %s теперь всегда разрешён\n\n"
 	case "command.custom":
 		return "Пользовательская команда /%s:\n"
-	case "command.mention_error":
-		return "Ошибка расширения упоминания: %v"
 
 	// --- Sessions ---
 	case "session.list_failed":
@@ -612,12 +530,6 @@ func ruCatalog(key string) string {
 	// --- Memory ---
 	case "memory.auto_unavailable":
 		return "Авто-память не инициализирована.\n\n"
-	case "memory.list_failed":
-		return "Ошибка получения списка воспоминаний: %v\n\n"
-	case "memory.none":
-		return "Нет сохранённых авто-воспоминаний.\n\n"
-	case "memory.auto_title":
-		return "Авто-воспоминания:\n"
 	case "memory.clear_failed":
 		return "Ошибка очистки воспоминаний: %v\n\n"
 	case "memory.cleared":
@@ -636,18 +548,6 @@ func ruCatalog(key string) string {
 		return "Memory %q restored to prompt injection.\n\n"
 	case "memory.restore_failed":
 		return "Error restoring memory: %v\n\n"
-	case "memory.title":
-		return "Память:\n"
-	case "memory.project":
-		return "Память проекта:\n"
-	case "memory.project_none":
-		return "  Нет загруженных файлов памяти проекта.\n"
-	case "memory.auto":
-		return "Авто-память:\n"
-	case "memory.auto_none":
-		return "  Нет загруженных авто-воспоминаний.\n"
-	case "memory.usage":
-		return "\nИспользование: /memory [list|clear]\n\n"
 
 	// --- Compact ---
 	case "compact.unavailable":
@@ -730,8 +630,6 @@ func ruCatalog(key string) string {
 		return "Подготовка обновления"
 	case "update.failed":
 		return "Обновление не удалось: %v\n\n"
-	case "update.restart_failed":
-		return "Обновление подготовлено, но перезапуск не удался: %v\n\n"
 	case "update.pm_hint.brew":
 		return "Обновление установлено. Примечание: ggcode был установлен через Homebrew.\nВыполните `brew upgrade ggcode`, чтобы синхронизировать Homebrew.\n\n"
 	case "update.pm_hint.scoop":
@@ -766,16 +664,6 @@ func ruCatalog(key string) string {
 		return "Изображение в буфере обмена не найдено. В Windows Ctrl+V часто перехватывается терминалом. Попробуйте Ctrl+Shift+V или /image paste."
 
 	// --- Agents ---
-	case "agents.unavailable":
-		return "Менеджер суб-агентов не настроен.\n\n"
-	case "agents.none":
-		return "Суб-агенты ещё не созданы.\nИспользование: LLM может использовать инструмент spawn_agent для создания суб-агентов.\n\n"
-	case "agents.title":
-		return "%d суб-агент(ов):\n"
-	case "agents.item":
-		return "  %s [%s]%s — %s\n"
-	case "agents.hint":
-		return "\nИспользуйте /agent <id> для деталей, /agent cancel <id> для отмены.\n\n"
 
 	// --- Slash command descriptions ---
 	case "slash.help":
@@ -900,8 +788,6 @@ func ruCatalog(key string) string {
 		return "QQ-боты не настроены."
 	case "panel.qq.entry.available":
 		return "Доступен"
-	case "panel.qq.entry.bound":
-		return "Привязан"
 	case "panel.qq.entry.active":
 		return "Активен"
 	case "panel.qq.entry.bound_other":
@@ -940,14 +826,6 @@ func ruCatalog(key string) string {
 		return "Enter создать бота • Esc отмена"
 	case "panel.qq.actions_hint":
 		return "j/k перемещение • d откл./вкл. • Enter или b привязать бота • c привязать канал • x отвязать канал • u отвязать бота • i создать бота • e правка конфигурации • q показать QR • Esc закрыть"
-	case "panel.qq.bind_channel":
-		return "Привязать канал"
-	case "panel.qq.scan_hint":
-		return "Отсканируйте QR-код, добавьте бота, затем отправьте сообщение для начала сопряжения."
-	case "panel.qq.qr_code":
-		return "QR-код:"
-	case "panel.qq.share_link":
-		return "Ссылка:"
 	case "panel.qq.message.no_bot":
 		return "Нет доступных QQ-ботов."
 	case "panel.qq.message.bound_success":

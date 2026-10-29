@@ -16,11 +16,6 @@ import (
 // Defaults to true. Can be disabled via configuration.
 var postEditDiagEnabled = true
 
-// SetPostEditDiagEnabled enables or disables post-edit LSP diagnostics globally.
-func SetPostEditDiagEnabled(enabled bool) {
-	postEditDiagEnabled = enabled
-}
-
 // postEditDiagTimeout is the maximum time to wait for LSP diagnostics after
 // an edit. Kept under 1s to avoid blocking the agent loop — if the LSP
 // server is slow to respond, we skip diagnostics rather than stalling the

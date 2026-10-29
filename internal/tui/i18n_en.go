@@ -10,8 +10,6 @@ func enCatalog(key string) string {
 		return "ephemeral"
 	case "agents.idle":
 		return "idle"
-	case "agents.running":
-		return "%d running"
 	case "cron.firing":
 		return "⏰ Cron job triggered"
 	case "panel.conversation":
@@ -24,16 +22,8 @@ func enCatalog(key string) string {
 		return "Commands:"
 	case "panel.files":
 		return "Files:"
-	case "panel.agent_status":
-		return "Agent status"
-	case "panel.mode_policy":
-		return "Mode policy"
 	case "panel.session_usage":
 		return "Session usage"
-	case "panel.metrics":
-		return "Metrics"
-	case "panel.context":
-		return "Context"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -78,8 +68,6 @@ func enCatalog(key string) string {
 		return "Tools unchanged for %s (%d tools)."
 	case "panel.mcp.refreshed":
 		return "Refreshed %s: %d tools."
-	case "panel.startup":
-		return "Initializing"
 	case "panel.approval_required":
 		return "Approval required"
 	case "panel.bypass_approval":
@@ -98,32 +86,16 @@ func enCatalog(key string) string {
 		return "session"
 	case "label.agents":
 		return "agents"
-	case "label.cwd":
-		return "cwd"
 	case "label.branch":
 		return "branch"
 	case "label.context":
 		return "context"
 	case "label.skills":
 		return "skills"
-	case "label.activity":
-		return "activity"
-	case "label.window":
-		return "window"
-	case "label.usage":
-		return "usage"
-	case "label.compact":
-		return "compact"
 	case "label.total":
 		return "total"
 	case "label.cost":
 		return "est. cost"
-	case "label.approval_policy":
-		return "approval"
-	case "label.tool_policy":
-		return "tools"
-	case "label.agent_policy":
-		return "agent"
 	case "label.tool":
 		return "tool"
 	case "label.input":
@@ -136,28 +108,6 @@ func enCatalog(key string) string {
 		return "cache write"
 	case "label.cache_hit":
 		return "cache hit"
-	case "label.turns":
-		return "turns"
-	case "label.avg_ttft":
-		return "avg ttft"
-	case "label.p95_ttft":
-		return "p95 ttft"
-	case "label.avg_duration":
-		return "avg dur"
-	case "label.p95_duration":
-		return "p95 dur"
-	case "label.avg_think":
-		return "avg think"
-	case "label.avg_tps":
-		return "avg tps"
-	case "label.p95_tps":
-		return "p95 tps"
-	case "label.fail_rate":
-		return "fail rate"
-	case "label.slow_tools":
-		return "slow tools"
-	case "label.recent_turns":
-		return "recent turns"
 	case "label.file":
 		return "file"
 	case "label.directory":
@@ -262,24 +212,6 @@ func enCatalog(key string) string {
 		return "  ↑↓←→ switch  Esc close"
 	case "status.tools_used":
 		return "%d tools used"
-	case "tool.done":
-		return "done"
-	case "tool.failed":
-		return "failed"
-	case "tool.no_output":
-		return "no output"
-	case "tool.output":
-		return "output"
-	case "tool.content":
-		return "content"
-	case "tool.match":
-		return "match"
-	case "tool.matches":
-		return "matches"
-	case "tool.entry":
-		return "entry"
-	case "tool.result":
-		return "result"
 	case "approval.rejected":
 		return "  Rejected.\n"
 	case "approval.allow":
@@ -351,8 +283,6 @@ func enCatalog(key string) string {
 		return "Auth"
 	case "panel.provider.env_var":
 		return "Env var"
-	case "panel.provider.api_key":
-		return "API key"
 	case "panel.provider.api_key.missing":
 		return "missing"
 	case "panel.provider.api_key.configured":
@@ -543,10 +473,6 @@ func enCatalog(key string) string {
 		return "Type /help for available commands\n\n"
 	case "command.usage.allow":
 		return "Usage: /allow <tool-name>\n\n"
-	case "command.usage.resume":
-		return "Usage: /resume <session-id>\n\n"
-	case "command.usage.export":
-		return "Usage: /export <session-id>\n\n"
 	case "init.resolve_failed":
 		return "Failed to resolve init target: %v\n\n"
 	case "init.generate_failed":
@@ -581,8 +507,6 @@ func enCatalog(key string) string {
 		return "✓ %s is now always allowed\n\n"
 	case "command.custom":
 		return "Custom command /%s:\n"
-	case "command.mention_error":
-		return "Mention expansion error: %v"
 	case "session.list_failed":
 		return "Error listing sessions: %v\n\n"
 	case "session.untitled":
@@ -691,12 +615,6 @@ func enCatalog(key string) string {
 		return "Exported %d learnings to %s"
 	case "traj.imported":
 		return "Imported %d new learnings (duplicates skipped)"
-	case "memory.list_failed":
-		return "Error listing memories: %v\n\n"
-	case "memory.none":
-		return "No auto memories saved.\n\n"
-	case "memory.auto_title":
-		return "Auto Memories:\n"
 	case "memory.clear_failed":
 		return "Error clearing memories: %v\n\n"
 	case "memory.cleared":
@@ -715,18 +633,6 @@ func enCatalog(key string) string {
 		return "Memory %q restored to prompt injection.\n\n"
 	case "memory.restore_failed":
 		return "Error restoring memory: %v\n\n"
-	case "memory.title":
-		return "Memory:\n"
-	case "memory.project":
-		return "Project Memory:\n"
-	case "memory.project_none":
-		return "  No project memory files loaded.\n"
-	case "memory.auto":
-		return "Auto Memory:\n"
-	case "memory.auto_none":
-		return "  No auto memories loaded.\n"
-	case "memory.usage":
-		return "\nUsage: /memory [list|clear]\n\n"
 	case "compact.unavailable":
 		return "Context manager not available.\n\n"
 	case "compact.failed":
@@ -793,8 +699,6 @@ func enCatalog(key string) string {
 		return "not checked yet"
 	case "update.restarting":
 		return "Restarting to apply the update..."
-	case "label.tools":
-		return "Tools"
 	case "label.active":
 		return "Active"
 	case "label.tasks":
@@ -807,8 +711,6 @@ func enCatalog(key string) string {
 		return "Preparing update"
 	case "update.failed":
 		return "Update failed: %v\n\n"
-	case "update.restart_failed":
-		return "Update prepared, but restart failed: %v\n\n"
 	case "update.pm_hint.brew":
 		return "Update installed. Note: ggcode was installed via Homebrew.\nRun `brew upgrade ggcode` to keep Homebrew in sync.\n\n"
 	case "update.pm_hint.scoop":
@@ -835,16 +737,6 @@ func enCatalog(key string) string {
 		return "Could not paste an image from the clipboard: %v"
 	case "image.clipboard_no_image_windows":
 		return "No image found in clipboard. On Windows, Ctrl+V is often intercepted by the terminal. Try Ctrl+Shift+V or /image paste instead."
-	case "agents.unavailable":
-		return "Sub-agent manager not configured.\n\n"
-	case "agents.none":
-		return "No sub-agents spawned yet.\nUsage: LLM can use spawn_agent tool to create sub-agents.\n\n"
-	case "agents.title":
-		return "%d sub-agent(s):\n"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.hint":
-		return "\nUse /agent <id> for details, /agent cancel <id> to cancel.\n\n"
 	case "slash.help":
 		return "Show help message"
 	case "slash.sessions":
@@ -939,22 +831,10 @@ func enCatalog(key string) string {
 		return "Stage changes and generate an AI commit message from the diff"
 	case "slash.hooks":
 		return "Open hooks configuration panel"
-	case "hooks.title":
-		return "Hooks Configuration"
 	case "hooks.events":
 		return "Events"
-	case "hooks.hooks":
-		return "Hooks"
 	case "hooks.noHooks":
 		return "(no hooks configured for this event)"
-	case "hooks.add":
-		return "+ Add Hook"
-	case "hooks.delete":
-		return "Delete"
-	case "hooks.edit":
-		return "Edit"
-	case "hooks.close":
-		return "Esc: Close"
 	case "hooks.event.onUserMessage":
 		return "On User Message"
 	case "hooks.event.preToolUse":
@@ -991,8 +871,6 @@ func enCatalog(key string) string {
 		return "hook updated"
 	case "hooks.msg.toggled":
 		return "inject_output toggled"
-	case "hooks.msg.saved":
-		return "hooks saved to config"
 	case "hooks.addTitle":
 		return " Add Hook "
 	case "hooks.editTitle":
@@ -1033,8 +911,6 @@ func enCatalog(key string) string {
 		return "No QQ bots configured."
 	case "panel.qq.entry.available":
 		return "Available"
-	case "panel.qq.entry.bound":
-		return "Bound"
 	case "panel.qq.entry.active":
 		return "Active"
 	case "panel.qq.entry.bound_other":
@@ -1071,14 +947,6 @@ func enCatalog(key string) string {
 		return "Enter create bot • Esc cancel"
 	case "panel.qq.actions_hint":
 		return "j/k move • d disable/enable • Enter or b bind bot • c bind channel • x unbind channel • u unbind bot • i create bot • e edit config • q show QR • Esc close"
-	case "panel.qq.bind_channel":
-		return "Bind Channel"
-	case "panel.qq.scan_hint":
-		return "Scan the QR code, add the bot, then send a message to start pairing."
-	case "panel.qq.qr_code":
-		return "QR Code:"
-	case "panel.qq.share_link":
-		return "Share Link:"
 	case "panel.qq.message.no_bot":
 		return "No QQ bot available."
 	case "panel.qq.message.bound_success":
