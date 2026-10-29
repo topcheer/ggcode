@@ -154,7 +154,9 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 	// (no deadline / provider-wide retry default).
 	requestTimeout := time.Duration(0)
 	maxRetries := 0
+	mlPresent := false
 	if ml, ok := ep.ModelLimits[model]; ok {
+		mlPresent = true
 		maxTokens = ml.MaxTokens
 		contextWindow = ml.ContextWindow
 		requestTimeout = ml.RequestTimeout
@@ -163,11 +165,19 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 	if maxTokens == 0 {
 		maxTokens = ep.MaxTokens
 	}
-	if requestTimeout <= 0 {
-		requestTimeout = ep.RequestTimeout
-	}
-	if maxRetries <= 0 {
-		maxRetries = ep.MaxRetries
+	if !mlPresent {
+		// #4408-C2: the documented contract (config.go EndpointConfig/
+		// ModelLimits comments) is "a model_limits entry takes priority,
+		// 0 = none" - an explicit per-model 0 must NOT be overridden by the
+		// endpoint-level value, or there is no way to disable the timeout
+		// for a single model under a 45s endpoint. Inherit endpoint values
+		// only when no model_limits entry exists at all.
+		if requestTimeout <= 0 {
+			requestTimeout = ep.RequestTimeout
+		}
+		if maxRetries <= 0 {
+			maxRetries = ep.MaxRetries
+		}
 	}
 	if maxTokens == 0 {
 		maxTokens = inferMaxOutputTokens(model, ep.Protocol)
@@ -390,10 +400,15 @@ func patchMCPServerConfig(base, patch MCPServerConfig) MCPServerConfig {
 	if patch.Type != "" {
 		merged.Type = patch.Type
 	}
-	if patch.Command != "" {
+	if patch.CommandClear {
+		// #4386: explicit clear sentinel beats the keep-old-value default.
+		merged.Command = ""
+	} else if patch.Command != "" {
 		merged.Command = patch.Command
 	}
-	if patch.URL != "" {
+	if patch.URLClear {
+		merged.URL = ""
+	} else if patch.URL != "" {
 		merged.URL = patch.URL
 	}
 	if patch.Args != nil {
@@ -544,6 +559,12 @@ func (c *Config) AddEndpoint(vendor, endpointName, protocol, baseURL, apiKey str
 			// #1435-A: same as AddVendor - persist, or the key lives only
 			// in this process and onboarding loops on fresh terminals.
 			if err := writeKeysEnv(map[string]string{envVarName: apiKey}); err != nil {
+				// #4507: roll the env var back, or a read-only/full keys.env
+				// dir left the PLAINTEXT key in process env while the vendor
+				// never made it into c.Vendors - NeedsOnboard's LookupEnv then
+				// saw a ghost key and split onboarding state from config
+				// state for the life of the process.
+				os.Unsetenv(envVarName)
 				return fmt.Errorf("persisting API key for %s/%s: %w", vendor, endpointName, err)
 			}
 			ep.APIKey = "${" + envVarName + "}"
@@ -605,19 +626,31 @@ func (c *Config) RemoveEndpoint(vendor, endpoint string) error {
 			}
 		}
 		if c.Endpoint == "" {
-			// No endpoints left under this vendor - fall back to another vendor.
-			for name, v := range c.Vendors {
-				if name == vendor {
+			// No endpoints left under this vendor - fall back to another
+			// vendor. #4407: deterministic successor per #1422-B2 - bare map
+			// iteration picked a RANDOM survivor and the caller's saveConfig()
+			// persisted the random pick as permanent config. Lowest vendor
+			// name, then lowest endpoint name under it.
+			otherVendors := make([]string, 0, len(c.Vendors))
+			for vName := range c.Vendors {
+				if vName == vendor {
 					continue
 				}
-				for epName := range v.Endpoints {
-					c.Vendor = name
-					c.Endpoint = epName
-					break
+				otherVendors = append(otherVendors, vName)
+			}
+			sort.Strings(otherVendors)
+			for _, vName := range otherVendors {
+				eps := make([]string, 0, len(c.Vendors[vName].Endpoints))
+				for epName := range c.Vendors[vName].Endpoints {
+					eps = append(eps, epName)
 				}
-				if c.Endpoint != "" {
-					break
+				if len(eps) == 0 {
+					continue
 				}
+				sort.Strings(eps)
+				c.Vendor = vName
+				c.Endpoint = eps[0]
+				break
 			}
 		}
 	}
@@ -653,6 +686,9 @@ func (c *Config) AddVendor(name, displayName, apiKey string) error {
 			// key on every launch. Save()'s migration only moves PLAINTEXT
 			// keys, so the ${VAR} reference path had no persistence owner.
 			if err := writeKeysEnv(map[string]string{envVarName: apiKey}); err != nil {
+				// #4507: same fail-atomic rollback as AddEndpoint - no ghost
+				// plaintext key in process env when the vendor was not added.
+				os.Unsetenv(envVarName)
 				return fmt.Errorf("persisting API key for vendor %q: %w", name, err)
 			}
 			syncVendorKeyEnv(name, apiKey) // #2105: keep both historic names in lockstep
@@ -687,15 +723,31 @@ func (c *Config) RemoveVendor(name string) error {
 	if c.Vendor == name {
 		c.Vendor = ""
 		c.Endpoint = ""
-		for vName, v := range c.Vendors {
-			for epName := range v.Endpoints {
-				c.Vendor = vName
-				c.Endpoint = epName
-				break
+		// #4407: deterministic successor per #1422-B2 - the old bare map
+		// iteration selected a RANDOM surviving vendor/endpoint and the
+		// caller's saveConfig() persisted the random pick as permanent
+		// config; a randomly-selected vendor with a dead key then failed
+		// silently. Lowest vendor name, then lowest endpoint name.
+		vNames := make([]string, 0, len(c.Vendors))
+		for vName := range c.Vendors {
+			if vName == name {
+				continue
 			}
-			if c.Endpoint != "" {
-				break
+			vNames = append(vNames, vName)
+		}
+		sort.Strings(vNames)
+		for _, vName := range vNames {
+			eps := make([]string, 0, len(c.Vendors[vName].Endpoints))
+			for epName := range c.Vendors[vName].Endpoints {
+				eps = append(eps, epName)
 			}
+			if len(eps) == 0 {
+				continue
+			}
+			sort.Strings(eps)
+			c.Vendor = vName
+			c.Endpoint = eps[0]
+			break
 		}
 	}
 	return nil

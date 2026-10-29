@@ -116,15 +116,22 @@ var constraintPatterns = []*regexp.Regexp{
 	// Requirement constraints: "needs to be", "has to", "it's important that"
 	regexp.MustCompile(`(?i)\b(?:needs? to be|has to be|it'?s important that|make sure|ensure that)\b[^\n.]{5,70}`),
 	// Scope restrictions: "stay in", "limit to", "keep within"
-	regexp.MustCompile(`(?i)\b(?:stay in|limit (?:to|changes to)|keep within|don'?t touch|leave\b[^n]{0,5}alone)\b[^\n.]{3,60}`),
+	regexp.MustCompile(`(?i)\b(?:stay in|limit (?:to|changes to)|keep within|don'?t touch|leave\b[^\n.]{0,20}alone)\b[^\n.]{3,60}`),
 }
 
 // extractConstraints scans user text for explicit constraint directives.
 // Returns extracted constraint excerpts (deduplicated).
+// stripNonDirectiveText / isLogLikeLine are provided by refusal_ledger.go in
+// this package (single shared source-discimination helper, #4285); constraint
+// extraction reuses them (#4257).
+
 func extractConstraints(text string) []string {
 	if len(text) == 0 {
 		return nil
 	}
+	// #4257: source-shape filter BEFORE extraction - see
+	// stripNonDirectiveText.
+	text = stripNonDirectiveText(text)
 
 	var results []string
 	seen := make(map[string]bool)

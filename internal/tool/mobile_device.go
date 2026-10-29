@@ -92,8 +92,8 @@ func (t *MobileDeviceTool) Parameters() json.RawMessage {
     },
     "x": { "type": "integer", "description": "X coordinate for tap/swipe." },
     "y": { "type": "integer", "description": "Y coordinate for tap/swipe." },
-    "end_x": { "type": "integer", "description": "End X coordinate for swipe." },
-    "end_y": { "type": "integer", "description": "End Y coordinate for swipe." },
+    "end_x": { "type": "integer", "description": "End X coordinate for swipe. Required for swipe; omitting it is an error." },
+    "end_y": { "type": "integer", "description": "End Y coordinate for swipe. Required for swipe; omitting it is an error." },
     "text": {
       "type": "string",
       "description": "Text to type or key name for press (e.g. \"home\", \"back\")."
@@ -109,7 +109,7 @@ func (t *MobileDeviceTool) Parameters() json.RawMessage {
     "format": {
       "type": "string",
       "enum": ["png", "jpeg"],
-      "description": "Screenshot format.",
+      "description": "Screenshot format. Android always captures PNG (format/quality apply to iOS only).",
       "default": "png"
     },
     "quality": {
@@ -133,8 +133,10 @@ type mobileDeviceParams struct {
 	Ref      string `json:"ref"`
 	X        int    `json:"x"`
 	Y        int    `json:"y"`
-	EndX     int    `json:"end_x"`
-	EndY     int    `json:"end_y"`
+	// #4576: pointers distinguish "absent" from an explicit 0 - a
+	// missing end must be an error, not a silent swipe to (0,0).
+	EndX     *int   `json:"end_x"`
+	EndY     *int   `json:"end_y"`
 	Text     string `json:"text"`
 	App      string `json:"app"`
 	BundleID string `json:"bundle_id"`
@@ -158,7 +160,10 @@ func (t *MobileDeviceTool) Execute(ctx context.Context, input json.RawMessage) (
 	if p.Quality == 0 {
 		p.Quality = 85
 	}
-	if p.Lines == 0 {
+	if p.Lines < 1 {
+		// #4482: only Lines == 0 was normalized before - a negative value
+		// (LLM-generated or a JSON typo) passed through and made the
+		// tail-trim slice underflow panic in both backends.
 		p.Lines = 100
 	}
 
@@ -352,7 +357,7 @@ type mobileBackend interface {
 	screenshot(ctx context.Context, device, format string, quality int, headless bool) (Result, error)
 	tap(ctx context.Context, device, ref string, x, y int) (Result, error)
 	typeText(ctx context.Context, device, ref, text string, x, y int) (Result, error)
-	swipe(ctx context.Context, device, ref string, x, y, endX, endY int) (Result, error)
+	swipe(ctx context.Context, device, ref string, x, y int, endX, endY *int) (Result, error)
 	press(ctx context.Context, device, key string) (Result, error)
 	logs(ctx context.Context, device, pkg string, lines int) (Result, error)
 	listApps(ctx context.Context, device string) (Result, error)

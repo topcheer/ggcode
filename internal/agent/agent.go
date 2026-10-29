@@ -1703,7 +1703,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// err chain plus the sentinel so timeout-aborted runs skip
 		// reflection/failure-attribution like user cancellations do.
 		isCancelled := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-			errors.Is(err, ErrSessionTimeout) ||
+			errors.Is(err, ErrSessionTimeout) || errors.Is(err, ErrSessionBudgetExhausted) ||
 			(err == nil && ctx.Err() != nil && (errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded)))
 		if !isCancelled {
 			a.maybeReflect(runStats)
@@ -2229,9 +2229,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// break sits at the loop TOP so the arming iteration's tool calls
 		// complete first (no stranded tool_use).
 		if sessionBudgetStop {
-			runStats.finalize(nil)
-			debug.Log("session-token-budget", "winding down: no further LLM calls (budget stop gate)")
-			return nil
+			// #4409: budget exhaustion is NOT success. The old `return nil`
+			// was the last silent truncation path: headless callers (cron,
+			// sub-agents, ACP) judge completion by err and misjudged
+			// half-finished work as done. Mirror the session-timeout
+			// pattern (#611): dedicated summary + sentinel error. Note the
+			// injected summarize guidance never got an LLM response (the
+			// break sits at the loop top), so the summary is stats-based.
+			runStats.finalize(nil) // compute Duration for the summary
+			summary := runStats.Summary()
+			onEvent(provider.StreamEvent{
+				Type: provider.StreamEventText,
+				Text: fmt.Sprintf("\nSession budget exhausted (token/cost/delegated/time limit reached). No further LLM calls this run. Summary: %s.\nYour task may be partially complete - review the changes above. You can continue by sending a follow-up message or raising the session budget.", summary),
+			})
+			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ErrSessionBudgetExhausted})
+			debug.Log("session-token-budget", "winding down: no further LLM calls (budget stop gate, sentinel returned)")
+			return ErrSessionBudgetExhausted
 		}
 		runStats.Iterations = i + 1
 		if err := ctx.Err(); err != nil {
@@ -2290,13 +2303,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			continue
 		}
 		// P1-1: push newly-finished sub-agent runs into context at the same
-		// boundary so the loop never has to poll blindly. One merged notice;
-		// budget edge handled like #3778 (persisted but unreached in-run).
-		if a.injectSubagentCompletions() {
-			if a.maxIter > 0 && i == a.maxIter-1 {
-				guidanceAtBudget = true
-			}
-		}
+		// boundary so the loop never has to poll blindly. One merged notice.
+		// #4516: unlike the guidance path above, there is NO continue here -
+		// the notice IS consumed by this iteration's ensurePromptSendable /
+		// Messages() / streamChatResponse below. Setting guidanceAtBudget on
+		// the final iteration claimed "no budget left to act on it ...
+		// consumed first on the next run" - the exact opposite of what
+		// happens - and callers keyed on errors.Is(ErrGuidanceAtBudget)
+		// could misjudge the run as unconsumed. No flag: the notice reached
+		// an LLM call this run.
+		a.injectSubagentCompletions()
 		if err := a.maybeAutoCompact(ctx, onEvent, &transientCompactWarned); err != nil {
 			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
 			return err
@@ -2833,8 +2849,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// a single empty reply exited as silent success. The #4201 false-
 		// positive defense is carried entirely by the textBuf/Message.Content
 		// emptiness checks, so dropping the conjunct reintroduces nothing.
+		// #4392: thinking-only responses must count as empty. textBuf only
+		// accumulates StreamEventText, but assembly PREPENDS thinking blocks
+		// into resp.Message.Content, so the old `len(Content) == 0` conjunct
+		// was always false for a thinking-only reply (DeepSeek R1-style
+		// reasoning-then-stop through zero-usage gateways) - nudge skipped,
+		// strike never incremented, cron/subagent callers got silent false
+		// success (#1672 family). Judge emptiness semantically instead.
 		if resp.Usage.OutputTokens == 0 && len(toolCalls) == 0 &&
-			strings.TrimSpace(textBuf) == "" && len(resp.Message.Content) == 0 {
+			strings.TrimSpace(textBuf) == "" && !hasNonThinkingContent(resp.Message.Content) {
 			// Complete policy block (no partial text, no output tokens): the
 			// request was rejected by a provider safety filter. An empty-response
 			// nudge would just re-trigger the same filter - report and stop (#266).
@@ -2887,6 +2910,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			continue
 		}
 		consecutiveEmptyResponses = 0
+		// Trajectory health synthesizer (metacognitive layer): record
+		// per-iteration tool activity stats for composite health scoring.
+		// #4515: this used to live INSIDE the len(toolCalls)==0 branch below,
+		// where toolCalls is always empty - countToolTypes scored 0/0, len()
+		// 0, and pure tool runs never grew iterations, so the composite
+		// health score was built from zero-activity samples only (every
+		// dimension dead). Record EVERY iteration so real tool activity
+		// feeds the scorer.
+		if a.trajectoryHealth != nil {
+			eCnt, rCnt := countToolTypes(toolCalls)
+			assCnt := 0 // assumption tracking removed
+			a.trajectoryHealth.recordIteration(eCnt, 0, len(toolCalls), rCnt, assCnt)
+		}
 		// No tool calls → done unless autopilot should continue with best-effort assumptions.
 		if len(toolCalls) == 0 {
 			// Truncated response recovery: the LLM hit the output token limit
@@ -3258,13 +3294,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// rapid-fire chain). Detection itself happens on the tool-call
 			// path (see beginBatch wiring); recordStep(false) never fires.
 			a.mindlessAction.recordStep(len(assistantText), false)
-			// Trajectory health synthesizer (metacognitive layer): record
-			// per-iteration tool activity stats for composite health scoring.
-			if a.trajectoryHealth != nil {
-				eCnt, rCnt := countToolTypes(toolCalls)
-				assCnt := 0 // assumption tracking removed
-				a.trajectoryHealth.recordIteration(eCnt, 0, len(toolCalls), rCnt, assCnt)
-			}
 			// Trajectory health warning: when composite score exceeds threshold,
 			// inject holistic guidance about accumulating risk.
 			if healthHint := a.maybeWarnTrajectoryHealth(); healthHint != "" {
@@ -5455,7 +5484,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			if csIsEditTool(tc.Name) {
 				a.correctionSpiral.recordEdit(i + 1)
-			} else if tc.Name == "run_command" && psIsVerifyCommand(sfCommandArg(psArgs)) {
+			} else if (tc.Name == "run_command" || tc.Name == "bash" || tc.Name == "powershell") && psIsVerifyCommand(sfCommandArg(psArgs)) {
+				// #4254: bash/powershell are reachable command channels
+				// (#3685-A family) - a `go test` through them verifies
+				// exactly like run_command; hardcoding run_command left the
+				// spiral detector blind in bash-dominated sessions.
 				a.correctionSpiral.recordVerifyResult(tc.Name, result.Content, result.IsError, i+1)
 			} else if tc.Name == "wait_command" || tc.Name == "read_command_output" || tc.Name == "task_output" {
 				// #1773 case 4: the final outcome of a long verification
@@ -5986,6 +6019,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ErrSessionTimeout})
 		return ErrSessionTimeout
 	}
+	// #4421: a budget stop armed on the FINAL iteration is swallowed by
+	// the loop condition (i++ fails, the loop-top gate never runs) and
+	// fell through to the generic "max iterations (N) reached" error -
+	// headless callers then misclassified a budget truncation as spin-out,
+	// exactly what #4409 set out to fix. Same dedicated summary + sentinel
+	// as the loop-top gate.
+	if sessionBudgetStop {
+		runStats.finalize(nil) // compute Duration for the summary
+		summary := runStats.Summary()
+		onEvent(provider.StreamEvent{
+			Type: provider.StreamEventText,
+			Text: fmt.Sprintf("\nSession budget exhausted (token/cost/delegated/time limit reached). No further LLM calls this run. Summary: %s.\nYour task may be partially complete - review the changes above. You can continue by sending a follow-up message or raising the session budget.", summary),
+		})
+		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ErrSessionBudgetExhausted})
+		debug.Log("session-token-budget", "budget stop armed on final iteration; sentinel surfaced post-loop (#4421)")
+		return ErrSessionBudgetExhausted
+	}
 	// #3778: guidance that landed on the final iteration was persisted but
 	// never consumed in-run. Report the real reason - NOT the generic
 	// max-iterations sentinel, which errors.Is callers would classify as
@@ -6334,4 +6384,26 @@ func (a *Agent) fillCancelledToolResults(pending []provider.ToolCallDelta, resul
 			Content: *results,
 		})
 	}
+}
+
+// hasNonThinkingContent reports whether any content block carries real
+// output (non-blank text or a tool_use), as opposed to thinking-only
+// blocks. Used by the empty-response guard in the agent loop (#4392):
+// response assembly prepends thinking blocks into Message.Content, so raw
+// len(Content) cannot distinguish a thinking-only reply (which must count
+// as empty) from a substantive one.
+func hasNonThinkingContent(blocks []provider.ContentBlock) bool {
+	for _, b := range blocks {
+		switch b.Type {
+		case "thinking", "redacted_thinking":
+			continue
+		case "tool_use":
+			return true
+		default:
+			if strings.TrimSpace(b.Text) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
