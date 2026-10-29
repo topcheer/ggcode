@@ -305,10 +305,17 @@ func AddMCPServer(values map[string]string) error {
 	// a form defaulting to "stdio" must not silently flip an http/ws server.
 	// UpsertMCPServer patches only non-zero fields, so an explicit empty type
 	// keeps the stored value; new servers still default to stdio.
+	// #4496: look the server up in the EFFECTIVE set (yaml ∪ Claude-migrated,
+	// same MergeStartupServersWithDeleted union the runtime and the panel's
+	// ListMCPServers use), not just cfg.MCPServers. Editing a migrated-only
+	// http server with no type in the form used to find existing==nil,
+	// default to stdio, and the yaml write + stdio validation then evicted
+	// the working server from the runtime entirely (#249 covered yaml only).
 	var existing *config.MCPServerConfig
-	for i := range cfg.MCPServers {
-		if cfg.MCPServers[i].Name == name {
-			existing = &cfg.MCPServers[i]
+	for _, ms := range effectiveSessionServers(chatSnap, cfg) {
+		if ms.Name == name {
+			m := ms
+			existing = &m
 			break
 		}
 	}
@@ -327,6 +334,17 @@ func AddMCPServer(values map[string]string) error {
 		Type:    serverType,
 		Command: values["command"],
 		URL:     values["url"],
+	}
+	// #4386: command/url had no clear-channel twin of #1434-B's args_clear /
+	// #979's env_clear - clearing the field in the form saved
+	// "successfully" (an empty string reads as "not provided" at the patch
+	// layer) while the old command/url silently resurrected on reopen. An
+	// emptied (or explicitly *_clear-flagged) field now sets the sentinel.
+	if isTruthyFormFlag(values["command_clear"]) || values["command"] == "" {
+		serverCfg.CommandClear = true
+	}
+	if isTruthyFormFlag(values["url_clear"]) || values["url"] == "" {
+		serverCfg.URLClear = true
 	}
 
 	// Parse args from space-separated string with quote awareness.

@@ -554,7 +554,11 @@ func (m *Model) bindNostrEntry(entry nostrBindingEntry) tea.Cmd {
 func (m *Model) unbindNostrEntry(adapterName string) tea.Cmd {
 	return func() tea.Msg {
 		if m.imManager == nil {
-			return nostrBindResultMsg{}
+			// #4601: bindNostrEntry reports config_unavailable for a nil
+			// manager; returning an empty result here left err and message
+			// blank, so the panel rendered nothing and the keypress was
+			// silently swallowed.
+			return nostrBindResultMsg{err: errors.New(m.t("panel.nostr.error.config_unavailable"))}
 		}
 		if err := m.imManager.UnbindAdapter(adapterName); err != nil {
 			return nostrBindResultMsg{err: err}
@@ -566,7 +570,8 @@ func (m *Model) unbindNostrEntry(adapterName string) tea.Cmd {
 func (m *Model) clearNostrChannel(adapterName string) tea.Cmd {
 	return func() tea.Msg {
 		if m.imManager == nil {
-			return nostrBindResultMsg{}
+			// #4601: same as unbind - never swallow the operation silently.
+			return nostrBindResultMsg{err: errors.New(m.t("panel.nostr.error.config_unavailable"))}
 		}
 		// #898/#905: this was the UNBIND path mislabeled as "clear
 		// channel" (whole workspace binding lost) AND reported success

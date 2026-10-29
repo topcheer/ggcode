@@ -196,7 +196,12 @@ func (t *KnowledgeGraphTool) doAdd(s *kgStore, p *kgParams) (Result, error) {
 		idWasAuto = true
 	}
 	if len(id) > 80 {
-		id = id[:80]
+		// #4452: byte slicing can split a multi-byte UTF-8 rune, producing an
+		// invalid id that json.Marshal persists as U+FFFD - after a restart the
+		// stored key no longer matches the id we returned to the caller (and two
+		// distinct over-long ids can even collapse onto one key). Truncate on a
+		// rune boundary instead.
+		id = truncateIDBytes(id, 80)
 	}
 	// #1692 case 4: slugify is lowercase + strip-non-[a-z0-9-], so "C++ API"
 	// and "c api" both become "c-api" - the second add hit the partial-
@@ -213,7 +218,7 @@ func (t *KnowledgeGraphTool) doAdd(s *kgStore, p *kgParams) (Result, error) {
 			suffix := fmt.Sprintf("-%d", i)
 			base := id
 			if len(base)+len(suffix) > 80 {
-				base = base[:80-len(suffix)]
+				base = truncateIDBytes(base, 80-len(suffix))
 			}
 			id = base + suffix
 		}
@@ -293,11 +298,29 @@ func (t *KnowledgeGraphTool) doLink(s *kgStore, p *kgParams) (Result, error) {
 	// Temporal dedup: a currently-valid duplicate is rejected, but a fact
 	// whose prior interval was invalidated may become true again (Zep-style
 	// re-assertion) - append a fresh validity interval instead of refusing.
+	// #4452: an existing edge that is not yet valid (ValidFrom in the future)
+	// is NOT an invalidated interval - relinking it appends a parallel edge
+	// and both become valid simultaneously once ValidFrom arrives. Reject on
+	// interval overlap instead of point-in-time validity.
 	relink := false
+	newFrom := defaultValidFrom(vf, now)
 	for _, e := range s.Edges {
 		if e.From == p.ID && e.To == p.To && e.Type == p.Type {
 			if kgEdgeValidAt(&e, now) {
 				return Result{Content: fmt.Sprintf("Edge %s --[%s]--> %s already exists.", p.ID, p.Type, p.To)}, nil
+			}
+			if e.ValidUntil == nil {
+				// #4452: an open-ended prior interval - regardless of start
+				// order, two open intervals overlap from max(ValidFrom) on,
+				// so appending would create a duplicate-live edge once the
+				// future ValidFrom arrives. Only invalidated (closed) edges
+				// are eligible for re-assertion.
+				from := "the beginning"
+				if e.ValidFrom != nil {
+					from = e.ValidFrom.Format(time.RFC3339)
+				}
+				return Result{Content: fmt.Sprintf("Edge %s --[%s]--> %s already exists (valid from %s).",
+					p.ID, p.Type, p.To, from)}, nil
 			}
 			relink = true
 		}
@@ -305,7 +328,7 @@ func (t *KnowledgeGraphTool) doLink(s *kgStore, p *kgParams) (Result, error) {
 	if len(s.Edges) >= kgMaxEdges {
 		return Result{IsError: true, Content: fmt.Sprintf("edge limit (%d)", kgMaxEdges)}, nil
 	}
-	s.Edges = append(s.Edges, kgEdge{From: p.ID, To: p.To, Type: p.Type, RecordedAt: now, ValidFrom: defaultValidFrom(vf, now)})
+	s.Edges = append(s.Edges, kgEdge{From: p.ID, To: p.To, Type: p.Type, RecordedAt: now, ValidFrom: newFrom})
 	if err := t.save(s); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to save: %v", err)}, nil
 	}
@@ -674,6 +697,27 @@ func kgParseTime(s string) (time.Time, error) {
 // kgEdgeValidAt reports whether the edge's fact is true at instant at.
 // Legacy edges without temporal fields are treated as always-valid, so
 // pre-temporal graph files keep their existing trace/list behavior.
+// truncateIDBytes caps s at n BYTES without splitting a multi-byte rune
+// (#4452: id[:80] byte slicing produced invalid UTF-8 keys that json.Marshal
+// persisted as U+FFFD, breaking the restart roundtrip). Unlike the rune-cap
+// truncateRunes in clipboard.go, this preserves the historical 80-byte id cap.
+func truncateIDBytes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	for cut > 0 && (s[cut]&0xC0) == 0x80 {
+		cut--
+	}
+	if cut == 0 {
+		return s[:n] // degenerate: whole prefix is continuation bytes
+	}
+	return s[:cut]
+}
+
 func kgEdgeValidAt(e *kgEdge, at time.Time) bool {
 	if e.ValidFrom != nil && at.Before(*e.ValidFrom) {
 		return false

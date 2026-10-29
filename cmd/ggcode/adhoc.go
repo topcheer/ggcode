@@ -76,17 +76,6 @@ const (
 	adhocEnvRetryAlways   = "GGCODE_LLM_RETRY_ALWAYS"
 )
 
-// adhocEnvTouched reports whether any GGCODE_LLM_* provider variable is set
-// (used for the partial-pair diagnostic: env half-set deserves a hint).
-func adhocEnvTouched() bool {
-	for _, k := range []string{adhocEnvBaseURL, adhocEnvModel, adhocEnvAPIKey, adhocEnvProtocol, adhocEnvContextWindow, adhocEnvMaxTokens, adhocEnvRetryAlways} {
-		if strings.TrimSpace(os.Getenv(k)) != "" {
-			return true
-		}
-	}
-	return false
-}
-
 // synthesizeAdhocConfig builds the in-memory Config for ad-hoc mode. It must
 // never touch the filesystem: no load, no save path is viable later either,
 // because root.go passes cfgFile="" which disables the hot-reload watcher and
@@ -195,12 +184,23 @@ func loadConfigForRun(cfgFile string, f *adhocLLMFlags) (*config.Config, error) 
 }
 
 // adhocInt resolves an int override: flag (non-zero) wins over env.
+// #4393: an explicitly-set but invalid env value (unparseable like "64k",
+// or non-positive like "0"/"-5") warns on stderr instead of silently
+// falling back to the default - the fallback is correct, but a typo'd
+// setting that never takes effect must be diagnosable (same class as the
+// #4216 half-pair warning; stderr survives pipe mode).
 func adhocInt(flagVal int, envKey string) int {
 	if flagVal > 0 {
 		return flagVal
 	}
 	if raw := strings.TrimSpace(os.Getenv(envKey)); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+		v, err := strconv.Atoi(raw)
+		switch {
+		case err != nil:
+			fmt.Fprintf(os.Stderr, "WARNING: ignoring invalid %s=%q (%v) - using the default instead\n", envKey, raw, err)
+		case v <= 0:
+			fmt.Fprintf(os.Stderr, "WARNING: ignoring invalid %s=%q (must be a positive integer) - using the default instead\n", envKey, raw)
+		default:
 			return v
 		}
 	}

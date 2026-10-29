@@ -16,8 +16,6 @@ func esCatalog(key string) string {
 		return "%d en ejecución"
 	case "cron.firing":
 		return "⏰ tarea cron activada"
-	case "activity.idle":
-		return "inactivo"
 	case "panel.conversation":
 		return "Conversación"
 	case "panel.composer":
@@ -164,10 +162,6 @@ func esCatalog(key string) string {
 		return "archivo"
 	case "label.directory":
 		return "directorio"
-	case "context.unavailable":
-		return "Sin datos de contexto aún"
-	case "metrics.empty":
-		return "Sin métricas aún"
 	case "im.none":
 		return "Sin adaptadores configurados"
 	case "im.summary":
@@ -182,38 +176,20 @@ func esCatalog(key string) string {
 		return "habilitado • reinicie para inicializar"
 	case "im.status.not_started":
 		return "no iniciado"
-	case "context.until_compact":
-		return "restánte"
 	case "empty.ask":
 		return "Pida una refactorización, corrección de errores, explicación o pruebas."
 	case "empty.tips":
 		return "Consejos: use @ruta para incluir archivos, /? para ayuda, y Shift+Tab para cambiar de modo."
-	case "startup.banner":
-		return "Preparando la interfaz de terminal y filtrando el ruido de inicio. Puede escribir de inmediato; este banner desaparece una vez que el inicio se complete."
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab ciclo • Enter aplicar • Esc cerrar"
 	case "hint.mention":
 		return "@ adjunta archivos/carpetas • Tab/Shift+Tab ciclo • Enter aplicar"
 	case "hint.mode":
 		return "modo"
-	case "mode.approval.ask":
-		return "preguntar según sea necesario"
-	case "mode.approval.none":
-		return "sin paradas de aprobación"
-	case "mode.approval.critical":
-		return "solo críticas"
-	case "mode.tools.rules":
-		return "seguir reglas de herramientas"
-	case "mode.tools.readonly":
-		return "solo lectura"
-	case "mode.tools.safe":
-		return "solo operaciónes seguras"
-	case "mode.tools.open":
-		return "casí todas las herramientas"
-	case "mode.agent.waits":
-		return "espera por usted"
-	case "mode.agent.autocontinue":
-		return "continúa solo"
+	case "hint.enter_send":
+		return "Enter enviar"
+	case "hint.ctrlv_image":
+		return "Ctrl+V / Ctrl+Shift+V pegar imagen"
 	case "hint.ctrlr_sidebar":
 		return "Ctrl+R barra lateral"
 	case "hint.help":
@@ -232,8 +208,6 @@ func esCatalog(key string) string {
 		return "Ctrl+N dejar seguir"
 	case "queued.count":
 		return "%d en cola"
-	case "queued.output":
-		return "[en cola %d pendientes]\n\n"
 	case "interrupt.delivered":
 		return "[entregado a la ejecución activa; revisando plan]\n"
 	case "status.thinking":
@@ -612,8 +586,6 @@ func esCatalog(key string) string {
 		return "Gestor de contexto no disponible.\n\n"
 	case "compact.failed":
 		return "Error de compactación: %v\n\n"
-	case "compact.done":
-		return "Historial de conversación compactado.\n\n"
 	case "compact.done_with_stats":
 		return "Historial de conversación compactado (%d → %d tokens).\n\n"
 	case "todo.cleared":
@@ -648,14 +620,8 @@ func esCatalog(key string) string {
 		return "Config: modelo = %s\n\n"
 	case "config.provider_set":
 		return "Config: proveedor = %s\n\n"
-	case "config.language_set":
-		return "Config: idioma = %s\n\n"
 	case "config.unknown_key":
 		return "Clave de config desconocida: %s\nSoportadas: model, provider, language\n\n"
-	case "config.title":
-		return "Configuración Actual:\n"
-	case "status.title":
-		return "Estado:\n"
 	case "panel.update":
 		return "Actualización"
 	case "label.version":
@@ -694,16 +660,8 @@ func esCatalog(key string) string {
 		return "Otras instalaciones de ggcode detectadas en este sistema:\n%s\nSi un ggcode diferente aparece primero en PATH, considere actualizarlo también o ajustar el orden de PATH.\n\n"
 	case "update.dual_scope":
 		return "Advertencia: Se encontraron instalaciones de ggcode de usuario y de sistema:\n  Usuario: %s\n  Sistema: %s\nEsto puede causar conflictos de PATH. Considere desinstalar una desde Configuración > Aplicaciónes.\n\n"
-	case "plugins.unavailable":
-		return "Gestor de plugins no disponible.\n\n"
-	case "plugins.none":
-		return "Sin plugins cargados.\n\n"
-	case "plugins.title":
-		return "Plugins:\n"
 	case "mcp.none":
 		return "Sin servidores MCP configurados.\n\n"
-	case "mcp.title":
-		return "Servidores MCP:\n"
 	case "mcp.active_tools":
 		return "Herramientas activas"
 	case "mcp.more":
@@ -712,10 +670,6 @@ func esCatalog(key string) string {
 		return "Uso: /image <ruta/al/archivo.png> o /image paste\n"
 	case "image.formats":
 		return "Formatos soportados: PNG, JPEG, GIF, WebP (max 20MB)\n\n"
-	case "image.attached":
-		return "Imagen adjunta: %s\n"
-	case "image.attached_hint":
-		return "Envie un mensaje para incluir la imagen, o /image para adjuntar otra.\n\n"
 	case "image.clipboard_failed":
 		return "No se pudo pegar una imagen del portapapeles: %v"
 	case "image.clipboard_no_image_windows":
@@ -730,20 +684,6 @@ func esCatalog(key string) string {
 		return "  %s [%s]%s - %s\n"
 	case "agents.hint":
 		return "\nUse /agent <id> para detalles, /agent cancel <id> para cancelar.\n\n"
-	case "agent.usage":
-		return "Uso: /agent <id> o /agent cancel <id>\n\n"
-	case "agent.cancelled":
-		return "Sub-agente %s cancelado\n\n"
-	case "agent.cancel_failed":
-		return "No se pudo cancelar %s (no encontrado o no en ejecución)\n\n"
-	case "agent.not_found":
-		return "Sub-agente %s no encontrado\n\n"
-	case "agent.title":
-		return "Agente: %s\nEstado: %s\ntarea: %s\n"
-	case "agent.result":
-		return "Resultado: %s\n"
-	case "agent.error":
-		return "Error: %v\n"
 	case "slash.help":
 		return "Mostrar mensaje de ayuda"
 	case "slash.sessions":
@@ -856,14 +796,8 @@ func esCatalog(key string) string {
 		return "Disponibles: %d"
 	case "panel.qq.none":
 		return "(ninguno)"
-	case "panel.qq.default":
-		return "(predeterminado)"
 	case "panel.qq.adapter":
 		return "Adaptador: %s"
-	case "panel.qq.target":
-		return "Objetivo: %s"
-	case "panel.qq.channel":
-		return "Canal: %s"
 	case "panel.qq.bot_list":
 		return "Lista de Bots QQ"
 	case "panel.qq.no_bots":
@@ -938,8 +872,6 @@ func esCatalog(key string) string {
 		return "Se requiere el nombre del adaptador QQ"
 	case "panel.qq.error.not_configured":
 		return "El bot QQ %q no está configurado"
-	case "panel.qq.error.disabled":
-		return "El bot QQ %q está deshabilitado"
 	case "panel.qq.error.not_qq_adapter":
 		return "el adaptador %q no es un bot QQ"
 	case "panel.qq.error.not_online":
