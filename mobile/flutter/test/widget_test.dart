@@ -450,7 +450,10 @@ void main() {
     await tester.pump();
     expect(tester.testTextInput.isVisible, isTrue);
 
-    await tester.tapAt(tester.getCenter(find.byType(ListView)));
+    // #4585: the default 800x600 test viewport is expanded width, so the
+    // session rail adds a second ListView. The message list is the last
+    // one (chat body renders after the rail in the Row).
+    await tester.tapAt(tester.getCenter(find.byType(ListView).last));
     await tester.pump();
 
     expect(tester.testTextInput.isVisible, isFalse);

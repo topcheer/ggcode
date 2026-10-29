@@ -219,7 +219,8 @@ func (t *RemoteTool) discover() ([]InstanceInfo, error) {
 	if t.cache != nil && time.Since(t.cacheAt) < 10*time.Second {
 		cache := t.cache
 		t.mu.RUnlock()
-		return cache, nil
+		// #4501: hand out a copy, not the cached backing array.
+		return append([]InstanceInfo(nil), cache...), nil
 	}
 	t.mu.RUnlock()
 
@@ -229,11 +230,14 @@ func (t *RemoteTool) discover() ([]InstanceInfo, error) {
 	}
 
 	t.mu.Lock()
-	t.cache = instances
+	// #4501: same defensive-copy posture as Registry.Discover - cache a
+	// private copy so in-place mutation of the returned slice cannot
+	// corrupt the cache or race concurrent readers.
+	t.cache = append([]InstanceInfo(nil), instances...)
 	t.cacheAt = time.Now()
 	t.mu.Unlock()
 
-	return instances, nil
+	return append([]InstanceInfo(nil), instances...), nil
 }
 
 // RemoteAgentMeta holds enrichment data (from lanchat presence) for a remote
@@ -243,17 +247,6 @@ type RemoteAgentMeta struct {
 	Role        string   // e.g. "frontend", "backend", "devops"
 	Languages   []string // e.g. ["go", "typescript"]
 	ProjectName string   // short project identifier
-}
-
-// RemoteAgentSummary returns a human-readable summary of other online
-// ggcode instances, suitable for injection into the system prompt.
-// Returns empty string if no other instances are online.
-func (t *RemoteTool) RemoteAgentSummary() string {
-	instances, err := t.discover()
-	if err != nil || len(instances) == 0 {
-		return ""
-	}
-	return FormatRemoteAgents(instances, nil)
 }
 
 // FormatRemoteAgents formats a list of discovered instances into a

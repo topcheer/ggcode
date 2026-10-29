@@ -69,6 +69,14 @@ func loadWorkspaceState(path, workspace string) ([]Pane, map[string][]LayoutPane
 }
 
 func saveWorkspaceState(path, workspace string, panes []Pane, layouts map[string][]LayoutPane) error {
+	// #4373: the store directory must exist BEFORE the lock file is opened —
+	// FileLock's O_CREATE on path+".flock" needs the parent dir and returns
+	// ENOENT otherwise, making every Save fail permanently (the MkdirAll that
+	// used to live below the lock was unreachable on the first Save with a
+	// custom store path or a fresh environment).
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create tmux pane store directory: %w", err)
+	}
 	// Acquire cross-process lock — multiple workspaces share the same store file.
 	unlock, err := lockTmuxStore(path)
 	if err != nil {

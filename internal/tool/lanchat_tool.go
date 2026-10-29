@@ -412,6 +412,14 @@ func joinNodeIDs(set map[string]bool) string {
 }
 
 func (t LanChatTool) resolveRecipients(ids []string) ([]string, []string) {
+	resolved, ambiguous, _ := t.resolveRecipientsFull(ids)
+	return resolved, ambiguous
+}
+
+// resolveRecipientsFull additionally returns the identifiers that resolved
+// to nothing (#4452: lets doSend report honest drop counts instead of
+// input-count minus deduped-output-count).
+func (t LanChatTool) resolveRecipientsFull(ids []string) ([]string, []string, []string) {
 	participants := t.Hub.Participants()
 
 	// Build lookup maps (case-insensitive)
@@ -530,6 +538,7 @@ func (t LanChatTool) resolveRecipients(ids []string) ([]string, []string) {
 	// 4. Archive fallback: for each unresolved identifier, search the
 	//    archive ring buffer. If found, use team+role to find the peer's
 	//    current NodeID in the active peers map.
+	var stillUnresolved []string
 	for _, raw := range unresolved {
 		// Try archive by node_id
 		ap := t.Hub.LookupArchiveByNodeID(raw)
@@ -560,10 +569,13 @@ func (t LanChatTool) resolveRecipients(ids []string) ([]string, []string) {
 				continue
 			}
 		}
-		// If nothing matched, skip silently - caller handles empty result
+		// If nothing matched, track it so the caller can report honestly
+		// (#4452: input-count minus output-count over-reports drops when
+		// several identifiers dedup onto one node).
+		stillUnresolved = append(stillUnresolved, raw)
 	}
 
-	return resolved, ambiguous
+	return resolved, ambiguous, stillUnresolved
 }
 
 func (t LanChatTool) doList(teamFilter string) Result {
@@ -655,7 +667,7 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 	// "dd_dev_agent") or partial nicks (e.g. "dd") as the 'to' value.
 	// We try exact node_id match first, then exact nick match, then
 	// prefix match (nick starts with the given string).
-	resolved, ambiguous := t.resolveRecipients(toNodeIDs)
+	resolved, ambiguous, unresolvedInputs := t.resolveRecipientsFull(toNodeIDs)
 	if len(ambiguous) > 0 {
 		// #1272: refuse coin-flip delivery - surface the candidates so the
 		// caller (agent or human) can re-address by node_id from action='list'.
@@ -752,12 +764,13 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 	}
 
 	result := fmt.Sprintf("Message sent to %s as %s", target, role)
-	// Report silently dropped recipients (unresolved nicks)
-	if len(resolved) < len(toNodeIDs) {
-		dropped := len(toNodeIDs) - len(resolved) - len(rateLimited)
-		if dropped > 0 {
-			result += fmt.Sprintf(" (%d recipient(s) could not be resolved and were skipped)", dropped)
-		}
+	// Report silently dropped recipients (unresolved nicks).
+	// #4452: resolved is post-rate-limit AND post-dedup (several input
+	// identifiers may map to one node), so input-count minus output-count
+	// over-reports. Track the unresolved identifier count instead.
+	if len(unresolvedInputs) > 0 {
+		result += fmt.Sprintf(" (%d recipient(s) could not be resolved and were skipped: %s)",
+			len(unresolvedInputs), strings.Join(unresolvedInputs, ", "))
 	}
 	if len(errors) > 0 {
 		result += fmt.Sprintf(" (errors: %s)", strings.Join(errors, "; "))

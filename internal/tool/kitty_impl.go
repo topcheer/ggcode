@@ -182,6 +182,15 @@ func (k *KittyTool) executeSplit(ctx context.Context, windowID int, direction st
 
 	args := []string{"launch", "--type=window", "--location=" + location, "--cwd=" + wd}
 
+	// #4450: windowID used to be validated and then never used - the split
+	// always landed in the FOCUSED window while the Result claimed success
+	// on the requested one (the same silent-wrong-target family #1692/
+	// #2597 fixed for focus/zoom/close). kitten @ launch accepts --match
+	// to anchor the new window relative to the requested one.
+	if windowID > 0 {
+		args = append(args, "--match="+matchID(windowID))
+	}
+
 	// Size bias: kitty uses --bias N where N is 1-100 (the new window's share).
 	// We map our size percentage directly.
 	if size > 0 && size < 100 {

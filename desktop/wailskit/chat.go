@@ -2893,8 +2893,18 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 		}
 		b.mu.Lock()
 		if th := b.tunnelHost; th != nil {
+			// #4495: currentSes is a raw snapshot - it is nil until the first
+			// session is created. A phone connecting to the share tunnel on a
+			// cold start (no message sent yet) panicked here on the bare
+			// .Title deref while holding b.mu. Zero-value the session-derived
+			// fields instead; cf. the cur != nil gate before BindSession below
+			// and pushTunnelSessionInfo.
+			var title string
+			if currentSes != nil {
+				title = currentSes.Title
+			}
 			th.SetSessionInfo(tunnel.SessionInfoData{
-				Title:     currentSes.Title,
+				Title:     title,
 				Workspace: b.workingDir,
 				Model:     model,
 				Provider:  vendorName,
@@ -4129,6 +4139,10 @@ func parseA2ATimeout(s string) time.Duration {
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
+		// #4397: silent fallback is undiagnosable (same fix as the
+		// cmd/ggcode twin) - name the rejected value and the default
+		// actually used.
+		fmt.Fprintf(os.Stderr, "warning: invalid a2a.task_timeout %q (%v), using default %v\n", s, err, 5*time.Minute)
 		return 5 * time.Minute
 	}
 	return d

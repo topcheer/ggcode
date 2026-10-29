@@ -226,12 +226,18 @@ func (s *SubAgent) appendEvent(ev AgentEvent) {
 					// Merge dropped text into the first remaining text event.
 					remaining[0].Text = savedText.String() + remaining[0].Text
 				} else {
-					// The first remaining event is not text (e.g. reasoning in
-					// an interleaved text/reasoning stream): keep the salvaged
-					// text as its own Text event instead of silently dropping
-					// it (#4359).
-					salvaged := AgentEvent{Type: AgentEventText, Text: savedText.String(), Time: now}
-					remaining = append([]AgentEvent{salvaged}, remaining...)
+					// #4359: the first remaining event is not text (e.g.
+					// Reasoning in an interleaved text/reasoning stream with
+					// no tool calls - isTurnBoundary never fires). Merging
+					// was skipped and the rescued text silently dropped,
+					// defeating the PRESERVE promise above. Insert a
+					// standalone text event carrying it instead.
+					anchor := remaining[0].Time
+					rescue := AgentEvent{Type: AgentEventText, Text: savedText.String(), Time: anchor}
+					kept := make([]AgentEvent, 0, len(remaining)+1)
+					kept = append(kept, rescue)
+					kept = append(kept, remaining...)
+					remaining = kept
 				}
 			}
 			s.events = remaining

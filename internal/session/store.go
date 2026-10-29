@@ -1972,7 +1972,16 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 					debug.Log("session", "repairIndex: keeping orphan session %s — on-disk check unknown: %v", id, hasErr)
 					newIdx = append(newIdx, sessionToIndexEntry(ses))
 				} else if !interacted {
-					_ = os.Remove(s.sessionPath(id))
+					// #1307 discipline (same as pruneInvalidIndexEntries above):
+					// never swallow a failed Remove. If the unlink fails (permission,
+					// read-only mount, Windows file-in-use) the orphan stays on disk
+					// and is retried on the next repair pass; skipping the changed
+					// flag keeps a stuck file from forcing an index rewrite every
+					// round (#4357). A vanished file (IsNotExist race) is success.
+					if rmErr := os.Remove(s.sessionPath(id)); rmErr != nil && !os.IsNotExist(rmErr) {
+						debug.Log("session", "repairIndex: remove failed for orphan %s, keeping it un-indexed for the next pass: %v", id, rmErr)
+						continue
+					}
 				} else {
 					newIdx = append(newIdx, sessionToIndexEntry(ses))
 				}
@@ -2118,6 +2127,28 @@ func (s *JSONLStore) WillCleanupIfEmpty(ses *Session) bool {
 		return false
 	}
 	return !interacted
+}
+
+// persistEligible reports whether meta/usage/metric records may be persisted
+// for ses. It mirrors the two-stage decision of WillCleanupIfEmpty (#254): the
+// cheap in-memory HasUserInteraction check first, then a full-file
+// HasUserInteractionOnDisk fallback when that is false — time-windowed loading
+// (loadSession with fullLoad=false) drops user messages older than
+// RecentMessageWindow from ses.Messages, which made the old single-stage gates
+// silently return nil and lose pin/tag/model changes after a restart (#4356).
+// Read errors count as eligible — the persistence-side fail-safe of #291's
+// rule: an unknown answer must never drop data. Callers hold s.mu;
+// HasUserInteractionOnDisk takes no locks and only reads the file.
+func (s *JSONLStore) persistEligible(ses *Session) bool {
+	if ses.HasUserInteraction() {
+		return true
+	}
+	interacted, err := s.HasUserInteractionOnDisk(ses.ID)
+	if err != nil {
+		debug.Log("session", "persistEligible: on-disk check unknown for %s, persisting — %v", ses.ID, err)
+		return true
+	}
+	return interacted
 }
 
 // LatestForWorkspace returns the most recently updated session for the
@@ -2500,7 +2531,7 @@ func (s *JSONLStore) AppendMetaToDisk(ses *Session) error {
 
 // appendMetaLocked is AppendMetaToDisk without locking; callers hold s.mu.
 func (s *JSONLStore) appendMetaLocked(ses *Session) error {
-	if !ses.HasUserInteraction() {
+	if !s.persistEligible(ses) {
 		return nil
 	}
 	// Meta writes always update the index — reset the debounce timer.
@@ -2599,10 +2630,12 @@ func normalizeTags(tags []string) []string {
 func (s *JSONLStore) AppendUsageEntry(ses *Session, entry UsageEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !ses.HasUserInteraction() {
+	// #4356: persistEligible subsumes the old bare HasUserInteraction gate
+	// (which silently dropped usage for window-loaded interacted sessions).
+	path := s.sessionPath(ses.ID)
+	if !s.persistEligible(ses) {
 		return nil
 	}
-	path := s.sessionPath(ses.ID)
 	rec := jsonlRecord{
 		Type:       "usage",
 		SessionID:  ses.ID,
@@ -2616,10 +2649,11 @@ func (s *JSONLStore) AppendUsageEntry(ses *Session, entry UsageEntry) error {
 func (s *JSONLStore) AppendMetric(ses *Session, m metrics.MetricEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !ses.HasUserInteraction() {
+	// #4356: persistEligible subsumes the old bare HasUserInteraction gate.
+	path := s.sessionPath(ses.ID)
+	if !s.persistEligible(ses) {
 		return nil
 	}
-	path := s.sessionPath(ses.ID)
 	rec := jsonlRecord{
 		Type:        "metric",
 		SessionID:   ses.ID,
@@ -2635,9 +2669,20 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 	defer s.mu.Unlock()
 	path := s.sessionPath(ses.ID)
 
-	// Don't create a meta file for sessions with no user interaction.
+	// Don't create a meta file for sessions with no user interaction. The
+	// on-disk fallback only applies when the session file already exists —
+	// time-windowed loads may have emptied ses.Messages while the file still
+	// holds user messages (#4356). When the file is absent the fallback can
+	// never prove interaction, and treating an unknown scan error as
+	// eligible must not CREATE a meta-only file for a session that never
+	// interacted.
 	if !ses.HasUserInteraction() {
-		return nil
+		if _, statErr := os.Stat(path); statErr != nil {
+			return nil
+		}
+		if !s.persistEligible(ses) {
+			return nil
+		}
 	}
 
 	// O_EXCL guards against a cross-process TOCTOU (#531): the sessions

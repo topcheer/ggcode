@@ -90,7 +90,10 @@ func depFindingsPrompt(board *task.Manager, tk task.Task) string {
 		entry := fmt.Sprintf("[%s] %s: %s\n", dep.ID, dep.Subject,
 			util.Truncate(result, depFindingMaxRunes))
 		if total+len(entry) > depFindingsMaxTotal {
-			break
+			// #4363: skip only THIS over-budget entry. The old `break`
+			// discarded every later dependency finding too, even ones
+			// small enough to still fit the remaining budget.
+			continue
 		}
 		sb.WriteString(entry)
 		total += len(entry)
