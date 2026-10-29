@@ -146,26 +146,16 @@ func ruCatalog(key string) string {
 	// --- Mode approval ---
 
 	// --- Hints ---
-	case "hint.enter_send":
-		return "Enter отправить"
-	case "hint.ctrlv_image":
-		return "Ctrl+V / Ctrl+Shift+V вставить изображение"
 	case "hint.ctrlr_sidebar":
 		return "Ctrl+R боковая панель"
 	case "hint.help":
 		return "/? справка"
-	case "hint.add_context":
-		return "@ добавить контекст"
-	case "hint.scroll":
-		return "PgUp/PgDn прокрутка"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab режим"
 	case "hint.ctrlc_cancel":
 		return "Ctrl+C отмена"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C очистить/выйти"
-	case "hint.image_attached":
-		return "Изображение прикреплено"
 	case "hint.image_attached_count":
 		return "%d изображ.(й) прикреплено"
 	case "hint.follow_panel":
@@ -482,14 +472,10 @@ func ruCatalog(key string) string {
 		return "Пользовательская команда /%s:\n"
 
 	// --- Sessions ---
-	case "session.list_failed":
-		return "Ошибка получения списка сессий: %v\n\n"
 	case "session.untitled":
 		return "без названия"
 	case "session.store_missing":
 		return "Хранилище сессий не настроено.\n\n"
-	case "session.none":
-		return "Сессии не найдены.\n\n"
 	case "session.new":
 		return "Новая сессия: %s\n\n"
 	case "session.resume":
@@ -512,8 +498,6 @@ func ruCatalog(key string) string {
 		return "Отмена не удалась: %v\n\n"
 	case "checkpoint.undid":
 		return "Отменено: %s на %s (контрольная точка %s)\n"
-	case "checkpoint.none":
-		return "Нет контрольных точек.\n\n"
 
 	// --- Files ---
 	case "files.disabled":
@@ -562,14 +546,6 @@ func ruCatalog(key string) string {
 		return "Список задач очищен.\n\n"
 	case "todo.clear_failed":
 		return "Ошибка очистки задач: %v\n\n"
-	case "todo.none":
-		return "Список задач не найден. Используйте инструмент todo_write для создания.\n\n"
-	case "todo.read_failed":
-		return "Ошибка чтения задач: %v\n\n"
-	case "todo.parse_failed":
-		return "Ошибка разбора задач: %v\n\n"
-	case "todo.title":
-		return "Список задач:\n%s\n\n"
 
 	// --- Bug report ---
 	case "bug.title":

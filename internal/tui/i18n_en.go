@@ -144,18 +144,12 @@ func enCatalog(key string) string {
 		return "Ctrl+R sidebar"
 	case "hint.help":
 		return "/? help"
-	case "hint.add_context":
-		return "@ add context"
-	case "hint.scroll":
-		return "PgUp/PgDn scroll"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab mode"
 	case "hint.ctrlc_cancel":
 		return "Ctrl+C cancel"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C clear/exit"
-	case "hint.image_attached":
-		return "image attached"
 	case "hint.image_attached_count":
 		return "%d image(s) attached"
 	case "hint.follow_panel":
@@ -507,14 +501,10 @@ func enCatalog(key string) string {
 		return "✓ %s is now always allowed\n\n"
 	case "command.custom":
 		return "Custom command /%s:\n"
-	case "session.list_failed":
-		return "Error listing sessions: %v\n\n"
 	case "session.untitled":
 		return "untitled"
 	case "session.store_missing":
 		return "Session store not configured.\n\n"
-	case "session.none":
-		return "No sessions found.\n\n"
 	case "session.new":
 		return "New session: %s\n\n"
 	case "session.resume":
@@ -555,8 +545,6 @@ func enCatalog(key string) string {
 		return "Redo failed: %v\n\n"
 	case "checkpoint.redid":
 		return "Redid %s on %s (checkpoint %s)\n"
-	case "checkpoint.none":
-		return "No checkpoints.\n\n"
 	case "files.disabled":
 		return "Checkpointing not enabled.\n\n"
 	case "files.none":
@@ -643,14 +631,6 @@ func enCatalog(key string) string {
 		return "Todo list cleared.\n\n"
 	case "todo.clear_failed":
 		return "Error clearing todos: %v\n\n"
-	case "todo.none":
-		return "No todo list found. Use the todo_write tool to create one.\n\n"
-	case "todo.read_failed":
-		return "Error reading todos: %v\n\n"
-	case "todo.parse_failed":
-		return "Error parsing todos: %v\n\n"
-	case "todo.title":
-		return "Todo list:\n%s\n\n"
 	case "bug.title":
 		return "=== Bug Report Diagnostics ===\n\n"
 	case "bug.version":

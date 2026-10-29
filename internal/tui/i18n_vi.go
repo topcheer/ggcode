@@ -144,18 +144,12 @@ func viCatalog(key string) string {
 		return "Ctrl+R thanh bên"
 	case "hint.help":
 		return "/? trợ giúp"
-	case "hint.add_context":
-		return "@ thêm ngữ cảnh"
-	case "hint.scroll":
-		return "PgUp/PgDn cuộn"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab chế độ"
 	case "hint.ctrlc_cancel":
 		return "Ctrl+C hủy"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C xóa/thoát"
-	case "hint.image_attached":
-		return "đã đính kèm ảnh"
 	case "hint.image_attached_count":
 		return "đã đính kèm %d ảnh"
 	case "hint.follow_panel":
@@ -440,14 +434,10 @@ func viCatalog(key string) string {
 		return "✓ %s hiện được luôn cho phép\n\n"
 	case "command.custom":
 		return "Lệnh tùy chỉnh /%s:\n"
-	case "session.list_failed":
-		return "Lỗi liệt kê phiên: %v\n\n"
 	case "session.untitled":
 		return "không tiêu đề"
 	case "session.store_missing":
 		return "Kho phiên chưa được cấu hình.\n\n"
-	case "session.none":
-		return "Không tìm thấy phiên nào.\n\n"
 	case "session.new":
 		return "Phiên mới: %s\n\n"
 	case "session.resume":
@@ -468,8 +458,6 @@ func viCatalog(key string) string {
 		return "Hoàn tác thất bại: %v\n\n"
 	case "checkpoint.undid":
 		return "Đã hoàn tác %s trên %s (checkpoint %s)\n"
-	case "checkpoint.none":
-		return "Không có checkpoint.\n\n"
 	case "files.disabled":
 		return "Checkpoint chưa được bật.\n\n"
 	case "files.none":
@@ -510,14 +498,6 @@ func viCatalog(key string) string {
 		return "Danh sách todo đã được xóa.\n\n"
 	case "todo.clear_failed":
 		return "Lỗi xóa todo: %v\n\n"
-	case "todo.none":
-		return "Không tìm thấy danh sách todo. Dùng công cụ todo_write để tạo.\n\n"
-	case "todo.read_failed":
-		return "Lỗi đọc todo: %v\n\n"
-	case "todo.parse_failed":
-		return "Lỗi phân tích todo: %v\n\n"
-	case "todo.title":
-		return "Danh sách todo:\n%s\n\n"
 	case "bug.title":
 		return "=== Chẩn đoán báo cáo lỗi ===\n\n"
 	case "bug.version":

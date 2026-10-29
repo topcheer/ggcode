@@ -143,18 +143,12 @@ func jaCatalog(key string) string {
 		return "Ctrl+R でサイドバー"
 	case "hint.help":
 		return "/help でヘルプ"
-	case "hint.add_context":
-		return "@ コンテキスト追加"
-	case "hint.scroll":
-		return "PgUp/PgDn スクロール"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab でモード切替"
 	case "hint.ctrlc_cancel":
 		return "Ctrl+C でキャンセル"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C クリア/終了"
-	case "hint.image_attached":
-		return "画像添付済み"
 	case "hint.image_attached_count":
 		return "%d 個の画像が添付されました"
 	case "hint.follow_panel":
@@ -483,14 +477,10 @@ func jaCatalog(key string) string {
 		return "✓ %s を永久許可に設定しました\n\n"
 	case "command.custom":
 		return "カスタムコマンド /%s:\n"
-	case "session.list_failed":
-		return "セッション一覧の取得エラー: %v\n\n"
 	case "session.untitled":
 		return "無題"
 	case "session.store_missing":
 		return "セッションストアが設定されていません。\n\n"
-	case "session.none":
-		return "セッションが見つかりません。\n\n"
 	case "session.new":
 		return "新しいセッション: %s\n\n"
 	case "session.resume":
@@ -513,8 +503,6 @@ func jaCatalog(key string) string {
 		// #1372: call site passes three STRINGS (tool, file, id); the old
 		// ja %d coerced the first to a number and dropped the other two.
 		return "%s を取り消しました（%s・チェックポイント %s）\n"
-	case "checkpoint.none":
-		return "チェックポイントがありません"
 	case "files.disabled":
 		return "ファイルブラウザ無効"
 	case "files.none":
@@ -555,14 +543,6 @@ func jaCatalog(key string) string {
 		return "TODOリストをクリアしました"
 	case "todo.clear_failed":
 		return "TODOのクリアエラー: %v\n\n"
-	case "todo.none":
-		return "TODO リストが見つかりません。todo_write ツールを使用して作成してください。\n\n"
-	case "todo.read_failed":
-		return "TODOの読み込みエラー: %v\n\n"
-	case "todo.parse_failed":
-		return "TODOのパースエラー: %v\n\n"
-	case "todo.title":
-		return "TODOリスト:\n%s\n\n"
 	case "bug.title":
 		return "バグレポート情報"
 	case "bug.version":

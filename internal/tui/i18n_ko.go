@@ -5,7 +5,6 @@ package tui
 // enCatalog via the default branch below (that fallback is why partial
 // coverage is safe). #1373: the old header claimed "All 722 keys
 // translated", which was false on both counts.
-
 func koCatalog(key string) string {
 	switch key {
 	case "workspace.tagline":
@@ -148,18 +147,12 @@ func koCatalog(key string) string {
 		return "Ctrl+R 사이드바"
 	case "hint.help":
 		return "/help 도움말"
-	case "hint.add_context":
-		return "@ 컨텍스트 추가"
-	case "hint.scroll":
-		return "PgUp/PgDn 스크롤"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab으로 모드 전환"
 	case "hint.ctrlc_cancel":
 		return "Ctrl+C로 취소"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C 지우기/종료"
-	case "hint.image_attached":
-		return "이미지 첨부됨"
 	case "hint.image_attached_count":
 		return "이미지 %d개 첨부됨"
 	case "hint.follow_panel":
@@ -444,14 +437,10 @@ func koCatalog(key string) string {
 		return "✓ %s이(가) 항상 허용되었습니다\n\n"
 	case "command.custom":
 		return "사용자 정의 명령 /%s:\n"
-	case "session.list_failed":
-		return "세션 목록 조회 오류: %v\n\n"
 	case "session.untitled":
 		return "제목 없음"
 	case "session.store_missing":
 		return "세션 저장소가 구성되지 않았습니다.\n\n"
-	case "session.none":
-		return "세션을 찾을 수 없습니다.\n\n"
 	case "session.new":
 		return "새 세션: %s\n\n"
 	case "session.resume":
@@ -472,8 +461,6 @@ func koCatalog(key string) string {
 		return "실행 취소 실패: %v\n\n"
 	case "checkpoint.undid":
 		return "%s의 %s 실행 취소 (체크포인트 %s)\n"
-	case "checkpoint.none":
-		return "체크포인트가 없습니다.\n\n"
 	case "files.disabled":
 		return "파일 브라우저 비활성화"
 	case "files.none":
@@ -514,14 +501,6 @@ func koCatalog(key string) string {
 		return "TODO 목록이 삭제되었습니다.\n\n"
 	case "todo.clear_failed":
 		return "TODO 삭제 오류: %v\n\n"
-	case "todo.none":
-		return "TODO 목록을 찾을 수 없습니다. todo_write 도구로 생성하세요.\n\n"
-	case "todo.read_failed":
-		return "TODO 읽기 오류: %v\n\n"
-	case "todo.parse_failed":
-		return "TODO 파싱 오류: %v\n\n"
-	case "todo.title":
-		return "TODO 목록:\n%s\n\n"
 	case "bug.title":
 		return "=== 버그 보고 진단 ===\n\n"
 	case "bug.version":

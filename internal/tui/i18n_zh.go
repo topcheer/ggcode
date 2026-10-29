@@ -142,18 +142,12 @@ func zhCatalog(key string) string {
 		return "Ctrl+R 侧栏"
 	case "hint.help":
 		return "/? 帮助"
-	case "hint.add_context":
-		return "@ 添加上下文"
-	case "hint.scroll":
-		return "PgUp/PgDn 滚动"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab 切模式"
 	case "hint.ctrlc_cancel":
 		return "Ctrl+C 取消"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C 清空/退出"
-	case "hint.image_attached":
-		return "已附加图片"
 	case "hint.image_attached_count":
 		return "已附加 %d 张图片"
 	case "hint.follow_panel":
@@ -518,14 +512,10 @@ func zhCatalog(key string) string {
 		return "✓ %s 已设为永久允许\n\n"
 	case "command.custom":
 		return "自定义命令 /%s：\n"
-	case "session.list_failed":
-		return "列出会话失败：%v\n\n"
 	case "session.untitled":
 		return "未命名"
 	case "session.store_missing":
 		return "未配置会话存储。\n\n"
-	case "session.none":
-		return "没有找到会话。\n\n"
 	case "session.new":
 		return "新会话：%s\n\n"
 	case "session.resume":
@@ -566,8 +556,6 @@ func zhCatalog(key string) string {
 		return "重做 %s 于 %s（检查点 %s）\n"
 	case "checkpoint.undid":
 		return "已撤销 %s 对 %s 的修改（检查点 %s）\n"
-	case "checkpoint.none":
-		return "没有检查点。\n\n"
 	case "files.disabled":
 		return "检查点功能未启用。\n\n"
 	case "files.none":
@@ -654,14 +642,6 @@ func zhCatalog(key string) string {
 		return "已清空 todo 列表。\n\n"
 	case "todo.clear_failed":
 		return "清空 todo 失败：%v\n\n"
-	case "todo.none":
-		return "没有找到 todo 列表。请使用 todo_write 工具创建。\n\n"
-	case "todo.read_failed":
-		return "读取 todo 失败：%v\n\n"
-	case "todo.parse_failed":
-		return "解析 todo 失败：%v\n\n"
-	case "todo.title":
-		return "Todo 列表：\n%s\n\n"
 	case "bug.title":
 		return "=== Bug 报告诊断信息 ===\n\n"
 	case "bug.version":
