@@ -42,7 +42,7 @@ import (
 )
 
 const (
-	equivWarnThreshold = 3 // occurrences of normalized-equivalent call before warning (#494: was 2 — fired before tool_redundancy on byte-identical repeats, double-warning)
+	equivWarnThreshold = 3 // occurrences of normalized-equivalent call before warning (#494: was 2 - fired before tool_redundancy on byte-identical repeats, double-warning)
 	equivMaxWarnings   = 2 // max warnings per run
 )
 
@@ -71,11 +71,18 @@ type toolEquivDetectState struct {
 	toolNames        map[string]string // fingerprint -> tool name (readable)
 	// rawSeen/rawCount implement the exact-match suppression contract (#494):
 	// rawSeen[normFp] is true while EVERY occurrence of that normalized
-	// fingerprint has been byte-identical — i.e. fully covered by the
+	// fingerprint has been byte-identical - i.e. fully covered by the
 	// tool_redundancy detector, which this detector yields to.
 	rawSeen  map[string]bool
 	rawCount map[string]int
-	warnings int
+	// warnedFirst/warnedSecond are per-fingerprint once-flags (#4520): the
+	// trigger was relaxed from == to >= so a fingerprint that stays
+	// byte-identical through the threshold count and diverges only later
+	// (the detector's core scenario) still fires - without the flags every
+	// subsequent occurrence would re-warn.
+	warnedFirst  map[string]bool
+	warnedSecond map[string]bool
+	warnings     int
 }
 
 func newToolEquivDetectState() *toolEquivDetectState {
@@ -84,6 +91,8 @@ func newToolEquivDetectState() *toolEquivDetectState {
 		toolNames:        make(map[string]string),
 		rawSeen:          make(map[string]bool),
 		rawCount:         make(map[string]int),
+		warnedFirst:      make(map[string]bool),
+		warnedSecond:     make(map[string]bool),
 	}
 }
 
@@ -92,6 +101,8 @@ func (s *toolEquivDetectState) reset() {
 	s.toolNames = make(map[string]string)
 	s.rawSeen = make(map[string]bool)
 	s.rawCount = make(map[string]int)
+	s.warnedFirst = make(map[string]bool)
+	s.warnedSecond = make(map[string]bool)
 	s.warnings = 0
 }
 
@@ -107,17 +118,17 @@ func stripVolatileForTool(toolName string) bool {
 	return !strings.HasPrefix(toolName, mcpToolNamePrefix)
 }
 
-// normalizeArgs parses JSON arguments, sorts keys, and — for builtin tools
-// only (#3631) — strips volatile fields, returning a canonical string
+// normalizeArgs parses JSON arguments, sorts keys, and - for builtin tools
+// only (#3631) - strips volatile fields, returning a canonical string
 // representation. If args is not valid JSON, returns the raw string
-// (fallback — don't crash on malformed input).
+// (fallback - don't crash on malformed input).
 func normalizeArgs(toolName string, args []byte) string {
 	if len(args) == 0 {
 		return ""
 	}
 	var parsed interface{}
 	if err := json.Unmarshal(args, &parsed); err != nil {
-		// Not valid JSON — use raw bytes as fallback
+		// Not valid JSON - use raw bytes as fallback
 		return string(args)
 	}
 	normalized := normalizeValue(parsed, stripVolatileForTool(toolName))
@@ -157,7 +168,7 @@ func normalizeValue(v interface{}, stripVolatile bool) interface{} {
 
 // recordCall tracks a tool call with normalized arguments and returns guidance
 // if a semantic-equivalent duplicate pattern is detected.
-// rawFp is the exact-match fingerprint (same raw bytes = same rawFp) — used to
+// rawFp is the exact-match fingerprint (same raw bytes = same rawFp) - used to
 // detect repetition fully covered by the exact-match tool_redundancy
 // detector, which this detector then yields to (#494).
 func (s *toolEquivDetectState) recordCall(toolName string, args []byte, rawFp string) string {
@@ -173,7 +184,7 @@ func (s *toolEquivDetectState) recordCall(toolName string, args []byte, rawFp st
 
 	// #494 exact-match suppression: if EVERY occurrence of this normalized
 	// fingerprint so far was byte-identical, tool_redundancy already sees
-	// the repetition — this detector yields (the documented :32 contract:
+	// the repetition - this detector yields (the documented :32 contract:
 	// only fire when exact-match did NOT already catch it). Warn only once
 	// an occurrence DIVERGES (reordered keys / volatile fields): that is
 	// the semantic-equivalence case this detector exists for.
@@ -187,15 +198,20 @@ func (s *toolEquivDetectState) recordCall(toolName string, args []byte, rawFp st
 
 	count := s.normalizedCounts[normFp]
 
-	if count == equivWarnThreshold && !s.rawSeen[normFp] {
+	// #4520: >= (not ==) so the core scenario works - N byte-identical calls
+	// (rawSeen=true through the threshold, no warning owed to the exact-match
+	// detector) followed by a DIVERGING occurrence at count > threshold now
+	// fires instead of being missed forever.
+	if count >= equivWarnThreshold && !s.rawSeen[normFp] && !s.warnedFirst[normFp] {
+		s.warnedFirst[normFp] = true
 		s.warnings++
-		// #3631: uncertain wording — normalization can miss semantics
+		// #3631: uncertain wording - normalization can miss semantics
 		// (e.g. volatile fields that DO carry meaning), so never assert
 		// that results are identical; only that they may be.
 		return fmt.Sprintf(
 			"Semantic duplicate: You called %s %d times with possibly equivalent arguments "+
 				"(same parameters after normalizing key order and volatile fields). "+
-				"Results may still differ if volatile fields (e.g. timestamp) carry meaning — "+
+				"Results may still differ if volatile fields (e.g. timestamp) carry meaning - "+
 				"if you intentionally changed a parameter, keep going; otherwise, unless "+
 				"context compaction has trimmed earlier results, you likely already have "+
 				"this information in context.",
@@ -203,7 +219,8 @@ func (s *toolEquivDetectState) recordCall(toolName string, args []byte, rawFp st
 		)
 	}
 
-	if count == equivWarnThreshold*3 && !s.rawSeen[normFp] {
+	if count >= equivWarnThreshold*3 && !s.rawSeen[normFp] && !s.warnedSecond[normFp] {
+		s.warnedSecond[normFp] = true
 		s.warnings++
 		return fmt.Sprintf(
 			"Warning: %s called %d times with semantically equivalent arguments. "+
