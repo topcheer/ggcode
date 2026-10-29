@@ -56,11 +56,12 @@ func TestIssue688_ResumeSessionSyncsPolicyMode(t *testing.T) {
 	ses.PermissionMode = "autopilot"
 	m.switchToSession(ses, false)
 
-	if m.mode != permission.AutopilotMode {
-		t.Errorf("displayed mode = %v, want autopilot", m.mode)
+	// two-mode refactor: autopilot normalizes to bypass on restore.
+	if m.mode != permission.BypassMode {
+		t.Errorf("displayed mode = %v, want bypass (autopilot normalizes)", m.mode)
 	}
-	if got := cp.Mode(); got != permission.AutopilotMode {
-		t.Errorf("policy mode = %v, want autopilot", got)
+	if got := cp.Mode(); got != permission.BypassMode {
+		t.Errorf("policy mode = %v, want bypass (autopilot normalizes)", got)
 	}
 }
 

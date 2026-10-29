@@ -209,14 +209,21 @@ func (t FileOps) executeOne(action, source, destination string, recursive bool) 
 
 	switch action {
 	case "delete":
-		// Check existence first.
-		info, err := os.Stat(source)
+		// Check existence first. #4551: os.Stat FOLLOWS symlinks, so a
+		// dangling link (target deleted) reported IsNotExist and was skipped
+		// forever - os.Remove would have removed the link itself. Lstat
+		// inspects the link, matching copyDirTree's symlink handling.
+		info, err := os.Lstat(source)
 		if err != nil {
 			if os.IsNotExist(err) {
 				return fileOpsItemResult{Action: action, Source: source, Status: "skipped", Detail: "file does not exist"}
 			}
 			return fileOpsItemResult{Action: action, Source: source, Status: "error", Detail: fmt.Sprintf("stat error: %v", err)}
 		}
+		// #4551: resolve the tracker key while the path still exists -
+		// normalizePath falls back to the lexical spelling once the tree is
+		// gone, missing the resolved keys children were recorded under.
+		srcKey := normalizePath(source)
 
 		if info.IsDir() && !recursive {
 			// Check if directory is empty.
@@ -239,17 +246,34 @@ func (t FileOps) executeOne(action, source, destination string, recursive bool) 
 		}
 
 		// Remove from the file tracker so it doesn't think the file is stale.
+		// #4551: directories are exact-path keyed; also drop every tracked
+		// entry under the deleted tree so children don't linger as stale keys.
 		defaultFileTracker.RemoveTracking(source)
+		if info.IsDir() {
+			removeTrackingSubtree(srcKey)
+		}
 		return fileOpsItemResult{Action: action, Source: source, Status: "ok"}
 
 	case "move":
-		// Check source existence.
-		if _, err := os.Stat(source); err != nil {
+		// Check source existence. #4551: capture info - the tracking
+		// migration below needs to know whether the source is a directory.
+		// #4574: Lstat, not Stat - Stat FOLLOWS symlinks, so a dangling
+		// link (its target deleted) reported "source does not exist" and
+		// the link could never be moved, though os.Rename moves the link
+		// entry itself. Lstat sees the link; info.IsDir() is false for a
+		// link, so no subtree migration fires (correct - links have no
+		// tracked children of their own).
+		info, err := os.Lstat(source)
+		if err != nil {
 			if os.IsNotExist(err) {
 				return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: "source does not exist"}
 			}
 			return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: fmt.Sprintf("stat error: %v", err)}
 		}
+		// #4551: resolve the subtree prefix while the source still exists;
+		// after the rename normalizePath(source) degrades to the lexical
+		// spelling and would miss resolved child keys.
+		srcTreeKey := normalizePath(source)
 
 		// Ensure destination parent exists.
 		dstDir := filepath.Dir(destination)
@@ -257,15 +281,56 @@ func (t FileOps) executeOne(action, source, destination string, recursive bool) 
 			return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: fmt.Sprintf("create destination dir error: %v", err)}
 		}
 
+		// #4445: refuse to silently overwrite an existing destination.
+		// os.Rename atomically replaces an existing regular file on Unix and
+		// the cross-device fallback clobbers it via os.WriteFile, so both
+		// paths destroy data with status:"ok" and no warning - unlike
+		// write_file, which guards this same case three ways. Fail closed:
+		// the caller must remove the destination first or pick another path.
+		if _, err := os.Lstat(destination); err == nil {
+			return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: "destination already exists; move refuses to silently overwrite it (delete the destination first or choose a different path)"}
+		} else if !os.IsNotExist(err) {
+			return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: fmt.Sprintf("stat destination error: %v", err)}
+		}
+
+		// Capture the source's tracked-read state BEFORE the rename: once
+		// os.Rename succeeds the source no longer exists, normalizePath falls
+		// back to the lexical key (macOS /var vs /private/var), and the
+		// resolved key recorded at read time would never match (#4445).
+		// Removing the old entry here also deletes the resolved key that a
+		// post-rename RemoveTracking would miss.
+		srcSeen := defaultFileTracker.HasBeenSeen(source)
+		defaultFileTracker.RemoveTracking(source)
+
 		// Use rename for atomic move when possible. Fall back to copy+remove
 		// for cross-device moves.
 		if err := os.Rename(source, destination); err != nil {
+			// #4448: every failure return below leaves the file physically at
+			// SOURCE, but the pre-rename RemoveTracking already dropped its
+			// read-state - a later write_file to the source then false-positived
+			// the blind-write warning ("overwriting without having read it")
+			// for a file the agent HAD read. Restore the tracked state on
+			// failure; on success the conditional RecordRead(destination)
+			// below carries it over.
+			if srcSeen {
+				defaultFileTracker.RecordRead(source)
+			}
 			// Cross-device link error: fall back to copy + delete.
 			if isCrossDeviceError(err) {
 				if err := copyRecursive(source, destination); err != nil {
-					return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: fmt.Sprintf("cross-device copy error: %v", err)}
+					// #4551: roll back the partially-copied destination. #4445
+					// guarantees destination did not exist on entry, so the whole
+					// tree is ours; leaving it behind parks a half-written tree
+					// that fail-closed move then refuses to retry over
+					// ("destination already exists") and that later reads may
+					// mistake for complete data.
+					_ = os.RemoveAll(destination)
+					return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: fmt.Sprintf("cross-device copy error (destination rolled back): %v", err)}
 				}
 				if err := os.RemoveAll(source); err != nil {
+					// Source still exists (remove failed): its read-state restore
+					// above matches the physical state. The destination copy ALSO
+					// exists - leave it untracked (it was never read).
 					return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: fmt.Sprintf("moved but failed to remove source: %v", err)}
 				}
 			} else {
@@ -273,9 +338,21 @@ func (t FileOps) executeOne(action, source, destination string, recursive bool) 
 			}
 		}
 
-		// Update tracker: remove old path, record new path.
-		defaultFileTracker.RemoveTracking(source)
-		defaultFileTracker.RecordRead(destination)
+		// Carry the read-state over to the new path ONLY if the source was
+		// actually tracked. Unconditionally RecordRead(destination) fabricated
+		// a read for a file this run never read, masking overwrite footprints
+		// (#4445).
+		if srcSeen {
+			defaultFileTracker.RecordRead(destination)
+		}
+		// #4551: the tracker is exact-path keyed with no subtree semantics;
+		// a directory move must carry every tracked child's read-state from
+		// olddir/... to newdir/... or a later write_file to newdir/a.go
+		// false-positives the blind-write warning for a file the agent HAD
+		// read (directory-shaped repeat of #4448).
+		if info.IsDir() {
+			migrateTrackingSubtree(srcTreeKey, destination)
+		}
 		return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "ok"}
 
 	case "mkdir":
@@ -382,4 +459,31 @@ func copyRecursive(src, dst string) error {
 		return copyDirTree(src, dst, info, 0, make(map[string]bool))
 	}
 	return copyDirEntry(src, dst, info, 0, nil)
+}
+
+// migrateTrackingSubtree carries every tracked read-state entry under the
+// (pre-resolved) subtree prefix srcPrefix over to the moved location dst
+// (#4551). Without this, read_file olddir/a.go -> move olddir newdir ->
+// write_file newdir/a.go false-positives the blind-write warning.
+func migrateTrackingSubtree(srcPrefix, dst string) {
+	prefix := srcPrefix + "/"
+	for path := range defaultFileTracker.SnapshotTracked() {
+		if strings.HasPrefix(path, prefix) {
+			defaultFileTracker.RemoveTracking(path)
+			// RecordRead re-stats the moved file (present after the move);
+			// its normalizePath resolves the new location cleanly.
+			defaultFileTracker.RecordRead(filepath.Join(dst, path[len(prefix):]))
+		}
+	}
+}
+
+// removeTrackingSubtree drops every tracked entry under the (pre-resolved)
+// subtree prefix dirKey so deleted children do not linger as stale keys (#4551).
+func removeTrackingSubtree(dirKey string) {
+	prefix := dirKey + "/"
+	for path := range defaultFileTracker.SnapshotTracked() {
+		if strings.HasPrefix(path, prefix) {
+			defaultFileTracker.RemoveTracking(path)
+		}
+	}
 }

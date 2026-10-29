@@ -10,7 +10,7 @@ import (
 // and unrecoverable.
 func TestRefusalReleaseReaffirmationVeto(t *testing.T) {
 	l := newRefusalTestLedger(t)
-	l.record("don't touch config.yaml", "user")
+	l.record("don't touch config.yaml", "nl", refusalKindDirect)
 
 	vetoes := []string{
 		// Issue primary: confirmation that opens with a weak lift word.
@@ -45,7 +45,7 @@ func TestRefusalReleaseReaffirmationVeto(t *testing.T) {
 // release evidence; with authorization it releases.
 func TestRefusalReleaseWeakLiftNeedsAuthorization(t *testing.T) {
 	l := newRefusalTestLedger(t)
-	l.record("don't touch internal/auth/core.go", "user")
+	l.record("don't touch internal/auth/core.go", "nl", refusalKindDirect)
 
 	// "ok ... core.go" alone: no authorization word - keep the block.
 	if n := l.release("ok internal/auth/core.go"); n != 0 {
@@ -60,7 +60,7 @@ func TestRefusalReleaseWeakLiftNeedsAuthorization(t *testing.T) {
 // #3469 strong lift phrases release without any weak-word ceremony.
 func TestRefusalReleaseStrongLift(t *testing.T) {
 	l := newRefusalTestLedger(t)
-	l.record("never use git push --force", "user")
+	l.record("never use git push --force", "nl", refusalKindDirect)
 	if n := l.release("go ahead with git push --force"); n != 1 {
 		t.Errorf("strong lift must release, got %d", n)
 	}
@@ -70,7 +70,7 @@ func TestRefusalReleaseStrongLift(t *testing.T) {
 // write-class block even when the refusal target appears in the command.
 func TestRefusalCheckBlockedReadOnlyCmdExempt(t *testing.T) {
 	l := newRefusalTestLedger(t)
-	l.record(`don't touch build/output`, "user")
+	l.record(`don't touch build/output`, "nl", refusalKindDirect)
 
 	grep := mustJSON3469(t, map[string]string{"command": "grep foo build/output"})
 	if msg := l.checkBlocked("run_command", grep); msg != "" {

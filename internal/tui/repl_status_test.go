@@ -32,8 +32,8 @@ func TestREPLRuntimeStatusBasic(t *testing.T) {
 	if st.Model != "gpt-4" {
 		t.Errorf("Model = %q, want gpt-4", st.Model)
 	}
-	if st.PermissionMode != "auto" {
-		t.Errorf("PermissionMode = %q, want auto", st.PermissionMode)
+	if st.PermissionMode != "supervised" {
+		t.Errorf("PermissionMode = %q, want supervised (auto alias normalizes)", st.PermissionMode)
 	}
 	if st.AgentBusy {
 		t.Error("AgentBusy should be false (model.loading=false)")

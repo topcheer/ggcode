@@ -37,11 +37,13 @@ package agent
 //     (negation constraints, exclusivity constraints, requirement constraints)
 //   - Tracks when each constraint was established (iteration number)
 //   - Injects a reminder when: (a) context has grown significantly
-//     (>12 iterations or >50K tokens since constraint), AND (b) the agent
-//     is about to make or has made an edit that plausibly relates to a
-//     tracked constraint
+//     (>12 iterations since the constraint; the >50K-token alternative
+//     arm of the original design is NOT implemented - no token plumbing
+//     reaches this detector), AND (b) the agent has made a write/edit in
+//     recent turns (#4242 edit-relevance gate - pure read-only runs no
+//     longer get "before your next edit" nudges)
 //   - Zero LLM cost - pure deterministic pattern matching
-//   - Fires at most 2 times per run (advisory, non-blocking)
+//   - Fires at most 1 time per run (advisory, non-blocking)
 
 import (
 	"fmt"
@@ -58,6 +60,12 @@ const (
 	// constraintMaxWarnings: max reminders per run to avoid noise.
 	constraintMaxWarnings = 1
 
+	// constraintEditRecencyTurns (#4242): a reminder only fires when a
+	// write/edit happened within this many turns - the reminder text is
+	// edit-scoped ("Before making your next edit..."), so firing it on a
+	// pure read-only run was noise.
+	constraintEditRecencyTurns = 2
+
 	// constraintMaxTracked: max constraints to track (bounded memory).
 	constraintMaxTracked = 8
 
@@ -73,9 +81,10 @@ type constraintEntry struct {
 
 // constraintAmnesiaState tracks user-established constraints across a run.
 type constraintAmnesiaState struct {
-	constraints []constraintEntry
-	warnings    int
-	currentIter int
+	constraints  []constraintEntry
+	warnings     int
+	currentIter  int
+	lastEditIter int // #4242: 1-based iteration of the most recent write/edit; -1 = none
 }
 
 func newConstraintAmnesiaState() *constraintAmnesiaState {
@@ -86,6 +95,15 @@ func (s *constraintAmnesiaState) reset() {
 	s.constraints = nil
 	s.warnings = 0
 	s.currentIter = 0
+	s.lastEditIter = -1
+}
+
+// noteEdit (#4242) records the 1-based iteration of a successful write/edit
+// tool call, feeding the edit-relevance gate in maybeWarn.
+func (s *constraintAmnesiaState) noteEdit(iter int) {
+	if iter > s.lastEditIter {
+		s.lastEditIter = iter
+	}
 }
 
 // Constraint extraction patterns. Case-insensitive.
@@ -98,15 +116,22 @@ var constraintPatterns = []*regexp.Regexp{
 	// Requirement constraints: "needs to be", "has to", "it's important that"
 	regexp.MustCompile(`(?i)\b(?:needs? to be|has to be|it'?s important that|make sure|ensure that)\b[^\n.]{5,70}`),
 	// Scope restrictions: "stay in", "limit to", "keep within"
-	regexp.MustCompile(`(?i)\b(?:stay in|limit (?:to|changes to)|keep within|don'?t touch|leave\b[^n]{0,5}alone)\b[^\n.]{3,60}`),
+	regexp.MustCompile(`(?i)\b(?:stay in|limit (?:to|changes to)|keep within|don'?t touch|leave\b[^\n.]{0,20}alone)\b[^\n.]{3,60}`),
 }
 
 // extractConstraints scans user text for explicit constraint directives.
 // Returns extracted constraint excerpts (deduplicated).
+// stripNonDirectiveText / isLogLikeLine are provided by refusal_ledger.go in
+// this package (single shared source-discimination helper, #4285); constraint
+// extraction reuses them (#4257).
+
 func extractConstraints(text string) []string {
 	if len(text) == 0 {
 		return nil
 	}
+	// #4257: source-shape filter BEFORE extraction - see
+	// stripNonDirectiveText.
+	text = stripNonDirectiveText(text)
 
 	var results []string
 	seen := make(map[string]bool)
@@ -179,6 +204,12 @@ func (s *constraintAmnesiaState) maybeWarn(iteration int) string {
 	earliestMsgIdx := s.constraints[0].messageIdx
 	iterationsSince := iteration - earliestMsgIdx
 	if iterationsSince < constraintReminderMinIterations {
+		return ""
+	}
+	// #4242 (b): edit-relevance gate - the design promised "about to make
+	// or has made an edit"; without it a pure read-only run got an
+	// edit-scoped reminder at iteration 13 as pure noise.
+	if s.lastEditIter < 0 || iteration-s.lastEditIter > constraintEditRecencyTurns {
 		return ""
 	}
 

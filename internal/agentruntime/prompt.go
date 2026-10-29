@@ -92,9 +92,9 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 			prompt += "\n\n## Skills\n" + skillsPrompt
 		}
 	}
-	if mode == permission.AutopilotMode {
+	if mode.IsCruiseMode() { // two-mode refactor: cruise rides on bypass
 		prompt += "\n\n## Autopilot\n" +
-			"You are in autopilot mode — work autonomously until the Goal is fully achieved.\n" +
+			"You are in bypass (cruise) mode — work autonomously until the Goal is fully achieved.\n" +
 			"\n" +
 			"**Goal-directed execution:**\n" +
 			"- At the start of each autopilot session, you will be asked to declare your goal. Work toward it fully autonomously.\n" +

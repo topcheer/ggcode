@@ -593,16 +593,25 @@ func (a *discordAdapter) Send(ctx context.Context, binding ChannelBinding, event
 
 	// Extract images from text and send them first
 	images, remainingText := ExtractImagesFromText(content)
+	sentImages := 0
 	for _, img := range images {
 		if err := a.sendExtractedImage(ctx, channelID, img); err != nil {
 			debug.Log("discord", "adapter=%s image send failed: %v", a.name, err)
+			continue
 		}
+		sentImages++
 	}
 
 	// Send remaining text
 	remainingText = strings.TrimSpace(remainingText)
 	if remainingText == "" {
-		return nil
+		if len(images) > 0 && sentImages == 0 {
+			// #4464: an image-only message whose sends all failed must not
+			// be silently dropped - fall back to the original markdown text.
+			remainingText = content
+		} else {
+			return nil
+		}
 	}
 	chunks := splitDiscordMessage(remainingText, discordMaxTextLen)
 	for i, chunk := range chunks {
@@ -654,10 +663,23 @@ func (a *discordAdapter) outboundText(event OutboundEvent) string {
 }
 
 func (a *discordAdapter) sendChannelMessage(ctx context.Context, channelID, content string) error {
+	return a.sendChannelMessageFlags(ctx, channelID, content, true)
+}
+
+// sendChannelMessageFlags is the underlying text-message send; suppress
+// toggles the SUPPRESS_EMBEDS flag. #4519: sendExtractedImage's remote-URL
+// path used to ride sendChannelMessage, whose unconditional
+// discordSuppressEmbeds stopped Discord from expanding the image URL into a
+// preview - the user saw bare URL text instead of the image. Image sends
+// pass suppress=false so the URL renders; ordinary text keeps the cleaner
+// no-embed UX.
+func (a *discordAdapter) sendChannelMessageFlags(ctx context.Context, channelID, content string, suppress bool) error {
 	url := a.apiBase + "/channels/" + channelID + "/messages"
 	body := map[string]any{
 		"content": content,
-		"flags":   discordSuppressEmbeds, // Suppress link preview embeds for cleaner UX
+	}
+	if suppress {
+		body["flags"] = discordSuppressEmbeds
 	}
 	bodyBytes, _ := json.Marshal(body)
 
@@ -824,8 +846,10 @@ func (a *discordAdapter) sendExtractedImage(ctx context.Context, channelID strin
 			}
 			return a.sendFileMessage(ctx, channelID, filepath.Base(img.Data), data, "")
 		}
-		// For remote URLs, send as an embed URL in a regular message
-		return a.sendChannelMessage(ctx, channelID, img.Data)
+		// For remote URLs, send as plain message content WITHOUT
+		// SUPPRESS_EMBEDS (#4519) - suppressing embeds killed the image
+		// preview and left the user with bare URL text.
+		return a.sendChannelMessageFlags(ctx, channelID, img.Data, false)
 	case "data_url":
 		parts := strings.SplitN(img.Data, ",", 2)
 		if len(parts) < 2 {

@@ -37,9 +37,9 @@ func TestConfigFileSyncPollerPicksUpExternalChange1847(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 	vendorsBlock := "vendors:\n  deskvendor:\n    endpoints:\n      main:\n        base_url: https://example.com\n        protocol: openai\n"
-	patched := strings.Replace(string(raw), "default_mode: auto", "default_mode: plan", 1)
-	if !strings.Contains(patched, "default_mode: plan") {
-		patched += "default_mode: plan\n"
+	patched := strings.Replace(string(raw), "default_mode: auto", "default_mode: bypass", 1)
+	if !strings.Contains(patched, "default_mode: bypass") {
+		patched += "default_mode: bypass\n"
 	}
 	if !strings.Contains(patched, "vendors:") {
 		patched += vendorsBlock
@@ -53,7 +53,7 @@ func TestConfigFileSyncPollerPicksUpExternalChange1847(t *testing.T) {
 	syncCfgFileLocked()
 	globalMu.Unlock()
 
-	if got := GetGlobalConfig().DefaultMode; got != "plan" {
+	if got := GetGlobalConfig().DefaultMode; got != "bypass" {
 		t.Fatalf("poller must refresh external change, default_mode=%q", got)
 	}
 	// A delta save from the desktop now preserves the external value.
@@ -64,7 +64,7 @@ func TestConfigFileSyncPollerPicksUpExternalChange1847(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if re.DefaultMode != "plan" {
+	if re.DefaultMode != "bypass" {
 		t.Fatalf("desktop save rolled back external change: default_mode=%q", re.DefaultMode)
 	}
 }

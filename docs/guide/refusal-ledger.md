@@ -35,6 +35,14 @@ Rules that keep false positives near zero:
 - Approval-gate denials are intentionally **not** recorded: "not right now" is weaker than "never do this"; persisting them as 30-day blocks would over-block.
 - English extraction in V1, matching the existing constraint extraction layer it extends.
 
+### Source discrimination (#4284)
+
+Not every negation-shaped phrase in a user message is the user's own instruction. Pasted code blocks, quoted reply fragments, and log lines routinely contain `// don't touch X` or `[ERROR] must not retry` — recording those with the same weight as a real directive poisoned production ledgers (a paste could then hard-block writes across runs for 30 days). Since the fix:
+
+- **Extraction runs only on direct user prose**: fenced code blocks (``` / ~~~), block-quote / reply-quote lines (`>`, `|`), log-shaped lines (ISO timestamps, `[LEVEL]` / `LEVEL` / `level=` prefixes), and line comments (`//`, `#`, `--`) are stripped before the refusal patterns run. Only near-certainly-non-directive shapes are stripped — bullets and inline quotes stay (a false strip would silently drop a REAL refusal).
+- **Entries carry a `kind`**: `user-direct` (enforced) or `fragment` (advisory-only — visible in `/refusals` marked `advisory-only`, never blocks).
+- **Legacy files are re-annotated at load**: pre-#4284 entries (no `kind`) are classified by excerpt shape — comment/quote/log-shaped excerpts are downgraded to `fragment`; anything else stays enforced (fail-closed for ambiguous prose). If a legacy downgrade looks wrong, `/refusals clear` resets the ledger.
+
 ## Usage
 
 ```

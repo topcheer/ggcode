@@ -388,6 +388,9 @@ var SlashCommands = []string{
 	// #2835: same omission family - /pin /style /goal have live handlers
 	// (commands.go dispatch) but never appeared in Tab completion.
 	"/pin", "/style", "/goal",
+	// #4268: third recurrence of the family - /interventions /refusals
+	// had live handlers and descriptions but were absent from this list.
+	"/interventions", "/refusals",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -488,7 +491,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/untag":           "Remove tags from the session (e.g. /untag rust)",
 	"/tags":            "Show the current session's tags",
 	"/fork":            "Fork current conversation into a new session",
-	"/mode":            "Set permission mode (supervised|plan|auto|bypass|autopilot)",
+	"/mode":            "Set permission mode (supervised|bypass)",
 	"/allow":           "Always allow a specific tool",
 	"/export":          "Export session to markdown file",
 	"/export-trace":    "Export session execution trace as JSON (--otel for OTLP/GenAI format)",

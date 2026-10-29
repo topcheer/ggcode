@@ -118,12 +118,17 @@ func (r *Registry) Discover() ([]InstanceInfo, error) {
 	}
 
 	// Update cache.
+	// #4501: store a private copy and return a separate one - returning
+	// the cached slice itself (or caching the returned slice) let any
+	// caller-side in-place mutation (sort.Slice, field edits) leak into the
+	// cache and race concurrent readers. CachedInstances/SetCachedInstances
+	// already defensively copy; these two sites were the gaps.
 	r.mu.Lock()
-	r.asyncCache = instances
+	r.asyncCache = append([]InstanceInfo(nil), instances...)
 	r.asyncCacheOK = true
 	r.mu.Unlock()
 
-	return instances, nil
+	return append([]InstanceInfo(nil), instances...), nil
 }
 
 // CachedInstances returns the last background-refreshed instance list without
@@ -177,13 +182,6 @@ func (r *Registry) refreshCache() {
 	r.mu.Unlock()
 }
 
-// InvalidateDiscoverCache forces the next background refresh to do a fresh scan.
-func (r *Registry) InvalidateDiscoverCache() {
-	r.mu.Lock()
-	r.asyncCacheOK = false
-	r.mu.Unlock()
-}
-
 // SetCachedInstances manually sets the in-memory instance cache. This is
 // used by tests to inject instances without requiring real mDNS discovery.
 func (r *Registry) SetCachedInstances(instances []InstanceInfo) {
@@ -191,25 +189,6 @@ func (r *Registry) SetCachedInstances(instances []InstanceInfo) {
 	r.asyncCache = append([]InstanceInfo(nil), instances...)
 	r.asyncCacheOK = true
 	r.mu.Unlock()
-}
-
-// DiscoverByCapability returns instances whose metadata matches the given tag.
-// Tag can be a language name ("go", "typescript"), framework ("npm"), or partial workspace path.
-func (r *Registry) DiscoverByCapability(tag string) ([]InstanceInfo, error) {
-	all, err := r.Discover()
-	if err != nil {
-		return nil, err
-	}
-
-	tag = strings.ToLower(tag)
-	var matched []InstanceInfo
-	for _, inst := range all {
-		ws := strings.ToLower(inst.Workspace)
-		if strings.Contains(ws, tag) || strings.Contains(tag, filepath.Base(ws)) {
-			matched = append(matched, inst)
-		}
-	}
-	return matched, nil
 }
 
 // UpdateStatus refreshes the status field for this instance.
@@ -232,37 +211,6 @@ func GenerateInstanceID() string {
 	return fmt.Sprintf("ggcode-%s-%d-%d", hostname, pid, time.Now().UnixNano())
 }
 
-// SelfInfo returns the InstanceInfo for this instance (safe copy).
-func (r *Registry) SelfInfo() *InstanceInfo {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.selfInfo == nil {
-		return nil
-	}
-	info := *r.selfInfo
-	return &info
-}
-
-// ListAllInstances returns all known instances sorted by workspace name.
-func (r *Registry) ListAllInstances() ([]InstanceInfo, error) {
-	instances, err := r.Discover()
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(instances, func(i, j int) bool {
-		return instances[i].Workspace < instances[j].Workspace
-	})
-
-	// Prepend self if registered.
-	r.mu.Lock()
-	if r.selfInfo != nil {
-		instances = append([]InstanceInfo{*r.selfInfo}, instances...)
-	}
-	r.mu.Unlock()
-
-	return instances, nil
-}
-
 // ---------------------------------------------------------------------------
 // Workspace detection
 // ---------------------------------------------------------------------------
@@ -274,9 +222,16 @@ func detectWorkspaceMeta(dir string) WorkspaceMeta {
 		HasGit:    false,
 	}
 
-	// Check for git.
+	// Check for git. #4562: a git worktree or submodule has a .git FILE
+	// (a "gitdir: ..." pointer), not a directory - the old info.IsDir()
+	// requirement misreported HasGit=false there, which blocked the
+	// git-ops skill in handler.go and exposed has_git=false on the agent
+	// card. Any .git entry (file or dir) means this is a git repository.
+	// ProjName intentionally stays filepath.Base(dir): for worktree-based
+	// instances the worktree name IS the instance identity used by A2A
+	// targets, so no repo-name resolution is done here.
 	gitDir := filepath.Join(dir, ".git")
-	if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
+	if _, err := os.Stat(gitDir); err == nil {
 		meta.HasGit = true
 	}
 
@@ -347,7 +302,11 @@ func scanWorkspaceSignals(dir string) ([]string, bool) {
 		case ".java":
 			langSet["java"] = true
 		}
-		if strings.Contains(name, "_test.") || strings.Contains(name, "test.") || strings.HasSuffix(name, "_test.go") || strings.Contains(name, ".test.") || strings.Contains(name, ".spec.") {
+		// #4500: drop the bare "test." substring - it matched ordinary
+		// files like latest.go / contest.go / protest.go (lat-est.-go) and
+		// flipped HasTests to a false true in the agent card. The precise
+		// _test. / _test.go / .test. / .spec. conditions cover real cases.
+		if strings.Contains(name, "_test.") || strings.HasSuffix(name, "_test.go") || strings.Contains(name, ".test.") || strings.Contains(name, ".spec.") {
 			hasTests = true
 		}
 		return nil

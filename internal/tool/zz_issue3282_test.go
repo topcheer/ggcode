@@ -7,64 +7,49 @@ import (
 	"testing"
 )
 
-// #3282: bypass-downgraded asks must feed the security ledger. The
-// RunCommand.SecLedger field comment promises three Record sources (gate
-// block, bypass-downgraded ask, sandbox EPERM) but only two were wired —
-// a prober repeatedly triggering downgraded-allows left no trace, missing
-// the highest-value sandbox-probing detection surface (#3281 reviewer
-// ruling: mandatory follow-up).
+// #4273 rewrite: the #3282 contract (bypass-downgraded asks feed the
+// security ledger and escalate as denials) was overturned - a
+// downgraded-allow is NOT a denial (the command runs), and feeding it to
+// the ledger produced the factually-wrong "was denied N times"
+// SECURITY ESCALATION banner on ordinary bypass workflows. Real probing
+// evidence remains the BLOCKED path, which records ("gate","block").
+// Kept from #3282: supervised asks are not recorded as allowed, and a
+// nil ledger must not turn a downgrade into a block.
 
-// askProbeCmd hits the injection ask-rule ("$(..." command substitution)
-// while being harmless when actually executed in the end-to-end test.
-const askProbeCmd = "echo $(date)"
-
-func TestIssue3282_BypassAskDowngradeRecordsLedger(t *testing.T) {
+func TestIssue4273_BypassAskDowngradeNoLedgerRecord(t *testing.T) {
 	ledger := &SecurityLedger{}
 	rc := RunCommand{Policy: newBypassPolicy(), SecLedger: ledger}
 	gate := NewCommandGate()
 
 	for i := 1; i <= 3; i++ {
-		_, _, blocked := rc.applyCommandGate(gate, askProbeCmd)
+		_, _, blocked := rc.applyCommandGate(gate, "echo $(date)")
 		if blocked != "" {
 			t.Fatalf("bypass mode must downgrade ask to allow, got blocked: %s", blocked)
 		}
-		events := ledger.Events()
-		if len(events) != i {
-			t.Fatalf("after %d downgraded asks: ledger has %d events, want %d", i, len(events), i)
-		}
-		if e := events[len(events)-1]; e.Denier != "gate" || e.RuleKind != "ask-allowed" {
-			t.Fatalf("event %d = denier=%q ruleKind=%q, want gate/ask-allowed", i, e.Denier, e.RuleKind)
+		if n := len(ledger.Events()); n != 0 {
+			t.Fatalf("downgraded asks must NOT be recorded as denials (#4273), got %d events after %d asks", n, i)
 		}
 	}
-	if esc := ledger.Escalation(); !strings.Contains(esc, "SECURITY ESCALATION") {
-		t.Fatalf("3 downgraded asks must escalate (probing fingerprint), got: %q", esc)
+	if esc := ledger.Escalation(); strings.Contains(esc, "SECURITY ESCALATION") {
+		t.Fatalf("no denial events recorded, escalation must stay empty, got: %q", esc)
 	}
 }
 
-func TestIssue3282_EscalationSurfacesInGatePreWarning(t *testing.T) {
-	ledger := &SecurityLedger{}
-	rc := RunCommand{Policy: newBypassPolicy(), SecLedger: ledger}
+func TestIssue4273_DecodeToShellStillAsks(t *testing.T) {
+	// The one real capture the old bare-symbol rules had: decode-then-shell.
 	gate := NewCommandGate()
-
-	var last string
-	for i := 0; i < 3; i++ {
-		_, pre, blocked := rc.applyCommandGate(gate, askProbeCmd)
-		if blocked != "" {
-			t.Fatalf("unexpected block: %s", blocked)
-		}
-		last = pre
-	}
-	if !strings.Contains(last, "SECURITY ESCALATION") {
-		t.Fatalf("3rd downgraded ask must surface the escalation notice via preWarning, got: %q", last)
+	if r := gate.Check("echo xxx | base64 -d | sh"); r.Behavior != Ask {
+		t.Fatalf("decode-then-shell must Ask, got %v (%s)", r.Behavior, r.Reason)
 	}
 }
 
-func TestIssue3282_SupervisedAskNotRecordedAsAllowed(t *testing.T) {
+func TestIssue4273_SupervisedAskNotRecordedAsAllowed(t *testing.T) {
 	ledger := &SecurityLedger{}
 	rc := RunCommand{Policy: newSupervisedPolicy(), SecLedger: ledger}
 	gate := NewCommandGate()
 
-	_, _, blocked := rc.applyCommandGate(gate, askProbeCmd)
+	// A command that still asks under content rules (decode-then-shell).
+	_, _, blocked := rc.applyCommandGate(gate, "echo xxx | base64 -d | sh")
 	if !strings.HasPrefix(blocked, "⚠️") {
 		t.Fatalf("supervised mode must return the ask-blocked marker, got: %q", blocked)
 	}
@@ -75,20 +60,20 @@ func TestIssue3282_SupervisedAskNotRecordedAsAllowed(t *testing.T) {
 	}
 }
 
-func TestIssue3282_NilLedgerBypassDowngradeSafe(t *testing.T) {
+func TestIssue4273_NilLedgerBypassDowngradeSafe(t *testing.T) {
 	rc := RunCommand{Policy: newBypassPolicy()} // SecLedger nil = unwired
 	gate := NewCommandGate()
-	if _, _, blocked := rc.applyCommandGate(gate, askProbeCmd); blocked != "" {
+	if _, _, blocked := rc.applyCommandGate(gate, "echo $(date)"); blocked != "" {
 		t.Fatalf("nil ledger must not turn a downgrade into a block: %s", blocked)
 	}
 }
 
-func TestIssue3282_EndToEndExecuteEscalationVisible(t *testing.T) {
+func TestIssue4273_EndToEndDowngradeNoEscalation(t *testing.T) {
 	ledger := &SecurityLedger{}
 	rc := RunCommand{Policy: newBypassPolicy(), SecLedger: ledger}
 	input, err := json.Marshal(map[string]string{
-		"command":     askProbeCmd,
-		"description": "issue 3282 probe",
+		"command":     "echo $(date)",
+		"description": "issue 4273 downgrade",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -101,8 +86,8 @@ func TestIssue3282_EndToEndExecuteEscalationVisible(t *testing.T) {
 		if res.IsError {
 			t.Fatalf("bypass downgrade must allow execution: %s", res.Content)
 		}
-		if i == 2 && !strings.Contains(res.Content, "SECURITY ESCALATION") {
-			t.Fatalf("3rd execute must carry the escalation notice in its result, got: %.200s", res.Content)
+		if strings.Contains(res.Content, "SECURITY ESCALATION") {
+			t.Fatalf("downgraded-allow must not carry a denial escalation banner (#4273), got: %.200s", res.Content)
 		}
 	}
 }

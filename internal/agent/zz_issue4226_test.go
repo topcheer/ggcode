@@ -40,6 +40,9 @@ func TestInjectedInterruptionRecordsConstraints(t *testing.T) {
 	if got := a.constraintAmnesia.constraints[0].messageIdx; got != 10 {
 		t.Fatalf("messageIdx = %d, want injection iteration 10", got)
 	}
+	// #4242 interplay: the reminder is now edit-gated - simulate the edit
+	// that typically follows a steering injection before expecting fire.
+	a.constraintAmnesia.noteEdit(21)
 	if w := a.constraintAmnesia.maybeWarn(22); w == "" {
 		t.Fatalf("reminder did not fire 12 iterations after mid-run constraint")
 	}

@@ -125,7 +125,7 @@ individual A2A auth configuration.
 | [CLI Reference](docs/guide/cli-reference.md) | Commands, flags, pipe mode |
 | [Providers](docs/guide/providers.md) | LLM vendor and endpoint configuration |
 | [Slash Commands](docs/guide/slash-commands.md) | In-TUI command reference |
-| [Permission Modes](docs/guide/modes.md) | Supervised, plan, auto, bypass, autopilot |
+| [Permission Modes](docs/guide/modes.md) | Supervised and bypass (auto/autopilot accepted as legacy aliases) |
 | [MCP Servers](docs/guide/mcp.md) | Connect external tools via MCP |
 | [gRPC Plugins](docs/guide/grpc-plugins.md) | Build and install custom tool plugins (Go, Python, Node.js) |
 | [IM Integration](docs/guide/im-integration.md) | QQ, Telegram, Discord, Slack, Feishu, DingTalk |

@@ -149,6 +149,11 @@ var criteriaDriftPatterns = map[string][]string{
 
 // recordAssistantText scans assistant response for criteria drift language.
 func (c *criteriaDriftState) recordAssistantText(text string, iter int) {
+	// #4241: normalize to the 1-based radix maybeWarn's call site uses
+	// (agent.go passes i+1 there). The mixed radix inflated every distance
+	// by 1 and narrowed the indicator window from 3 turns to 2 (#1439-A
+	// same-family dual-index bug; fixed at the record side there too).
+	iter++
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

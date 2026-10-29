@@ -391,7 +391,7 @@ func (d tuiSlashDeps) SwitchMode(name string) error {
 	// im.remote_dangerous_commands opt-in. Downgrade/level switches and
 	// plan/auto stay ungated (they reduce or hold the trust level).
 	if !permission.IsValidPermissionMode(name) {
-		return fmt.Errorf("unknown permission mode %q (valid: supervised, plan, auto, bypass, autopilot)", name)
+		return fmt.Errorf("unknown permission mode %q (valid: supervised, bypass; legacy aliases auto/autopilot normalize)", name)
 	}
 	newMode := permission.ParsePermissionMode(name)
 	if (newMode == permission.BypassMode || newMode == permission.AutopilotMode) &&

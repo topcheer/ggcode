@@ -127,8 +127,8 @@ When the LLM needs to ask a question, it uses the `ask_user` tool. In ACP mode t
 
 | Mode | Behavior |
 |------|----------|
-| `auto` (default) | Safe operations auto-approved; dangerous tools ask via IDE permission dialog |
-| `bypass` / `autopilot` | All tools auto-approved (no dialogs) |
+| `auto` (default) | Normalizes to `supervised`: default-Allow with safety floors (extremely dangerous commands, credential exfiltration, persistence-backdoor writes ask via IDE permission dialog) |
+| `bypass` / `autopilot` | Both normalize to `bypass`: all tools auto-approved except system-level destructive commands and persistence-backdoor writes (no dialogs otherwise) |
 | `manual` | Every tool call requires IDE approval |
 
 ## Protocol Support

@@ -6,10 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Instruction-driven per-entry forgetting (r10, sa-160).
@@ -82,6 +83,33 @@ func (am *AutoMemory) ForgottenSet() map[string]bool {
 	return out
 }
 
+// lockForgottenWrite serializes forget-sidecar read-modify-write cycles.
+// #4413: ForgetKey/RestoreKey (and the GC digest prune in gc.go) were the
+// package's only unlocked RMWs over this file — the startup GC goroutine
+// replaying its stale sidecar snapshot could overwrite a just-written
+// forget mark, resurrecting the entry into prompt injection. Mirror the
+// memory save paths: writeMu serializes writers within one process
+// (#1752 discipline, same as the usage sidecars) and util.FileLock
+// serializes across processes (r401 GAP-B). Fail-open with a debug log
+// on lock-infrastructure faults (auto.go precedent) — a lost race beats
+// blocking forget/restore on lock faults. Callers must NOT hold the
+// memory dir FileLock when calling this (same-flock self-deadlock).
+func (am *AutoMemory) lockForgottenWrite() func() {
+	path := filepath.Join(am.dir, forgottenFileName)
+	muAny, _ := writeMu.LoadOrStore(path, &sync.Mutex{})
+	mu := muAny.(*sync.Mutex)
+	mu.Lock()
+	unlock, err := util.FileLock(am.dir + ".lock")
+	if err != nil {
+		debug.Log("memory", "forget: filelock failed, degraded to process-local locking: %v", err)
+		return mu.Unlock
+	}
+	return func() {
+		unlock()
+		mu.Unlock()
+	}
+}
+
 // ForgetKey marks a single memory entry as user-forgotten: it stops being
 // injected into prompts immediately, stays on disk (restorable) until the
 // next GarbageCollect physically digests it. The key existence check and
@@ -94,6 +122,10 @@ func (am *AutoMemory) ForgetKey(key string) error {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return fmt.Errorf("memory %q not found", key)
 	}
+	// #4413: the load→mark→save cycle runs under the sidecar write lock so
+	// a concurrent GC digest prune cannot replay a stale snapshot over it.
+	unlock := am.lockForgottenWrite()
+	defer unlock()
 	f := am.loadForgotten()
 	if _, dup := f.Entries[safe]; dup {
 		return nil // idempotent: already forgotten
@@ -111,6 +143,10 @@ func (am *AutoMemory) ForgetKey(key string) error {
 // a key that was never forgotten or has already been digested by GC.
 func (am *AutoMemory) RestoreKey(key string) error {
 	safe := disambiguateKey(key, sanitizeKey(key))
+	// #4413: same unlocked-RMW fix as ForgetKey — the mark delete must not
+	// race the GC digest prune or a concurrent forget.
+	unlock := am.lockForgottenWrite()
+	defer unlock()
 	f := am.loadForgotten()
 	if _, ok := f.Entries[safe]; !ok {
 		return fmt.Errorf("memory %q is not forgotten", key)
@@ -137,15 +173,4 @@ func (am *AutoMemory) ListForgotten() []string {
 		out = append(out, fmt.Sprintf("%s (forgotten %s ago)", it.key, time.Since(it.at).Round(time.Minute)))
 	}
 	return out
-}
-
-// forgottenLine returns one display line for a forgotten key, or "" when
-// the key is not forgotten. Used by list views that annotate entries.
-func (am *AutoMemory) forgottenLine(key string) string {
-	f := am.loadForgotten()
-	at, ok := f.Entries[key]
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(fmt.Sprintf("%s [forgotten %s ago]", key, time.Since(at).Round(time.Minute)))
 }

@@ -12,8 +12,6 @@ func zhCatalog(key string) string {
 		return "空闲"
 	case "agents.running":
 		return "%d 个运行中"
-	case "activity.idle":
-		return "空闲"
 	case "panel.conversation":
 		return "对话"
 	case "panel.composer":
@@ -162,10 +160,6 @@ func zhCatalog(key string) string {
 		return "文件"
 	case "label.directory":
 		return "目录"
-	case "context.unavailable":
-		return "暂无上下文数据"
-	case "metrics.empty":
-		return "暂无指标"
 	case "im.none":
 		return "未配置适配器"
 	case "im.summary":
@@ -180,38 +174,16 @@ func zhCatalog(key string) string {
 		return "已启用 • 重启后初始化"
 	case "im.status.not_started":
 		return "未启动"
-	case "context.until_compact":
-		return "后触发"
 	case "empty.ask":
 		return "你可以让我做重构、修复 bug、解释代码或补测试。"
 	case "empty.tips":
 		return "提示：用 @path 引用文件，/? 查看帮助，Shift+Tab 切换模式。"
-	case "startup.banner":
-		return "正在准备终端界面并过滤启动期的终端噪声。你现在就可以输入；一旦界面进入可交互状态，这个提示会自动消失。"
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab 切换 • Enter 应用 • Esc 关闭"
 	case "hint.mention":
 		return "@ 可附加文件/目录 • Tab/Shift+Tab 切换 • Enter 应用"
 	case "hint.mode":
 		return "模式"
-	case "mode.approval.ask":
-		return "按需询问"
-	case "mode.approval.none":
-		return "不会停下来审批"
-	case "mode.approval.critical":
-		return "仅关键操作"
-	case "mode.tools.rules":
-		return "遵循工具规则"
-	case "mode.tools.readonly":
-		return "仅只读"
-	case "mode.tools.safe":
-		return "仅安全操作"
-	case "mode.tools.open":
-		return "几乎全部工具"
-	case "mode.agent.waits":
-		return "等待你决策"
-	case "mode.agent.autocontinue":
-		return "自动继续推进"
 	case "hint.enter_send":
 		return "Enter 发送"
 	case "hint.ctrlv_image":
@@ -250,8 +222,6 @@ func zhCatalog(key string) string {
 		return "该渠道因多次被拒绝，已被加入黑名单。"
 	case "queued.count":
 		return "%d 条排队中"
-	case "queued.output":
-		return "[已排队 %d 条待发送]\n\n"
 	case "interrupt.delivered":
 		return "[已送达当前运行，正在调整方向]\n"
 	case "status.thinking":
@@ -354,7 +324,7 @@ func zhCatalog(key string) string {
 	case "lang.first_use.hint":
 		return " Tab/j/k 移动 • Enter 确认 • e/z 快捷键"
 	case "mode.current":
-		return "当前模式：%s\n用法：/mode <supervised|plan|auto|bypass|autopilot>\n  supervised  未显式配置的工具会询问\n  plan        严格只读探索；拒绝写入和命令\n  auto        自动允许安全操作，拒绝危险操作\n  bypass      基本全放行，只在关键操作时停下\n  autopilot   等同 bypass，并在模型反问时自动继续\n\n"
+		return "当前模式：%s\n用法：/mode <supervised|bypass>\n  supervised  默认；多数调用免打扰，仅安全地板（极危命令/凭证外传/持久化后门写入）会询问\n  bypass      巡航面；几乎全放行，仅系统级破坏与持久化后门写入会询问\n  （auto/autopilot 为兼容别名）\n"
 	case "mode.persist_failed":
 		return "持久化模式偏好失败：%v"
 	case "input.placeholder":
@@ -632,12 +602,6 @@ func zhCatalog(key string) string {
 		return "未配置会话存储。\n\n"
 	case "session.none":
 		return "没有找到会话。\n\n"
-	case "session.list.title":
-		return "会话列表：\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  （%s）\n"
-	case "session.list.hint":
-		return "\n使用 /resume <id> 继续某个会话\n\n"
 	case "session.new":
 		return "新会话：%s\n\n"
 	case "session.resume":
@@ -690,12 +654,6 @@ func zhCatalog(key string) string {
 		return "  %s  %d 次编辑  最后: %s%s\n"
 	case "files.hint":
 		return "\n使用 /undo 撤销最近一次编辑，/redo 重做，/checkpoints 查看详情。\n\n"
-	case "checkpoint.list.title":
-		return "检查点（%d）：\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.hint":
-		return "\n使用 /undo 回滚最近一次修改，/redo 重做。\n\n"
 	case "memory.auto_unavailable":
 		return "自动记忆未初始化。\n\n"
 	case "traj.no_workspace":
@@ -784,8 +742,6 @@ func zhCatalog(key string) string {
 		return "上下文管理器不可用。\n\n"
 	case "compact.failed":
 		return "压缩失败：%v\n\n"
-	case "compact.done":
-		return "已压缩对话历史。\n\n"
 	case "compact.done_with_stats":
 		return "已压缩对话历史（%d → %d tokens）。\n\n"
 	case "todo.cleared":
@@ -828,14 +784,8 @@ func zhCatalog(key string) string {
 		return "配置：model = %s\n\n"
 	case "config.provider_set":
 		return "配置：provider = %s\n\n"
-	case "config.language_set":
-		return "配置：language = %s\n\n"
 	case "config.unknown_key":
 		return "未知配置项：%s\n支持：model, provider, language\n\n"
-	case "config.title":
-		return "当前配置：\n"
-	case "status.title":
-		return "状态：\n"
 	case "panel.update":
 		return "更新"
 	case "label.version":
@@ -882,16 +832,8 @@ func zhCatalog(key string) string {
 		return "检测到系统中还有其他 ggcode 安装：\n%s\n如果 PATH 中另一个 ggcode 优先级更高，建议一并更新或调整 PATH 顺序。\n\n"
 	case "update.dual_scope":
 		return "警告：检测到用户级和系统级 ggcode 安装同时存在：\n  用户级：%s\n  系统级：%s\n这可能导致 PATH 冲突。建议从“设置 > 应用”中卸载其中一个。\n\n"
-	case "plugins.unavailable":
-		return "插件管理器不可用。\n\n"
-	case "plugins.none":
-		return "没有加载插件。\n\n"
-	case "plugins.title":
-		return "插件：\n"
 	case "mcp.none":
 		return "没有配置 MCP 服务器。\n\n"
-	case "mcp.title":
-		return "MCP 服务器：\n"
 	case "mcp.active_tools":
 		return "活动工具"
 	case "mcp.more":
@@ -900,10 +842,6 @@ func zhCatalog(key string) string {
 		return "用法：/image <path/to/file.png> 或 /image paste\n"
 	case "image.formats":
 		return "支持格式：PNG、JPEG、GIF、WebP（最大 20MB）\n\n"
-	case "image.attached":
-		return "已附加图片：%s\n"
-	case "image.attached_hint":
-		return "发送一条消息即可携带这张图片，或继续用 /image 再附加一张。\n\n"
 	case "image.clipboard_failed":
 		return "无法从剪贴板粘贴图片：%v"
 	case "image.clipboard_no_image_windows":
@@ -920,20 +858,6 @@ func zhCatalog(key string) string {
 		return "  %s [%s]%s - %s\n"
 	case "agents.hint":
 		return "\n使用 /agent <id> 查看详情，/agent cancel <id> 取消。\n\n"
-	case "agent.usage":
-		return "用法：/agent <id> 或 /agent cancel <id>\n\n"
-	case "agent.cancelled":
-		return "已取消子 Agent %s\n\n"
-	case "agent.cancel_failed":
-		return "无法取消 %s（未找到或未在运行）\n\n"
-	case "agent.not_found":
-		return "未找到子 Agent %s\n\n"
-	case "agent.title":
-		return "Agent：%s\n状态：%s\n任务：%s\n"
-	case "agent.result":
-		return "结果：%s\n"
-	case "agent.error":
-		return "错误：%v\n"
 	case "slash.help":
 		return "显示帮助"
 	case "slash.sessions":
@@ -1044,8 +968,6 @@ func zhCatalog(key string) string {
 		return "删除"
 	case "hooks.edit":
 		return "编辑"
-	case "hooks.toggleInject":
-		return "切换注入"
 	case "hooks.close":
 		return "Esc: 关闭"
 	case "hooks.event.onUserMessage":
@@ -1106,8 +1028,6 @@ func zhCatalog(key string) string {
 		return "查看（/traj）或清空（/traj clear）注入系统提示的历史经验学习库"
 	case "panel.qq.directory":
 		return "目录"
-	case "panel.qq.runtime":
-		return "运行时"
 	case "panel.qq.bots":
 		return "QQ 机器人"
 	case "panel.qq.created":
@@ -1116,18 +1036,10 @@ func zhCatalog(key string) string {
 		return "已绑定：%d"
 	case "panel.qq.available":
 		return "可用：%d"
-	case "panel.qq.current_binding":
-		return "当前绑定"
 	case "panel.qq.none":
 		return "(无)"
-	case "panel.qq.default":
-		return "(默认)"
 	case "panel.qq.adapter":
 		return "机器人：%s"
-	case "panel.qq.target":
-		return "目标：%s"
-	case "panel.qq.channel":
-		return "渠道：%s"
 	case "panel.qq.bot_list":
 		return "QQ 机器人列表"
 	case "panel.qq.no_bots":
@@ -1200,8 +1112,6 @@ func zhCatalog(key string) string {
 		return "QQ 适配器名称不能为空"
 	case "panel.qq.error.not_configured":
 		return "QQ 机器人 %q 未配置"
-	case "panel.qq.error.disabled":
-		return "QQ 机器人 %q 已禁用"
 	case "panel.qq.error.not_qq_adapter":
 		return "适配器 %q 不是 QQ 机器人"
 	case "panel.qq.error.not_online":
@@ -1263,7 +1173,7 @@ func zhCatalog(key string) string {
 	case "goal.current":
 		return "当前目标：%s\n\n该目标在上下文压缩和会话中断后仍然保留。"
 	case "goal.set":
-		return "目标已设置：%s\n\n切换到自动驾驶模式（/mode autopilot）以自主执行。目标在上下文压缩后仍然保留。"
+		return "目标已设置：%s\n\n切换到旁路模式（/mode bypass；巡航面）以自主执行。目标在上下文压缩后仍然保留。"
 	case "goal.cleared":
 		return "自动驾驶目标已清除。"
 	case "regenerate.busy":
@@ -1319,7 +1229,7 @@ func zhCatalog(key string) string {
   /model [name]      打开模型面板或直接切换
   /provider [vendor] 打开供应商管理界面
   /impersonate [p/m] 测试供应商/模型而不切换配置
-  /mode <mode>       设置运行模式（supervised|plan|auto|bypass|autopilot）
+  /mode <mode>       设置运行模式（supervised|bypass；auto/autopilot 为兼容别名）
   /goal [text]       查看、设置或清除持久化自动驾驶目标
   /stream            切换流式输出模式
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/mcp"
+	"github.com/topcheer/ggcode/internal/plugin"
 )
 
 // handleMcpServersMsg handles the corresponding message case.
@@ -137,6 +138,30 @@ func (m Model) handleMcpUninstallResultMsg(msg mcpUninstallResultMsg) (Model, te
 	}
 	return m, nil
 
+}
+
+// handleMcpRefreshResultMsg surfaces the async f-key refresh outcome in the
+// MCP panel. The outcome mapping matches the pre-async behavior.
+func (m Model) handleMcpRefreshResultMsg(msg mcpRefreshResultMsg) (Model, tea.Cmd) {
+	if m.mcpPanel == nil {
+		return m, nil
+	}
+	name := msg.name
+	switch {
+	case !msg.found:
+		m.mcpPanel.message = m.t("panel.mcp.reconnect_failed", name)
+	case msg.outcome == plugin.RefreshNotConnected:
+		m.mcpPanel.message = m.t("panel.mcp.refresh_not_connected", name)
+	case msg.outcome == plugin.RefreshThrottled:
+		m.mcpPanel.message = m.t("panel.mcp.refresh_throttled")
+	case msg.outcome == plugin.RefreshFailed:
+		m.mcpPanel.message = m.t("panel.mcp.refresh_failed", name)
+	case msg.outcome == plugin.RefreshUnchanged:
+		m.mcpPanel.message = m.t("panel.mcp.refresh_unchanged", name, msg.count)
+	default:
+		m.mcpPanel.message = m.t("panel.mcp.refreshed", name, msg.count)
+	}
+	return m, nil
 }
 
 // mcpHealthCheckTickMsg refreshes the MCP panel message with the current

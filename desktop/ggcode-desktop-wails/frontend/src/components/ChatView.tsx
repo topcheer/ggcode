@@ -2215,10 +2215,12 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   }, [modelPickerOpen])
   const shortModel = statusBar.model.split('/').pop() || statusBar.model
   const workspaceLabel = workspace || 'Workspace'
-  const modeOptions = ['supervised', 'plan', 'auto', 'bypass', 'autopilot'] as const
+  // two-mode refactor: users cycle supervised <-> bypass (plan is tool-internal;
+  // auto/autopilot are legacy aliases that the backend normalizes).
+  const modeOptions = ['supervised', 'bypass'] as const
   const cycleMode = async () => {
     const idx = modeOptions.indexOf(statusBar.mode as any)
-    const next = modeOptions[(idx + 1) % modeOptions.length]
+    const next = modeOptions[idx >= 0 ? (idx + 1) % modeOptions.length : 0]
     try {
       await App.SetPermissionMode(next)
       setStatusBar(s => ({ ...s, mode: next }))

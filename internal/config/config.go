@@ -225,10 +225,18 @@ type MCPServerConfig struct {
 	// approved baseline are logged silently instead of raising the
 	// OnToolDrift callback. For servers under active development whose
 	// tool definitions legitimately churn.
-	AllowToolDrift bool   `yaml:"allow_tool_drift,omitempty" json:"allow_tool_drift,omitempty"`
-	Source         string `yaml:"-" json:"-"`
-	OriginPath     string `yaml:"-" json:"-"`
-	Migrated       bool   `yaml:"-" json:"-"`
+	AllowToolDrift bool `yaml:"allow_tool_drift,omitempty" json:"allow_tool_drift,omitempty"`
+	// #4386 form clear sentinels: Command/URL are strings, so the patch
+	// layer's "empty = not provided" semantics leave the form no way to
+	// clear them - an emptied field saved "successfully" while the old
+	// value silently resurrected. Mirrors #979's env_clear / #1434-B's
+	// args_clear (which use non-nil empties because their fields are
+	// maps/slices). Never serialized.
+	CommandClear bool   `yaml:"-" json:"-"`
+	URLClear     bool   `yaml:"-" json:"-"`
+	Source       string `yaml:"-" json:"-"`
+	OriginPath   string `yaml:"-" json:"-"`
+	Migrated     bool   `yaml:"-" json:"-"`
 }
 
 // PluginConfigEntry describes a single plugin from the config file.
@@ -292,9 +300,10 @@ const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a
 2. **Verification before completion** — every task must have a verifiable success condition defined before implementation. "Build passes", "tests pass", "repro path no longer triggers". If you cannot define how to verify it, the task is not yet well-specified.
 
 ## Permission modes
-- You can switch between permission modes at any time using the ` + "`switch_mode`" + ` tool. It is always available, even in plan mode.
-- Modes: ` + "`supervised`" + ` (default; respects per-tool rules, asks for unspecified), ` + "`plan`" + ` (read-only exploration), ` + "`auto`" + ` (safe ops auto-allowed, dangerous denied), ` + "`bypass`" + ` (almost everything allowed), ` + "`autopilot`" + ` (bypass + autonomous continuation + goal-directed).
-- Default to ` + "`supervised`" + ` or ` + "`auto`" + `. Only switch to ` + "`bypass`" + ` or ` + "`autopilot`" + ` when the user explicitly requests it. Switch to ` + "`plan`" + ` when exploring unfamiliar code.
+- You can switch between permission modes at any time using the ` + "`switch_mode`" + ` tool. It is always available.
+- Two user modes: ` + "`supervised`" + ` (default; most calls flow without prompting, with safety floors that ask: system-level destruction, credential exfiltration, persistence-backdoor writes) and ` + "`bypass`" + ` (cruise surface; everything allowed except system-level destruction and persistence-backdoor writes).
+- ` + "`auto`" + ` / ` + "`autopilot`" + ` are accepted legacy aliases that normalize to supervised / bypass. ` + "`plan`" + ` is tool-internal (enter via enter_plan_mode, exit via exit_plan_mode) and cannot be switched into directly.
+- Default to ` + "`supervised`" + `. Only switch to ` + "`bypass`" + ` when the user explicitly requests it.
 
 ## Memory & Knowledge
 - Use ` + "`save_memory`" + ` / ` + "`delete_memory`" + ` for durable patterns and decisions that will matter later.
@@ -794,12 +803,18 @@ func isLoopbackHost(host string) bool {
 	return false
 }
 
-// EffectiveAPIKey returns the user-configured API key if set, otherwise
-// the built-in default key. This ensures that even without explicit auth
-// config, ggcode instances can authenticate to each other on a LAN.
+// EffectiveAPIKey returns the user-configured API key if set. The built-in
+// default key is only a fallback when NO authentication mechanism is
+// configured at all (LAN convenience). When api_keys / oauth2 / oidc / mTLS
+// is configured, returning the public default key here would merge it into
+// the server's accepted key list and let anyone who has read the source
+// bypass the configured credentials (#4259).
 func (c A2AConfig) EffectiveAPIKey() string {
 	if strings.TrimSpace(c.Auth.APIKey) != "" {
 		return c.Auth.APIKey
+	}
+	if c.HasAuth() {
+		return ""
 	}
 	return DefaultA2AAPIKey
 }
@@ -1752,9 +1767,19 @@ func (c *Config) Validate() error {
 	}
 	if c.DefaultMode != "" {
 		switch strings.ToLower(c.DefaultMode) {
-		case "supervised", "plan", "auto", "bypass", "autopilot":
+		// "auto"/"autopilot" are accepted legacy aliases (normalized to
+		// supervised/bypass at consumption); "plan" is tool-internal.
+		case "supervised", "auto", "bypass", "autopilot":
+		case "plan":
+			// #4267: pre-two-mode-refactor binaries could persist
+			// default_mode: plan via /mode plan or the IM channel. It is
+			// tool-internal now and must not boot a session, but a stored
+			// legacy value must not brick every CLI entry point either.
+			// Normalize to supervised (same philosophy as auto/autopilot
+			// legacy handling) instead of failing Load.
+			c.DefaultMode = "supervised"
 		default:
-			return fmt.Errorf("default_mode %q must be one of supervised, plan, auto, bypass, autopilot", c.DefaultMode)
+			return fmt.Errorf("default_mode %q must be supervised or bypass (legacy aliases auto/autopilot normalize; stored plan normalizes to supervised)", c.DefaultMode)
 		}
 	}
 	if c.SubAgents.MaxConcurrent < 0 {
@@ -2187,6 +2212,14 @@ func carryGatewayVendorKey(agVC *VendorConfig, epName, oldKey string) {
 		agVC.Endpoints[epName] = ep
 	case !hasEP && agVC.APIKey == "":
 		agVC.APIKey = oldKey
+	case !hasEP:
+		// #4408-C1: a SECOND legacy gateway vendor's key (vendor-level,
+		// no matching endpoint) used to be silently dropped here - the
+		// vendor-level slot was already taken by the first one and no
+		// switch branch fired, directly contradicting the "cannot
+		// irreversibly drop credentials" contract above. Preserve it on
+		// a per-vendor endpoint stub keyed by the original endpoint name.
+		agVC.Endpoints[epName] = EndpointConfig{APIKey: oldKey}
 	}
 }
 

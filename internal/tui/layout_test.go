@@ -1913,11 +1913,11 @@ func TestModeSwitchPersistsDefaultModePreference(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected no command from mode switch")
 	}
-	if m.mode != permission.PlanMode {
-		t.Fatalf("expected in-memory mode %v, got %v", permission.PlanMode, m.mode)
+	if m.mode != permission.BypassMode {
+		t.Fatalf("expected in-memory mode %v (two-mode cycle), got %v", permission.BypassMode, m.mode)
 	}
-	if ses.PermissionMode != permission.PlanMode.String() {
-		t.Fatalf("expected session.PermissionMode %q, got %q", permission.PlanMode.String(), ses.PermissionMode)
+	if ses.PermissionMode != permission.BypassMode.String() {
+		t.Fatalf("expected session.PermissionMode %q, got %q", permission.BypassMode.String(), ses.PermissionMode)
 	}
 	if m.chatList != nil && m.chatList.Len() != 0 {
 		t.Errorf("expected no output on successful mode persistence, got %q", renderedOutput(&m))
@@ -1935,11 +1935,12 @@ func TestModeCommandPersistsDefaultModePreference(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected no command from /mode set")
 	}
-	if m.mode != permission.AutoMode {
-		t.Fatalf("expected in-memory mode %v, got %v", permission.AutoMode, m.mode)
+	// two-mode refactor: auto normalizes to supervised.
+	if m.mode != permission.SupervisedMode {
+		t.Fatalf("expected in-memory mode %v (auto normalizes), got %v", permission.SupervisedMode, m.mode)
 	}
-	if ses.PermissionMode != permission.AutoMode.String() {
-		t.Fatalf("expected session.PermissionMode %q, got %q", permission.AutoMode.String(), ses.PermissionMode)
+	if ses.PermissionMode != permission.SupervisedMode.String() {
+		t.Fatalf("expected session.PermissionMode %q, got %q", permission.SupervisedMode.String(), ses.PermissionMode)
 	}
 	if m.chatList != nil && m.chatList.Len() != 0 {
 		t.Errorf("expected no output on successful /mode persistence, got %q", renderedOutput(&m))
@@ -1987,48 +1988,46 @@ func TestAgentToolStatusMsgCountsToolsInsideEventLoop(t *testing.T) {
 }
 
 func TestAutopilotApprovalAutoContinues(t *testing.T) {
-	m := newTestModel()
-	m.mode = permission.AutopilotMode
-	msg := ApprovalMsg{ToolName: "bash", Input: `{"command":"sudo rm -rf /"}`, Response: make(chan permission.Decision, 1)}
+	// two-mode refactor: the legacy autopilot auto-approve fast path is
+	// removed - autopilot normalizes to bypass, whose retained floors must
+	// reach a human. Both the legacy enum value and BypassMode now record
+	// the pending approval instead of silently allowing it.
+	for _, mode := range []permission.PermissionMode{permission.AutopilotMode, permission.BypassMode} {
+		m := newTestModel()
+		m.mode = mode
+		msg := ApprovalMsg{ToolName: "bash", Input: `{"command":"sudo rm -rf /"}`, Response: make(chan permission.Decision, 1)}
 
-	next, cmd := m.Update(msg)
-	m = next.(Model)
-	if cmd != nil {
-		t.Fatal("expected autopilot approval to resolve synchronously")
-	}
-	select {
-	case decision := <-msg.Response:
-		if decision != permission.Allow {
-			t.Fatalf("expected autopilot to allow approval, got %v", decision)
+		next, _ := m.Update(msg)
+		m = next.(Model)
+		if m.pendingApproval == nil {
+			t.Fatalf("mode %v: expected approval to pend for the user, not auto-resolve", mode)
 		}
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("expected autopilot to resolve approval immediately")
-	}
-	if m.pendingApproval != nil {
-		t.Fatal("expected pending approval to be cleared")
+		select {
+		case d := <-msg.Response:
+			t.Fatalf("mode %v: approval must not auto-resolve, got %v", mode, d)
+		default:
+		}
 	}
 }
 
 func TestAutopilotDiffConfirmAutoContinues(t *testing.T) {
-	m := newTestModel()
-	m.mode = permission.AutopilotMode
-	msg := DiffConfirmMsg{FilePath: "main.go", DiffText: "@@ -1 +1 @@\n-a\n+b", Response: make(chan bool, 1)}
+	// two-mode refactor: same removal as the approval fast path - diff
+	// confirmations in the bypass surface must reach a human.
+	for _, mode := range []permission.PermissionMode{permission.AutopilotMode, permission.BypassMode} {
+		m := newTestModel()
+		m.mode = mode
+		msg := DiffConfirmMsg{FilePath: "main.go", DiffText: "@@ -1 +1 @@\n-a\n+b", Response: make(chan bool, 1)}
 
-	next, cmd := m.Update(msg)
-	m = next.(Model)
-	if cmd != nil {
-		t.Fatal("expected autopilot diff confirm to resolve synchronously")
-	}
-	select {
-	case approved := <-msg.Response:
-		if !approved {
-			t.Fatal("expected autopilot to approve diff confirm")
+		next, _ := m.Update(msg)
+		m = next.(Model)
+		if m.pendingDiffConfirm == nil {
+			t.Fatalf("mode %v: expected diff confirm to pend for the user", mode)
 		}
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("expected autopilot to resolve diff confirm immediately")
-	}
-	if m.pendingDiffConfirm != nil {
-		t.Fatal("expected pending diff confirm to be cleared")
+		select {
+		case b := <-msg.Response:
+			t.Fatalf("mode %v: diff confirm must not auto-resolve, got %v", mode, b)
+		default:
+		}
 	}
 }
 

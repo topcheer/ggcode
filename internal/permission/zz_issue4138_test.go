@@ -51,8 +51,12 @@ func TestIssue4138_SupervisedSensitiveTildeReadAsks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check(read_file ~/.ssh/id_rsa): %v", err)
 	}
-	if d != Ask {
-		t.Fatalf("supervised read_file ~/.ssh/id_rsa must Ask (got %v) - tilde form must match the absolute-path gate (#4138)", d)
+	// two-mode refactor: the supervised sensitive-read gate was removed
+	// entirely (reads flow Allow; the exfiltration floor is command-side),
+	// so the tilde-vs-absolute asymmetry of #4138 no longer produces a
+	// decision split - both forms now flow Allow symmetrically.
+	if d != Allow {
+		t.Fatalf("supervised read_file ~/.ssh/id_rsa must Allow (two-mode refactor), got %v", d)
 	}
 
 	// Control: the absolute-path form was already correct and must not regress.
@@ -111,7 +115,9 @@ func TestIssue4138_AutoTildeWriteDenied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check(write_file ~/.zshrc): %v", err)
 	}
-	if d != Deny {
-		t.Fatalf("auto write_file ~/.zshrc must Deny as out-of-sandbox write (got %v) (#4138)", d)
+	// two-mode refactor: auto is an alias for the supervised surface;
+	// out-of-sandbox writes gate with Ask (downgrade, not Deny).
+	if d != Ask {
+		t.Fatalf("auto(alias=supervised) write_file ~/.zshrc must Ask as out-of-sandbox write (got %v) (#4138)", d)
 	}
 }

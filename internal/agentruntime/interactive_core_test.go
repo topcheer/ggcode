@@ -123,8 +123,10 @@ func TestInteractivePermissionMode(t *testing.T) {
 	if got := InteractivePermissionMode(cfg, false); got != permission.SupervisedMode {
 		t.Fatalf("empty mode = %v, want supervised", got)
 	}
-	if got := InteractivePermissionModeWithDefault(cfg, false, "auto"); got != permission.AutoMode {
-		t.Fatalf("default auto mode = %v, want auto", got)
+	if got := InteractivePermissionModeWithDefault(cfg, false, "auto"); got != permission.SupervisedMode {
+		// two-mode refactor: legacy "auto" default normalizes to supervised at
+		// parse time, so the resolved default mode is SupervisedMode, not AutoMode.
+		t.Fatalf("default auto mode = %v, want supervised", got)
 	}
 	cfg.DefaultMode = "plan"
 	if got := InteractivePermissionMode(cfg, false); got != permission.PlanMode {
@@ -148,8 +150,10 @@ func TestBuildInteractivePermissionPolicyMatchesConfigToolPerms(t *testing.T) {
 	if policy == nil {
 		t.Fatal("expected policy")
 	}
-	if got := policy.Mode(); got != permission.AutoMode {
-		t.Fatalf("mode = %v, want auto", got)
+	// two-mode refactor: cfg.DefaultMode "auto" normalizes to supervised
+	// when building the interactive policy, so Mode() reports SupervisedMode.
+	if got := policy.Mode(); got != permission.SupervisedMode {
+		t.Fatalf("mode = %v, want supervised", got)
 	}
 	if !policy.AllowedPath(filepath.Join(wd, "foo.txt")) {
 		t.Fatal("expected working dir path to be allowed")

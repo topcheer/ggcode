@@ -47,6 +47,9 @@ func TestIssue3294_StartCommandDenialsRecorded(t *testing.T) {
 	if !gate.Check(blockCmd).IsBlocked() {
 		t.Skip("gate no longer blocks the sample command; retune probe input")
 	}
+	// #4273: bare-symbol ask rules were removed; use a command that still
+	// asks under content rules (decode-then-shell).
+	askProbeCmd := "echo xxx | base64 -d | sh"
 	if !gate.Check(askProbeCmd).NeedsConfirmation() {
 		t.Skip("gate no longer asks for the sample command; retune probe input")
 	}
@@ -73,8 +76,9 @@ func TestIssue3294_StartCommandDenialsRecorded(t *testing.T) {
 	if kinds["block"] != 1 {
 		t.Fatalf("gate block via start_command must record kind=block, kinds=%v", kinds)
 	}
-	if kinds["ask-allowed"] != 1 {
-		t.Fatalf("bypass ask->allow via start_command must record kind=ask-allowed, kinds=%v", kinds)
+	// #4273: bypass ask->allow is NOT recorded as a denial anymore.
+	if kinds["ask-allowed"] != 0 {
+		t.Fatalf("bypass ask->allow must not record kind=ask-allowed (#4273), kinds=%v", kinds)
 	}
 
 	// Supervised mode: ask becomes a hard denial for background jobs and

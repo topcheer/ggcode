@@ -43,7 +43,7 @@ Download directly from [GitHub Releases](https://github.com/topcheer/ggcode/rele
 It runs entirely in your terminal with a polished TUI:
 
 - **Multi-provider LLM support** — OpenAI, Anthropic, Google Gemini, GitHub Copilot, DeepSeek, and more
-- **Five permission modes** — supervised, plan, auto, bypass, autopilot — you decide how much autonomy the agent gets
+- **Two permission modes** — supervised and bypass (auto/autopilot accepted as legacy aliases) — you decide how much autonomy the agent gets
 - **LSP integration** — go-to-definition, references, rename, diagnostics, code actions via your language server
 - **MCP tools** — connect external tool servers (browser, databases, APIs) seamlessly
 - **Sub-agents** — spawn parallel workers for research, coding, and testing tasks
