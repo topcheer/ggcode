@@ -15,8 +15,6 @@ func ptCatalog(key string) string {
 		return "Endpoint"
 	case "label.session":
 		return "Sessão"
-	case "label.tools":
-		return "Ferramentas"
 	case "label.context":
 		return "Contexto"
 	case "label.cost":
@@ -159,12 +157,6 @@ func ptCatalog(key string) string {
 		return "Arquivos modificados pelo agente (%d arquivos, %d edições):"
 
 	// ── Memory ────────────────────────────────────────────────────
-	case "memory.none":
-		return "Nenhuma memória automática salva."
-	case "memory.title":
-		return "Memória:"
-	case "memory.auto_title":
-		return "Memórias Automáticas:"
 	case "memory.cleared":
 		return "Todas as memórias automáticas foram limpas."
 	case "memory.forget_usage":
@@ -225,20 +217,8 @@ func ptCatalog(key string) string {
 	// ── Activity ──────────────────────────────────────────────────
 
 	// ── Agent ─────────────────────────────────────────────────────
-	case "agents.hint":
-		return "\nUse /agent <id> para detalhes, /agent cancel <id> para cancelar.\n\n"
 	case "agents.idle":
 		return "inativo"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.none":
-		return "Nenhum sub-agente criado ainda.\nUso: o LLM pode usar a ferramenta spawn_agent para criar sub-agentes.\n\n"
-	case "agents.running":
-		return "%d em execução"
-	case "agents.title":
-		return "%d sub-agente(s):\n"
-	case "agents.unavailable":
-		return "Gerenciador de sub-agentes não configurado.\n\n"
 
 	// ── Approval ──────────────────────────────────────────────────
 	case "approval.accept":
@@ -421,24 +401,8 @@ func ptCatalog(key string) string {
 		return "Knight não está disponível"
 
 	// ── Labels ────────────────────────────────────────────────────
-	case "label.activity":
-		return "atividade"
-	case "label.agent_policy":
-		return "agente"
 	case "label.agents":
 		return "agentes"
-	case "label.approval_policy":
-		return "aprovação"
-	case "label.avg_duration":
-		return "duração média"
-	case "label.avg_think":
-		return "think médio"
-	case "label.avg_tps":
-		return "tps médio"
-	case "label.p95_tps":
-		return "p95 tps"
-	case "label.avg_ttft":
-		return "ttft médio"
 	case "label.branch":
 		return "branch"
 	case "label.cache_hit":
@@ -447,14 +411,8 @@ func ptCatalog(key string) string {
 		return "leitura cache"
 	case "label.cache_write":
 		return "escrita cache"
-	case "label.compact":
-		return "compactar"
-	case "label.cwd":
-		return "cwd"
 	case "label.directory":
 		return "diretório"
-	case "label.fail_rate":
-		return "taxa falha"
 	case "label.file":
 		return "arquivo"
 	case "label.input":
@@ -463,30 +421,14 @@ func ptCatalog(key string) string {
 		return "Mais recente"
 	case "label.output":
 		return "saída"
-	case "label.p95_duration":
-		return "p95 duração"
-	case "label.p95_ttft":
-		return "p95 ttft"
-	case "label.recent_turns":
-		return "turnos recentes"
 	case "label.skills":
 		return "skills"
-	case "label.slow_tools":
-		return "ferr. lentas"
 	case "label.tool":
 		return "ferramenta"
-	case "label.tool_policy":
-		return "ferramentas"
 	case "label.total":
 		return "total"
-	case "label.turns":
-		return "turnos"
-	case "label.usage":
-		return "uso"
 	case "label.version":
 		return "Versão"
-	case "label.window":
-		return "janela"
 
 	// ── LAN Chat ──────────────────────────────────────────────────
 	case "lanchat.unavailable":
@@ -519,22 +461,10 @@ func ptCatalog(key string) string {
 		return "Nenhum servidor MCP configurado.\n\n"
 
 	// ── Memory ────────────────────────────────────────────────────
-	case "memory.auto":
-		return "Memória Automática:\n"
-	case "memory.auto_none":
-		return "  Nenhuma memória automática carregada.\n"
 	case "memory.auto_unavailable":
 		return "Memória automática não inicializada.\n\n"
 	case "memory.clear_failed":
 		return "Erro ao limpar memórias: %v\n\n"
-	case "memory.list_failed":
-		return "Erro ao listar memórias: %v\n\n"
-	case "memory.project":
-		return "Memória do Projeto:\n"
-	case "memory.project_none":
-		return "  Nenhum arquivo de memória do projeto carregado.\n"
-	case "memory.usage":
-		return "\nUso: /memory [list|clear]\n\n"
 
 	// ── Metrics ───────────────────────────────────────────────────
 
@@ -693,24 +623,6 @@ func ptCatalog(key string) string {
 		return "Lista de todos limpa.\n\n"
 
 	// ── Tool ──────────────────────────────────────────────────────
-	case "tool.content":
-		return "conteúdo"
-	case "tool.done":
-		return "concluído"
-	case "tool.entry":
-		return "entrada"
-	case "tool.failed":
-		return "falhou"
-	case "tool.match":
-		return "correspondência"
-	case "tool.matches":
-		return "correspondências"
-	case "tool.no_output":
-		return "sem saída"
-	case "tool.output":
-		return "saída"
-	case "tool.result":
-		return "resultado"
 
 	// ── Tunnel ────────────────────────────────────────────────────
 	case "tunnel.mobile_connected":
@@ -743,8 +655,6 @@ func ptCatalog(key string) string {
 		return "Atualização instalada. Nota: ggcode foi instalado via winget.\nExecute `winget upgrade ggcode` para manter o winget sincronizado.\n\n"
 	case "update.preparing":
 		return "Preparando atualização"
-	case "update.restart_failed":
-		return "Atualização preparada, mas reinício falhou: %v\n\n"
 	case "update.sidebar_hint":
 		return "Nova versão disponível. Execute /update."
 	case "update.unavailable":
@@ -767,8 +677,6 @@ func ptCatalog(key string) string {
 		return "Nenhum envio anterior para editar."
 	case "command.edit_ready":
 		return "Último envio carregado — edite e pressione Enter para enviar."
-	case "command.mention_error":
-		return "Erro de expansão de menção: %v"
 	case "command.model_failed":
 		return "Falha ao trocar modelo: %v\n\n"
 	case "command.provider_current":
@@ -793,10 +701,6 @@ func ptCatalog(key string) string {
 		return "Skill %s só pode ser invocada pelo agente."
 	case "command.usage.allow":
 		return "Uso: /allow <nome-ferramenta>\n\n"
-	case "command.usage.export":
-		return "Uso: /export <id-sessão>\n\n"
-	case "command.usage.resume":
-		return "Uso: /resume <id-sessão>\n\n"
 
 	// ── Files ─────────────────────────────────────────────────────
 	case "files.disabled":
@@ -813,22 +717,12 @@ func ptCatalog(key string) string {
 		return "Falha ao resolver destino de inicialização: %v\n\n"
 
 	// ── Panel ─────────────────────────────────────────────────────
-	case "panel.agent_status":
-		return "Status do agente"
 	case "panel.approval_required":
 		return "Aprovação necessária"
 	case "panel.bypass_approval":
 		return "Aprovação modo bypass"
 	case "panel.commands":
 		return "Comandos:"
-	case "panel.composer":
-		return "Compositor"
-	case "panel.composer_locked":
-		return "Compositor bloqueado"
-	case "panel.context":
-		return "Contexto"
-	case "panel.conversation":
-		return "Conversa"
 	case "panel.files":
 		return "Arquivos:"
 	case "panel.im":
@@ -861,10 +755,6 @@ func ptCatalog(key string) string {
 		return "Falha ao reconectar %s: %s"
 	case "panel.mcp.uninstalling":
 		return "Desinstalando %s..."
-	case "panel.metrics":
-		return "Métricas"
-	case "panel.mode_policy":
-		return "Política de modo"
 	case "panel.model.context_applied":
 		return "Aplicado context_window=%d, max_tokens=%d (salvo)"
 	case "panel.model.context_cleared":
@@ -923,8 +813,6 @@ func ptCatalog(key string) string {
 		return "mostrando %d/%d modelos"
 	case "panel.provider.active_draft":
 		return "Rascunho ativo"
-	case "panel.provider.api_key":
-		return "Chave de API"
 	case "panel.provider.api_key.configured":
 		return "configurada"
 	case "panel.provider.api_key.missing":
@@ -1019,8 +907,6 @@ func ptCatalog(key string) string {
 		return "Adaptador: %s"
 	case "panel.qq.available":
 		return "Disponíveis: %d"
-	case "panel.qq.bind_channel":
-		return "Vincular Canal"
 	case "panel.qq.bot_input":
 		return "Bot QQ: %s"
 	case "panel.qq.bot_list":
@@ -1053,8 +939,6 @@ func ptCatalog(key string) string {
 		return "Ativo"
 	case "panel.qq.entry.available":
 		return "Disponível"
-	case "panel.qq.entry.bound":
-		return "Vinculado"
 	case "panel.qq.entry.bound_other":
 		return "Vinculado: %s"
 	case "panel.qq.entry.muted":
@@ -1095,18 +979,12 @@ func ptCatalog(key string) string {
 		return "(nenhum)"
 	case "panel.qq.occupied_by":
 		return "Ocupado por: %s"
-	case "panel.qq.qr_code":
-		return "QR Code:"
 	case "panel.qq.runtime.available":
 		return "disponível"
 	case "panel.qq.runtime.disabled":
 		return "desativado (defina im.enabled: true e reinicie o ggcode)"
 	case "panel.qq.runtime.not_started":
 		return "não iniciado (reinicie o ggcode para inicializar o runtime IM)"
-	case "panel.qq.scan_hint":
-		return "Escaneie o QR code, adicione o bot, depois envie uma mensagem para iniciar o pareamento."
-	case "panel.qq.share_link":
-		return "Link de Compartilhamento:"
 	case "panel.qq.status":
 		return "Status: %s"
 	case "panel.qq.status.not_started":
@@ -1135,8 +1013,6 @@ func ptCatalog(key string) string {
 		return "Ferramentas de %s inalteradas (%d ferramentas)."
 	case "panel.mcp.refreshed":
 		return "%s atualizado: %d ferramentas."
-	case "panel.startup":
-		return "Inicializando"
 	case "panel.update":
 		return "Atualizar"
 	case "help.text":

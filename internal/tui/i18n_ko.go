@@ -5,7 +5,6 @@ package tui
 // enCatalog via the default branch below (that fallback is why partial
 // coverage is safe). #1373: the old header claimed "All 722 keys
 // translated", which was false on both counts.
-
 func koCatalog(key string) string {
 	switch key {
 	case "workspace.tagline":
@@ -16,8 +15,6 @@ func koCatalog(key string) string {
 		return "임시"
 	case "agents.idle":
 		return "대기 중"
-	case "agents.running":
-		return "%d개 실행 중"
 	case "cron.firing":
 		return "실행 중"
 	case "panel.conversation":
@@ -30,16 +27,8 @@ func koCatalog(key string) string {
 		return "명령"
 	case "panel.files":
 		return "파일"
-	case "panel.agent_status":
-		return "에이전트 상태"
-	case "panel.mode_policy":
-		return "모드"
 	case "panel.session_usage":
 		return "세션 사용량"
-	case "panel.metrics":
-		return "메트릭"
-	case "panel.context":
-		return "컨텍스트"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -82,8 +71,6 @@ func koCatalog(key string) string {
 		return "%s 의 도구에 변화가 없습니다 (%d개)."
 	case "panel.mcp.refreshed":
 		return "%s 새로고침 완료: 도구 %d개."
-	case "panel.startup":
-		return "시작 중..."
 	case "panel.approval_required":
 		return "승인 필요"
 	case "panel.bypass_approval":
@@ -102,32 +89,16 @@ func koCatalog(key string) string {
 		return "세션"
 	case "label.agents":
 		return "에이전트"
-	case "label.cwd":
-		return "작업 디렉토리"
 	case "label.branch":
 		return "브랜치"
 	case "label.context":
 		return "컨텍스트"
 	case "label.skills":
 		return "스킬"
-	case "label.activity":
-		return "활동"
-	case "label.window":
-		return "창"
-	case "label.usage":
-		return "사용량"
-	case "label.compact":
-		return "압축"
 	case "label.total":
 		return "합계"
 	case "label.cost":
 		return "예상 비용"
-	case "label.approval_policy":
-		return "승인"
-	case "label.tool_policy":
-		return "도구"
-	case "label.agent_policy":
-		return "에이전트"
 	case "label.tool":
 		return "도구"
 	case "label.input":
@@ -140,28 +111,6 @@ func koCatalog(key string) string {
 		return "캐시 쓰기"
 	case "label.cache_hit":
 		return "캐시 적중"
-	case "label.turns":
-		return "턴"
-	case "label.avg_ttft":
-		return "평균 TTFT"
-	case "label.p95_ttft":
-		return "P95 TTFT"
-	case "label.avg_duration":
-		return "평균 소요"
-	case "label.p95_duration":
-		return "P95 소요"
-	case "label.avg_think":
-		return "평균 사고"
-	case "label.avg_tps":
-		return "평균 TPS"
-	case "label.p95_tps":
-		return "P95 TPS"
-	case "label.fail_rate":
-		return "실패율"
-	case "label.slow_tools":
-		return "느린 도구"
-	case "label.recent_turns":
-		return "최근 턴"
 	case "label.file":
 		return "파일"
 	case "label.directory":
@@ -248,24 +197,6 @@ func koCatalog(key string) string {
 		return "  ↑↓←→ 전환  Esc 닫기"
 	case "status.tools_used":
 		return "도구 %d회 사용"
-	case "tool.done":
-		return "완료"
-	case "tool.failed":
-		return "실패"
-	case "tool.no_output":
-		return "출력 없음"
-	case "tool.output":
-		return "출력"
-	case "tool.content":
-		return "내용"
-	case "tool.match":
-		return "일치"
-	case "tool.matches":
-		return "일치"
-	case "tool.entry":
-		return "항목"
-	case "tool.result":
-		return "결과"
 	case "approval.rejected":
 		return "거부됨"
 	case "approval.allow":
@@ -336,8 +267,6 @@ func koCatalog(key string) string {
 		return "인증"
 	case "panel.provider.env_var":
 		return "환경 변수"
-	case "panel.provider.api_key":
-		return "API 키"
 	case "panel.provider.api_key.missing":
 		return "누락"
 	case "panel.provider.api_key.configured":
@@ -474,10 +403,6 @@ func koCatalog(key string) string {
 		return "사용 가능한 명령은 /help를 입력하세요\n\n"
 	case "command.usage.allow":
 		return "사용법: /allow <도구-이름>\n\n"
-	case "command.usage.resume":
-		return "사용법: /resume <세션-id>\n\n"
-	case "command.usage.export":
-		return "사용법: /export <세션-id>\n\n"
 	case "init.resolve_failed":
 		return "초기화 대상 확인 실패: %v\n\n"
 	case "init.generate_failed":
@@ -512,8 +437,6 @@ func koCatalog(key string) string {
 		return "✓ %s이(가) 항상 허용되었습니다\n\n"
 	case "command.custom":
 		return "사용자 정의 명령 /%s:\n"
-	case "command.mention_error":
-		return "멘션 확장 오류: %v"
 	case "session.untitled":
 		return "제목 없음"
 	case "session.store_missing":
@@ -550,12 +473,6 @@ func koCatalog(key string) string {
 		return "파일 선택"
 	case "memory.auto_unavailable":
 		return "자동 메모리가 초기화되지 않았습니다.\n\n"
-	case "memory.list_failed":
-		return "메모리 목록 조회 오류: %v\n\n"
-	case "memory.none":
-		return "메모리가 없습니다"
-	case "memory.auto_title":
-		return "자동 메모리:\n"
 	case "memory.clear_failed":
 		return "메모리 삭제 오류: %v\n\n"
 	case "memory.cleared":
@@ -574,18 +491,6 @@ func koCatalog(key string) string {
 		return "Memory %q restored to prompt injection.\n\n"
 	case "memory.restore_failed":
 		return "Error restoring memory: %v\n\n"
-	case "memory.title":
-		return "메모리"
-	case "memory.project":
-		return "프로젝트 메모리:\n"
-	case "memory.project_none":
-		return "  로드된 프로젝트 메모리 파일이 없습니다.\n"
-	case "memory.auto":
-		return "자동 메모리:\n"
-	case "memory.auto_none":
-		return "  로드된 자동 메모리가 없습니다.\n"
-	case "memory.usage":
-		return "\n사용법: /memory [list|clear]\n\n"
 	case "compact.unavailable":
 		return "컨텍스트 관리자를 사용할 수 없습니다.\n\n"
 	case "compact.failed":
@@ -650,8 +555,6 @@ func koCatalog(key string) string {
 		return "업데이트 준비 중"
 	case "update.failed":
 		return "업데이트 실패: %v\n\n"
-	case "update.restart_failed":
-		return "업데이트가 준비되었지만 재시작에 실패했습니다: %v\n\n"
 	case "update.pm_hint.brew":
 		return "업데이트 설치 완료. 참고: Homebrew로 설치되었습니다.\nHomebrew 동기화를 위해 `brew upgrade ggcode`를 실행하세요.\n\n"
 	case "update.pm_hint.scoop":
@@ -678,16 +581,6 @@ func koCatalog(key string) string {
 		return "클립보드에서 이미지를 붙여널 수 없습니다: %v"
 	case "image.clipboard_no_image_windows":
 		return "클립보드에서 이미지를 찾을 수 없습니다. Windows에서는 Ctrl+V가 종종 가로채집니다."
-	case "agents.unavailable":
-		return "서브에이전트 관리자가 구성되지 않았습니다.\n\n"
-	case "agents.none":
-		return "아직 생성된 서브에이전트가 없습니다.\nLLLM이 spawn_agent 도구를 사용하여 서브에이전트를 생성할 수 있습니다.\n\n"
-	case "agents.title":
-		return "서브에이전트 %d개:\n"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.hint":
-		return "\n/agent <id>로 상세 정보, /agent cancel <id>로 취소하세요.\n\n"
 	case "slash.help":
 		return "도움말 표시"
 	case "slash.sessions":
@@ -808,8 +701,6 @@ func koCatalog(key string) string {
 		return "구성된 QQ 봇이 없습니다."
 	case "panel.qq.entry.available":
 		return "사용 가능"
-	case "panel.qq.entry.bound":
-		return "바인딩됨"
 	case "panel.qq.entry.active":
 		return "활성"
 	case "panel.qq.entry.bound_other":
@@ -848,14 +739,6 @@ func koCatalog(key string) string {
 		return "Enter 봇 생성 • Esc 취소"
 	case "panel.qq.actions_hint":
 		return "j/k 이동 • d 비활성/활성 • Enter 또는 b 봇 바인딩 • c 채널 바인딩 • x 채널 언바인딩 • u 봇 언바인딩 • i 봇 생성 • e 구성 편집 • q QR 표시 • Esc 닫기"
-	case "panel.qq.bind_channel":
-		return "채널 바인딩"
-	case "panel.qq.scan_hint":
-		return "QR 코드를 스캔하고 봇을 추가한 후 메시지를 보내 페어링을 시작하세요."
-	case "panel.qq.qr_code":
-		return "QR 코드:"
-	case "panel.qq.share_link":
-		return "공유 링크:"
 	case "panel.qq.message.no_bot":
 		return "사용 가능한 QQ 봇이 없습니다."
 	case "panel.qq.message.bound_success":

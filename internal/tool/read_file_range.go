@@ -14,17 +14,6 @@ type readFileRangeOptions struct {
 	moreHint     string
 }
 
-// readFileRange formats content with cat -n style line numbers, returning
-// lines [offset, offset+limit) from the full content.
-// offset is 1-based; 0 or 1 means start from the beginning.
-// limit <= 0 means read to end (capped at maxOutputLines).
-func readFileRange(content string, offset, limit int, totalLines int) string {
-	return readFileRangeWithOptions(content, offset, limit, readFileRangeOptions{
-		defaultLimit: maxOutputLines,
-		moreHint:     "Use read_file with offset/limit for more.",
-	})
-}
-
 func readFileRangeWithOptions(content string, offset, limit int, opts readFileRangeOptions) string {
 	lines := strings.Split(content, "\n")
 

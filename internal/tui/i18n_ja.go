@@ -11,8 +11,6 @@ func jaCatalog(key string) string {
 		return "一時的"
 	case "agents.idle":
 		return "アイドル"
-	case "agents.running":
-		return "%d 実行中"
 	case "cron.firing":
 		return "実行中"
 	case "panel.conversation":
@@ -25,16 +23,8 @@ func jaCatalog(key string) string {
 		return "コマンド"
 	case "panel.files":
 		return "ファイル"
-	case "panel.agent_status":
-		return "エージェント状態"
-	case "panel.mode_policy":
-		return "モード"
 	case "panel.session_usage":
 		return "セッション使用量"
-	case "panel.metrics":
-		return "メトリクス"
-	case "panel.context":
-		return "コンテキスト"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -77,8 +67,6 @@ func jaCatalog(key string) string {
 		return "%s のツールに変更はありません（%d 件）。"
 	case "panel.mcp.refreshed":
 		return "%s を更新しました：%d 件のツール。"
-	case "panel.startup":
-		return "起動中..."
 	case "panel.approval_required":
 		return "承認が必要"
 	case "panel.bypass_approval":
@@ -97,32 +85,16 @@ func jaCatalog(key string) string {
 		return "セッション"
 	case "label.agents":
 		return "エージェント"
-	case "label.cwd":
-		return "作業ディレクトリ"
 	case "label.branch":
 		return "ブランチ"
 	case "label.context":
 		return "コンテキスト"
 	case "label.skills":
 		return "スキル"
-	case "label.activity":
-		return "アクティビティ"
-	case "label.window":
-		return "ウィンドウ"
-	case "label.usage":
-		return "使用量"
-	case "label.compact":
-		return "圧縮"
 	case "label.total":
 		return "合計"
 	case "label.cost":
 		return "コスト"
-	case "label.approval_policy":
-		return "承認"
-	case "label.tool_policy":
-		return "ツール"
-	case "label.agent_policy":
-		return "エージェント"
 	case "label.tool":
 		return "ツール"
 	case "label.input":
@@ -135,28 +107,6 @@ func jaCatalog(key string) string {
 		return "キャッシュ書込"
 	case "label.cache_hit":
 		return "キャッシュヒット"
-	case "label.turns":
-		return "ターン"
-	case "label.avg_ttft":
-		return "平均TTFT"
-	case "label.p95_ttft":
-		return "P95 TTFT"
-	case "label.avg_duration":
-		return "平均時間"
-	case "label.p95_duration":
-		return "P95時間"
-	case "label.avg_think":
-		return "平均思考"
-	case "label.avg_tps":
-		return "平均TPS"
-	case "label.p95_tps":
-		return "P95 TPS"
-	case "label.fail_rate":
-		return "失敗率"
-	case "label.slow_tools":
-		return "低速ツール"
-	case "label.recent_turns":
-		return "最近のターン"
 	case "label.file":
 		return "ファイル"
 	case "label.directory":
@@ -243,24 +193,6 @@ func jaCatalog(key string) string {
 		return "  ↑↓←→ 切替  Esc 閉じる"
 	case "status.tools_used":
 		return "ツール %d 回使用"
-	case "tool.done":
-		return "完了"
-	case "tool.failed":
-		return "失敗"
-	case "tool.no_output":
-		return "出力なし"
-	case "tool.output":
-		return "出力"
-	case "tool.content":
-		return "内容"
-	case "tool.match":
-		return "一致"
-	case "tool.matches":
-		return "一致"
-	case "tool.entry":
-		return "エントリ"
-	case "tool.result":
-		return "結果"
 	case "approval.rejected":
 		return "拒否されました"
 	case "approval.allow":
@@ -337,8 +269,6 @@ func jaCatalog(key string) string {
 		return "認証"
 	case "panel.provider.env_var":
 		return "環境変数"
-	case "panel.provider.api_key":
-		return "APIキー"
 	case "panel.provider.api_key.missing":
 		return "未設定"
 	case "panel.provider.api_key.configured":
@@ -511,10 +441,6 @@ func jaCatalog(key string) string {
 		return "/helpでコマンド一覧を表示\n\n"
 	case "command.usage.allow":
 		return "使用法: /allow <ツール名>\n\n"
-	case "command.usage.resume":
-		return "使用法: /resume <セッションID>\n\n"
-	case "command.usage.export":
-		return "使用法: /export <セッションID>\n\n"
 	case "init.resolve_failed":
 		return "初期化ターゲットの解決に失敗しました: %v\n\n"
 	case "init.generate_failed":
@@ -551,8 +477,6 @@ func jaCatalog(key string) string {
 		return "✓ %s を永久許可に設定しました\n\n"
 	case "command.custom":
 		return "カスタムコマンド /%s:\n"
-	case "command.mention_error":
-		return "メンション展開エラー: %v"
 	case "session.untitled":
 		return "無題"
 	case "session.store_missing":
@@ -591,12 +515,6 @@ func jaCatalog(key string) string {
 		return "ファイルを選択"
 	case "memory.auto_unavailable":
 		return "自動メモリが初期化されていません。\n\n"
-	case "memory.list_failed":
-		return "メモリ一覧の取得エラー: %v\n\n"
-	case "memory.none":
-		return "メモリがありません"
-	case "memory.auto_title":
-		return "自動メモリ:\n"
 	case "memory.clear_failed":
 		return "メモリのクリアエラー: %v\n\n"
 	case "memory.cleared":
@@ -615,18 +533,6 @@ func jaCatalog(key string) string {
 		return "Memory %q restored to prompt injection.\n\n"
 	case "memory.restore_failed":
 		return "Error restoring memory: %v\n\n"
-	case "memory.title":
-		return "メモリ"
-	case "memory.project":
-		return "プロジェクト"
-	case "memory.project_none":
-		return "  プロジェクトメモリファイルが読み込まれていません。\n"
-	case "memory.auto":
-		return "自動メモリ:\n"
-	case "memory.auto_none":
-		return "  自動メモリが読み込まれていません。\n"
-	case "memory.usage":
-		return "\n使用法: /memory [list|clear]\n\n"
 	case "compact.unavailable":
 		return "コンテキストマネージャーが利用できません。\n\n"
 	case "compact.failed":
@@ -691,8 +597,6 @@ func jaCatalog(key string) string {
 		return "アップデート準備中"
 	case "update.failed":
 		return "更新に失敗しました: %v"
-	case "update.restart_failed":
-		return "アップデートの準備が完了しましたが、再起動に失敗しました: %v\n\n"
 	case "update.pm_hint.brew":
 		return "アップデートがインストールされました。注意: ggcode は Homebrew 経由でインストールされています。\nHomebrew を同期するには `brew upgrade ggcode` を実行してください。\n\n"
 	case "update.pm_hint.scoop":
@@ -719,16 +623,6 @@ func jaCatalog(key string) string {
 		return "クリップボードから画像を貼り付けできませんでした: %v"
 	case "image.clipboard_no_image_windows":
 		return "クリップボードに画像が見つかりません。WindowsではCtrl+Vが端末に遮断されることがあります。Ctrl+Shift+Vまたは/image pasteを試してください。"
-	case "agents.unavailable":
-		return "サブエージェント管理が利用できません"
-	case "agents.none":
-		return "アクティブなサブエージェントがありません"
-	case "agents.title":
-		return "%d 個のサブエージェント:\n"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.hint":
-		return "タブでサブエージェントを選択、Enter で送信"
 	case "slash.help":
 		return "ヘルプを表示"
 	case "slash.sessions":
@@ -849,8 +743,6 @@ func jaCatalog(key string) string {
 		return "QQ Botが設定されていません。"
 	case "panel.qq.entry.available":
 		return "利用可能"
-	case "panel.qq.entry.bound":
-		return "バインド済み"
 	case "panel.qq.entry.active":
 		return "アクティブ"
 	case "panel.qq.entry.bound_other":
@@ -889,14 +781,6 @@ func jaCatalog(key string) string {
 		return "Enter でBot作成 • Esc でキャンセル"
 	case "panel.qq.actions_hint":
 		return "j/k 移動 • d 無効/有効 • Enter または b でBotバインド • c でチャネルバインド • x でチャネルバインド解除 • u でBotバインド解除 • i でBot作成 • e 設定編集 • q QR表示 • Esc で閉じる"
-	case "panel.qq.bind_channel":
-		return "チャネルをバインド"
-	case "panel.qq.scan_hint":
-		return "QRコードをスキャンし、Botを追加して、メッセージを送信してペアリングを開始してください。"
-	case "panel.qq.qr_code":
-		return "QRコード:"
-	case "panel.qq.share_link":
-		return "共有リンク:"
 	case "panel.qq.message.no_bot":
 		return "利用可能なQQ Botがありません。"
 	case "panel.qq.message.bound_success":
