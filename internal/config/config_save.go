@@ -158,8 +158,14 @@ func (c *Config) Save() error {
 		return err
 	}
 	// Re-migrate any plaintext secrets that yaml.Marshal produced.
+	// #4505: the migration intent (config_migration.go) is "no plaintext
+	// key readable on disk" - a failure here (read-only/locked keys.env
+	// dir) previously only hit debug.Log, so Save() reported success while
+	// plaintext keys stayed in ggcode.yaml with no user-visible signal and
+	// no retry path. Surface it: the config IS saved, but the security
+	// migration did not complete.
 	if migrated, migrateErr := MigratePlaintextAPIKeys(c.FilePath); migrateErr != nil {
-		debug.Log("config", "Save: post-save migration error: %v", migrateErr)
+		return fmt.Errorf("config saved, but migrating plaintext API keys out of %s failed (they remain readable on disk): %w", c.FilePath, migrateErr)
 	} else if len(migrated) > 0 {
 		if err := recompactConfigFile(c.FilePath); err != nil {
 			debug.Log("config", "Save: recompact error: %v", err)
@@ -171,7 +177,8 @@ func (c *Config) Save() error {
 	// vendors were excluded from the file, any plaintext key found here is
 	// global-sourced and belongs in the global keys.env (#293).
 	if migrated, migrateErr := MigrateVendorsFilePlaintextAPIKeys(VendorsPath(extDir), ""); migrateErr != nil {
-		debug.Log("config", "Save: vendors.yaml migration error: %v", migrateErr)
+		// #4505: same security-visibility rationale as the main-file migration.
+		return fmt.Errorf("config saved, but migrating plaintext API keys out of vendors.yaml failed (they remain readable on disk): %w", migrateErr)
 	} else if len(migrated) > 0 {
 		debug.Log("config", "Save: migrated %d plaintext API keys out of vendors.yaml", len(migrated))
 	}

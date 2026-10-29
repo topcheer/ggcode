@@ -1741,6 +1741,12 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(ep.AuthType) == "" {
 		ep.AuthType = "api_key"
+		// #4504: ep is a MAP-VALUE COPY - the defaults written above (and
+		// ep.Provider below) landed on the copy and never reached
+		// vc.Endpoints, so post-Load readers of the map still saw an empty
+		// AuthType. ResolveCurrentProvider's own fallback masked it, but any
+		// direct reader got "". Write the endpoint back.
+		vc.Endpoints[c.Endpoint] = ep
 	}
 	if strings.TrimSpace(c.Model) == "" && strings.TrimSpace(ep.SelectedModel) == "" && strings.TrimSpace(ep.DefaultModel) == "" {
 		return fmt.Errorf("model must not be empty")
