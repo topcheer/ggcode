@@ -15,8 +15,6 @@ func ruCatalog(key string) string {
 	// --- Agents ---
 	case "agents.idle":
 		return "ожидание"
-	case "agents.running":
-		return "%d активных"
 	case "cron.firing":
 		return "⏰ Сработала задача cron"
 
@@ -105,32 +103,16 @@ func ruCatalog(key string) string {
 		return "Сессия"
 	case "label.agents":
 		return "Агенты"
-	case "label.cwd":
-		return "Дир."
 	case "label.branch":
 		return "Ветвь"
 	case "label.context":
 		return "Контекст"
 	case "label.skills":
 		return "Навыки"
-	case "label.activity":
-		return "Активность"
-	case "label.window":
-		return "Окно"
-	case "label.usage":
-		return "Использ."
-	case "label.compact":
-		return "компакт."
 	case "label.total":
 		return "всего"
 	case "label.cost":
 		return "оц. стоимость"
-	case "label.approval_policy":
-		return "Подтверждение"
-	case "label.tool_policy":
-		return "Инструменты"
-	case "label.agent_policy":
-		return "Агент"
 	case "label.tool":
 		return "Инструмент"
 	case "label.input":
@@ -143,28 +125,6 @@ func ruCatalog(key string) string {
 		return "Запись кэша"
 	case "label.cache_hit":
 		return "Попадание кэша"
-	case "label.turns":
-		return "Ходы"
-	case "label.avg_ttft":
-		return "Ø TTFT"
-	case "label.p95_ttft":
-		return "p95 TTFT"
-	case "label.avg_duration":
-		return "Ø длительность"
-	case "label.p95_duration":
-		return "p95 длительность"
-	case "label.avg_think":
-		return "Ø размышление"
-	case "label.avg_tps":
-		return "Ø TPS"
-	case "label.p95_tps":
-		return "P95 TPS"
-	case "label.fail_rate":
-		return "Уровень ошибок"
-	case "label.slow_tools":
-		return "медл. инструменты"
-	case "label.recent_turns":
-		return "недавние ходы"
 	case "label.file":
 		return "Файл"
 	case "label.directory":
@@ -274,24 +234,6 @@ func ruCatalog(key string) string {
 	// --- Tools ---
 	case "status.tools_used":
 		return "%d инструментов использовано"
-	case "tool.done":
-		return "готово"
-	case "tool.failed":
-		return "ошибка"
-	case "tool.no_output":
-		return "нет вывода"
-	case "tool.output":
-		return "вывод"
-	case "tool.content":
-		return "содержимое"
-	case "tool.match":
-		return "совпадение"
-	case "tool.matches":
-		return "совпадений"
-	case "tool.entry":
-		return "запись"
-	case "tool.result":
-		return "результат"
 
 	// --- Approval ---
 	case "approval.rejected":
@@ -612,12 +554,6 @@ func ruCatalog(key string) string {
 	// --- Memory ---
 	case "memory.auto_unavailable":
 		return "Авто-память не инициализирована.\n\n"
-	case "memory.list_failed":
-		return "Ошибка получения списка воспоминаний: %v\n\n"
-	case "memory.none":
-		return "Нет сохранённых авто-воспоминаний.\n\n"
-	case "memory.auto_title":
-		return "Авто-воспоминания:\n"
 	case "memory.clear_failed":
 		return "Ошибка очистки воспоминаний: %v\n\n"
 	case "memory.cleared":
@@ -636,18 +572,6 @@ func ruCatalog(key string) string {
 		return "Memory %q restored to prompt injection.\n\n"
 	case "memory.restore_failed":
 		return "Error restoring memory: %v\n\n"
-	case "memory.title":
-		return "Память:\n"
-	case "memory.project":
-		return "Память проекта:\n"
-	case "memory.project_none":
-		return "  Нет загруженных файлов памяти проекта.\n"
-	case "memory.auto":
-		return "Авто-память:\n"
-	case "memory.auto_none":
-		return "  Нет загруженных авто-воспоминаний.\n"
-	case "memory.usage":
-		return "\nИспользование: /memory [list|clear]\n\n"
 
 	// --- Compact ---
 	case "compact.unavailable":
@@ -766,16 +690,6 @@ func ruCatalog(key string) string {
 		return "Изображение в буфере обмена не найдено. В Windows Ctrl+V часто перехватывается терминалом. Попробуйте Ctrl+Shift+V или /image paste."
 
 	// --- Agents ---
-	case "agents.unavailable":
-		return "Менеджер суб-агентов не настроен.\n\n"
-	case "agents.none":
-		return "Суб-агенты ещё не созданы.\nИспользование: LLM может использовать инструмент spawn_agent для создания суб-агентов.\n\n"
-	case "agents.title":
-		return "%d суб-агент(ов):\n"
-	case "agents.item":
-		return "  %s [%s]%s — %s\n"
-	case "agents.hint":
-		return "\nИспользуйте /agent <id> для деталей, /agent cancel <id> для отмены.\n\n"
 
 	// --- Slash command descriptions ---
 	case "slash.help":

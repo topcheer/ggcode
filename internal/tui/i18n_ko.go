@@ -16,8 +16,6 @@ func koCatalog(key string) string {
 		return "임시"
 	case "agents.idle":
 		return "대기 중"
-	case "agents.running":
-		return "%d개 실행 중"
 	case "cron.firing":
 		return "실행 중"
 	case "panel.conversation":
@@ -102,32 +100,16 @@ func koCatalog(key string) string {
 		return "세션"
 	case "label.agents":
 		return "에이전트"
-	case "label.cwd":
-		return "작업 디렉토리"
 	case "label.branch":
 		return "브랜치"
 	case "label.context":
 		return "컨텍스트"
 	case "label.skills":
 		return "스킬"
-	case "label.activity":
-		return "활동"
-	case "label.window":
-		return "창"
-	case "label.usage":
-		return "사용량"
-	case "label.compact":
-		return "압축"
 	case "label.total":
 		return "합계"
 	case "label.cost":
 		return "예상 비용"
-	case "label.approval_policy":
-		return "승인"
-	case "label.tool_policy":
-		return "도구"
-	case "label.agent_policy":
-		return "에이전트"
 	case "label.tool":
 		return "도구"
 	case "label.input":
@@ -140,28 +122,6 @@ func koCatalog(key string) string {
 		return "캐시 쓰기"
 	case "label.cache_hit":
 		return "캐시 적중"
-	case "label.turns":
-		return "턴"
-	case "label.avg_ttft":
-		return "평균 TTFT"
-	case "label.p95_ttft":
-		return "P95 TTFT"
-	case "label.avg_duration":
-		return "평균 소요"
-	case "label.p95_duration":
-		return "P95 소요"
-	case "label.avg_think":
-		return "평균 사고"
-	case "label.avg_tps":
-		return "평균 TPS"
-	case "label.p95_tps":
-		return "P95 TPS"
-	case "label.fail_rate":
-		return "실패율"
-	case "label.slow_tools":
-		return "느린 도구"
-	case "label.recent_turns":
-		return "최근 턴"
 	case "label.file":
 		return "파일"
 	case "label.directory":
@@ -254,24 +214,6 @@ func koCatalog(key string) string {
 		return "  ↑↓←→ 전환  Esc 닫기"
 	case "status.tools_used":
 		return "도구 %d회 사용"
-	case "tool.done":
-		return "완료"
-	case "tool.failed":
-		return "실패"
-	case "tool.no_output":
-		return "출력 없음"
-	case "tool.output":
-		return "출력"
-	case "tool.content":
-		return "내용"
-	case "tool.match":
-		return "일치"
-	case "tool.matches":
-		return "일치"
-	case "tool.entry":
-		return "항목"
-	case "tool.result":
-		return "결과"
 	case "approval.rejected":
 		return "거부됨"
 	case "approval.allow":
@@ -562,12 +504,6 @@ func koCatalog(key string) string {
 		return "파일 선택"
 	case "memory.auto_unavailable":
 		return "자동 메모리가 초기화되지 않았습니다.\n\n"
-	case "memory.list_failed":
-		return "메모리 목록 조회 오류: %v\n\n"
-	case "memory.none":
-		return "메모리가 없습니다"
-	case "memory.auto_title":
-		return "자동 메모리:\n"
 	case "memory.clear_failed":
 		return "메모리 삭제 오류: %v\n\n"
 	case "memory.cleared":
@@ -586,18 +522,6 @@ func koCatalog(key string) string {
 		return "Memory %q restored to prompt injection.\n\n"
 	case "memory.restore_failed":
 		return "Error restoring memory: %v\n\n"
-	case "memory.title":
-		return "메모리"
-	case "memory.project":
-		return "프로젝트 메모리:\n"
-	case "memory.project_none":
-		return "  로드된 프로젝트 메모리 파일이 없습니다.\n"
-	case "memory.auto":
-		return "자동 메모리:\n"
-	case "memory.auto_none":
-		return "  로드된 자동 메모리가 없습니다.\n"
-	case "memory.usage":
-		return "\n사용법: /memory [list|clear]\n\n"
 	case "compact.unavailable":
 		return "컨텍스트 관리자를 사용할 수 없습니다.\n\n"
 	case "compact.failed":
@@ -698,16 +622,6 @@ func koCatalog(key string) string {
 		return "클립보드에서 이미지를 붙여널 수 없습니다: %v"
 	case "image.clipboard_no_image_windows":
 		return "클립보드에서 이미지를 찾을 수 없습니다. Windows에서는 Ctrl+V가 종종 가로채집니다."
-	case "agents.unavailable":
-		return "서브에이전트 관리자가 구성되지 않았습니다.\n\n"
-	case "agents.none":
-		return "아직 생성된 서브에이전트가 없습니다.\nLLLM이 spawn_agent 도구를 사용하여 서브에이전트를 생성할 수 있습니다.\n\n"
-	case "agents.title":
-		return "서브에이전트 %d개:\n"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.hint":
-		return "\n/agent <id>로 상세 정보, /agent cancel <id>로 취소하세요.\n\n"
 	case "slash.help":
 		return "도움말 표시"
 	case "slash.sessions":

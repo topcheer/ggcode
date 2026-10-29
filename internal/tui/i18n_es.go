@@ -12,8 +12,6 @@ func esCatalog(key string) string {
 		return "efímera"
 	case "agents.idle":
 		return "inactivo"
-	case "agents.running":
-		return "%d en ejecución"
 	case "cron.firing":
 		return "⏰ tarea cron activada"
 	case "panel.conversation":
@@ -98,32 +96,16 @@ func esCatalog(key string) string {
 		return "sesión"
 	case "label.agents":
 		return "agentes"
-	case "label.cwd":
-		return "dir. actual"
 	case "label.branch":
 		return "rama"
 	case "label.context":
 		return "contexto"
 	case "label.skills":
 		return "habilidades"
-	case "label.activity":
-		return "actividad"
-	case "label.window":
-		return "ventana"
-	case "label.usage":
-		return "uso"
-	case "label.compact":
-		return "compacto"
 	case "label.total":
 		return "total"
 	case "label.cost":
 		return "costo est."
-	case "label.approval_policy":
-		return "aprobación"
-	case "label.tool_policy":
-		return "herramientas"
-	case "label.agent_policy":
-		return "agente"
 	case "label.tool":
 		return "herramienta"
 	case "label.input":
@@ -136,28 +118,6 @@ func esCatalog(key string) string {
 		return "escritura cache"
 	case "label.cache_hit":
 		return "aciertos cache"
-	case "label.turns":
-		return "turnos"
-	case "label.avg_ttft":
-		return "ttft medio"
-	case "label.p95_ttft":
-		return "ttft p95"
-	case "label.avg_duration":
-		return "dur. media"
-	case "label.p95_duration":
-		return "dur. p95"
-	case "label.avg_think":
-		return "pens. medio"
-	case "label.avg_tps":
-		return "tps medio"
-	case "label.p95_tps":
-		return "p95 tps"
-	case "label.fail_rate":
-		return "tasa fallos"
-	case "label.slow_tools":
-		return "herr. lentas"
-	case "label.recent_turns":
-		return "turnos recientes"
 	case "label.file":
 		return "archivo"
 	case "label.directory":
@@ -250,24 +210,6 @@ func esCatalog(key string) string {
 		return "  ↑↓←→ cambiar  Esc cerrar"
 	case "status.tools_used":
 		return "%d herramientas usadas"
-	case "tool.done":
-		return "completado"
-	case "tool.failed":
-		return "fallido"
-	case "tool.no_output":
-		return "sin salida"
-	case "tool.output":
-		return "salida"
-	case "tool.content":
-		return "contenido"
-	case "tool.match":
-		return "coincidencia"
-	case "tool.matches":
-		return "coincidencias"
-	case "tool.entry":
-		return "entrada"
-	case "tool.result":
-		return "resultado"
 	case "approval.rejected":
 		return "  Rechazado.\n"
 	case "approval.allow":
@@ -558,12 +500,6 @@ func esCatalog(key string) string {
 		return "\nUse /undo para revertir la edición más reciente, /checkpoints para detalles.\n\n"
 	case "memory.auto_unavailable":
 		return "Memoria automatica no inicializada.\n\n"
-	case "memory.list_failed":
-		return "Error al listar memorias: %v\n\n"
-	case "memory.none":
-		return "Sin memorias automaticas guardadas.\n\n"
-	case "memory.auto_title":
-		return "Memorias Automaticas:\n"
 	case "memory.clear_failed":
 		return "Error al limpiar memorias: %v\n\n"
 	case "memory.cleared":
@@ -582,18 +518,6 @@ func esCatalog(key string) string {
 		return "Memory %q restored to prompt injection.\n\n"
 	case "memory.restore_failed":
 		return "Error restoring memory: %v\n\n"
-	case "memory.title":
-		return "Memoria:\n"
-	case "memory.project":
-		return "Memoria del Proyecto:\n"
-	case "memory.project_none":
-		return "  Sin archivos de memoria de proyecto cargados.\n"
-	case "memory.auto":
-		return "Memoria Automatica:\n"
-	case "memory.auto_none":
-		return "  Sin memorias automaticas cargadas.\n"
-	case "memory.usage":
-		return "\nUso: /memory [list|clear]\n\n"
 	case "compact.unavailable":
 		return "Gestor de contexto no disponible.\n\n"
 	case "compact.failed":
@@ -694,16 +618,6 @@ func esCatalog(key string) string {
 		return "No se pudo pegar una imagen del portapapeles: %v"
 	case "image.clipboard_no_image_windows":
 		return "Sin imagen en el portapapeles. En Windows, Ctrl+V a menudo es interceptado por la terminal. Pruebe Ctrl+Shift+V o /image paste."
-	case "agents.unavailable":
-		return "Gestor de sub-agentes no configurado.\n\n"
-	case "agents.none":
-		return "Sin sub-agentes creados aún.\nUso: el LLM puede usar la herramienta spawn_agent para crear sub-agentes.\n\n"
-	case "agents.title":
-		return "%d sub-agente(s):\n"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.hint":
-		return "\nUse /agent <id> para detalles, /agent cancel <id> para cancelar.\n\n"
 	case "slash.help":
 		return "Mostrar mensaje de ayuda"
 	case "slash.sessions":
