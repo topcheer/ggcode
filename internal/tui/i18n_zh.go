@@ -20,16 +20,8 @@ func zhCatalog(key string) string {
 		return "命令："
 	case "panel.files":
 		return "文件："
-	case "panel.agent_status":
-		return "Agent 状态"
-	case "panel.mode_policy":
-		return "模式说明"
 	case "panel.session_usage":
 		return "会话用量"
-	case "panel.metrics":
-		return "指标"
-	case "panel.context":
-		return "上下文"
 	case "panel.usage":
 		return "用量"
 	case "usage.refreshing":
@@ -72,8 +64,6 @@ func zhCatalog(key string) string {
 		return "%s 的工具无变化（%d 个）。"
 	case "panel.mcp.refreshed":
 		return "已刷新 %s：%d 个工具。"
-	case "panel.startup":
-		return "正在初始化"
 	case "panel.approval_required":
 		return "需要确认"
 	case "panel.bypass_approval":
@@ -301,8 +291,6 @@ func zhCatalog(key string) string {
 		return "认证"
 	case "panel.provider.env_var":
 		return "环境变量"
-	case "panel.provider.api_key":
-		return "API Key"
 	case "panel.provider.api_key.missing":
 		return "未配置"
 	case "panel.provider.api_key.configured":
@@ -496,10 +484,6 @@ func zhCatalog(key string) string {
 		return "输入 /help 查看可用命令\n\n"
 	case "command.usage.allow":
 		return "用法：/allow <tool-name>\n\n"
-	case "command.usage.resume":
-		return "用法：/resume <session-id>\n\n"
-	case "command.usage.export":
-		return "用法：/export <session-id>\n\n"
 	case "init.resolve_failed":
 		return "解析初始化目标失败：%v\n\n"
 	case "init.generate_failed":
@@ -534,8 +518,6 @@ func zhCatalog(key string) string {
 		return "✓ %s 已设为永久允许\n\n"
 	case "command.custom":
 		return "自定义命令 /%s：\n"
-	case "command.mention_error":
-		return "展开 @ 引用失败：%v"
 	case "session.list_failed":
 		return "列出会话失败：%v\n\n"
 	case "session.untitled":
@@ -740,8 +722,6 @@ func zhCatalog(key string) string {
 		return "正在准备升级"
 	case "update.failed":
 		return "升级失败：%v\n\n"
-	case "update.restart_failed":
-		return "升级已准备完成，但重启失败：%v\n\n"
 	case "update.pm_hint.brew":
 		return "更新已安装。注意：ggcode 是通过 Homebrew 安装的。\n建议运行 `brew upgrade ggcode` 以保持 Homebrew 同步。\n\n"
 	case "update.pm_hint.scoop":
@@ -944,8 +924,6 @@ func zhCatalog(key string) string {
 		return "没有配置 QQ 机器人。"
 	case "panel.qq.entry.available":
 		return "可用"
-	case "panel.qq.entry.bound":
-		return "已绑定"
 	case "panel.qq.entry.active":
 		return "活跃"
 	case "panel.qq.entry.bound_other":
@@ -982,14 +960,6 @@ func zhCatalog(key string) string {
 		return "Enter 创建机器人 • Esc 取消"
 	case "panel.qq.actions_hint":
 		return "j/k 移动 • d 禁用/启用 • Enter 或 b 绑定机器人 • c 绑定渠道 • x 解绑渠道 • u 解绑机器人 • i 创建机器人 • e 编辑配置 • q 显示二维码 • Esc 关闭"
-	case "panel.qq.bind_channel":
-		return "绑定渠道"
-	case "panel.qq.scan_hint":
-		return "扫描二维码添加机器人，然后发送一条消息开始配对。"
-	case "panel.qq.qr_code":
-		return "二维码："
-	case "panel.qq.share_link":
-		return "分享链接："
 	case "panel.qq.message.no_bot":
 		return "当前没有可用的 QQ 机器人。"
 	case "panel.qq.message.bound_success":

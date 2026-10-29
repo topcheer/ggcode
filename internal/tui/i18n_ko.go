@@ -28,16 +28,8 @@ func koCatalog(key string) string {
 		return "명령"
 	case "panel.files":
 		return "파일"
-	case "panel.agent_status":
-		return "에이전트 상태"
-	case "panel.mode_policy":
-		return "모드"
 	case "panel.session_usage":
 		return "세션 사용량"
-	case "panel.metrics":
-		return "메트릭"
-	case "panel.context":
-		return "컨텍스트"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -80,8 +72,6 @@ func koCatalog(key string) string {
 		return "%s 의 도구에 변화가 없습니다 (%d개)."
 	case "panel.mcp.refreshed":
 		return "%s 새로고침 완료: 도구 %d개."
-	case "panel.startup":
-		return "시작 중..."
 	case "panel.approval_required":
 		return "승인 필요"
 	case "panel.bypass_approval":
@@ -284,8 +274,6 @@ func koCatalog(key string) string {
 		return "인증"
 	case "panel.provider.env_var":
 		return "환경 변수"
-	case "panel.provider.api_key":
-		return "API 키"
 	case "panel.provider.api_key.missing":
 		return "누락"
 	case "panel.provider.api_key.configured":
@@ -422,10 +410,6 @@ func koCatalog(key string) string {
 		return "사용 가능한 명령은 /help를 입력하세요\n\n"
 	case "command.usage.allow":
 		return "사용법: /allow <도구-이름>\n\n"
-	case "command.usage.resume":
-		return "사용법: /resume <세션-id>\n\n"
-	case "command.usage.export":
-		return "사용법: /export <세션-id>\n\n"
 	case "init.resolve_failed":
 		return "초기화 대상 확인 실패: %v\n\n"
 	case "init.generate_failed":
@@ -460,8 +444,6 @@ func koCatalog(key string) string {
 		return "✓ %s이(가) 항상 허용되었습니다\n\n"
 	case "command.custom":
 		return "사용자 정의 명령 /%s:\n"
-	case "command.mention_error":
-		return "멘션 확장 오류: %v"
 	case "session.list_failed":
 		return "세션 목록 조회 오류: %v\n\n"
 	case "session.untitled":
@@ -594,8 +576,6 @@ func koCatalog(key string) string {
 		return "업데이트 준비 중"
 	case "update.failed":
 		return "업데이트 실패: %v\n\n"
-	case "update.restart_failed":
-		return "업데이트가 준비되었지만 재시작에 실패했습니다: %v\n\n"
 	case "update.pm_hint.brew":
 		return "업데이트 설치 완료. 참고: Homebrew로 설치되었습니다.\nHomebrew 동기화를 위해 `brew upgrade ggcode`를 실행하세요.\n\n"
 	case "update.pm_hint.scoop":
@@ -742,8 +722,6 @@ func koCatalog(key string) string {
 		return "구성된 QQ 봇이 없습니다."
 	case "panel.qq.entry.available":
 		return "사용 가능"
-	case "panel.qq.entry.bound":
-		return "바인딩됨"
 	case "panel.qq.entry.active":
 		return "활성"
 	case "panel.qq.entry.bound_other":
@@ -782,14 +760,6 @@ func koCatalog(key string) string {
 		return "Enter 봇 생성 • Esc 취소"
 	case "panel.qq.actions_hint":
 		return "j/k 이동 • d 비활성/활성 • Enter 또는 b 봇 바인딩 • c 채널 바인딩 • x 채널 언바인딩 • u 봇 언바인딩 • i 봇 생성 • e 구성 편집 • q QR 표시 • Esc 닫기"
-	case "panel.qq.bind_channel":
-		return "채널 바인딩"
-	case "panel.qq.scan_hint":
-		return "QR 코드를 스캔하고 봇을 추가한 후 메시지를 보내 페어링을 시작하세요."
-	case "panel.qq.qr_code":
-		return "QR 코드:"
-	case "panel.qq.share_link":
-		return "공유 링크:"
 	case "panel.qq.message.no_bot":
 		return "사용 가능한 QQ 봇이 없습니다."
 	case "panel.qq.message.bound_success":

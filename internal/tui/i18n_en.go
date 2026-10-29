@@ -22,16 +22,8 @@ func enCatalog(key string) string {
 		return "Commands:"
 	case "panel.files":
 		return "Files:"
-	case "panel.agent_status":
-		return "Agent status"
-	case "panel.mode_policy":
-		return "Mode policy"
 	case "panel.session_usage":
 		return "Session usage"
-	case "panel.metrics":
-		return "Metrics"
-	case "panel.context":
-		return "Context"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -76,8 +68,6 @@ func enCatalog(key string) string {
 		return "Tools unchanged for %s (%d tools)."
 	case "panel.mcp.refreshed":
 		return "Refreshed %s: %d tools."
-	case "panel.startup":
-		return "Initializing"
 	case "panel.approval_required":
 		return "Approval required"
 	case "panel.bypass_approval":
@@ -293,8 +283,6 @@ func enCatalog(key string) string {
 		return "Auth"
 	case "panel.provider.env_var":
 		return "Env var"
-	case "panel.provider.api_key":
-		return "API key"
 	case "panel.provider.api_key.missing":
 		return "missing"
 	case "panel.provider.api_key.configured":
@@ -485,10 +473,6 @@ func enCatalog(key string) string {
 		return "Type /help for available commands\n\n"
 	case "command.usage.allow":
 		return "Usage: /allow <tool-name>\n\n"
-	case "command.usage.resume":
-		return "Usage: /resume <session-id>\n\n"
-	case "command.usage.export":
-		return "Usage: /export <session-id>\n\n"
 	case "init.resolve_failed":
 		return "Failed to resolve init target: %v\n\n"
 	case "init.generate_failed":
@@ -523,8 +507,6 @@ func enCatalog(key string) string {
 		return "✓ %s is now always allowed\n\n"
 	case "command.custom":
 		return "Custom command /%s:\n"
-	case "command.mention_error":
-		return "Mention expansion error: %v"
 	case "session.list_failed":
 		return "Error listing sessions: %v\n\n"
 	case "session.untitled":
@@ -729,8 +711,6 @@ func enCatalog(key string) string {
 		return "Preparing update"
 	case "update.failed":
 		return "Update failed: %v\n\n"
-	case "update.restart_failed":
-		return "Update prepared, but restart failed: %v\n\n"
 	case "update.pm_hint.brew":
 		return "Update installed. Note: ggcode was installed via Homebrew.\nRun `brew upgrade ggcode` to keep Homebrew in sync.\n\n"
 	case "update.pm_hint.scoop":
@@ -931,8 +911,6 @@ func enCatalog(key string) string {
 		return "No QQ bots configured."
 	case "panel.qq.entry.available":
 		return "Available"
-	case "panel.qq.entry.bound":
-		return "Bound"
 	case "panel.qq.entry.active":
 		return "Active"
 	case "panel.qq.entry.bound_other":
@@ -969,14 +947,6 @@ func enCatalog(key string) string {
 		return "Enter create bot • Esc cancel"
 	case "panel.qq.actions_hint":
 		return "j/k move • d disable/enable • Enter or b bind bot • c bind channel • x unbind channel • u unbind bot • i create bot • e edit config • q show QR • Esc close"
-	case "panel.qq.bind_channel":
-		return "Bind Channel"
-	case "panel.qq.scan_hint":
-		return "Scan the QR code, add the bot, then send a message to start pairing."
-	case "panel.qq.qr_code":
-		return "QR Code:"
-	case "panel.qq.share_link":
-		return "Share Link:"
 	case "panel.qq.message.no_bot":
 		return "No QQ bot available."
 	case "panel.qq.message.bound_success":

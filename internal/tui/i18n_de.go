@@ -19,26 +19,12 @@ func deCatalog(key string) string {
 		return "⏰ Cron-Job ausgelöst"
 
 	// --- Panel ---
-	case "panel.conversation":
-		return "Unterhaltung"
-	case "panel.composer":
-		return "Eingabe"
-	case "panel.composer_locked":
-		return "Eingabe gesperrt"
 	case "panel.commands":
 		return "Befehle:"
 	case "panel.files":
 		return "Dateien:"
-	case "panel.agent_status":
-		return "Agent-Status"
-	case "panel.mode_policy":
-		return "Modus-Richtlinie"
 	case "panel.session_usage":
 		return "Sitzungsnutzung"
-	case "panel.metrics":
-		return "Metriken"
-	case "panel.context":
-		return "Kontext"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -81,8 +67,6 @@ func deCatalog(key string) string {
 		return "Tools für %s unverändert (%d Tools)."
 	case "panel.mcp.refreshed":
 		return "%s aktualisiert: %d Tools."
-	case "panel.startup":
-		return "Initialisierung"
 	case "panel.approval_required":
 		return "Genehmigung erforderlich"
 	case "panel.bypass_approval":
@@ -318,8 +302,6 @@ func deCatalog(key string) string {
 		return "Auth"
 	case "panel.provider.env_var":
 		return "Env-Var"
-	case "panel.provider.api_key":
-		return "API-Schlüssel"
 	case "panel.provider.api_key.missing":
 		return "fehlt"
 	case "panel.provider.api_key.configured":
@@ -468,10 +450,6 @@ func deCatalog(key string) string {
 		return "/help für verfügbare Befehle eingeben\n\n"
 	case "command.usage.allow":
 		return "Verwendung: /allow <werkzeugname>\n\n"
-	case "command.usage.resume":
-		return "Verwendung: /resume <sitzungs-id>\n\n"
-	case "command.usage.export":
-		return "Verwendung: /export <sitzungs-id>\n\n"
 
 	// --- Init ---
 	case "init.resolve_failed":
@@ -510,8 +488,6 @@ func deCatalog(key string) string {
 		return "✓ %s ist jetzt immer erlaubt\n\n"
 	case "command.custom":
 		return "Benutzerdefinierter Befehl /%s:\n"
-	case "command.mention_error":
-		return "Erwähnungserweiterungsfehler: %v"
 
 	// --- Sessions ---
 	case "session.list_failed":
@@ -662,8 +638,6 @@ func deCatalog(key string) string {
 		return "Update wird vorbereitet"
 	case "update.failed":
 		return "Update fehlgeschlagen: %v\n\n"
-	case "update.restart_failed":
-		return "Update vorbereitet, aber Neustart fehlgeschlagen: %v\n\n"
 	case "update.pm_hint.brew":
 		return "Update installiert. Hinweis: ggcode wurde über Homebrew installiert.\nFühren Sie `brew upgrade ggcode` aus, um Homebrew synchron zu halten.\n\n"
 	case "update.pm_hint.scoop":
@@ -822,8 +796,6 @@ func deCatalog(key string) string {
 		return "Keine QQ-Bots konfiguriert."
 	case "panel.qq.entry.available":
 		return "Verfügbar"
-	case "panel.qq.entry.bound":
-		return "Gebunden"
 	case "panel.qq.entry.active":
 		return "Aktiv"
 	case "panel.qq.entry.bound_other":
@@ -862,14 +834,6 @@ func deCatalog(key string) string {
 		return "Enter Bot erstellen • Esc abbrechen"
 	case "panel.qq.actions_hint":
 		return "j/k bewegen • d deaktivieren/aktivieren • Enter oder b Bot binden • c Kanal binden • x Kanal lösen • u Bot lösen • i Bot erstellen • e Konfig bearbeiten • q QR zeigen • Esc schließen"
-	case "panel.qq.bind_channel":
-		return "Kanal binden"
-	case "panel.qq.scan_hint":
-		return "QR-Code scannen, Bot hinzufügen, dann eine Nachricht senden, um das Pairing zu starten."
-	case "panel.qq.qr_code":
-		return "QR-Code:"
-	case "panel.qq.share_link":
-		return "Freigabe-Link:"
 	case "panel.qq.message.no_bot":
 		return "Kein QQ-Bot verfügbar."
 	case "panel.qq.message.bound_success":
