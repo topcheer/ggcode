@@ -332,8 +332,10 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 		}
 		// #1367 family batch 2: config write + disk save moved onto
 		// the Update loop via configMutationMsg (see config_mutation.go).
+		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
 		return configMutationMsg{
 			apply: func(m *Model) error {
+				imEnabledBefore = m.config.IM.Enabled
 				// #1384 附案: validate the key BEFORE AddIMAdapter persists
 				// it - a bad key used to land in the yaml and then error on
 				// every later start (dirty config the user had to hand-edit).
@@ -364,6 +366,7 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 									return rerr
 								}
+								m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
 								return m.saveConfig()
 							},
 							next: func(m *Model) tea.Cmd {

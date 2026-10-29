@@ -337,8 +337,10 @@ func (m *Model) createDingtalkAdapterCmd(spec string) tea.Cmd {
 		// map (concurrent map read/write = fatal). Only side-effect-free
 		// prep stays on this goroutine; the mutation goes through
 		// configMutationMsg and lands on the Update loop.
+		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
 		return configMutationMsg{
 			apply: func(m *Model) error {
+				imEnabledBefore = m.config.IM.Enabled
 				m.config.IM.Enabled = true
 				if err := m.config.AddIMAdapter(name, adapter); err != nil {
 					return err
@@ -366,6 +368,7 @@ func (m *Model) createDingtalkAdapterCmd(spec string) tea.Cmd {
 								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 									return rerr
 								}
+								m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
 								return m.saveConfig()
 							},
 							next: func(m *Model) tea.Cmd {
