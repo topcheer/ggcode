@@ -65,8 +65,11 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	// commit still proceeds, but the warning helps the agent self-correct.
 	msgWarning := checkCommitMessageQuality(args.Message)
 
-	// Append Co-Authored-By trailer
-	fullMessage := args.Message + "\n\n" + coAuthorTrailer
+	// Append Co-Authored-By trailer unless opted out via GGCODE_NO_COAUTHOR
+	fullMessage := args.Message
+	if !coAuthorInjectionDisabled() {
+		fullMessage += "\n\n" + coAuthorTrailer
+	}
 
 	dir := resolveDir(args.Path, t.WorkingDir)
 
