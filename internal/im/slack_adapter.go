@@ -272,10 +272,20 @@ func (a *slackAdapter) connectAndServe(ctx context.Context) error {
 				event, _ := payload["event"].(map[string]any)
 				if event != nil {
 					eventType, _ := event["type"].(string)
-					if eventType == "message" {
-						a.handleMessage(ctx, event)
-					} else if eventType == "app_mention" {
-						a.handleMessage(ctx, event)
+					if eventType == "message" || eventType == "app_mention" {
+						// #4528: handleMessage ran synchronously INSIDE the
+						// read loop (ffmpeg STT, attachment downloads,
+						// HandleInbound) - while it ran, ReadMessage never
+						// returned, the pong handler could not renew the read
+						// deadline, and past slackWSReadTimeout the next read
+						// errored into a reconnect. Worse, the envelope was
+						// already acked, so Slack never redelivered: messages
+						// arriving in the blocked window were lost for real.
+						// Dedup already happened above (before this point), so
+						// processing asynchronously is idempotent-safe; the ack
+						// stays here on the read loop.
+						ev := event
+						safego.Go("im.slack.envelope", func() { a.handleMessage(ctx, ev) })
 					}
 				}
 			}
@@ -339,8 +349,11 @@ func (a *slackAdapter) authTest(ctx context.Context) error {
 	a.mu.Lock()
 	a.botUserID, _ = result["user_id"].(string)
 	a.botID, _ = result["bot_id"].(string)
+	// #4529: read the logged value from the local we just wrote - logging
+	// a.botUserID after the Unlock re-read the field unsynchronized.
+	botUserID := a.botUserID
 	a.mu.Unlock()
-	debug.Log("slack", "adapter=%s auth OK botUserID=%s", a.name, a.botUserID)
+	debug.Log("slack", "adapter=%s auth OK botUserID=%s", a.name, botUserID)
 	return nil
 }
 
@@ -705,16 +718,25 @@ func (a *slackAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 
 	// Extract images from text and upload them first
 	images, remainingText := ExtractImagesFromText(content)
+	sentImages := 0
 	for _, img := range images {
 		if err := a.sendExtractedImage(ctx, channelID, binding.ThreadID, img); err != nil {
 			debug.Log("slack", "adapter=%s image upload failed: %v", a.name, err)
+			continue
 		}
+		sentImages++
 	}
 
 	// Send remaining text (converted to mrkdwn)
 	remainingText = strings.TrimSpace(remainingText)
 	if remainingText == "" {
-		return nil
+		if len(images) > 0 && sentImages == 0 {
+			// #4464: an image-only message whose uploads all failed must not
+			// be silently dropped - fall back to the original markdown text.
+			remainingText = content
+		} else {
+			return nil
+		}
 	}
 	remainingText = markdownToMrkdwn(remainingText)
 	chunks := splitSlackMessage(remainingText, slackMaxTextLen)
@@ -906,9 +928,16 @@ func (a *slackAdapter) publishState(healthy bool, status, lastErr string) {
 	if a.manager == nil {
 		return
 	}
+	// #4529: snapshot botUserID under the adapter lock - publishState runs
+	// on the RTM read-loop goroutine while authTest (connect/reconnect
+	// goroutine) writes it under a.mu; the bare read was a data race whose
+	// visible symptom was an empty/stale ContactURI during reconnect.
+	a.mu.RLock()
+	botUserID := a.botUserID
+	a.mu.RUnlock()
 	contactURI := ""
-	if a.botUserID != "" {
-		contactURI = "https://slack.com/app_redirect?channel=" + a.botUserID
+	if botUserID != "" {
+		contactURI = "https://slack.com/app_redirect?channel=" + botUserID
 	}
 	a.manager.PublishAdapterState(AdapterState{
 		Name:       a.name,

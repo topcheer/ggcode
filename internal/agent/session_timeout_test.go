@@ -68,10 +68,16 @@ func TestSessionTimeoutWarnings(t *testing.T) {
 
 func TestSessionTimeoutAutopilotDefault(t *testing.T) {
 	s := newSessionTimeoutState(0)
-	// In autopilot mode, a default timeout should be applied
+	// In autopilot mode, a default timeout should be applied.
+	// #4514: the resolved value lives on runTimeout (per-run) - the old
+	// write-back into s.timeout leaked the 600m default into every later
+	// interactive run on the same Agent.
 	s.start(true)
-	if s.timeout != defaultAutopilotSessionTimeout {
-		t.Fatalf("expected default autopilot timeout %v, got %v", defaultAutopilotSessionTimeout, s.timeout)
+	if s.runTimeout != defaultAutopilotSessionTimeout {
+		t.Fatalf("expected default autopilot timeout %v, got %v", defaultAutopilotSessionTimeout, s.runTimeout)
+	}
+	if s.timeout != 0 {
+		t.Fatalf("configured timeout must stay untouched, got %v", s.timeout)
 	}
 }
 

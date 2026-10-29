@@ -16,8 +16,12 @@ func viCatalog(key string) string {
 		return "%d đang chạy"
 	case "cron.firing":
 		return "Cron job đã kích hoạt"
-	case "activity.idle":
-		return "chờ"
+	case "panel.conversation":
+		return "Hội thoại"
+	case "panel.composer":
+		return "Soạn thảo"
+	case "panel.composer_locked":
+		return "Soạn thảo đã khóa"
 	case "panel.commands":
 		return "Lệnh:"
 	case "panel.files":
@@ -148,10 +152,6 @@ func viCatalog(key string) string {
 		return "tệp"
 	case "label.directory":
 		return "thư mục"
-	case "context.unavailable":
-		return "Chưa có dữ liệu ngữ cảnh"
-	case "metrics.empty":
-		return "Chưa có chỉ số"
 	case "im.none":
 		return "Chưa cấu hình adapter nào"
 	case "im.summary":
@@ -166,38 +166,16 @@ func viCatalog(key string) string {
 		return "đã bật • khởi động lại để khởi tạo"
 	case "im.status.not_started":
 		return "chưa bắt đầu"
-	case "context.until_compact":
-		return "còn lại"
 	case "empty.ask":
 		return "Yêu cầu tái cấu trúc, sửa lỗi, giải thích, hoặc kiểm thử."
 	case "empty.tips":
 		return "Mẹo: dùng @path để thêm tệp, /? để xem trợ giúp, Shift+Tab để đổi chế độ."
-	case "startup.banner":
-		return "Đang chuẩn bị giao diện terminal và lọc nhiễu khởi động. Bạn có thể gõ ngay; banner này sẽ biến mất khi khởi động hoàn tất."
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab xoay vòng • Enter áp dụng • Esc đóng"
 	case "hint.mention":
 		return "@ đính kèm tệp/thư mục • Tab/Shift+Tab xoay vòng • Enter áp dụng"
 	case "hint.mode":
 		return "chế độ"
-	case "mode.approval.ask":
-		return "hỏi khi cần"
-	case "mode.approval.none":
-		return "không điểm dừng phê duyệt"
-	case "mode.approval.critical":
-		return "chỉ quan trọng"
-	case "mode.tools.rules":
-		return "theo quy tắc công cụ"
-	case "mode.tools.readonly":
-		return "chỉ đọc"
-	case "mode.tools.safe":
-		return "chỉ thao tác an toàn"
-	case "mode.tools.open":
-		return "gần như tất cả công cụ"
-	case "mode.agent.waits":
-		return "chờ bạn"
-	case "mode.agent.autocontinue":
-		return "tiếp tục tự động"
 	case "hint.enter_send":
 		return "Enter gửi"
 	case "hint.ctrlv_image":
@@ -226,8 +204,6 @@ func viCatalog(key string) string {
 		return "Ctrl+N bỏ theo dõi"
 	case "queued.count":
 		return "%d trong hàng đợi"
-	case "queued.output":
-		return "[đã xếp hàng %d đang chờ]\n\n"
 	case "interrupt.delivered":
 		return "[đã gửi đến lượt chạy hoạt động; đang sửa đổi kế hoạch]\n"
 	case "status.thinking":
@@ -604,8 +580,6 @@ func viCatalog(key string) string {
 		return "Context manager không khả dụng.\n\n"
 	case "compact.failed":
 		return "Nén thất bại: %v\n\n"
-	case "compact.done":
-		return "Lịch sử hội thoại đã được nén.\n\n"
 	case "compact.done_with_stats":
 		return "Lịch sử hội thoại đã được nén (%d → %d token).\n\n"
 	case "todo.cleared":
@@ -648,14 +622,8 @@ func viCatalog(key string) string {
 		return "Cấu hình: model = %s\n\n"
 	case "config.provider_set":
 		return "Cấu hình: provider = %s\n\n"
-	case "config.language_set":
-		return "Cấu hình: language = %s\n\n"
 	case "config.unknown_key":
 		return "Khóa cấu hình không xác định: %s\nHỗ trợ: model, provider, language\n\n"
-	case "config.title":
-		return "Cấu hình hiện tại:\n"
-	case "status.title":
-		return "Trạng thái:\n"
 	case "panel.update":
 		return "Cập nhật"
 	case "label.version":
@@ -692,16 +660,8 @@ func viCatalog(key string) string {
 		return "Phát hiện cài đặt ggcode khác trên hệ thống:\n%s\nNếu ggcode khác xuất hiện đầu trong PATH, hãy cân nhắc cập nhật nó hoặc điều chỉnh thứ tự PATH.\n\n"
 	case "update.dual_scope":
 		return "Cảnh báo: Tìm thấy cả cài đặt ggcode người dùng và toàn hệ thống:\n  Người dùng: %s\n  Hệ thống: %s\nĐiều này có thể gây xung đột PATH. Cân nhắc gỡ một bản trong Settings > Apps.\n\n"
-	case "plugins.unavailable":
-		return "Trình quản lý plugin không khả dụng.\n\n"
-	case "plugins.none":
-		return "Không có plugin nào được tải.\n\n"
-	case "plugins.title":
-		return "Plugin:\n"
 	case "mcp.none":
 		return "Chưa cấu hình MCP server.\n\n"
-	case "mcp.title":
-		return "MCP Server:\n"
 	case "mcp.active_tools":
 		return "Công cụ hoạt động"
 	case "mcp.more":
@@ -710,10 +670,6 @@ func viCatalog(key string) string {
 		return "Cách dùng: /image <đường/dẫn/tệp.png> hoặc /image paste\n"
 	case "image.formats":
 		return "Định dạng hỗ trợ: PNG, JPEG, GIF, WebP (tối đa 20MB)\n\n"
-	case "image.attached":
-		return "Đã đính kèm ảnh: %s\n"
-	case "image.attached_hint":
-		return "Gửi tin nhắn để bao gồm ảnh, hoặc /image để đính kèm ảnh khác.\n\n"
 	case "image.clipboard_failed":
 		return "Không thể dán ảnh từ clipboard: %v"
 	case "image.clipboard_no_image_windows":
@@ -728,20 +684,6 @@ func viCatalog(key string) string {
 		return "  %s [%s]%s - %s\n"
 	case "agents.hint":
 		return "\nDùng /agent <id> để xem chi tiết, /agent cancel <id> để hủy.\n\n"
-	case "agent.usage":
-		return "Cách dùng: /agent <id> hoặc /agent cancel <id>\n\n"
-	case "agent.cancelled":
-		return "Đã hủy sub-agent %s\n\n"
-	case "agent.cancel_failed":
-		return "Không thể hủy %s (không tìm thấy hoặc không đang chạy)\n\n"
-	case "agent.not_found":
-		return "Không tìm thấy sub-agent %s\n\n"
-	case "agent.title":
-		return "Agent: %s\nTrạng thái: %s\nTác vụ: %s\n"
-	case "agent.result":
-		return "Kết quả: %s\n"
-	case "agent.error":
-		return "Lỗi: %v\n"
 	case "slash.help":
 		return "Hiện thông báo trợ giúp"
 	case "slash.sessions":
@@ -854,14 +796,8 @@ func viCatalog(key string) string {
 		return "Khả dụng: %d"
 	case "panel.qq.none":
 		return "(không có)"
-	case "panel.qq.default":
-		return "(mặc định)"
 	case "panel.qq.adapter":
 		return "Adapter: %s"
-	case "panel.qq.target":
-		return "Mục tiêu: %s"
-	case "panel.qq.channel":
-		return "Kênh: %s"
 	case "panel.qq.bot_list":
 		return "Danh sách QQ Bot"
 	case "panel.qq.no_bots":
@@ -926,8 +862,6 @@ func viCatalog(key string) string {
 		return "Tên QQ adapter là bắt buộc"
 	case "panel.qq.error.not_configured":
 		return "QQ bot %q chưa được cấu hình"
-	case "panel.qq.error.disabled":
-		return "QQ bot %q đã bị tắt"
 	case "panel.qq.error.not_qq_adapter":
 		return "adapter %q không phải là QQ bot"
 	case "panel.qq.error.not_online":

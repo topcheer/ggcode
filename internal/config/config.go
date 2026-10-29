@@ -225,10 +225,18 @@ type MCPServerConfig struct {
 	// approved baseline are logged silently instead of raising the
 	// OnToolDrift callback. For servers under active development whose
 	// tool definitions legitimately churn.
-	AllowToolDrift bool   `yaml:"allow_tool_drift,omitempty" json:"allow_tool_drift,omitempty"`
-	Source         string `yaml:"-" json:"-"`
-	OriginPath     string `yaml:"-" json:"-"`
-	Migrated       bool   `yaml:"-" json:"-"`
+	AllowToolDrift bool `yaml:"allow_tool_drift,omitempty" json:"allow_tool_drift,omitempty"`
+	// #4386 form clear sentinels: Command/URL are strings, so the patch
+	// layer's "empty = not provided" semantics leave the form no way to
+	// clear them - an emptied field saved "successfully" while the old
+	// value silently resurrected. Mirrors #979's env_clear / #1434-B's
+	// args_clear (which use non-nil empties because their fields are
+	// maps/slices). Never serialized.
+	CommandClear bool   `yaml:"-" json:"-"`
+	URLClear     bool   `yaml:"-" json:"-"`
+	Source       string `yaml:"-" json:"-"`
+	OriginPath   string `yaml:"-" json:"-"`
+	Migrated     bool   `yaml:"-" json:"-"`
 }
 
 // PluginConfigEntry describes a single plugin from the config file.
@@ -2204,6 +2212,14 @@ func carryGatewayVendorKey(agVC *VendorConfig, epName, oldKey string) {
 		agVC.Endpoints[epName] = ep
 	case !hasEP && agVC.APIKey == "":
 		agVC.APIKey = oldKey
+	case !hasEP:
+		// #4408-C1: a SECOND legacy gateway vendor's key (vendor-level,
+		// no matching endpoint) used to be silently dropped here - the
+		// vendor-level slot was already taken by the first one and no
+		// switch branch fired, directly contradicting the "cannot
+		// irreversibly drop credentials" contract above. Preserve it on
+		// a per-vendor endpoint stub keyed by the original endpoint name.
+		agVC.Endpoints[epName] = EndpointConfig{APIKey: oldKey}
 	}
 }
 

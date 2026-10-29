@@ -203,6 +203,14 @@ func coerceInteger(val json.RawMessage) (json.RawMessage, bool) {
 		if f != math.Trunc(f) {
 			return val, false
 		}
+		// #4376: beyond 2^53 a float64 cannot represent every int64, so
+		// int64(f) can be off by one ("9007199254740993.0" -> ...992).
+		// Pure-integer strings never reach here (ParseInt above); a float
+		// spelling of a >2^53 integer is inherently ambiguous - reject for
+		// the corrective type error instead of a silent off-by-one.
+		if f >= (1<<53) || f <= -(1<<53) {
+			return val, false
+		}
 		return json.RawMessage(strconv.FormatInt(int64(f), 10)), true
 	}
 	return val, false
@@ -216,6 +224,13 @@ func coerceNumber(val json.RawMessage) (json.RawMessage, bool) {
 	s := strings.TrimSpace(strings.Trim(string(val), `"`))
 	if s == "" {
 		return val, false
+	}
+	// #4376: integer strings must not round-trip through float64 - values
+	// beyond 2^53 lose the low bit (9007199254740993 -> ...992) and the
+	// tool then executes with a silently-wrong number. Parse the integer
+	// exactly first; only genuine float spellings take the float path.
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return json.RawMessage(strconv.FormatInt(n, 10)), true
 	}
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
