@@ -295,6 +295,9 @@ func init() {
 	regUpdatePlain(func(m Model, msg mcpUninstallResultMsg) (tea.Model, tea.Cmd) {
 		return m.handleMcpUninstallResultMsg(msg)
 	})
+	regUpdatePlain(func(m Model, msg mcpRefreshResultMsg) (tea.Model, tea.Cmd) {
+		return m.handleMcpRefreshResultMsg(msg)
+	})
 	regUpdatePlain(func(m Model, msg mcpOAuthStartMsg) (tea.Model, tea.Cmd) { return m.handleMcpOAuthStartMsg(msg) })
 	regUpdatePlain(func(m Model, msg mcpOAuthResultMsg) (tea.Model, tea.Cmd) { return m.handleMcpOAuthResultMsg(msg) })
 	regUpdatePlain(func(m Model, msg mcpHealthCheckTickMsg) (tea.Model, tea.Cmd) { return m.handleMcpHealthCheckTick(msg) })
