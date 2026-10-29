@@ -19,6 +19,11 @@ type migrationSource struct {
 	Path     string
 	Source   string
 	Priority int
+	// pluginRoot/pluginDataDir are non-empty only for Agent Plugins
+	// (agent-plugins.org) sources; they carry the ${PLUGIN_ROOT}/
+	// ${PLUGIN_DATA} expansion context (Args/Env only, per spec).
+	pluginRoot    string
+	pluginDataDir string
 }
 
 func MergeStartupServers(workingDir string, explicit []config.MCPServerConfig) ([]config.MCPServerConfig, []string) {
@@ -111,6 +116,19 @@ func knownClaudeSources(workingDir string) []migrationSource {
 	sources := []migrationSource{
 		{Path: filepath.Join(workingDir, ".mcp.json"), Source: "claude-project", Priority: 3},
 	}
+	// Agent Plugins (sa-114): each plugin's mcp.json joins at priority 2 -
+	// below the repo's own .mcp.json (3) but alongside user config, so a
+	// plugin never overrides an explicit workspace or user server
+	// (signature/name dedup in mergeServers arbitrates collisions).
+	for _, plugin := range DiscoverAgentPlugins(workingDir) {
+		sources = append(sources, migrationSource{
+			Path:          plugin.MCPConfigPath(),
+			Source:        AgentPluginSource,
+			Priority:      2,
+			pluginRoot:    plugin.Root,
+			pluginDataDir: plugin.DataDir(),
+		})
+	}
 	return append(sources, knownUserClaudeSources()...)
 }
 
@@ -159,6 +177,17 @@ func loadClaudeServers(source migrationSource) ([]config.MCPServerConfig, []stri
 		cfg.Source = source.Source
 		cfg.OriginPath = source.Path
 		cfg.Migrated = true
+		// Agent Plugins (sa-114): expand ${PLUGIN_ROOT}/${PLUGIN_DATA} in
+		// Args and Env ONLY - the spec forbids carrying plugin filesystem
+		// state in command/url/headers, so those fields are left alone.
+		if source.pluginRoot != "" || source.pluginDataDir != "" {
+			for i, arg := range cfg.Args {
+				cfg.Args[i] = expandPluginVars(arg, source.pluginRoot, source.pluginDataDir)
+			}
+			for key, value := range cfg.Env {
+				cfg.Env[key] = expandPluginVars(value, source.pluginRoot, source.pluginDataDir)
+			}
+		}
 		// #1276: every dropped entry must be VISIBLE - the old switch dropped
 		// ws (fully supported by client+install!) and sse (unsupported) with a
 		// bare default:continue, and even the stdio/http field checks failed
@@ -196,13 +225,18 @@ func normalizedTransport(transport string) string {
 	if normalized == "" {
 		return "stdio"
 	}
+	// Agent Plugins spec (sa-114) spells the modern HTTP transport
+	// "streamable-http"; ggcode's native spelling is "http".
+	if normalized == "streamable-http" {
+		return "http"
+	}
 	return normalized
 }
 
 func serverSignature(cfg config.MCPServerConfig) string {
 	normalized := normalizedTransport(cfg.Type)
 	switch normalized {
-	case "http", "ws": // #1276: ws is URL-identified like http
+	case "http", "ws", "sse": // #1276: ws/sse are URL-identified like http
 		// Prefix with the NORMALIZED transport: an explicit yaml entry with
 		// Type: "HTTP" and a migrated lowercase "http" entry describe the
 		// same server and must collide for dedup (review of #1276 caught
@@ -213,6 +247,13 @@ func serverSignature(cfg config.MCPServerConfig) string {
 		// silently swapping a header would otherwise keep the grant.
 		// sig-v2 prefix: grants stored under the v1 scheme (URL-only /
 		// command-only) no longer match, forcing one re-approval.
+		//
+		// #3790: sse was accepted at the migration entry (transport
+		// normalizer returns it) but fell to the stdio default here - its
+		// Command/Args are empty, so EVERY sse server signed as
+		// `sig-v2:stdio:[""]` and the dedup pass silently dropped all but
+		// the first of multiple different-URL sse servers. sse is
+		// URL-identified exactly like http/ws (#1848).
 		sig := "sig-v2:" + normalized + ":" + strings.TrimSpace(cfg.URL)
 		if kv := canonicalKVPairs(cfg.Headers); kv != "" {
 			sig += "|" + kv

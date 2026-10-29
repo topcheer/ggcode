@@ -283,9 +283,10 @@ type Model struct {
 	autoCompleteItems   []string
 	autoCompleteIndex   int
 	autoCompleteActive  bool
-	autoCompleteKind    string // "slash" or "mention"
-	autoCompleteWorkDir string // working directory for mention completion
-	inputHint           string // placeholder hint shown after cursor (e.g. "<subcommand>")
+	autoCompleteKind    string    // "slash" or "mention"
+	autoCompleteWorkDir string    // working directory for mention completion
+	inputHint           string    // placeholder hint shown after cursor (e.g. "<subcommand>")
+	hintsShownAt        time.Time // TUI creation time; static composer hints auto-hide 5min after this
 	startedAt           time.Time
 	inputDrainUntil     time.Time // suppress all KeyPressMsg until this time (after setProgramMsg)
 	inputReady          bool      // true after setProgramMsg + drain completes; before that, all KeyPress is discarded
@@ -312,6 +313,7 @@ type Model struct {
 	runStartTime         time.Time // when the current agent run started (for bell timing)
 	subAgentsCanceling   bool      // true while async CancelAll() is in progress after user cancel
 	lastUserSubmission   string    // last non-slash user prompt, for /retry
+	crashResumeTask      string    // task prompt captured from a crashed run, for /continue-task (sa-117)
 	// Blind-spot (unrecognized error) auto-retry: counters survive Model
 	// copies because handler methods run on the value receiver's parent.
 	blindSpotRetries int // attempts used for the current submission
@@ -587,6 +589,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		viewport:               NewViewportModel(80, 20),
 		mode:                   policyMode(policy),
 		startedAt:              time.Time{}, // set on first WindowSizeMsg
+		hintsShownAt:           time.Now(),  // composer onboarding hints auto-hide 5min after startup
 		sidebarVisible:         false,
 		activeMCPTools:         make(map[string]ToolStatusMsg),
 		clipboardLoader:        loadClipboardImage,
@@ -729,6 +732,7 @@ func policyMode(policy permission.PermissionPolicy) permission.PermissionMode {
 func (m Model) Init() tea.Cmd {
 	// Clean up stale temp images from previous sessions (best-effort).
 	go safego.Run("tui.cleanupTempImages", cleanupOldTempImages)
+	m.oscIdle() // OSC 7501: at rest, waiting for the first instruction
 
 	cmds := []tea.Cmd{
 		func() tea.Msg { return textarea.Blink() },

@@ -407,6 +407,47 @@ func (m *Model) handleMemoryCommand(parts []string) tea.Cmd {
 			return nil
 		}
 		m.chatWriteSystem(nextSystemID(), m.t("memory.cleared"))
+	case "forget", "restore":
+		// r10 instruction-driven per-entry forgetting (sa-160): soft
+		// delete that hides from prompt injection; GC digests the file.
+		if m.autoMem == nil {
+			m.chatWriteSystem(nextSystemID(), m.t("memory.auto_unavailable"))
+			return nil
+		}
+		if len(parts) < 3 {
+			m.chatWriteSystem(nextSystemID(), m.t("memory.forget_usage"))
+			return nil
+		}
+		if sub == "forget" {
+			if err := m.autoMem.ForgetKey(parts[2]); err != nil {
+				m.chatWriteSystem(nextSystemID(), m.t("memory.forget_failed", err))
+				return nil
+			}
+			m.chatWriteSystem(nextSystemID(), m.t("memory.forgot", parts[2]))
+			return nil
+		}
+		if err := m.autoMem.RestoreKey(parts[2]); err != nil {
+			m.chatWriteSystem(nextSystemID(), m.t("memory.restore_failed", err))
+			return nil
+		}
+		m.chatWriteSystem(nextSystemID(), m.t("memory.restored", parts[2]))
+	case "forgotten":
+		if m.autoMem == nil {
+			m.chatWriteSystem(nextSystemID(), m.t("memory.auto_unavailable"))
+			return nil
+		}
+		items := m.autoMem.ListForgotten()
+		if len(items) == 0 {
+			m.chatWriteSystem(nextSystemID(), m.t("memory.forgotten_empty"))
+			return nil
+		}
+		var b strings.Builder
+		b.WriteString(m.t("memory.forgotten_title"))
+		for _, it := range items {
+			b.WriteString("  " + it + "\n")
+		}
+		b.WriteString("\n")
+		m.chatWriteSystem(nextSystemID(), b.String())
 	default:
 		m.openInspectorPanel(inspectorPanelMemory)
 	}
@@ -756,7 +797,12 @@ func (m *Model) handleTagsCommand() tea.Cmd {
 // handleRunReportCommand evaluates the current session trajectory offline
 // (no LLM calls) and prints the efficiency scorecard produced by the runeval
 // package.
-func (m *Model) handleRunReportCommand() tea.Cmd {
+func (m *Model) handleRunReportCommand(args []string) tea.Cmd {
+	// /runreport all — cross-session trajectory aggregation (Langfuse-style
+	// experiment comparison, on top of the per-session scorecard).
+	if len(args) > 0 && (args[0] == "all" || args[0] == "-a" || args[0] == "--all") {
+		return m.handleRunReportAllCommand()
+	}
 	msgs := m.currentSessionMessages()
 	if len(msgs) == 0 {
 		m.chatWriteSystem(nextSystemID(), "No messages to evaluate yet.")
@@ -775,6 +821,54 @@ func (m *Model) handleRunReportCommand() tea.Cmd {
 	}
 	m.chatWriteSystem(nextSystemID(), runeval.Render(runeval.EvaluateWithCoordination(
 		msgs, usage, runeval.CoordEventsFromMessages(msgs))))
+	return nil
+}
+
+// handleRunReportAllCommand evaluates every stored session offline and
+// prints the cross-session aggregate scorecard (mean/min/max efficiency,
+// worst sessions, most cross-session repeated tools). Read-only: no LLM
+// calls, no session mutations.
+func (m *Model) handleRunReportAllCommand() tea.Cmd {
+	jsonlStore, ok := m.sessionStore.(*session.JSONLStore)
+	if !ok {
+		m.chatWriteSystem(nextSystemID(), "Cross-session report requires a JSONL session store.")
+		m.chatListScrollToBottom()
+		return nil
+	}
+	list, err := jsonlStore.List()
+	if err != nil {
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to list sessions: %v", err))
+		m.chatListScrollToBottom()
+		return nil
+	}
+	// Cap the scan so a huge history stays interactive: most recent 50
+	// sessions (List already sorts pinned-first then UpdatedAt desc).
+	if len(list) > 50 {
+		list = list[:50]
+	}
+	sessionReports := make([]runeval.SessionReport, 0, len(list))
+	for _, meta := range list {
+		// #3982: List() builds sessions from index entries only — Messages,
+		// UsageHistory and ContextMessages are always nil there. Evaluating
+		// the metadata skeleton directly made every session look empty and
+		// the whole report silently degrade to "no tool calls". Load the full
+		// session per ID first (same pattern as /export and /branch).
+		full, err := jsonlStore.Load(meta.ID)
+		if err != nil || full == nil || len(full.Messages) == 0 {
+			sessionReports = append(sessionReports, runeval.SessionReport{ID: meta.ID, Title: meta.Title})
+			continue
+		}
+		usage := make([]runeval.UsageSample, 0, len(full.UsageHistory))
+		for _, e := range full.UsageHistory {
+			usage = append(usage, runeval.UsageSample{Source: e.Source, Usage: e.Usage})
+		}
+		sessionReports = append(sessionReports, runeval.SessionReport{
+			ID:     meta.ID,
+			Title:  meta.Title,
+			Report: runeval.EvaluateWithCoordination(full.Messages, usage, runeval.CoordEventsFromMessages(full.Messages)),
+		})
+	}
+	m.chatWriteSystem(nextSystemID(), runeval.RenderAggregate(runeval.Aggregate(sessionReports)))
 	return nil
 }
 
@@ -1038,12 +1132,15 @@ func (m *Model) handleForecastCommand(args []string) tea.Cmd {
 	}
 
 	var sb strings.Builder
-	shown := prompt
-	if len(shown) > 60 {
-		shown = shown[:60] + "..."
+	// #4114: rune-safe truncation - the old byte slice [:60] cut CJK
+	// sequences mid-rune and the %q escape then printed the invalid bytes
+	// as \xe6 litter. Preview with %s in quotes so CJK stays readable.
+	shown := util.Truncate(prompt, 60)
+	if len([]rune(prompt)) > 60 {
+		shown += "..."
 	}
 	sb.WriteString(fmt.Sprintf("Cost forecast (before running):\n"))
-	sb.WriteString(fmt.Sprintf("  Task: %q\n", shown))
+	sb.WriteString(fmt.Sprintf("  Task: %s\n", "\""+shown+"\""))
 	if fc.Degraded {
 		sb.WriteString(fmt.Sprintf("  (few similar runs - range covers all %d runs in this workspace)\n", fc.Neighbors))
 	} else {

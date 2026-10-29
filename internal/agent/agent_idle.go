@@ -31,6 +31,11 @@ type IdleMaintainer struct {
 	ratioFn    func() float64
 	action     func()
 
+	// maintenance (sa-63) is the secondary, ratio-INDEPENDENT idle-window
+	// callback (memory re-consolidation). atomic.Value so it can be attached
+	// after construction without a lock on the ticker hot path.
+	maintenance atomic.Value // func()
+
 	interval     time.Duration
 	lastActivity atomic.Int64 // unix nanos
 	inflight     atomic.Int32
@@ -57,6 +62,29 @@ func NewIdleMaintainer(after time.Duration, ratioFloor float64, ratioFn func() f
 	}
 	m.lastActivity.Store(time.Now().UnixNano())
 	return m
+}
+
+// maintenanceCleared is the sentinel stored in place of nil: atomic.Value
+// cannot hold a nil func. Calling it is observationally identical to having
+// no maintenance registered (#4122: "Pass nil to clear" was previously a
+// no-op, so a registered callback could never be stopped).
+var maintenanceCleared = func() {}
+
+// SetMaintenance registers a secondary idle-window callback that runs on
+// EVERY idle fire, independent of the pre-compact ratio gate (sa-63, Letta
+// sleep-time compute "every few turns / from a queue" trigger). Use it for
+// deterministic, idempotent work such as memory re-consolidation - it
+// reclaims the fires the ratio gate below would otherwise consume without
+// doing anything. fn must be safe to run between runs (inflight == 0).
+// Pass nil to clear. No-op on a nil receiver.
+func (m *IdleMaintainer) SetMaintenance(fn func()) {
+	if m == nil {
+		return
+	}
+	if fn == nil {
+		fn = maintenanceCleared
+	}
+	m.maintenance.Store(fn)
 }
 
 // Touch records user activity and re-arms the idle period.
@@ -124,6 +152,16 @@ func (m *IdleMaintainer) check() {
 	// One fire per idle period: CAS prevents every tick from re-firing.
 	if !m.fired.CompareAndSwap(false, true) {
 		return
+	}
+	// Secondary maintenance (sa-63): deterministic, ratio-independent work
+	// runs on every idle fire - including the fires the ratio gate below
+	// would otherwise waste. Recover-isolated so a maintenance panic can
+	// never take down the watcher loop.
+	if fn, ok := m.maintenance.Load().(func()); ok && fn != nil {
+		func() {
+			defer safego.Recover("idle-maintenance")
+			fn()
+		}()
 	}
 	ratio := m.ratioFn()
 	if ratio < m.ratioFloor {

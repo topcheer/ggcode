@@ -185,7 +185,7 @@ func (t RunCommand) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		},
 		"dry_run": {
 			"type": "boolean",
@@ -832,22 +832,18 @@ func (t RunCommand) applyCommandGate(gate *CommandGate, command string) (cleaned
 		debug.Log("run_command", "BLOCKED: %s", gateResult.Reason)
 		return "", "", gateResult.Reason
 	}
-	var askEsc string
 	if gateResult.NeedsConfirmation() {
 		// In Bypass/Autopilot mode, Ask is automatically downgraded to Allow.
 		// These modes assume the user trusts the agent — the command is
 		// still logged as a warning for audit purposes.
 		if t.isBypassMode() {
 			debug.Log("run_command", "ASK→ALLOW (bypass mode): %s", gateResult.Reason)
-			// #3282: the downgraded-allow is itself a denial the security
-			// ledger must see — a prober repeatedly triggering bypass-
-			// downgraded asks is the same sandbox-probing fingerprint as
-			// repeated blocks, and this third Record source has been
-			// promised by the SecLedger field comment since sa-216.
-			t.SecLedger.Record("gate", "ask-allowed", command)
-			if esc := t.SecLedger.Escalation(); esc != "" {
-				askEsc = esc + "\n\n"
-			}
+			// #4273: no SecLedger.Record here. A downgraded-allow is NOT a
+			// denial - the command runs - and feeding it into the denial
+			// ledger produced the factually-wrong "was denied N times"
+			// escalation banner on ordinary bypass workflows (the PS deploy
+			// chain report). Real probing is still covered: the BLOCKED path
+			// above records ("gate","block") separately.
 		} else {
 			debug.Log("run_command", "ASK: %s", gateResult.Reason)
 			// Caller returns this verbatim — the agent loop interprets the
@@ -863,10 +859,9 @@ func (t RunCommand) applyCommandGate(gate *CommandGate, command string) (cleaned
 	if interactive := gate.InteractiveCommandWarning(command); interactive != "" {
 		preWarning = "[Interactive command warning] " + interactive + "\n\n"
 	}
-	// Escalation rides the preWarning prefix: a bypass-downgraded command
-	// still produces a (possibly successful) result, so this is the only
-	// channel through which the probing-pattern notice reaches the agent.
-	preWarning += askEsc
+	// #4273: no escalation banner rides on bypass-downgraded asks - a
+	// downgraded-allow is not a denial, so a probing-pattern notice would
+	// be factually wrong. Blocked commands carry their own escalation.
 	if gateResult.CleanedCmd != "" && gateResult.CleanedCmd != command {
 		debug.Log("run_command", "cleaned command: %s → %s", command, gateResult.CleanedCmd)
 		cleanedCmd = gateResult.CleanedCmd

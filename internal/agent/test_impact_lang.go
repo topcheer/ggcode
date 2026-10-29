@@ -718,7 +718,8 @@ func parseTestFuncNamesMulti(filePath string, profile *langProfile) map[string]b
 	}
 	// Go uses AST
 	if profile.Name == "go" {
-		return parseTestFuncNames(filePath)
+		names, _ := parseTestFuncNames(filePath)
+		return names
 	}
 	// For other languages, read and scan for test patterns
 	data, err := os.ReadFile(filePath)
@@ -886,14 +887,26 @@ func untestedExportedFuncsMulti(workingDir, srcFile string) []string {
 
 // camelToSnakeLower converts camelCase/PascalCase to lowercase snake_case
 // ("GetUser" -> "get_user"). Boundaries are inserted before an uppercase
-// letter that follows a lowercase letter or digit.
+// letter that follows a lowercase letter or digit, AND at the end of an
+// acronym run followed by a lowercase letter (#3621: "HTTPServer" ->
+// "http_server", not the single token "httpserver" that never matched
+// conventional test names like "test_http_server").
 func camelToSnakeLower(s string) string {
 	var b strings.Builder
 	runes := []rune(s)
 	for i, r := range runes {
 		if r >= 'A' && r <= 'Z' {
-			if i > 0 && !(runes[i-1] >= 'A' && runes[i-1] <= 'Z') {
-				b.WriteByte('_')
+			// Boundary BEFORE this uppercase when it opens a word:
+			// - the previous char is lowercase/digit ("GetUser" -> get_user), or
+			// - it is the LAST capital of an acronym run and a lowercase word
+			//   follows ("HTTPServer": the S of SERVER) - the boundary goes
+			//   before S, keeping the acronym intact: http_server (#3621).
+			if i > 0 {
+				prev := runes[i-1]
+				nextLower := i+1 < len(runes) && runes[i+1] >= 'a' && runes[i+1] <= 'z'
+				if !(prev >= 'A' && prev <= 'Z') || (prev >= 'A' && prev <= 'Z' && nextLower) {
+					b.WriteByte('_')
+				}
 			}
 			b.WriteRune(r + ('a' - 'A'))
 		} else {
@@ -1075,7 +1088,12 @@ func changedDirsForLang(files []string, lang string) []string {
 			continue
 		}
 		dir := filepath.ToSlash(filepath.Dir(f))
-		if dir == "." || dir == "" {
+		// #3664 (mirrors the Go path's #3648 fix): keep "." - the module
+		// root. npm/pytest projects with root-level index.ts / main.py are
+		// a common shape; dropping the root dir left dirs empty and the
+		// suggested test command degraded to the bare full-suite runner.
+		// Renderers accept "." (e.g. `pytest .` = explicit root scope).
+		if dir == "" {
 			continue
 		}
 		if !seen[dir] {

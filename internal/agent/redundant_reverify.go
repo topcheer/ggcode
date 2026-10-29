@@ -36,6 +36,7 @@ package agent
 //   - Resets each user turn.
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -102,6 +103,10 @@ var reverifyTextToolFirstWords = map[string]bool{
 	"printf": true, "tail": true, "head": true, "less": true, "sort": true,
 	"uniq": true, "wc": true, "tr": true, "cut": true, "tee": true, "xargs": true,
 	"man": true, "which": true, "type": true, "find": true, "ls": true,
+	// #3588: content operations and wrapper commands whose ARGUMENTS quote
+	// verification verbs (git grep "go test", git commit -m "make test pass",
+	// docker run make test) - the verb is data there, not execution.
+	"git": true, "docker": true, "kubectl": true, "podman": true,
 }
 
 func firstPipelineSegment(args string) string {
@@ -164,6 +169,21 @@ func stripLeadingPrefixes(fields []string) []string {
 	return fields
 }
 
+// extractShellCommand returns the shell command string from raw tool
+// arguments. Production call sites pass the raw JSON arguments
+// (agent.go: tc.Arguments), where the command lives in the "command"
+// field; shell-level quoting only has meaning AFTER extraction (#3588).
+// Non-JSON input (bare command, test-compat) is returned unchanged.
+func extractShellCommand(args string) string {
+	var wrapper struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(args), &wrapper); err == nil && wrapper.Command != "" {
+		return wrapper.Command
+	}
+	return args
+}
+
 // verificationSignature returns a normalized fingerprint of the verification
 // command (issues #1173, #1190). The fingerprint is taken from the FIRST
 // command segment that actually matches a verification verb, not blindly the
@@ -173,6 +193,7 @@ func stripLeadingPrefixes(fields []string) []string {
 // a redundant re-run. Leading cd/env/$(...) prefixes are stripped from the
 // chosen segment. If no segment matches, the full args are used as fallback.
 func verificationSignature(args string) string {
+	args = extractShellCommand(args) // #3588: fingerprint the shell command, not the JSON wrapper
 	chosen := ""
 	for _, seg := range commandSegments(args) {
 		for _, re := range reverifyCmdPatterns {
@@ -197,6 +218,10 @@ func (s *redundantReverifyState) classifyVerificationCommand(toolName, args stri
 	if toolName != "run_command" && toolName != "start_command" {
 		return ""
 	}
+	// #3588: production args are raw JSON; the shell command lives in the
+	// "command" field. Extract it first so shell-level quoting is analyzed
+	// in its own layer (JSON string quoting never reaches the matcher).
+	args = extractShellCommand(args)
 	// Take the first pipeline segment's first word: if the command itself is a
 	// text operation, any "go test" mention is data, not execution.
 	fields := strings.Fields(firstPipelineSegment(args))
@@ -209,13 +234,45 @@ func (s *redundantReverifyState) classifyVerificationCommand(toolName, args stri
 			return ""
 		}
 	}
-	combined := toolName + " " + args
+	// #3588: quoted spans are DATA, not command position - strip their
+	// contents before pattern matching so `git grep -n "go test"` (also
+	// first-word blocked) or `commit -m "make test pass"` cannot match a
+	// verification verb that lives only inside a string literal. Unquoted
+	// command positions (including later pipeline segments) still match.
+	combined := toolName + " " + stripQuotedSpans(args)
 	for cat, re := range reverifyCmdPatterns {
 		if re.MatchString(combined) {
 			return cat
 		}
 	}
 	return ""
+}
+
+// stripQuotedSpans replaces the contents of single/double-quoted spans
+// (including the quote characters) with spaces. Escaped quotes (\" and \')
+// do not toggle quote state. Shell command substitution inside quotes is
+// also data at match time, which is the desired semantics here.
+func stripQuotedSpans(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	var quote byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			b.WriteByte(' ')
+			continue
+		}
+		if (c == '"' || c == '\'') && i > 0 && s[i-1] != '\\' {
+			quote = c
+			b.WriteByte(' ')
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 // recordToolCall tracks verification commands and checks for redundant

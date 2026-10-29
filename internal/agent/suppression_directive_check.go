@@ -153,6 +153,17 @@ func countBareMatches(content string, sd *suppressionDirective) int {
 		if sd.checkLinePrefix && !matchRidesComment(line, matched) {
 			continue
 		}
+		// #3607: prose riding INSIDE a comment - the most natural place to
+		// DISCUSS suppression policies - inverted the #1778 guard: the
+		// comment marker on the line let "do not use eslint-disable in this
+		// repo" or docstring prose "Use # noqa only as last resort" count as
+		// real directives. Adjacency tells them apart: prose mentions have
+		// natural words welded to the match (a letter word ends the prefix
+		// and/or a lowercase sentence continues after), while real forms
+		// start at the comment marker, end the line, or trail code.
+		if proseMention(line, loc[0]-lineStart, matched) {
+			continue
+		}
 		if isBareSuppression(line, matched, sd.requiresRule) {
 			count++
 		}
@@ -170,6 +181,97 @@ func matchRidesComment(line, matched string) bool {
 		}
 	}
 	return false
+}
+
+// proseMention reports whether the match at line[off:off+len(matched)] is
+// natural-language prose DISCUSSING a suppression directive rather than
+// the directive itself (#3607). Signals: a letter word ending the prefix
+// ("do not use <match>", "Use <match>") plus a prose continuation after
+// ("<match> in this repo", "<match> is banned here").
+// #3618: the old marker-less "either side suffices" shortcut inverted at
+// comment-start position - the prefix is always the comment marker there,
+// so wordAfter alone had to distinguish prose from real rule arguments
+// and pure-lowercase rule names ("eslint-disable semi") were skipped as
+// prose. Disambiguator: English function words (is/in/the/only/as/...)
+// never open a rule list. With a word before, a continuation counts when
+// it opens with a function word or spans 2+ lowercase words (single
+// trailing adverbs like "sparingly" are accepted as a narrow residual);
+// at comment-start, ONLY a function-word opener counts as prose - a bare
+// lowercase identifier re-fires as a directive argument.
+// For matches that embed a comment marker ("# noqa"), prose requires BOTH
+// sides so bare trailing forms ("value  # noqa" - nothing after) and
+// comment-start forms (line begins at the marker) stay flagged.
+func proseMention(line string, off int, matched string) bool {
+	if off < 0 || off+len(matched) > len(line) {
+		return false
+	}
+	prefix := strings.TrimRight(line[:off], " \t")
+	wordBefore := len(prefix) > 0 && isLetterByte(prefix[len(prefix)-1])
+	suffix := strings.TrimLeft(line[off+len(matched):], " \t")
+	matchedHasMarker := strings.ContainsAny(matched, "#") || strings.Contains(matched, "//") || strings.Contains(matched, "/*") || strings.Contains(matched, "--")
+	if matchedHasMarker {
+		return wordBefore && proseContinuation(suffix, false)
+	}
+	// Marker-less match ("eslint-disable"): a word before + prose
+	// continuation, or (comment-start) a function-word opener.
+	if wordBefore {
+		return proseContinuation(suffix, false)
+	}
+	return proseContinuation(suffix, true)
+}
+
+// proseWords are English function words that never open a lint rule list
+// but do open prose continuations ("... is banned", "... in this repo").
+var proseWords = map[string]bool{
+	"a": true, "an": true, "and": true, "are": true, "as": true,
+	"here": true, "in": true, "is": true, "not": true, "of": true,
+	"only": true, "or": true, "the": true, "this": true, "to": true,
+	"we": true, "when": true, "where": true,
+}
+
+// proseContinuation reports whether suffix reads as a natural-language
+// sentence continuation. With requireFunctionWord the first token MUST be
+// a function word (comment-start position: a bare lowercase identifier
+// like "semi" is a rule argument, not prose); otherwise a function-word
+// opener or a 2+ lowercase-word span both count (rule arguments carry
+// hyphens/commas/colons and never satisfy either).
+func proseContinuation(suffix string, requireFunctionWord bool) bool {
+	if suffix == "" || suffix[0] < 'a' || suffix[0] > 'z' {
+		return false
+	}
+	first := suffix
+	if idx := strings.IndexAny(suffix, " \t"); idx >= 0 {
+		first = suffix[:idx]
+	}
+	if !isLowerWord(first) {
+		return false
+	}
+	if proseWords[first] {
+		return true
+	}
+	if requireFunctionWord {
+		return false
+	}
+	// Word-before context: any lowercase word after a letter word is the
+	// both-sides prose signal (single trailing adverbs included).
+	return true
+}
+
+// isLowerWord reports whether s is a non-empty pure lowercase letter word.
+func isLowerWord(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < 'a' || s[i] > 'z' {
+			return false
+		}
+	}
+	return true
+}
+
+func isLetterByte(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 // containsLang checks if a language is in a list.

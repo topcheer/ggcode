@@ -40,10 +40,10 @@ func TestIssue1296_TestOnlyImportsCounted(t *testing.T) {
 	writeTestGoFile(t, dir, "down/b/b_test.go", "package b_test\n\nimport (\n\t\"testing\"\n\n\t\"test/lib/a\"\n)\n\nfunc TestA(t *testing.T) { _ = a.A() }\n")
 
 	// First call triggers the background build; wait for it to land.
-	_ = transitiveImporters(dir, []string{})
+	_, _ = transitiveImporters(dir, []string{})
 	waitForCacheBuild(dir)
 
-	importers := transitiveImporters(dir, []string{"lib/a"})
+	importers, _ := transitiveImporters(dir, []string{"lib/a"})
 	found := map[string]bool{}
 	for _, d := range importers {
 		found[d] = true
@@ -139,7 +139,7 @@ func TestIssue1296_GoTestCommandHasTags(t *testing.T) {
 	runGit(t, dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
 	writeTestGoFile(t, dir, "lib/a/dirty.go", "package a\n\nfunc D() int { return 2 }\n")
 
-	_ = transitiveImporters(dir, []string{})
+	_, _ = transitiveImporters(dir, []string{})
 	waitForCacheBuild(dir)
 
 	cmd := impactScopedTestCommandWithDeps(dir)

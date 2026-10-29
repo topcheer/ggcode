@@ -2045,17 +2045,17 @@ func toolCallDisplayName(toolName, rawArgs string) string {
 
 // parseModeFromString parses a permission mode string, returning (mode, true) if valid.
 func parseModeFromString(s string) (permission.PermissionMode, bool) {
+	// two-mode refactor: normalize at the parse boundary (same as
+	// ParsePermissionMode) so no legacy enum value ever enters the TUI
+	// state from the tunnel path - legacy aliases map to the canonical
+	// mode and downstream comparisons stay consistent with switch_mode.
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "supervised":
+	case "supervised", "auto":
 		return permission.SupervisedMode, true
 	case "plan":
 		return permission.PlanMode, true
-	case "auto":
-		return permission.AutoMode, true
-	case "bypass":
+	case "bypass", "autopilot":
 		return permission.BypassMode, true
-	case "autopilot":
-		return permission.AutopilotMode, true
 	default:
 		return permission.SupervisedMode, false
 	}

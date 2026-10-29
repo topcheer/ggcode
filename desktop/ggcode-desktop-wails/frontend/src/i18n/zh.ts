@@ -8,7 +8,6 @@ const zh: Record<TranslationKey, string> = {
   'nav.mcp': 'MCP 服务器',
   'nav.settings': '设置',
   'nav.debug': '调试控制台',
-  'nav.lanchat': '局域网聊天',
   'nav.cron': '定时任务',
   'cron.title': '定时任务',
   'cron.newTask': '新建任务',
@@ -63,7 +62,6 @@ const zh: Record<TranslationKey, string> = {
   'sidebar.newSession': '新建会话',
   'sidebar.untitled': '未命名',
   'sidebar.delete': '删除',
-  'sidebar.loading': '加载中...',
   'sidebar.group.pinned': '已置顶',
   'sidebar.group.today': '今天',
   'sidebar.group.yesterday': '昨天',
@@ -77,7 +75,6 @@ const zh: Record<TranslationKey, string> = {
   // StatusBar
   'status.ready': '就绪',
   'status.thinking': '思考中...',
-  'status.streaming': '输出中',
   'status.offline': '离线',
   'status.zoomIn': '放大 (Cmd+)',
   'status.zoomOut': '缩小 (Cmd-)',
@@ -100,9 +97,6 @@ const zh: Record<TranslationKey, string> = {
   'cmd.noResults': '没有匹配的命令',
   'cmd.newSession': '新建会话',
   'cmd.searchSessions': '搜索会话',
-  'cmd.clearHistory': '清除历史',
-  'cmd.compactContext': '压缩上下文',
-  'cmd.undoLast': '撤销上次操作',
   'cmd.shareSession': '分享会话',
   'cmd.exportMarkdown': '导出会话为 Markdown',
   'cmd.exportJSON': '导出会话为 JSON',
@@ -177,8 +171,6 @@ const zh: Record<TranslationKey, string> = {
   // ContextPanel
   'context.title': '上下文',
   'context.usage': '上下文使用量',
-  'context.permission': '权限模式',
-  'context.files': '上下文中的文件',
   'context.input': '输入',
   'context.output': '输出',
   'context.cacheRead': '缓存读取',
@@ -198,12 +190,9 @@ const zh: Record<TranslationKey, string> = {
   'settings.apiKey': 'API 密钥',
   'settings.apiKeyPlaceholder': '请输入 API 密钥',
   'settings.model': '模型',
-  'settings.modelPlaceholder': '例如 claude-sonnet-4-20250514',
   'settings.permissionMode': '权限模式',
   'settings.language': '语言',
   'settings.identity': '身份',
-  'settings.identityPlaceholder': '你的名字或别名',
-  'settings.version': '版本',
   'settings.save': '保存',
   'settings.saved': '已保存!',
   'settings.saving': '保存中...',
@@ -213,32 +202,18 @@ const zh: Record<TranslationKey, string> = {
   'settings.impersonateApply': '应用',
 
   // Onboarding
-  'onboarding.title': '欢迎使用 GGCode',
-  'onboarding.subtitle': '几步即可开始',
   'onboarding.next': '下一步',
   'onboarding.back': '上一步',
   'onboarding.getStarted': '开始使用',
-  'onboarding.step.vendor': '选择 AI 服务商',
-  'onboarding.step.apiKey': '输入 API 密钥',
-  'onboarding.step.configure': '配置',
   'onboarding.vendorHint': '选择你要使用的 AI 服务商',
-  'onboarding.apiKeyHint': '你的 API 密钥保存在本地，不会发送到我们的服务器',
   'onboarding.configHint': '调整这些设置，或保持默认值',
-  'onboarding.skip': '跳过设置',
-  'onboarding.workDir': '工作目录',
-  'onboarding.browse': '浏览',
-  'onboarding.workDirHint': '选择要工作的项目目录',
   'onboarding.welcome': '欢迎使用 GGCode',
   'onboarding.selectDirHint': '选择一个项目目录开始使用',
   'onboarding.chooseDir': '选择目录',
   'onboarding.modeSupervised': '监督模式',
   'onboarding.modeSupervisedDesc': '执行前审查并批准每个工具调用',
-  'onboarding.modeAuto': '自动模式',
-  'onboarding.modeAutoDesc': '自动批准只读工具，确认危险操作',
   'onboarding.modeBypass': '绕过模式',
   'onboarding.modeBypassDesc': '自动批准所有工具，无需确认',
-  'onboarding.modeAutopilot': '自动驾驶',
-  'onboarding.modeAutopilotDesc': '完全自主 — 无需任何确认即可运行',
   'onboarding.fetchingModels': '获取中...',
   'onboarding.fetchModels': '获取模型',
   'onboarding.noModelsFound': '未找到模型。请手动输入模型名称。',
@@ -261,27 +236,18 @@ const zh: Record<TranslationKey, string> = {
 
   // Dialogs (About)
   'about.title': '关于 GGCode',
-  'about.version': '版本',
   'about.description': '终端 AI 编程助手',
-  'about.close': '关闭',
 
   // PairingCodeDialog
   'pairing.title': '配对设备',
-  'pairing.code': '配对码',
-  'pairing.expiresIn': '{n}秒后过期',
   'pairing.close': '关闭',
 
   // ShareDialog
   'share.title': '分享会话',
-  'share.connectUrl': '连接 URL',
-  'share.qrCode': '二维码',
   'share.copy': '复制',
   'share.copied': '已复制!',
-  'share.openInBrowser': '在浏览器中打开',
   'share.stopSharing': '停止分享',
   'share.generating': '生成中...',
-  'share.scanQr': '扫描二维码连接',
-  'share.activeDevices': '{n} 个设备已连接',
 
   // IMManagement
   'im.title': 'IM 适配器',
@@ -292,55 +258,23 @@ const zh: Record<TranslationKey, string> = {
   'im.unbound': '未绑定',
   'im.online': '在线',
   'im.offline': '离线',
-  'im.muted': '已静音',
   'im.mute': '静音',
   'im.unmute': '取消静音',
-  'im.delete': '删除',
-  'im.configure': '配置',
   'im.platform': '平台',
   'im.name': '名称',
-  'im.workspace': '工作区',
-  'im.enabled': '已启用',
   'im.save': '保存',
   'im.cancel': '取消',
   'im.selectPlatform': '选择平台...',
-  'im.adapterName': '适配器名称',
-  'im.adapterNamePlaceholder': '例如 我的 Slack',
-  'im.bindToWorkspace': '绑定工作区',
-  'im.enabledHint': '启用此适配器',
-  'im.pairing': '配对中...',
-  'im.paired': '已配对',
-  'im.notPaired': '未配对',
-  'im.startPairing': '开始配对',
 
   // MCPServers
   'mcp.title': 'MCP 服务器',
   'mcp.add': '添加',
-  'mcp.noServers': '未配置 MCP 服务器。点击"添加"添加一个。',
   'mcp.name': '名称',
-  'mcp.command': '命令',
-  'mcp.args': '参数',
-  'mcp.url': 'URL',
-  'mcp.headers': '请求头',
-  'mcp.type': '类型',
-  'mcp.typeLocal': '本地 (stdio)',
-  'mcp.typeRemote': '远程 (HTTP)',
-  'mcp.enabled': '已启用',
-  'mcp.save': '保存',
   'mcp.cancel': '取消',
-  'mcp.delete': '删除',
-  'mcp.namePlaceholder': '服务器名称',
-  'mcp.commandPlaceholder': '例如 npx @modelcontextprotocol/server',
-  'mcp.argsPlaceholder': '参数（空格分隔）',
-  'mcp.urlPlaceholder': '例如 http://localhost:3000/mcp',
-  'mcp.selectType': '选择类型...',
 
   // FileBrowser
   'files.fileTooLarge': '文件过大无法预览 (>2MB)',
   'files.binaryFile': '二进制文件',
-  'files.imagePreview': '图片预览',
-  'files.noPreview': '无预览',
-  'files.openInEditor': '在编辑器中打开',
 
   // DebugConsole
   'debug.title': '调试控制台',
@@ -370,19 +304,15 @@ const zh: Record<TranslationKey, string> = {
 
   // SettingsPage sections
   'settings.agentSafety': 'Agent 与安全',
-  'settings.workspaceAccess': '工作区与文件访问',
   'settings.appearance': '外观',
   'settings.integrations': '集成',
-  'settings.languageServers': '语言服务器',
   'settings.diagnostics': '诊断',
-  'settings.hooks': 'Hooks',
   'settings.hooksTitle': '生命周期钩子',
   'settings.hooksAdd': '+ 添加',
   'settings.hooksEdit': '编辑',
   'settings.hooksDelete': '删除',
   'settings.hooksInject': '注入',
   'settings.hooksNone': '(无)',
-  'settings.hooksEditTitle': '{0} Hook — {1}',
   'settings.hooksMatch': '匹配 (* 匹配全部)',
   'settings.hooksType': '类型 (command/http)',
   'settings.hooksCommand': '命令',
@@ -404,13 +334,11 @@ const zh: Record<TranslationKey, string> = {
   'settings.hooksMatchMode': '匹配模式',
   'settings.hooksTesterTitle': '正则测试器',
   'settings.hooksTesterPlaceholder': '例如 run_command git push',
-  'settings.hooksTestBtn': '测试',
   'settings.hooksTestMatched': '匹配成功！',
   'settings.hooksTestNotMatched': '不匹配',
   'settings.hooksTestError': '错误: {0}',
   'settings.addCustomEndpoint': '添加自定义端点',
   'settings.configured': '已配置',
-  'settings.install': '安装:',
   'settings.saveLimits': '保存限制',
   'settings.refreshModels': '从 API 刷新模型',
   'settings.versionPlaceholder': '版本号...',
@@ -445,8 +373,6 @@ const zh: Record<TranslationKey, string> = {
   'settings.theme': '主题',
   'settings.themeLight': '浅色',
   'settings.themeDark': '深色',
-  'settings.themeSystem': '跟随系统',
-  'settings.integrationsHint': '启用集成功能以便快速访问工具。',
   'settings.lspHint': '语言服务器协议（LSP）为 Agent 提供代码智能功能：转到定义、查找引用、悬停信息、诊断等。',
   'settings.lspNoServers': '此工作区未检测到语言服务器。',
   'settings.lspConfigured': '(已配置)',
@@ -474,17 +400,9 @@ const zh: Record<TranslationKey, string> = {
   'chat.copyError': '复制错误',
 
   // Permission mode dropdown options
-  'mode.supervisedDesc': '监督（每个工具需确认）',
-  'mode.autoDesc': '自动（仅安全工具）',
-  'mode.planDesc': '计划（只读）',
-  'mode.bypassDesc': '绕过（自动批准大部分工具）',
-  'mode.autopilotDesc': '自动驾驶（高度自主）',
 
   // Common dropdown placeholders
-  'common.chooseVendor': '选择服务商...',
-  'common.chooseEndpoint': '选择端点...',
   'common.chooseModel': '选择模型...',
-  'common.english': '英文',
 
   // ChatView activity descriptions
   'chat.activity.reading': '读取文件中...',
@@ -499,13 +417,10 @@ const zh: Record<TranslationKey, string> = {
   'chat.activity.subagent': '运行子 Agent...',
   'chat.activity.waiting': '等待输入...',
   'chat.activity.saving': '保存记忆中...',
-  'chat.activity.writingResponse': '编写回复中...',
   'chat.activity.planMode': '进入计划模式...',
 
   // ChatView UI labels
   'chat.findPlaceholder': '在对话中查找...',
-  'chat.noModel': '无模型',
-  'chat.selectWorkspace': '选择工作区',
   'chat.sending': '发送中...',
   'chat.failedToSend': '发送失败',
   'chat.nickname': '昵称',
@@ -529,11 +444,7 @@ const zh: Record<TranslationKey, string> = {
   'chat.title.copyReasoning': '复制推理过程',
   'chat.title.editResend': '编辑并重发',
   'chat.title.copyMessage': '复制消息',
-  'chat.title.regenerate': '重新生成回复',
-  'chat.title.copyResult': '复制结果',
-  'chat.title.copyError': '复制错误',
   'chat.title.teamBoard': '打开任务面板',
-  'chat.title.editIdentity': '点击编辑昵称、角色和团队',
 
   // MCPServers
   'mcp.transport': '传输方式',
@@ -564,51 +475,30 @@ const zh: Record<TranslationKey, string> = {
   'lanchat.noMessagesDM': '暂无私信。',
   'lanchat.broadcastPlaceholder': '广播给所有人...',
   'lanchat.dmPlaceholder': '给 {name} 发消息...',
-  'lanchat.enterNickname': '输入新昵称:',
 
   // ApprovalDialog hints
-  'approval.denyHint': '拒绝',
-  'approval.allowHint': '允许',
-  'approval.alwaysHint': '始终',
-  'approval.copyToClipboard': '复制到剪贴板',
-  'approval.ariaLabel': '工具审批',
 
   // AskUserDialog
   'askUser.typeAnswer': '输入你的回答...',
-  'askUser.additionalNotes': '附加备注（可选）',
-  'askUser.close': '关闭对话框',
-  'askUser.cancel': '取消',
 
   // IMManagement
   'im.editAdapter': '编辑: {name}',
-  'im.addTitle': '添加 IM 适配器',
-  'im.adapterNameRequired': '请输入适配器名称',
 
   // FileBrowser
   'files.searchPlaceholder': '搜索文件...',
   'files.officeDocument': 'Office 文档',
   'files.openExternal': '使用外部应用打开查看',
-  'files.renderingMermaid': '渲染图表中...',
   'files.htmlPreview': 'HTML 预览',
 
   // Dialogs / About
-  'about.checkUpdates': '检查更新',
-  'about.checking': '检查中...',
-  'about.newVersion': '发现新版本: v{version}',
-  'about.download': '下载',
 
   // TopDragBar (window controls)
-  'window.close': '关闭',
-  'window.minimize': '最小化',
-  'window.maximize': '最大化',
-  'window.restore': '恢复窗口',
 
   // StatusBar
   'status.toggleContext': '切换上下文面板',
 
   // TeamBoard
   'team.boardTitle': '任务面板',
-  'team.closeBoard': '关闭任务面板',
 
   // Common shared
   'common.dismiss': '关闭通知',
@@ -661,12 +551,8 @@ const zh: Record<TranslationKey, string> = {
   'settings.chooseVendor': '选择供应商...',
   'settings.chooseEndpoint': '选择端点...',
   'settings.modeSupervised': '受控模式（逐个确认工具）',
-  'settings.modeAuto': '自动模式（仅安全工具）',
-  'settings.modePlan': '计划模式（只读）',
   'settings.modeBypass': '绕过模式（自动批准安全工具）',
   'settings.modeBypassAll': '绕过模式（自动批准大部分工具）',
-  'settings.modeAutopilot': '自动驾驶（批准所有操作）',
-  'settings.modeAutopilotHigh': '自动驾驶（高度自主）',
   'settings.saveModeHint': '保存以持久化此默认模式。运行时模式更改仍遵循应用程序的正常模式处理。',
 
   // Dialogs
@@ -700,11 +586,6 @@ const zh: Record<TranslationKey, string> = {
   'onboarding.languageHint': '稍后可以在设置中更改',
 
   // SettingsPage mode descriptions (FeatureCard)
-  'settings.modeDescSupervised': '审查并批准每次工具执行',
-  'settings.modeDescAuto': '自动仅批准安全操作',
-  'settings.modeDescPlan': '探索代码而不做更改',
-  'settings.modeDescBypass': '自动批准大部分操作',
-  'settings.modeDescAutopilot': '完全自主，最少干预',
   'settings.agentSafetyHint': '查看桌面端 agent 当前的自主权限。此处仅汇总现有行为，不更改高级工具策略。',
   'settings.workspaceAccessHint': '文件工具在当前工作区和配置的允许目录内操作。高级目录编辑目前不在此处开放，以避免意外更改安全边界。',
   'settings.appearanceHint': '自定义视觉主题。应用默认跟随系统偏好设置。',
@@ -763,9 +644,6 @@ const zh: Record<TranslationKey, string> = {
   'toast.copiedMessages': '已复制 {count} 条消息到剪贴板',
 
   // FileBrowser
-  'files.emptyDirectory': '空目录',
-  'files.noMatchingFiles': '没有匹配的文件',
-  'files.selectToPreview': '选择文件预览',
 
   // ApprovalDialog risk levels
   'approval.riskHigh': '高风险',
@@ -773,59 +651,12 @@ const zh: Record<TranslationKey, string> = {
   'approval.riskLow': '低风险',
 
   // DebugConsole
-  'debug.filterLogs': '过滤调试日志',
 
   // Sidebar context menu
-  'sidebar.ctxOpen': '打开',
-  'sidebar.ctxRename': '重命名',
-  'sidebar.ctxCopyId': '复制 ID',
-  'sidebar.ctxDelete': '删除',
-  'sidebar.ctxPin': '置顶',
-  'sidebar.ctxUnpin': '取消置顶',
-  'sidebar.startConversation': '开始对话',
-  'sidebar.noMatching': '没有匹配"{search}"的会话',
-  'sidebar.clearSearch': '清除搜索',
-  'sidebar.noSessionsYet': '还没有会话',
 
   // ChatView context menu & run stats
-  'chat.ctxCopy': '复制',
-  'chat.ctxEdit': '编辑',
-  'chat.ctxRegenerate': '重新生成',
-  'chat.runDuration': '耗时',
-  'chat.runTools': '工具',
-  'chat.runFiles': '文件',
-  'chat.runErrors': '错误',
-  'chat.runTokens': '令牌',
-  'chat.dropImages': '拖放图片以附加',
-  'chat.slashHelp': '显示可用命令',
-  'chat.slashModel': '切换或查看 AI 模型',
-  'chat.slashMode': '更改权限模式（auto/supervised/plan/bypass）',
-  'chat.slashClear': '清空聊天历史',
-  'chat.slashCompact': '压缩上下文窗口',
-  'chat.slashContext': '显示上下文使用详情',
-  'chat.slashCost': '显示令牌用量和费用',
-  'chat.slashCopy': '复制对话到剪贴板',
-  'chat.slashExport': '下载对话为 Markdown 文件',
-  'chat.slashSessions': '浏览并切换会话',
-  'chat.slashConfig': '查看或编辑配置',
-  'chat.slashStatus': '显示运行状态',
-  'chat.slashSkills': '浏览可用技能',
-  'chat.slashMcp': '管理 MCP 服务器',
-  'chat.slashReview': '审查代码变更（git diff）',
-  'chat.slashDiff': '显示工作树差异',
-  'chat.slashReflect': '触发自我反思',
-  'chat.slashUndo': '撤销上次文件编辑',
-  'chat.slashRegenerate': '重新生成上次回复',
-  'chat.slashTodo': '任务管理',
-  'chat.slashInit': '初始化项目记忆文件',
-  'chat.slashLang': '更改界面语言',
-  'chat.slashBug': '报告 Bug',
 
   // Dialogs links
-  'dialogs.linkGitHub': 'GitHub',
-  'dialogs.linkReleases': '版本发布',
-  'dialogs.linkIssues': '问题反馈',
-  'dialogs.linkDiscord': 'Discord',
 
   // MCPServers transports
   'mcp.transportHttp': 'HTTP / SSE',
@@ -834,20 +665,14 @@ const zh: Record<TranslationKey, string> = {
   'mcp.descWs': '通过 WebSocket 的远程服务器',
 
   // IMManagement
-  'im.qrAuthHint': '此平台使用二维码认证。保存以启动配对流程。',
-  'im.noConfigurableFields': '此适配器无可配置字段。',
 
   // PairingCodeDialog
-  'pairing.enterCode': '在你的 IM 频道中输入此代码：',
 
   // LanChatView
-  'lanchat.noContactsOnline': '没有联系人在线',
 
   // ContextPanel
-  'context.noImAdapters': '没有绑定的 IM 适配器',
 
   // SettingsPage
-  'settings.maxTokensHint': '设为 0 或留空以从模型规格自动检测。',
   'settings.oauthConnected': '已连接',
   'settings.oauthNotConnected': '未连接',
   'settings.oauthLoggingIn': '正在登录...',

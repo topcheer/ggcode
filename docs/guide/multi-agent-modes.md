@@ -55,6 +55,7 @@ By default the sub-agent edits files directly in the parent's working tree, whic
 - The worktree is created under `<repo>/.ggcode/worktrees/agent-<id>-<timestamp>-<rand>` on a dedicated branch of the same name.
 - The sub-agent runs with its working directory set to the worktree, so its file edits never touch the parent's working tree.
 - The spawn result and `wait_agent` snapshots both report the worktree path, so the parent can inspect, test, or merge the sub-agent's edits after the run.
+- To recover a finished branch, use the `merge_worktree` tool: clean merges auto-finalize; on conflicts it returns a structured arbitration report (conflict regions + both sides' commit intents) and keeps the merge state so you can resolve the markers with `edit_file`, then `action=finalize` (optionally gated by `verify_command`). `action=abort` rolls back; the branch is never deleted.
 - Worktrees and branches are **kept after the run** (never auto-removed) — clean them up with `git worktree remove` once merged.
 - If worktree creation fails (not a git repo, git errors), the spawn is rejected and the sub-agent cancelled rather than silently downgraded to non-isolated.
 - Note: the worktree starts from the last commit (`HEAD`); uncommitted changes in the parent tree are not visible to the sub-agent.
@@ -87,13 +88,14 @@ Sub-agents always use the parent agent's **current runtime provider**, not the p
 
 For tasks where a single attempt frequently fails (tricky refactor, elusive bug, ambiguous architecture), `best_of_n` launches N (2-4, default 3) **independent sub-agent candidates on the same task**, waits for all to finish, and picks the winner:
 
-- **Isolation**: each candidate runs in its own git worktree by default (`isolation: "worktree"`), so file edits never collide. The winner's worktree path is reported for merging; the others are disposable. Use `isolation: "none"` only for read-only/research tasks.
+- **Isolation**: each candidate runs in its own git worktree by default (`isolation: "worktree"`), so file edits never collide. The winner's worktree path is reported for merging (via `merge_worktree`); the others are disposable. Use `isolation: "none"` only for read-only/research tasks.
 - **Task contract**: a suffix appended to the task requires every candidate to verify its own work (targeted build/test) and state the outcome in its final message.
 - **Selection**: per-rollout distilled summaries (attempted/progress/failures/verdict) are ranked by consensus; ties or a failed "best-of-a-bad-lot" degrade to a **sequential-retry conditioning hint** distilled from ALL rollouts (RTV escalation from "Scaling Test-time Compute for LLM Agents", arXiv 2506.12928).
 - **Economics**: N runs cost N x sub-agent tokens - only justified for tasks where one attempt frequently fails. The orchestrator needs N free sub-agent slots (16-session budget) and refuses cleanly otherwise.
 - **Cancellation**: cancelling the tool call does NOT kill the candidates; a partial report with live IDs comes back and they keep running (poll via `wait_agent`/`list_agents`).
 - **Cross-model ensemble** (heterogeneous candidates): pass `models` (2-4 model names, each available on the current endpoint) instead of `n` — one candidate runs per model, e.g. mixing a cheap model with flagships. Decorrelating candidate errors gives the consensus ranking genuinely independent votes instead of N copies of one model's failure modes (Mixture-of-Models-style ensembles, 2026); the per-candidate model appears in the report lines.
 - **Heterogeneous verifier** (verdict independence): pass `verifier_models` (1-4 model names) to route the execution tie-break discriminator - used when candidates rank too close to separate by consensus - to a model different from the tied candidates. The first entry not used by either candidate is picked, and the discriminator evidence is tagged `[verifier=<model>]`. Same-family verification is measurably weaker than cross-family (arXiv:2512.02304): a judge sharing the candidates' model inherits their blind spots, so this decorrelates the verdict too. Omitted = discriminator inherits the parent model.
+- **Ensemble admission hint** (does the ensemble pay for itself?): the generator-verifier gap study (Shahi & Chaudhary, MIT 2026) measured that 47% of multi-agent configurations are net-negative at matched token budget - ensemble gain is bounded by coverage headroom (how often any candidate succeeds) times selection efficiency (how often the winner is a real success). ggcode keeps a rolling ledger per recurring task family (`~/.ggcode/bon-gap-ledger.json`, last 10 runs) and, when the history turns bad (mean candidate success < 20%, or the selector fails to pick the existing successes in > 60% of runs while > 40% degrade), appends an advisory `Note:` to the report recommending a single focused agent + sequential retry, or `verifier_models`. Hints never block a run; history ages out so a task family re-qualifies after model/tooling changes. The ledger is disabled under `go test` and never records partial/aborted runs.
 
 ```json
 {"task": "Fix the flaky test in internal/session by ..., verify with go test -run TestSession ./internal/session/", "n": 3, "isolation": "worktree", "description": "并行修 flaky 测试"}
@@ -154,12 +156,36 @@ root.go:
 4. Output collected in `strings.Builder`, stored as `LastResult`
 5. Leader retrieves via `teammate_results` or `send_message` reply channel
 
+### Task Ordering with `depends_on`
+
+`swarm_task_create` accepts `depends_on`: a list of prerequisite task IDs that must complete before this task becomes runnable. While any dependency is incomplete the task stays parked on the board — it is not delivered to any inbox (even with an `assignee` set), `swarm_task_claim` rejects claims, and `swarm_task_list` shows it as `(blocked by: ...)`. The board unblocks automatically as dependencies complete; no manual unblock step exists. Unknown dependency IDs are rejected at creation (the task is not created). Use this to express cross-teammate ordering (e.g. "review" blocked by "implement") instead of polling completion yourself.
+
+### Dependency Findings Handoff (team blackboard)
+
+When a teammate completes a board task, its final output is persisted on the
+task itself (`metadata["result"]`, capped at 2000 runes). When a later task
+with `BlockedBy` dependencies is claimed from the board, the persisted
+results of its completed dependencies are appended to the claim prompt
+(bounded: max 6 entries, 800 runes each, 4800 runes total — the same cost
+profile as the subagent findings handoff). This closes the dependency-chain
+content gap: `BlockedBy` used to convey ordering only, forcing the claiming
+agent to re-derive findings its teammate had already produced.
+
+Boundaries:
+
+- Failed or parked tasks (e.g. `permanent_error`) never persist a result,
+  so their metadata cannot leak into a dependent's prompt.
+- Direct-inbox delivery (`send_message`, assigned tasks) is unchanged —
+  the sender already controls that prompt.
+- Findings are injected into the teammate's task prompt before execution
+  starts; the leader's context is never enlarged.
+
 ### Key Differences from Subagent
 
 - **Persistent**: Teammate runs an idle loop and handles multiple tasks over its lifetime (subagent handles one task then exits)
 - **Shared registry**: Gets live MCP tool updates; subagent gets a frozen snapshot
-- **No event recording**: Teammate only collects final output text, no per-turn event stream
-- **No follow panel**: Teammate execution is not observable in real-time (only status events)
+- **Event recording**: Teammate tool calls/results are streamed as `teammate_tool_call` events (tool name, args, result, error flag) and surface in the subagent panel
+- **Follow panel**: Teammate execution is observable in real-time via the follow panel (`/agent` follow), same as subagents
 
 ---
 

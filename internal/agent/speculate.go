@@ -66,6 +66,29 @@ var argLinkedPatterns = map[string]bool{
 	"multi_edit_file→multi_file_read": true,
 	"write_file→read_file":            true,
 	"write_file→multi_file_read":      true,
+	// r11: same-path post-edit diagnostics/lookup. The LLM checks the file
+	// it just edited — lsp_diagnostics and lsp_symbols are single-"path"
+	// tools (lspPathTool), so the same path linkage as read_file applies.
+	"edit_file→lsp_diagnostics":       true,
+	"multi_edit_file→lsp_diagnostics": true,
+	"write_file→lsp_diagnostics":      true,
+	"edit_file→lsp_symbols":           true,
+	"multi_edit_file→lsp_symbols":     true,
+	"write_file→lsp_symbols":          true,
+}
+
+// noArgTemplates holds tools whose useful invocation needs no arguments (or
+// only optional ones), so the argument prediction degenerates to a constant
+// template. This makes name-only bigram predictions (e.g. anything→git_status
+// after an edit) actually speculatable instead of being skipped with
+// predArgs==nil. Keys must be speculativeSafeTools members. git_diff is
+// deliberately excluded: its bare invocation is a whole-tree diff whose
+// output size dwarfs the latency it saves, and real invocations usually pass
+// file/cached flags (guaranteed cache-key miss).
+var noArgTemplates = map[string]json.RawMessage{
+	"git_status":      json.RawMessage(`{}`),
+	"git_branch_list": json.RawMessage(`{}`),
+	"git_log":         json.RawMessage(`{}`),
 }
 
 // speculator implements pattern-aware speculative tool execution.
@@ -251,8 +274,37 @@ func (s *speculator) predictNext(lastTool string) []string {
 
 // cacheKey generates a deterministic cache key from tool name and arguments.
 func cacheKey(toolName string, args json.RawMessage) string {
+	// #4079: tools with a no-arg template carry REQUIRED-but-semantically-
+	// empty args — description is an LLM-facing label every schema demands,
+	// so the raw byte hash never equaled the `{}` template: name-only
+	// predictions were structurally 0% hit while every miss poisoned the
+	// adaptive threshold (#1496's exact failure mode, reintroduced by r11).
+	// Drop description for those tools only, at the single hash entry point
+	// shared by store (predict) and query (consume), before hashing.
+	if _, ok := noArgTemplates[toolName]; ok {
+		args = stripDescriptionArg(args)
+	}
 	h := sha256.Sum256(append([]byte(toolName+":"), args...))
 	return hex.EncodeToString(h[:8])
+}
+
+// stripDescriptionArg removes the description field from a JSON object.
+// Non-objects, invalid JSON, and objects without the field pass through
+// unchanged; map marshaling is key-sorted, so the result is deterministic.
+func stripDescriptionArg(args json.RawMessage) json.RawMessage {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(args, &fields); err != nil || len(fields) == 0 {
+		return args
+	}
+	if _, has := fields["description"]; !has {
+		return args
+	}
+	delete(fields, "description")
+	b, err := json.Marshal(fields)
+	if err != nil {
+		return args
+	}
+	return b
 }
 
 // getCached returns a speculative result if available and fresh.
@@ -333,7 +385,7 @@ func (s *speculator) maybeAdaptThreshold() {
 
 // store caches a speculative result, evicting the oldest entry if the
 // cache is at capacity (simple LRU using cacheOrder slice).
-func (s *speculator) store(toolName string, args json.RawMessage, result tool.Result) {
+func (s *speculator) store(toolName string, args json.RawMessage, result tool.Result, freshPath string, freshMtime, freshSize int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -352,13 +404,14 @@ func (s *speculator) store(toolName string, args json.RawMessage, result tool.Re
 		}
 	}
 
-	fp, fm, fs := statSnapshotFor(toolName, args)
+	// (#3611: the snapshot is captured by the caller BEFORE Execute - see
+	// the goroutine in speculate(); store only records it.)
 	s.cache[key] = &speculativeResult{
 		result:     result,
 		cachedAt:   time.Now(),
-		freshPath:  fp,
-		freshMtime: fm,
-		freshSize:  fs,
+		freshPath:  freshPath,
+		freshMtime: freshMtime,
+		freshSize:  freshSize,
 	}
 	s.cacheOrder = append(s.cacheOrder, key)
 }
@@ -392,6 +445,12 @@ func (s *speculator) hasCached(toolName string, args json.RawMessage) bool {
 // For argument-linked patterns (e.g., edit_file→read_file), it extracts the
 // "path" or "file_path" field from the previous tool's args.
 func predictArgs(nextTool, prevTool string, prevArgs json.RawMessage) json.RawMessage {
+	// r11: constant-template tools need no linkage — any learned bigram that
+	// predicts them can be served with the template directly.
+	if tmpl, ok := noArgTemplates[nextTool]; ok {
+		return tmpl
+	}
+
 	linkKey := prevTool + "→" + nextTool
 	if !argLinkedPatterns[linkKey] {
 		return nil
@@ -433,6 +492,16 @@ func predictArgs(nextTool, prevTool string, prevArgs json.RawMessage) json.RawMe
 		}
 		return result
 	}
+	// r11: single-path lsp tools (lspPathTool) take {"path": ...} exactly like
+	// read_file — the predicted shape mirrors the read_file branch above.
+	if nextTool == "lsp_diagnostics" || nextTool == "lsp_symbols" {
+		obj := map[string]json.RawMessage{"path": pathBytes}
+		result, err := json.Marshal(obj)
+		if err != nil {
+			return nil
+		}
+		return result
+	}
 	return nil
 }
 
@@ -449,30 +518,34 @@ func (s *speculator) speculate(ctx context.Context, tools *tool.Registry, lastTo
 	}
 
 	for _, predicted := range predictions {
-		// Check concurrency limit.
-		s.mu.Lock()
-		if s.activeSpeculations >= specMaxConcurrent {
-			s.mu.Unlock()
+		// Reserve the concurrency slot atomically (#3593): the old code
+		// checked the limit under this lock but incremented only under the
+		// second lock, after the unlocked predictArgs window - two loop
+		// iterations could both pass the check and both increment (effective
+		// limit max+N). Check+increment must happen in one critical section;
+		// every bail path below releases the reserved slot via releaseSpecSlot,
+		// and the goroutine's defer releases it on completion.
+		if !s.reserveSpecSlot() {
 			debug.Log("speculate", "max concurrent speculations (%d) reached, skipping %s", specMaxConcurrent, predicted)
 			continue
 		}
-		// Predict arguments for this tool.
-		s.mu.Unlock()
 
+		// Predict arguments for this tool.
 		predArgs := predictArgs(predicted, lastTool, lastArgs)
 		if predArgs == nil {
+			s.releaseSpecSlot()
 			debug.Log("speculate", "no arg prediction for %s after %s, skipping", predicted, lastTool)
 			continue
 		}
 
 		// Skip if already cached.
 		if s.hasCached(predicted, predArgs) {
+			s.releaseSpecSlot()
 			continue
 		}
 
 		s.mu.Lock()
 		s.speculations++
-		s.activeSpeculations++
 		s.mu.Unlock()
 
 		// Launch background goroutine for speculative execution.
@@ -493,6 +566,13 @@ func (s *speculator) speculate(ctx context.Context, tools *tool.Registry, lastTo
 				return
 			}
 
+			// #3611: capture the freshness snapshot BEFORE Execute starts:
+			// the #1831 contract says "taken at speculation time". Statting
+			// inside store() (after Execute) recorded the POST-edit mtime when
+			// an edit_file landed mid-flight, blessing stale content with a
+			// fresh-looking snapshot the mtime self-heal could never catch.
+			fp, fm, fs := statSnapshotFor(toolName, toolArgs)
+
 			start := time.Now()
 			result, err := t.Execute(specCtx, toolArgs)
 			dur := time.Since(start)
@@ -506,13 +586,34 @@ func (s *speculator) speculate(ctx context.Context, tools *tool.Registry, lastTo
 				return
 			}
 
-			s.store(toolName, toolArgs, result)
+			s.store(toolName, toolArgs, result, fp, fm, fs)
 			s.mu.Lock()
 			s.savedMicros += dur.Microseconds()
 			s.mu.Unlock()
 			debug.Log("speculate", "speculatively executed %s in %v (cached for future use)", toolName, dur)
 		}(predicted, predArgs)
 	}
+}
+
+// reserveSpecSlot atomically checks the concurrency limit and increments
+// activeSpeculations, reporting whether the caller holds a reserved slot
+// (#3593: closes the check-then-increment TOCTOU window).
+func (s *speculator) reserveSpecSlot() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeSpeculations >= specMaxConcurrent {
+		return false
+	}
+	s.activeSpeculations++
+	return true
+}
+
+// releaseSpecSlot returns a slot reserved by reserveSpecSlot (bail paths
+// and goroutine completion).
+func (s *speculator) releaseSpecSlot() {
+	s.mu.Lock()
+	s.activeSpeculations--
+	s.mu.Unlock()
 }
 
 // Close stops all background goroutines and clears the cache.

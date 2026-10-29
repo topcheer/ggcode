@@ -202,11 +202,13 @@ type diffStats struct {
 	deletions int
 }
 
-// diffBinaryHeader matches the "Binary files a/x and b/x differ" marker.
-// Binary changes carry no hunks, so without this the file never entered
-// stats.files (#1650 case 1: pure-deletion and binary changes silently
-// bypassed the maxFilesPerCommit/maxLinesPerCommit warnings).
-var diffBinaryHeader = regexp.MustCompile(`^Binary files a/(.+) and b/(.+) differ`)
+// diffBinaryHeader matches the "Binary files ... differ" marker in all
+// three git forms: modify (a/x and b/x), add (/dev/null and b/x), and
+// delete (a/x and /dev/null). #4047: the old a/...b/-only pattern missed
+// the add/delete forms entirely - newly added binaries (the most common
+// accidental-commit shape #1650 targeted) bypassed the maxFilesPerCommit
+// warnings 100% of the time.
+var diffBinaryHeader = regexp.MustCompile(`^Binary files (?:a/(\S+)|/dev/null) and (?:b/(\S+)|/dev/null) differ$`)
 
 // diffModeChange matches the pure mode-change markers ("old mode"/
 // "new mode") - these hunks carry no +/- lines and previously no file
@@ -232,8 +234,17 @@ func parseDiffStats(diffOutput string) diffStats {
 	}
 	lastOldFile := ""
 	lastGitPath := ""
+	// #3956 (#3164 parity): true when the previous line was consumed as a
+	// minus-side file header ("--- a/x" at the oldFileHeader branch, or the
+	// "--- /dev/null" literal at the counting branch). The very next line
+	// being "+++"-prefixed is then a residual header, not content.
+	prevWasOldHeader := false
 
 	for _, line := range strings.Split(diffOutput, "\n") {
+		// #3956 (#3164 parity): capture-and-clear the header-adjacency flag
+		// for THIS line before any branch consumes it.
+		afterOld := prevWasOldHeader
+		prevWasOldHeader = false
 		// Track the b/ path from "diff --git a/x b/x" headers - the only
 		// source for pure mode-change hunks.
 		if m := diffGitHeader.FindStringSubmatch(line); m != nil && len(m) > 1 {
@@ -254,11 +265,18 @@ func parseDiffStats(diffOutput string) diffStats {
 		}
 		if m := diffOldFileHeader.FindStringSubmatch(line); m != nil {
 			lastOldFile = m[1]
+			prevWasOldHeader = true
 			continue
 		}
 		// Binary change: no hunks, no +/- lines - extract the b/ path.
-		if m := diffBinaryHeader.FindStringSubmatch(line); m != nil && len(m) > 2 {
-			add(m[2])
+		if m := diffBinaryHeader.FindStringSubmatch(line); m != nil {
+			// #4047: register the non-/dev/null side - added binaries only
+			// have a b-side name, deleted ones only an a-side name.
+			if m[1] != "" {
+				add(m[1])
+			} else {
+				add(m[2])
+			}
 			lastOldFile = ""
 			continue
 		}
@@ -277,12 +295,29 @@ func parseDiffStats(diffOutput string) diffStats {
 			lastGitPath = ""
 			continue
 		}
-		// Count additions (lines starting with '+', but not "+++").
-		if len(line) > 0 && line[0] == '+' && !strings.HasPrefix(line, "+++") {
+		// Count additions (#3956, #3164 parity with parseFileChanges):
+		// real "+++ b/x" and "+++ /dev/null" headers were already consumed
+		// by the regexes above. A "+++"-prefixed line here is header-shaped
+		// content (source line starts with "++": C++ increment, nested patch
+		// tails) UNLESS it immediately follows a consumed minus-side header -
+		// adjacency is the only remaining discriminator.
+		if len(line) > 0 && line[0] == '+' {
+			if strings.HasPrefix(line, "+++") && afterOld {
+				continue
+			}
 			stats.additions++
 		}
-		// Count deletions (lines starting with '-', but not "---").
-		if len(line) > 0 && line[0] == '-' && !strings.HasPrefix(line, "---") {
+		// Count deletions (#3956): the only real header reaching here is the
+		// new-file old side "--- /dev/null" (the a/-form was consumed above);
+		// flag it so the "+++ b/x" that follows is header-adjacent. Every other
+		// "---"-shaped line is diff CONTENT (markdown hr "----", "--"
+		// strikethrough markers, "---count;" C++ deletions) and must be
+		// counted, not skipped.
+		if len(line) > 0 && line[0] == '-' {
+			if strings.HasPrefix(line, "--- /dev/null") {
+				prevWasOldHeader = true
+				continue
+			}
 			stats.deletions++
 		}
 	}

@@ -126,7 +126,7 @@ Per-workspace A2A config via `.ggcode/a2a.yaml` in the workspace root.
 
 ## Security
 
-- A built-in default key (`ggcode-lan-a2a-v1`) is always active when no custom auth is configured — it ensures only ggcode instances can connect
+- A built-in default key (`ggcode-lan-a2a-v1`) is always active when no custom auth is configured — it ensures only ggcode instances can connect. Once any custom auth is configured (`api_keys` / OAuth2 / OIDC / mTLS), the built-in key is fully disabled so the public default cannot bypass your credentials
 - Multiple auth schemes can be enabled simultaneously (any matching scheme authenticates)
 - Without custom auth or lan_discovery, only localhost connections are accepted
 - API keys support `${ENV_VAR}` expansion and are stored in `keys.env`
@@ -135,6 +135,25 @@ Per-workspace A2A config via `.ggcode/a2a.yaml` in the workspace root.
 - mTLS provides mutual certificate-based authentication
 
 See [A2A Authentication Guide](../a2a-auth.md) for detailed setup instructions.
+
+## Delegation Declarations (Audit Anchors)
+
+ggcode agents can attach delegation declarations to outgoing A2A tasks
+(`ggcode.dev/on-behalf-of` and `ggcode.dev/delegation` message metadata),
+recording WHO the agent acts for and WHY (intent summary). Receiving
+instances can enforce an inbound policy:
+
+```yaml
+a2a:
+  delegation:
+    require_on_behalf_of: true  # reject tasks without an on-behalf-of declaration
+    max_depth: 3                # reject delegation chains deeper than 3
+```
+
+Both knobs default to off (zero behavior change). **These are declarations,
+not signatures**: they do not prevent forgery or tampering and are never an
+authentication basis - they give auditors and policy-enforcing receivers an
+anchor, complementing (not replacing) the auth schemes above.
 
 ## Protocol Extensions (A2A v1.0)
 

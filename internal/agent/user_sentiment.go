@@ -47,6 +47,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -102,12 +103,147 @@ const (
 // A first line containing any of these phrases is never classified as
 // negative feedback.
 var sentimentPositiveWhitelist = []string{
-	"no problem", "no worries", "no issues", "no issue",
+	"no problem", "no problems", "no worries", "no issues", "no issue", "no need",
+	// #4203: plural/collective "no X" confirmations — "no problems, looks
+	// good" etc. The bare "no" must be masked before the rejection scan,
+	// same family as #1223/#4197. #4207: "no biggie"/"no rush" - benign
+	// pacing/reassurance ("No rush, take your time") is not a rejection.
+	"no sweat", "no complaints", "no concerns", "no biggie", "no rush",
 	"not bad", "not too bad", "looks good", "looks great", "looks fine",
 	"all good", "well done", "good job", "nice work", "great work",
 	"perfect", "excellent", "awesome", "thank you", "thanks",
 	"how do i stop", "how to stop", "how can i stop", "how do you stop",
 	"how do i restart", "how to restart",
+	// #3739 CJK positives: same masking role for Chinese acknowledgements.
+	"没问题", "不碍事", "谢谢", "好的", "很好", "不错", "可以了", "太好了",
+	"干得好", "看起来不错", "完美", "棒",
+	// #4149 CJK neutral carriers: bare CJK negative words have no word
+	// boundaries (isAlnum is false for all bytes >= 0x80, so wordContains
+	// degenerates to substring matching), and everyday Chinese compounds
+	// EMBED the trigger patterns: 算了 inside 计算了/结算, 垃圾 inside
+	// 垃圾回收, 没用 inside 没用上/没用过, 不对 inside 不对齐, 停一下
+	// inside 帮我停一下, 我是说 inside 我是说中文. These are the CJK
+	// counterparts of the English #1223/#4104 false-positive families:
+	// masking the carrier blanks the embedded trigger while leaving any
+	// other negative words in the line still detectable.
+	"计算了", "预算了", "结算", "打算了",
+	"垃圾回收", "没用上", "没用到", "没用过", "不对齐",
+	"帮我停一下", "我是说中文", "我是说英文", "我是说英语",
+	// #4181: 还是错 inside 还是错误处理/还是错误码 (a neutral
+	// technical recommendation, not a rejection of the agent's output)
+	// - same carrier family as #4149.
+	"还是错误",
+	// Mid-compound straddle carriers: 别动 inside 区别动态, 重来 inside
+	// 重庆来. A clause-start position rule was tried and rejected - it also
+	// killed genuine mid-sentence predicates ("这个方案错了", #4003 test
+	// suite) - so these two niche straddles are masked as carriers instead.
+	"区别动", "重庆来",
+}
+
+// containsCJKANotA reports whether s contains an A-not-A construction
+// (V不V, 是不是, 对不对, 行不行, 好不好, 能不能, 要不要...): a 不 rune whose
+// preceding 1-3 runes are repeated verbatim right after it. RE2 has no
+// backreferences, so this is scanned by hand.
+func containsCJKANotA(s string) bool {
+	r := []rune(s)
+	for i, c := range r {
+		if c != '不' {
+			continue
+		}
+		for k := 1; k <= 3 && i-k >= 0 && i+k < len(r); k++ {
+			if runesEqual(r[i-k:i], r[i+1:i+1+k]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// patternHasCJK reports whether the pattern contains at least one CJK rune.
+// #4149 gates below apply only to such patterns; ASCII patterns keep the
+// wordContains boundary semantics unchanged.
+func patternHasCJK(pat string) bool {
+	for _, r := range pat {
+		if r >= 0x4E00 && r <= 0x9FFF {
+			return true
+		}
+	}
+	return false
+}
+
+// isCJKQuestionLine reports whether the (first) line is an interrogative:
+// after trimming trailing spaces and sentence-final 。/！/， it ends with ？,
+// ?, 吗 or 呢. Diagnostic questions ("服务为什么停下了？", "部署没成功吗？")
+// carry bare negative substrings without any feedback intent. (#4149)
+func isCJKQuestionLine(line string) bool {
+	t := strings.TrimRight(line, "。！!，, \t")
+	if t == "" {
+		return false
+	}
+	last, _ := utf8.DecodeLastRuneInString(t)
+	switch last {
+	case '？', '?', '吗', '呢':
+		return true
+	}
+	return false
+}
+
+// isEnglishQuestionLine reports whether the (first) line is an English
+// interrogative: it ends with a question mark, or opens with a question
+// word. Diagnostic questions ("is the build still broken?", "why does the
+// auth flow keep failing?") embed rejection substrings without feedback
+// intent - the ASCII counterpart of the #4149 CJK question gate. (#4190)
+func isEnglishQuestionLine(line string) bool {
+	// #4194: lowercase INSIDE the function. IM clients auto-capitalize the
+	// first letter and drop the question mark ("Why is this still failing"),
+	// which used to defeat both the suffix check and the all-lowercase
+	// prefix list while the rejection scanner happily lowercased its own
+	// copy. Also accept the full-width question mark: mixed CJK/English
+	// lines commonly end with ？ and were invisible to the ASCII suffix.
+	t := strings.ToLower(strings.TrimSpace(line))
+	if t == "" {
+		return false
+	}
+	if strings.HasSuffix(strings.TrimRight(t, "! \t"), "?") || strings.HasSuffix(strings.TrimRight(t, "! \t"), "？") {
+		return true
+	}
+	for _, w := range []string{
+		"is ", "are ", "was ", "were ",
+		"do ", "does ", "did ",
+		"why ", "what ", "how ", "when ", "where ", "who ",
+		"can ", "could ", "should ", "would ", "will ", "shall ",
+		"has ", "have ", "had ",
+		"isn't ", "aren't ", "doesn't ", "don't ",
+	} {
+		if strings.HasPrefix(t, w) {
+			return true
+		}
+	}
+	return false
+}
+
+func runesEqual(a, b []rune) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// isCJKANotAQuestion reports whether the line is a short CJK confirmation
+// question: it carries an A-not-A construction AND an interrogative ending
+// (？/?/吗/呢). (#4004)
+func isCJKANotAQuestion(line string) bool {
+	if utf8.RuneCountInString(line) > 40 || !containsCJKANotA(line) {
+		return false
+	}
+	t := strings.TrimRight(line, "。！!，, ")
+	return strings.HasSuffix(t, "？") || strings.HasSuffix(t, "?") ||
+		strings.HasSuffix(t, "吗") || strings.HasSuffix(t, "呢")
 }
 
 // negFeedbackPatterns maps patterns to categories. Matching is case-insensitive
@@ -125,25 +261,51 @@ var negFeedbackPatterns = []struct {
 		"that's wrong", "thats wrong", "this is wrong", "bad", "doesn't work",
 		"doesnt work", "didnt work", "didn't work", "broken", "still broken",
 		"still failing", "still not working", "still doesn't", "still doesnt",
-		"not working", "fails", "failing", "error again"},
+		"not working", "fails", "failing", "error again",
+		// #3739 CJK: Chinese users correcting the agent were 100% invisible to
+		// this detector (pure-CJK text matched no English pattern, resetting
+		// the escalation counter mid-sequence). CJK has no \b semantics, but
+		// wordContains degenerates safely to substring matching for CJK (its
+		// boundary check isAlnum is false for all bytes >= 0x80).
+		"错了", "不对", "不正确", "不是这样", "不是我要的", "改错了",
+		"坏了", "坏掉了", "不行", "不能用", "没成功", "又错了",
+		"还是错", "还是不对", "还是不行", "又失败"},
 		negCatRejection},
 	// Redirection: user changing direction.
 	{[]string{"instead", "actually", "i meant", "i should have", "let me rephrase",
 		"let me clarify", "what i actually", "what i really", "on second thought",
 		"never mind", "nevermind", "ignore that", "forget that", "disregard",
-		"start over", "try again", "redo"},
+		"start over", "try again", "redo",
+		// #3739 CJK redirection.
+		"重新来", "重来", "重新开始", "再来一次", "换个", "改用", "换成",
+		"我是说", "我的意思是", "我是想要", "算了", "别管了", "忽略刚才"},
 		negCatRedirection},
 	// Frustration: emotional signals.
-	// #1223: "why are you" narrowed to "why are you doing"/"why do you keep" -
-	// the generic form matched technical questions like "why are you using a
-	// mutex here?". How-to-stop questions are whitelist phrases above.
-	{[]string{"stop", "ugh", "wtf", "this is frustrating", "frustrating",
-		"why are you doing", "why do you keep", "why do you still",
-		"you keep", "stop doing", "stop trying",
-		"i said", "as i said", "like i said", "i already told",
+	// #1223: "why are you" removed - it matched technical questions like
+	// "why are you using a mutex here?". How-to-stop questions are whitelist
+	// phrases above.
+	// #4104: bare "stop" removed - see isBareStopCommand; imperative ops
+	// commands ("stop the dev server") must not read as frustration.
+	// #4127: "why do you keep"/"you keep"/"why are you doing" narrowed to
+	// gerund/deixis forms - keep+doing/making is frustration, keep/doing + a
+	// noun phrase ("keep a mutex", "doing a bounds check") is a neutral
+	// technical question, the same false-positive family #1223 removed.
+	{[]string{"ugh", "wtf", "this is frustrating", "frustrating",
+		"why are you doing this", "why are you doing that", "why do you still",
+		"you keep doing", "you keep making", "you keep trying",
+		"stop doing", "stop trying",
+		// #4129: bare "i said"/"as i said"/"like i said"/"i already told"
+		// removed - neutral technical restatement ("as I said, the parser
+		// retries on 429") read as frustration and two such messages
+		// reset monitoring. Only the agent-directed reprimand form keeps
+		// firing; the CJK counterpart 我说过了 is already reprimand-shaped.
+		"i already told you",
 		"are you listening", "read my message", "pay attention",
 		"this doesn't make sense", "this doesnt make sense",
-		"nonsense", "garbage", "useless", "terrible"},
+		"nonsense", "garbage", "useless", "terrible",
+		// #3739 CJK frustration.
+		"停下", "停一下", "别改了", "别动", "烦死了", "太差了", "垃圾",
+		"没用", "我说过了", "说过多少次", "你听了吗", "看我的消息"},
 		negCatFrustration},
 }
 
@@ -174,7 +336,13 @@ func detectNegativeFeedback(message string) string {
 	}
 
 	lower := strings.ToLower(firstLine)
-	isShort := len(firstLine) < 100
+	// #3968: rune count, not byte length - UTF-8 CJK runs 3 bytes/char, so
+	// `len() < 100` classified every Chinese message over ~33 chars as long,
+	// silently skipping rejection/frustration hits and resetting the
+	// escalation counter mid-sequence (exactly what #3739's CJK keywords
+	// were added to prevent). Rune count keeps the threshold semantics
+	// identical for ASCII (1 byte = 1 rune).
+	isShort := utf8.RuneCountInString(firstLine) < 100
 
 	// Positive-phrase masking (#1223, refined by #1227): whitelist phrases
 	// like "no problem" / "not bad" contain bare rejection words but express
@@ -185,9 +353,54 @@ func detectNegativeFeedback(message string) string {
 	scanText := maskPositivePhrases(lower)
 
 	// Check patterns in priority order.
+	// #4104: bare "stop" no longer sits in the frustration pattern list -
+	// it fired on imperative ops commands ("stop the dev server and check
+	// the logs") and injected a misleading course-correction signal, and two
+	// such commands escalated to a monitoring reset. Genuine bare-stop
+	// ABORT intent is the message consisting of essentially only "stop"
+	// ("stop", "stop!", "stop."); frustrated-work stop is already covered
+	// by "stop doing"/"stop trying".
+	if isBareStopCommand(lower) {
+		return negCatFrustration
+	}
 	for _, group := range negFeedbackPatterns {
+		// #4004: CJK A-not-A confirmation questions (对不对/行不行/是不是…)
+		// contain bare rejection substrings but mean the OPPOSITE - they ask
+		// for confirmation, the exact mirror of the English "no problem"/
+		// "not bad" whitelist problem #1223 solved. Masking cannot handle the
+		// nested form (是不是不对 masks 是不是 and still hits 不对), so the
+		// whole rejection category is skipped for short interrogative lines
+		// carrying an A-not-A construction. Genuine rejections (不对，重新做 /
+		// 还是错) carry no trailing interrogative and stay detected.
+		if group.category == negCatRejection && isCJKANotAQuestion(lower) {
+			continue
+		}
 		for _, pat := range group.patterns {
 			if wordContains(scanText, pat) {
+				// #4149: CJK bare words carry no word boundaries, so an
+				// additional gate applies before a CJK pattern counts:
+				// QUESTION GATE: a line ending in an interrogative
+				//     (吗/呢/？/?) is a diagnostic question, not feedback -
+				//     "服务为什么停下了？" / "部署没成功吗？". Same conservative
+				//     direction as the #4004 A-not-A question skip above.
+				//     Mid-compound straddles (区别动态->别动, 重庆来->重来) and
+				//     neutral carriers (计算了/垃圾回收/没用上) are handled by
+				//     masking in the whitelist above; a clause-start position
+				//     rule was tried and rejected - it killed genuine
+				//     mid-sentence predicates like "这个方案错了".
+				if patternHasCJK(pat) {
+					if isCJKQuestionLine(firstLine) {
+						continue
+					}
+				} else if group.category == negCatRejection && isEnglishQuestionLine(firstLine) {
+					// #4190: ASCII mirror of the #4149 gate. English
+					// diagnostic questions ("is the build still broken?",
+					// "why does the auth flow keep failing?") embed
+					// rejection substrings without feedback intent.
+					// Scoped to the rejection category so genuinely
+					// emotional questions keep their category signal.
+					continue
+				}
 				// All categories only trigger for short messages to avoid
 				// false positives in detailed technical messages. A long
 				// message with "actually" mid-sentence is context, not
@@ -204,16 +417,53 @@ func detectNegativeFeedback(message string) string {
 				if isShort {
 					return group.category
 				}
-				if group.category == negCatRedirection {
-					if idx := strings.Index(scanText, pat); idx >= 0 && idx < 40 {
-						return group.category
-					}
+				// Opener exception: a strong signal word near the START of a
+				// LONG message is still course-correction feedback, not
+				// context. #1521 introduced this for redirection; #4126
+				// extends it to rejection/frustration - a detailed
+				// correction opening with "不对/错了/烦死了" (CJK corrections
+				// run long fast: 100 runes is ~2-3 sentences) was swallowed
+				// AND reset consecutiveNegatives, systematically delaying the
+				// escalation ladder exactly when the user is escalating.
+				// Two-tier window: redirection markers ("instead",
+				// "actually") are unambiguous course words and keep the
+				// #1521/#3968 40-rune window; bare rejection/frustration
+				// words ("wrong", "bad") are common inside reflective prose
+				// ("I was thinking about how the wrong approach might
+				// actually be right...") and only qualify when the message
+				// essentially BEGINS with them (12 runes of preamble).
+				openerWindow := 40
+				if group.category != negCatRedirection {
+					openerWindow = 12
+				}
+				// #3968: the index is a BYTE index; compare the rune
+				// count of the prefix so the window is CHARACTERS in any
+				// script. ASCII behavior is unchanged (byte index == rune
+				// count when the prefix is pure ASCII).
+				// #4174: use wordIndexIn, not strings.Index. The gate that
+				// got us here is wordContains (word-bounded), so the
+				// position check must use the same boundary semantics:
+				// strings.Index finds a substring embedded in an unrelated
+				// word at the START ("no" inside "Now that..."), and that
+				// borrowed position passes the 12-rune opener window even
+				// though the word-bounded match that actually fired is
+				// mid-message - exactly what the window exists to exclude.
+				if idx := wordIndexIn([]byte(scanText), pat); idx >= 0 && utf8.RuneCountInString(scanText[:idx]) < openerWindow {
+					return group.category
 				}
 			}
 		}
 	}
 
 	return ""
+}
+
+// isBareStopCommand reports whether the message is essentially just the
+// word "stop" with optional trailing punctuation - a genuine abort
+// command, not an imperative ops instruction that merely starts with
+// "stop" (#4104).
+func isBareStopCommand(lower string) bool {
+	return strings.Trim(lower, " !.!~\t\n") == "stop"
 }
 
 // maskPositivePhrases blanks out word-bounded occurrences of every
@@ -259,8 +509,14 @@ func wordIndexIn(b []byte, pattern string) int {
 }
 
 // wordContains checks if text contains the pattern as a standalone word
-// (bounded by non-alphanumeric characters or string boundaries). This prevents
+// (bounded by non-word characters or string boundaries). This prevents
 // false positives like "now" matching "no".
+// #4033: hyphens and underscores are word-continuation bytes, NOT boundaries,
+// so "no-op"/"bad-API"/"stop-gaps" are single tokens and no longer match the
+// bare negative patterns "no"/"bad"/"stop". Without this, any hyphenated
+// compound sharing its first syllable with a negative word fired the
+// sentiment escalation ladder on neutral technical messages ("this is a
+// no-op change").
 func wordContains(text, pattern string) bool {
 	idx := strings.Index(text, pattern)
 	for idx >= 0 {
@@ -282,8 +538,11 @@ func wordContains(text, pattern string) bool {
 	return false
 }
 
+// isAlnum reports whether b continues a word: ASCII alphanumerics, the
+// apostrophe ("don't"), and - #4033 - hyphen/underscore, so a hyphenated
+// compound is one token rather than two boundary-separated words.
 func isAlnum(b byte) bool {
-	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '\''
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '\'' || b == '-' || b == '_'
 }
 
 // SentimentFeedback represents the result of sentiment analysis for a single

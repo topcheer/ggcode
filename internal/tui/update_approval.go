@@ -40,10 +40,10 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 			stale.Response <- permission.Cancelled
 		})
 	}
-	if m.mode == permission.AutopilotMode {
-		m.pendingApproval = &msg
-		return m, m.handleApproval(permission.Allow)
-	}
+	// two-mode refactor: the legacy autopilot auto-approve fast path is
+	// REMOVED - autopilot normalizes to bypass, and bypass's retained Ask
+	// floors (system-level destruction, persistence backdoors) must reach
+	// a real human, otherwise the gates are decorative.
 	// Agent is requesting approval
 	m.pendingApproval = &msg
 	// #1741: defaultApprovalOptions() hardcodes LangEnglish wrappers -
@@ -53,6 +53,7 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 	m.approvalOptions = defaultApprovalOptionsFor(m.currentLanguage())
 	m.approvalCursor = 0
 	m.inputBellFired = false
+	m.oscBlocked(oscKindPermission, "Approval needed: "+msg.ToolName) // OSC 7501
 	// Push to IM if available so user can approve remotely
 	m.approvalNotifiedIM = false
 	if m.imEmitter != nil {
@@ -74,15 +75,14 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 
 // handleDiffConfirmMsg handles the corresponding message case.
 func (m Model) handleDiffConfirmMsg(msg DiffConfirmMsg) (Model, tea.Cmd) {
-	if m.mode == permission.AutopilotMode {
-		m.pendingDiffConfirm = &msg
-		return m, m.handleDiffConfirm(true)
-	}
+	// two-mode refactor: same removal as the approval fast path above -
+	// diff confirmations in the bypass surface must reach a human.
 	m.pendingDiffConfirm = &msg
 	// #1741: same LangEnglish hardcoding as the approval options above.
 	m.diffOptions = diffConfirmOptionsFor(m.currentLanguage())
 	m.diffCursor = 0
 	m.inputBellFired = false
+	m.oscBlocked(oscKindPermission, "Confirm edit") // OSC 7501
 	// Schedule delayed input bell
 	return m, m.scheduleInputBell("Diff confirmation needed")
 
@@ -105,6 +105,7 @@ func (m Model) handleAskUserMsg(msg AskUserMsg) (Model, tea.Cmd) {
 	m.pendingQuestionnaire = newQuestionnaireState(msg.Request, msg.Response, m.currentLanguage())
 	m.syncQuestionnaireInputWidth()
 	m.inputBellFired = false
+	m.oscBlocked(oscKindQuestion, "Question: "+msg.Request.Title) // OSC 7501
 	// Push the first question to IM so remote users can answer.
 	if len(msg.Request.Questions) > 0 {
 		q := msg.Request.Questions[0]
@@ -148,7 +149,7 @@ func (m Model) scheduleInputBell(summary string) tea.Cmd {
 }
 
 // handleInputBellMsg fires the delayed notification if the user hasn't
-// responded yet. It's idempotent — if the input was already handled, the
+// responded yet. It's idempotent - if the input was already handled, the
 // pending fields will be nil and nothing fires.
 func (m Model) handleInputBellMsg(msg inputBellMsg) (Model, tea.Cmd) {
 	// Only fire if something is still pending and we haven't already fired

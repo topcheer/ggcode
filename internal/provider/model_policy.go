@@ -58,6 +58,11 @@ func callPolicyFromResolved(resolved *config.ResolvedEndpoint) callPolicy {
 // attempts returns the retry budget for this provider: the configured
 // override when positive, otherwise the provider-wide default.
 func (c callPolicy) attempts() int {
+	if retryAlwaysEnabled.Load() {
+		// Retry-always (--llm-retry-always): unlimited attempts; loop until
+		// success or context cancellation. Configured caps do not apply.
+		return retryAlwaysAttempts
+	}
 	if c.maxRetries > 0 {
 		return c.maxRetries
 	}

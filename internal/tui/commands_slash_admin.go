@@ -53,8 +53,20 @@ func (m *Model) handleModeCommand(parts []string) tea.Cmd {
 		// #743: reject unknown mode names instead of silently falling back
 		// to supervised (ParsePermissionMode's fail-safe default is intended
 		// for config parsing, not user input).
-		if !permission.IsValidPermissionMode(parts[1]) {
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Invalid mode %q. Valid modes: supervised | plan | auto | bypass | autopilot", parts[1]))
+		// Two-mode refactor: /mode accepts supervised | bypass only. Legacy
+		// names auto/autopilot normalize silently (config compat); plan is
+		// tool-internal (enter_plan_mode / exit_plan_mode).
+		switch strings.ToLower(parts[1]) {
+		case "auto":
+			parts[1] = "supervised"
+		case "autopilot":
+			parts[1] = "bypass"
+		case "plan":
+			m.chatWriteSystem(nextSystemID(), "plan mode cannot be entered directly; it is managed by the enter_plan_mode/exit_plan_mode tools")
+			return nil
+		case "supervised", "bypass":
+		default:
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Invalid mode %q. Valid modes: supervised | bypass", parts[1]))
 			return nil
 		}
 		oldMode := m.mode

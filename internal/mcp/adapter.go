@@ -18,6 +18,15 @@ type toolCaller interface {
 	CallTool(ctx context.Context, name string, args map[string]interface{}) (*CallToolResult, error)
 }
 
+// taskCaller is the optional MCP Tasks upgrade of toolCaller (SEP-1686,
+// official extension since the 2026-07-28 spec RC), satisfied by *Client.
+// Absent on callers without Tasks support; the adapter falls back to plain
+// CallTool in that case.
+type taskCaller interface {
+	CallToolAsTask(ctx context.Context, name string, args map[string]interface{}, opts TaskRequestOptions) (*CallToolResult, *Task, error)
+	HasTasks() bool
+}
+
 // Adapter wraps MCP tools into ggcode's Tool interface.
 type Adapter struct {
 	serverName string
@@ -298,7 +307,18 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 			IsError: true,
 		}, nil
 	}
-	result, err := t.caller.CallTool(ctx, t.toolName, args)
+	var result *CallToolResult
+	var err error
+	if tc, ok := t.caller.(taskCaller); ok && tc.HasTasks() {
+		// Tasks-capable server (SEP-1686): send task-augmented
+		// (params.task=true). Sync answers behave identically to plain
+		// CallTool; task envelopes are polled to a terminal state
+		// (taskPollBudget-bounded) and the real result fetched via
+		// tasks/result — instead of decoding into an empty success.
+		result, _, err = tc.CallToolAsTask(ctx, t.toolName, args, TaskRequestOptions(`true`))
+	} else {
+		result, err = t.caller.CallTool(ctx, t.toolName, args)
+	}
 	if err != nil {
 		// Classify before surfacing: only transport-level failures feed the
 		// breaker. Semantic errors (server answered) never trip it.

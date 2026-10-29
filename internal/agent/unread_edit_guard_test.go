@@ -142,6 +142,36 @@ func TestExtractEditFilePaths(t *testing.T) {
 		}
 	})
 
+	t.Run("file_ops_mkdir_skipped", func(t *testing.T) {
+		// mkdir edits no file content and its source is a brand-new
+		// directory path that can never have been read - feeding it to
+		// the read-before-edit check was a guaranteed false positive.
+		args, _ := json.Marshal(map[string]any{
+			"operations": []any{
+				map[string]any{"action": "mkdir", "source": "/Volumes/new/brand-new-dir"},
+			},
+		})
+		paths := extractEditFilePaths("file_ops", args)
+		if paths != nil {
+			t.Fatalf("expected nil for mkdir op, got %v", paths)
+		}
+	})
+
+	t.Run("file_ops_delete_move_kept", func(t *testing.T) {
+		// delete/move change which file lives at a path - freshness and
+		// readHash bookkeeping still want the path extracted.
+		args, _ := json.Marshal(map[string]any{
+			"operations": []any{
+				map[string]any{"action": "delete", "source": "/a/old.go"},
+				map[string]any{"action": "move", "source": "/b/x.go", "destination": "/b/y.go"},
+			},
+		})
+		paths := extractEditFilePaths("file_ops", args)
+		if len(paths) != 3 {
+			t.Fatalf("expected 3 paths from delete+move ops, got %d: %v", len(paths), paths)
+		}
+	})
+
 	t.Run("batch_replace", func(t *testing.T) {
 		args, _ := json.Marshal(map[string]any{
 			"files":       []any{"/a/foo.go", "/b/bar.go"},

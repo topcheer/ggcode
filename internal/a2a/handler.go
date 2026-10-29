@@ -942,18 +942,6 @@ var skillPermissions = map[string]*SkillPermission{
 // Helpers
 // ---------------------------------------------------------------------------
 
-func isToolAllowed(toolName string, allowed []string) bool {
-	if len(allowed) == 0 {
-		return true // nil/empty = all tools allowed
-	}
-	for _, a := range allowed {
-		if a == toolName {
-			return true
-		}
-	}
-	return false
-}
-
 // restrictRegistry builds a registry exposing only the tools named in
 // allowed (fix #565 A). Tool instances are shared with src — the same
 // ownership model as the previous direct pass-through; the agent package

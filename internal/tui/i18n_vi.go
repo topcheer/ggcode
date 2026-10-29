@@ -12,12 +12,8 @@ func viCatalog(key string) string {
 		return "tạm thời"
 	case "agents.idle":
 		return "chờ"
-	case "agents.running":
-		return "%d đang chạy"
 	case "cron.firing":
 		return "Cron job đã kích hoạt"
-	case "activity.idle":
-		return "chờ"
 	case "panel.conversation":
 		return "Hội thoại"
 	case "panel.composer":
@@ -28,16 +24,8 @@ func viCatalog(key string) string {
 		return "Lệnh:"
 	case "panel.files":
 		return "Tệp:"
-	case "panel.agent_status":
-		return "Trạng thái agent"
-	case "panel.mode_policy":
-		return "Chính sách chế độ"
 	case "panel.session_usage":
 		return "Sử dụng phiên"
-	case "panel.metrics":
-		return "Chỉ số"
-	case "panel.context":
-		return "Ngữ cảnh"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -80,8 +68,6 @@ func viCatalog(key string) string {
 		return "Công cụ của %s không thay đổi (%d công cụ)."
 	case "panel.mcp.refreshed":
 		return "Đã làm mới %s: %d công cụ."
-	case "panel.startup":
-		return "Đang khởi tạo"
 	case "panel.approval_required":
 		return "Cần phê duyệt"
 	case "panel.bypass_approval":
@@ -100,32 +86,16 @@ func viCatalog(key string) string {
 		return "phiên"
 	case "label.agents":
 		return "tác tử"
-	case "label.cwd":
-		return "thư mục hiện tại"
 	case "label.branch":
 		return "nhánh"
 	case "label.context":
 		return "ngữ cảnh"
 	case "label.skills":
 		return "kỹ năng"
-	case "label.activity":
-		return "hoạt động"
-	case "label.window":
-		return "cửa sổ"
-	case "label.usage":
-		return "sử dụng"
-	case "label.compact":
-		return "nén"
 	case "label.total":
 		return "tổng"
 	case "label.cost":
 		return "chi phí ước tính"
-	case "label.approval_policy":
-		return "phê duyệt"
-	case "label.tool_policy":
-		return "công cụ"
-	case "label.agent_policy":
-		return "tác tử"
 	case "label.tool":
 		return "công cụ"
 	case "label.input":
@@ -138,36 +108,10 @@ func viCatalog(key string) string {
 		return "ghi cache"
 	case "label.cache_hit":
 		return "trúng cache"
-	case "label.turns":
-		return "lượt"
-	case "label.avg_ttft":
-		return "ttft tb"
-	case "label.p95_ttft":
-		return "ttft p95"
-	case "label.avg_duration":
-		return "tg tb"
-	case "label.p95_duration":
-		return "tg p95"
-	case "label.avg_think":
-		return "suy nghĩ tb"
-	case "label.avg_tps":
-		return "tps tb"
-	case "label.p95_tps":
-		return "p95 tps"
-	case "label.fail_rate":
-		return "tỷ lệ lỗi"
-	case "label.slow_tools":
-		return "công cụ chậm"
-	case "label.recent_turns":
-		return "lượt gần đây"
 	case "label.file":
 		return "tệp"
 	case "label.directory":
 		return "thư mục"
-	case "context.unavailable":
-		return "Chưa có dữ liệu ngữ cảnh"
-	case "metrics.empty":
-		return "Chưa có chỉ số"
 	case "im.none":
 		return "Chưa cấu hình adapter nào"
 	case "im.summary":
@@ -182,38 +126,16 @@ func viCatalog(key string) string {
 		return "đã bật • khởi động lại để khởi tạo"
 	case "im.status.not_started":
 		return "chưa bắt đầu"
-	case "context.until_compact":
-		return "còn lại"
 	case "empty.ask":
 		return "Yêu cầu tái cấu trúc, sửa lỗi, giải thích, hoặc kiểm thử."
 	case "empty.tips":
 		return "Mẹo: dùng @path để thêm tệp, /? để xem trợ giúp, Shift+Tab để đổi chế độ."
-	case "startup.banner":
-		return "Đang chuẩn bị giao diện terminal và lọc nhiễu khởi động. Bạn có thể gõ ngay; banner này sẽ biến mất khi khởi động hoàn tất."
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab xoay vòng • Enter áp dụng • Esc đóng"
 	case "hint.mention":
 		return "@ đính kèm tệp/thư mục • Tab/Shift+Tab xoay vòng • Enter áp dụng"
 	case "hint.mode":
 		return "chế độ"
-	case "mode.approval.ask":
-		return "hỏi khi cần"
-	case "mode.approval.none":
-		return "không điểm dừng phê duyệt"
-	case "mode.approval.critical":
-		return "chỉ quan trọng"
-	case "mode.tools.rules":
-		return "theo quy tắc công cụ"
-	case "mode.tools.readonly":
-		return "chỉ đọc"
-	case "mode.tools.safe":
-		return "chỉ thao tác an toàn"
-	case "mode.tools.open":
-		return "gần như tất cả công cụ"
-	case "mode.agent.waits":
-		return "chờ bạn"
-	case "mode.agent.autocontinue":
-		return "tiếp tục tự động"
 	case "hint.enter_send":
 		return "Enter gửi"
 	case "hint.ctrlv_image":
@@ -222,18 +144,12 @@ func viCatalog(key string) string {
 		return "Ctrl+R thanh bên"
 	case "hint.help":
 		return "/? trợ giúp"
-	case "hint.add_context":
-		return "@ thêm ngữ cảnh"
-	case "hint.scroll":
-		return "PgUp/PgDn cuộn"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab chế độ"
 	case "hint.ctrlc_cancel":
 		return "Ctrl+C hủy"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C xóa/thoát"
-	case "hint.image_attached":
-		return "đã đính kèm ảnh"
 	case "hint.image_attached_count":
 		return "đã đính kèm %d ảnh"
 	case "hint.follow_panel":
@@ -242,8 +158,6 @@ func viCatalog(key string) string {
 		return "Ctrl+N bỏ theo dõi"
 	case "queued.count":
 		return "%d trong hàng đợi"
-	case "queued.output":
-		return "[đã xếp hàng %d đang chờ]\n\n"
 	case "interrupt.delivered":
 		return "[đã gửi đến lượt chạy hoạt động; đang sửa đổi kế hoạch]\n"
 	case "status.thinking":
@@ -280,24 +194,6 @@ func viCatalog(key string) string {
 		return "  ↑↓←→ chuyển  Esc đóng"
 	case "status.tools_used":
 		return "đã dùng %d công cụ"
-	case "tool.done":
-		return "hoàn thành"
-	case "tool.failed":
-		return "lỗi"
-	case "tool.no_output":
-		return "không đầu ra"
-	case "tool.output":
-		return "đầu ra"
-	case "tool.content":
-		return "nội dung"
-	case "tool.match":
-		return "khớp"
-	case "tool.matches":
-		return "khớp"
-	case "tool.entry":
-		return "mục"
-	case "tool.result":
-		return "kết quả"
 	case "approval.rejected":
 		return "  Đã từ chối.\n"
 	case "approval.allow":
@@ -333,7 +229,7 @@ func viCatalog(key string) string {
 	case "lang.first_use.hint":
 		return " Tab/j/k di chuyển • Enter xác nhận • e/z phím tắt"
 	case "mode.current":
-		return "Chế độ hiện tại: %s\nCách dùng: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  Hỏi khi công cụ không có quy tắc rõ ràng\n  plan        Khám phá chỉ đọc; từ chối ghi và lệnh\n  auto        Cho phép thao tác an toàn, từ chối nguy hiểm\n  bypass      Cho phép gần như tất cả; chỉ dừng ở hành động quan trọng\n  autopilot   bypass + tiếp tục khi mô hình hỏi lại\n\n"
+		return "Chế độ hiện tại: %s\nCách dùng: /mode <supervised|bypass>\n  supervised  Hỏi khi công cụ không có quy tắc rõ ràng\n  plan        Khám phá chỉ đọc; từ chối ghi và lệnh\n  auto        Cho phép thao tác an toàn, từ chối nguy hiểm\n  bypass      Cho phép gần như tất cả; chỉ dừng ở hành động quan trọng\n  autopilot   bypass + tiếp tục khi mô hình hỏi lại\n\n"
 	case "mode.persist_failed":
 		return "Không thể lưu tùy chọn chế độ: %v"
 	case "input.placeholder":
@@ -368,8 +264,6 @@ func viCatalog(key string) string {
 		return "Xác thực"
 	case "panel.provider.env_var":
 		return "Biến môi trường"
-	case "panel.provider.api_key":
-		return "API key"
 	case "panel.provider.api_key.missing":
 		return "thiếu"
 	case "panel.provider.api_key.configured":
@@ -490,6 +384,12 @@ func viCatalog(key string) string {
 		return "Không có nội dung gửi trước để thử lại."
 	case "command.retry_busy":
 		return "Agent đang bận. Đợi lượt chạy hiện tại hoàn tất trước khi thử lại."
+	case "command.continue_task_empty":
+		return "Không có tác vụ bị gián đoạn nào để tiếp tục trong phiên này."
+	case "command.continue_task_busy":
+		return "Agent đang bận. Đợi lượt chạy hiện tại hoàn tất trước khi tiếp tục tác vụ."
+	case "command.continue_task_sent":
+		return "Đang tiếp tục tác vụ bị gián đoạn…"
 	case "command.edit_empty":
 		return "Không có nội dung gửi trước để sửa."
 	case "command.edit_busy":
@@ -500,10 +400,6 @@ func viCatalog(key string) string {
 		return "Gõ /help để xem lệnh có sẵn\n\n"
 	case "command.usage.allow":
 		return "Cách dùng: /allow <tên-công-cụ>\n\n"
-	case "command.usage.resume":
-		return "Cách dùng: /resume <id-phiên>\n\n"
-	case "command.usage.export":
-		return "Cách dùng: /export <id-phiên>\n\n"
 	case "init.resolve_failed":
 		return "Không thể giải quyết mục tiêu init: %v\n\n"
 	case "init.generate_failed":
@@ -538,22 +434,10 @@ func viCatalog(key string) string {
 		return "✓ %s hiện được luôn cho phép\n\n"
 	case "command.custom":
 		return "Lệnh tùy chỉnh /%s:\n"
-	case "command.mention_error":
-		return "Lỗi mở rộng mention: %v"
-	case "session.list_failed":
-		return "Lỗi liệt kê phiên: %v\n\n"
 	case "session.untitled":
 		return "không tiêu đề"
 	case "session.store_missing":
 		return "Kho phiên chưa được cấu hình.\n\n"
-	case "session.none":
-		return "Không tìm thấy phiên nào.\n\n"
-	case "session.list.title":
-		return "Phiên:\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  (%s)\n"
-	case "session.list.hint":
-		return "\nDùng /resume <id> để tiếp tục phiên\n\n"
 	case "session.new":
 		return "Phiên mới: %s\n\n"
 	case "session.resume":
@@ -574,8 +458,6 @@ func viCatalog(key string) string {
 		return "Hoàn tác thất bại: %v\n\n"
 	case "checkpoint.undid":
 		return "Đã hoàn tác %s trên %s (checkpoint %s)\n"
-	case "checkpoint.none":
-		return "Không có checkpoint.\n\n"
 	case "files.disabled":
 		return "Checkpoint chưa được bật.\n\n"
 	case "files.none":
@@ -586,56 +468,36 @@ func viCatalog(key string) string {
 		return "  %s  %d lần sửa  cuối: %s%s\n"
 	case "files.hint":
 		return "\nDùng /undo để hoàn tác lần sửa gần nhất, /checkpoints để xem chi tiết.\n\n"
-	case "checkpoint.list.title":
-		return "Checkpoint (%d):\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.hint":
-		return "\nDùng /undo để hoàn tác lần sửa gần nhất.\n\n"
 	case "memory.auto_unavailable":
 		return "Auto memory chưa được khởi tạo.\n\n"
-	case "memory.list_failed":
-		return "Lỗi liệt kê bộ nhớ: %v\n\n"
-	case "memory.none":
-		return "Chưa có auto memory nào được lưu.\n\n"
-	case "memory.auto_title":
-		return "Bộ nhớ tự động:\n"
 	case "memory.clear_failed":
 		return "Lỗi xóa bộ nhớ: %v\n\n"
 	case "memory.cleared":
 		return "Đã xóa tất cả auto memory.\n\n"
-	case "memory.title":
-		return "Bộ nhớ:\n"
-	case "memory.project":
-		return "Bộ nhớ dự án:\n"
-	case "memory.project_none":
-		return "  Không có tệp bộ nhớ dự án nào được tải.\n"
-	case "memory.auto":
-		return "Bộ nhớ tự động:\n"
-	case "memory.auto_none":
-		return "  Không có auto memory nào được tải.\n"
-	case "memory.usage":
-		return "\nCách dùng: /memory [list|clear]\n\n"
+	case "memory.forget_usage":
+		return "Usage: /memory forget <key> | /memory restore <key> | /memory forgotten\n\n"
+	case "memory.forgot":
+		return "Memory %q forgotten (restorable via /memory restore until next GC).\n\n"
+	case "memory.forget_failed":
+		return "Error forgetting memory: %v\n\n"
+	case "memory.forgotten_empty":
+		return "No forgotten memories.\n\n"
+	case "memory.forgotten_title":
+		return "Forgotten memories:\n"
+	case "memory.restored":
+		return "Memory %q restored to prompt injection.\n\n"
+	case "memory.restore_failed":
+		return "Error restoring memory: %v\n\n"
 	case "compact.unavailable":
 		return "Context manager không khả dụng.\n\n"
 	case "compact.failed":
 		return "Nén thất bại: %v\n\n"
-	case "compact.done":
-		return "Lịch sử hội thoại đã được nén.\n\n"
 	case "compact.done_with_stats":
 		return "Lịch sử hội thoại đã được nén (%d → %d token).\n\n"
 	case "todo.cleared":
 		return "Danh sách todo đã được xóa.\n\n"
 	case "todo.clear_failed":
 		return "Lỗi xóa todo: %v\n\n"
-	case "todo.none":
-		return "Không tìm thấy danh sách todo. Dùng công cụ todo_write để tạo.\n\n"
-	case "todo.read_failed":
-		return "Lỗi đọc todo: %v\n\n"
-	case "todo.parse_failed":
-		return "Lỗi phân tích todo: %v\n\n"
-	case "todo.title":
-		return "Danh sách todo:\n%s\n\n"
 	case "bug.title":
 		return "=== Chẩn đoán báo cáo lỗi ===\n\n"
 	case "bug.version":
@@ -664,14 +526,8 @@ func viCatalog(key string) string {
 		return "Cấu hình: model = %s\n\n"
 	case "config.provider_set":
 		return "Cấu hình: provider = %s\n\n"
-	case "config.language_set":
-		return "Cấu hình: language = %s\n\n"
 	case "config.unknown_key":
 		return "Khóa cấu hình không xác định: %s\nHỗ trợ: model, provider, language\n\n"
-	case "config.title":
-		return "Cấu hình hiện tại:\n"
-	case "status.title":
-		return "Trạng thái:\n"
 	case "panel.update":
 		return "Cập nhật"
 	case "label.version":
@@ -696,8 +552,6 @@ func viCatalog(key string) string {
 		return "Đang chuẩn bị cập nhật"
 	case "update.failed":
 		return "Cập nhật thất bại: %v\n\n"
-	case "update.restart_failed":
-		return "Cập nhật đã chuẩn bị, nhưng khởi động lại thất bại: %v\n\n"
 	case "update.pm_hint.brew":
 		return "Đã cài đặt cập nhật. Lưu ý: ggcode được cài qua Homebrew.\nChạy `brew upgrade ggcode` để đồng bộ Homebrew.\n\n"
 	case "update.pm_hint.scoop":
@@ -710,16 +564,8 @@ func viCatalog(key string) string {
 		return "Phát hiện cài đặt ggcode khác trên hệ thống:\n%s\nNếu ggcode khác xuất hiện đầu trong PATH, hãy cân nhắc cập nhật nó hoặc điều chỉnh thứ tự PATH.\n\n"
 	case "update.dual_scope":
 		return "Cảnh báo: Tìm thấy cả cài đặt ggcode người dùng và toàn hệ thống:\n  Người dùng: %s\n  Hệ thống: %s\nĐiều này có thể gây xung đột PATH. Cân nhắc gỡ một bản trong Settings > Apps.\n\n"
-	case "plugins.unavailable":
-		return "Trình quản lý plugin không khả dụng.\n\n"
-	case "plugins.none":
-		return "Không có plugin nào được tải.\n\n"
-	case "plugins.title":
-		return "Plugin:\n"
 	case "mcp.none":
 		return "Chưa cấu hình MCP server.\n\n"
-	case "mcp.title":
-		return "MCP Server:\n"
 	case "mcp.active_tools":
 		return "Công cụ hoạt động"
 	case "mcp.more":
@@ -728,44 +574,18 @@ func viCatalog(key string) string {
 		return "Cách dùng: /image <đường/dẫn/tệp.png> hoặc /image paste\n"
 	case "image.formats":
 		return "Định dạng hỗ trợ: PNG, JPEG, GIF, WebP (tối đa 20MB)\n\n"
-	case "image.attached":
-		return "Đã đính kèm ảnh: %s\n"
-	case "image.attached_hint":
-		return "Gửi tin nhắn để bao gồm ảnh, hoặc /image để đính kèm ảnh khác.\n\n"
 	case "image.clipboard_failed":
 		return "Không thể dán ảnh từ clipboard: %v"
 	case "image.clipboard_no_image_windows":
 		return "Không tìm thấy ảnh trong clipboard. Trên Windows, Ctrl+V thường bị terminal chặn. Thử Ctrl+Shift+V hoặc /image paste."
-	case "agents.unavailable":
-		return "Trình quản lý sub-agent chưa được cấu hình.\n\n"
-	case "agents.none":
-		return "Chưa tạo sub-agent nào.\nCách dùng: LLM có thể dùng công cụ spawn_agent để tạo sub-agent.\n\n"
-	case "agents.title":
-		return "%d sub-agent:\n"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.hint":
-		return "\nDùng /agent <id> để xem chi tiết, /agent cancel <id> để hủy.\n\n"
-	case "agent.usage":
-		return "Cách dùng: /agent <id> hoặc /agent cancel <id>\n\n"
-	case "agent.cancelled":
-		return "Đã hủy sub-agent %s\n\n"
-	case "agent.cancel_failed":
-		return "Không thể hủy %s (không tìm thấy hoặc không đang chạy)\n\n"
-	case "agent.not_found":
-		return "Không tìm thấy sub-agent %s\n\n"
-	case "agent.title":
-		return "Agent: %s\nTrạng thái: %s\nTác vụ: %s\n"
-	case "agent.result":
-		return "Kết quả: %s\n"
-	case "agent.error":
-		return "Lỗi: %v\n"
 	case "slash.help":
 		return "Hiện thông báo trợ giúp"
 	case "slash.sessions":
 		return "Liệt kê phiên đã lưu"
 	case "slash.resume":
 		return "Tiếp tục phiên trước đó"
+	case "slash.continue_task":
+		return "Tiếp tục tác vụ bị gián đoạn do lỗi"
 	case "slash.export":
 		return "Xuất phiên sang markdown"
 	case "slash.model":
@@ -860,8 +680,6 @@ func viCatalog(key string) string {
 		return "Mở bảng kênh IM thống nhất"
 	case "panel.qq.directory":
 		return "Thư mục"
-	case "panel.qq.runtime":
-		return "Runtime"
 	case "panel.qq.bots":
 		return "QQ Bot"
 	case "panel.qq.created":
@@ -870,26 +688,16 @@ func viCatalog(key string) string {
 		return "Đã liên kết: %d"
 	case "panel.qq.available":
 		return "Khả dụng: %d"
-	case "panel.qq.current_binding":
-		return "Liên kết hiện tại"
 	case "panel.qq.none":
 		return "(không có)"
-	case "panel.qq.default":
-		return "(mặc định)"
 	case "panel.qq.adapter":
 		return "Adapter: %s"
-	case "panel.qq.target":
-		return "Mục tiêu: %s"
-	case "panel.qq.channel":
-		return "Kênh: %s"
 	case "panel.qq.bot_list":
 		return "Danh sách QQ Bot"
 	case "panel.qq.no_bots":
 		return "Chưa cấu hình QQ bot nào."
 	case "panel.qq.entry.available":
 		return "Khả dụng"
-	case "panel.qq.entry.bound":
-		return "Đã liên kết"
 	case "panel.qq.entry.active":
 		return "Hoạt động"
 	case "panel.qq.entry.bound_other":
@@ -928,14 +736,6 @@ func viCatalog(key string) string {
 		return "Enter tạo bot • Esc hủy"
 	case "panel.qq.actions_hint":
 		return "j/k di chuyển • d tắt/bật • Enter hoặc b liên kết bot • c liên kết kênh • x hủy liên kết kênh • u hủy liên kết bot • i tạo bot • e sửa cấu hình • q hiện QR • Esc đóng"
-	case "panel.qq.bind_channel":
-		return "Liên kết kênh"
-	case "panel.qq.scan_hint":
-		return "Quét mã QR, thêm bot, sau đó gửi tin nhắn để bắt đầu ghép nối."
-	case "panel.qq.qr_code":
-		return "Mã QR:"
-	case "panel.qq.share_link":
-		return "Liên kết chia sẻ:"
 	case "panel.qq.message.no_bot":
 		return "Không có QQ bot khả dụng."
 	case "panel.qq.message.bound_success":
@@ -956,8 +756,6 @@ func viCatalog(key string) string {
 		return "Tên QQ adapter là bắt buộc"
 	case "panel.qq.error.not_configured":
 		return "QQ bot %q chưa được cấu hình"
-	case "panel.qq.error.disabled":
-		return "QQ bot %q đã bị tắt"
 	case "panel.qq.error.not_qq_adapter":
 		return "adapter %q không phải là QQ bot"
 	case "panel.qq.error.not_online":
@@ -1020,6 +818,14 @@ func viCatalog(key string) string {
 		return "Context manager không khả dụng."
 	case "regenerate.no_response":
 		return "Không có phản hồi assistant để tạo lại."
+	case "rewind.bad_arg":
+		return "Cách dùng: /rewind [N] với N >= 1 là số lượt người dùng cần tua lại."
+	case "rewind.revert_failed":
+		return "Từ chối hoàn tác tệp, đã hủy tua lại (không thay đổi gì): %v"
+	case "rewind.success":
+		return "Đã tua lại %d lượt; các chỉnh sửa tệp đã được hoàn tác (%s). Tiếp tục trong phiên %s - phiên gốc được giữ nguyên."
+	case "rewind.success_no_edits":
+		return "Đã tua lại %d lượt; các lượt được tua lại không có chỉnh sửa tệp nào được theo dõi. Tiếp tục trong phiên %s - phiên gốc được giữ nguyên."
 	case "branch.busy":
 		return "Không thể phân nhánh khi agent đang chạy. Nhấn Ctrl+C để hủy trước."
 	case "branch.no_session":
@@ -1048,7 +854,7 @@ Phiên & Lịch sử:
 Mô hình & Nhà cung cấp:
   /model [tên]       Mở bảng mô hình hoặc chuyển trực tiếp
   /provider [vendor] Mở trình quản lý nhà cung cấp
-  /mode <chế độ>     Đặt chế độ agent (supervised|plan|auto|bypass|autopilot)
+  /mode <chế độ>     Đặt chế độ agent (supervised|bypass)
 
 Phát triển:
   /diff [tùy chọn]   Hiện git diff trong chat (--cached, --stat, <tệp>)

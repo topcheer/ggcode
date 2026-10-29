@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // Research synthesizer (r343 deep-research third component; sa-130). The
@@ -45,7 +46,14 @@ var findingURLRe = regexp.MustCompile(`https?://[^\s"'<>)\]]+`)
 func trimFindingSnippet(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) > researchSnippetCap {
-		s = s[:researchSnippetCap]
+		// #4076: byte slicing can split a multi-byte CJK rune mid-sequence,
+		// injecting U+FFFD garbage into the injected draft. Back off to the
+		// nearest rune boundary at or before the cap.
+		cut := researchSnippetCap
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut]
 	}
 	return s
 }
@@ -83,11 +91,22 @@ func unquoteJSONString(s, key string) string {
 		return ""
 	}
 	rest = rest[start+1:]
-	end := strings.Index(rest, `"`)
-	if end < 0 {
-		return ""
+	// #4080: the closing quote must be found with escape awareness - a URL
+	// or query containing \" would otherwise truncate the value mid-way.
+	var b strings.Builder
+	for i := 0; i < len(rest); i++ {
+		if rest[i] == '\\' && i+1 < len(rest) {
+			b.WriteByte(rest[i])
+			b.WriteByte(rest[i+1])
+			i++
+			continue
+		}
+		if rest[i] == '"' {
+			return b.String()
+		}
+		b.WriteByte(rest[i])
 	}
-	return rest[:end]
+	return ""
 }
 
 // recordFinding appends one finding to the overseer's collection. Called
@@ -104,9 +123,21 @@ func (o *overseerState) recordFinding(toolName, argsStr, resultContent string) {
 		return
 	}
 	q := extractFindingQuery(toolName, argsStr)
+	// #4080: source attribution priority is tool-class-dependent. For
+	// FETCH-class tools the argument IS the page's own URL - the stripped
+	// body never repeats it, so the old body-first-then-arg order captured
+	// the first CDN/asset link in the body instead (cdn.example.net/logo.png
+	// "became" the source of a docs page). web_search bodies are result
+	// lists, where the first link IS the top result's URL - keep body-first
+	// there, with the query as fallback.
 	url := ""
-	if m := findingURLRe.FindString(resultContent); m != "" {
-		url = m
+	if toolName != "web_search" {
+		url = q
+	}
+	if url == "" {
+		if m := findingURLRe.FindString(resultContent); m != "" {
+			url = m
+		}
 	}
 	if url == "" {
 		url = q
@@ -131,6 +162,9 @@ func (o *overseerState) findingsSnapshot() []ResearchFinding {
 // hostOf extracts the scheme-stripped host of a URL, best-effort.
 func hostOf(url string) string {
 	s := strings.TrimPrefix(strings.TrimPrefix(url, "https://"), "http://")
+	// #4080: www-prefixed and bare hosts are the same site - distinct-host
+	// conflict detection was splitting one source into two.
+	s = strings.TrimPrefix(s, "www.")
 	if i := strings.IndexByte(s, '/'); i >= 0 {
 		s = s[:i]
 	}
@@ -182,12 +216,17 @@ func SynthesizeResearchReport(goal string, findings []ResearchFinding, planned [
 		b.WriteString("\n")
 	}
 
-	// Gaps: planned sub-queries with no finding whose query text overlaps.
+	// Gaps: planned sub-queries no finding covers. Every planner template
+	// starts with the goal text, so a bare goal-prefix probe is IDENTICAL
+	// for all sibling perspectives - one matching finding used to mark
+	// every planned sub-query covered, and one miss used to gap them all
+	// (#3999). Coverage now additionally requires the sub-query's own
+	// perspective vocabulary (the same taxonomy words the planner
+	// matched), restoring per-perspective granularity.
 	if len(planned) > 0 {
 		joined := strings.ToLower(strings.Join(groups, " \n "))
 		for _, p := range planned {
-			pk := strings.Join(strings.Fields(strings.ToLower(p.Query)), " ")
-			if pk != "" && !strings.Contains(joined, firstWords(pk, gapProbeWords)) {
+			if !subQueryCovered(joined, p) {
 				gaps = append(gaps, p.Query)
 			}
 		}
@@ -206,6 +245,80 @@ func SynthesizeResearchReport(goal string, findings []ResearchFinding, planned [
 // gapProbeWords is how many leading words of a planned sub-query are used
 // as the containment probe against collected finding queries.
 const gapProbeWords = 3
+
+// subQueryCovered reports whether the collected finding queries cover a
+// planned sub-query. Coverage needs (a) the goal-prefix probe - the first
+// gapProbeWords words of the planned query, which for template-expanded
+// queries are the goal's own words - and, when the perspective is known
+// (b) at least one of that perspective's vocabulary words in some finding
+// query. (b) is what separates sibling perspectives sharing the same goal
+// prefix. Unknown perspectives ("general", hand-built plans) fall back to
+// the goal-prefix probe alone.
+func subQueryCovered(joined string, p ResearchSubQuery) bool {
+	pk := strings.Join(strings.Fields(strings.ToLower(p.Query)), " ")
+	if pk == "" {
+		return true // nothing to probe; treat as covered
+	}
+	fields := strings.Fields(pk)
+	// #4067: the goal-prefix probe is one signal, NOT a hard gate. It is
+	// template-blind (every planned query of the same goal shares the same
+	// first words, so a reworded goal failed the gate for ALL perspectives)
+	// and CJK-blind (a Chinese goal has no spaces, so the "first 3 words"
+	// probe becomes the whole sentence + template tail - containment of
+	// which almost never holds, and word-overlap has nothing to match
+	// against reworded Chinese findings). Pass the gate on any of: prefix
+	// hit, >=2 content-word overlaps, or a CJK-bearing query.
+	prefixHit := strings.Contains(joined, firstWords(pk, gapProbeWords))
+	if !prefixHit && !containsCJK(pk) && contentOverlap(joined, fields) < 2 {
+		return false
+	}
+	kws := perspectiveKeywords(p.Perspective)
+	if len(kws) == 0 {
+		return true
+	}
+	for _, kw := range kws {
+		if strings.Contains(joined, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// contentOverlap counts how many distinct content words of the planned
+// query appear in the joined finding queries (#4067 rephrase-tolerant
+// signal). Stop words are excluded so template tails ("and", "of", "the")
+// do not manufacture overlaps.
+var overlapStopWords = map[string]bool{
+	"and": true, "or": true, "the": true, "a": true, "an": true, "of": true,
+	"in": true, "on": true, "to": true, "for": true, "with": true, "how": true,
+	"its": true, "their": true, "is": true, "are": true, "technical": true,
+	"details": true, "mechanisms": true,
+}
+
+func contentOverlap(joined string, fields []string) int {
+	n := 0
+	for _, f := range fields {
+		if overlapStopWords[f] {
+			continue
+		}
+		if strings.Contains(joined, f) {
+			n++
+		}
+	}
+	return n
+}
+
+// containsCJK reports whether s carries any CJK rune (#4067): space-based
+// probes and word-overlap are both meaningless for CJK text, so such
+// queries fall through to the perspective-keyword gate directly.
+func containsCJK(s string) bool {
+	for _, r := range s {
+		if r >= 0x4E00 && r <= 0x9FFF {
+			return true
+		}
+	}
+	return false
+}
 
 // firstWords returns the first n words of a normalized string, used as a
 // cheap containment probe for gap detection.

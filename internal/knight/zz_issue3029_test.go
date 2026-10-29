@@ -39,12 +39,20 @@ func TestIssue3029_ConcurrentAppendsAcrossStoreInstancesLoseNothing(t *testing.T
 	}
 	wg.Wait()
 
+	// #r25: identical recurrences merge into ONE entry (semantic dedup), so
+	// the lost-update probe is now exact: every successful Append must land
+	// exactly one Hits increment on the merged entry. A dropped
+	// read-modify-write cycle leaves Hits < 2*perWriter.
 	entries, err := a.Recent(1000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2*perWriter {
-		t.Fatalf("#3029: cross-instance concurrent appends lost entries: got %d, want %d", len(entries), 2*perWriter)
+	if len(entries) != 1 {
+		t.Fatalf("#3029: identical recurrences must dedup to 1 entry, got %d", len(entries))
+	}
+	if entries[0].Hits != 2*perWriter {
+		t.Fatalf("#3029: cross-instance concurrent appends lost increments: got Hits=%d, want %d",
+			entries[0].Hits, 2*perWriter)
 	}
 }
 

@@ -15,34 +15,16 @@ func ruCatalog(key string) string {
 	// --- Agents ---
 	case "agents.idle":
 		return "ожидание"
-	case "agents.running":
-		return "%d активных"
 	case "cron.firing":
 		return "⏰ Сработала задача cron"
-	case "activity.idle":
-		return "ожидание"
 
 	// --- Panel ---
-	case "panel.conversation":
-		return "Беседа"
-	case "panel.composer":
-		return "Ввод"
-	case "panel.composer_locked":
-		return "Ввод заблокирован"
 	case "panel.commands":
 		return "Команды:"
 	case "panel.files":
 		return "Файлы:"
-	case "panel.agent_status":
-		return "Статус агента"
-	case "panel.mode_policy":
-		return "Политика режима"
 	case "panel.session_usage":
 		return "Использование сессии"
-	case "panel.metrics":
-		return "Метрики"
-	case "panel.context":
-		return "Контекст"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -85,8 +67,6 @@ func ruCatalog(key string) string {
 		return "Инструменты %s не изменились (%d шт.)."
 	case "panel.mcp.refreshed":
 		return "%s обновлён: инструментов: %d."
-	case "panel.startup":
-		return "Инициализация"
 	case "panel.approval_required":
 		return "Требуется подтверждение"
 	case "panel.bypass_approval":
@@ -107,32 +87,16 @@ func ruCatalog(key string) string {
 		return "Сессия"
 	case "label.agents":
 		return "Агенты"
-	case "label.cwd":
-		return "Дир."
 	case "label.branch":
 		return "Ветвь"
 	case "label.context":
 		return "Контекст"
 	case "label.skills":
 		return "Навыки"
-	case "label.activity":
-		return "Активность"
-	case "label.window":
-		return "Окно"
-	case "label.usage":
-		return "Использ."
-	case "label.compact":
-		return "компакт."
 	case "label.total":
 		return "всего"
 	case "label.cost":
 		return "оц. стоимость"
-	case "label.approval_policy":
-		return "Подтверждение"
-	case "label.tool_policy":
-		return "Инструменты"
-	case "label.agent_policy":
-		return "Агент"
 	case "label.tool":
 		return "Инструмент"
 	case "label.input":
@@ -145,38 +109,12 @@ func ruCatalog(key string) string {
 		return "Запись кэша"
 	case "label.cache_hit":
 		return "Попадание кэша"
-	case "label.turns":
-		return "Ходы"
-	case "label.avg_ttft":
-		return "Ø TTFT"
-	case "label.p95_ttft":
-		return "p95 TTFT"
-	case "label.avg_duration":
-		return "Ø длительность"
-	case "label.p95_duration":
-		return "p95 длительность"
-	case "label.avg_think":
-		return "Ø размышление"
-	case "label.avg_tps":
-		return "Ø TPS"
-	case "label.p95_tps":
-		return "P95 TPS"
-	case "label.fail_rate":
-		return "Уровень ошибок"
-	case "label.slow_tools":
-		return "медл. инструменты"
-	case "label.recent_turns":
-		return "недавние ходы"
 	case "label.file":
 		return "Файл"
 	case "label.directory":
 		return "Каталог"
 
 	// --- Context & metrics ---
-	case "context.unavailable":
-		return "Данные контекста пока недоступны"
-	case "metrics.empty":
-		return "Метрики пока недоступны"
 	case "im.none":
 		return "Адаптеры не настроены"
 	case "im.summary":
@@ -191,16 +129,12 @@ func ruCatalog(key string) string {
 		return "включено • перезапустите для инициализации"
 	case "im.status.not_started":
 		return "не запущено"
-	case "context.until_compact":
-		return "осталось"
 
 	// --- Empty ---
 	case "empty.ask":
 		return "Запросите рефакторинг, исправление бага, объяснение или тесты."
 	case "empty.tips":
 		return "Подсказки: @путь для файлов, /? для справки, Shift+Tab для смены режима."
-	case "startup.banner":
-		return "Подготовка интерфейса терминала и фильтрация шумов запуска. Вы можете начать вводить сразу; этот баннер исчезнет после завершения инициализации."
 
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab переключать • Enter применить • Esc закрыть"
@@ -210,46 +144,18 @@ func ruCatalog(key string) string {
 		return "Режим"
 
 	// --- Mode approval ---
-	case "mode.approval.ask":
-		return "спрашивать при необходимости"
-	case "mode.approval.none":
-		return "без остановок для подтверждения"
-	case "mode.approval.critical":
-		return "только критические"
-	case "mode.tools.rules":
-		return "следовать правилам инструментов"
-	case "mode.tools.readonly":
-		return "только чтение"
-	case "mode.tools.safe":
-		return "только безопасные операции"
-	case "mode.tools.open":
-		return "почти все инструменты"
-	case "mode.agent.waits":
-		return "ожидает вас"
-	case "mode.agent.autocontinue":
-		return "продолжает работу"
 
 	// --- Hints ---
-	case "hint.enter_send":
-		return "Enter отправить"
-	case "hint.ctrlv_image":
-		return "Ctrl+V / Ctrl+Shift+V вставить изображение"
 	case "hint.ctrlr_sidebar":
 		return "Ctrl+R боковая панель"
 	case "hint.help":
 		return "/? справка"
-	case "hint.add_context":
-		return "@ добавить контекст"
-	case "hint.scroll":
-		return "PgUp/PgDn прокрутка"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab режим"
 	case "hint.ctrlc_cancel":
 		return "Ctrl+C отмена"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C очистить/выйти"
-	case "hint.image_attached":
-		return "Изображение прикреплено"
 	case "hint.image_attached_count":
 		return "%d изображ.(й) прикреплено"
 	case "hint.follow_panel":
@@ -260,8 +166,6 @@ func ruCatalog(key string) string {
 	// --- Queued ---
 	case "queued.count":
 		return "%d в очереди"
-	case "queued.output":
-		return "[в очереди %d ожидающих]\n\n"
 	case "interrupt.delivered":
 		return "[доставлено в активный запуск; план пересматривается]\n"
 
@@ -304,24 +208,6 @@ func ruCatalog(key string) string {
 	// --- Tools ---
 	case "status.tools_used":
 		return "%d инструментов использовано"
-	case "tool.done":
-		return "готово"
-	case "tool.failed":
-		return "ошибка"
-	case "tool.no_output":
-		return "нет вывода"
-	case "tool.output":
-		return "вывод"
-	case "tool.content":
-		return "содержимое"
-	case "tool.match":
-		return "совпадение"
-	case "tool.matches":
-		return "совпадений"
-	case "tool.entry":
-		return "запись"
-	case "tool.result":
-		return "результат"
 
 	// --- Approval ---
 	case "approval.rejected":
@@ -365,7 +251,7 @@ func ruCatalog(key string) string {
 
 	// --- Mode ---
 	case "mode.current":
-		return "Текущий режим: %s\nИспользование: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  Спрашивать, когда у инструмента нет явного правила\n  plan        Исследование только для чтения; отклонять запись и команды\n  auto        Разрешать безопасные операции, отклонять опасные\n  bypass      Разрешать почти всё; останавливаться только при критических действиях\n  autopilot   bypass + продолжать, когда модель переспрашивает\n\n"
+		return "Текущий режим: %s\nИспользование: /mode <supervised|bypass>\n  supervised  По умолчанию; большинство вызовов проходит без запросов - спрашивают только защитные барьеры (уничтожение системы, эксфильтрация ключей, записи бэкдоров)\n  bypass      Режим круиза; всё разрешено, кроме уничтожения системы и записей бэкдоров\n  (auto/autopilot - унаследованные псевдонимы)\n"
 	case "mode.persist_failed":
 		return "Не удалось сохранить настройку режима: %v"
 
@@ -406,8 +292,6 @@ func ruCatalog(key string) string {
 		return "Аутентификация"
 	case "panel.provider.env_var":
 		return "Переменная окружения"
-	case "panel.provider.api_key":
-		return "API-ключ"
 	case "panel.provider.api_key.missing":
 		return "отсутствует"
 	case "panel.provider.api_key.configured":
@@ -532,6 +416,12 @@ func ruCatalog(key string) string {
 		return "Нет предыдущего ввода для повтора."
 	case "command.retry_busy":
 		return "Агент занят. Дождитесь завершения текущего запуска перед повтором."
+	case "command.continue_task_empty":
+		return "В этой сессии нет прерванной задачи для возобновления."
+	case "command.continue_task_busy":
+		return "Агент занят. Дождитесь завершения текущего запуска перед возобновлением задачи."
+	case "command.continue_task_sent":
+		return "Возобновляем прерванную задачу…"
 	case "command.edit_empty":
 		return "Нет предыдущего ввода для редактирования."
 	case "command.edit_busy":
@@ -542,10 +432,6 @@ func ruCatalog(key string) string {
 		return "Введите /help для списка доступных команд\n\n"
 	case "command.usage.allow":
 		return "Использование: /allow <имя_инструмента>\n\n"
-	case "command.usage.resume":
-		return "Использование: /resume <id_сессии>\n\n"
-	case "command.usage.export":
-		return "Использование: /export <id_сессии>\n\n"
 
 	// --- Init ---
 	case "init.resolve_failed":
@@ -584,24 +470,12 @@ func ruCatalog(key string) string {
 		return "✓ %s теперь всегда разрешён\n\n"
 	case "command.custom":
 		return "Пользовательская команда /%s:\n"
-	case "command.mention_error":
-		return "Ошибка расширения упоминания: %v"
 
 	// --- Sessions ---
-	case "session.list_failed":
-		return "Ошибка получения списка сессий: %v\n\n"
 	case "session.untitled":
 		return "без названия"
 	case "session.store_missing":
 		return "Хранилище сессий не настроено.\n\n"
-	case "session.none":
-		return "Сессии не найдены.\n\n"
-	case "session.list.title":
-		return "Сессии:\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  (%s)\n"
-	case "session.list.hint":
-		return "\nИспользуйте /resume <id> для продолжения сессии\n\n"
 	case "session.new":
 		return "Новая сессия: %s\n\n"
 	case "session.resume":
@@ -624,8 +498,6 @@ func ruCatalog(key string) string {
 		return "Отмена не удалась: %v\n\n"
 	case "checkpoint.undid":
 		return "Отменено: %s на %s (контрольная точка %s)\n"
-	case "checkpoint.none":
-		return "Нет контрольных точек.\n\n"
 
 	// --- Files ---
 	case "files.disabled":
@@ -638,46 +510,34 @@ func ruCatalog(key string) string {
 		return "  %s  %d правок  последняя: %s%s\n"
 	case "files.hint":
 		return "\nИспользуйте /undo для отмены последней правки, /checkpoints для деталей.\n\n"
-	case "checkpoint.list.title":
-		return "Контрольные точки (%d):\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.hint":
-		return "\nИспользуйте /undo для отмены последней.\n\n"
 
 	// --- Memory ---
 	case "memory.auto_unavailable":
 		return "Авто-память не инициализирована.\n\n"
-	case "memory.list_failed":
-		return "Ошибка получения списка воспоминаний: %v\n\n"
-	case "memory.none":
-		return "Нет сохранённых авто-воспоминаний.\n\n"
-	case "memory.auto_title":
-		return "Авто-воспоминания:\n"
 	case "memory.clear_failed":
 		return "Ошибка очистки воспоминаний: %v\n\n"
 	case "memory.cleared":
 		return "Все авто-воспоминания очищены.\n\n"
-	case "memory.title":
-		return "Память:\n"
-	case "memory.project":
-		return "Память проекта:\n"
-	case "memory.project_none":
-		return "  Нет загруженных файлов памяти проекта.\n"
-	case "memory.auto":
-		return "Авто-память:\n"
-	case "memory.auto_none":
-		return "  Нет загруженных авто-воспоминаний.\n"
-	case "memory.usage":
-		return "\nИспользование: /memory [list|clear]\n\n"
+	case "memory.forget_usage":
+		return "Usage: /memory forget <key> | /memory restore <key> | /memory forgotten\n\n"
+	case "memory.forgot":
+		return "Memory %q forgotten (restorable via /memory restore until next GC).\n\n"
+	case "memory.forget_failed":
+		return "Error forgetting memory: %v\n\n"
+	case "memory.forgotten_empty":
+		return "No forgotten memories.\n\n"
+	case "memory.forgotten_title":
+		return "Forgotten memories:\n"
+	case "memory.restored":
+		return "Memory %q restored to prompt injection.\n\n"
+	case "memory.restore_failed":
+		return "Error restoring memory: %v\n\n"
 
 	// --- Compact ---
 	case "compact.unavailable":
 		return "Менеджер контекста недоступен.\n\n"
 	case "compact.failed":
 		return "Компактация не удалась: %v\n\n"
-	case "compact.done":
-		return "История беседы скомпактирована.\n\n"
 	case "compact.done_with_stats":
 		return "История беседы скомпактирована (%d → %d токенов).\n\n"
 
@@ -686,14 +546,6 @@ func ruCatalog(key string) string {
 		return "Список задач очищен.\n\n"
 	case "todo.clear_failed":
 		return "Ошибка очистки задач: %v\n\n"
-	case "todo.none":
-		return "Список задач не найден. Используйте инструмент todo_write для создания.\n\n"
-	case "todo.read_failed":
-		return "Ошибка чтения задач: %v\n\n"
-	case "todo.parse_failed":
-		return "Ошибка разбора задач: %v\n\n"
-	case "todo.title":
-		return "Список задач:\n%s\n\n"
 
 	// --- Bug report ---
 	case "bug.title":
@@ -726,14 +578,8 @@ func ruCatalog(key string) string {
 		return "Конфиг: model = %s\n\n"
 	case "config.provider_set":
 		return "Конфиг: поставщик = %s\n\n"
-	case "config.language_set":
-		return "Конфиг: язык = %s\n\n"
 	case "config.unknown_key":
 		return "Неизвестный ключ конфигурации: %s\nПоддерживаются: model, provider, language\n\n"
-	case "config.title":
-		return "Текущая конфигурация:\n"
-	case "status.title":
-		return "Статус:\n"
 
 	// --- Update ---
 	case "panel.update":
@@ -760,8 +606,6 @@ func ruCatalog(key string) string {
 		return "Подготовка обновления"
 	case "update.failed":
 		return "Обновление не удалось: %v\n\n"
-	case "update.restart_failed":
-		return "Обновление подготовлено, но перезапуск не удался: %v\n\n"
 	case "update.pm_hint.brew":
 		return "Обновление установлено. Примечание: ggcode был установлен через Homebrew.\nВыполните `brew upgrade ggcode`, чтобы синхронизировать Homebrew.\n\n"
 	case "update.pm_hint.scoop":
@@ -776,18 +620,10 @@ func ruCatalog(key string) string {
 		return "Предупреждение: Найдены как пользовательская, так и системная установки ggcode:\n  Пользовательская: %s\n  Системная: %s\nЭто может привести к конфликтам PATH. Рассмотрите удаление одной через Настройки > Приложения.\n\n"
 
 	// --- Plugins ---
-	case "plugins.unavailable":
-		return "Менеджер плагинов недоступен.\n\n"
-	case "plugins.none":
-		return "Плагины не загружены.\n\n"
-	case "plugins.title":
-		return "Плагины:\n"
 
 	// --- MCP ---
 	case "mcp.none":
 		return "MCP-серверы не настроены.\n\n"
-	case "mcp.title":
-		return "MCP-серверы:\n"
 	case "mcp.active_tools":
 		return "Активные инструменты"
 	case "mcp.more":
@@ -798,40 +634,12 @@ func ruCatalog(key string) string {
 		return "Использование: /image <путь/к/файлу.png> или /image paste\n"
 	case "image.formats":
 		return "Поддерживаемые форматы: PNG, JPEG, GIF, WebP (макс. 20МБ)\n\n"
-	case "image.attached":
-		return "Изображение прикреплено: %s\n"
-	case "image.attached_hint":
-		return "Отправьте сообщение, чтобы включить изображение, или /image для ещё одного.\n\n"
 	case "image.clipboard_failed":
 		return "Не удалось вставить изображение из буфера обмена: %v"
 	case "image.clipboard_no_image_windows":
 		return "Изображение в буфере обмена не найдено. В Windows Ctrl+V часто перехватывается терминалом. Попробуйте Ctrl+Shift+V или /image paste."
 
 	// --- Agents ---
-	case "agents.unavailable":
-		return "Менеджер суб-агентов не настроен.\n\n"
-	case "agents.none":
-		return "Суб-агенты ещё не созданы.\nИспользование: LLM может использовать инструмент spawn_agent для создания суб-агентов.\n\n"
-	case "agents.title":
-		return "%d суб-агент(ов):\n"
-	case "agents.item":
-		return "  %s [%s]%s — %s\n"
-	case "agents.hint":
-		return "\nИспользуйте /agent <id> для деталей, /agent cancel <id> для отмены.\n\n"
-	case "agent.usage":
-		return "Использование: /agent <id> или /agent cancel <id>\n\n"
-	case "agent.cancelled":
-		return "Суб-агент %s отменён\n\n"
-	case "agent.cancel_failed":
-		return "Не удалось отменить %s (не найден или не активен)\n\n"
-	case "agent.not_found":
-		return "Суб-агент %s не найден\n\n"
-	case "agent.title":
-		return "Агент: %s\nСтатус: %s\nЗадача: %s\n"
-	case "agent.result":
-		return "Результат: %s\n"
-	case "agent.error":
-		return "Ошибка: %v\n"
 
 	// --- Slash command descriptions ---
 	case "slash.help":
@@ -840,6 +648,8 @@ func ruCatalog(key string) string {
 		return "Показать сохранённые сессии"
 	case "slash.resume":
 		return "Возобновить предыдущую сессию"
+	case "slash.continue_task":
+		return "Возобновить задачу, прерванную сбоем"
 	case "slash.export":
 		return "Экспортировать сессию в Markdown"
 	case "slash.model":
@@ -936,8 +746,6 @@ func ruCatalog(key string) string {
 	// --- QQ panel ---
 	case "panel.qq.directory":
 		return "Каталог"
-	case "panel.qq.runtime":
-		return "Среда"
 	case "panel.qq.bots":
 		return "QQ-боты"
 	case "panel.qq.created":
@@ -946,26 +754,16 @@ func ruCatalog(key string) string {
 		return "Привязано: %d"
 	case "panel.qq.available":
 		return "Доступно: %d"
-	case "panel.qq.current_binding":
-		return "Текущая привязка"
 	case "panel.qq.none":
 		return "(нет)"
-	case "panel.qq.default":
-		return "(по умолчанию)"
 	case "panel.qq.adapter":
 		return "Адаптер: %s"
-	case "panel.qq.target":
-		return "Цель: %s"
-	case "panel.qq.channel":
-		return "Канал: %s"
 	case "panel.qq.bot_list":
 		return "Список QQ-ботов"
 	case "panel.qq.no_bots":
 		return "QQ-боты не настроены."
 	case "panel.qq.entry.available":
 		return "Доступен"
-	case "panel.qq.entry.bound":
-		return "Привязан"
 	case "panel.qq.entry.active":
 		return "Активен"
 	case "panel.qq.entry.bound_other":
@@ -1004,14 +802,6 @@ func ruCatalog(key string) string {
 		return "Enter создать бота • Esc отмена"
 	case "panel.qq.actions_hint":
 		return "j/k перемещение • d откл./вкл. • Enter или b привязать бота • c привязать канал • x отвязать канал • u отвязать бота • i создать бота • e правка конфигурации • q показать QR • Esc закрыть"
-	case "panel.qq.bind_channel":
-		return "Привязать канал"
-	case "panel.qq.scan_hint":
-		return "Отсканируйте QR-код, добавьте бота, затем отправьте сообщение для начала сопряжения."
-	case "panel.qq.qr_code":
-		return "QR-код:"
-	case "panel.qq.share_link":
-		return "Ссылка:"
 	case "panel.qq.message.no_bot":
 		return "Нет доступных QQ-ботов."
 	case "panel.qq.message.bound_success":
@@ -1032,8 +822,6 @@ func ruCatalog(key string) string {
 		return "Требуется имя QQ-адаптера"
 	case "panel.qq.error.not_configured":
 		return "QQ-бот %q не настроен"
-	case "panel.qq.error.disabled":
-		return "QQ-бот %q отключён"
 	case "panel.qq.error.not_qq_adapter":
 		return "Адаптер %q не является QQ-ботом"
 	case "panel.qq.error.not_online":
@@ -1102,6 +890,14 @@ func ruCatalog(key string) string {
 		return "Нет ответа ассистента для перегенерации."
 
 	// --- Branch ---
+	case "rewind.bad_arg":
+		return "Использование: /rewind [N], где N >= 1 - число перематываемых пользовательских ходов."
+	case "rewind.revert_failed":
+		return "Откат файлов отклонён, перемотка прервана (ничего не изменено): %v"
+	case "rewind.success":
+		return "Перемотано ходов: %d; правки файлов отменены (%s). Продолжение в сессии %s - оригинал сохранён."
+	case "rewind.success_no_edits":
+		return "Перемотано ходов: %d; в перемотанных ходах не было отслеживаемых правок файлов. Продолжение в сессии %s - оригинал сохранён."
 	case "branch.busy":
 		return "Невозможно создать ветку во время работы агента. Сначала нажмите Ctrl+C для отмены."
 	case "branch.no_session":
@@ -1132,7 +928,7 @@ func ruCatalog(key string) string {
 Модель и поставщик:
   /model [name]      Открыть панель моделей или переключить напрямую
   /provider [vendor] Открыть менеджер поставщиков
-  /mode <mode>       Установить режим агента (supervised|plan|auto|bypass|autopilot)
+  /mode <mode>       Установить режим агента (supervised|bypass)
 
 Разработка:
   /diff [opts]       Показать git diff в чате (--cached, --stat, <file>)

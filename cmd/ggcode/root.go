@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,10 +102,15 @@ func NewRootCmd() *cobra.Command {
 
 			debug.Init()
 
-			workingDirForConfig, _ := os.Getwd()
-			cfg, err := config.LoadWithInstance(cfgFile, workingDirForConfig)
+			cfg, err := loadConfigForRun(cfgFile, &adhocLLM)
 			if err != nil {
-				return fmt.Errorf("loading config: %w", err)
+				return err
+			}
+			// #4117: ad-hoc provider mode zeroes the config-file association so
+			// nothing downstream can read or write ggcode.yaml on this run: no
+			// hot-reload watch (empty SetConfigPath), no config-tool write target.
+			if adhocLLM.adhocActive() {
+				cfgFile = ""
 			}
 			// r415: per-run budget override. Flags beat the config file for
 			// this invocation only (nothing is persisted); 0/unset keeps the
@@ -218,6 +224,17 @@ func NewRootCmd() *cobra.Command {
 	// The time ladder steers (80%/95%/100%) like the token budget.
 	cmd.Flags().Int64Var(&tokenBudgetFlag, "token-budget", 0, "per-run session token budget override (input+output tokens; 0 = use config)")
 	cmd.Flags().DurationVar(&timeBudgetFlag, "time-budget", 0, "per-run wall-clock soft budget override (e.g. 10m, 1h; 0 = use config)")
+	// #4117: ad-hoc provider flags (pipe mode). When --llm-base-url and
+	// --llm-model (or their GGCODE_LLM_* env equivalents) are both present,
+	// the config file is neither loaded nor written; provider settings come
+	// purely from these flags + env. See cmd/ggcode/adhoc.go.
+	cmd.Flags().StringVar(&adhocLLM.BaseURL, "llm-base-url", "", "ad-hoc provider mode: base URL of the endpoint (env "+adhocEnvBaseURL+")")
+	cmd.Flags().StringVar(&adhocLLM.Model, "llm-model", "", "ad-hoc provider mode: model name (env "+adhocEnvModel+")")
+	cmd.Flags().StringVar(&adhocLLM.APIKey, "llm-api-key", "", "ad-hoc provider mode: API key (env "+adhocEnvAPIKey+")")
+	cmd.Flags().StringVar(&adhocLLM.Protocol, "llm-protocol", "", "ad-hoc provider mode: wire protocol override - openai|anthropic|gemini (env "+adhocEnvProtocol+"; default: inferred from URL)")
+	cmd.Flags().IntVar(&adhocLLM.ContextWindow, "llm-context-window", 0, "ad-hoc provider mode: context window override (env "+adhocEnvContextWindow+")")
+	cmd.Flags().IntVar(&adhocLLM.MaxTokens, "llm-max-tokens", 0, "ad-hoc provider mode: max output tokens override (env "+adhocEnvMaxTokens+")")
+	cmd.Flags().BoolVar(&adhocLLM.RetryAlways, "llm-retry-always", false, "ad-hoc provider mode: retry EVERY LLM error indefinitely - auth/404/quota/overflow all retried, attempt and backoff caps lifted; only Ctrl-C/cancellation stops (env "+adhocEnvRetryAlways+"=true/1)")
 
 	helperCmd := &cobra.Command{
 		Use:    "update-helper",
@@ -244,6 +261,10 @@ func NewRootCmd() *cobra.Command {
 	}
 	cmd.AddCommand(versionCmd)
 
+	// config subcommand - print the effective configuration (secrets
+	// masked). Composes with the root --config path flag.
+	cmd.AddCommand(newConfigCmd(&cfgFile))
+
 	// Shell completion commands
 	completionCmd := &cobra.Command{
 		Use:       "completion [shell]",
@@ -269,12 +290,14 @@ func NewRootCmd() *cobra.Command {
 	}
 	cmd.AddCommand(completionCmd)
 	cmd.AddCommand(newMCPCmd(&cfgFile))
+	cmd.AddCommand(newAuditCmd())
 	cmd.AddCommand(newPluginCmd(&cfgFile))
 	cmd.AddCommand(newIMCmd(&cfgFile))
 	cmd.AddCommand(newDaemonCmd(&cfgFile))
 	cmd.AddCommand(newLLMProbeCmd(&cfgFile))
 	cmd.AddCommand(newACPCommand(&cfgFile))
 	cmd.AddCommand(newStatusCmd())
+	cmd.AddCommand(newBOMCmd())
 	cmd.AddCommand(newReportCmd())
 	cmd.AddCommand(newLoginCmd(&cfgFile))
 	configureHelpRendering(cmd)
@@ -504,10 +527,15 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	projectAutoMem := core.ProjectAutoMem
 	saveMemoryTool := core.SaveMemoryTool
 	startupAssets := core.StartupAssets
-	// Startup notices (sa-45): merge MCP gate/merge warnings with
-	// sleep-time consolidation findings and hand the combined list to the
-	// TUI so they render as system messages on the first frame.
-	startupNotices := append(core.StartupNotices, startupAssets.ConsolidationFindings...)
+	// Startup notices (sa-45): MCP gate/merge warnings render as system
+	// messages on the first frame. Sleep-time consolidation findings are
+	// deliberately NOT appended anymore: they are agent-facing advisory
+	// (already injected into the system prompt via RepairSuggestions,
+	// agentruntime/prompt.go) - showing them in the TUI only surfaced
+	// regex-level false positives (broken-path heuristics on tool names /
+	// cross-project paths) as user-visible noise. User stays in the loop
+	// when the agent acts on a suggestion (save_memory/delete_memory).
+	startupNotices := core.StartupNotices
 	autoFiles := startupAssets.AutoFiles
 	commandMgr := startupAssets.CommandManager
 	trace.Mark("build interactive runtime core")
@@ -626,7 +654,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	buildCurrentSystemPrompt := func() (string, []string) {
 		// Remote agents info is injected dynamically via systemPromptInjector
 		// (lanchat peers), not baked into the static prompt.
-		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, "")
+		// #4502: detect git status LAZILY at every prompt build - the old
+		// closure captured the startup-time snapshot, so refreshAgentSystemPrompt
+		// (save_memory, knight reload, skills ticker) kept injecting a stale
+		// branch/dirty-count after mid-session commits and checkouts, while the
+		// sub-agent builder below detects live. Same freshness on both paths.
+		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, detectGitStatus(workingDir), "")
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
 	trace.Mark(fmt.Sprintf("build initial system prompt skills=%d bytes=%d", len(promptSkillRefs), len(systemPrompt)))
@@ -690,6 +723,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	maxIter := cfg.MaxIterations
 	ag = agent.NewAgent(prov, registry, systemPrompt, maxIter)
 	agentruntime.RegisterCompactContextTool(registry, ag)
+	agentruntime.RegisterRecallCompactedTool(registry, ag)
 	core.SetConfigAgent(ag)
 	refreshAgentSystemPrompt := func() {
 		nextPrompt, nextRefs := buildCurrentSystemPrompt()
@@ -835,9 +869,24 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		}
 		if len(sessions) > 0 {
 			storeDir, _ := session.DefaultDir()
+			ioFailures := 0
 			for _, ses := range sessions {
 				lock, lockErr := session.TryAcquireSessionLock(storeDir, ses.ID)
-				if lockErr == nil && lock != nil && lock.Acquired() {
+				if lockErr != nil {
+					// #4396: an IO/permission failure is NOT a competing
+					// instance - the #1487-D twin branch (fixed for --resume in
+					// 9860c360b but missed here). Name the real cause per
+					// session; the summary line below must not blame phantom
+					// instances either when every check failed on I/O.
+					shortID := ses.ID
+					if len(shortID) > 8 {
+						shortID = shortID[:8]
+					}
+					fmt.Fprintf(os.Stderr, "  Warning: session lock check for %s failed (%v).\n", shortID, lockErr)
+					ioFailures++
+					continue
+				}
+				if lock != nil && lock.Acquired() {
 					replPendingSessionLock = lock
 					resumeID = ses.ID
 					trace.Mark("auto-load session")
@@ -845,7 +894,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 				}
 			}
 			if resumeID == "" {
-				fmt.Fprintf(os.Stderr, "\n  All %d workspace session(s) are in use by other instances. Starting a new session.\n", len(sessions))
+				if ioFailures == len(sessions) {
+					fmt.Fprintf(os.Stderr, "\n  %d workspace session(s) failed lock checks (I/O errors). Starting a new session.\n", ioFailures)
+				} else if ioFailures > 0 {
+					fmt.Fprintf(os.Stderr, "\n  All %d workspace session(s) unavailable (%d in use by other instances, %d lock-check failures). Starting a new session.\n", len(sessions), len(sessions)-ioFailures, ioFailures)
+				} else {
+					fmt.Fprintf(os.Stderr, "\n  All %d workspace session(s) are in use by other instances. Starting a new session.\n", len(sessions))
+				}
 			}
 		}
 	}
@@ -884,9 +939,19 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	var a2aTaskHandler *a2a.TaskHandler
 	if !cfg.A2A.Disabled {
 		// A2A instance override already applied by LoadWithInstance.
-		a2aSrv, a2aReg, a2aHandler, err := startA2AServer(cfg, ag, registry, workingDir)
+		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err := startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
+			// #3677: startA2AServer's internal fail-fast (#1174) checks
+			// oauth2/oidc/mTLS config and returns errors the TUI path used
+			// to swallow into a debug-only log - the session then ran with
+			// no A2A server at all (not on the registry, invisible to LAN
+			// peers, remote dispatch silently dead) with zero user-visible
+			// signal. Surface it on the TUI's native startup-notice channel
+			// (same list the first frame renders); the daemon path keeps its
+			// stderr warning.
 			debug.Log("root", "A2A server startup warning: %v", err)
+			startupNotices = append(startupNotices, fmt.Sprintf(
+				"A2A server failed to start - remote task dispatch and LAN visibility are DISABLED for this session. Fix the a2a config to re-enable: %v", err))
 		} else {
 			a2aServer = a2aSrv
 			a2aRegistry = a2aReg
@@ -901,6 +966,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			a2aReg.StartBackgroundRefresh(a2aBgCtx)
 			defer func() {
 				a2aBgCancel()
+				// #4155: stop the refreshCache ticker goroutine too.
+				a2aStopRefresh()
 				if a2aRegistry != nil {
 					_ = a2aRegistry.Unregister()
 				}
@@ -931,6 +998,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub, a2aServer.Port())
 		// Sync peers from A2A registry
+		// #4155: cancellable so the 10s ticker goroutine exits when run()
+		// returns instead of relying solely on process exit.
+		syncCtx, syncCancel := context.WithCancel(context.Background())
+		defer syncCancel()
 		safego.Go("lanchat.syncPeers", func() {
 			syncPeers := func() {
 				instances := a2aRegistry.CachedInstances()
@@ -952,8 +1023,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			// Then periodic every 10s
 			ticker := time.NewTicker(10 * time.Second)
 			defer ticker.Stop()
-			for range ticker.C {
-				syncPeers()
+			for {
+				select {
+				case <-syncCtx.Done():
+					return
+				case <-ticker.C:
+					syncPeers()
+				}
 			}
 		})
 	}
@@ -1080,6 +1156,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	defer fileWatch.Stop()
 	// Sleep-time compute (r373): pre-compact during idle windows.
 	idleMaint := agentruntime.ApplyIdleMaintenance(ag, cfg.Idle)
+	// sa-63: every idle fire also re-runs the memory consolidation sweep,
+	// so long-lived sessions surface stale/conflicting memory without
+	// waiting for the startup-only sweep.
+	agentruntime.AttachIdleConsolidation(idleMaint, autoMem, workingDir)
 	defer idleMaint.Stop()
 	repl.SetPlanModeTools(registry)
 	repl.SetSendMessageTool(subMgr, registry)
@@ -1244,11 +1324,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		case "rollback":
 			return knightAgent.RollbackSkill(skillName)
 		case "record_effectiveness":
-			score := 3
-			if v, ok := params["score"]; ok {
-				if f, ok := v.(float64); ok {
-					score = int(f)
-				}
+			score, err := knightScoreFromParams(params)
+			if err != nil {
+				return err
 			}
 			knightAgent.RecordSkillEffectiveness(skillName, score)
 			return nil
@@ -1462,23 +1540,60 @@ func localA2ASkills(m *commands.Manager) []a2a.Skill {
 	return out
 }
 
+// knightScoreFromParams validates the score param of the knight skill
+// action record_effectiveness. #4463: usage_tracker defines the scale as
+// 1-5; an unbounded score would be persisted into the rolling
+// Effectiveness array and silently poison avgScore-driven scheduling.
+func knightScoreFromParams(params map[string]any) (int, error) {
+	score := 3
+	if v, ok := params["score"]; ok {
+		if f, ok := v.(float64); ok {
+			score = int(math.Round(f))
+		}
+	}
+	if score < 1 || score > 5 {
+		return 0, fmt.Errorf("invalid score %d: must be within 1-5", score)
+	}
+	return score, nil
+}
+
 // startA2AServer starts the A2A HTTP server, registers this instance in the local
 // registry, discovers other running instances, and registers cross-instance MCP tools.
+// a2aTimeoutWarnf emits the invalid-a2a.task_timeout warning. It is a
+// package-level variable so tests can capture the warning without swapping
+// the global os.Stderr, which races with concurrent stderr writers under CI
+// parallelism (main flake on 10b3dabf0, reported by reviewer seat).
+var a2aTimeoutWarnf = func(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, format, args...)
+}
+
 func parseA2ATimeout(s string) time.Duration {
 	if s == "" {
 		return 5 * time.Minute
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
+		// #4397: silent fallback is undiagnosable - a typo'd config value
+		// ("90sec", "5") quietly shifted every remote task to 5m with no
+		// trace of the user's intent. Same "silent fallbacks must be
+		// diagnosable" principle as #4393's adhocInt.
+		a2aTimeoutWarnf("warning: invalid a2a.task_timeout %q (%v), using default %v\n", s, err, 5*time.Minute)
+		return 5 * time.Minute
+	}
+	// #4462: a successfully parsed non-positive duration (e.g. "-5m" from a
+	// typo) would flow straight into time.NewTimer and expire instantly,
+	// failing every A2A task with no diagnostic. Normalize like
+	// parseA2AMaxTasks does for the task cap (#1422-A).
+	if d <= 0 {
 		return 5 * time.Minute
 	}
 	return d
 }
 
-func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, workingDir string) (*a2a.Server, *a2a.Registry, *a2a.TaskHandler, error) {
+func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, workingDir string) (*a2a.Server, *a2a.Registry, *a2a.TaskHandler, func(), error) {
 	a2aReg, err := a2a.NewRegistry()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("a2a registry: %w", err)
+		return nil, nil, nil, func() {}, fmt.Errorf("a2a registry: %w", err)
 	}
 
 	handler := a2a.NewTaskHandler(workingDir, ag, reg,
@@ -1492,6 +1607,10 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		APIKey:     a2aAPIKey(cfg),
 		APIKeys:    cfg.A2A.Auth.APIKeys,
 		Extensions: a2aExtensionsFromConfig(cfg.A2A.Extensions),
+		Delegation: a2a.DelegationPolicy{
+			RequireOnBehalfOf: cfg.A2A.Delegation.RequireOnBehalfOf,
+			MaxDepth:          cfg.A2A.Delegation.MaxDepth,
+		},
 	}, handler)
 
 	// Wire OAuth2/OIDC token validation if configured
@@ -1502,14 +1621,14 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		_, _, clientID, _, err := auth.ResolveA2AAuth(oc.Provider, oc.ClientID, oc.IssuerURL, oc.Scopes)
 		if err != nil {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oauth2: %w", err)
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a oauth2: %w", err)
 		}
 		// Issue #1174: refuse to silently run without token validation when an
 		// oauth2 auth block is present but resolves to nothing (fail-open
 		// downgrade to the public default API key would otherwise be invisible).
 		if clientID == "" {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oauth2: no client_id resolved (set client_id, or a provider with a default)")
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a oauth2: no client_id resolved (set client_id, or a provider with a default)")
 		}
 		// Issue #1175: derive the issuer from the OIDC discovery URL, never
 		// from the token endpoint - TokenURL is not a valid issuer and makes
@@ -1517,7 +1636,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		issuerURL := auth.ResolveA2AIssuerURL(oc.Provider, oc.IssuerURL)
 		if issuerURL == "" {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oauth2: no issuer available for provider %q (preset has no OIDC discovery URL); set issuer_url explicitly", oc.Provider)
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a oauth2: no issuer available for provider %q (preset has no OIDC discovery URL); set issuer_url explicitly", oc.Provider)
 		}
 		// #1503: preset placeholders (AUTH0_TENANT/AZURE_TENANT) pass the
 		// non-empty checks and the server starts fine - then every JWKS
@@ -1525,7 +1644,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		// at startup instead, matching the #1174/#1175 spirit.
 		if strings.Contains(issuerURL, "AUTH0_TENANT") || strings.Contains(issuerURL, "AZURE_TENANT") {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oauth2: provider %q issuer is an unfilled preset placeholder (%s); set issuer_url/tenant and restart", oc.Provider, issuerURL)
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a oauth2: provider %q issuer is an unfilled preset placeholder (%s); set issuer_url/tenant and restart", oc.Provider, issuerURL)
 		}
 		if issuerURL != "" && clientID != "" {
 			tv, err := auth.NewTokenValidator(clientID, issuerURL,
@@ -1534,7 +1653,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 			)
 			if err != nil {
 				srv.Stop()
-				return nil, nil, nil, fmt.Errorf("a2a oauth2: %w", err)
+				return nil, nil, nil, func() {}, fmt.Errorf("a2a oauth2: %w", err)
 			}
 			srv.SetTokenValidator(tv)
 		}
@@ -1545,17 +1664,17 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		_, _, clientID, _, err := auth.ResolveA2AAuth(oc.Provider, oc.ClientID, oc.IssuerURL, oc.Scopes)
 		if err != nil {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oidc: %w", err)
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a oidc: %w", err)
 		}
 		// Issue #1174: fail fast when the oidc block resolves to nothing.
 		if clientID == "" {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oidc: no client_id resolved (set client_id, or a provider with a default)")
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a oidc: no client_id resolved (set client_id, or a provider with a default)")
 		}
 		issuerURL := auth.ResolveA2AIssuerURL(oc.Provider, oc.IssuerURL)
 		if issuerURL == "" {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oidc: no issuer available for provider %q; set issuer_url explicitly", oc.Provider)
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a oidc: no issuer available for provider %q; set issuer_url explicitly", oc.Provider)
 		}
 		// #2781: the same preset-placeholder fail-fast as the OAuth2 block
 		// (#1503) - without it an auth0/azure preset without a filled
@@ -1563,7 +1682,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		// NXDOMAIN placeholder host: silent per-request 401s.
 		if strings.Contains(issuerURL, "AUTH0_TENANT") || strings.Contains(issuerURL, "AZURE_TENANT") {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oidc: provider %q issuer is an unfilled preset placeholder (%s); set issuer_url/tenant and restart", oc.Provider, issuerURL)
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a oidc: provider %q issuer is an unfilled preset placeholder (%s); set issuer_url/tenant and restart", oc.Provider, issuerURL)
 		}
 		if issuerURL != "" && clientID != "" {
 			tv, err := auth.NewTokenValidator(clientID, issuerURL,
@@ -1572,7 +1691,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 			)
 			if err != nil {
 				srv.Stop()
-				return nil, nil, nil, fmt.Errorf("a2a oidc: %w", err)
+				return nil, nil, nil, func() {}, fmt.Errorf("a2a oidc: %w", err)
 			}
 			srv.SetTokenValidator(tv)
 		}
@@ -1586,13 +1705,13 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		tlsCfg, err := mtlsCfg.BuildTLSConfig()
 		if err != nil {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a mtls: %w", err)
+			return nil, nil, nil, func() {}, fmt.Errorf("a2a mtls: %w", err)
 		}
 		srv.SetTLSConfig(tlsCfg)
 	}
 
 	if err := srv.Start(); err != nil {
-		return nil, nil, nil, fmt.Errorf("a2a start: %w", err)
+		return nil, nil, nil, func() {}, fmt.Errorf("a2a start: %w", err)
 	}
 
 	// Register this instance in the shared local registry.
@@ -1608,7 +1727,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	a2aReg.SetInterfaces(cfg.A2A.Interfaces)
 	if err := a2aReg.Register(instance); err != nil {
 		srv.Stop()
-		return nil, nil, nil, fmt.Errorf("a2a register: %w", err)
+		return nil, nil, nil, func() {}, fmt.Errorf("a2a register: %w", err)
 	}
 
 	// Register MCP bridge tools for external MCP clients (Claude, Cursor, etc.)
@@ -1626,16 +1745,25 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	_ = reg.Register(remoteTool)
 
 	// Periodically refresh the remote instance cache so new instances are discovered.
+	// #4155: cancellable like the sibling StartBackgroundRefresh context the
+	// callers own - the ticker goroutine used to have no exit path and
+	// outlived the server teardown (latent leak, exposed by library reuse).
+	refreshCtx, refreshCancel := context.WithCancel(context.Background())
 	safego.Go("root.a2a.refreshCache", func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
-			remoteTool.RefreshCache()
+		for {
+			select {
+			case <-refreshCtx.Done():
+				return
+			case <-ticker.C:
+				remoteTool.RefreshCache()
+			}
 		}
 	})
 
 	debug.Log("root", "A2A server started at %s", srv.Endpoint())
-	return srv, a2aReg, handler, nil
+	return srv, a2aReg, handler, refreshCancel, nil
 }
 
 func init() {

@@ -22,7 +22,7 @@ func TestIssue2218AmbiguousSuffixTiersDown(t *testing.T) {
 		{filePath: "pkg/api/types.go"}, {filePath: "internal/api/types.go"},
 	}, []string{"api/types.go"})
 	for _, editPath := range []string{"pkg/api/types.go", "internal/api/types.go"} {
-		score, fileMatch := computeCRSDetail(
+		score, fileMatch, _ := computeCRSDetail(
 			causalEditStep{filePath: editPath}, []string{"api/types.go"}, 0, amb)
 		if fileMatch {
 			t.Fatalf("%s: ambiguous suffix match must NOT set fileMatch (authority wording)", editPath)
@@ -41,7 +41,7 @@ func TestIssue2218UniqueSuffixStaysStrong(t *testing.T) {
 	if amb["api/types.go"] {
 		t.Fatal("unique suffix must not be flagged")
 	}
-	score, fileMatch := computeCRSDetail(
+	score, fileMatch, _ := computeCRSDetail(
 		causalEditStep{filePath: "pkg/api/types.go"}, []string{"api/types.go"}, 0, amb)
 	if !fileMatch || score < causalWtErrorFileMatch {
 		t.Fatalf("unique suffix must stay strong, score=%d match=%v", score, fileMatch)

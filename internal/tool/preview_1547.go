@@ -94,6 +94,19 @@ func (t BatchReplace) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit, 
 	if args.Pattern == "" || len(args.Files) == 0 {
 		return nil, fmt.Errorf("missing pattern or files")
 	}
+	// #4039: preview must enforce the SAME prechecks as the executor, or it
+	// returns a "successful" plan the executor will refuse to run (preview
+	// != execution breaks the approval gate: the approver signs off on a
+	// diff that can never land).
+	if len(args.Pattern) > maxBatchReplacePatternLen {
+		return nil, fmt.Errorf("pattern too long: %d bytes, max %d", len(args.Pattern), maxBatchReplacePatternLen)
+	}
+	if len(args.Replacement) > maxBatchReplaceReplaceLen {
+		return nil, fmt.Errorf("replacement too long: %d bytes, max %d", len(args.Replacement), maxBatchReplaceReplaceLen)
+	}
+	if len(args.Files) > maxBatchReplaceFiles {
+		return nil, fmt.Errorf("too many files: %d, max %d", len(args.Files), maxBatchReplaceFiles)
+	}
 	var re *regexp.Regexp
 	if args.IsRegex {
 		compiled, err := regexp.Compile(args.Pattern)
@@ -102,6 +115,14 @@ func (t BatchReplace) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit, 
 			return nil, err
 		}
 		re = compiled
+		// #4039 core: the executor's #385 guard - an out-of-range $N in the
+		// replacement makes the executor refuse the run, but ReplaceAllString
+		// would silently expand it to "", producing a "successful" plan whose
+		// diff shows matched text deleted. Reject at preview time so the
+		// approval gate never sees a diff the executor will not run.
+		if bad := invalidGroupRefs(re, args.Replacement); bad != "" {
+			return nil, fmt.Errorf("replacement references capture group %s but the pattern has only %d group(s); use $$ for a literal $", bad, re.NumSubexp())
+		}
 	}
 	plans := make([]PlannedFileEdit, 0, len(args.Files))
 	for _, f := range args.Files {

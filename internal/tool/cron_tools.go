@@ -48,7 +48,7 @@ func (t CronCreateTool) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [
@@ -115,7 +115,7 @@ func (t CronDeleteTool) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [
@@ -162,7 +162,7 @@ func (t CronListTool) Parameters() json.RawMessage {
 	"properties": {
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [
@@ -195,9 +195,15 @@ func (t CronListTool) Execute(_ context.Context, _ json.RawMessage) (Result, err
 		if job.Paused {
 			state = "paused, "
 		}
+		// #4049: Pause() clears NextFire to the zero time (#311 invariant);
+		// render it as none instead of the 0001-01-01 fake timestamp.
+		next := job.NextFire.Format(time.RFC3339)
+		if job.NextFire.IsZero() {
+			next = "none (paused)"
+		}
 		fmt.Fprintf(&sb, "- %s [%s%s, %s] %s next=%s\n",
 			job.ID, state, kind, queueMode, job.CronExpr,
-			job.NextFire.Format(time.RFC3339))
+			next)
 	}
 	return Result{Content: sb.String()}, nil
 }
@@ -234,7 +240,7 @@ func (t CronUpdateTool) Parameters() json.RawMessage {
 			},
 			"description": {
 				"type": "string",
-				"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+				"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 			}
 		},
 		"required": [
@@ -316,7 +322,7 @@ func (t CronPauseTool) Parameters() json.RawMessage {
 			},
 			"description": {
 				"type": "string",
-				"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+				"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 			}
 		},
 		"required": [
@@ -364,7 +370,7 @@ func (t CronResumeTool) Parameters() json.RawMessage {
 			},
 			"description": {
 				"type": "string",
-				"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+				"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 			}
 		},
 		"required": [
@@ -412,7 +418,7 @@ func (t CronGetTool) Parameters() json.RawMessage {
 			},
 			"description": {
 				"type": "string",
-				"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+				"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 			}
 		},
 		"required": [
@@ -459,7 +465,13 @@ func (t CronGetTool) Execute(_ context.Context, input json.RawMessage) (Result, 
 	fmt.Fprintf(&sb, "Type:        %s\n", kind)
 	fmt.Fprintf(&sb, "Queue mode:  %s\n", queueMode)
 	fmt.Fprintf(&sb, "Cron expr:   %s\n", job.CronExpr)
-	fmt.Fprintf(&sb, "Next fire:   %s\n", job.NextFire.Format(time.RFC3339))
+	// #4049: guard parity with CronUpdate L284 - a paused job carries a zero
+	// NextFire; render it as none instead of the 0001-01-01 fake timestamp.
+	nextFire := job.NextFire.Format(time.RFC3339)
+	if job.NextFire.IsZero() {
+		nextFire = "none (paused)"
+	}
+	fmt.Fprintf(&sb, "Next fire:   %s\n", nextFire)
 	fmt.Fprintf(&sb, "Created at:  %s\n", job.CreatedAt.Format(time.RFC3339))
 	fmt.Fprintf(&sb, "Prompt:\n%s\n", job.Prompt)
 	return Result{Content: sb.String()}, nil

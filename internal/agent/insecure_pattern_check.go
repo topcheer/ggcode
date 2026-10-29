@@ -488,9 +488,15 @@ func findInsecurePatternsPython(content string) []insecurePatternInstance {
 		}
 
 		// hashlib.md5/sha1 for password hashing
+		// #3541: the old gate had a fourth `strings.Contains(lower, "hash")`
+		// term - but "hashlib.md5"/"hashlib.sha1" themselves start with
+		// "hash", so that term was ALWAYS true whenever the first clause
+		// held: the security-context gate was dead and every MD5/SHA1 use
+		// (file checksums, cache keys, dedup digests) was flagged. Drop the
+		// subsumed term so only genuine security contexts gate the check.
 		if (strings.Contains(lower, "hashlib.md5") || strings.Contains(lower, "hashlib.sha1")) &&
 			(strings.Contains(lower, "password") || strings.Contains(lower, "token") ||
-				strings.Contains(lower, "secret") || strings.Contains(lower, "hash")) {
+				strings.Contains(lower, "secret")) {
 			issues = append(issues, insecurePatternInstance{
 				category: "weak crypto",
 				detail:   "MD5/SHA1 for password hashing - use hashlib.sha256+ or bcrypt/passlib",

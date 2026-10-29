@@ -18,6 +18,8 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/stats` | Open session statistics panel |
 | `/cost` | Show session token usage and estimated cost |
 | `/runreport` | Evaluate this session's trajectory and print an offline efficiency scorecard (wasted calls, duplicate tool calls, error rate, token overhead); sessions with swarm/subagent activity also show a Coordination section (cross-agent duplicate work, message round trips, delegation chain integrity, parallel-layer waste, coordination token share) |
+| `/runreport all` | Cross-session aggregate scorecard (most recent 50 sessions): mean/min/max efficiency, worst-sessions leaderboard, most cross-session repeated tools, and global totals (tool calls, errors, wasted repeats, wasted context tax, overhead share) |
+| `/export-training` | Append the current session (redacted: secrets masked, images dropped, last 400 messages) as one JSONL training sample to `.ggcode/training-samples.jsonl` for RLVR/SFT corpus collection. Automatic post-run export with reward labels is available via `GGCODE_TRAINING_EXPORT=1`; manual exports carry outcome `manual` and reward 0 |
 | `/exit` | Exit ggcode |
 | `/restart` | Restart ggcode (preserves current session) |
 | `/update` | Check and install updates |
@@ -37,7 +39,7 @@ Slash commands are typed directly in the chat input within the TUI.
 
 | Command | Description |
 |---------|-------------|
-| `/mode [supervised\|plan\|auto\|bypass\|autopilot]` | Switch permission mode |
+| `/mode [supervised\|bypass]` | Switch permission mode (auto/autopilot accepted as legacy aliases; plan is tool-internal) |
 | `/config` | Configuration management |
 | `/allow [tool]` | Permanently allow a tool (override permission policy) |
 | `/init` | Create `GGCODE.md` project memory file |
@@ -67,6 +69,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/edit` | Edit last user message and resubmit |
 | `/retry` | Retry last agent turn |
 | `/regenerate` | Regenerate last response |
+| `/continue-task` | Resume the task interrupted by a crash in this session (available right after the `[Crash Recovery]` notice appears; one-shot) |
 
 ## LAN Chat
 
@@ -103,6 +106,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/doctor` | Run health diagnostics (provider, config, MCP, LSP, permissions) |
 | `/style` | Cycle output style (default → concise → detailed → socratic) |
 | `/branch [N]` / `/fork [N]` | Branch/fork current session; N drops the last N user turns to fork from an earlier point |
+| `/rewind [N]` | Coordinated rewind: drop the last N user turns (default 1) AND revert the file edits those runs made, then continue in a forked session with a rewind-memory breadcrumb; the original session is preserved (refuses safely if checkpoint baselines were evicted) |
 | `/pin-session` / `/unpin-session` | Pin/unpin session (pinned sessions are never removed by cleanup and list first in `/sessions`; distinct from `/pin`, which pins context items) |
 | `/tag <tag>...` | Add tags to the session (deduplicated case-insensitively) |
 | `/untag <tag>...` | Remove tags from the session |
@@ -174,7 +178,7 @@ Quick-send messages to other ggcode instances on your LAN directly from the main
 | `Ctrl+T` | Toggle config save scope (global ↔ instance) |
 | `Ctrl+X` | Open terminal pane menu (tmux/Ghostty/Warp/Kitty/iTerm2) |
 | `Ctrl+Shift+C` | Copy last assistant response to clipboard |
-| `Shift+Tab` | Cycle permission mode (supervised → plan → auto → bypass → autopilot) |
+| `Shift+Tab` | Cycle permission mode (supervised → bypass) |
 | `Alt+Up` / `Alt+K` | Cycle to previous session |
 | `Alt+Down` / `Alt+J` | Cycle to next session |
 | `Esc Esc` (double) | Trigger `/undo` (checkpoint rollback) |

@@ -36,7 +36,7 @@ func (t GitCommit) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [
@@ -65,8 +65,11 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	// commit still proceeds, but the warning helps the agent self-correct.
 	msgWarning := checkCommitMessageQuality(args.Message)
 
-	// Append Co-Authored-By trailer
-	fullMessage := args.Message + "\n\n" + coAuthorTrailer
+	// Append Co-Authored-By trailer unless opted out via GGCODE_NO_COAUTHOR
+	fullMessage := args.Message
+	if !coAuthorInjectionDisabled() {
+		fullMessage += "\n\n" + coAuthorTrailer
+	}
 
 	dir := resolveDir(args.Path, t.WorkingDir)
 

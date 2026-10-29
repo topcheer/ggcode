@@ -18,8 +18,6 @@ import (
 type FollowSink interface {
 	// OnUserMessage displays a user message.
 	OnUserMessage(text string)
-	// OnToolStatus is called when a tool starts (used only for internal tracking, not display).
-	OnToolStatus(toolName, rawArgs string)
 	// OnToolResult displays the result of a tool call.
 	OnToolResult(toolName, rawArgs, result string, isError bool)
 	// OnStreamText accumulates streaming text (not displayed until OnRoundDone).
@@ -71,10 +69,6 @@ func PlatformDisplayName(platform string) string {
 		return "IM"
 	}
 }
-
-// ToolFormatter is a function that formats tool activity for display.
-// It takes a tool name and raw JSON args, and returns a human-readable status string.
-type ToolFormatter func(toolName, rawArgs string) string
 
 // ToolPresenter returns a display presentation for a tool call.
 // Used by daemon follow to get the same labels as TUI.
@@ -219,11 +213,6 @@ func (d *TerminalFollowDisplay) OnUserMessage(text string) {
 	defer d.mu.Unlock()
 	text = truncateForTerminal(d.relativizePaths(text), 200)
 	fmt.Fprintf(d.out, "%s%s%s"+nl, d.styles.UserPrefix, text, ansiReset)
-}
-
-// OnToolStatus is a no-op — we only display final results via OnToolResult.
-func (d *TerminalFollowDisplay) OnToolStatus(toolName, rawArgs string) {
-	// intentionally not displayed
 }
 
 // OnToolResult displays the tool call result using the same label system as TUI.

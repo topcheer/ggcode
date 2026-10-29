@@ -138,7 +138,7 @@ func TestUpdateConfigInstanceFieldWriteBack(t *testing.T) {
 		t.Fatalf("instance default_mode not merged: %q", cfg.DefaultMode)
 	}
 
-	if err := UpdateConfig(map[string]interface{}{"defaultMode": "plan"}); err != nil {
+	if err := UpdateConfig(map[string]interface{}{"defaultMode": "bypass"}); err != nil {
 		t.Fatalf("UpdateConfig: %v", err)
 	}
 
@@ -147,13 +147,13 @@ func TestUpdateConfigInstanceFieldWriteBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadWithInstance after update: %v", err)
 	}
-	if after.DefaultMode != "plan" {
-		t.Errorf("default_mode after reload = %q, want %q (instance write-back missing, change lost on restart)", after.DefaultMode, "plan")
+	if after.DefaultMode != "bypass" {
+		t.Errorf("default_mode after reload = %q, want %q (instance write-back missing, change lost on restart)", after.DefaultMode, "bypass")
 	}
 
 	// The global file must NOT carry the stripped instance field.
 	globData, _ := os.ReadFile(globalPath)
-	if strings.Contains(string(globData), "default_mode: plan") {
+	if strings.Contains(string(globData), "default_mode: bypass") {
 		t.Errorf("instance-sourced default_mode leaked into global config file:\n%s", globData)
 	}
 }

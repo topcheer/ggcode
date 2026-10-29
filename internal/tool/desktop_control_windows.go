@@ -31,7 +31,6 @@ var (
 	pSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
 	pPostMessageW             = user32.NewProc("PostMessageW")
 	pShowWindow               = user32.NewProc("ShowWindow")
-	pIsIconic                 = user32.NewProc("IsIconic")
 	pGetWindowRect            = user32.NewProc("GetWindowRect")
 	pMoveWindow               = user32.NewProc("MoveWindow")
 )
@@ -156,6 +155,22 @@ func mouseEventInput(flags uint32, dx, dy int32) winINPUT {
 	return in
 }
 
+// wheelEventInput builds a MOUSEEVENTF_WHEEL event. Win32 reads the wheel
+// delta from MOUSEINPUT.mouseData — dx/dy are meaningless for wheel events.
+// #4459: the old call passed the delta as dy while mouseData stayed 0, so
+// SendInput delivered zero-delta wheel events: scroll silently no-opped
+// while reporting OK (the #189 direction fix never reached mouseData).
+func wheelEventInput(delta int32) winINPUT {
+	mi := winMOUSEINPUT{
+		MouseData: uint32(delta),
+		DwFlags:   mouseWheel,
+	}
+	var in winINPUT
+	in.Type = inputMouse
+	copy(in.U[:], (*[32]byte)(unsafe.Pointer(&mi))[:])
+	return in
+}
+
 func keyEventInput(vk uint16, flags uint32) winINPUT {
 	ki := winKEYBDINPUT{
 		Vk:    vk,
@@ -223,7 +238,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "scroll":
 		return winScroll(ctx, p.Direction, p.Amount)
 	case "modifier_click":
-		return winModifierClick(ctx, p.X, p.Y, p.Text)
+		return winModifierClick(ctx, p.X, p.Y, p.Text, p.Button)
 	case "mouse_position":
 		var pt struct{ X, Y int32 }
 		r, _, err := pGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
@@ -287,22 +302,33 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		if err != nil {
 			return Result{}, err
 		}
-		state := swMaximize
-		if r, _, _ := pIsIconic.Call(uintptr(h)); r != 0 {
-			// Already maximized means iconic-restore cycle is handled by the
-			// app; simplest deterministic behavior is maximize (idempotent).
-			state = swMaximize
-		}
-		pShowWindow.Call(uintptr(h), uintptr(state))
+		// Idempotent: ShowWindow(swMaximize) is a no-op on an already
+		// maximized window — a retry "make sure it's maximized" never
+		// restores it (#4058; this is the semantics Linux/macOS now match).
+		pShowWindow.Call(uintptr(h), swMaximize)
 		return Result{Content: "OK: maximized " + windowText(h)}, nil
 
 	case "set_window_bounds":
 		if p.ToX <= 0 || p.ToY <= 0 {
 			return Result{}, fmt.Errorf("set_window_bounds requires positive to_x (width) and to_y (height)")
 		}
-		h, err := findWindowByTitle(p.Text)
-		if err != nil {
-			return Result{}, err
+		// #4440: unify the empty-text semantics with the other platforms -
+		// empty text now targets the FOREGROUND window (this used to hard-
+		// error while Linux fell back to the active window: one instruction,
+		// opposite behaviors per platform).
+		var h uintptr
+		if strings.TrimSpace(p.Text) == "" {
+			fh, _, _ := user32.NewProc("GetForegroundWindow").Call()
+			if fh == 0 {
+				return Result{}, fmt.Errorf("no foreground window to move")
+			}
+			h = fh
+		} else {
+			var err error
+			h, err = findWindowByTitle(p.Text)
+			if err != nil {
+				return Result{}, err
+			}
 		}
 		r, _, _ := pMoveWindow.Call(uintptr(h), uintptr(int32(p.X)), uintptr(int32(p.Y)),
 			uintptr(int32(p.ToX)), uintptr(int32(p.ToY)), 1)
@@ -591,7 +617,7 @@ func winScroll(ctx context.Context, direction string, amount int) (Result, error
 	}
 	var inputs []winINPUT
 	for i := 0; i < amount; i++ {
-		inputs = append(inputs, mouseEventInput(mouseWheel, 0, d))
+		inputs = append(inputs, wheelEventInput(d))
 	}
 	if err := sendInput(inputs); err != nil {
 		return Result{}, err
@@ -599,10 +625,24 @@ func winScroll(ctx context.Context, direction string, amount int) (Result, error
 	return Result{Content: "OK"}, nil
 }
 
-func winModifierClick(ctx context.Context, x, y int, modifierSpec string) (Result, error) {
+func winModifierClick(ctx context.Context, x, y int, modifierSpec, button string) (Result, error) {
 	mods, err := normalizeModifiers(modifierSpec)
 	if err != nil {
 		return Result{}, err
+	}
+	// #3876: honor the schema button contract ("right" was silently
+	// left-clicked, same breach as #1665 fixed for plain click).
+	// #4440: middle was still silently left-clicked (only the plain click
+	// path had it), and unknown buttons erred the same way.
+	var down, up uint32 = mouseLeftDown, mouseLeftUp
+	switch button {
+	case "right":
+		down, up = mouseRightDown, mouseRightUp
+	case "middle":
+		down, up = mouseMiddleDown, mouseMiddleUp
+	case "", "left":
+	default:
+		return Result{}, fmt.Errorf("unsupported button %q (supported: left, right, middle)", button)
 	}
 	vsx, vsy, vsw, vsh := virtualScreen()
 	var inputs []winINPUT
@@ -611,8 +651,8 @@ func winModifierClick(ctx context.Context, x, y int, modifierSpec string) (Resul
 	for _, m := range mods {
 		inputs = append(inputs, keyEventInput(winVK[m], 0))
 	}
-	inputs = append(inputs, mouseEventInput(mouseLeftDown, 0, 0))
-	inputs = append(inputs, mouseEventInput(mouseLeftUp, 0, 0))
+	inputs = append(inputs, mouseEventInput(down, 0, 0))
+	inputs = append(inputs, mouseEventInput(up, 0, 0))
 	for i := len(mods) - 1; i >= 0; i-- {
 		inputs = append(inputs, keyEventInput(winVK[mods[i]], keyUp))
 	}
@@ -678,14 +718,26 @@ func winOpenApp(ctx context.Context, p desktopParams) (Result, error) {
 	if target == "" {
 		return Result{}, fmt.Errorf("%s requires 'text'", p.Action)
 	}
-	cmdline := target
+	// #4459: keep app/target as SEPARATE argv tokens. The old form joined
+	// them into one quoted string, so `start "" "msedge https://x"` looked
+	// for an executable literally named "msedge https://x" — open+app and
+	// multi-word launch_app were both unconditionally broken (a #1673
+	// regression: the quoting fix was meant for bare URLs only). Go quotes
+	// each token as needed when building the cmd.exe command line, so
+	// injection via '&'/'^' stays closed while args split correctly.
+	var argv []string
 	if app := strings.TrimSpace(p.App); app != "" {
-		cmdline = app + " " + target
+		argv = append(argv, app)
 	}
-	if err := runWindowsCommand(ctx, cmdline); err != nil {
+	if p.Action == "launch_app" {
+		argv = append(argv, strings.Fields(target)...)
+	} else {
+		argv = append(argv, target)
+	}
+	if err := runWindowsCommand(ctx, argv...); err != nil {
 		return Result{}, err
 	}
-	return Result{Content: "OK: " + cmdline}, nil
+	return Result{Content: "OK: " + strings.Join(argv, " ")}, nil
 }
 
 func winListWindows() (Result, error) {
@@ -716,13 +768,15 @@ func keyEventInputWithScan(scan uint16, flags uint32) winINPUT {
 	return in
 }
 
-func runWindowsCommand(ctx context.Context, cmdline string) error {
-	// Use cmd /c start "" <cmdline> so URLs and documents open via
+func runWindowsCommand(ctx context.Context, argv ...string) error {
+	// Use cmd /c start "" <argv...> so URLs and documents open via
 	// shell associations, matching the macOS `open` semantics.
-	// #1673: pass the target as a QUOTED single argv. The old unquoted
-	// form let cmd.exe re-parse the whole string - URLs with '&' split
-	// into commands, '^' escaped, and spaced paths broke into arguments.
-	c := exec.CommandContext(ctx, "cmd", "/c", "start", "", `"`+cmdline+`"`)
+	// #1673: each token is passed as its own argv entry — Go quotes it
+	// when spaces require it, so cmd.exe never re-parses '&'/'^' inside
+	// a URL, while app+target still split into program and argument
+	// (#4459; the old single-quoted-string form broke open+app).
+	startArgs := append([]string{"/c", "start", ""}, argv...)
+	c := exec.CommandContext(ctx, "cmd", startArgs...)
 	if out, err := c.CombinedOutput(); err != nil {
 		return fmt.Errorf("start failed: %w\n%s", err, string(out))
 	}

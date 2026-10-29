@@ -566,7 +566,6 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
               <select value={defaultMode} onChange={e => setDefaultMode(e.target.value)} style={selectStyle}>
                 <option value="supervised">{t('settings.modeSupervised')}</option>
                 <option value="bypass">{t('settings.modeBypass')}</option>
-                <option value="autopilot">{t('settings.modeAutopilot')}</option>
               </select>
             </FieldRow>
             <FieldRow label={t('settings.language')}>
@@ -612,10 +611,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
             <FieldRow label={t('settings.permissionMode')}>
               <select value={defaultMode} onChange={e => setDefaultMode(e.target.value)} style={selectStyle}>
                 <option value="supervised">{t('settings.modeSupervised')}</option>
-                <option value="auto">{t('settings.modeAuto')}</option>
-                <option value="plan">{t('settings.modePlan')}</option>
                 <option value="bypass">{t('settings.modeBypassAll')}</option>
-                <option value="autopilot">{t('settings.modeAutopilotHigh')}</option>
               </select>
               <span style={{ display: 'block', marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>
                 {t('settings.saveModeHint')}

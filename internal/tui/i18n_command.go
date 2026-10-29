@@ -25,27 +25,23 @@ func enCommandModule() map[string]string {
 		"slash.lang":                "Switch interface language",
 		"slash.skills":              "Browse available skills",
 		"slash.exit":                "Exit ggcode",
-		"slash.agents":              "List sub-agents",
-		"slash.agent":               "Sub-agent details",
 		"slash.compact":             "Compress conversation history",
 		"slash.todo":                "View/manage todo list",
 		"slash.bug":                 "Report a bug",
 		"slash.config":              "View/modify configuration",
 		"slash.qq":                  "Manage QQ channel binding",
-		"slash.tg":                  "Manage Telegram bot binding",
 		"slash.telegram":            "Manage Telegram bot binding",
 		"slash.pc":                  "Manage PC channel binding",
 		"slash.discord":             "Manage Discord binding",
 		"slash.feishu":              "Manage Feishu binding",
-		"slash.lark":                "Manage Feishu binding",
 		"slash.slack":               "Manage Slack binding",
 		"slash.dingtalk":            "Manage DingTalk binding",
-		"slash.ding":                "Manage DingTalk binding",
 		"slash.status":              "Show current status",
 		"slash.update":              "Update ggcode",
 		"slash.restart":             "Restart ggcode",
 		"slash.regenerate":          "Regenerate last response",
 		"slash.branch":              "Fork conversation into new session; [N] drops last N turns",
+		"slash.rewind":              "Rewind last N turns: revert their file edits, continue in forked session",
 		"slash.pin_session":         "Pin session (protected from cleanup)",
 		"slash.unpin_session":       "Unpin session",
 		"slash.tag":                 "Add tags to session",
@@ -61,16 +57,12 @@ func enCommandModule() map[string]string {
 		"slash.tunnel":              "Share session to mobile (QR code tunnel)",
 		"slash.retry":               "Retry last submission after error",
 		"slash.edit":                "Edit and resend last submission",
-		"slash.regen":               "Regenerate last response",
-		"slash.fork":                "Fork conversation into new session",
 		"slash.reflect":             "Show recent run reflections",
 		"slash.rules":               "Manage ratchet rules",
 		"slash.goal":                "Show, set, or clear persistent autopilot goal",
 		"command.unknown":           "Unknown command: %s\n",
 		"command.help_hint":         "Type /help for available commands\n\n",
 		"command.usage.allow":       "Usage: /allow <tool-name>\n\n",
-		"command.usage.resume":      "Usage: /resume <session-id>\n\n",
-		"command.usage.export":      "Usage: /export <session-id>\n\n",
 		"command.model_switched":    "Switched model to: %s (vendor: %s)\n\n",
 		"command.model_failed":      "Failed to switch model: %v\n\n",
 		"command.model_current":     "Current model: %s (vendor: %s)\nAvailable models: %s\nUse /model to open the model panel or /model <model-name> to switch directly.\n\n",
@@ -80,7 +72,6 @@ func enCommandModule() map[string]string {
 		"command.provider_current":  "Current vendor: %s (endpoint: %s, model: %s)\nAvailable vendors: %s\nAvailable endpoints: %s\nUsage: /provider [vendor] [endpoint]\n\n",
 		"command.allow_set":         "✓ %s is now always allowed\n\n",
 		"command.custom":            "Custom command /%s:\n",
-		"command.mention_error":     "Mention expansion error: %v",
 		"command.skill_agent_only":  "Skill %s can only be invoked by the agent.",
 		"init.resolve_failed":       "Failed to resolve init target: %v\n\n",
 		"init.generate_failed":      "Failed to generate AGENTS.md content: %v\n\n",
@@ -107,6 +98,8 @@ func enCommandModule() map[string]string {
   /memory            Show loaded memory files
   /memory list       List auto memory entries
   /memory clear      Clear all auto memories
+  /memory forget <k> Forget a single memory (soft delete, restorable)
+  /memory forgotten  List forgotten memories
   /undo              Undo the last file edit (checkpoint rollback)
   /files             Show files modified by agent in this session
   /checkpoints       List all file edit checkpoints
@@ -116,7 +109,7 @@ func enCommandModule() map[string]string {
   /allow <tool>      Always allow a specific tool
   /plugins           List loaded plugins and their tools
   /image <path>      Attach an image file
-  /mode <mode>       Set agent mode (supervised|plan|auto|bypass|autopilot)
+  /mode <mode>       Set agent mode (supervised|bypass)
   /init              Generate AGENTS.md from the current project
   /agents            List sub-agents
   /agent <id>        Show sub-agent details
@@ -170,27 +163,23 @@ func zhCommandModule() map[string]string {
 		"slash.lang":                "切换界面语言",
 		"slash.skills":              "浏览可用 skills",
 		"slash.exit":                "退出 ggcode",
-		"slash.agents":              "列出子 Agent",
-		"slash.agent":               "查看子 Agent 详情",
 		"slash.compact":             "压缩对话历史",
 		"slash.todo":                "查看/管理 todo",
 		"slash.bug":                 "报告 bug",
 		"slash.config":              "查看/修改配置",
 		"slash.qq":                  "管理 QQ 渠道绑定",
-		"slash.tg":                  "管理 Telegram 机器人绑定",
 		"slash.telegram":            "管理 Telegram 机器人绑定",
 		"slash.pc":                  "管理 PC 渠道绑定",
 		"slash.discord":             "管理 Discord 绑定",
 		"slash.feishu":              "管理飞书绑定",
-		"slash.lark":                "管理飞书绑定",
 		"slash.slack":               "管理 Slack 绑定",
 		"slash.dingtalk":            "管理钉钉绑定",
-		"slash.ding":                "管理钉钉绑定",
 		"slash.status":              "显示当前状态",
 		"slash.update":              "升级 ggcode",
 		"slash.restart":             "重启 ggcode",
 		"slash.regenerate":          "重新生成最近回复",
 		"slash.branch":              "分叉对话到新会话；[N] 回退 N 轮",
+		"slash.rewind":              "回退最近 N 轮：还原其文件编辑并在分叉会话中继续",
 		"slash.pin_session":         "固定会话（免清理、列表置顶）",
 		"slash.unpin_session":       "取消固定会话",
 		"slash.tag":                 "为会话添加标签",
@@ -206,16 +195,12 @@ func zhCommandModule() map[string]string {
 		"slash.tunnel":              "分享会话到手机（二维码隧道）",
 		"slash.retry":               "出错后重试上次提交",
 		"slash.edit":                "编辑并重新发送上次提交",
-		"slash.regen":               "重新生成最近回复",
-		"slash.fork":                "分叉对话到新会话",
 		"slash.reflect":             "显示最近运行反思",
 		"slash.rules":               "管理棘轮规则",
 		"slash.goal":                "查看、设置或清除持久化自动驾驶目标",
 		"command.unknown":           "未知命令：%s\n",
 		"command.help_hint":         "输入 /help 查看可用命令\n\n",
 		"command.usage.allow":       "用法：/allow <tool-name>\n\n",
-		"command.usage.resume":      "用法：/resume <session-id>\n\n",
-		"command.usage.export":      "用法：/export <session-id>\n\n",
 		"command.model_switched":    "已切换模型为：%s（供应商：%s）\n\n",
 		"command.model_failed":      "切换模型失败：%v\n\n",
 		"command.model_current":     "当前模型：%s（供应商：%s）\n可用模型：%s\n使用 /model 打开模型面板，或用 /model <model-name> 直接切换。\n\n",
@@ -225,7 +210,6 @@ func zhCommandModule() map[string]string {
 		"command.provider_current":  "当前供应商：%s（接口：%s，模型：%s）\n可用供应商：%s\n可用接口：%s\n用法：/provider [vendor] [endpoint]\n\n",
 		"command.allow_set":         "✓ %s 已设为永久允许\n\n",
 		"command.custom":            "自定义命令 /%s：\n",
-		"command.mention_error":     "展开 @ 引用失败：%v",
 		"command.skill_agent_only":  "技能 %s 只能由 agent 调用。",
 		"init.resolve_failed":       "解析初始化目标失败：%v\n\n",
 		"init.generate_failed":      "生成 AGENTS.md 内容失败：%v\n\n",
@@ -252,6 +236,8 @@ func zhCommandModule() map[string]string {
   /memory            显示已加载记忆
   /memory list       列出自动记忆条目
   /memory clear      清空自动记忆
+  /memory forget <k> 遗忘单条记忆（软删除，可恢复）
+  /memory forgotten  列出已遗忘的记忆
   /undo              撤销最近一次文件修改（回滚检查点）
   /files             查看 agent 在本次会话中修改的文件
   /checkpoints       列出所有文件修改检查点
@@ -261,7 +247,7 @@ func zhCommandModule() map[string]string {
   /allow <tool>      永久允许某个工具
   /plugins           列出已加载插件及其工具
   /image <path>      附加图片文件
-  /mode <mode>       设置运行模式（supervised|plan|auto|bypass|autopilot）
+  /mode <mode>       设置运行模式（supervised|bypass；auto/autopilot 为兼容别名）
   /init              基于当前项目生成 AGENTS.md
   /agents            列出子 Agent
   /agent <id>        查看子 Agent 详情

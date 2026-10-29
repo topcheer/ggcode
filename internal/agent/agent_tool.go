@@ -4,17 +4,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	runtimedebug "runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/audit"
+	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/hooks"
@@ -39,8 +42,9 @@ func (a *Agent) permissionDeniedMessage(toolName string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Permission denied for tool %q. The operation was blocked by the permission policy (current mode: %s).\n", toolName, mode)
 	if mode == permission.PlanMode {
-		b.WriteString("Plan mode is read-only: writes, shell commands, and other non-readonly tools are denied until the mode changes. " +
-			"If you did not intend to operate in plan mode, call switch_mode to restore the previous mode (e.g. \"auto\"), or present your plan via exit_plan_mode.\n")
+		b.WriteString("Plan mode denies explicit file-writing tools until the mode changes (reads, shell probes, and builds are allowed). " +
+			"If you did not intend to operate in plan mode, call exit_plan_mode to restore the previous mode (" +
+			"supervised or bypass), or present your plan via exit_plan_mode.\n")
 	}
 	b.WriteString("To proceed:\n" +
 		"1. If this is a file write, ensure the path is within the workspace\n" +
@@ -314,8 +318,19 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	// workflow ordering is the coarser contract).
 	if wf := a.workflowEngineLazy(); wf != nil {
 		if wv := wf.checkPreconditions(tc.Name, tc.Arguments); wv != nil {
-			msg := fmt.Sprintf("[workflow:%s %s] %q is guarded by step %q which requires step %q first, and no artifact matching %q was produced this run. Complete the prerequisite (or fix the workflow spec) before running this command.",
-				wv.Step.ID, strings.ToUpper(wv.Step.Mode), wv.Command, wv.Step.ID, wv.Missing, wv.WantGlob)
+			// #3860 B: a block step with no ArtifactGlob renders
+			// `no artifact matching ""` - pointing at an artifact contract that
+			// does not exist. Commands-only prerequisites speak in "command was
+			// never executed" terms instead, matching wfAttemptAttribution's
+			// last==nil semantics.
+			var msg string
+			if wv.WantGlob == "" {
+				msg = fmt.Sprintf("[workflow:%s %s] %q is guarded by step %q which requires step %q first, and the guarded command for that prerequisite was not executed this run. Complete the prerequisite (or fix the workflow spec) before running this command.",
+					wv.Step.ID, strings.ToUpper(wv.Step.Mode), wv.Command, wv.Step.ID, wv.Missing)
+			} else {
+				msg = fmt.Sprintf("[workflow:%s %s] %q is guarded by step %q which requires step %q first, and no artifact matching %q was produced this run. Complete the prerequisite (or fix the workflow spec) before running this command.",
+					wv.Step.ID, strings.ToUpper(wv.Step.Mode), wv.Command, wv.Step.ID, wv.Missing, wv.WantGlob)
+			}
 			msg += wfAttemptAttribution(wv)
 			if wv.Step.Message != "" {
 				msg += " Note: " + wv.Step.Message
@@ -327,6 +342,20 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 			}
 			res := runTraced()
 			a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
+			// #3671-1: warn-mode workflow still EXECUTES the real tool (same
+			// runTraced as the normal path) - a successful side effect must hit
+			// the crash sidecar exactly like the invariant-warn branch and the
+			// normal path (#3366 semantics), or a post-crash restore replays the
+			// call as if it never happened and repeats the write.
+			if !res.IsError {
+				a.appendCrashSidecar(tc.Name, string(tc.Arguments))
+			}
+			// #3859 B: ground before returning - this branch used to skip the
+			// shared grounding block entirely, so a command that BOTH hit a
+			// warn guard AND was a step's ground command left that step
+			// un-grounded forever (commands-only soft deadlock), and
+			// warn-matching commands never probed for produced artifacts.
+			a.groundWorkflowAfterTool(tc, res)
 			res.Content += "\n\n" + msg
 			return res
 		}
@@ -350,6 +379,10 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 			}
 			res.Content += fmt.Sprintf("\n\n[invariant:%s] %s (target: %q) - warn-mode invariant matched; proceed carefully.", v.Inv.ID, v.Inv.Message, v.Target)
 			auditInvariantWarn(tc.Name, v.Inv.ID)
+			// #3859 B: same grounding gap as the workflow-warn branch - a
+			// warn-matching invariant must not forfeit artifact probing and
+			// step grounding for commands that succeeded.
+			a.groundWorkflowAfterTool(tc, res)
 			return res
 		}
 	}
@@ -371,22 +404,28 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		}
 	}
 	// r26: same products ground workflow-step completion (artifact_glob).
-	if wf := a.workflowEngineLazy(); wf != nil && !res.IsError {
-		for _, ot := range invariantOpTargets(tc.Name, tc.Arguments) {
-			if ot.Op == "write" || ot.Op == "mkdir" || ot.Op == "move" {
-				wf.recordCompletion(ot.Target)
-			}
-		}
-		// #3414: successful commands often produce the declared artifacts
-		// themselves (go test -coverprofile=..., make bin/*). Exec products
-		// never flow through invariantOpTargets, so block mode deadlocked
-		// the flagship spec shape on a step that had actually completed.
-		// Probe the disk for fresh artifacts after every command success.
-		if tc.Name == "run_command" {
-			wf.probeArtifactsOnDisk()
+	a.groundWorkflowAfterTool(tc, res)
+	return res
+}
+
+// groundWorkflowAfterTool is the shared post-success grounding pass for
+// every executed tool call (normal path and both warn branches, #3859):
+// write-class targets complete steps directly, and successful command
+// executions (run_command AND start_command) probe the disk for declared
+// step artifacts (#3414).
+func (a *Agent) groundWorkflowAfterTool(tc provider.ToolCallDelta, res tool.Result) {
+	wf := a.workflowEngineLazy()
+	if wf == nil || res.IsError {
+		return
+	}
+	for _, ot := range invariantOpTargets(tc.Name, tc.Arguments) {
+		if ot.Op == "write" || ot.Op == "mkdir" || ot.Op == "move" {
+			wf.recordCompletion(ot.Target)
 		}
 	}
-	return res
+	if isCommandExecTool(tc.Name) {
+		wf.probeArtifactsOnDisk()
+	}
 }
 
 // invariantEngineLazy builds the engine on first use, anchored to the
@@ -693,7 +732,17 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 	// direct Content += - the direct append bypassed the per-turn guidance
 	// budget and duplicated the agent.go toolFallbackCheck pathway, stacking
 	// an extra unbudgeted hint onto every failing result.
-	if result.IsError {
+	// #3641: the search tools' headline scenario ("When grep returns
+	// nothing...") never fired - grep renders zero matches as a SUCCESS
+	// result (by contract, grep.go), and the hint path was gated on
+	// IsError alone. Successful results of the search/LSP tools now also
+	// go through toolFallbackHint; the hint itself decides via
+	// lspFallbackHint (non-empty successes return ""
+	// unchanged, so no other tool or success path is affected).
+	// #3673: this is now the SINGLE engine for zero-match success hints
+	// (agent.go's toolFallbackCheck is IsError-gated again) and the
+	// coverage set matches isZeroMatchSuccess exactly.
+	if result.IsError || toolFallbackHintOnSuccess(t.Name()) {
 		if hint := toolFallbackHint(t.Name(), result.Content); hint != "" {
 			// Trim the hint's leading newline: appendGuidance inserts its own
 			// "\n\n" separator, which would otherwise yield a triple newline.
@@ -795,6 +844,30 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 			plans[i].Existed = true
 		}
 	}
+	// #3690: the refresh above mirrors the single-file leg's #1786 handling,
+	// but that leg also RE-RUNS its dry-run gate on the refreshed baseline
+	// (a drifted file must not slip a guaranteed-failure write through the
+	// gate that only validated the pre-pause pair). Same asymmetry fixed
+	// here: rebuild the batch from the refreshed baselines and re-validate.
+	refreshedBatch := make([]fileEditPlan, 0, len(plans))
+	for _, p := range plans {
+		if diff.HasChanges(p.OldContent, p.NewContent) {
+			refreshedBatch = append(refreshedBatch, fileEditPlan{
+				Path:       p.Path,
+				OldContent: p.OldContent,
+				NewContent: p.NewContent,
+			})
+		}
+	}
+	if blockers := dryRunValidateBatch(refreshedBatch); len(blockers) > 0 {
+		var b strings.Builder
+		b.WriteString("[Multi-file edit blocked by post-refresh validation]\n")
+		b.WriteString("File content drifted during the confirmation pause and now has fatal issues. NO files were modified.\n\n")
+		for path, msg := range blockers {
+			b.WriteString(fmt.Sprintf("File: %s\n%s\n\n", path, msg))
+		}
+		return tool.Result{Content: strings.TrimRight(b.String(), "\n"), IsError: true}
+	}
 
 	multiStart := time.Now()
 	result, err := a.safeExecute(t, ctx, tc.Arguments)
@@ -859,12 +932,17 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 			// write-time formatting so mismatch means REAL drift here too.
 			mirrored := mirrorWriteTimeGoFormat(path, newContent)
 			return checkWriteIntegrity(path, oldContent, mirrored)
-		})
+		}, writtenSet)
 	}
 
 	// Post-write missing test companion detection for multi-file edits.
-	if !result.IsError {
-		a.runPostWriteWarnings(&result, plans, CheckMissingTestCompanionWithFS)
+	// #3853: mirror the #2143 P1/P2 filters - a dry-run preview writes
+	// nothing, and in partial_success mode only written_paths actually
+	// landed. Unwritten plans used to emit companion warnings and eat the
+	// shared per-turn guidance budget (#1864 case 2), crowding out real
+	// warnings elsewhere in the turn.
+	if !result.IsError && !isDryRun {
+		a.runPostWriteWarnings(&result, plans, CheckMissingTestCompanionWithFS, writtenSet)
 	}
 
 	// Post-write hardcoded credential detection for multi-file edits
@@ -874,8 +952,8 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	// registry copy respects the maxIntegrityWarnings cap).
 
 	// Post-write debug statement detection for multi-file edits.
-	if !result.IsError {
-		a.runPostWriteWarnings(&result, plans, checkDebugStmts)
+	if !result.IsError && !isDryRun {
+		a.runPostWriteWarnings(&result, plans, checkDebugStmts, writtenSet)
 	}
 
 	postEnv := env
@@ -897,12 +975,15 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 // non-empty warnings to the result via appendGuidance - the shared per-turn
 // budget path (#1864 case 2: the direct += appends let N plans stack 3N
 // warning blocks that neither charged the count cap nor the 2048-byte pool).
-func (a *Agent) runPostWriteWarnings(result *tool.Result, plans []tool.PlannedFileEdit, checker func(path, oldContent, newContent string) string) {
+func (a *Agent) runPostWriteWarnings(result *tool.Result, plans []tool.PlannedFileEdit, checker func(path, oldContent, newContent string) string, writtenSet map[string]bool) {
 	if len(plans) == 0 {
 		return
 	}
 	var warnings []string
 	for _, plan := range plans {
+		if writtenSet != nil && !writtenSet[plan.Path] {
+			continue // #3853: not actually written (failed/skipped in partial mode)
+		}
 		if diff.HasChanges(plan.OldContent, plan.NewContent) {
 			if w := checker(plan.Path, plan.OldContent, plan.NewContent); w != "" {
 				warnings = append(warnings, w)
@@ -1052,6 +1133,18 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 		// change from remove to restore.
 		fileExisted = true
 		oldContent = string(cur)
+		// #3671-2: the drift branch above re-runs the dry-run gate on its
+		// refreshed baseline; this externally-created branch flips Existed and
+		// swaps oldContent (a " from nothing" overwrite of real external
+		// content) without re-running it - the exact asymmetry #3690 fixed on
+		// the multi-file leg. Run the gate on the external content too: the
+		// empty-loss and conflict-marker checks are baseline-relative and this
+		// is now the real baseline.
+		if diff.HasChanges(oldContent, newContent) {
+			if blockMsg := dryRunValidate(filePath, oldContent, newContent); blockMsg != "" {
+				return tool.Result{Content: blockMsg, IsError: true}
+			}
+		}
 	}
 
 	// Execute the actual tool (with panic recovery)
@@ -1468,7 +1561,8 @@ func simAdjustNewText(content, newText string, mr simMatchResult) string {
 		}
 	}
 	if strings.Contains(mr.transform, "line-numbers-stripped") {
-		out = simStripAllLineNumberPrefixes(out)
+		// #3854: padded-prefix strip, mirroring tool.adjustNewText.
+		out = simStripPaddedLineNumberPrefixes(out, content)
 	}
 	if strings.Contains(mr.transform, "indent-normalized") {
 		out = simNormalizeIndentation(content, out)
@@ -1515,14 +1609,32 @@ func simStripLineNumberPrefix(text string) string {
 	return strings.Join(out, "\n")
 }
 
-func simStripAllLineNumberPrefixes(text string) string {
+// simPaddedLineNumberPrefixRE mirrors tool.paddedLineNumberPrefixRE
+// (#3854): at least one leading space before the digits.
+var simPaddedLineNumberPrefixRE = regexp.MustCompile(`^\s{1,12}\d+\t`)
+var simBareLineNumberPrefixRE = regexp.MustCompile(`^(\d+)\t`)
+
+// simStripPaddedLineNumberPrefixes mirrors
+// tool.stripPaddedLineNumberPrefixes (#3854): padded prefixes always
+// strip; column-0 digit+TAB strips only when the number is a plausible
+// line number of the file (readFileRange width-1 form, TestIssue601_W1).
+func simStripPaddedLineNumberPrefixes(text, content string) string {
+	maxLine := strings.Count(content, "\n") + 1
 	lines := simTrimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
 	for i, l := range lines {
 		if simReadFileLineNumberOnlyRE.MatchString(l) {
 			lines[i] = ""
 			continue
 		}
-		lines[i] = simLineNumberPrefixRE.ReplaceAllString(l, "")
+		if simPaddedLineNumberPrefixRE.MatchString(l) {
+			lines[i] = simPaddedLineNumberPrefixRE.ReplaceAllString(l, "")
+			continue
+		}
+		if m := simBareLineNumberPrefixRE.FindStringSubmatch(l); m != nil {
+			if n, err := strconv.Atoi(m[1]); err == nil && n >= 1 && n <= maxLine {
+				lines[i] = simBareLineNumberPrefixRE.ReplaceAllString(l, "")
+			}
+		}
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1948,9 +2060,19 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 	case "undo":
 		cp, err := cpMgr.Undo("agent")
 		if err != nil {
+			// #3671-3: distinguish "stack empty" (benign, sentinel) from
+			// IO/corruption failures - the old uniform "Nothing to undo"
+			// label made the LLM read a corrupt checkpoint store as an
+			// empty stack and diagnose from wrong disk state.
+			if errors.Is(err, checkpoint.ErrNothingToUndo) {
+				return tool.Result{
+					IsError: true,
+					Content: fmt.Sprintf("Nothing to undo: %v", err),
+				}
+			}
 			return tool.Result{
 				IsError: true,
-				Content: fmt.Sprintf("Nothing to undo: %v", err),
+				Content: fmt.Sprintf("Undo failed (checkpoint store error, not an empty stack): %v", err),
 			}
 		}
 		// Existed (not OldContent=="") distinguishes created files from

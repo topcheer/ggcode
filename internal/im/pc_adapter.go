@@ -654,11 +654,17 @@ func (a *pcAdapter) handleSessionCloseFromApp(sessionID string, payload pcPayloa
 	reason := pcPayloadString(payload, "reason")
 	debug.Log("pc", "session close from app session=%s reason=%s", sessionID, reason)
 	a.sessions.Delete(sessionID)
+	// #3576: passive close must persist like the active CloseSession path -
+	// a memory-only Delete leaves the session in the store, and a restart
+	// revives it as a ghost.
+	a.saveSessionsToStore()
 }
 
 func (a *pcAdapter) handleSessionClosed(sessionID, reason string) {
 	debug.Log("pc", "session closed by relay session=%s reason=%s", sessionID, reason)
 	a.sessions.Delete(sessionID)
+	// #3576: same persist-on-close contract as above (relay-side close).
+	a.saveSessionsToStore()
 }
 
 func (a *pcAdapter) sendPayload(sessionID string, sess *pcSession, payload pcPayload) error {

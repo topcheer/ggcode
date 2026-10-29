@@ -108,6 +108,19 @@ func (s *PathSandbox) Allowed(path string) bool {
 		return true // no restrictions
 	}
 
+	// #4138: expand a leading ~ BEFORE anchoring. "~/x" is neither absolute
+	// nor "/"-rooted, so it used to fall into the relative-path anchoring
+	// below and got joined under the sandbox root ("<sandbox>/~/x") - the
+	// prefix compare then passed and every tilde path was misjudged as
+	// sandbox-inside. In bypass/auto that disabled the out-of-sandbox write
+	// Deny (write_file ~/.zshrc escaped); in supervised it short-circuited
+	// the sensitive-read Ask (read_file ~/.ssh/id_rsa silently allowed).
+	// The tool layer expands ~ independently (resolveToolPath, #568), so the
+	// policy layer must judge the same real target. Config_policy's plan and
+	// redirect callers (#573-C) already pre-expand; re-expanding an expanded
+	// absolute path is a no-op.
+	path = expandTilde(path)
+
 	// Relative paths are anchored at the first allowed directory, not the
 	// process CWD (#551-F). Since #542, file tools resolve relative paths
 	// against their WorkingDir (the workspace root), so the sandbox must

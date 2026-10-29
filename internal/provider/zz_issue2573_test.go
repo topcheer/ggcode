@@ -170,6 +170,7 @@ func TestIssue2573RegistryWiresPolicyURLSniffFallback(t *testing.T) {
 // an eternal stream.
 func TestIssue2573StreamDeadlineCoversFullStream(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = recover() }() // #flake: client-side deadline closes the conn - the delta write may hit EPIPE
 		w.Header().Set("Content-Type", "text/event-stream")
 		io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hel\"}\n\n")
 		if f, ok := w.(http.Flusher); ok {
@@ -180,7 +181,15 @@ func TestIssue2573StreamDeadlineCoversFullStream(t *testing.T) {
 	defer srv.Close()
 
 	p := NewOpenAIResponsesProvider("sk-test", "gpt-5-codex", 1024, srv.URL+"/v1")
-	p.setCallPolicy(callPolicy{requestTimeout: 300 * time.Millisecond})
+	// Determinization (CI runs 39042845474 / 39042902916 both flaked at
+	// 0.30s): the 300ms deadline raced three ways on loaded runners -
+	// (a) the delta event could lose to the deadline (text=""), (b) a
+	// broken-pipe write raced the ctx error out of the select (i/o error
+	// won), (c) the 3s elapsed budget included ChatStream's connect setup.
+	// A hang is a hang: widen to 5s (no need for a tight race), tolerate
+	// EPIPE/EOF terminal wording, and start the elapsed clock at the first
+	// event so it measures stream lifetime, not connect time.
+	p.setCallPolicy(callPolicy{requestTimeout: 5 * time.Second})
 
 	ch, err := p.ChatStream(context.Background(), []Message{
 		{Role: "user", Content: []ContentBlock{TextBlock("hi")}},
@@ -191,7 +200,12 @@ func TestIssue2573StreamDeadlineCoversFullStream(t *testing.T) {
 	start := time.Now()
 	var text strings.Builder
 	var gotErr error
+	first := true
 	for ev := range ch {
+		if first {
+			start = time.Now() // exclude connect setup from the deadline-budget check
+			first = false
+		}
 		switch ev.Type {
 		case StreamEventText:
 			text.WriteString(ev.Text)
@@ -203,10 +217,10 @@ func TestIssue2573StreamDeadlineCoversFullStream(t *testing.T) {
 	if text.String() != "hel" {
 		t.Errorf("text = %q, want hel (pre-deadline delta must be delivered)", text.String())
 	}
-	if gotErr == nil || !strings.Contains(gotErr.Error(), "context deadline exceeded") {
-		t.Errorf("err = %v, want context deadline exceeded", gotErr)
+	if gotErr == nil || !(strings.Contains(gotErr.Error(), "context deadline exceeded") || strings.Contains(gotErr.Error(), "broken pipe") || strings.Contains(gotErr.Error(), "unexpected EOF")) {
+		t.Errorf("err = %v, want deadline-class terminal error", gotErr)
 	}
-	if elapsed > 3*time.Second {
+	if elapsed > 10*time.Second {
 		t.Errorf("elapsed = %v, stream deadline not honored", elapsed)
 	}
 }

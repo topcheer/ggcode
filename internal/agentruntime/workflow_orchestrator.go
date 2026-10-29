@@ -42,6 +42,10 @@ const (
 	// workflowMaxSteps bounds graph size: 16 steps at one level of nesting
 	// already dwarfs what one turn-by-turn delegation loop manages reliably.
 	workflowMaxSteps = 16
+	// workflowMaxRetries bounds the per-step transient-failure retry budget
+	// (LLMCompiler task-fetching semantics: a transient worker failure
+	// requeues instead of poisoning the downstream chain).
+	workflowMaxRetries = 2
 	// workflowLayerCap bounds per-layer concurrency: the session-wide spawn
 	// budget is 16 slots shared with the parent's own tool calls, so a
 	// workflow layer takes at most half of it.
@@ -55,14 +59,20 @@ const (
 // scripts (no JS sandbox needed — Anthropic's semantics, a reviewable
 // subset of its surface).
 type WorkflowStep struct {
-	ID         string   `json:"id"`
-	Task       string   `json:"task"`
-	DependsOn  []string `json:"dependsOn,omitempty"`
-	Verifier   string   `json:"verifier,omitempty"` // adversarial refute prompt; "" = no verification
-	Tools      []string `json:"tools,omitempty"`
-	Model      string   `json:"model,omitempty"`
-	workerID   string   // runtime: sub-agent ID
-	verifierID string   // runtime: verifier sub-agent ID
+	ID        string   `json:"id"`
+	Task      string   `json:"task"`
+	DependsOn []string `json:"dependsOn,omitempty"`
+	Verifier  string   `json:"verifier,omitempty"` // adversarial refute prompt; "" = no verification
+	Tools     []string `json:"tools,omitempty"`
+	Model     string   `json:"model,omitempty"`
+	// Retries is the per-step transient-failure retry budget (0..2). A
+	// worker that ends Failed/Cancelled, a verifier REJECTED verdict, or a
+	// launch error requeues the step instead of poisoning its downstream
+	// chain (LLMCompiler task-fetching semantics). Default 0 = old
+	// one-strike behavior, byte-identical for existing callers.
+	Retries    int    `json:"retries,omitempty"`
+	workerID   string // runtime: sub-agent ID
+	verifierID string // runtime: verifier sub-agent ID
 }
 
 // WorkflowSpec is the full generated graph.
@@ -105,6 +115,9 @@ func (s *WorkflowSpec) Validate() ([][]int, error) {
 			return nil, fmt.Errorf("workflow: duplicate step id %q", st.ID)
 		}
 		idx[st.ID] = i
+		if st.Retries < 0 || st.Retries > workflowMaxRetries {
+			return nil, fmt.Errorf("workflow: step %q retries %d out of range 0..%d", st.ID, st.Retries, workflowMaxRetries)
+		}
 	}
 	// Kahn layering over DependsOn edges; a cycle leaves unreachable nodes.
 	indeg := make([]int, len(s.Steps))
@@ -259,9 +272,32 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 			}
 		}
 	}
+	// retryStep requeues a transiently failed step while its retry budget
+	// lasts, instead of striking it and poisoning downstream consumers.
+	// Returns true when the step was requeued (caller must NOT release or
+	// mark blocking).
+	attempts := make([]int, len(spec.Steps))
+	retryStep := func(i int, reason string) bool {
+		st := &spec.Steps[i]
+		if attempts[i] >= st.Retries {
+			return false
+		}
+		attempts[i]++
+		doneStep[i] = true // free the in-flight slot; relaunched on requeue
+		rep.StepLines = append(rep.StepLines, fmt.Sprintf("[%s] %s — retrying (attempt %d/%d)", st.ID, reason, attempts[i], st.Retries))
+		ready = append(ready, i)
+		sort.Slice(ready, func(x, y int) bool { return readyLess(ready[x], ready[y]) })
+		return true
+	}
 	// finalize records a terminal step, runs its adversarial verifier when
 	// configured, then releases dependents into the ready set.
 	finalize := func(i int, status, result string) {
+		switch status {
+		case string(subagent.StatusFailed), string(subagent.StatusCancelled):
+			if retryStep(i, status+" (transient)") {
+				return
+			}
+		}
 		statuses[i] = status
 		results[i] = result
 		doneStep[i] = true
@@ -272,6 +308,9 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 			case verdict == "":
 				rep.StepLines = append(rep.StepLines, fmt.Sprintf("[%s] completed (verifier unavailable — unverified)", st.ID))
 			case strings.HasPrefix(verdict, "REJECTED"):
+				if retryStep(i, "refuted by verifier") {
+					return
+				}
 				refuted[i] = true
 				blocking = append(blocking, st.ID)
 				rep.StepLines = append(rep.StepLines, fmt.Sprintf("[%s] REFUTED by adversarial verifier: %s", st.ID, firstLine(verdict)))
@@ -335,6 +374,9 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 				Model:       st.Model,
 			})
 			if err != nil {
+				if retryStep(i, "launch failed") {
+					continue
+				}
 				statuses[i] = "launch-failed"
 				rep.StepLines = append(rep.StepLines, fmt.Sprintf("[%s] LAUNCH FAILED: %v", st.ID, err))
 				blocking = append(blocking, st.ID)
@@ -342,11 +384,11 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 				continue
 			}
 			st.workerID = id
+			doneStep[i] = false // reset in case this launch is a retry
 			act = append(act, inFlight{i, id})
 		}
 
 		// Poll in-flight workers to terminal state (best_of_n pattern).
-		allDone := true
 		for _, a := range act {
 			if doneStep[a.i] {
 				continue
@@ -359,13 +401,20 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 			switch s.Status {
 			case subagent.StatusCompleted, subagent.StatusFailed, subagent.StatusCancelled:
 				finalize(a.i, string(s.Status), s.Result)
-			default:
-				allDone = false
 			}
 		}
-		if allDone {
-			act = act[:0] // compact finished entries
+		// #3544: compact finalized entries EVERY round. The old compaction
+		// ran only when every in-flight step had finished (allDone), so a
+		// finished step kept occupying a workflowLayerCap slot until its
+		// whole batch drained - ready downstream steps starved below the
+		// cap even though the window had free capacity.
+		kept := act[:0]
+		for _, a := range act {
+			if !doneStep[a.i] {
+				kept = append(kept, a)
+			}
 		}
+		act = kept
 		if len(act) == 0 && len(ready) == 0 {
 			break
 		}

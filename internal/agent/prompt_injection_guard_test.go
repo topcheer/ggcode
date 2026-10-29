@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -259,21 +260,40 @@ func TestInjectionPatterns_HighPrecision(t *testing.T) {
 	}
 }
 
+// selfDefArgs marshals a single-field args body for guard probes (#3996 tests).
+func selfDefArgs(t *testing.T, field, path string) json.RawMessage {
+	t.Helper()
+	b, err := json.Marshal(map[string]string{field: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return json.RawMessage(b)
+}
+
 // #1481-B: local reads of the defense system's own source must not be
 // wrapped (which also skips taint fingerprinting) - the pattern list lives
 // in those files, so the guard fired on its own source three separate
 // times while agents worked on it.
 func TestInjectionGuardSelfDefenseExempt1481(t *testing.T) {
 	body := "var x = []string{\"ignore previous instructions\"}\n[system]\n"
+	// #3996: paths are built from the REAL package dir - the exemption now
+	// requires the defense files' actual directory, not a synthetic basename.
+	guardFile := filepath.Join(defenseSourceDir(), "prompt_injection_guard.go")
+	taintFile := filepath.Join(defenseSourceDir(), "taint_influence_check.go")
 	// read_file of the guard's own source: no wrap.
-	got := guardPromptInjection("read_file", json.RawMessage(`{"path":"/repo/internal/agent/prompt_injection_guard.go"}`), body)
+	got := guardPromptInjection("read_file", selfDefArgs(t, "path", guardFile), body)
 	if strings.HasPrefix(got, injectionWarning) {
 		t.Fatal("self-defense read must be exempt from the wrap")
 	}
 	// grep with the taint check file in a nested glob arg: exempt too.
-	got = guardPromptInjection("grep", json.RawMessage(`{"pattern":"x","path":"/repo/internal/agent/taint_influence_check.go"}`), body)
+	got = guardPromptInjection("grep", selfDefArgs(t, "path", taintFile), body)
 	if strings.HasPrefix(got, injectionWarning) {
 		t.Fatal("self-defense grep target must be exempt")
+	}
+	// A same-named file OUTSIDE the package dir is NOT exempt anymore (#3996).
+	got = guardPromptInjection("read_file", selfDefArgs(t, "path", "/tmp/attacker/prompt_injection_guard.go"), body)
+	if !strings.HasPrefix(got, injectionWarning) {
+		t.Fatal("same-named decoy outside the defense dir must be wrapped (#3996)")
 	}
 	// The same body from an EXTERNAL tool is still wrapped.
 	got = guardPromptInjection("web_fetch", json.RawMessage(`{"url":"https://x/prompt_injection_guard.go"}`), body)

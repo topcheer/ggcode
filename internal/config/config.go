@@ -225,10 +225,18 @@ type MCPServerConfig struct {
 	// approved baseline are logged silently instead of raising the
 	// OnToolDrift callback. For servers under active development whose
 	// tool definitions legitimately churn.
-	AllowToolDrift bool   `yaml:"allow_tool_drift,omitempty" json:"allow_tool_drift,omitempty"`
-	Source         string `yaml:"-" json:"-"`
-	OriginPath     string `yaml:"-" json:"-"`
-	Migrated       bool   `yaml:"-" json:"-"`
+	AllowToolDrift bool `yaml:"allow_tool_drift,omitempty" json:"allow_tool_drift,omitempty"`
+	// #4386 form clear sentinels: Command/URL are strings, so the patch
+	// layer's "empty = not provided" semantics leave the form no way to
+	// clear them - an emptied field saved "successfully" while the old
+	// value silently resurrected. Mirrors #979's env_clear / #1434-B's
+	// args_clear (which use non-nil empties because their fields are
+	// maps/slices). Never serialized.
+	CommandClear bool   `yaml:"-" json:"-"`
+	URLClear     bool   `yaml:"-" json:"-"`
+	Source       string `yaml:"-" json:"-"`
+	OriginPath   string `yaml:"-" json:"-"`
+	Migrated     bool   `yaml:"-" json:"-"`
 }
 
 // PluginConfigEntry describes a single plugin from the config file.
@@ -292,9 +300,10 @@ const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a
 2. **Verification before completion** — every task must have a verifiable success condition defined before implementation. "Build passes", "tests pass", "repro path no longer triggers". If you cannot define how to verify it, the task is not yet well-specified.
 
 ## Permission modes
-- You can switch between permission modes at any time using the ` + "`switch_mode`" + ` tool. It is always available, even in plan mode.
-- Modes: ` + "`supervised`" + ` (default; respects per-tool rules, asks for unspecified), ` + "`plan`" + ` (read-only exploration), ` + "`auto`" + ` (safe ops auto-allowed, dangerous denied), ` + "`bypass`" + ` (almost everything allowed), ` + "`autopilot`" + ` (bypass + autonomous continuation + goal-directed).
-- Default to ` + "`supervised`" + ` or ` + "`auto`" + `. Only switch to ` + "`bypass`" + ` or ` + "`autopilot`" + ` when the user explicitly requests it. Switch to ` + "`plan`" + ` when exploring unfamiliar code.
+- You can switch between permission modes at any time using the ` + "`switch_mode`" + ` tool. It is always available.
+- Two user modes: ` + "`supervised`" + ` (default; most calls flow without prompting, with safety floors that ask: system-level destruction, credential exfiltration, persistence-backdoor writes) and ` + "`bypass`" + ` (cruise surface; everything allowed except system-level destruction and persistence-backdoor writes).
+- ` + "`auto`" + ` / ` + "`autopilot`" + ` are accepted legacy aliases that normalize to supervised / bypass. ` + "`plan`" + ` is tool-internal (enter via enter_plan_mode, exit via exit_plan_mode) and cannot be switched into directly.
+- Default to ` + "`supervised`" + `. Only switch to ` + "`bypass`" + ` when the user explicitly requests it.
 
 ## Memory & Knowledge
 - Use ` + "`save_memory`" + ` / ` + "`delete_memory`" + ` for durable patterns and decisions that will matter later.
@@ -331,7 +340,7 @@ Antinoise rules: prefer DMs over broadcasts. No acknowledgments ("got it", "than
 - Never delete files you did not create. Stage only your own files (` + "`git add <files>`" + `), not ` + "`git add -A`" + ` (except releases). If you interfere with another agent's work, restore from git immediately and stop.
 
 ## Wait productivity
-- Never idle-wait while subagents or background commands run. Do other work; if none, tell the user you are waiting. Use one long wait (300s) instead of repeated short polls; batch-check all subagents in one call.
+- Never idle-wait while subagents or background commands run. Before waiting on any result, first do the work that does NOT depend on it; only wait when nothing else remains. Then wait briefly (15-60s) and continue, or tell the user you are waiting; batch-check all subagents in one call instead of polling them one by one. Do not issue long blocking waits.
 `
 
 // Config is the top-level configuration.
@@ -364,21 +373,25 @@ type Config struct {
 	// for auxiliary LLM calls (compaction summarization, autopilot strategist,
 	// health check). Task-tier model routing; see internal/agent/model_routing.go.
 	// Empty (default) routes all calls through Model.
-	AuxModel           string                    `yaml:"aux_model,omitempty" json:"aux_model,omitempty"`
-	Language           string                    `yaml:"language" json:"language"`
-	UI                 UIConfig                  `yaml:"ui,omitempty" json:"ui,omitempty"`
-	IM                 IMConfig                  `yaml:"im,omitempty" json:"im,omitempty"`
-	ExtraPrompt        string                    `yaml:"extra_prompt" json:"extra_prompt"`
-	Vendors            map[string]VendorConfig   `yaml:"vendors" json:"vendors"`
-	AllowedDirs        []string                  `yaml:"allowed_dirs" json:"allowed_dirs"`
-	MaxIterations      int                       `yaml:"max_iterations" json:"max_iterations"`
-	SessionTimeout     time.Duration             `yaml:"session_timeout,omitempty" json:"session_timeout,omitempty"`
-	SessionTokenBudget int64                     `yaml:"session_token_budget,omitempty" json:"session_token_budget,omitempty"`
-	SessionTimeBudget  time.Duration             `yaml:"session_time_budget,omitempty" json:"session_time_budget,omitempty"`
-	ToolCallBudget     int                       `yaml:"tool_call_budget,omitempty" json:"tool_call_budget,omitempty"`
-	ToolPerms          map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
-	Plugins            []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
-	MCPServers         []MCPServerConfig         `yaml:"mcp_servers" json:"mcp_servers"`
+	AuxModel           string                  `yaml:"aux_model,omitempty" json:"aux_model,omitempty"`
+	Language           string                  `yaml:"language" json:"language"`
+	UI                 UIConfig                `yaml:"ui,omitempty" json:"ui,omitempty"`
+	IM                 IMConfig                `yaml:"im,omitempty" json:"im,omitempty"`
+	ExtraPrompt        string                  `yaml:"extra_prompt" json:"extra_prompt"`
+	Vendors            map[string]VendorConfig `yaml:"vendors" json:"vendors"`
+	AllowedDirs        []string                `yaml:"allowed_dirs" json:"allowed_dirs"`
+	MaxIterations      int                     `yaml:"max_iterations" json:"max_iterations"`
+	SessionTimeout     time.Duration           `yaml:"session_timeout,omitempty" json:"session_timeout,omitempty"`
+	SessionTokenBudget int64                   `yaml:"session_token_budget,omitempty" json:"session_token_budget,omitempty"`
+	// SessionCostLimitUSD caps the priced USD spend of a single agent run
+	// (80%/95%/100% ladder: guidance, urgent finalize, hard stop). Only
+	// metered models with known pricing accumulate; see session_cost_limit.go.
+	SessionCostLimitUSD float64                   `yaml:"session_cost_limit_usd,omitempty" json:"session_cost_limit_usd,omitempty"`
+	SessionTimeBudget   time.Duration             `yaml:"session_time_budget,omitempty" json:"session_time_budget,omitempty"`
+	ToolCallBudget      int                       `yaml:"tool_call_budget,omitempty" json:"tool_call_budget,omitempty"`
+	ToolPerms           map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
+	Plugins             []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
+	MCPServers          []MCPServerConfig         `yaml:"mcp_servers" json:"mcp_servers"`
 	// MCPSamplingDisabled (#1484-D) turns the MCP sampling handler off
 	// entirely - sampling is the only LLM-consumption path with no gate:
 	// a buggy/malicious server could loop sampling requests and burn the
@@ -598,13 +611,14 @@ const DefaultA2AAPIKey = "ggcode-lan-a2a-v1"
 // A2A is enabled by default — mDNS discovery runs automatically so teams
 // on the same network can discover each other without any configuration.
 type A2AConfig struct {
-	Disabled    bool          `yaml:"disabled,omitempty"`   // true to disable (default: enabled)
-	Port        int           `yaml:"port"`                 // 0 = auto-assign
-	Host        string        `yaml:"host"`                 // default "0.0.0.0" (always)
-	MaxTasks    int           `yaml:"max_tasks"`            // concurrent task limit (default 5)
-	TaskTimeout string        `yaml:"task_timeout"`         // per-task timeout (default "5m")
-	Interfaces  []string      `yaml:"interfaces,omitempty"` // mDNS advertise interfaces (default: auto-detect default route)
-	Auth        A2AAuthConfig `yaml:"auth,omitempty"`
+	Disabled    bool                `yaml:"disabled,omitempty"`   // true to disable (default: enabled)
+	Port        int                 `yaml:"port"`                 // 0 = auto-assign
+	Host        string              `yaml:"host"`                 // default "0.0.0.0" (always)
+	MaxTasks    int                 `yaml:"max_tasks"`            // concurrent task limit (default 5)
+	TaskTimeout string              `yaml:"task_timeout"`         // per-task timeout (default "5m")
+	Interfaces  []string            `yaml:"interfaces,omitempty"` // mDNS advertise interfaces (default: auto-detect default route)
+	Auth        A2AAuthConfig       `yaml:"auth,omitempty"`
+	Delegation  A2ADelegationConfig `yaml:"delegation,omitempty"`
 
 	// Extensions declares A2A protocol extensions this instance SUPPORTS
 	// (server side, A2A v1.0 "Extension Declaration"). They appear in the
@@ -625,6 +639,22 @@ type A2AConfig struct {
 	// bidirectional instance-wins merge in MergeA2AConfig. Unexported so it
 	// never round-trips through yaml or crosses package boundaries.
 	disabledExplicit bool
+}
+
+// A2ADelegationConfig configures the A-JWT-lite delegation declarations
+// (sa-84): outbound tasks may carry ggcode.dev/on-behalf-of +
+// ggcode.dev/delegation message metadata (declarations, NOT signatures -
+// audit anchors only, never an authentication basis). These knobs control
+// INBOUND enforcement on the local A2A server; the zero value disables all
+// checks.
+type A2ADelegationConfig struct {
+	// RequireOnBehalfOf rejects inbound tasks that carry no
+	// ggcode.dev/on-behalf-of declaration.
+	RequireOnBehalfOf bool `yaml:"require_on_behalf_of,omitempty"`
+	// MaxDepth rejects inbound tasks whose delegation-depth exceeds this
+	// bound (guard against unbounded agent-to-agent forwarding chains).
+	// 0 (default) = no depth check. Recommended: 3.
+	MaxDepth int `yaml:"max_depth,omitempty"`
 }
 
 // A2AExtensionConfig declares one supported A2A protocol extension
@@ -773,12 +803,18 @@ func isLoopbackHost(host string) bool {
 	return false
 }
 
-// EffectiveAPIKey returns the user-configured API key if set, otherwise
-// the built-in default key. This ensures that even without explicit auth
-// config, ggcode instances can authenticate to each other on a LAN.
+// EffectiveAPIKey returns the user-configured API key if set. The built-in
+// default key is only a fallback when NO authentication mechanism is
+// configured at all (LAN convenience). When api_keys / oauth2 / oidc / mTLS
+// is configured, returning the public default key here would merge it into
+// the server's accepted key list and let anyone who has read the source
+// bypass the configured credentials (#4259).
 func (c A2AConfig) EffectiveAPIKey() string {
 	if strings.TrimSpace(c.Auth.APIKey) != "" {
 		return c.Auth.APIKey
+	}
+	if c.HasAuth() {
+		return ""
 	}
 	return DefaultA2AAPIKey
 }
@@ -1723,14 +1759,27 @@ func (c *Config) Validate() error {
 	if c.SessionTokenBudget < 0 {
 		return fmt.Errorf("session_token_budget must not be negative")
 	}
+	if c.SessionCostLimitUSD < 0 {
+		return fmt.Errorf("session_cost_limit_usd must not be negative")
+	}
 	if c.SessionTimeBudget < 0 {
 		return fmt.Errorf("session_time_budget must not be negative")
 	}
 	if c.DefaultMode != "" {
 		switch strings.ToLower(c.DefaultMode) {
-		case "supervised", "plan", "auto", "bypass", "autopilot":
+		// "auto"/"autopilot" are accepted legacy aliases (normalized to
+		// supervised/bypass at consumption); "plan" is tool-internal.
+		case "supervised", "auto", "bypass", "autopilot":
+		case "plan":
+			// #4267: pre-two-mode-refactor binaries could persist
+			// default_mode: plan via /mode plan or the IM channel. It is
+			// tool-internal now and must not boot a session, but a stored
+			// legacy value must not brick every CLI entry point either.
+			// Normalize to supervised (same philosophy as auto/autopilot
+			// legacy handling) instead of failing Load.
+			c.DefaultMode = "supervised"
 		default:
-			return fmt.Errorf("default_mode %q must be one of supervised, plan, auto, bypass, autopilot", c.DefaultMode)
+			return fmt.Errorf("default_mode %q must be supervised or bypass (legacy aliases auto/autopilot normalize; stored plan normalizes to supervised)", c.DefaultMode)
 		}
 	}
 	if c.SubAgents.MaxConcurrent < 0 {
@@ -1898,6 +1947,16 @@ func BuildSystemPrompt(extraPrompt, workingDir, language string, toolNames []str
 
 	var sb strings.Builder
 	sb.WriteString(DefaultSystemPrompt)
+	// GGCODE_NO_COAUTHOR opts out of the automatic Co-Authored-By trailer
+	// (see internal/tool coAuthorInjectionDisabled). Drop the prompt-side
+	// directive too, otherwise the model keeps hand-writing the trailer and
+	// the env var is meaningless.
+	if os.Getenv("GGCODE_NO_COAUTHOR") != "" {
+		s := sb.String()
+		s = strings.ReplaceAll(s, "- Always include \"Co-Authored-By: ggcode <noreply@ggcode.dev>\" in git commit messages.\n", "")
+		sb.Reset()
+		sb.WriteString(s)
+	}
 
 	if extraPrompt != "" {
 		sb.WriteString("\n\n## Extra instructions\n")
@@ -2118,6 +2177,28 @@ func mergeDefaultEndpoints(cfg, defaults *Config) {
 				}
 			}
 			carryGatewayVendorKey(&agVC, epName, oldVC.APIKey)
+			// #3986: if the top-level active selection points at the legacy
+			// vendor being deleted, redirect it to ai-gateway first —
+			// otherwise cfg.Vendor dangles, Validate() fails with
+			// "vendor %q is not configured" on next Load, and ggcode cannot
+			// start until the yaml is fixed by hand.
+			if cfg.Vendor == oldVendor {
+				cfg.Vendor = "ai-gateway"
+				if _, ok := agVC.Endpoints[cfg.Endpoint]; !ok {
+					// Legacy endpoint names do not carry over (they merge
+					// under the gateway endpoint names); fall back to the
+					// first endpoint deterministically (#1422-B2: lowest
+					// name, never map-iteration order).
+					eps := make([]string, 0, len(agVC.Endpoints))
+					for k := range agVC.Endpoints {
+						eps = append(eps, k)
+					}
+					sort.Strings(eps)
+					if len(eps) > 0 {
+						cfg.Endpoint = eps[0]
+					}
+				}
+			}
 			delete(cfg.Vendors, oldVendor)
 		}
 		cfg.Vendors["ai-gateway"] = agVC
@@ -2141,6 +2222,14 @@ func carryGatewayVendorKey(agVC *VendorConfig, epName, oldKey string) {
 		agVC.Endpoints[epName] = ep
 	case !hasEP && agVC.APIKey == "":
 		agVC.APIKey = oldKey
+	case !hasEP:
+		// #4408-C1: a SECOND legacy gateway vendor's key (vendor-level,
+		// no matching endpoint) used to be silently dropped here - the
+		// vendor-level slot was already taken by the first one and no
+		// switch branch fired, directly contradicting the "cannot
+		// irreversibly drop credentials" contract above. Preserve it on
+		// a per-vendor endpoint stub keyed by the original endpoint name.
+		agVC.Endpoints[epName] = EndpointConfig{APIKey: oldKey}
 	}
 }
 

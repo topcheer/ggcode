@@ -853,11 +853,37 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		Tools:               tools,
 		AgentFactory:        factory,
 		WorkingDir:          r.model.agent.WorkingDir(),
-		OnUsage:             func(usage provider.TokenUsage) { r.recordSessionUsage(usage, "subagent") },
+		OnUsage:             func(usage provider.TokenUsage) { r.recordDelegatedUsage(usage) },
 		OnMetric:            r.metricCollector.Emit,
 		SystemPromptBuilder: r.systemPromptBuilder,
 	}
 	tools.Register(spawnTool)
+	// P1-1: completion push - convert manager terminal states into the
+	// agent-local feed type (internal/agent cannot import internal/subagent;
+	// subagent imports agent for its runner factory).
+	r.model.agent.SetSubagentCompletionFeed(func() []agent.SubagentCompletion {
+		var out []agent.SubagentCompletion
+		for _, st := range mgr.Statuses() {
+			switch st.Status {
+			case subagent.StatusCompleted:
+			case subagent.StatusFailed, subagent.StatusCancelled:
+				c := agent.SubagentCompletion{ID: st.ID, Name: st.Name, Failed: true}
+				if res, ok := mgr.GetTaskOutput(st.ID); ok {
+					c.Summary = res
+				}
+				out = append(out, c)
+				continue
+			default:
+				continue
+			}
+			c := agent.SubagentCompletion{ID: st.ID, Name: st.Name}
+			if res, ok := mgr.GetTaskOutput(st.ID); ok {
+				c.Summary = res
+			}
+			out = append(out, c)
+		}
+		return out
+	})
 	tools.Register(tool.BestOfNTool{
 		Manager: mgr,
 		Run:     agentruntime.BestOfNRunnerFor(spawnTool, mgr),
@@ -910,7 +936,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		Tools:               tools,
 		AgentFactory:        factory,
 		WorkingDir:          r.model.agent.WorkingDir(),
-		OnUsage:             func(usage provider.TokenUsage) { r.recordSessionUsage(usage, "subagent") },
+		OnUsage:             func(usage provider.TokenUsage) { r.recordDelegatedUsage(usage) },
 		SystemPromptBuilder: r.systemPromptBuilder,
 	})
 
@@ -1194,6 +1220,8 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 	tools.Register(tool.SwarmTaskListTool{Manager: mgr})
 	tools.Register(tool.SwarmTaskClaimTool{Manager: mgr})
 	tools.Register(tool.SwarmTaskCompleteTool{Manager: mgr})
+	tools.Register(tool.TeamReviewDigestTool{Manager: mgr})
+	tools.Register(tool.TeamReviewDecideTool{Manager: mgr})
 
 	// Re-register send_message with SwarmMgr so it can route to swarm teammates.
 	tools.Unregister("send_message")
@@ -1489,7 +1517,11 @@ func (r *REPL) Run() error {
 	markdown.Warmup()
 	traceMark("markdown warmup")
 
-	r.program = tea.NewProgram(r.model)
+	// #4154: route all renderer writes through the guard writer - while the
+	// stdout health monitor flags stdout dead (display sleep / SSH drop),
+	// frames are dropped instead of blocking the renderer on a dead pty.
+	// Recovery sends displayWakeMsg which triggers a full repaint.
+	r.program = tea.NewProgram(r.model, tea.WithOutput(stdoutGuardWriter{File: os.Stdout}))
 	// #2844: give the Model a thread-safe message injector so background
 	// goroutines (context probe results) never touch shared state directly.
 	// Assignment happens before Run(), so the happens-before edge is the

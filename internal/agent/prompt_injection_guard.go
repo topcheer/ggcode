@@ -3,7 +3,9 @@ package agent
 import (
 	"encoding/json"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/memory"
@@ -154,8 +156,12 @@ func isSelfDefenseRead(toolName string, args json.RawMessage) bool {
 			// #3155: only read-target fields qualify. A `pattern` or
 			// `query` equal to a detector basename is a content
 			// coincidence, not a self-defense read.
+			// #3996: the basename alone is an attacker-known oracle - any
+			// directory can host a same-named file and hit the exemption,
+			// skipping BOTH the wrap and the taint fingerprint. Require the
+			// file to live in this package's own source directory.
 			if selfDefenseReadTargetFields[field] &&
-				selfDefenseReadTargets[filepath.Base(strings.TrimSpace(x))] {
+				isSelfDefensePath(strings.TrimSpace(x)) {
 				found = true
 			}
 		case map[string]interface{}:
@@ -171,6 +177,57 @@ func isSelfDefenseRead(toolName string, args json.RawMessage) bool {
 	}
 	walk(m, "")
 	return found
+}
+
+// defenseSourceDir is the absolute directory of THIS package's own sources,
+// resolved once from the call stack. #3996: the self-defense read exemption
+// must key on more than a basename - the four defense filenames are public
+// knowledge, so any directory can host a same-named decoy. A file only
+// skips the guard when it lives where the real defense sources live.
+var (
+	defenseDirOnce sync.Once
+	defenseDir     string
+)
+
+func defenseSourceDir() string {
+	defenseDirOnce.Do(func() {
+		if _, file, _, ok := runtime.Caller(0); ok {
+			defenseDir = filepath.Dir(file)
+		}
+	})
+	return defenseDir
+}
+
+// isSelfDefensePath reports whether p refers to one of the defense system's
+// own source files (#3996): the basename must be a defense filename AND the
+// containing directory must be this package's real source directory (either
+// given absolutely or as a workspace-relative path that resolves there).
+// Anything else - including /tmp/attacker/taint_influence_check.go - fails
+// CLOSED and goes through the normal guard pipeline.
+func isSelfDefensePath(p string) bool {
+	if p == "" || !selfDefenseReadTargets[filepath.Base(p)] {
+		return false
+	}
+	dir := filepath.Dir(p)
+	if dd := defenseSourceDir(); dd != "" {
+		if dir == dd {
+			return true
+		}
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return false
+		}
+		// Two legal resolutions: CWD-relative (tests, absolute callers) and
+		// repo-root-relative (workspace paths like "internal/agent/x.go",
+		// which resolve against the repo root = grandparent of the package
+		// dir). Anything else - same-named files in other trees - stays
+		// guarded.
+		root := filepath.Dir(filepath.Dir(dd))
+		if abs == dd || filepath.Join(root, dir) == dd {
+			return true
+		}
+	}
+	return false
 }
 
 // guardPromptInjection is the single entry point for untrusted tool-result
@@ -203,7 +260,10 @@ func guardPromptInjection(toolName string, args json.RawMessage, content string)
 		return content
 	}
 
-	lowered := strings.ToLower(content)
+	// G1 (sa-157): match against the normalized copy so zero-width,
+	// full-width, and homoglyph obfuscation cannot bypass the patterns;
+	// wrapUntrustedContent below still emits the ORIGINAL content.
+	lowered := strings.ToLower(memory.NormalizeForInjectionMatch(content))
 	for _, pattern := range injectionPatterns {
 		if strings.Contains(lowered, pattern) {
 			debug.Log("prompt-injection-guard", "detected injection pattern %q in tool=%s content_len=%d", pattern, toolName, len(content))

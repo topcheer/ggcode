@@ -105,6 +105,10 @@ func TestVerifyCommandAvailable(t *testing.T) {
 		{"nonexistent_tool_xyz arg", false}, // tool not in PATH
 		{"bash /definitely/not/a/real/script_xyz123.sh", false}, // #941: bash script path checked, missing → unavailable
 		{"bash /etc/hosts", true},                               // #941: existing script path → available
+		{"cd /app && go test ./...", true},                      // #2122: compound, cd skipped
+		{"cd /app && GOFLAGS=-p=1 go test ./...", true},         // #3751: per-segment env prefix stripped
+		{`GREETING="hello world" make test`, true},              // #3751: quoted env value consumed whole
+		{"cd /app && nonexistent_tool_xyz arg", false},          // compound: unavailable segment still unavailable
 	}
 	for _, tt := range tests {
 		got := verifyCommandAvailable(tt.cmd)

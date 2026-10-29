@@ -40,17 +40,23 @@ type Client struct {
 	// (HTTP transport only) so tools/call can resolve x-mcp-header
 	// annotations into Mcp-Param-* headers (SEP-2243). Read/written under c.mu.
 	toolSchemas map[string]json.RawMessage
-	cmd         *exec.Cmd
-	procCancel  context.CancelFunc
-	stdin       io.WriteCloser
-	stdout      io.Reader
-	reader      *bufio.Reader // reused stdout reader
-	httpClient  *http.Client
-	wsMu        sync.Mutex                // serializes ReadMessage on wsConn (fix #138)
-	readMu      sync.Mutex                // serializes reads on the shared stdio bufio.Reader and response matching (fix #156)
-	waiters     map[string]chan *Response // stdio response waiters keyed by request ID JSON (guarded by mu)
-	wsConn      *websocket.Conn
-	sessionID   string
+	// resMu guards the four transport-resource fields (cmd, procCancel,
+	// stdin, wsConn) ONLY - it is never held while calling anything, so it
+	// can be taken from any lock context, including Abort() which may run
+	// with c.mu held (#3748). Lockless readers use snapshotTransport();
+	// writers use the setTransport* helpers.
+	resMu      sync.Mutex
+	cmd        *exec.Cmd
+	procCancel context.CancelFunc
+	stdin      io.WriteCloser
+	stdout     io.Reader
+	reader     *bufio.Reader // reused stdout reader
+	httpClient *http.Client
+	wsMu       sync.Mutex                // serializes ReadMessage on wsConn (fix #138)
+	readMu     sync.Mutex                // serializes reads on the shared stdio bufio.Reader and response matching (fix #156)
+	waiters    map[string]chan *Response // stdio response waiters keyed by request ID JSON (guarded by mu)
+	wsConn     *websocket.Conn
+	sessionID  string
 	// httpNotifLastEventID is the SSE redelivery cursor (MCP Streamable HTTP
 	// "Resumability and Redelivery", spec 2025-03-26..2025-11-25): the id of
 	// the last SSE event seen on any stream. On reconnect of the standalone
@@ -281,7 +287,7 @@ func (c *Client) Start(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("mcp[%s]: websocket dial: %w", c.name, err)
 		}
-		c.wsConn = conn
+		c.setTransportWSConn(conn)
 		return nil
 	case "", "stdio":
 	default:
@@ -327,9 +333,7 @@ func (c *Client) Start(ctx context.Context) error {
 	}
 
 	c.mu.Lock()
-	c.cmd = cmd
-	c.procCancel = cancelProc
-	c.stdin = stdin
+	c.setTransportProcess(cmd, cancelProc, stdin)
 	c.stdout = stdout
 	c.reader = bufio.NewReader(stdout)
 	c.processExit = make(chan struct{})
@@ -753,11 +757,11 @@ func (c *Client) Close() error {
 	c.Abort()
 
 	c.mu.Lock()
-	cmd := c.cmd
+	cmd := c.snapshotTransport().cmd
 	transport := c.transport
 	c.sessionID = ""
 	c.httpClient = nil
-	c.procCancel = nil
+	c.setTransportProcess(nil, nil, nil)
 	notifCancel := c.notifStreamCancel
 	waitDone := c.procWaitDone
 	oauthHandler := c.oauthHandler
@@ -803,6 +807,39 @@ func (c *Client) ForceReauth() error {
 	return handler.DeleteServerToken()
 }
 
+// transportResources is a consistent snapshot of the resMu-guarded fields.
+type transportResources struct {
+	wsConn     *websocket.Conn
+	stdin      io.WriteCloser
+	cmd        *exec.Cmd
+	procCancel context.CancelFunc
+}
+
+// snapshotTransport returns a consistent copy of the transport-resource
+// fields. Safe from ANY lock context (#3748): resMu is a leaf lock.
+func (c *Client) snapshotTransport() transportResources {
+	c.resMu.Lock()
+	defer c.resMu.Unlock()
+	return transportResources{wsConn: c.wsConn, stdin: c.stdin, cmd: c.cmd, procCancel: c.procCancel}
+}
+
+// setTransportProcess replaces the process-side fields under resMu. Callers
+// usually hold c.mu; that is fine - c.mu is always taken OUTSIDE resMu.
+func (c *Client) setTransportProcess(cmd *exec.Cmd, cancel context.CancelFunc, stdin io.WriteCloser) {
+	c.resMu.Lock()
+	c.cmd = cmd
+	c.procCancel = cancel
+	c.stdin = stdin
+	c.resMu.Unlock()
+}
+
+// setTransportWSConn replaces the websocket field under resMu.
+func (c *Client) setTransportWSConn(conn *websocket.Conn) {
+	c.resMu.Lock()
+	c.wsConn = conn
+	c.resMu.Unlock()
+}
+
 func (c *Client) Abort() {
 	c.abortOnce.Do(func() {
 		// Mark as closed atomically — Abort may be called from
@@ -810,10 +847,11 @@ func (c *Client) Abort() {
 		// atomic.Bool avoids both the data race and the deadlock.
 		c.closed.Store(true)
 
-		wsConn := c.wsConn
-		stdin := c.stdin
-		cmd := c.cmd
-		procCancel := c.procCancel
+		tr := c.snapshotTransport()
+		wsConn := tr.wsConn
+		stdin := tr.stdin
+		cmd := tr.cmd
+		procCancel := tr.procCancel
 
 		if wsConn != nil {
 			_ = wsConn.Close()
@@ -1153,11 +1191,30 @@ func (c *Client) readResponseWithWaiter(ctx context.Context, reqID *ID, waiter c
 	})
 	select {
 	case res := <-done:
-		if err := ctx.Err(); err != nil {
-			return nil, c.withStderr(err)
+		// #3747: the response ARRIVED - return it unconditionally. The old
+		// ctx.Err() re-check discarded an already-delivered result at the
+		// deadline instant; the server had already executed the (possibly
+		// non-idempotent) tool, and callers retried on the timeout error,
+		// double-executing writes. Cancellation semantics belong exclusively
+		// to the <-ctx.Done() branch below.
+		if res.resp != nil {
+			return res.resp, nil
 		}
 		return res.resp, res.err
 	case <-ctx.Done():
+		// #3747 final-chance drain: with BOTH channels ready Go's select
+		// picks randomly, so a response that landed in the same instant the
+		// deadline hit can still land here. Prefer an arrived RESPONSE over
+		// cancellation - the server already executed the tool. A bare
+		// teardown error is not the caller's truth; fall through to the
+		// normal cancel handling for it.
+		select {
+		case res := <-done:
+			if res.resp != nil {
+				return res.resp, nil
+			}
+		default:
+		}
 		// #652: the waiter must be unregistered as soon as this request gives
 		// up, NOT when the read goroutine exits. The goroutine is parked behind
 		// readMu in Peek(1) when the server hangs, and readMessage's ctx check
@@ -1180,10 +1237,14 @@ func (c *Client) readResponseWithWaiter(ctx context.Context, reqID *ID, waiter c
 			// wait so the caller gets the ctx error instead of hanging.
 			select {
 			case res := <-done:
-				if err := ctx.Err(); err != nil {
-					return nil, c.withStderr(err)
+				// #3747 (post-abort twin): a REAL response that arrived wins; the
+				// old ctx.Err() re-check discarded it after a successful post-abort
+				// delivery. A bare teardown error (EOF from our own Abort) is not
+				// the caller's truth - keep the ctx semantics for that shape.
+				if res.resp != nil {
+					return res.resp, nil
 				}
-				return res.resp, res.err
+				return nil, c.withStderr(ctx.Err())
 			case <-time.After(5 * time.Second):
 				return nil, c.withStderr(fmt.Errorf("mcp[%s]: read goroutine did not return after abort: %w", c.name, ctx.Err()))
 			}
@@ -1307,7 +1368,8 @@ var mcpStdioWriteTimeout = 15 * time.Second
 // which makes the kernel fail the stuck Write (EPIPE) so the writer
 // goroutine exits instead of leaking.
 func (c *Client) writeStdinWithDeadline(data []byte) error {
-	stdin := c.stdin
+	// #3748: resMu snapshot (caller holds c.mu; resMu is a leaf lock).
+	stdin := c.snapshotTransport().stdin
 	if stdin == nil {
 		return fmt.Errorf("mcp[%s]: stdin closed", c.name)
 	}
@@ -1635,14 +1697,16 @@ func (c *Client) sendWSUnlocked(ctx context.Context, req Request) (*Response, er
 	}
 	// #994: wsConn may legitimately be nil here (sendWSNotification checks the
 	// same state under c.mu); dereferencing it panicked with no safego recovery.
-	if c.wsConn == nil {
+	// #3748: snapshot under resMu (c.mu does not order resMu writers).
+	wsConn := c.snapshotTransport().wsConn
+	if wsConn == nil {
 		c.mu.Unlock()
 		return nil, fmt.Errorf("mcp[%s]: websocket connection not established", c.name)
 	}
 	if deadline, ok := ctx.Deadline(); ok {
-		_ = c.wsConn.SetWriteDeadline(deadline)
+		_ = wsConn.SetWriteDeadline(deadline)
 	}
-	if err := c.wsConn.WriteMessage(websocket.TextMessage, data); err != nil {
+	if err := wsConn.WriteMessage(websocket.TextMessage, data); err != nil {
 		c.mu.Unlock()
 		return nil, fmt.Errorf("mcp[%s]: websocket write: %w", c.name, err)
 	}
@@ -1724,9 +1788,9 @@ func (c *Client) readWSLoop(ctx context.Context, reqID *ID, waiter chan *Respons
 			}
 		}
 		if deadline, ok := ctx.Deadline(); ok {
-			_ = c.wsConn.SetReadDeadline(deadline)
+			_ = c.snapshotTransport().wsConn.SetReadDeadline(deadline)
 		}
-		_, payload, err := c.wsConn.ReadMessage()
+		_, payload, err := c.snapshotTransport().wsConn.ReadMessage()
 		if err != nil {
 			return nil, fmt.Errorf("mcp[%s]: websocket read: %w", c.name, err)
 		}
@@ -1783,13 +1847,15 @@ func (c *Client) sendWSNotification(ctx context.Context, msg interface{}) (*Resp
 	if c.closed.Load() {
 		return nil, fmt.Errorf("mcp[%s]: connection closed", c.name)
 	}
-	if c.wsConn == nil {
+	// #3748: resMu snapshot (c.mu does not order resMu writers).
+	wsConn := c.snapshotTransport().wsConn
+	if wsConn == nil {
 		return nil, fmt.Errorf("mcp[%s]: websocket connection not established", c.name)
 	}
 	if deadline, ok := ctx.Deadline(); ok {
-		_ = c.wsConn.SetWriteDeadline(deadline)
+		_ = wsConn.SetWriteDeadline(deadline)
 	}
-	if err := c.wsConn.WriteMessage(websocket.TextMessage, data); err != nil {
+	if err := wsConn.WriteMessage(websocket.TextMessage, data); err != nil {
 		return nil, fmt.Errorf("mcp[%s]: websocket write: %w", c.name, err)
 	}
 	return &Response{JSONRPC: "2.0"}, nil
@@ -2389,10 +2455,12 @@ func (c *Client) respondToServerRequestWS(req *Request) error {
 	// #994: align with sendWSNotification's nil guard — respondToServerRequestWS
 	// runs off the WS read loop where wsConn can already be nil (torn down), and
 	// a nil WriteMessage panics inside a goroutine safego cannot make safe.
-	if c.wsConn == nil {
+	// #3748: resMu snapshot.
+	wsConn := c.snapshotTransport().wsConn
+	if wsConn == nil {
 		return fmt.Errorf("mcp[%s]: websocket connection not established", c.name)
 	}
-	return c.wsConn.WriteMessage(websocket.TextMessage, data)
+	return wsConn.WriteMessage(websocket.TextMessage, data)
 }
 
 func (c *Client) readResponse(ctx context.Context, reqID *ID, waiter chan *Response) (*Response, error) {

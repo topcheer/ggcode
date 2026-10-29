@@ -296,6 +296,24 @@ func (c *Client) EnableModernSubscriptions(ctx context.Context) bool {
 		return false
 	}
 	c.subMu.Lock()
+	// #3869 A: check-then-act race. The early read above released subMu
+	// before the slow ListenSubscriptions call (ack wait up to 15s), so two
+	// concurrent callers both saw existing==nil, both subscribed, and the
+	// unconditional overwrite here orphaned the first subscription (still
+	// registered in c.subs, watch goroutine running, server-side stream
+	// leaked - nothing cancels it until close). Re-read under the lock and
+	// cancel the LOSER (the new one) instead.
+	if cur := c.modernSub; cur != nil {
+		select {
+		case <-cur.done:
+			// previous stream finished - replace it below
+		default:
+			c.subMu.Unlock()
+			sub.Cancel(fmt.Errorf("subscriptions/listen lost the concurrent-enable race (#3869)"))
+			debug.Log("mcp-subs", "server=%s concurrent subscriptions/listen lost the race; cancelling the new one", c.name)
+			return true
+		}
+	}
 	c.modernSub = sub
 	c.subMu.Unlock()
 	c.subListenState.Store(subStateSupported)
@@ -347,6 +365,17 @@ func (c *Client) ListenSubscriptions(ctx context.Context, filter SubscriptionFil
 	}
 	sub.cancelCtx, sub.cancelFunc = context.WithCancel(context.Background())
 
+	// Register the subscription BEFORE the write (#3817): the stdio
+	// server is an independent process and can flush its
+	// `notifications/subscriptions/acknowledged` ack the instant the write
+	// returns; the read loop correlates acks via c.subs[key], so with
+	// addSubscription AFTER the write the ack hit "unknown subscription
+	// dropped" (unreplayable) and ackCh hung until the 15s timeout, or the
+	// caller's own deadline (2s in mcp_loader) fired first. Same
+	// register-before-write ordering guarantee as the waiter above (#994);
+	// a failed write rolls the registration back.
+	c.addSubscription(subscriptionIDKey(reqID), sub)
+
 	// stdio: register the waiter BEFORE the write (same ordering guarantee
 	// as #994) so the shared read loop can never drop the eventual response
 	// as unknown-ID traffic. HTTP: the watch goroutine owns the roundtrip
@@ -360,11 +389,10 @@ func (c *Client) ListenSubscriptions(ctx context.Context, filter SubscriptionFil
 		c.mu.Unlock()
 		if err != nil {
 			c.unregisterWaiter(reqID, waiter)
+			c.removeSubscription(subscriptionIDKey(reqID), sub)
 			return nil, fmt.Errorf("mcp[%s]: write subscriptions/listen: %w", c.name, err)
 		}
 	}
-
-	c.addSubscription(subscriptionIDKey(reqID), sub)
 
 	safego.Go("mcp.subs.watch", func() {
 		defer sub.end(nil)

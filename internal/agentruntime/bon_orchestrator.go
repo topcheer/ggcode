@@ -189,8 +189,12 @@ type BestOfNReport struct {
 	// bonSharedErrorSimWarn); AvgSimilarity carries the measurement.
 	HighCorrelation bool
 	AvgSimilarity   float64
-	Report          string
-	Err             string // orchestration-level error (gate failure, launch failure)
+	// sa-64 generator-verifier-gap admission: advisory cross-run hint from
+	// the bon gap ledger when this task family's history says the ensemble
+	// is unlikely to pay for its k-times budget. Empty when no history.
+	AdmissionHint string
+	Report        string
+	Err           string // orchestration-level error (gate failure, launch failure)
 }
 
 // candidateTaskSuffix standardizes what each candidate's final message must
@@ -231,6 +235,11 @@ func RunBestOfN(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSou
 	isolation := opts.Isolation
 	if isolation == "" {
 		isolation = "worktree" // default: candidates edit files; shared cwd = corruption
+	}
+	// sa-64: consult the ensemble-admission ledger BEFORE spending the
+	// k-times budget again - advisory only, never blocks the run.
+	if hint, ok := BestOfNAdmissionHint(opts.Task); ok {
+		rep.AdmissionHint = hint
 	}
 	poll := opts.Poll
 	if poll <= 0 {
@@ -429,6 +438,9 @@ func RunBestOfN(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSou
 		rep.HighCorrelation = sim >= bonSharedErrorSimWarn
 	}
 	rep.Report = formatBestOfNReport(rep, winnerSummary(wsum, ok))
+	// sa-64: record this run's admission-relevant outcome (no-op for
+	// partial/errored runs and under `go test`).
+	RecordBestOfNGap(opts.Task, rep)
 	return rep
 }
 
@@ -554,6 +566,9 @@ func formatBestOfNReport(rep BestOfNReport, winnerVerdict string) string {
 		b.WriteString("\nNo distinguishable winner (no consensus among distilled summaries). Sequential-retry conditioning (distilled from ALL rollouts):\n")
 		b.WriteString(clip(rep.ConditioningHint, 2000))
 		b.WriteString("\nRetry the task once yourself with this conditioning appended, or inspect the candidate worktrees individually.")
+	}
+	if rep.AdmissionHint != "" {
+		fmt.Fprintf(&b, "\n\nNote: %s\n", rep.AdmissionHint)
 	}
 	return b.String()
 }

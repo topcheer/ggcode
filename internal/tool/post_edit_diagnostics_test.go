@@ -118,17 +118,3 @@ func TestFormatDiagnostics_ErrorAndWarningCap(t *testing.T) {
 		t.Fatalf("expected warning cap message, got %q", result)
 	}
 }
-
-func TestSetPostEditDiagEnabled(t *testing.T) {
-	old := postEditDiagEnabled
-	defer func() { postEditDiagEnabled = old }()
-
-	SetPostEditDiagEnabled(false)
-	if postEditDiagEnabled {
-		t.Fatal("expected postEditDiagEnabled to be false")
-	}
-	SetPostEditDiagEnabled(true)
-	if !postEditDiagEnabled {
-		t.Fatal("expected postEditDiagEnabled to be true")
-	}
-}

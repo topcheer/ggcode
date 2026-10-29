@@ -2337,8 +2337,11 @@ func TestRunStreamPolicyBlockedEmptyReportsOnce(t *testing.T) {
 			allTexts = append(allTexts, event.Text)
 		}
 	})
-	if err != nil {
-		t.Fatalf("RunStream() error = %v", err)
+	// #4249: the blocked run must surface a distinguishable error - the
+	// old nil return reported "blocked by a safety filter" as success to
+	// ACP/A2A/Knight callers.
+	if err == nil || !strings.Contains(err.Error(), "safety filter") {
+		t.Fatalf("RunStream() error = %v, want distinguishable safety-filter error", err)
 	}
 	if got := mp.streamCallCount(); got != 1 {
 		t.Fatalf("expected exactly 1 stream call (no empty nudges), got %d", got)

@@ -42,6 +42,11 @@ func (t SwarmTaskCreateTool) Parameters() json.RawMessage {
 		"assignee": {
 			"type": "string",
 			"description": "The teammate ID to assign this task to (e.g. tm-2). STRONGLY RECOMMENDED when you know the owner. If set, the task is direct-delivered to that teammate's inbox; do not also call swarm_task_claim. Leave empty only when no specific teammate can be determined."
+		},
+		"depends_on": {
+			"type": "array",
+			"items": {"type": "string"},
+			"description": "Optional task IDs that must complete before this task can be claimed or delivered. Creates a dependency edge on the board; claiming is rejected while any dependency is not completed (auto-unblocks when they complete). Cyclic dependencies are rejected."
 		}
 	},
 	"required": [
@@ -56,10 +61,11 @@ func (t SwarmTaskCreateTool) Execute(_ context.Context, input json.RawMessage) (
 		return Result{IsError: true, Content: "swarm_task_create: swarm manager not available"}, nil
 	}
 	var args struct {
-		TeamID      string `json:"team_id"`
-		Subject     string `json:"subject"`
-		Description string `json:"description"`
-		Assignee    string `json:"assignee"`
+		TeamID      string   `json:"team_id"`
+		Subject     string   `json:"subject"`
+		Description string   `json:"description"`
+		Assignee    string   `json:"assignee"`
+		DependsOn   []string `json:"depends_on"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -105,11 +111,28 @@ func (t SwarmTaskCreateTool) Execute(_ context.Context, input json.RawMessage) (
 	}
 
 	created := tm.Create(args.Subject, args.Description, "", metadata)
+
+	// Dependency wiring (#research-task-deps): the task engine has
+	// supported BlockedBy edges (with cycle detection) all along, but the
+	// swarm tool surface never exposed them - agents could not declare
+	// ordering, so 2026 Agent-Teams-style "shared task list with
+	// dependency tracking" was unreachable from the board.
+	if len(args.DependsOn) > 0 {
+		if _, err := tm.Update(created.ID, task.UpdateOptions{AddBlockedBy: args.DependsOn}); err != nil {
+			// Bad edge (unknown ID or cycle): drop the half-wired task so
+			// the board never accumulates tasks whose deps could not link.
+			tm.Delete(created.ID)
+			t.Manager.EmitBoardUpdated(args.TeamID)
+			return Result{IsError: true, Content: fmt.Sprintf("depends_on rejected (task not created): %v", err)}, nil
+		}
+	}
 	t.Manager.EmitBoardUpdated(args.TeamID)
 
 	// If an assignee is specified, push the task directly into their inbox
-	// for immediate execution (bypasses the polling delay).
-	if args.Assignee != "" {
+	// for immediate execution (bypasses the polling delay) - unless an
+	// unmet dependency keeps the task blocked: delivering a blocked task
+	// would have the teammate start work whose prerequisites are not done.
+	if args.Assignee != "" && len(unmetDependencies(tm, created.ID)) == 0 {
 		prompt := formatTaskPrompt(created)
 		err := t.Manager.SendToTeammate(args.TeamID, args.Assignee, swarm.MailMessage{
 			From:    "leader",
@@ -125,9 +148,14 @@ func (t SwarmTaskCreateTool) Execute(_ context.Context, input json.RawMessage) (
 	}
 
 	// No specific assignee: notify idle runners so they can claim immediately
-	// instead of waiting for the next poller tick.
-	if args.Assignee == "" {
+	// instead of waiting for the next poller tick. A blocked task stays
+	// parked: runners re-check on completion of its dependencies.
+	if args.Assignee == "" && len(unmetDependencies(tm, created.ID)) == 0 {
 		t.Manager.NotifyIdleRunners(args.TeamID)
+	}
+	if unmet := unmetDependencies(tm, created.ID); len(unmet) > 0 {
+		out, _ := json.Marshal(created)
+		return Result{Content: string(out) + fmt.Sprintf("\nNote: task is blocked by uncompleted dependencies %v; it stays on the board and cannot be claimed or delivered until they complete.\n", unmet)}, nil
 	}
 
 	out, _ := json.Marshal(created)
@@ -154,6 +182,25 @@ func formatTaskPrompt(tk task.Task) string {
 // SwarmTaskList
 // ————————————————————————————————————————
 
+// unmetDependencies returns the IDs of the given task's BlockedBy
+// dependencies that are not yet completed. An unknown board state returns
+// the full list (fail-closed: better to keep a task parked than to let it
+// run ahead of an unverifiable prerequisite).
+func unmetDependencies(tm *task.Manager, taskID string) []string {
+	tk, ok := tm.Get(taskID)
+	if !ok {
+		return nil
+	}
+	var unmet []string
+	for _, depID := range tk.BlockedBy {
+		dep, ok := tm.Get(depID)
+		if !ok || dep.Status != task.StatusCompleted {
+			unmet = append(unmet, depID)
+		}
+	}
+	return unmet
+}
+
 type SwarmTaskListTool struct {
 	Manager *swarm.Manager
 }
@@ -172,7 +219,7 @@ func (t SwarmTaskListTool) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [
@@ -218,7 +265,11 @@ func (t SwarmTaskListTool) Execute(_ context.Context, input json.RawMessage) (Re
 		if owner != "" {
 			ownerSuffix = fmt.Sprintf(" → %s", owner)
 		}
-		fmt.Fprintf(&sb, "- %s [%s] %s%s\n", tk.ID, tk.Status, tk.Subject, ownerSuffix)
+		blockedSuffix := ""
+		if unmet := unmetDependencies(tm, tk.ID); len(unmet) > 0 {
+			blockedSuffix = fmt.Sprintf(" (blocked by: %s)", strings.Join(unmet, ", "))
+		}
+		fmt.Fprintf(&sb, "- %s [%s] %s%s%s\n", tk.ID, tk.Status, tk.Subject, ownerSuffix, blockedSuffix)
 	}
 	return Result{Content: sb.String()}, nil
 }
@@ -253,7 +304,7 @@ func (t SwarmTaskClaimTool) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [
@@ -286,11 +337,19 @@ func (t SwarmTaskClaimTool) Execute(_ context.Context, input json.RawMessage) (R
 	// teammate's inbox. The poller (idle_runner) already skips them; the
 	// claim tool must enforce the same rule so another teammate's agent
 	// cannot steal a directly-assigned pending task and run it twice.
+	// Dependency gate (#research-task-deps): claiming a task whose
+	// dependencies are not all completed would run work ahead of its
+	// prerequisites; the board auto-unblocks the moment they complete.
 	if existing, ok := tm.Get(args.TaskID); ok {
 		if assignee := existing.Metadata["assignee"]; assignee != "" && assignee != args.Owner {
 			return Result{IsError: true, Content: fmt.Sprintf(
 				"task %s is directly assigned to %s (direct-delivered to their inbox); do not claim it",
 				args.TaskID, assignee)}, nil
+		}
+		if unmet := unmetDependencies(tm, args.TaskID); len(unmet) > 0 {
+			return Result{IsError: true, Content: fmt.Sprintf(
+				"task %s is blocked by uncompleted dependencies: %v - complete those first (the board unblocks automatically when they complete)",
+				args.TaskID, unmet)}, nil
 		}
 	}
 	// #861: without ExpectedStatus the claim is an unconditional overwrite:
@@ -338,7 +397,7 @@ func (t SwarmTaskCompleteTool) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [

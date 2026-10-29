@@ -12,7 +12,10 @@ package agent
 // only when the ENTIRE message is a stop phrase (exact set match after
 // normalization), so "stop adding tests" or "cancel the timer refactor" -
 // which carry task content - stay Addition. Revision needs an explicit
-// redirection marker. Everything else keeps the existing addition preamble;
+// redirection marker. Insert (a complex task unrelated to the main thread)
+// needs a composite signal - length >= 120 runes AND >= 2 sentence units -
+// so short clarifications never misclassify; prefer miss-to-Addition over
+// false positives. Everything else keeps the existing addition preamble;
 // behavior for addition is byte-identical to pre-typing.
 
 import (
@@ -35,6 +38,12 @@ const (
 	// The run aborts without another LLM call; the injected notice survives
 	// in context for the next resume.
 	InterruptionRetractStop InterruptionKind = "retraction-stop"
+	// InterruptionInsert: a complex SEPARATE task injected mid-run, unrelated
+	// to the current main thread. The preamble suggests delegating it to a
+	// sub-agent and resuming the suspended main thread afterwards. Advisory
+	// only - misclassification costs one extra suggestion sentence, so the
+	// detector errs toward Addition.
+	InterruptionInsert InterruptionKind = "inserted-task"
 )
 
 // retractPhrases: whole-message stop phrases (normalized: lowercased,
@@ -57,10 +66,26 @@ var retractPhrases = map[string]struct{}{
 }
 
 // revisionMarkers: explicit redirection signal inside the message.
+// #4121/#4180 family bar: a marker earns its place only when its ordinary
+// technical usage is RARE. Bare connectives ("instead", "rather than",
+// "switch to") and bare CJK modification verbs (改为/改成/换成/改用 - the most
+// ordinary way to request a rename or reorder) fired on everyday refinement,
+// and the Revision preamble then told the model to abandon in-flight work
+// that was still valid. Remaining forms all carry explicit redirection
+// semantics: deictic references to the prior plan ("instead of that/this",
+// "change it to"), goal language ("revise/change the goal", "new/different
+// direction or goal", "switch to plan N"), or scheme-swap compounds
+// (改成/换成方案, 换个思路/方向) that ordinary refinements ("把变量名改为
+// camelCase 再继续") never produce contiguously.
 var revisionMarkers = []string{
-	"instead", "switch to", "rather than", "actually, do", "change it to",
-	"make it", "revise the goal", "new direction",
-	"改成", "换成", "改用", "改为", "换成方案", "不要这个了要", "换个思路",
+	// "instead," with the comma is the imperative swap form ("instead, use
+	// the buffered writer", pinned by #4121) - distinct from the trailing
+	// connective ("use X instead of Y", the #4180 FP family, no comma).
+	"instead,", "actually, do", "change it to", "instead of that", "instead of this",
+	"revise the goal", "change the goal", "new direction", "different goal",
+	"switch to plan",
+	"改成方案", "换成方案", "不要这个了要", "换个思路", "换个方向",
+	"改目标", "需求变了", "需求改了",
 }
 
 // normalizeRetract folds a candidate phrase: lowercase, drop all whitespace
@@ -90,7 +115,37 @@ func classifyInterruption(text string) InterruptionKind {
 			return InterruptionRevision
 		}
 	}
+	if looksLikeInsertedTask(text) {
+		return InterruptionInsert
+	}
 	return InterruptionAddition
+}
+
+// insertedTask thresholds: a message this long AND this structured is a
+// plausible self-contained task brief rather than an in-thread correction.
+const (
+	insertMinRunes        = 120
+	insertMinSentenceUnit = 2
+)
+
+// looksLikeInsertedTask reports whether text plausibly carries a complex
+// separate task (not an in-thread clarification). Composite signal, both
+// required: total length >= insertMinRunes AND >= insertMinSentenceUnit
+// sentence-ending units. Conservative: anything shorter or single-sentence
+// stays Addition.
+func looksLikeInsertedTask(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if len([]rune(trimmed)) < insertMinRunes {
+		return false
+	}
+	units := 0
+	for _, r := range trimmed {
+		switch r {
+		case '.', '!', '?', '。', '！', '？', ';', '；':
+			units++
+		}
+	}
+	return units >= insertMinSentenceUnit
 }
 
 // firstTextBlock returns the text of the first non-blank text block
@@ -119,6 +174,14 @@ func interruptionPreamble(kind InterruptionKind) string {
 			"the original goal. This notice stays in context so a future resume knows the task was " +
 			"withdrawn: report what was already done, revert nothing automatically, and await new " +
 			"instructions."
+	case InterruptionInsert:
+		return "New user guidance arrived while you were working, and it appears to be a SEPARATE task " +
+			"unrelated to your current main thread. Consider handling it as an insertion rather than a " +
+			"goal change: (1) if the task is self-contained, consider delegating it to a sub-agent via " +
+			"spawn_agent so your main context stays clean; (2) note the suspended main task in one line " +
+			"before switching; (3) after the inserted task completes, resume the suspended main thread " +
+			"unless the user says otherwise. If it is actually a small follow-up to the current work, " +
+			"just fold it into your plan and continue."
 	default:
 		return "New user guidance arrived while you were working. Treat it as higher-priority context, adjust your plan immediately if needed, and then continue."
 	}

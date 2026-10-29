@@ -11,12 +11,8 @@ func jaCatalog(key string) string {
 		return "一時的"
 	case "agents.idle":
 		return "アイドル"
-	case "agents.running":
-		return "%d 実行中"
 	case "cron.firing":
 		return "実行中"
-	case "activity.idle":
-		return "アイドル"
 	case "panel.conversation":
 		return "会話"
 	case "panel.composer":
@@ -27,16 +23,8 @@ func jaCatalog(key string) string {
 		return "コマンド"
 	case "panel.files":
 		return "ファイル"
-	case "panel.agent_status":
-		return "エージェント状態"
-	case "panel.mode_policy":
-		return "モード"
 	case "panel.session_usage":
 		return "セッション使用量"
-	case "panel.metrics":
-		return "メトリクス"
-	case "panel.context":
-		return "コンテキスト"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -79,8 +67,6 @@ func jaCatalog(key string) string {
 		return "%s のツールに変更はありません（%d 件）。"
 	case "panel.mcp.refreshed":
 		return "%s を更新しました：%d 件のツール。"
-	case "panel.startup":
-		return "起動中..."
 	case "panel.approval_required":
 		return "承認が必要"
 	case "panel.bypass_approval":
@@ -99,32 +85,16 @@ func jaCatalog(key string) string {
 		return "セッション"
 	case "label.agents":
 		return "エージェント"
-	case "label.cwd":
-		return "作業ディレクトリ"
 	case "label.branch":
 		return "ブランチ"
 	case "label.context":
 		return "コンテキスト"
 	case "label.skills":
 		return "スキル"
-	case "label.activity":
-		return "アクティビティ"
-	case "label.window":
-		return "ウィンドウ"
-	case "label.usage":
-		return "使用量"
-	case "label.compact":
-		return "圧縮"
 	case "label.total":
 		return "合計"
 	case "label.cost":
 		return "コスト"
-	case "label.approval_policy":
-		return "承認"
-	case "label.tool_policy":
-		return "ツール"
-	case "label.agent_policy":
-		return "エージェント"
 	case "label.tool":
 		return "ツール"
 	case "label.input":
@@ -137,36 +107,10 @@ func jaCatalog(key string) string {
 		return "キャッシュ書込"
 	case "label.cache_hit":
 		return "キャッシュヒット"
-	case "label.turns":
-		return "ターン"
-	case "label.avg_ttft":
-		return "平均TTFT"
-	case "label.p95_ttft":
-		return "P95 TTFT"
-	case "label.avg_duration":
-		return "平均時間"
-	case "label.p95_duration":
-		return "P95時間"
-	case "label.avg_think":
-		return "平均思考"
-	case "label.avg_tps":
-		return "平均TPS"
-	case "label.p95_tps":
-		return "P95 TPS"
-	case "label.fail_rate":
-		return "失敗率"
-	case "label.slow_tools":
-		return "低速ツール"
-	case "label.recent_turns":
-		return "最近のターン"
 	case "label.file":
 		return "ファイル"
 	case "label.directory":
 		return "ディレクトリ"
-	case "context.unavailable":
-		return "コンテキストデータがまだありません"
-	case "metrics.empty":
-		return "メトリクスがまだありません"
 	case "im.none":
 		return "IMアダプタなし"
 	case "im.summary":
@@ -181,38 +125,16 @@ func jaCatalog(key string) string {
 		return "有効 • 再起動して初期化"
 	case "im.status.not_started":
 		return "未開始"
-	case "context.until_compact":
-		return "残り"
 	case "empty.ask":
 		return "リファクタリング、バグ修正、説明、テストなどを依頼してください。"
 	case "empty.tips":
 		return "ヒント: @path でファイルを含める、/? でヘルプ、Shift+Tab でモード切替"
-	case "startup.banner":
-		return "ターミナル UI を準備し、起動時のターミナルノイズをフィルタリングしています。すぐに入力できます; バナーは起動が完了すると消えます。"
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab 切替 • Enter 適用 • Esc 閉じる"
 	case "hint.mention":
 		return "@ ファイル/フォルダ添付 • Tab/Shift+Tab 切替 • Enter 適用"
 	case "hint.mode":
 		return "モード"
-	case "mode.approval.ask":
-		return "毎回確認"
-	case "mode.approval.none":
-		return "承認不要"
-	case "mode.approval.critical":
-		return "重要な操作のみ確認"
-	case "mode.tools.rules":
-		return "ツールルール"
-	case "mode.tools.readonly":
-		return "読み取り専用"
-	case "mode.tools.safe":
-		return "安全"
-	case "mode.tools.open":
-		return "オープン"
-	case "mode.agent.waits":
-		return "エージェント待機"
-	case "mode.agent.autocontinue":
-		return "自動継続"
 	case "hint.enter_send":
 		return "Enter で送信"
 	case "hint.ctrlv_image":
@@ -221,18 +143,12 @@ func jaCatalog(key string) string {
 		return "Ctrl+R でサイドバー"
 	case "hint.help":
 		return "/help でヘルプ"
-	case "hint.add_context":
-		return "@ コンテキスト追加"
-	case "hint.scroll":
-		return "PgUp/PgDn スクロール"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab でモード切替"
 	case "hint.ctrlc_cancel":
 		return "Ctrl+C でキャンセル"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C クリア/終了"
-	case "hint.image_attached":
-		return "画像添付済み"
 	case "hint.image_attached_count":
 		return "%d 個の画像が添付されました"
 	case "hint.follow_panel":
@@ -241,8 +157,6 @@ func jaCatalog(key string) string {
 		return "Ctrl+N フォロー解除"
 	case "queued.count":
 		return "%d 件キュー中"
-	case "queued.output":
-		return "[キュー %d 件保留中]\n\n"
 	case "interrupt.delivered":
 		return "[アクティブ実行に配信; 計画修正中]\n"
 	case "status.thinking":
@@ -279,24 +193,6 @@ func jaCatalog(key string) string {
 		return "  ↑↓←→ 切替  Esc 閉じる"
 	case "status.tools_used":
 		return "ツール %d 回使用"
-	case "tool.done":
-		return "完了"
-	case "tool.failed":
-		return "失敗"
-	case "tool.no_output":
-		return "出力なし"
-	case "tool.output":
-		return "出力"
-	case "tool.content":
-		return "内容"
-	case "tool.match":
-		return "一致"
-	case "tool.matches":
-		return "一致"
-	case "tool.entry":
-		return "エントリ"
-	case "tool.result":
-		return "結果"
 	case "approval.rejected":
 		return "拒否されました"
 	case "approval.allow":
@@ -338,7 +234,7 @@ func jaCatalog(key string) string {
 	case "lang.first_use.hint":
 		return " Tab/j/k 移動 • Enter 確認 • e/z ショートカット"
 	case "mode.current":
-		return "現在のモード: %s\n使用法: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  ツールに明示的なルールがない場合に確認\n  plan        読み取り専用探索; 書き込みとコマンドを拒否\n  auto        安全な操作を許可、危険な操作を拒否\n  bypass      ほぼすべて許可; 重要な操作のみ停止\n  autopilot   bypass + モデルが質問しても継続\n\n"
+		return "現在のモード: %s\n使用法: /mode <supervised|bypass>\n  supervised  デフォルト。ほぼノンストップ - 安全フロア（システム破壊/資格情報流出/バックドア書き込み）のみ確認\n  bypass      クルーズ面。システム破壊とバックドア書き込み以外はすべて許可\n  （auto/autopilot は旧エイリアス）\n"
 	case "mode.persist_failed":
 		return "モード設定の保存に失敗しました: %v"
 	case "input.placeholder":
@@ -373,8 +269,6 @@ func jaCatalog(key string) string {
 		return "認証"
 	case "panel.provider.env_var":
 		return "環境変数"
-	case "panel.provider.api_key":
-		return "APIキー"
 	case "panel.provider.api_key.missing":
 		return "未設定"
 	case "panel.provider.api_key.configured":
@@ -531,6 +425,12 @@ func jaCatalog(key string) string {
 		return "再試行する前回の送信がありません。"
 	case "command.retry_busy":
 		return "エージェントが実行中です。再試行前に現在の実行が完了するまでお待ちください。"
+	case "command.continue_task_empty":
+		return "このセッションで再開できるクラッシュタスクはありません。"
+	case "command.continue_task_busy":
+		return "エージェントが実行中です。タスク再開前に現在の実行が完了するまでお待ちください。"
+	case "command.continue_task_sent":
+		return "中断されたタスクを再開しています…"
 	case "command.edit_empty":
 		return "前のメッセージがありません"
 	case "command.edit_busy":
@@ -541,10 +441,6 @@ func jaCatalog(key string) string {
 		return "/helpでコマンド一覧を表示\n\n"
 	case "command.usage.allow":
 		return "使用法: /allow <ツール名>\n\n"
-	case "command.usage.resume":
-		return "使用法: /resume <セッションID>\n\n"
-	case "command.usage.export":
-		return "使用法: /export <セッションID>\n\n"
 	case "init.resolve_failed":
 		return "初期化ターゲットの解決に失敗しました: %v\n\n"
 	case "init.generate_failed":
@@ -581,22 +477,10 @@ func jaCatalog(key string) string {
 		return "✓ %s を永久許可に設定しました\n\n"
 	case "command.custom":
 		return "カスタムコマンド /%s:\n"
-	case "command.mention_error":
-		return "メンション展開エラー: %v"
-	case "session.list_failed":
-		return "セッション一覧の取得エラー: %v\n\n"
 	case "session.untitled":
 		return "無題"
 	case "session.store_missing":
 		return "セッションストアが設定されていません。\n\n"
-	case "session.none":
-		return "セッションが見つかりません。\n\n"
-	case "session.list.title":
-		return "セッション一覧:\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  (%s)\n"
-	case "session.list.hint":
-		return "\n/resume <ID> でセッションを再開できます\n\n"
 	case "session.new":
 		return "新しいセッション: %s\n\n"
 	case "session.resume":
@@ -619,8 +503,6 @@ func jaCatalog(key string) string {
 		// #1372: call site passes three STRINGS (tool, file, id); the old
 		// ja %d coerced the first to a number and dropped the other two.
 		return "%s を取り消しました（%s・チェックポイント %s）\n"
-	case "checkpoint.none":
-		return "チェックポイントがありません"
 	case "files.disabled":
 		return "ファイルブラウザ無効"
 	case "files.none":
@@ -631,56 +513,36 @@ func jaCatalog(key string) string {
 		return "  %s  %d 回編集  最終: %s%s\n"
 	case "files.hint":
 		return "ファイルを選択"
-	case "checkpoint.list.title":
-		return "チェックポイント (%d):\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.hint":
-		return "チェックポイントを選択してロールバック (Esc でキャンセル)"
 	case "memory.auto_unavailable":
 		return "自動メモリが初期化されていません。\n\n"
-	case "memory.list_failed":
-		return "メモリ一覧の取得エラー: %v\n\n"
-	case "memory.none":
-		return "メモリがありません"
-	case "memory.auto_title":
-		return "自動メモリ:\n"
 	case "memory.clear_failed":
 		return "メモリのクリアエラー: %v\n\n"
 	case "memory.cleared":
 		return "すべての自動メモリをクリアしました。\n\n"
-	case "memory.title":
-		return "メモリ"
-	case "memory.project":
-		return "プロジェクト"
-	case "memory.project_none":
-		return "  プロジェクトメモリファイルが読み込まれていません。\n"
-	case "memory.auto":
-		return "自動メモリ:\n"
-	case "memory.auto_none":
-		return "  自動メモリが読み込まれていません。\n"
-	case "memory.usage":
-		return "\n使用法: /memory [list|clear]\n\n"
+	case "memory.forget_usage":
+		return "Usage: /memory forget <key> | /memory restore <key> | /memory forgotten\n\n"
+	case "memory.forgot":
+		return "Memory %q forgotten (restorable via /memory restore until next GC).\n\n"
+	case "memory.forget_failed":
+		return "Error forgetting memory: %v\n\n"
+	case "memory.forgotten_empty":
+		return "No forgotten memories.\n\n"
+	case "memory.forgotten_title":
+		return "Forgotten memories:\n"
+	case "memory.restored":
+		return "Memory %q restored to prompt injection.\n\n"
+	case "memory.restore_failed":
+		return "Error restoring memory: %v\n\n"
 	case "compact.unavailable":
 		return "コンテキストマネージャーが利用できません。\n\n"
 	case "compact.failed":
 		return "圧縮に失敗しました: %v\n\n"
-	case "compact.done":
-		return "圧縮完了"
 	case "compact.done_with_stats":
 		return "会話履歴を圧縮しました（%d → %d トークン）。\n\n"
 	case "todo.cleared":
 		return "TODOリストをクリアしました"
 	case "todo.clear_failed":
 		return "TODOのクリアエラー: %v\n\n"
-	case "todo.none":
-		return "TODO リストが見つかりません。todo_write ツールを使用して作成してください。\n\n"
-	case "todo.read_failed":
-		return "TODOの読み込みエラー: %v\n\n"
-	case "todo.parse_failed":
-		return "TODOのパースエラー: %v\n\n"
-	case "todo.title":
-		return "TODOリスト:\n%s\n\n"
 	case "bug.title":
 		return "バグレポート情報"
 	case "bug.version":
@@ -709,14 +571,8 @@ func jaCatalog(key string) string {
 		return "設定: model = %s\n\n"
 	case "config.provider_set":
 		return "設定: provider = %s\n\n"
-	case "config.language_set":
-		return "設定: language = %s\n\n"
 	case "config.unknown_key":
 		return "不明な設定キー: %s\n対応: model, provider, language\n\n"
-	case "config.title":
-		return "現在の設定:\n"
-	case "status.title":
-		return "ステータス"
 	case "panel.update":
 		return "更新"
 	case "label.version":
@@ -741,8 +597,6 @@ func jaCatalog(key string) string {
 		return "アップデート準備中"
 	case "update.failed":
 		return "更新に失敗しました: %v"
-	case "update.restart_failed":
-		return "アップデートの準備が完了しましたが、再起動に失敗しました: %v\n\n"
 	case "update.pm_hint.brew":
 		return "アップデートがインストールされました。注意: ggcode は Homebrew 経由でインストールされています。\nHomebrew を同期するには `brew upgrade ggcode` を実行してください。\n\n"
 	case "update.pm_hint.scoop":
@@ -755,16 +609,8 @@ func jaCatalog(key string) string {
 		return "このシステムで他の ggcode インストールが検出されました:\n%s\n別の ggcode が PATH の先頭にある場合、そちらも更新するか PATH の順序を調整することを検討してください。\n\n"
 	case "update.dual_scope":
 		return "警告: ユーザーとシステム全体の両方に ggcode インストールが見つかりました:\n  ユーザー: %s\n  システム: %s\nPATH の競合が発生する可能性があります。設定 > アプリからどちらかをアンインストールすることを検討してください。\n\n"
-	case "plugins.unavailable":
-		return "プラグインマネージャーが利用できません。\n\n"
-	case "plugins.none":
-		return "プラグインが読み込まれていません"
-	case "plugins.title":
-		return "プラグイン"
 	case "mcp.none":
 		return "MCP サーバが設定されていません。\n\n"
-	case "mcp.title":
-		return "MCPサーバ"
 	case "mcp.active_tools":
 		return "アクティブツール"
 	case "mcp.more":
@@ -773,44 +619,18 @@ func jaCatalog(key string) string {
 		return "使用法: /image <ファイルパス> または /image paste\n"
 	case "image.formats":
 		return "対応形式: PNG, JPEG, GIF, WebP（最大20MB）\n\n"
-	case "image.attached":
-		return "画像を添付しました: %s\n"
-	case "image.attached_hint":
-		return "画像を含めるにはメッセージを送信するか、/image で別の画像を添付できます。\n\n"
 	case "image.clipboard_failed":
 		return "クリップボードから画像を貼り付けできませんでした: %v"
 	case "image.clipboard_no_image_windows":
 		return "クリップボードに画像が見つかりません。WindowsではCtrl+Vが端末に遮断されることがあります。Ctrl+Shift+Vまたは/image pasteを試してください。"
-	case "agents.unavailable":
-		return "サブエージェント管理が利用できません"
-	case "agents.none":
-		return "アクティブなサブエージェントがありません"
-	case "agents.title":
-		return "%d 個のサブエージェント:\n"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.hint":
-		return "タブでサブエージェントを選択、Enter で送信"
-	case "agent.usage":
-		return "使用法: /agent <id> または /agent cancel <id>\n\n"
-	case "agent.cancelled":
-		return "サブエージェント %s をキャンセルしました\n\n"
-	case "agent.cancel_failed":
-		return "エージェントのキャンセルに失敗: %s"
-	case "agent.not_found":
-		return "エージェント %s が見つかりません"
-	case "agent.title":
-		return "エージェント: %s\nステータス: %s\nタスク: %s\n"
-	case "agent.result":
-		return "結果: %s\n"
-	case "agent.error":
-		return "エージェントエラー: %v"
 	case "slash.help":
 		return "ヘルプを表示"
 	case "slash.sessions":
 		return "セッション一覧を表示"
 	case "slash.resume":
 		return "セッションを復元"
+	case "slash.continue_task":
+		return "クラッシュで中断されたタスクを再開"
 	case "slash.export":
 		return "セッションをエクスポート"
 	case "slash.model":
@@ -905,8 +725,6 @@ func jaCatalog(key string) string {
 		return "IMアダプタを管理"
 	case "panel.qq.directory":
 		return "ディレクトリ"
-	case "panel.qq.runtime":
-		return "ランタイム"
 	case "panel.qq.bots":
 		return "QQボット"
 	case "panel.qq.created":
@@ -915,26 +733,16 @@ func jaCatalog(key string) string {
 		return "バインド済み: %d"
 	case "panel.qq.available":
 		return "利用可能: %d"
-	case "panel.qq.current_binding":
-		return "現在のバインド"
 	case "panel.qq.none":
 		return "（なし）"
-	case "panel.qq.default":
-		return "（デフォルト）"
 	case "panel.qq.adapter":
 		return "アダプタ: %s"
-	case "panel.qq.target":
-		return "ターゲット: %s"
-	case "panel.qq.channel":
-		return "チャネル: %s"
 	case "panel.qq.bot_list":
 		return "QQ Bot リスト"
 	case "panel.qq.no_bots":
 		return "QQ Botが設定されていません。"
 	case "panel.qq.entry.available":
 		return "利用可能"
-	case "panel.qq.entry.bound":
-		return "バインド済み"
 	case "panel.qq.entry.active":
 		return "アクティブ"
 	case "panel.qq.entry.bound_other":
@@ -973,14 +781,6 @@ func jaCatalog(key string) string {
 		return "Enter でBot作成 • Esc でキャンセル"
 	case "panel.qq.actions_hint":
 		return "j/k 移動 • d 無効/有効 • Enter または b でBotバインド • c でチャネルバインド • x でチャネルバインド解除 • u でBotバインド解除 • i でBot作成 • e 設定編集 • q QR表示 • Esc で閉じる"
-	case "panel.qq.bind_channel":
-		return "チャネルをバインド"
-	case "panel.qq.scan_hint":
-		return "QRコードをスキャンし、Botを追加して、メッセージを送信してペアリングを開始してください。"
-	case "panel.qq.qr_code":
-		return "QRコード:"
-	case "panel.qq.share_link":
-		return "共有リンク:"
 	case "panel.qq.message.no_bot":
 		return "利用可能なQQ Botがありません。"
 	case "panel.qq.message.bound_success":
@@ -1001,8 +801,6 @@ func jaCatalog(key string) string {
 		return "QQアダプタ名が必要です"
 	case "panel.qq.error.not_configured":
 		return "QQ Bot %q は設定されていません"
-	case "panel.qq.error.disabled":
-		return "QQ Bot %q は無効です"
 	case "panel.qq.error.not_qq_adapter":
 		return "アダプタ %q はQQ Botではありません"
 	case "panel.qq.error.not_online":
@@ -1065,6 +863,14 @@ func jaCatalog(key string) string {
 		return "コンテキストマネージャが利用できません。"
 	case "regenerate.no_response":
 		return "再生成する応答がありません。"
+	case "rewind.bad_arg":
+		return "使い方: /rewind [N]（N >= 1、巻き戻すユーザーターン数）"
+	case "rewind.revert_failed":
+		return "ファイルのロールバックが拒否されたため、巻き戻しを中止しました（何も変更されていません）: %v"
+	case "rewind.success":
+		return "%d ターンを巻き戻しました。ファイル編集を取り消しました（%s）。セッション %s で継続します - 元セッションは保持されます。"
+	case "rewind.success_no_edits":
+		return "%d ターンを巻き戻しました。巻き戻したターンには追跡対象のファイル編集がありませんでした。セッション %s で継続します - 元セッションは保持されます。"
 	case "branch.busy":
 		return "エージェント実行中はブランチできません。Ctrl+C でキャンセルしてください。"
 	case "branch.no_session":
@@ -1097,7 +903,7 @@ func jaCatalog(key string) string {
 モデル & プロバイダ:
   /model [name]      モデルパネルを開く、または直接切り替え
   /provider [vendor] プロバイダマネージャを開く
-  /mode <mode>       エージェントモードを設定 (supervised|plan|auto|bypass|autopilot)
+  /mode <mode>       エージェントモードを設定 (supervised|bypass)
 
 開発:
   /diff [opts]       git diff をチャットに表示 (--cached, --stat, <file>)

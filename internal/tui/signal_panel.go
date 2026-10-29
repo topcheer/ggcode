@@ -456,8 +456,10 @@ func (m *Model) createSigAdapterCmd(spec string) tea.Cmd {
 		}
 		// #1367 family batch 2: config write + disk save moved onto
 		// the Update loop via configMutationMsg (see config_mutation.go).
+		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
 		return configMutationMsg{
 			apply: func(m *Model) error {
+				imEnabledBefore = m.config.IM.Enabled
 				m.config.IM.Enabled = true
 				return m.config.AddIMAdapter(name, adapter)
 			},
@@ -476,6 +478,7 @@ func (m *Model) createSigAdapterCmd(spec string) tea.Cmd {
 								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 									return rerr
 								}
+								m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
 								return m.saveConfig()
 							},
 							next: func(m *Model) tea.Cmd {

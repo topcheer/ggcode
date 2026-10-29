@@ -105,6 +105,12 @@ type trajectoryLearning struct {
 	InjectedRuns int `json:"injected_runs,omitempty"`
 	AfterSuccess int `json:"after_success,omitempty"`
 	AfterFail    int `json:"after_fail,omitempty"`
+
+	// sa-149 (GEPA-style policy distillation): LLM-refined imperative
+	// policy text, compiled once the r461 outcome counters above have
+	// proven this entry effective (see policy_distill.go). Empty = never
+	// distilled; prompt injection falls back to the raw Insight.
+	Refined string `json:"refined,omitempty"`
 }
 
 // trajIntelState manages post-run trajectory intelligence extraction.
@@ -287,6 +293,30 @@ func (s *trajIntelState) maybeExtractAndPersist(workingDir string, stats *RunSta
 	}
 }
 
+// trimLearnings evicts the lowest-EffectiveConfidence entries when the
+// store exceeds trajIntelMaxEntries (ties evict the oldest first), then
+// restores chronological order for the file. Shared by persistLocked and
+// TrajMergeInto so no write path regresses to the pre-r459 tail-FIFO trim,
+// which discarded the most-reinforced rows during merge/import/backflow
+// while decayed noise survived (#3705).
+func trimLearnings(all []trajectoryLearning) []trajectoryLearning {
+	if len(all) <= trajIntelMaxEntries {
+		return all
+	}
+	sort.SliceStable(all, func(i, j int) bool {
+		ci, cj := all[i].EffectiveConfidence(), all[j].EffectiveConfidence()
+		if ci != cj {
+			return ci > cj
+		}
+		return all[i].Timestamp.After(all[j].Timestamp)
+	})
+	all = all[:trajIntelMaxEntries]
+	sort.SliceStable(all, func(i, j int) bool { // restore chronological order for the file
+		return all[i].Timestamp.Before(all[j].Timestamp)
+	})
+	return all
+}
+
 // persistLocked appends new learnings to the JSONL file and trims to max
 // entries. Caller must hold s.mu. Since r461 the load→append→rewrite runs
 // inside rewriteAllLocked's cross-process critical section.
@@ -301,19 +331,7 @@ func (s *trajIntelState) persistLocked() error {
 		// Trim to most recent N entries - but evict lowest-confidence first
 		// among ties so repeatedly-reinforced old insights outlive one-off
 		// noise (pure tail FIFO was the pre-r459 behavior).
-		if len(all) > trajIntelMaxEntries {
-			sort.SliceStable(all, func(i, j int) bool {
-				ci, cj := all[i].EffectiveConfidence(), all[j].EffectiveConfidence()
-				if ci != cj {
-					return ci > cj
-				}
-				return all[i].Timestamp.After(all[j].Timestamp)
-			})
-			all = all[:trajIntelMaxEntries]
-			sort.SliceStable(all, func(i, j int) bool { // restore chronological order for the file
-				return all[i].Timestamp.Before(all[j].Timestamp)
-			})
-		}
+		all = trimLearnings(all)
 		return all, nil
 	})
 	if writeErr != nil {
@@ -446,9 +464,19 @@ func (s *trajIntelState) RenderPromptSection(workingDir string) string {
 	// categories; global only fills gaps.
 	if globalPath, gErr := TrajGlobalPath(); gErr == nil {
 		if gEntries, gLoadErr := loadTrajFile(globalPath); gLoadErr == nil && len(gEntries) > 0 {
+			// #3729: count only INJECTION-ELIGIBLE local entries. The old
+			// file-existence count let retired zombies (below the 0.3
+			// confidence floor, or r461 effectiveness-gated) suppress
+			// same-category global entries too - a double supply cut: the
+			// category was injected neither locally nor globally, exactly
+			// when cross-workspace knowledge was most valuable (the local
+			// pattern no longer reproduces). Aligned with the injection
+			// filter chain (trajInjectEligible).
 			localCats := map[string]bool{}
 			for _, l := range entries {
-				localCats[l.Category] = true
+				if trajInjectEligible(l) {
+					localCats[l.Category] = true
+				}
 			}
 			for _, l := range gEntries {
 				if l.Category == "" || localCats[l.Category] {
@@ -513,7 +541,13 @@ func (s *trajIntelState) RenderPromptSection(workingDir string) string {
 		seenCat[key] = true
 		counts[l.Type]++
 		s.recordInjectedLocked(l)
-		lines = append(lines, fmt.Sprintf("- [%s] %s", l.Type, l.Insight))
+		// sa-149: prefer the distilled policy text when present; the raw
+		// statistical Insight remains the fallback for unrefined entries.
+		text := l.Refined
+		if text == "" {
+			text = l.Insight
+		}
+		lines = append(lines, fmt.Sprintf("- [%s] %s", l.Type, text))
 		total++
 	}
 	if len(lines) == 0 {
@@ -615,9 +649,19 @@ func TrajListLearnings(workingDir string) []TrajLearningView {
 	}
 	if globalPath, gErr := TrajGlobalPath(); gErr == nil {
 		if gEntries, gLoadErr := loadTrajFile(globalPath); gLoadErr == nil && len(gEntries) > 0 {
+			// #3729: count only INJECTION-ELIGIBLE local entries. The old
+			// file-existence count let retired zombies (below the 0.3
+			// confidence floor, or r461 effectiveness-gated) suppress
+			// same-category global entries too - a double supply cut: the
+			// category was injected neither locally nor globally, exactly
+			// when cross-workspace knowledge was most valuable (the local
+			// pattern no longer reproduces). Aligned with the injection
+			// filter chain (trajInjectEligible).
 			localCats := map[string]bool{}
 			for _, l := range entries {
-				localCats[l.Category] = true
+				if trajInjectEligible(l) {
+					localCats[l.Category] = true
+				}
 			}
 			for _, l := range gEntries {
 				if l.Category == "" || localCats[l.Category] {
@@ -788,9 +832,11 @@ func TrajMergeInto(dstWorkingDir, srcPath string) (int, error) {
 		return 0, nil
 	}
 	merged = consolidateLearnings(merged)
-	if len(merged) > trajIntelMaxEntries {
-		merged = merged[len(merged)-trajIntelMaxEntries:]
-	}
+	// #3705: use the shared confidence-aware trim. The tail-FIFO slice that
+	// was here revived the pre-r459 eviction policy on the merge path: it
+	// silently dropped the highest-confidence (most-reinforced) rows during
+	// /traj import and worktree backflow while decayed noise survived.
+	merged = trimLearnings(merged)
 	if err := writeTrajFile(dstPath, merged); err != nil {
 		return 0, err
 	}
@@ -977,6 +1023,16 @@ func (l trajectoryLearning) EffectiveConfidence() float64 {
 func effectivenessGated(l trajectoryLearning) bool {
 	return l.InjectedRuns >= trajEffectMinSamples &&
 		float64(l.AfterSuccess)/float64(l.InjectedRuns) < trajEffectMinSuccess
+}
+
+// trajInjectEligible reports whether an entry would survive the injection
+// filter chain (confidence floor + r461 effectiveness gate). #3729: the
+// global-tier fill-gaps top-up keys on this, so a locally-retired zombie
+// category no longer suppresses an eligible global entry of the same
+// category. The r462 holdout is per-run sampling, not retirement, so it
+// deliberately does not factor in.
+func trajInjectEligible(l trajectoryLearning) bool {
+	return l.EffectiveConfidence() >= trajPromptMinConfidence && !effectivenessGated(l)
 }
 
 // consolidateLearnings merges same Category+Type entries into a single

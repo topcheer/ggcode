@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -56,7 +58,7 @@ func (p *OpenAIProvider) ModelName() string { return p.model }
 // CloneWithModel returns a shallow copy of this provider with a different model.
 // Used by named subagents to run with a model override.
 func (p *OpenAIProvider) CloneWithModel(model string) Provider {
-	return &OpenAIProvider{
+	clone := &OpenAIProvider{
 		client:    p.client,
 		model:     model,
 		maxTokens: p.maxTokens,
@@ -75,7 +77,16 @@ func (p *OpenAIProvider) CloneWithModel(model string) Provider {
 		baseURL:         p.baseURL,
 		transport:       p.transport,
 		logprobs:        p.logprobs,
+		// #4419: same trap as #3066 (anthropic) - a struct literal silently
+		// dropped these two. responseSchema zero-value = structured-output
+		// constraint silently lost on model-override subagents; the
+		// atomic.Pointer literal copy carries only zero state.
+		responseSchema: append(json.RawMessage(nil), p.responseSchema...),
 	}
+	if ov := p.samplingOverride.Load(); ov != nil {
+		clone.samplingOverride.Store(ov)
+	}
+	return clone
 }
 
 // SetAdaptiveCap installs (or replaces) the adaptive max-output-tokens cap.
@@ -604,6 +615,12 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 			OutputTokens:      estimateTokensFromChars(len(choice.Message.Content)),
 			PromptTokensTotal: inputTokens,
 		}
+	} else if usage.OutputTokens == 0 && len(choice.Message.Content) > 0 {
+		// #4563: prompt-only usage (PromptTokens>0, CompletionTokens==0) from
+		// relays that report usage before generating - the non-streaming
+		// counterpart of the streaming #4472 backfill. Without this the
+		// compaction summarizer's cost/budget accounting understates output.
+		usage.OutputTokens = estimateTokensFromChars(len(choice.Message.Content))
 	}
 
 	// #1484-C: normalize finish_reason into the anthropic value family so
@@ -632,6 +649,15 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 // no-fallback production path. Every send in the ChatStream producer
 // goroutine must go through here.
 func (p *OpenAIProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
+	// #4295 family: same fix as openai_responses (#4293) / gemini - see
+	// the GeminiProvider.sendEvent comment. Non-blocking fast path keeps
+	// the terminal error deterministic; full-buffer falls through to the
+	// racing select (#3071 leak guard preserved).
+	select {
+	case ch <- ev:
+		return true
+	default:
+	}
 	select {
 	case ch <- ev:
 		return true
@@ -871,6 +897,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							// delta has nothing to disambiguate — default to 0 instead
 							// of silently discarding the whole turn's tool call.
 							idx = 0
+							// #4471: those same relays may stream parallel tool calls
+							// one chunk each; collapsing every chunk into slot 0 silently
+							// merges distinct calls (ID last-write-wins, arguments
+							// byte-concatenated into invalid JSON). When the delta
+							// carries an ID, keep distinct IDs in distinct slots.
+							idx = resolveNoIndexToolCallSlot(toolCalls, tc.ID)
 						} else {
 							// Multiple calls without index cannot be located safely.
 							debug.Log("openai", "dropping tool-call delta without index (multi-call delta, id=%s name=%s)", tc.ID, tc.Function.Name)
@@ -901,7 +933,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 								debug.Log("openai", "tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
 							}
 						}
-						for idx, tc := range toolCalls {
+						// #4244: Go map iteration is randomized - emitting the parallel
+						// tool calls in map order lost the model's idx-expressed intent
+						// (mkdir→write, add→commit pairs executed in random order, and
+						// replay transcripts differed run-to-run). Emit sorted by idx.
+						for _, idx := range slices.Sorted(maps.Keys(toolCalls)) {
+							tc := toolCalls[idx]
 							// Attempt JSON repair for truncated/malformed args.
 							// This is especially important when finish_reason is
 							// "length" (max_tokens truncation) - the args may be
@@ -952,6 +989,26 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						OutputTokens:      estimateTokensFromChars(outputChars),
 						PromptTokensTotal: inputTokens,
 					}
+				} else {
+					if usage.OutputTokens == 0 && outputChars > 0 {
+						// #4472: the #1286 zero guard only rejects chunks where every
+						// field is zero, so a prompt-only usage chunk (two-phase relays)
+						// materializes usage with OutputTokens==0 and suppresses this
+						// estimation fallback - silently zeroing cost/budget/compaction
+						// accounting while real output streamed. Backfill the estimate.
+						usage.OutputTokens = estimateTokensFromChars(outputChars)
+					}
+					if usage.InputTokens == 0 {
+						// #4563: the mirror gap - a completion-only usage chunk
+						// (Output>0, Input==0) materializes usage, which skips the
+						// usage==nil estimation fallback above and leaves
+						// InputTokens permanently 0. Backfill via CountTokens so
+						// cost/budget accounting does not understate the prompt side.
+						if it, err := p.CountTokens(ctx, messages); err == nil {
+							usage.InputTokens = it
+							usage.PromptTokensTotal = it
+						}
+					}
 				}
 				var confidence *float64 // sa-74
 				if logprobN > 0 {
@@ -971,6 +1028,41 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	})
 
 	return ch, nil
+}
+
+// resolveNoIndexToolCallSlot locates the accumulator slot for a
+// single-element tool-call delta that omits index (#722 minimal relays).
+// #4471: those relays may stream parallel calls one chunk each - when the
+// delta carries an ID, reuse the slot with the same ID, or open a fresh
+// slot when slot 0 already belongs to a different ID; never merge two
+// distinct calls into one accumulator (corrupts arguments JSON).
+func resolveNoIndexToolCallSlot(toolCalls map[int]*ToolCallDelta, id string) int {
+	idx := 0
+	if id == "" {
+		return idx
+	}
+	for i, ex := range toolCalls {
+		if ex != nil && ex.ID == id {
+			return i
+		}
+	}
+	if ex0 := toolCalls[0]; ex0 != nil && ex0.ID != "" && ex0.ID != id {
+		return nextToolCallSlot(toolCalls)
+	}
+	return idx
+}
+
+// nextToolCallSlot returns the next free slot index for a tool-call delta
+// whose ID matches no existing slot (#4471: relays omitting index may
+// stream parallel calls one chunk each; distinct IDs must not share a slot).
+func nextToolCallSlot(toolCalls map[int]*ToolCallDelta) int {
+	max := -1
+	for k := range toolCalls {
+		if k > max {
+			max = k
+		}
+	}
+	return max + 1
 }
 
 func openAIUsage(usage openai.Usage) TokenUsage {
@@ -1475,6 +1567,14 @@ func (p *OpenAIProvider) convertTools(tools []ToolDefinition) []openai.Tool {
 		if len(bytes.TrimSpace(params)) == 0 || !json.Valid(params) {
 			debug.Log("openai", "WARNING: tool %q has invalid JSON schema (%d bytes), using empty object fallback", t.Name, len(params))
 			params = json.RawMessage(`{"type":"object","properties":{}}`)
+		}
+		// #4276: moonshot-flavored endpoints reject free-form object
+		// schema nodes ({"type":"object"} with no properties and no
+		// additionalProperties) as "infinite recursion without termination
+		// condition". Normalize vendor-gated so every other endpoint is
+		// byte-identical.
+		if moonshotSchemaGateActive(p.baseURL, p.model) {
+			params = normalizeMoonshotSchema(params)
 		}
 		// Strict tool use (structured outputs): only allowlisted tools get
 		// `strict: true`, and only when their schema is strict-compatible.

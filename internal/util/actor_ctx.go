@@ -15,9 +15,6 @@ import "context"
 // actorKeyType is the unexported context key type.
 type actorKeyType struct{}
 
-// ActorMain labels the primary agent (no sub-agent/swarm wrapper).
-const ActorMain = "main"
-
 // WithActor returns a ctx annotated with the executing actor's identity.
 // An empty id keeps the ctx unchanged (legacy callers).
 func WithActor(ctx context.Context, id string) context.Context {

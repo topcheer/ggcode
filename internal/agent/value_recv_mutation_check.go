@@ -48,6 +48,13 @@ package agent
 // bounded. Item 3 is excluded because it requires type knowledge to know
 // whether the nested method mutates.
 //
+// Known blind spots (deliberate, #3742): assignments through an index
+// expression (c.arr[0] = x, c.m[k] = v) are not checked -- map/slice fields
+// share their backing store through the copy, so flagging them wholesale
+// would false-positive on the map case; typed detection needs type info.
+// Value-semantics builders (methods returning the receiver type) are exempt
+// -- their mutations on the copy are the point, not a bug.
+//
 // Delta-aware: only flags mutations present in the NEW content.
 
 import (
@@ -110,8 +117,17 @@ func vrmCheckFunc(fn *ast.FuncDecl, fset *token.FileSet, filePath string, issues
 		return
 	}
 
-	// Check if this function already had mutations in oldContent
 	typeName := vrmReceiverTypeShort(fn.Recv.List[0].Type)
+
+	// #3742: value-semantics builder exemption -- a method that RETURNS the
+	// receiver type mutates the copy by design and hands it back to the
+	// caller (stdlib idiom: WithName/WithX chains). Nothing is lost; warning
+	// here taught the LLM to rewrite legal builders as pointer receivers.
+	if vrmReturnsReceiver(fn, typeName) {
+		return
+	}
+
+	// Check if this function already had mutations in oldContent
 	sig := typeName + "." + fn.Name.Name
 	if oldMutations != nil && oldMutations[sig] {
 		return // Skip - this mutation already existed
@@ -199,6 +215,33 @@ func vrmReceiverTypeShort(expr ast.Expr) string {
 // into nested function literals) looking for assignments or inc/dec on
 // receiver fields. Returns mutations found.
 func vrmFindReceiverMutations(body *ast.BlockStmt, recvName string) []vrmMutation {
+	// #3758-B: a `recvName := ...` inside the body re-binds the NAME -
+	// later mutations of it hit the shadow, not the receiver. Collect the
+	// rebind positions first; position-ordered comparison is conservative
+	// (may skip a genuine mutation after a rebind in a sibling scope),
+	// matching this detector's keep-false-positives-low contract.
+	var rebinds []token.Pos
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, isFuncLit := n.(*ast.FuncLit); isFuncLit {
+			return false
+		}
+		if as, ok := n.(*ast.AssignStmt); ok && as.Tok == token.DEFINE {
+			for _, lhs := range as.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && id.Name == recvName {
+					rebinds = append(rebinds, as.Pos())
+				}
+			}
+		}
+		return true
+	})
+	isShadowed := func(p token.Pos) bool {
+		for _, r := range rebinds {
+			if r < p {
+				return true
+			}
+		}
+		return false
+	}
 	var results []vrmMutation
 	ast.Inspect(body, func(n ast.Node) bool {
 		if n == nil {
@@ -213,6 +256,9 @@ func vrmFindReceiverMutations(body *ast.BlockStmt, recvName string) []vrmMutatio
 		case *ast.AssignStmt:
 			for _, lhs := range stmt.Lhs {
 				if field := vrmExtractRecvField(lhs, recvName); field != "" {
+					if isShadowed(stmt.Pos()) {
+						continue
+					}
 					results = append(results, vrmMutation{
 						pos:   lhs.Pos(),
 						field: field,
@@ -221,10 +267,12 @@ func vrmFindReceiverMutations(body *ast.BlockStmt, recvName string) []vrmMutatio
 			}
 		case *ast.IncDecStmt:
 			if field := vrmExtractRecvField(stmt.X, recvName); field != "" {
-				results = append(results, vrmMutation{
-					pos:   stmt.X.Pos(),
-					field: field,
-				})
+				if !isShadowed(stmt.Pos()) {
+					results = append(results, vrmMutation{
+						pos:   stmt.X.Pos(),
+						field: field,
+					})
+				}
 			}
 		}
 		return true
@@ -232,14 +280,43 @@ func vrmFindReceiverMutations(body *ast.BlockStmt, recvName string) []vrmMutatio
 	return results
 }
 
+// vrmReturnsReceiver reports whether any result type of fn is the receiver
+// type itself (value-semantics builder shape). Pointer results of the same
+// type are irrelevant here -- pointer receivers are never checked anyway.
+func vrmReturnsReceiver(fn *ast.FuncDecl, typeName string) bool {
+	if fn.Type == nil || fn.Type.Results == nil {
+		return false
+	}
+	for _, r := range fn.Type.Results.List {
+		if id, ok := r.Type.(*ast.Ident); ok && id.Name == typeName {
+			return true
+		}
+	}
+	return false
+}
+
 // vrmExtractRecvField checks if an expression is a field selection on the
-// receiver (e.g., "c.count"). Returns the field name if so, empty string otherwise.
+// receiver (e.g., "c.count", and nested "c.inner.count" -- #3742: the base
+// identifier of the selector chain must be the receiver). Returns the field
+// name if so, empty string otherwise.
 func vrmExtractRecvField(expr ast.Expr, recvName string) string {
 	sel, ok := expr.(*ast.SelectorExpr)
 	if !ok {
 		return ""
 	}
-	ident, ok := sel.X.(*ast.Ident)
+	// #3799 B: NESTED selector chains are conservatively exempt. Pure AST
+	// cannot know whether an intermediate field is a POINTER (`state
+	// *State`): through a pointer field the value-receiver copy still
+	// reaches the shared target, and `func (c Client) Init() {
+	// c.state.ready = true }` is a legal, visible mutation - claiming
+	// "lost with the copy" there was a systematic false positive. Same
+	// tradeoff as the #3742 index-expression exemption: accept a miss over
+	// a false accusation (typed detection needs go/types).
+	if _, isSel := sel.X.(*ast.SelectorExpr); isSel {
+		return ""
+	}
+	base := sel.X
+	ident, ok := base.(*ast.Ident)
 	if !ok || ident.Name != recvName {
 		return ""
 	}

@@ -161,6 +161,18 @@ func unbindBelongsToWorkspace(bindingWorkspace, daemonWorkspace string) bool {
 	return session.NormalizeWorkspacePath(bindingWorkspace) == session.NormalizeWorkspacePath(daemonWorkspace)
 }
 
+// runtimeBypassActive reports whether the LIVE permission policy is in
+// bypass mode. The CLI `bypass` flag only captures process-start state; a
+// runtime switch_mode transition lives in the ConfigPolicy (the local `mode`
+// copy is only refreshed on session restore), so detach/restart argv
+// reconstruction must ask the policy itself (#4148-B1).
+func runtimeBypassActive(policy permission.PermissionPolicy, mode permission.PermissionMode) bool {
+	if cp, ok := policy.(*permission.ConfigPolicy); ok {
+		return cp.CurrentMode() == permission.BypassMode
+	}
+	return mode == permission.BypassMode
+}
+
 func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool, startTunnel bool, newSession bool, fullLoad bool) error {
 	// --- Steps 1-8: same as run() in root.go ---
 
@@ -323,21 +335,24 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// Agent
 	ag = agent.NewAgent(prov, registry, systemPrompt, cfg.MaxIterations)
-	if rTool, ok := registry.Get("runtime"); ok {
-		if rt, ok := rTool.(tool.RuntimeTool); ok {
-			if dp, ok := rt.Provider.(*daemonRuntimeProvider); ok {
-				dp.agent = ag
-			}
-		}
-	}
+	// #4132: the runtime tool's Provider is (re)wired below (daemon.go:617)
+	// with a daemonRuntimeProvider that carries `agent` directly; the old
+	// type assertion here could never match (builtin.go registers RuntimeTool
+	// by value with a nil Provider interface, and internal/tool cannot hold
+	// this package-private type) - removed as dead code.
 	core.SetConfigAgent(ag)
 	refreshAgentSystemPrompt := func() {
 		nextPrompt, nextRefs := buildCurrentSystemPrompt()
-		systemPrompt = nextPrompt
+		// #4133: same data race root.go fixed in #2102 - daemon is a
+		// long-lived process with two concurrent callers (save_memory tool
+		// goroutine via SetAfterSave, and the 2s command ticker goroutine
+		// via commandMgr.Reload), so the systemPrompt string write must live
+		// inside the mutex; writing the ptr+len header outside it can tear.
 		promptSkillRefsMu.Lock()
+		systemPrompt = nextPrompt
 		promptSkillRefs = append(promptSkillRefs[:0], nextRefs...)
 		promptSkillRefsMu.Unlock()
-		ag.UpdateSystemPrompt(systemPrompt)
+		ag.UpdateSystemPrompt(nextPrompt)
 		if knightAgent != nil {
 			knightAgent.RecordSkillPromptExposure(nextRefs)
 		}
@@ -616,11 +631,15 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Wire runtime tool to daemon's runtime status
 	if rt, ok := registry.Get("runtime"); ok {
 		if rTool, ok := rt.(tool.RuntimeTool); ok {
+			// #4132: `agent: ag` is required - without it the provider's
+			// RuntimeContextWindow/RuntimeMaxTokens gate on a nil agent and
+			// return 0, silently zeroing context-budget hints in daemon mode.
 			rTool.Provider = &daemonRuntimeProvider{
 				ses:    ses,
 				cfg:    cfg,
 				imMgr:  imMgr,
 				bridge: bridge,
+				agent:  ag,
 			}
 			registry.Unregister("runtime")
 			registry.Register(rTool)
@@ -648,6 +667,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	defer fileWatch.Stop()
 	// Sleep-time compute (r373): pre-compact during idle windows.
 	idleMaint := agentruntime.ApplyIdleMaintenance(ag, cfg.Idle)
+	// sa-63: every idle fire also re-runs the memory consolidation sweep,
+	// so long-lived daemon sessions surface stale/conflicting memory without
+	// waiting for the startup-only sweep.
+	agentruntime.AttachIdleConsolidation(idleMaint, autoMem, workingDir)
 	defer idleMaint.Stop()
 
 	// Sub-agent manager
@@ -942,11 +965,18 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		if lanchatHub != nil {
 			lanchatHub.SetModel(r.Model)
 		}
-		agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
+		// #3994: every read below uses the LOCAL r (the fresh pointer
+		// ActivateCurrentSelection just returned), never the outer resolved -
+		// multiple IM adapters can enter this hook concurrently, and the outer
+		// pointer is reassigned under resolvedMu by the other goroutine between
+		// L937's unlock and any later read (data race; #2868's own discipline:
+		// reads go through currentResolved() or a held-lock copy - r is even
+		// stronger, it is this call's immutable snapshot).
+		agentruntime.StartAsyncRelayModelLimitRefresh(cfg, r, ag, nil)
 		if ses != nil {
 			ses.Vendor = cfg.Vendor
 			ses.Endpoint = cfg.Endpoint
-			ses.Model = resolved.Model
+			ses.Model = r.Model
 			// Persist model selection to session JSONL (session-scoped).
 			if err := store.AppendMetaToDisk(ses); err != nil {
 				debug.Log("daemon", "model switch: meta persist failed: %v", err)
@@ -960,25 +990,25 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				vendors = append(vendors, v)
 			}
 			endpoints := cfg.EndpointNames(cfg.Vendor)
-			models := resolved.Models
-			if len(models) == 0 && resolved.Model != "" {
-				models = []string{resolved.Model}
+			models := r.Models
+			if len(models) == 0 && r.Model != "" {
+				models = []string{r.Model}
 			}
 			return fmt.Sprintf(
 				"📋 Current config:\n  Provider: %s (%s)\n  Model: %s\n  Available providers: %s\n  Endpoints: %s\n  Models: %s",
-				resolved.VendorName, resolved.EndpointName, resolved.Model,
+				r.VendorName, r.EndpointName, r.Model,
 				strings.Join(vendors, ", "),
 				strings.Join(endpoints, ", "),
 				strings.Join(models, ", "),
 			), nil
 		}
 		if model != "" {
-			return fmt.Sprintf("✅ Model switched to: %s (%s)", resolved.Model, resolved.VendorName), nil
+			return fmt.Sprintf("✅ Model switched to: %s (%s)", r.Model, r.VendorName), nil
 		}
 		if vendor != "" {
-			return fmt.Sprintf("✅ Provider switched to: %s (%s) → model: %s", resolved.VendorName, resolved.EndpointName, resolved.Model), nil
+			return fmt.Sprintf("✅ Provider switched to: %s (%s) → model: %s", r.VendorName, r.EndpointName, r.Model), nil
 		}
-		return fmt.Sprintf("✅ Config updated: %s (%s) → %s", resolved.VendorName, resolved.EndpointName, resolved.Model), nil
+		return fmt.Sprintf("✅ Config updated: %s (%s) → %s", r.VendorName, r.EndpointName, r.Model), nil
 	})
 	// Turn-scoped vision fallback: image-bearing turns on non-vision models
 	// switch to a comparable vision model for that turn only. switchFn keeps
@@ -1049,9 +1079,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	var a2aSrv *a2a.Server
 	// a2aReg already declared above for system prompt access
 	var a2aHandler *a2a.TaskHandler
+	var a2aStopRefresh func() // #4155: stops the refreshCache ticker goroutine
 	if !cfg.A2A.Disabled {
 		// A2A instance override already applied by LoadWithInstance.
-		a2aSrv, a2aReg, a2aHandler, err = startA2AServer(cfg, ag, registry, workingDir)
+		a2aSrv, a2aReg, a2aHandler, a2aStopRefresh, err = startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
 			debug.Log("daemon", "A2A server start failed: %v", err)
 			fmt.Fprintf(os.Stderr, "A2A server warning: %v\n", err)
@@ -1060,6 +1091,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			a2aReg.StartBackgroundRefresh(a2aBgCtx)
 			defer func() {
 				a2aBgCancel()
+				// #4155: stop the refreshCache ticker goroutine too.
+				a2aStopRefresh()
 				_ = a2aReg.Unregister()
 				if lanchatHub != nil {
 					lanchatHub.Close()
@@ -1556,6 +1589,11 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}()
 
+	// #4148-B3: retain the tunnel stream-event subscription's unsubscribe so
+	// a second 't' StartShare can release the previous forwarder goroutine
+	// (bridge.Subscribe has no removal path otherwise).
+	var unsubscribeTunnelPrev func()
+
 	// Main loop
 loop:
 	for {
@@ -1573,9 +1611,24 @@ loop:
 			case 'x': // exit
 				break loop
 			case 'd': // detach to background
+				// #4148-B1: mirror the restart argv construction (#873 family) -
+				// runtime permission mode and a live tunnel are invisible in
+				// os.Args when enabled at runtime (switch_mode tool / 't' key),
+				// so the forked child would silently fall back to supervised
+				// mode and drop the phone connection.
+				var detachExtra []string
+				if runtimeBypassActive(policy, mode) {
+					detachExtra = append(detachExtra, "--bypass")
+				}
+				if core.Tunnel.GetShareInfo() != nil {
+					detachExtra = append(detachExtra, "--tunnel")
+				}
+				if fullLoad {
+					detachExtra = append(detachExtra, "--full")
+				}
 				// #2633: on fork failure stay in the foreground - the session
 				// must keep running in this process, not die with a break.
-				if detachToBackground(lang, cfgFile, workingDir, ses.ID) {
+				if detachToBackground(lang, cfgFile, workingDir, ses.ID, detachExtra) {
 					detachedToBackground = true
 					break loop
 				}
@@ -1675,8 +1728,15 @@ loop:
 							ctrl.HandleRunState(busy)
 						})
 						bridge.SetUserMessageHook(ctrl.HandleUserMessage)
-						unsubscribeTunnel := bridge.Subscribe(ctrl.HandleStreamEvent)
-						_ = unsubscribeTunnel // cleaned up on daemon exit
+						// #4148-B3: release the previous subscription before
+						// replacing it - DaemonBridge.eventSubs has no removal
+						// path, so without this each re-'t' after a teardown
+						// leaks one forwarder goroutine whose stale ctrl keeps
+						// firing against the dead broker.
+						if unsubscribeTunnelPrev != nil {
+							unsubscribeTunnelPrev()
+						}
+						unsubscribeTunnelPrev = bridge.Subscribe(ctrl.HandleStreamEvent)
 
 						fmt.Fprintf(os.Stderr, "\r\n  Mobile Tunnel Active\r\n")
 						fmt.Fprintf(os.Stderr, "  URL: %s\r\n\r\n", result.ConnectURL)
@@ -1748,7 +1808,9 @@ loop:
 		// #873: propagate --tunnel/--full through the restart argv - a tunnel
 		// daemon otherwise loses its mobile tunnel silently (phone connections
 		// drop, no error anywhere) and --full sessions fall back to 24h window.
-		if startTunnel {
+		// #4148-B2: also honor a tunnel opened at runtime via the 't' key -
+		// startTunnel only reflects the CLI flag.
+		if startTunnel || core.Tunnel.GetShareInfo() != nil {
 			args = append(args, "--tunnel")
 		}
 		if fullLoad {

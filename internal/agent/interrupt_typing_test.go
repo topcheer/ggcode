@@ -31,14 +31,34 @@ func TestClassifyInterruption(t *testing.T) {
 		{"cancel timer refactor", "cancel the timer refactor task", InterruptionAddition},
 		{"dont commit", "don't commit to main", InterruptionAddition},
 		// Revision: explicit redirection markers.
-		{"instead", "use the retry library instead", InterruptionRevision},
-		{"switch to", "switch to plan B", InterruptionRevision},
-		{"cn 改成", "改成方案B", InterruptionRevision},
-		{"cn 换成", "换成 redis 方案", InterruptionRevision},
+		// #4180: bare "instead"/"rather than"/bare CJK 改为/改成 removed
+		// (everyday refinement vocabulary - the FP family #4121 started).
+		// Rows below pin the surviving strong forms.
+		{"instead of that", "instead of that, parse the CSV directly", InterruptionRevision},
+		{"switch to plan", "switch to plan B", InterruptionRevision},
+		{"cn 改成方案", "改成方案B", InterruptionRevision},
+		{"cn 换成方案", "换成方案B再跑", InterruptionRevision},
+		{"cn 换个思路", "换个思路，直接用批处理", InterruptionRevision},
+		// NOT revision (#4180 FP family): ordinary refinement stays Addition.
+		{"bare instead refinement", "use buffered I/O instead of the streaming reader, it's simpler", InterruptionAddition},
+		{"bare instead library", "use the retry library instead", InterruptionAddition},
+		{"cn 改为 rename", "把变量名改为 camelCase 再继续", InterruptionAddition},
+		{"cn 改成 reorder", "改成先跑测试再构建", InterruptionAddition},
+		{"rather than comparison", "rather than a mutex, use an atomic counter here", InterruptionAddition},
 		// Addition: default.
 		{"plain guidance", "also add a README", InterruptionAddition},
 		{"change of plans (legacy test text)", "change of plans", InterruptionAddition},
 		{"empty", "", InterruptionAddition},
+		// Insert: complex separate task brief (composite signal: >=120 runes
+		// AND >=2 sentence units, no revision marker). Conservative - see
+		// looksLikeInsertedTask; full hit/miss matrix in zz_issue_insert_class_test.go.
+		{"long multi-sentence brief => insert",
+			"Please also review the billing module for double-charge bugs. The finance team reported duplicated invoices on renewals. Reproduce with the fixture in testdata/billing, then propose a minimal fix with tests.",
+			InterruptionInsert},
+		{"short follow-up stays addition", "also handle the retry backoff in the same client", InterruptionAddition},
+		{"revision marker beats insert signal",
+			"Please switch to plan B entirely and drop the old approach. It must also cover the retry path with tests and the migration script.",
+			InterruptionRevision},
 	}
 	for _, c := range cases {
 		if got := classifyInterruption(c.text); got != c.want {

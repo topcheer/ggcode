@@ -79,7 +79,7 @@ func (t SpawnAgentTool) currentProvider() provider.Provider {
 func (t SpawnAgentTool) Name() string { return "spawn_agent" }
 
 func (t SpawnAgentTool) Description() string {
-	return "Spawn a one-shot sub-agent run to work on an independent task. Put the full task and needed context in the initial request; do not assume the run will accept later work via send_message. Returns an agent_id. Use wait_agent or list_agents to poll status and retrieve the eventual result. At most 16 sub-agents may run concurrently (config: subagents.max_concurrent); spawns beyond the limit are rejected until earlier runs complete. A separate lifetime budget (config: subagents.max_total, default unlimited) bounds the TOTAL number of spawns per session and is not released when agents finish - once exhausted, no new sub-agents can be spawned. Delegation economics: a sub-agent re-reads context from scratch (context-copy token cost) and adds wall-clock latency; only fan out genuinely independent tasks, and for small or trivial work do it yourself with local tools."
+	return "Spawn a one-shot sub-agent run to work on an independent task. Put the full task and needed context in the initial request; do not assume the run will accept later work via send_message. Returns an agent_id. Use wait_agent or list_agents to poll status and retrieve the eventual result. At most 16 sub-agents may run concurrently (config: subagents.max_concurrent); spawns beyond the limit are rejected until earlier runs complete. A separate lifetime budget (config: subagents.max_total, default unlimited) bounds the TOTAL number of spawns per session and is not released when agents finish - once exhausted, no new sub-agents can be spawned. Delegation trade-off: a sub-agent re-reads context from scratch (context-copy token cost) and adds wall-clock latency, so do small in-scope work yourself; BUT delegation keeps that work's context OUT of yours - for a complex independent task (research, exploration, multi-file reads, or a NEW task unrelated to your current main thread), prefer spawn_agent to protect your main context."
 }
 
 func (t SpawnAgentTool) Parameters() json.RawMessage {
@@ -116,7 +116,7 @@ func (t SpawnAgentTool) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [
@@ -215,7 +215,7 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		return Result{IsError: true, Content: fmt.Sprintf("%v. Fix the git state or retry with isolation=none.", err)}, nil
 	}
 
-	content := fmt.Sprintf("Sub-agent spawned with ID: %s\nUse wait_agent or list_agents to monitor progress and retrieve the result.", id)
+	content := fmt.Sprintf("Sub-agent spawned with ID: %s\nIt runs asynchronously - before waiting, continue with work that does not depend on this result; harvest it later via wait_agent or list_agents.", id)
 	if worktreePath != "" {
 		content += fmt.Sprintf("\nIsolated in git worktree: %s (branch: %s). Its edits stay off the parent working tree; inspect or merge from that path after the run completes.", worktreePath, filepath.Base(worktreePath))
 	}
@@ -255,7 +255,10 @@ func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string,
 	}
 	if displayModel != "" {
 		if sa, ok := t.Manager.Get(id); ok && sa != nil {
-			sa.Model = displayModel
+			// #4161: all Model readers (snapshot/statusInfo) hold sa.mu and the
+			// runner write path locks too - a bare write here is a data race
+			// (string header tear) that -race flags even though it is display-only.
+			sa.SetModel(displayModel)
 		}
 	}
 
@@ -332,15 +335,19 @@ func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string,
 }
 
 // setupIsolationWorktree creates the isolation worktree for a spawned
-// sub-agent when isolation="worktree". Synthetic IDs (sa-limit-*/sa-shutdown-*)
-// are pre-failed registrations that never run, so no worktree is created for
-// them. On creation failure the sub-agent is cancelled rather than silently
-// downgraded to non-isolated, and the wrapped error is returned.
+// sub-agent when isolation="worktree". Synthetic IDs (sa-shutdown-/*
+// sa-budget-/* sa-limit-*) are pre-failed registrations that never run, so no
+// worktree is created for them. On creation failure the sub-agent is
+// cancelled rather than silently downgraded to non-isolated, and the wrapped
+// error is returned.
 func (t SpawnAgentTool) setupIsolationWorktree(ctx context.Context, isolation, id string) (string, error) {
 	if isolation != "worktree" {
 		return "", nil
 	}
-	if strings.HasPrefix(id, "sa-limit-") || strings.HasPrefix(id, "sa-shutdown-") {
+	// #4160: must cover sa-budget-* too - budget exhaustion is an expected
+	// saturation state (subagents.max_total), and each pass-through here
+	// deterministically leaked one worktree + branch on the terminal entry.
+	if subagent.IsSyntheticID(id) {
 		return "", nil
 	}
 	wtPath, _, err := createAgentWorktree(ctx, t.WorkingDir, id)

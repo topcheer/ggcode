@@ -120,6 +120,17 @@ func makefileTargets(path string) map[string]bool {
 	targets := make(map[string]bool)
 	for _, line := range strings.Split(string(data), "\n") {
 		if m := makefileTargetLine.FindStringSubmatch(line); m != nil {
+			// #3825: `.PHONY`, `.DEFAULT_GOAL` etc. are special make
+			// directives, not user targets. Capturing them let a bare
+			// `include core.mk` + `.PHONY: build` root Makefile register
+			// ".PHONY" and pass the hasMakefile gate, while the REAL targets
+			// (defined in the included .mk) stayed unregistered - the
+			// #3049-C2 empty-map guard never fired and every referenced
+			// target false-flagged as undefined. Skip dot/percent-prefixed
+			// directive names entirely.
+			if strings.HasPrefix(m[1], ".") || strings.HasPrefix(m[1], "%") {
+				continue
+			}
 			targets[m[1]] = true
 		}
 	}

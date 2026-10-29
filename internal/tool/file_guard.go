@@ -1,7 +1,6 @@
 package tool
 
 import (
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -128,9 +127,19 @@ func matchProtectedPattern(relPath, slashPath, pattern string) bool {
 	// Directory prefix match: "dir/" matches "dir/anything" or "subdir/dir/anything"
 	if strings.HasSuffix(pat, "/") {
 		prefix := pat
+		// #4060: fold the prefix comparisons on case-insensitive FSes so a
+		// literal ".GIT/" variant cannot slip this branch — the OS resolves
+		// subdir/.GIT/config to the real .git/config (same file), and the
+		// guard must judge it under FS semantics, like matchSegFS does.
+		hasPrefix := strings.HasPrefix
+		if fsCaseInsensitive() {
+			hasPrefix = func(s, p string) bool {
+				return strings.HasPrefix(strings.ToLower(s), strings.ToLower(p))
+			}
+		}
 		// Match at workspace root
-		if strings.HasPrefix(relPath+"/", prefix) ||
-			strings.HasPrefix(slashPath+"/", prefix) ||
+		if hasPrefix(relPath+"/", prefix) ||
+			hasPrefix(slashPath+"/", prefix) ||
 			relPath+"/" == prefix {
 			return true
 		}
@@ -143,7 +152,9 @@ func matchProtectedPattern(relPath, slashPath, pattern string) bool {
 		dirName := strings.TrimSuffix(pat, "/")
 		for _, p := range []string{relPath, slashPath} {
 			for _, seg := range strings.Split(p, "/") {
-				if seg == dirName {
+				// #4060: segment equality must also fold on case-insensitive
+				// FSes ("subdir/.GIT/refs" carries seg ".GIT" vs dirName ".git").
+				if seg == dirName || (fsCaseInsensitive() && strings.EqualFold(seg, dirName)) {
 					return true
 				}
 			}
@@ -184,92 +195,46 @@ func matchGlob(pattern, name string) (bool, error) {
 	return matched, nil
 }
 
-// matchGlobSegments reports whether every path SEGMENT of name matches the
-// corresponding pattern segment via filepath.Match (#445). The old prefix
-// comparison used == / HasPrefix literal matching, so patterns like
-// src/*-gen/** silently failed to protect (protection is fail-open).
-func matchGlobSegments(pattern, name string) bool {
-	pSegs := strings.Split(pattern, "/")
-	nSegs := strings.Split(name, "/")
-	if len(pSegs) != len(nSegs) {
-		return false
-	}
-	for i, p := range pSegs {
-		if !matchSegFS(p, nSegs[i]) { // #1683: FS-aware fold
-			return false
-		}
-	}
-	return true
-}
-
 // matchDoubleStar handles glob patterns containing **.
 // "src/**" matches anything under src/.
 // "src/**/test" matches src/a/test, src/a/b/test, etc.
+// #4443: '**' may appear anywhere ("**/a/**/b", "src/**/a/**/b"); the old
+// split-on-first-** implementation fed a non-trailing '**' in the suffix
+// into single-segment glob matching (it degraded to matching ONE segment,
+// never crossing '/'), so protected-path patterns with mid-'**' silently
+// failed OPEN. The segment-wise recursive matcher below handles '**' at
+// any position: it consumes zero or more whole segments with backtracking,
+// preserving the documented #445/#830/#4089 behaviors.
 func matchDoubleStar(pattern, name string) (bool, error) {
-	parts := strings.SplitN(pattern, "**", 2)
-	prefix := strings.TrimSuffix(parts[0], "/")
-	suffix := ""
-	if len(parts) > 1 {
-		suffix = strings.TrimPrefix(parts[1], "/")
-	}
+	return matchSegsFS(strings.Split(pattern, "/"), strings.Split(name, "/")), nil
+}
 
-	// If no prefix, ** matches everything
-	if prefix == "" {
-		if suffix == "" {
-			return true, nil
-		}
-		return filepath.Match(suffix, filepath.Base(name))
-	}
-
-	// #445: the prefix may itself contain glob metacharacters (src/*-gen/**).
-	// Segment-wise matching: name must have at least len(prefix segments)+1
-	// segments, and every prefix segment must glob-match.
-	pSegs := strings.Split(prefix, "/")
-	nSegs := strings.Split(name, "/")
-	if len(nSegs) <= len(pSegs) {
-		// name is not strictly under the prefix — only an exact
-		// segment-wise match can hit (prefix itself matched as a file).
-		if matchGlobSegments(prefix, name) && suffix == "" {
-			return true, nil
-		}
-		return false, nil
-	}
-	for i, p := range pSegs {
-		matched, err := filepath.Match(p, nSegs[i])
-		if err != nil || !matched {
-			return false, nil
-		}
-	}
-	rest := strings.Join(nSegs[len(pSegs):], "/")
-	if suffix == "" {
-		return true, nil
-	}
-	// #830: a multi-segment suffix ('src/**/gen/config.yaml' style) never
-	// matched — filepath.Match does not cross '/' and Base() drops the
-	// directory part, so the guard silently failed OPEN (at odds with the
-	// #445 fail-closed history). Accept a tail segment-wise match.
-	sSegs := strings.Split(suffix, "/")
-	if len(nSegs)-len(pSegs) >= len(sSegs) {
-		off := len(nSegs) - len(sSegs)
-		all := true
-		for i, s := range sSegs {
-			ok, err := filepath.Match(s, nSegs[off+i])
-			if err != nil || !ok {
-				all = false
-				break
+// matchSegsFS matches pattern segments against name segments, honoring
+// '**' (zero or more segments, with backtracking) and per-segment globs
+// via matchSegFS (#4060 FS-aware folding).
+func matchSegsFS(p, n []string) bool {
+	for len(p) > 0 {
+		if p[0] == "**" {
+			if len(p) == 1 {
+				// Trailing '**' consumes the rest (including zero
+				// remaining segments - the prefix-as-file case, e.g.
+				// "a/**" matching "a" itself per the old #445 path).
+				return true
 			}
+			// Non-trailing '**': try consuming 0..len(n) segments.
+			for i := 0; i <= len(n); i++ {
+				if matchSegsFS(p[1:], n[i:]) {
+					return true
+				}
+			}
+			return false
 		}
-		if all {
-			return true, nil
+		if len(n) == 0 || !matchSegFS(p[0], n[0]) {
+			return false
 		}
+		p, n = p[1:], n[1:]
 	}
-	// Single-segment or globbed suffix against the base.
-	matched, err := filepath.Match(suffix, filepath.Base(rest))
-	if err == nil && matched {
-		return true, nil
-	}
-	matched2, err2 := filepath.Match(suffix, rest)
-	return matched2 && err2 == nil, nil
+	return len(n) == 0
 }
 
 // resolveSymlinkPrefix resolves symlinks for the longest existing prefix
@@ -351,27 +316,4 @@ func MergeFileGuards(sandbox AllowedPathChecker, guard *FileGuard, workingDir st
 		}
 		return true
 	}
-}
-
-// LoadProtectedPatternsFromFile reads protected patterns from a .ggcode/protect file.
-// This is a simple newline-delimited format, # for comments.
-// Returns nil if the file doesn't exist (use defaults).
-func LoadProtectedPatternsFromFile(workspaceDir string) []string {
-	if workspaceDir == "" {
-		return nil
-	}
-	path := filepath.Join(workspaceDir, ".ggcode", "protect")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var patterns []string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		patterns = append(patterns, line)
-	}
-	return patterns
 }

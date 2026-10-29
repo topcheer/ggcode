@@ -933,8 +933,12 @@ func (a *configAccess) setMCPServer(name, value string) error {
 		if config.IsPlaintextSecret(val) {
 			envVar := config.MCPServerEnvVar(name, key)
 			os.Setenv(envVar, val)
+			// #4037: a failed keys.env persist must abort the migration -
+			// replacing the value with ${VAR} anyway loses the secret on
+			// restart (reference expands to empty) while the tool reports
+			// success. Fatal semantics, matching internal/config/api_keys.go.
 			if err := config.WriteKeysEnv(map[string]string{envVar: val}); err != nil {
-				debug.Log("config", "failed to persist %s to keys.env: %v", envVar, err)
+				return fmt.Errorf("persisting %s to keys.env failed; secret kept in memory only and NOT migrated to a ${%s} reference: %w", envVar, envVar, err)
 			}
 			srv.Env[key] = "${" + envVar + "}"
 		}
@@ -945,8 +949,9 @@ func (a *configAccess) setMCPServer(name, value string) error {
 		if config.IsPlaintextSecret(val) {
 			envVar := config.MCPServerHeaderEnvVar(name, key)
 			os.Setenv(envVar, val)
+			// #4037: same fatal-on-persist-failure semantics as the env block above.
 			if err := config.WriteKeysEnv(map[string]string{envVar: val}); err != nil {
-				debug.Log("config", "failed to persist %s to keys.env: %v", envVar, err)
+				return fmt.Errorf("persisting %s to keys.env failed; secret kept in memory only and NOT migrated to a ${%s} reference: %w", envVar, envVar, err)
 			}
 			srv.Headers[key] = "${" + envVar + "}"
 		}
@@ -1006,8 +1011,9 @@ func (a *configAccess) setIMAdapterPath(path, value string) error {
 			if strVal, ok := val.(string); ok && config.IsPlaintextSecret(strVal) && config.LooksLikeSecretField(key) {
 				envVar := config.IMAdapterSecretEnvVar(adapterName, key)
 				os.Setenv(envVar, strVal)
+				// #4037: same fatal-on-persist-failure semantics as the MCP paths.
 				if err := config.WriteKeysEnv(map[string]string{envVar: strVal}); err != nil {
-					debug.Log("config", "failed to persist %s to keys.env: %v", envVar, err)
+					return fmt.Errorf("persisting %s to keys.env failed; secret kept in memory only and NOT migrated to a ${%s} reference: %w", envVar, envVar, err)
 				}
 				ad.Extra[key] = "${" + envVar + "}"
 			}
@@ -1030,8 +1036,9 @@ func (a *configAccess) setIMAdapterPath(path, value string) error {
 		if config.LooksLikeSecretField(field) && config.IsPlaintextSecret(value) {
 			envVar := config.IMAdapterSecretEnvVar(adapterName, field)
 			os.Setenv(envVar, value)
+			// #4037: same fatal-on-persist-failure semantics as the MCP paths.
 			if err := config.WriteKeysEnv(map[string]string{envVar: value}); err != nil {
-				debug.Log("config", "failed to persist %s to keys.env: %v", envVar, err)
+				return fmt.Errorf("persisting %s to keys.env failed; secret kept in memory only and NOT migrated to a ${%s} reference: %w", envVar, envVar, err)
 			}
 			return a.cfg.SetIMAdapterExtra(adapterName, field, "${"+envVar+"}")
 		}
@@ -1106,8 +1113,9 @@ func (a *configAccess) setA2AAuth(key, value string) error {
 		if config.IsPlaintextSecret(oauth2.ClientSecret) {
 			envVar := config.A2ASecretEnvVar("oauth2_client_secret")
 			os.Setenv(envVar, oauth2.ClientSecret)
+			// #4037: same fatal-on-persist-failure semantics as the MCP paths.
 			if err := config.WriteKeysEnv(map[string]string{envVar: oauth2.ClientSecret}); err != nil {
-				debug.Log("config", "failed to persist %s to keys.env: %v", envVar, err)
+				return fmt.Errorf("persisting %s to keys.env failed; secret kept in memory only and NOT migrated to a ${%s} reference: %w", envVar, envVar, err)
 			}
 			oauth2.ClientSecret = "${" + envVar + "}"
 		}
@@ -1121,8 +1129,9 @@ func (a *configAccess) setA2AAuth(key, value string) error {
 func (a *configAccess) setA2ASecret(field, value string) error {
 	envVar := config.A2ASecretEnvVar(field)
 	os.Setenv(envVar, value)
+	// #4037: same fatal-on-persist-failure semantics as the MCP paths.
 	if err := config.WriteKeysEnv(map[string]string{envVar: value}); err != nil {
-		debug.Log("config", "failed to persist %s to keys.env: %v", envVar, err)
+		return fmt.Errorf("persisting %s to keys.env failed; secret kept in memory only and NOT migrated to a ${%s} reference: %w", envVar, envVar, err)
 	}
 	ref := "${" + envVar + "}"
 	switch field {
@@ -1363,9 +1372,10 @@ func (a *configAccess) reloadProvider() {
 
 	ApplyProviderToAgent(a.agentInst, prov, resolved)
 	ApplySessionTokenBudget(a.agentInst, a.cfg)
+	ApplySessionCostLimit(a.agentInst, a.cfg)
 	ApplySessionTimeBudget(a.agentInst, a.cfg)
 	ApplyToolCallBudget(a.agentInst, a.cfg)
-	ApplySessionTimeout(a.agentInst, a.cfg, false)
+	ApplySessionTimeout(a.agentInst, a.cfg, a.agentInst.IsAutopilotMode())
 	StartAsyncRelayModelLimitRefresh(a.cfg, resolved, a.agentInst, nil)
 	debug.Log("config", "provider reloaded: %s/%s/%s", resolved.VendorID, resolved.EndpointID, resolved.Model)
 

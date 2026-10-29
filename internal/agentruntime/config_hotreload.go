@@ -38,11 +38,6 @@ import (
 // dependency) comparing sha256 of each watched file against its own
 // baseline, with mtime prefilter to keep idle cost near zero.
 
-// HotReloadFieldPolicy classifies which top-level config fields may be
-// refreshed in place on a live Config. Everything not listed here keeps the
-// startup snapshot value (restart to change) - conservative by default.
-type HotReloadFieldPolicy struct{}
-
 // ConfigHotReload is the watcher for ggcode.yaml + external config files.
 type ConfigHotReload struct {
 	configPath  string // ggcode.yaml (or workspace equivalent)
@@ -175,6 +170,7 @@ func (w *ConfigHotReload) applyFreshConfig(fresh *config.Config) {
 	old.KnightConfig = fresh.KnightConfig
 	old.MaxIterations = fresh.MaxIterations
 	old.SessionTokenBudget = fresh.SessionTokenBudget
+	old.SessionCostLimitUSD = fresh.SessionCostLimitUSD
 	old.ToolCallBudget = fresh.ToolCallBudget
 	// #1482 case D: snapshot the log fields under the same lock the
 	// setFallbacks* writers now hold - the old post-Unlock read raced
@@ -189,9 +185,10 @@ func (w *ConfigHotReload) applyFreshConfig(fresh *config.Config) {
 	// Re-apply turn-scoped budgets so the next turn picks them up.
 	if a.agentInst != nil {
 		ApplySessionTokenBudget(a.agentInst, old)
+		ApplySessionCostLimit(a.agentInst, old)
 		ApplySessionTimeBudget(a.agentInst, old)
 		ApplyToolCallBudget(a.agentInst, old)
-		ApplySessionTimeout(a.agentInst, old, false)
+		ApplySessionTimeout(a.agentInst, old, a.agentInst.IsAutopilotMode())
 	}
 }
 

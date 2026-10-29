@@ -34,9 +34,9 @@ func issue573RunCommandInput(t *testing.T, cmd string) json.RawMessage {
 func TestIssue573_C_BypassRedirectBackdoorPathsAsk(t *testing.T) {
 	for _, mode := range []PermissionMode{BypassMode, AutopilotMode} {
 		p := issue573PolicyWithMode(t, mode)
-		// Out-of-sandbox (home) persistent-backdoor write targets. The
-		// dangerous.go High patterns only cover a subset; sandbox gating
-		// must catch all of them uniformly.
+		// Out-of-sandbox persistent-backdoor write targets. #4279 contract:
+		// only sensitive-path targets ask in bypass; ordinary out-of-sandbox
+		// writes are normal workflow (separate case below pins that).
 		for _, tc := range []struct {
 			cmd, note string
 		}{
@@ -44,7 +44,6 @@ func TestIssue573_C_BypassRedirectBackdoorPathsAsk(t *testing.T) {
 			{"echo x > ~/.bashrc", "bashrc overwrite"},
 			{"echo x > ~/.zshrc", "zshrc overwrite"},
 			{"echo x > /etc/hosts", "hosts overwrite"},
-			{"echo backdoor > /Users/whoever/.config/backdoor", "arbitrary out-of-sandbox write"},
 			{"cmd 2> /etc/cron.d/evil", "stderr redirect to cron"},
 			{"cmd &> ~/.profile", "stdout+stderr redirect to profile"},
 		} {
@@ -55,6 +54,15 @@ func TestIssue573_C_BypassRedirectBackdoorPathsAsk(t *testing.T) {
 			if d != Ask {
 				t.Errorf("[%s] %s (%s): got %v, want Ask", mode, tc.cmd, tc.note, d)
 			}
+		}
+		// #4279: ordinary out-of-sandbox write (non-sensitive nested path) is
+		// daily workflow - must be Allow in bypass now, not Ask.
+		d, err := p.Check("run_command", issue573RunCommandInput(t, "echo backdoor > /Users/whoever/.config/backdoor"))
+		if err != nil {
+			t.Fatalf("[%s] ordinary write: Check error: %v", mode, err)
+		}
+		if d != Allow {
+			t.Errorf("[%s] ordinary out-of-sandbox write: got %v, want Allow (#4279 friction ruling)", mode, d)
 		}
 	}
 }
@@ -185,8 +193,11 @@ func TestIssue573_G_SupervisedSensitiveReadCaseFlipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d != Ask {
-		t.Errorf("read case-flipped key got %v, want Ask (was silently allowed pre-fix)", d)
+	// two-mode refactor: the supervised sensitive-read gate is gone
+	// (reads flow Allow; exfil floor is command-side), so even the
+	// case-flipped form flows Allow.
+	if d != Allow {
+		t.Errorf("read case-flipped key got %v, want Allow (two-mode refactor; sensitive-read gate removed)", d)
 	}
 }
 

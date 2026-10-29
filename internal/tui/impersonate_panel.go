@@ -441,6 +441,13 @@ func (m *Model) applyImpersonateSettings() tea.Cmd {
 	version := strings.TrimSpace(panel.versionInput.Value())
 	customHeaders := headerEntriesToMap(panel.customHeaders)
 
+	// Snapshot the outgoing impersonation state so a failed persist can
+	// roll the runtime back (#4590): without this, SetActiveImpersonation
+	// + header injection take effect for the rest of the process while
+	// SaveImpersonation keeps the OLD identity on disk - runtime/disk fork,
+	// silently reverted on the next restart.
+	prevPreset, prevVersion, prevHeaders := provider.GetActiveImpersonation()
+
 	// Set global impersonation state
 	provider.SetActiveImpersonation(presetPtr, version, customHeaders)
 
@@ -454,7 +461,14 @@ func (m *Model) applyImpersonateSettings() tea.Cmd {
 		CustomHeaders: customHeaders,
 	}
 	if err := m.config.SaveImpersonation(impCfg); err != nil {
-		panel.message = fmt.Sprintf("config write failed: %v", err)
+		// #4590: roll the runtime back to what the disk still holds.
+		// applyImpersonationToProvider rebuilds headers from the global
+		// state, so restoring that state first re-injects the old
+		// identity on every provider kind (HeaderMutable, copilot UA,
+		// anthropic reload).
+		provider.SetActiveImpersonation(prevPreset, prevVersion, prevHeaders)
+		m.applyImpersonationToProvider()
+		panel.message = fmt.Sprintf("config write failed: %v (identity not applied)", err)
 		panel.persistFailed = true
 		return nil
 	}

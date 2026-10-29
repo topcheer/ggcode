@@ -249,10 +249,13 @@ func driftInOnboardingWindow(approvedAt, now time.Time) bool {
 //   - no store attached: no-op (unit fixtures without persistence);
 //   - no baseline yet: first connection IS the approval - save silently;
 //   - hash match: nothing changed, short-circuit;
-//   - hash mismatch: always move the baseline forward (one alert per
-//     change, never a replay), but only alert when the change escapes
-//     the false-positive guards (AllowToolDrift escape hatch, 24h
-//     onboarding window).
+//   - hash mismatch: move the baseline forward (one alert per change,
+//     never a replay) when an alert sink is wired, but only alert when
+//     the change escapes the false-positive guards (AllowToolDrift
+//     escape hatch, 24h onboarding window);
+//   - #4062: mismatch with NO sink wired must NOT re-baseline - keep the
+//     approved baseline so the tampered tool set re-detects on every
+//     reconnect instead of being silently whitewashed.
 //
 // I/O failures degrade to a debug log - persistence is a guardrail, not a
 // hard dependency of connecting.
@@ -278,10 +281,10 @@ func (m *MCPPlugin) recordToolBaselineLocked(newHash string, newNames []string) 
 		return nil, nil, false
 	}
 	added, removed, _ = store.CompareAndReport(m.cfg.Name, newHash, newNames)
-	if err := store.SaveBaseline(m.cfg.Name, newHash, newNames); err != nil {
-		debug.Log("mcp-drift", "server=%s baseline save failed: %v", m.cfg.Name, err)
-	}
 	if m.cfg.AllowToolDrift {
+		if err := store.SaveBaseline(m.cfg.Name, newHash, newNames); err != nil {
+			debug.Log("mcp-drift", "server=%s baseline save failed: %v", m.cfg.Name, err)
+		}
 		debug.Log("mcp-drift", "server=%s tool definitions changed but allow_tool_drift is set: %+v / -%+v", m.cfg.Name, added, removed)
 		return nil, nil, false
 	}
@@ -293,8 +296,25 @@ func (m *MCPPlugin) recordToolBaselineLocked(newHash string, newNames []string) 
 		anchor = base.ApprovedAt
 	}
 	if driftInOnboardingWindow(anchor, time.Now()) {
+		if err := store.SaveBaseline(m.cfg.Name, newHash, newNames); err != nil {
+			debug.Log("mcp-drift", "server=%s baseline save failed: %v", m.cfg.Name, err)
+		}
 		debug.Log("mcp-drift", "server=%s tool definitions changed inside 24h onboarding window (baseline updated silently)", m.cfg.Name)
 		return nil, nil, false
+	}
+	if m.OnToolDrift != nil {
+		// One alert per change: move the baseline forward so the SAME
+		// change never replays (#4062: only when an alert sink is wired).
+		if err := store.SaveBaseline(m.cfg.Name, newHash, newNames); err != nil {
+			debug.Log("mcp-drift", "server=%s baseline save failed: %v", m.cfg.Name, err)
+		}
+	} else {
+		// #4062 fail-visible: no alert channel wired. Do NOT whitelist the
+		// tampered tool set - keep the approved baseline so the drift
+		// re-detects on every reconnect instead of being silently
+		// re-baselined (the old behavior erased the tamper trace in one
+		// step while the user saw nothing).
+		debug.Log("mcp-drift", "server=%s TOOL DRIFT with no OnToolDrift sink wired: approved baseline kept (not re-baselined)", m.cfg.Name)
 	}
 	debug.Log("mcp-drift", "server=%s TOOL DRIFT after approval: added=%v removed=%v", m.cfg.Name, added, removed)
 	return added, removed, true

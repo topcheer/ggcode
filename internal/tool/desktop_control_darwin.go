@@ -39,7 +39,7 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "scroll":
 		return mouseScroll(ctx, p.X, p.Y, p.Direction, p.Amount)
 	case "modifier_click":
-		return modifierClick(ctx, p.X, p.Y, p.Text)
+		return modifierClick(ctx, p.X, p.Y, p.Text, p.Button)
 
 	// ── Keyboard ──
 	case "type":
@@ -70,10 +70,12 @@ tell application %s
   set miniaturized of front window to true
 end tell`, applescriptQuote(p.Text)))
 	case "maximize_window":
-		// macOS doesn't have true maximize; use fullscreen toggle
+		// macOS doesn't have true maximize; use fullscreen. #4058: set to
+		// true (idempotent), NOT `not fullscreen` (toggle) — a retry must not
+		// exit fullscreen. Matches Windows ShowWindow(swMaximize) semantics.
 		return appleScriptResult(ctx, fmt.Sprintf(`
 tell application %s
-  set fullscreen of front window to not fullscreen of front window
+  set fullscreen of front window to true
 end tell`, applescriptQuote(p.Text)))
 
 	// ── Application ──
@@ -422,6 +424,38 @@ func swiftStringLiteral(s string) string {
 	return b.String()
 }
 
+// jxaStringLiteral escapes a Go string for safe embedding inside a
+// JavaScript (JXA) double-quoted string literal. Backslash and quote are
+// escaped, control characters become \n/\r/\t or a JS \uXXXX escape, and
+// every other rune (BMP or astral, emoji included) is written through as
+// raw UTF-8. #4478: Go's %q emits Go-only \U escapes for astral runes,
+// which JXA rejects with a SyntaxError - UI labels with emoji made every
+// find_element/find_and_click/wait_and_click probe fail.
+func jxaStringLiteral(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if r < 0x20 {
+				fmt.Fprintf(&b, `\u%04X`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return b.String()
+}
+
 // runSwiftCGEvent runs an inline Swift script that uses CoreGraphics
 // CGEvent API for mouse events. Zero external dependencies — swift
 // and CoreGraphics are pre-installed on every macOS system.
@@ -436,11 +470,29 @@ func runSwiftCGEvent(ctx context.Context, code string) (Result, error) {
 
 // modifierClick holds modifier keys down while clicking (multi-select,
 // force-open-in-new-tab, etc.). modifiers is a normalized spec like
-// "cmd+shift".
-func modifierClick(ctx context.Context, x, y int, modifiers string) (Result, error) {
+// "cmd+shift"; button honors the schema contract (#1665 fixed the plain
+// click path, modifier_click had the same contract breach — #3876).
+func modifierClick(ctx context.Context, x, y int, modifiers, button string) (Result, error) {
 	mods, err := normalizeModifiers(modifiers)
 	if err != nil {
 		return Result{}, err
+	}
+	// Same event-type encoding as mouseClick: the CGEventType encodes the
+	// button; the middle button additionally needs mouseButton .center.
+	// #4440: middle was silently left-clicked here (the #1665/#3876 fixes
+	// only covered the plain click path), and unknown buttons erred the
+	// same way - mirror mouseClick's full button mapping instead.
+	downType, upType := ".leftMouseDown", ".leftMouseUp"
+	swiftButton := ".left"
+	switch button {
+	case "right":
+		downType, upType = ".rightMouseDown", ".rightMouseUp"
+	case "middle":
+		downType, upType = ".otherMouseDown", ".otherMouseUp"
+		swiftButton = ".center"
+	case "", "left":
+	default:
+		return Result{}, fmt.Errorf("unsupported button %q (supported: left, right, middle)", button)
 	}
 	// Map to CGEventFlags raw values: these overlap-free masks can be OR-ed.
 	var flags uint64
@@ -462,15 +514,15 @@ func modifierClick(ctx context.Context, x, y int, modifiers string) (Result, err
 import CoreGraphics
 let point = CGPoint(x: %d, y: %d)
 let flags = CGEventFlags(rawValue: %d)
-let eDown = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown,
-                    mouseCursorPosition: point, mouseButton: .left)
+let eDown = CGEvent(mouseEventSource: nil, mouseType: %s,
+                    mouseCursorPosition: point, mouseButton: %s)
 eDown?.flags = flags
 eDown?.post(tap: .cghidEventTap)
-let eUp = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp,
-                  mouseCursorPosition: point, mouseButton: .left)
+let eUp = CGEvent(mouseEventSource: nil, mouseType: %s,
+                  mouseCursorPosition: point, mouseButton: %s)
 eUp?.flags = flags
 eUp?.post(tap: .cghidEventTap)
-`, x, y, flags))
+`, x, y, flags, downType, swiftButton, upType, swiftButton))
 }
 
 // mousePosition returns the current cursor position in logical pixels.
@@ -516,13 +568,20 @@ func setWindowBounds(ctx context.Context, p desktopParams) (Result, error) {
 	if p.ToX <= 0 || p.ToY <= 0 {
 		return Result{}, fmt.Errorf("set_window_bounds requires positive to_x (width) and to_y (height)")
 	}
+	// #4440: honor p.App (same #2587 fix shape as menuSelect) - the old
+	// script hardcoded the frontmost process, so set_window_bounds(app:
+	// "Safari") silently moved the frontmost Chrome window and reported OK.
+	target := "(first process whose frontmost is true)"
+	if name := strings.TrimSpace(p.App); name != "" {
+		target = fmt.Sprintf("(first application process whose name is %s)", applescriptQuote(name))
+	}
 	return appleScriptResult(ctx, fmt.Sprintf(`
 tell application "System Events"
-  tell (first process whose frontmost is true)
+  tell %s
     set position of front window to {%d, %d}
     set size of front window to {%d, %d}
   end tell
-end tell`, p.X, p.Y, p.ToX, p.ToY))
+end tell`, target, p.X, p.Y, p.ToX, p.ToY))
 }
 
 // menuSelect clicks a menu bar item by path, e.g. "File > Export…".
@@ -669,7 +728,7 @@ ObjC.import('AppKit');
   var se = Application('System Events');
   var proc = se.processes.whose({frontmost: true})[0];
   if (!proc) return JSON.stringify({error: "no frontmost process"});
-  var search = %q;
+  var search = "%s";
   var results = [];
   var maxDepth = %d;
 
@@ -719,7 +778,7 @@ ObjC.import('AppKit');
   walk(proc, 0, "");
   return JSON.stringify(results, null, 2);
 })();
-`, searchText, maxDepth)
+`, jxaStringLiteral(searchText), maxDepth)
 	return runJXA(ctx, script)
 }
 
@@ -764,10 +823,19 @@ func findAndClick(ctx context.Context, searchText string, maxDepth int) (Result,
 func waitAndClick(ctx context.Context, searchText string, maxDepth, timeoutMs int) (Result, error) {
 	deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
 	pollInterval := 200 * time.Millisecond
-	for time.Now().Before(deadline) {
+	// #4440: timeoutMs <= 0 previously meant the loop body never ran - an
+	// immediately-visible element still reported "Timed out". Poll at
+	// least once regardless of the deadline.
+	lastDetail := ""
+	for first := true; first || time.Now().Before(deadline); first = false {
 		res, err := findAndClick(ctx, searchText, maxDepth)
 		if err == nil && !strings.Contains(res.Content, "No UI element") && !strings.Contains(res.Content, "none had clickable") {
 			return res, nil
+		}
+		// #4440: keep the real failure reason (osascript error, missing
+		// accessibility permission) instead of masking it as a timeout.
+		if err != nil {
+			lastDetail = fmt.Sprintf(": last error: %v", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -775,14 +843,23 @@ func waitAndClick(ctx context.Context, searchText string, maxDepth, timeoutMs in
 		case <-time.After(pollInterval):
 		}
 	}
-	return Result{Content: fmt.Sprintf("Timed out waiting for element %q after %dms", searchText, timeoutMs)}, nil
+	return Result{IsError: true, Content: fmt.Sprintf("Timed out waiting for element %q after %dms%s", searchText, timeoutMs, lastDetail)}, nil // #4091: consumers gate on IsError (termGuard, spec memo)
 }
 
 // runJXA runs a JavaScript for Automation script via osascript.
 func runJXA(ctx context.Context, script string) (Result, error) {
 	cmd := exec.CommandContext(ctx, "osascript", "-l", "JavaScript", "-e", script)
+	// #4440: Output() discarded stderr; appleScriptResult already
+	// appends it (#2587) - JXA failures kept the same diagnostic gap.
 	out, err := cmd.Output()
 	if err != nil {
+		var stderr string
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = string(ee.Stderr)
+		}
+		if stderr != "" {
+			return Result{}, fmt.Errorf("JXA failed: %w\n%s", err, stderr)
+		}
 		return Result{}, fmt.Errorf("JXA failed: %w (ensure Terminal/your app has Accessibility permissions in System Settings > Privacy & Security)", err)
 	}
 	result := strings.TrimSpace(string(out))
@@ -819,12 +896,40 @@ ObjC.import('AppKit');
 	return runJXA(ctx, script)
 }
 
+var keyCodeMap = map[string]int{
+	"return": 36, "enter": 76, "tab": 48, "space": 49,
+	// #4054: backspace was missing and fell through to the keystroke
+	// fallback, typing the literal text "backspace" into the focused
+	// control with a fake success. Apple key code 51 is the backspace key.
+	"backspace": 51, "delete": 51,
+	// #4055: "delete" is backspace on macOS but forward delete on
+	// Windows/Linux (xdotool Delete / VK_DELETE). Keep the legacy macOS
+	// mapping for compatibility, and expose unambiguous names for the
+	// forward direction (Fn+Delete, key code 117).
+	"forward-delete": 117, "forwarddelete": 117,
+	"esc": 53, "escape": 53,
+	"home": 115, "end": 119,
+	"pageup": 116, "page-up": 116, "pagedown": 121, "page-down": 121,
+	"arrowleft": 123, "arrow-left": 123, "arrowright": 124, "arrow-right": 124,
+	"arrowdown": 125, "arrow-down": 125, "arrowup": 126, "arrow-up": 126,
+	"f1": 122, "f2": 120, "f3": 99, "f4": 118,
+	"f5": 96, "f6": 97, "f7": 98, "f8": 100,
+	"f9": 101, "f10": 109, "f11": 103, "f12": 111,
+}
+
 // keyComboResult translates key combo strings (e.g. "cmd+c", "ctrl+shift+tab")
 // to AppleScript System Events key code commands.
 func keyComboResult(ctx context.Context, combo string) (Result, error) {
-	parts := strings.Split(combo, "+")
-	if len(parts) == 0 {
+	// #3876: strings.Split never returns an empty slice (len(parts)==0 was
+	// unreachable dead code), so an empty combo or a trailing "+" silently
+	// produced `keystroke ""` and an opaque osascript error. Reject both
+	// shapes up front, mirroring normalizeModifiers' empty-segment check.
+	if strings.TrimSpace(combo) == "" {
 		return Result{}, fmt.Errorf("empty key combo")
+	}
+	parts := strings.Split(combo, "+")
+	if strings.TrimSpace(parts[len(parts)-1]) == "" {
+		return Result{}, fmt.Errorf("key combo %q ends with an empty key (trailing "+"?)", combo)
 	}
 
 	modifiers := []string{}
@@ -849,18 +954,6 @@ func keyComboResult(ctx context.Context, combo string) (Result, error) {
 	key := strings.TrimSpace(parts[len(parts)-1])
 	keyLower := strings.ToLower(key)
 
-	keyCodeMap := map[string]int{
-		"return": 36, "enter": 76, "tab": 48, "space": 49,
-		"delete": 51, "esc": 53, "escape": 53,
-		"home": 115, "end": 119,
-		"pageup": 116, "page-up": 116, "pagedown": 121, "page-down": 121,
-		"arrowleft": 123, "arrow-left": 123, "arrowright": 124, "arrow-right": 124,
-		"arrowdown": 125, "arrow-down": 125, "arrowup": 126, "arrow-up": 126,
-		"f1": 122, "f2": 120, "f3": 99, "f4": 118,
-		"f5": 96, "f6": 97, "f7": 98, "f8": 100,
-		"f9": 101, "f10": 109, "f11": 103, "f12": 111,
-	}
-
 	modList := ""
 	if len(modifiers) > 0 {
 		modList = " using {" + strings.Join(modifiers, ", ") + "}"
@@ -870,6 +963,16 @@ func keyComboResult(ctx context.Context, combo string) (Result, error) {
 	if code, ok := keyCodeMap[keyLower]; ok {
 		script = fmt.Sprintf(`tell application "System Events" to key code %d%s`, code, modList)
 	} else {
+		// #4054: a multi-char purely-alphabetic key that is not in the map is
+		// almost certainly a mistyped key NAME (e.g. "backspace" before the
+		// map entry existed, or "f13") — typing it literally is a silent
+		// wrong action with a fake success. Reject it and list supported
+		// names (Windows-side precedent: only single chars reach the literal
+		// fallback). Text to type belongs to the 'type' action; digits and
+		// mixed strings keep the keystroke fallback for key_combo tails.
+		if unknownAlphaKeyName(keyLower) {
+			return Result{IsError: true, Content: fmt.Sprintf("unknown key name %q; supported keys: return, enter, tab, space, backspace, delete, forward-delete, esc, escape, home, end, pageup, pagedown, arrowleft/right/up/down, f1-f12; single characters are typed literally", key)}, nil
+		}
 		// Escape the key for embedding in an AppleScript double-quoted
 		// string; applies to the single-char branch too (a literal " would
 		// otherwise break the script). Control characters must NOT use the
@@ -960,5 +1063,10 @@ func appleScriptResult(ctx context.Context, script string) (Result, error) {
 func applescriptQuote(s string) string {
 	s = strings.ReplaceAll(s, "\\", "\\\\")
 	s = strings.ReplaceAll(s, "\"", "\\\"")
+	// #3876: raw newlines/tabs inside `tell application "..."` produce
+	// osascript -2739 syntax errors; escape like swiftStringLiteral does.
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	s = strings.ReplaceAll(s, "\t", "\\t")
 	return "\"" + s + "\""
 }

@@ -138,10 +138,21 @@ func (am *AutoMemory) SaveMemoryWithSourceActor(key, content, source, actor stri
 	// outgoing version into .history/ before the rename below destroys it.
 	// Fail-open per #3120 precedent - a save must not block on archive
 	// faults - but the potential loss stays observable via debug.Log.
-	if err := am.archiveVersion(safe, path); err != nil {
-		debug.Log("memory", "history archive failed for %q (continuing overwrite): %v", safe, err)
+	archived, archErr := am.archiveVersion(safe, path)
+	if archErr != nil {
+		debug.Log("memory", "history archive failed for %q (continuing overwrite): %v", safe, archErr)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
+		// #3818: archiveVersion already MOVED the live file away; a failed
+		// swap-in used to leave both gone (old only in .history, new content
+		// deleted below) - the key vanished from prompts until the next
+		// successful save. Roll the archived version back into place first;
+		// the tmp file is then cleaned up as before.
+		if archived != "" {
+			if rbErr := os.Rename(archived, path); rbErr != nil {
+				debug.Log("memory", "history rollback failed for %q (live file lost, archived copy at %s): %v", safe, archived, rbErr)
+			}
+		}
 		os.Remove(tmpName)
 		return err
 	}
@@ -294,6 +305,8 @@ func (am *AutoMemory) collectMetas() ([]MemoryMeta, error) {
 			meta.Uses = rec.Uses
 			meta.LastUsedAt = rec.LastUsed
 			meta.Source = rec.Source
+			meta.Outcome = rec.Outcome     // sa-139 MemGuard lifecycle metadata
+			meta.Conflicts = rec.Conflicts // sa-146 REALM reconsolidation signal
 		}
 		metas = append(metas, meta)
 	}
@@ -445,6 +458,21 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 		metas = filtered
 	}
 
+	// r10 user-forgotten entries (forget.go): the user explicitly asked to
+	// forget these - stronger than supersession: excluded from both the
+	// inline channel AND the index list (an index entry would invite the
+	// model to read it back). Disk file remains until GC digests it.
+	if fg := am.ForgottenSet(); len(fg) > 0 {
+		filtered := make([]MemoryMeta, 0, len(metas))
+		for _, m := range metas {
+			if fg[m.Key] {
+				continue
+			}
+			filtered = append(filtered, m)
+		}
+		metas = filtered
+	}
+
 	active, _, _, _ := curateEntries(metas, now)
 
 	// Sort active entries: persistent first (inline priority), then by key
@@ -460,6 +488,13 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 	})
 
 	totalInline := 0
+	// sa-147 (LIMBO arXiv:2609.14138, inference-time memory allocation):
+	// the total inline budget is not a constant. The store-wide
+	// Consumed/Uses ratio (consumption.go) scales it between the floor
+	// (25%) and the ceiling (100%); fail-open returns the full constant
+	// when no consumption signal exists yet, so fresh stores and legacy
+	// sidecars behave exactly as before.
+	totalBudget := am.EffectiveInlineBudget()
 	// sa-113 task-relevance gate: pre-read persistent candidates once to
 	// build the IDF statistics, then score each inline decision. Only the
 	// persistent channel is gated - the index list always stays complete.
@@ -512,7 +547,7 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 		}
 
 		// Inline persistent entries that are small enough and within budget.
-		if m.Category == CategoryPersistent && len(content) > 0 && len(content) <= maxInlineBytes && totalInline+len(content) <= maxTotalInlineBytes && relGate.relevant(m.Key, content) {
+		if m.Category == CategoryPersistent && len(content) > 0 && len(content) <= maxInlineBytes && totalInline+len(content) <= totalBudget && relGate.relevant(m.Key, content) {
 			inline = append(inline, MemoryEntry{
 				Key:     m.Key,
 				Content: content,
@@ -530,7 +565,8 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 	// with no warning. Arbitrate among the inline set and annotate the
 	// lower-trust side; winners stay clean. Annotation happens after
 	// budget accounting and is capped by maxRecallConflicts.
-	if arb := ArbitrateInline(inline, now); arb.HasConflicts() {
+	arb := ArbitrateInline(inline, now)
+	if arb.HasConflicts() {
 		arb.Annotate(inline)
 		debug.Log("memory", "recall arbitration: %d conflict(s) among %d inline entries", len(arb.Conflicts), len(inline))
 	}
@@ -544,6 +580,18 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 	am.annotateStaleInline(inline)
 
 	if record {
+		// sa-146 (REALM arXiv:2609.33226 retrieval-driven reconsolidation):
+		// the recall episode itself revises the activated entries' standing -
+		// persist high-confidence losses so curation eviction and trust
+		// scoring can consume retrieval-time conflict signal. Ties and thin
+		// margins (< recallConflictLossGap) stay ephemeral annotations.
+		var losers []string
+		for _, c := range arb.Conflicts {
+			if c.WinnerTrust-c.LoserTrust >= recallConflictLossGap {
+				losers = append(losers, c.LoserKey)
+			}
+		}
+		am.RecordConflictLoss(losers)
 		inlineKeys := make([]string, 0, len(inline))
 		for _, e := range inline {
 			inlineKeys = append(inlineKeys, e.Key)

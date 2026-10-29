@@ -33,16 +33,16 @@ const (
 // write). Errors are reported, never fatal: callers fail open (#3120
 // precedent - memory writes must not block on archive faults) but log via
 // debug so the loss is observable.
-func (am *AutoMemory) archiveVersion(safe, path string) error {
+func (am *AutoMemory) archiveVersion(safe, path string) (string, error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			return nil // first write, nothing to archive
+			return "", nil // first write, nothing to archive
 		}
-		return err
+		return "", err
 	}
 	hdir := filepath.Join(am.dir, historyDirName)
 	if err := os.MkdirAll(hdir, 0755); err != nil {
-		return err
+		return "", err
 	}
 	stamp := time.Now().UTC().Format(historyTSFormat)
 	dst := filepath.Join(hdir, safe+"."+stamp+".md")
@@ -52,7 +52,10 @@ func (am *AutoMemory) archiveVersion(safe, path string) error {
 	if _, err := os.Stat(dst); err == nil {
 		dst = filepath.Join(hdir, fmt.Sprintf("%s.%s.%d.md", safe, stamp, os.Getpid()))
 	}
-	return os.Rename(path, dst)
+	if err := os.Rename(path, dst); err != nil {
+		return "", err
+	}
+	return dst, nil // #3818: caller rolls back from dst if the swap-in fails
 }
 
 // MemoryVersion is one archived (or current) snapshot of a memory key.
@@ -107,6 +110,25 @@ func (am *AutoMemory) HistoryVersions(key string) []MemoryVersion {
 // participates as the newest version; archived versions fill earlier
 // intervals [version.ModTime, nextVersion.ModTime). Returns found=false when
 // the key did not exist at asOf yet.
+// tombstoneTimes returns every recorded deletion instant for safe: the
+// #4334 timestamp-suffixed tombstones plus the legacy single tombstone
+// (kept so pre-#4334 deletion instants remain visible). sanitized keys are
+// restricted to [a-zA-Z0-9_-], so the glob pattern itself is safe.
+func (am *AutoMemory) tombstoneTimes(safe string) []time.Time {
+	var times []time.Time
+	if matches, gErr := filepath.Glob(filepath.Join(am.dir, historyDirName, safe+".tombstone.*")); gErr == nil {
+		for _, m := range matches {
+			if info, statErr := os.Stat(m); statErr == nil {
+				times = append(times, info.ModTime())
+			}
+		}
+	}
+	if info, statErr := os.Stat(filepath.Join(am.dir, historyDirName, safe+".tombstone")); statErr == nil {
+		times = append(times, info.ModTime())
+	}
+	return times
+}
+
 func (am *AutoMemory) ReadMemoryAsOf(key string, asOf time.Time) (content string, held time.Time, found bool, err error) {
 	safe := disambiguateKey(key, sanitizeKey(key))
 	path := filepath.Join(am.dir, safe+".md")
@@ -122,6 +144,17 @@ func (am *AutoMemory) ReadMemoryAsOf(key string, asOf time.Time) (content string
 	if info, statErr := os.Stat(path); statErr == nil {
 		versions = append(versions, snap{modTime: info.ModTime(), path: path})
 	}
+	// #3880/#3924/#4334: tombstones (written by DeleteMemory) mark deletion
+	// instants and CUT the interval of the last pre-delete version: an as_of
+	// at/after ANY deletion newer than the chosen version resolves nothing
+	// UNLESS a newer version (a recreate) was written after it - then that
+	// version's own interval starts and selection picks it naturally. This
+	// keeps the three-segment truth: old version / deleted gap / recreated
+	// version, and #4334 extends it to delete->recreate->delete (every
+	// deletion keeps its own tombstone; the legacy single tombstone is
+	// still honored). (Tombstones have no .md suffix, so historyVersions
+	// never lists them as content versions.)
+	tombTimes := am.tombstoneTimes(safe)
 	if len(versions) == 0 {
 		return "", time.Time{}, false, nil
 	}
@@ -141,6 +174,17 @@ func (am *AutoMemory) ReadMemoryAsOf(key string, asOf time.Time) (content string
 	data, readErr := os.ReadFile(versions[chosen].path)
 	if readErr != nil {
 		return "", time.Time{}, false, readErr
+	}
+	// #3924/#4334: the chosen version predates a tombstone and the as_of is
+	// at or after that deletion - this is a DELETED GAP (no recreate landed
+	// before as_of), not the old version's interval. Every recorded
+	// deletion instant is checked independently so a double delete keeps
+	// BOTH gaps.
+	for _, t := range tombTimes {
+		if versions[chosen].modTime.Before(t) && !asOf.Before(t) {
+			debug.Log("memory", "as_of %s falls in the deleted gap of %q", asOf.Format(time.RFC3339), key)
+			return "", time.Time{}, false, nil
+		}
 	}
 	return string(data), versions[chosen].modTime, true, nil
 }

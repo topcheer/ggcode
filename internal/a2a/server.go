@@ -44,6 +44,10 @@ type Server struct {
 	pushClient               *http.Client
 
 	extensions []AgentExtension // A2A protocol extensions supported by this server
+
+	// delegation is the inbound enforcement policy for the A-JWT-lite
+	// ggcode.dev/* declarations (sa-84). Zero value = disabled.
+	delegation DelegationPolicy
 }
 
 // ServerConfig holds A2A server configuration.
@@ -77,6 +81,11 @@ type ServerConfig struct {
 	// negotiated per-request via the A2A-Extensions header. Clients that fail
 	// to activate a required extension are rejected with -32004.
 	Extensions []AgentExtension
+
+	// Delegation configures inbound enforcement of the A-JWT-lite delegation
+	// declarations (ggcode.dev/* message metadata, sa-84). Zero value
+	// disables all checks (zero behavior change).
+	Delegation DelegationPolicy
 }
 
 // NewServer creates a new A2A server.
@@ -91,6 +100,7 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 		handler:                  handler,
 		apiKeys:                  apiKeys,
 		extensions:               cfg.Extensions,
+		delegation:               cfg.Delegation,
 		done:                     make(chan struct{}),
 		pushConfigs:              make(map[string]PushNotificationConfig),
 		pushGuard:                newPushGuard(cfg.PushCallbackAllowlist),
@@ -482,6 +492,9 @@ func (s *Server) handleMessageSend(w http.ResponseWriter, r *http.Request, req *
 		writeRPCError(w, req.ID, ErrInvalidParams)
 		return
 	}
+	if !s.checkDelegation(w, req.ID, &params.Message) {
+		return
+	}
 
 	// Validate acceptedOutputModes if provided.
 	if params.Configuration != nil && len(params.Configuration.AcceptedOutputModes) > 0 {
@@ -549,6 +562,9 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 	var params SendMessageParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		writeRPCError(w, req.ID, ErrInvalidParams)
+		return
+	}
+	if !s.checkDelegation(w, req.ID, &params.Message) {
 		return
 	}
 

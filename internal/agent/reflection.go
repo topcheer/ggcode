@@ -14,6 +14,15 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
+// assistantTextMaxBytes / assistantTextMaxTurns (sa-147) cap the
+// consumption-scanning corpus recorded per run: memory fingerprints
+// (keys, first content lines) live early in a turn; reflection needs
+// evidence, not fidelity.
+const (
+	assistantTextMaxBytes = 2048
+	assistantTextMaxTurns = 40
+)
+
 // RunStats accumulates observability data during a single RunStreamWithContent
 // call. It is the input to the reflection system (the "hill climbing loop"):
 // after each run, the stats are analyzed to extract insights that compound
@@ -27,6 +36,16 @@ type RunStats struct {
 
 	// CommandsRun lists shell commands executed via run_command or start_command.
 	CommandsRun []string
+
+	// EditContents lists the ADDED text of edit-family tool calls
+	// (write_file content / edit_file+multi_* new_text / notebook new
+	// source): the write-vector counterpart of CommandsRun. Consumed by
+	// spec-gaming Pattern 2 (#3696) so injecting a test skip marker via the
+	// agent's primary edit tools cannot silently bypass the detector the
+	// way it could when only shell commands were scanned. Only ADDED text
+	// is kept (old_text is removal, not gaming); entries truncated and
+	// capped like CommandsRun.
+	EditContents []string
 
 	// SuccessfulCommands lists commands that completed successfully
 	// (non-error result), deduplicated and capped. Consumed by the
@@ -86,6 +105,11 @@ type RunStats struct {
 	// startTime is used internally to compute Duration.
 	startTime time.Time
 
+	// assistantTexts (sa-147, LIMBO inference-time memory allocation)
+	// holds capped assistant text turns for post-run consumption scanning
+	// (memory key / fingerprint matching, memory/consumption.go). Unexported;\t	// exposed via AssistantCorpus.
+	assistantTexts []string
+
 	// runID is a unique identifier for this run, used for checkpoint
 	// run-boundary tracking (UndoRun). Generated at creation time.
 	runID string
@@ -104,6 +128,29 @@ func newRunStats(userPrompt string) *RunStats {
 
 // RunID returns the unique run identifier.
 func (s *RunStats) RunID() string { return s.runID }
+
+// recordAssistantText (sa-147) appends one assistant turn's text for
+// post-run memory-consumption scanning. Capped: last 40 turns, first 2KB
+// each - consumption fingerprints (memory keys, first content lines) live
+// early in a turn, and reflection only needs evidence, not fidelity.
+func (s *RunStats) recordAssistantText(text string) {
+	if text == "" {
+		return
+	}
+	if len(text) > assistantTextMaxBytes {
+		text = text[:assistantTextMaxBytes]
+	}
+	s.assistantTexts = append(s.assistantTexts, text)
+	if len(s.assistantTexts) > assistantTextMaxTurns {
+		s.assistantTexts = s.assistantTexts[len(s.assistantTexts)-40:]
+	}
+}
+
+// AssistantCorpus returns the capped concatenation of recorded assistant
+// texts ("" when none) for memory consumption scanning.
+func (s *RunStats) AssistantCorpus() string {
+	return strings.Join(s.assistantTexts, "\n")
+}
 
 // generateRunID produces a short hex string for run identification.
 func generateRunID() string {
@@ -165,6 +212,21 @@ func (s *RunStats) recordCommand(cmd string) {
 		return
 	}
 	s.CommandsRun = append(s.CommandsRun, truncatePrompt(cmd, 200))
+}
+
+// recordEditContent adds one edit-family tool call's added text to
+// EditContents (#3696). Max 30 entries, each truncated to 4KB - skip
+// markers are short but sit anywhere in a large new_text, so the truncat
+// budget is deliberately larger than recordCommand's 200.
+func (s *RunStats) recordEditContent(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if len(s.EditContents) >= 30 {
+		return
+	}
+	s.EditContents = append(s.EditContents, truncatePrompt(text, 4096))
 }
 
 // recordToolError adds a tool execution error for reflection/ratchet rule
@@ -288,6 +350,14 @@ func extractPathsFromToolCall(toolName string, rawArgs json.RawMessage, s *RunSt
 		if path, ok := args["file_path"].(string); ok {
 			s.recordFileEdit(path)
 		}
+		// #3696: capture the ADDED text so spec-gaming Pattern 2 can scan
+		// edit-injected skip markers, not just shell-injected ones.
+		if t, ok := args["new_text"].(string); ok {
+			s.recordEditContent(t)
+		}
+		if t, ok := args["content"].(string); ok {
+			s.recordEditContent(t)
+		}
 	case "multi_file_edit", "multi_file_write":
 		// {"files": [{"path": "...", ...}, ...]}
 		if files, ok := args["files"].([]any); ok {
@@ -296,6 +366,13 @@ func extractPathsFromToolCall(toolName string, rawArgs json.RawMessage, s *RunSt
 					if path, ok := fm["path"].(string); ok {
 						s.recordFileEdit(path)
 					}
+					// #3696: same added-text capture for batched edits.
+					if t, ok := fm["new_text"].(string); ok {
+						s.recordEditContent(t)
+					}
+					if t, ok := fm["content"].(string); ok {
+						s.recordEditContent(t)
+					}
 				}
 			}
 		}
@@ -303,9 +380,67 @@ func extractPathsFromToolCall(toolName string, rawArgs json.RawMessage, s *RunSt
 		if path, ok := args["notebook_path"].(string); ok {
 			s.recordFileEdit(path)
 		}
+		// #3696: notebook cells carry source as a list of lines; a skip
+		// marker can be injected on any line.
+		if srcs, ok := args["new_source"].([]any); ok {
+			var b strings.Builder
+			for _, ln := range srcs {
+				if l, ok := ln.(string); ok {
+					b.WriteString(l)
+					b.WriteByte('\n')
+				}
+			}
+			s.recordEditContent(b.String())
+		}
 	case "run_command", "start_command":
 		if cmd, ok := args["command"].(string); ok {
 			s.recordCommand(cmd)
+		}
+	case "file_ops":
+		// #3969: file_ops move/delete/mkdir mutate the tree but were absent
+		// from the work corpus, so a plan item done purely via a rename
+		// ("rename utils.go to helpers.go") left the destination keyword out
+		// of buildPlanWorkCorpus and plan drift flagged it unaddressed.
+		recordFileOpsPaths(args, s)
+	case "batch_replace":
+		// #3969: batch_replace rewrites files across the tree; its files[]
+		// entries are edited paths and belong in the work corpus.
+		recordBatchReplacePaths(args, s)
+	}
+}
+
+// recordFileOpsPaths records operations[].source and destination as edited
+// paths. delete/mkdir carry source only; a move carries both halves as
+// evidence (see #3969 note in extractPathsFromToolCall).
+func recordFileOpsPaths(args map[string]any, s *RunStats) {
+	ops, ok := args["operations"].([]any)
+	if !ok {
+		return
+	}
+	for _, op := range ops {
+		om, ok := op.(map[string]any)
+		if !ok {
+			continue
+		}
+		if p, ok := om["source"].(string); ok && p != "" {
+			s.recordFileEdit(p)
+		}
+		if p, ok := om["destination"].(string); ok && p != "" {
+			s.recordFileEdit(p)
+		}
+	}
+}
+
+// recordBatchReplacePaths records the files[] entries of a batch_replace
+// codemod as edited paths (see #3969 note in extractPathsFromToolCall).
+func recordBatchReplacePaths(args map[string]any, s *RunStats) {
+	files, ok := args["files"].([]any)
+	if !ok {
+		return
+	}
+	for _, f := range files {
+		if p, ok := f.(string); ok && p != "" {
+			s.recordFileEdit(p)
 		}
 	}
 }
@@ -325,6 +460,13 @@ func GenerateInsights(stats RunStats) string {
 		status = "failed"
 	}
 	fmt.Fprintf(&b, "## Run Reflection (%s, %d iterations, %s)\n", status, stats.Iterations, stats.Duration.Round(time.Second))
+	// sa-139 (MemGuard): run-insights are injected into every future prompt,
+	// so the verification signal must travel WITH the text, not only in the
+	// sidecar. Observations distilled from a failed run are unverified - say
+	// so up front so later runs do not treat them as proven practices.
+	if !stats.Success {
+		b.WriteString("[verified: no - this run FAILED; the observations below are unverified post-mortem notes, not proven practices]\n")
+	}
 	if stats.UserPrompt != "" {
 		fmt.Fprintf(&b, "Task: %s\n\n", stats.UserPrompt)
 	}
@@ -493,8 +635,10 @@ func (a *Agent) maybeReflect(stats *RunStats) {
 			}
 		}()
 		fn(s)
-		// Record successful strategies in the playbook (ACE-inspired).
-		// Learns from SUCCESSES to complement ratchet's learning from failures.
+		// Record run outcomes in the playbook (ACE-inspired): successes
+		// create/upgrade entries, failures degrade SuccessRate so prune can
+		// evict degraded strategies (#3557). Complements ratchet's learning
+		// from errors.
 		a.recordPlaybook(&s)
 		// Run ratchet: match errors against existing rules, generalize
 		// unmatched ones via LLM. This is the learning ratchet — every

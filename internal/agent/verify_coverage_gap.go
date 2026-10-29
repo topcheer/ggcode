@@ -53,6 +53,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -190,7 +191,16 @@ func (s *editCoverageState) checkCoverage(toolName, rawArgs string) string {
 			}
 		}
 		if covered {
-			s.verifiedPkgs[pkg] = true // remember for subsequent runs (#417)
+			// #3861 A: permanent coverage credit requires a COMPLETED execution
+			// (run_command). recordToolCall runs in the PRE-execution loop, so
+			// for start_command the background run has not even started - its
+			// outcome (a FAILED go test) arrives via read_command_output, which
+			// never reaches this state machine, and a failed verification would
+			// have been credited forever. Registration is not a result, the
+			// same semantics #3840 applied to verify_hint.
+			if toolName == "run_command" {
+				s.verifiedPkgs[pkg] = true // remember for subsequent runs (#417)
+			}
 			continue
 		}
 		uncovered = append(uncovered, pkg)
@@ -358,7 +368,12 @@ func coverageExtractVerifyScopes(cmd string) []string {
 		return nil
 	}
 
-	fields := strings.Fields(lc)
+	// #3906: strip env-assignment prefixes BEFORE tokenizing, mirroring
+	// coverageIsVerifyCommand (L493). Otherwise a bare `GOFLAGS=... go test`
+	// passes recognition but fields[0] is the assignment token, so the
+	// bare-Go "." fallback at the tail never fires and the cwd package
+	// loses its verify credit (later false UNVERIFIED warnings).
+	fields := strings.Fields(stripEnvAssignments(lc))
 
 	// Collect every package-scope token (#1784 case 3: ./ prefix is
 	// OPTIONAL - "go test internal/agent/ internal/config/" is legal Go
@@ -368,7 +383,21 @@ func coverageExtractVerifyScopes(cmd string) []string {
 	var scopes []string
 	for _, f := range fields {
 		if strings.Contains(f, "...") && (strings.HasPrefix(f, "./") || strings.HasPrefix(f, "../")) {
-			return []string{"ALL"}
+			// #3749: `./internal/agent/...` covers a SUBTREE, not the whole
+			// module. Old shape returned ALL and permanently marked every
+			// edited package verified (cumulative #417), silently swallowing
+			// cross-package gaps - the exact case this detector exists to
+			// catch. Strip the wildcard to a prefix scope and let
+			// coveragePkgInScope do its subtree-prefix matching; only a
+			// bare-root `./...` (empty prefix) means ALL.
+			prefix := strings.TrimSuffix(f, "...")
+			prefix = strings.TrimSuffix(prefix, "/")
+			prefix = strings.TrimPrefix(prefix, "./")
+			if prefix == "" || prefix == "." {
+				return []string{"ALL"}
+			}
+			scopes = append(scopes, prefix)
+			continue
 		}
 		// #2773: `go test` accepts file-list args (./pkg/a.go); the file
 		// belongs to its package directory - map the token to that dir
@@ -396,6 +425,17 @@ func coverageExtractVerifyScopes(cmd string) []string {
 		}
 		if !isRel && !strings.HasSuffix(f, "/") && !strings.Contains(f, "/") {
 			continue
+		}
+		// #3800: bare relative subtree `go test internal/agent/...` is
+		// legal Go and common oracle output, but it skips the ./-anchored
+		// wildcard branch above and TrimRight("/") below can't strip the
+		// trailing `...` - the scope stayed the LITERAL
+		// `internal/agent/...`, so coveragePkgInScope's equality and
+		// subtree-prefix matches all failed and explicitly verified
+		// packages got UNVERIFIED false positives. Strip the wildcard
+		// here so bare and ./-prefixed subtrees normalize identically.
+		if strings.HasSuffix(f, "...") {
+			f = strings.TrimSuffix(strings.TrimSuffix(f, "..."), "/")
 		}
 		r := strings.TrimRight(f, "/")
 		r = strings.TrimPrefix(r, "./")
@@ -451,6 +491,11 @@ func coverageExtractVerifyScopes(cmd string) []string {
 // Lexical (token-prefix) matching: substring Contains matched inside commit
 // messages ("git commit -m 'make test pass'") and other noise (#354).
 func coverageIsVerifyCommand(lc string) bool {
+	// #3861 B: strip leading env-var assignments (GOFLAGS="-p=1" go test ...)
+	// before tokenizing - the first token was the assignment, so the command
+	// was not recognized as a verify run and edited packages warned UNVERIFIED
+	// although a full `go test ./...` had just run.
+	lc = stripEnvAssignments(lc)
 	fields := strings.Fields(lc)
 	if len(fields) == 0 {
 		return false
@@ -504,6 +549,13 @@ func coveragePackagesFromFileSet(files map[string]bool) []string {
 func coverageFileToPackage(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
+		return ""
+	}
+	// #3750: only Go source files are verification targets. Docs, YAML,
+	// scripts and friends generated package entries like "docs/design"
+	// that then warned UNVERIFIED and suggested `go test` on directories
+	// no go test can ever cover, burning the warning budget.
+	if filepath.Ext(path) != ".go" {
 		return ""
 	}
 	dir := path

@@ -47,7 +47,7 @@ func (t StartCommandTool) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		},
 		"timeout": {
 			"type": "integer",
@@ -104,10 +104,9 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 	if gateResult.NeedsConfirmation() {
 		if t.isBypassMode() {
 			debug.Log("command-gate", "ASK→ALLOW (bypass mode): %s", gateResult.Reason)
-			// #3294: bypass-downgraded ask is a denial the ledger must see
-			// (same "ask-allowed" kind as run_command's #3283 hook, so the
-			// escalation threshold aggregates across both tools).
-			t.SecLedger.Record("gate", "ask-allowed", args.Command)
+			// #4273: no ledger Record - a downgraded-allow runs and is not a
+			// denial (same ruling as run_command). The BLOCKED path above
+			// records ("gate","block") separately.
 		} else {
 			// In non-bypass mode, treat Ask as Block for background jobs.
 			// #3294: that IS a denial (the command never starts) - record it
@@ -192,7 +191,7 @@ func (t ReadCommandOutputTool) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [
@@ -253,7 +252,7 @@ func (t WaitCommandTool) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [
@@ -365,7 +364,7 @@ func (t StopCommandTool) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [
@@ -420,7 +419,7 @@ func (t WriteCommandInputTool) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [
@@ -470,7 +469,7 @@ func (t ListCommandsTool) Parameters() json.RawMessage {
 	"properties": {
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [

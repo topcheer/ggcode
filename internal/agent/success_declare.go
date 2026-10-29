@@ -94,6 +94,44 @@ var sdCaveatPhrases = []string{
 	"but first",
 	"caveat",
 	"note that",
+	// #4256 gap 1: "still work to be done: ..." is the passive-negation
+	// form of "isn't done" - the sentence LITERALLY says work remains, yet
+	// bare "done" matched the declaration table and the well-calibrated
+	// agent got a premature-success warning for telling the truth. As a
+	// CAVEAT (not negation: the lookbehind window ends before "done", so
+	// phrases containing "done" can never match there) the leading "to
+	// be" hedges the declaration in the windowed scan.
+	"to be done", "to be finished", "to be completed",
+	// #4256 gap 2: verification-intent framing. "Let me verify if the fix
+	// works" matched the bare "the fix works" declaration with no caveat
+	// veto - the verify framing means the outcome is UNKNOWN, the opposite
+	// of a completion claim.
+	"let me verify", "verify if", "verifying if", "verifying whether",
+	"check if", "checking if", "let me check",
+	// #4401: "make sure" is the same verification-intent framing in a
+	// different verb suit. "Running tests to make sure everything is done."
+	// matched bare "done" with no caveat in the window - the sentence says
+	// verification is IN PROGRESS, and it also burned the run's single
+	// first-declaration slot (#364).
+	"make sure", "making sure",
+}
+
+// sdVerifyIntentPhrases are the caveat phrases that keep their force
+// ACROSS a sentence boundary (#4521): "All done. Let me check the build."
+// declares completion in sentence one and announces verification NOT done
+// in sentence two - the outcome is unknown, so the veto must survive the
+// period. Ordinary hedges ("however", "but first") keep their old
+// same-sentence-only scope.
+var sdVerifyIntentPhrases = map[string]bool{
+	"let me verify":     true,
+	"verify if":         true,
+	"verifying if":      true,
+	"verifying whether": true,
+	"check if":          true,
+	"checking if":       true,
+	"let me check":      true,
+	"make sure":         true,
+	"making sure":       true,
 }
 
 // sdCaveatWindow is how many characters before/after the declaration
@@ -196,8 +234,24 @@ func sdHasNegationBefore(lowerText string, declIdx int) bool {
 	}
 	window := lowerText[start:declIdx]
 	for _, n := range sdNegationPatterns {
-		if strings.Contains(window, n) {
-			return true
+		from := 0
+		for {
+			idx := strings.Index(window[from:], n)
+			if idx < 0 {
+				break
+			}
+			idx += from
+			// #4539: a negation only vetoes the declaration when it sits
+			// in the SAME sentence - "We fixed the bug that was not working.
+			// The task is done." is a legitimate claim (the not-working bug
+			// belongs to the previous sentence), not a negated one. The
+			// trailing caveat branch has always had this boundary check; the
+			// lookbehind window was a bare Contains, so cross-sentence
+			// negations killed the run's only declaration.
+			if !strings.ContainsAny(window[idx+len(n):], ".;\n") {
+				return true
+			}
+			from = idx + 1
 		}
 	}
 	return false
@@ -366,11 +420,37 @@ func sdHasContinuationWindowed(lowerText string, declEnd int) bool {
 	}
 	after := lowerText[declEnd:end]
 	for _, c := range sdContinuationPhrases {
-		if strings.Contains(after, c) {
+		if sdPhraseAtWordBoundary(after, c) {
 			return true
 		}
 	}
 	return false
+}
+
+// sdPhraseAtWordBoundary reports whether phrase occurs in s at least once
+// with non-word characters (or the string edges) on both sides. #4522:
+// "then i" as a bare substring also matched "then in"/"then it"/"then
+// is"/"then if" - high-frequency summary phrasing that wrongly vetoed
+// legitimate wrap-up declarations. A hit glued to surrounding letters
+// ("then insurance") is a different word and does not count.
+func sdPhraseAtWordBoundary(s, phrase string) bool {
+	isWord := func(b byte) bool {
+		return b >= 'a' && b <= 'z' || b >= '0' && b <= '9'
+	}
+	for from := 0; ; {
+		idx := strings.Index(s[from:], phrase)
+		if idx < 0 {
+			return false
+		}
+		idx += from
+		beforeOK := idx == 0 || !isWord(s[idx-1])
+		afterIdx := idx + len(phrase)
+		afterOK := afterIdx >= len(s) || !isWord(s[afterIdx])
+		if beforeOK && afterOK {
+			return true
+		}
+		from = idx + 1
+	}
 }
 
 func sdHasCaveatWindowed(lowerText string, declStart, declEnd int) bool {
@@ -403,9 +483,24 @@ func sdHasCaveatWindowed(lowerText string, declStart, declEnd int) bool {
 		trimmed := strings.TrimSpace(lowerText[negStart:absIdx])
 		negated := false
 		for _, neg := range []string{"no", "not", "nothing", "none", "without", "zero"} {
-			if strings.HasSuffix(trimmed, neg) {
+			if trimmed == neg {
 				negated = true
 				break
+			}
+			// #4556: the negator must be the whole word directly before the
+			// caveat. Bare HasSuffix matched "with piano however..." (suffix
+			// "no") and "I cannot however..." (suffix "not"), skipping the
+			// caveat and logging hedged declarations as unhedged. Require a
+			// non-word character before the negator, mirroring the boundary
+			// rule of sdPhraseAtWordBoundary (#4522).
+			if strings.HasSuffix(trimmed, neg) {
+				at := len(trimmed) - len(neg) - 1
+				b := trimmed[at]
+				isWordByte := b >= 'a' && b <= 'z' || b >= '0' && b <= '9'
+				if !isWordByte {
+					negated = true
+					break
+				}
 			}
 		}
 		if negated {
@@ -413,12 +508,37 @@ func sdHasCaveatWindowed(lowerText string, declStart, declEnd int) bool {
 		}
 
 		if absIdx < declStart {
-			return true // leading hedge
+			// #4539: leading hedges only veto within the declaration's own
+			// sentence, mirroring the trailing branch. "However, see caveats
+			// below. The task is complete." is the documented wrap-up shape
+			// (L79-83) - the caveat lives in its own previous sentence and
+			// must not kill the claim.
+			caveatEnd := absIdx + len(caveat)
+			if caveatEnd >= declStart {
+				// #4256: the caveat phrase OVERLAPS the declaration itself
+				// ("still work to be done" vs the bare "done" declaration) -
+				// same sentence by construction, and the hedging framing is
+				// the whole point of that table entry.
+				return true
+			}
+			between := lowerText[caveatEnd:declStart]
+			if !strings.ContainsAny(between, ".;\n") {
+				return true // same-sentence leading hedge
+			}
+			// Cross-sentence leading hedge: not a hedge against THIS claim.
+			continue
 		}
 		// Trailing: veto only if still in the declaration's own sentence.
 		between := lowerText[declEnd:absIdx]
 		if !strings.ContainsAny(between, ".;\n") {
 			return true // same-sentence hedge ("all done, but first ...")
+		}
+		// #4521: verification-intent framing survives the sentence break.
+		// "All done. Let me check the build." is not a wrapped-up claim with
+		// commentary after it - the second sentence announces the verification
+		// has NOT happened yet, which is exactly the #4256 gap-2 intent.
+		if sdVerifyIntentPhrases[caveat] {
+			return true
 		}
 		// New-sentence wrap-up commentary: not a hedge against THIS claim.
 	}
@@ -457,4 +577,13 @@ func itoaSD(n int) string {
 		buf[i] = '-'
 	}
 	return string(buf[i:])
+}
+
+// markUndelivered (#4224) rolls back the fire marker consumed by maybeWarn
+// when the guidance budget suppressed delivery (#3380 rollback pattern).
+func (s *successDeclareState) markUndelivered() {
+	s.fired = false
+	if s.warnCount > 0 {
+		s.warnCount--
+	}
 }

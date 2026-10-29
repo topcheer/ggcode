@@ -39,13 +39,22 @@ const ProjectGateEnvVar = "GGCODE_ALLOW_PROJECT_MCP"
 const ProjectGrantsFile = "mcp_project_grants.json"
 
 // projectGateSource is the Source marker written for workspace-local
-// .mcp.json entries (see knownClaudeSources). Only this source is gated.
+// .mcp.json entries (see knownClaudeSources).
 const projectGateSource = "claude-project"
 
-// IsProjectSource reports whether a server config came from the
-// workspace .mcp.json - the source the project gate governs.
+// gatedSources are the config sources the project gate governs: content
+// that arrives with a cloned repository (.mcp.json itself, and Agent
+// Plugins packages per agent-plugins.org, sa-114). User-owned sources
+// (explicit ggcode yaml, claude-user) are NOT gated.
+var gatedSources = map[string]bool{
+	projectGateSource: true,
+	AgentPluginSource: true,
+}
+
+// IsProjectSource reports whether a server config came from a
+// repository-carried source - the sources the project gate governs.
 func IsProjectSource(source string) bool {
-	return strings.TrimSpace(source) == projectGateSource
+	return gatedSources[strings.TrimSpace(source)]
 }
 
 // ProjectGrants maps approved server name -> approved signature. The
@@ -170,7 +179,7 @@ func GateProjectServers(servers []config.MCPServerConfig, workspace string) (all
 		}
 		name := strings.TrimSpace(server.Name)
 		approved, hasGrant := grants.Grants[name]
-		wantSig := projectGateSource + "|" + serverSignature(server)
+		wantSig := projectGrantSignature(server)
 		switch {
 		case hasGrant && approved == wantSig:
 			allowed = append(allowed, server)
@@ -183,7 +192,7 @@ func GateProjectServers(servers []config.MCPServerConfig, workspace string) (all
 			blocked = append(blocked, server)
 			warnings = append(warnings, fmt.Sprintf(
 				"warning: blocked project MCP server %q from %s (command %q); approve with `ggcode mcp approve-project %s` or set %s=1",
-				server.Name, projectGateSource, serverSignatureCommand(server), server.Name, ProjectGateEnvVar))
+				server.Name, server.Source, serverSignatureCommand(server), server.Name, ProjectGateEnvVar))
 		}
 	}
 	if len(blocked) > 0 {
@@ -210,9 +219,11 @@ type ProjectServerStatus struct {
 }
 
 // projectGrantSignature is the grant-store value for one approval: source-
-// prefixed so grants never leak across config sources.
+// prefixed so grants never leak across config sources (a claude-project
+// approval must not cover an agent-plugin entry of the same name, and
+// vice versa).
 func projectGrantSignature(server config.MCPServerConfig) string {
-	return projectGateSource + "|" + serverSignature(server)
+	return server.Source + "|" + serverSignature(server)
 }
 
 // ProjectServersStatus merges the startup sources for workspace and

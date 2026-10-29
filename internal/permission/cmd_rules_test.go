@@ -180,25 +180,33 @@ func TestConfigPolicy_CommandRulesIntegrated(t *testing.T) {
 		t.Errorf("expected Allow for matched command pattern, got %v", d)
 	}
 
-	// Unmatched command should still ask
+	// two-mode refactor: supervised defaults to Allow, so an unmatched
+	// command is no longer Ask — only extremely dangerous / exfil commands
+	// gate. The Ask-for-unmatched contract is gone by design.
 	input2 := json.RawMessage(`{"command":"git push"}`)
 	d2, _ := policy.Check("run_command", input2)
-	if d2 != Ask {
-		t.Errorf("expected Ask for unmatched command, got %v", d2)
+	if d2 != Allow {
+		t.Errorf("expected Allow for unmatched command (default Allow), got %v", d2)
 	}
 }
 
 func TestConfigPolicy_CommandRulesStillCheckDangerous(t *testing.T) {
 	policy := NewConfigPolicyWithMode(nil, []string{"."}, SupervisedMode)
 
-	// Even if a pattern matches, dangerous commands should still ask
+	// two-mode refactor: ordinary dangerous commands (rm -rf under /tmp)
+	// flow with Allow — only IsExtremelyDangerous gates.
 	policy.AllowCommandPattern("rm*")
 
 	input := json.RawMessage(`{"command":"rm -rf /tmp/test"}`)
 	d, _ := policy.Check("run_command", input)
-	// rm -rf is dangerous — should still ask despite matching allow pattern
-	if d != Ask {
-		t.Errorf("expected Ask for dangerous command despite allow pattern, got %v", d)
+	if d != Allow {
+		t.Errorf("expected Allow for non-extreme rm (no gate for ordinary dangerous), got %v", d)
+	}
+
+	inputED := json.RawMessage(`{"command":"rm -rf /"}`)
+	dED, _ := policy.Check("run_command", inputED)
+	if dED != Ask {
+		t.Errorf("expected Ask for extremely dangerous rm -rf / despite allow pattern, got %v", dED)
 	}
 }
 
@@ -206,11 +214,12 @@ func TestConfigPolicy_CommandRulesOnlyForCommandTools(t *testing.T) {
 	policy := NewConfigPolicyWithMode(nil, []string{"."}, SupervisedMode)
 	policy.AllowCommandPattern("anything*")
 
-	// Non-command tools should not be affected
+	// Non-command tools should not be affected. two-mode refactor:
+	// supervised default is Allow, so edit_file flows Allow here.
 	input := json.RawMessage(`{"command":"anything here"}`)
 	d, _ := policy.Check("edit_file", input)
-	if d != Ask {
-		t.Errorf("command rules should not affect non-command tools, got %v", d)
+	if d != Allow {
+		t.Errorf("command rules should not affect non-command tools (supervised default Allow), got %v", d)
 	}
 }
 
