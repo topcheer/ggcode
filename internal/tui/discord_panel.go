@@ -377,6 +377,19 @@ func (m *Model) createDiscordAdapterCmd(spec string) tea.Cmd {
 						return rollback(err)
 					}
 					if err := m.startDiscordAdapterIfNeeded(name); err != nil {
+						if errors.Is(err, errDiscordEnableNeeded) {
+							// #4483 (#1794/#1719 completion): enable on the Update loop,
+							// then retry - same shape as dingtalk_panel's sentinel
+							// branch. The old path rolled back on the enable-needed
+							// error instead of routing it.
+							// #4580: pass a success callback - next=nil made the
+							// auto-enable path return no message, so the panel
+							// never showed the added_bot confirmation and users
+							// re-submitted a working binding.
+							return m.discordEnableMutation(name, func(m *Model) tea.Msg {
+								return discordBindResultMsg{message: m.t("panel.discord.message.added_bot", name)}
+							})
+						}
 						return rollback(err)
 					}
 					return discordBindResultMsg{message: m.t("panel.discord.message.added_bot", name)}
@@ -408,18 +421,53 @@ func (m *Model) startDiscordAdapterIfNeeded(name string) error {
 		return errors.New(m.t("panel.discord.error.not_configured", name))
 	}
 	if !adapterCfg.Enabled {
-		// Auto-enable when user explicitly tries to bind from panel.
-		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
-			return fmt.Errorf("enable %s: %w", name, err)
-		}
-		if m.imManager != nil {
-			_ = m.imManager.EnableBinding(name)
-		}
+		// #4483: the auto-enable used to write the config map RIGHT HERE on
+		// the Cmd goroutine (bypassing configMutationMsg's fail/persist
+		// choreography) - the #1794 case-2 fix only covered the apply side.
+		// Signal the caller to route the enable through configMutationMsg
+		// (Update loop) instead, same sentinel pattern as dingtalk #1719.
+		return errDiscordEnableNeeded
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformDiscord)) {
 		return errors.New(m.t("panel.discord.error.not_discord_adapter", name))
 	}
 	return im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager)
+}
+
+// errDiscordEnableNeeded signals the auto-enable must run on the Update
+// loop via configMutationMsg (#4483, completing #1794/#1719 - same shape
+// as dingtalk_panel's errDingtalkEnableNeeded).
+var errDiscordEnableNeeded = errors.New("discord adapter needs enable-on-update-loop")
+
+// discordEnableMutation routes the auto-enable through configMutationMsg
+// (Update loop) and retries the adapter start afterwards - the #1719
+// dingtalk_enableMutation shape.
+func (m *Model) discordEnableMutation(name string, next func(m *Model) tea.Msg) tea.Msg {
+	return configMutationMsg{
+		apply: func(m *Model) error {
+			if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
+				return fmt.Errorf("enable %s: %w", name, err)
+			}
+			if m.imManager != nil {
+				_ = m.imManager.EnableBinding(name)
+			}
+			return nil
+		},
+		next: func(m *Model) tea.Cmd {
+			return func() tea.Msg {
+				if err := im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager); err != nil {
+					return discordBindResultMsg{err: err}
+				}
+				if next == nil {
+					return nil
+				}
+				return next(m)
+			}
+		},
+		fail: func(err error) tea.Msg {
+			return discordBindResultMsg{err: err}
+		},
+	}
 }
 
 func (m Model) discordBindingEntries() []discordBindingEntry {

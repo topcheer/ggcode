@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // GCStats holds statistics from a garbage collection run.
@@ -56,14 +57,35 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 	// GC is the only physical deleter (#779 doctrine), so the forget mark
 	// takes effect on disk here. RestoreKey before this run still saves
 	// the entry; after it, only re-saving recreates it.
+	// #4525: the forgotten set was read BEFORE the FileLock below, so a
+	// RestoreKey completing in the lock-free window still got its key
+	// archived+tombstoned by the stale snapshot (RestoreKey only touches
+	// the sidecar - the md mtime guard cannot see it). Re-read the set
+	// AFTER acquiring the lock: loadForgotten is a pure sidecar read with
+	// no flock acquisition, so calling it under the held FileLock cannot
+	// self-deadlock.
+	unlockGC, lockErr := util.FileLock(am.dir + ".lock")
+	gcLocked := lockErr == nil
+	if !gcLocked {
+		debug.Log("memory", "GC: filelock failed, degraded to unlocked delete: %v", lockErr)
+	}
 	forgotten := am.ForgottenSet()
 	for k := range forgotten {
 		delete(activeKeys, k)
 	}
-	var digestedForgotten []string
+	var digestedForgotten, forgetUsageKeys []string
 
 	stats := GCStats{Total: len(metas)}
 
+	// #4416: hold the cross-process memory file lock across the re-stat
+	// mtime guard AND the Remove below. SaveMemory renames under this same
+	// lock (auto.go r401 GAP-B); without it, a rename landing in the
+	// Stat→Remove micro-window passed the stale-mtime guard and the freshly
+	// saved file was deleted permanently (the tmp had already been consumed
+	// by the rename - no archive, no tombstone, unrecoverable). Fail-open
+	// matches the save paths' posture (GC must not block on lock faults).
+	// Released explicitly before the sidecar prune below, which acquires
+	// the same lock via lockForgottenWrite (same-flock self-deadlock guard).
 	for _, m := range metas {
 		if activeKeys[m.Key] {
 			continue
@@ -78,6 +100,32 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 			debug.Log("memory", "GC: %s modified after snapshot (concurrent writer); keeping", m.Key)
 			continue
 		}
+		// #4469: a user-forgotten entry is a DeleteMemory-equivalent,
+		// user-intent deletion - it must satisfy the same #3880 interval
+		// contract. The old path did a plain os.Remove: the final live
+		// version was never archived (unrecoverable loss) and no tombstone
+		// was written, so ReadMemoryAsOf time-traveled past the forget to
+		// stale .history content. Delete via archive+tombstone instead
+		// (the archive rename IS the removal). On failure keep the forget
+		// mark and retry next GC run - fail-closed beats silent data loss.
+		if forgotten[m.Key] {
+			if err := am.archiveAndTombstone(m.Key, path, m.Key); err != nil {
+				debug.Log("memory", "GC: forget-digest contract delete failed for %s (will retry next run): %v", m.Key, err)
+				continue
+			}
+			stats.ForgottenRemoved++
+			// #4426: ForgetUsage itself FileLocks the SAME path (usage.go
+			// r401) - calling it inside the GC lock window is a same-flock
+			// self-conflict (flock conflicts per open-file-description, so
+			// two fds in one process still block): acquireWithRetry busy-
+			// waited the FULL 10s timeout per digested entry, fail-open,
+			// and the held lock also dragged OTHER processes' writes into
+			// their 10s timeouts. Defer to after unlockGC below, same
+			// guard as the sidecar prune.
+			forgetUsageKeys = append(forgetUsageKeys, m.Key)
+			digestedForgotten = append(digestedForgotten, m.Key)
+			continue
+		}
 		if err := os.Remove(path); err != nil {
 			debug.Log("memory", "GC: failed to remove %s: %v", path, err)
 			continue
@@ -87,17 +135,24 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 		} else if m.Category == CategoryEvolving {
 			stats.DedupRemoved++
 		}
-		if forgotten[m.Key] {
-			stats.ForgottenRemoved++
-			am.ForgetUsage(m.Key) // drop sidecar ghosts, same as DeleteMemory
-			digestedForgotten = append(digestedForgotten, m.Key)
-		}
+	}
+	if gcLocked {
+		unlockGC()
+	}
+	// #4426: outside the GC lock window - ForgetUsage re-acquires the lock
+	// itself (drop sidecar ghosts, same as DeleteMemory).
+	for _, k := range forgetUsageKeys {
+		am.ForgetUsage(k)
 	}
 
-	// The forget sidecar must not keep marks for files GC just digested —
+	// The forget sidecar must not keep marks for files GC just digested -
 	// otherwise RestoreKey reports success for an entry that no longer
 	// exists on disk (ghost-restore).
 	if len(digestedForgotten) > 0 {
+		// #4413: this prune is itself a sidecar RMW - run it under the same
+		// write lock as ForgetKey/RestoreKey (acquired fresh: the GC lock
+		// above was already released).
+		unlock := am.lockForgottenWrite()
 		f := am.loadForgotten()
 		for _, k := range digestedForgotten {
 			delete(f.Entries, k)
@@ -105,6 +160,7 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 		if err := am.saveForgotten(f); err != nil {
 			debug.Log("memory", "GC: failed to prune forget sidecar: %v", err)
 		}
+		unlock()
 	}
 
 	removed := stats.ExpiredRemoved + stats.DedupRemoved + stats.ForgottenRemoved
@@ -114,6 +170,32 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 	}
 
 	return stats
+}
+
+// archiveAndTombstone implements the #3880 deletion contract shared by
+// DeleteMemory and GC's forget-digest path (#4469): it archives the live
+// version (the rename IS the removal - no separate os.Remove is needed)
+// and writes a #4334 timestamp-suffixed tombstone so ReadMemoryAsOf sees
+// the deletion gap instead of time-traveling to older archived content.
+func (am *AutoMemory) archiveAndTombstone(safe, path, key string) error {
+	if _, err := am.archiveVersion(safe, path); err != nil {
+		return err
+	}
+	hdir := filepath.Join(am.dir, historyDirName)
+	if err := os.MkdirAll(hdir, 0755); err != nil {
+		return err
+	}
+	// #4334: each deletion gets its OWN timestamp-suffixed tombstone. The
+	// old single-path write overwrote the previous deletion instant on a
+	// delete->recreate->delete sequence, so ReadMemoryAsOf could not see the
+	// first deleted gap. The read side unions these with the legacy
+	// single-tombstone file (which still records one valid instant).
+	now := time.Now()
+	tomb := filepath.Join(hdir, safe+".tombstone."+strconv.FormatInt(now.UnixNano(), 10))
+	if err := os.WriteFile(tomb, []byte(key+"\n"), 0o644); err != nil {
+		return err
+	}
+	return os.Chtimes(tomb, now, now)
 }
 
 // DeleteMemory removes a single memory entry by key. Returns an error if the
@@ -133,24 +215,7 @@ func (am *AutoMemory) DeleteMemory(key string) error {
 	// moment. Without it, delete left only older archived versions and any
 	// as_of AFTER the deletion time-traveled back to stale content -
 	// breaking the "exact version that held at that instant" contract.
-	if _, err := am.archiveVersion(safe, path); err != nil {
-		return err
-	}
-	hdir := filepath.Join(am.dir, historyDirName)
-	if err := os.MkdirAll(hdir, 0755); err != nil {
-		return err
-	}
-	// #4334: each deletion gets its OWN timestamp-suffixed tombstone. The
-	// old single-path write overwrote the previous deletion instant on a
-	// delete->recreate->delete sequence, so ReadMemoryAsOf could not see the
-	// first deleted gap. The read side unions these with the legacy
-	// single-tombstone file (which still records one valid instant).
-	now := time.Now()
-	tomb := filepath.Join(hdir, safe+".tombstone."+strconv.FormatInt(now.UnixNano(), 10))
-	if err := os.WriteFile(tomb, []byte(key+"\n"), 0o644); err != nil {
-		return err
-	}
-	if err := os.Chtimes(tomb, now, now); err != nil {
+	if err := am.archiveAndTombstone(safe, path, key); err != nil {
 		return err
 	}
 	// sa-85: drop the provenance/usage record so deleted keys do not

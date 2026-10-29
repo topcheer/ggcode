@@ -186,24 +186,6 @@ func frCatalog(key string) string {
 		return "@ joindre fichiers/dossiers • Tab/Shift+Tab naviguer • Enter appliquér"
 	case "hint.mode":
 		return "mode"
-	case "mode.approval.ask":
-		return "demandér si nécessaire"
-	case "mode.approval.none":
-		return "sans arrêt d'approbation"
-	case "mode.approval.critical":
-		return "critiques uniquement"
-	case "mode.tools.rules":
-		return "suivre les règles d'outils"
-	case "mode.tools.readonly":
-		return "lecture seule"
-	case "mode.tools.safe":
-		return "opérations sûres uniquement"
-	case "mode.tools.open":
-		return "presque tous les outils"
-	case "mode.agent.waits":
-		return "attend votre action"
-	case "mode.agent.autocontinue":
-		return "continue seul"
 	case "hint.enter_send":
 		return "Enter envoyér"
 	case "hint.ctrlv_image":
@@ -834,14 +816,8 @@ func frCatalog(key string) string {
 		return "Disponibles: %d"
 	case "panel.qq.none":
 		return "(aucun)"
-	case "panel.qq.default":
-		return "(par défaut)"
 	case "panel.qq.adapter":
 		return "Adapteur: %s"
-	case "panel.qq.target":
-		return "Cible: %s"
-	case "panel.qq.channel":
-		return "Canal: %s"
 	case "panel.qq.bot_list":
 		return "Liste des Bots QQ"
 	case "panel.qq.no_bots":
@@ -916,8 +892,6 @@ func frCatalog(key string) string {
 		return "Le nom de l'adapteur QQ est requis"
 	case "panel.qq.error.not_configured":
 		return "Le bot QQ %q n'est pas configuré"
-	case "panel.qq.error.disabled":
-		return "Le bot QQ %q est désactivé"
 	case "panel.qq.error.not_qq_adapter":
 		return "l'adapteur %q n'est pas un bot QQ"
 	case "panel.qq.error.not_online":

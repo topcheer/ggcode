@@ -278,6 +278,15 @@ func tryClaimPendingTask(
 			// Another teammate beat us — continue to next task.
 			continue
 		}
+		// #4367: record CurrentTaskID IMMEDIATELY after the claim succeeds,
+		// before any code that can panic (probe consumption, onEvent external
+		// callback, prompt building). The deferred rollbackClaimedTask reads
+		// this field; with the old late write, a panic in that window rolled
+		// back a no-op (ID still "" from the previous terminal clear) and the
+		// task leaked in_progress forever (#1688 regression).
+		tm.mu.Lock()
+		tm.CurrentTaskID = claimed.ID // #1688: panic rollback needs the board ID
+		tm.mu.Unlock()
 		// #3245: the claim is REAL now - spend the armed probe slot (if
 		// any) exactly here. Gate passes that never reached a claim left
 		// the circuit OPEN+expired so a later tick can still probe; only
@@ -291,9 +300,6 @@ func tryClaimPendingTask(
 		// completed dependencies (dep-chain blackboard sharing).
 		prompt := buildTaskPrompt(claimed) + depFindingsPrompt(tmMgr, claimed)
 
-		tm.mu.Lock()
-		tm.CurrentTaskID = claimed.ID // #1688: panic rollback needs the board ID
-		tm.mu.Unlock()
 		tm.setStatus(TeammateWorking)
 		tm.setCurrentTask(util.Truncate(claimed.Subject, 100))
 
@@ -316,7 +322,9 @@ func tryClaimPendingTask(
 		if ctx.Err() != nil {
 			pending := task.StatusPending
 			owner := ""
-			tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &pending, Owner: &owner})
+			if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &pending, Owner: &owner}); uerr != nil {
+				debug.Log("swarm", "teammate %s ctx-cancel rollback of %s failed: %v", tm.ID, claimed.ID, uerr)
+			}
 			if onEvent != nil {
 				onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
 			}
@@ -337,10 +345,12 @@ func tryClaimPendingTask(
 				errMsg := util.Truncate(taskErr.Error(), 200)
 				meta := map[string]string{"permanent_error": fc.String(), "error": errMsg}
 				meta = attachAttribution(meta, buildFailureAttribution(tm, claimed.ID, taskErr)) // sa-90 step-level attribution
-				tmMgr.Update(claimed.ID, task.UpdateOptions{
+				if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{
 					Status:   &completed,
 					Metadata: meta,
-				})
+				}); uerr != nil {
+					debug.Log("swarm", "teammate %s permanent-failure park of %s failed: %v", tm.ID, claimed.ID, uerr)
+				}
 				debug.Log("swarm", "teammate %s task %s permanently failed (%s): %v",
 					tm.ID, claimed.ID, fc, taskErr)
 			} else {
@@ -365,25 +375,31 @@ func tryClaimPendingTask(
 						"retry_attempts":  strconv.Itoa(attempts),
 					}
 					meta = attachAttribution(meta, buildFailureAttribution(tm, claimed.ID, taskErr)) // sa-90 step-level attribution
-					tmMgr.Update(claimed.ID, task.UpdateOptions{
+					if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{
 						Status:   &completed,
 						Metadata: meta,
-					})
+					}); uerr != nil {
+						debug.Log("swarm", "teammate %s max-retries park of %s failed: %v", tm.ID, claimed.ID, uerr)
+					}
 					debug.Log("swarm", "teammate %s task %s exceeded %d transient retries, parking as completed(max_retries): %v",
 						tm.ID, claimed.ID, maxTransientTaskRetries, taskErr)
 				} else {
 					pending := task.StatusPending
 					owner := ""
-					tmMgr.Update(claimed.ID, task.UpdateOptions{
+					if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{
 						Status:   &pending,
 						Owner:    &owner,
 						Metadata: map[string]string{"retry_attempts": strconv.Itoa(attempts)},
-					})
+					}); uerr != nil {
+						debug.Log("swarm", "teammate %s transient rollback of %s failed: %v", tm.ID, claimed.ID, uerr)
+					}
 				}
 			}
 		} else {
 			completed := task.StatusCompleted
-			tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed})
+			if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed}); uerr != nil {
+				debug.Log("swarm", "teammate %s completion of %s failed: %v", tm.ID, claimed.ID, uerr)
+			}
 			// Persist the final output on the board so dependent tasks
 			// claimed later inherit the findings (dep-chain blackboard).
 			persistTaskResult(tmMgr, claimed.ID, result)
@@ -536,6 +552,11 @@ func executeTask(
 	var output strings.Builder
 	var textBuf strings.Builder // accumulate text chunks into turn-level events
 	lastToolName := ""
+	// #4474: some providers/relays surface a non-fatal failure as an
+	// in-stream Error event yet still return nil from RunStream. Track the
+	// first such error so the task is not reported Completed with the error
+	// text persisted as findings for dependents to inherit.
+	var streamErr error
 	flushText := func() {
 		if textBuf.Len() == 0 {
 			return
@@ -626,6 +647,9 @@ func executeTask(
 		case provider.StreamEventError:
 			flushText()
 			output.WriteString(fmt.Sprintf("\n[error: %v]", event.Error))
+			if streamErr == nil {
+				streamErr = event.Error
+			}
 			tm.appendEvent(TeammateEvent{
 				Type:    TeammateEventError,
 				Text:    fmt.Sprintf("%v", event.Error),
@@ -635,13 +659,23 @@ func executeTask(
 	})
 	flushText()
 
+	// #4474: promote the tracked in-stream error so the claim path's
+	// transient/permanent classification (and the breaker accounting below)
+	// sees it; otherwise the task is marked Completed and persistTaskResult
+	// stores the error text as this task's findings.
+	if err == nil && streamErr != nil {
+		err = streamErr
+	}
+
 	if err != nil {
 		debug.Log("swarm", "teammate %s RunStream error: %v output_len=%d", tm.ID, err, output.Len())
 		if subCtx.Err() == context.DeadlineExceeded {
 			output.WriteString("\n[timeout: task exceeded time limit]")
 		} else if subCtx.Err() == context.Canceled {
 			output.WriteString("\n[cancelled]")
-		} else {
+		} else if streamErr == nil {
+			// (when streamErr != nil the in-stream handler above already
+			// appended the matching [error: ...] line - do not duplicate it)
 			output.WriteString(fmt.Sprintf("\n[error: %v]", err))
 		}
 	}

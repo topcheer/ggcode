@@ -176,7 +176,15 @@ func (a *tgAdapter) connectAndServe(ctx context.Context) error {
 			return fmt.Errorf("poll updates: %w", err)
 		}
 		for _, update := range updates {
-			a.handleUpdate(ctx, update)
+			// #4526: isolate per-update panics. handleUpdate had no
+			// recover of its own - a malformed update that panicked tore
+			// down the whole safego.Go("im.tg.run") wrapper, killing the
+			// backoff loop too: the adapter stayed dead until process
+			// restart. safego.Run is synchronous, so update ordering is
+			// preserved; one bad update now costs a log line, not the
+			// connection.
+			u := update
+			safego.Run("im.tg.update", func() { a.handleUpdate(ctx, u) })
 		}
 	}
 }
@@ -590,11 +598,13 @@ func (a *tgAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 
 	// Extract images from text and send them as photos
 	images, remainingText := ExtractImagesFromText(content)
+	sentImages := 0
 	for i, img := range images {
 		if err := a.sendExtractedImage(ctx, channelID, img, ""); err != nil {
 			debug.Log("tg", "adapter=%s image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
 			continue
 		}
+		sentImages++
 		// #1242: every delivered photo must respect the ~1 msg/s per-chat
 		// limit — back-to-back multi-image replies and the photo→text
 		// transition otherwise burst past it and Telegram 429s the send
@@ -608,6 +618,11 @@ func (a *tgAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 
 	// Send remaining text
 	remainingText = strings.TrimSpace(remainingText)
+	if remainingText == "" && len(images) > 0 && sentImages == 0 {
+		// #4464: an image-only message whose sends all failed must not be
+		// silently dropped - fall back to the original markdown text.
+		remainingText = content
+	}
 	if remainingText != "" {
 		messages, err := a.formatMessages(remainingText)
 		if err != nil {
@@ -1528,15 +1543,32 @@ func (a *tgAdapter) SendInteractive(ctx context.Context, binding ChannelBinding,
 		})
 	}
 
-	// Convert markdown to Telegram format
+	// Convert markdown to Telegram format.
+	// #4527: formatMessages may split into multiple chunks (>4096 chars);
+	// the old code took only messages[0].Text and silently dropped the
+	// tail. Loop-send the leading chunks via sendTextMessage (same pattern
+	// as the plain-text path, rate-limit delay included) and attach the
+	// inline keyboard to the LAST chunk, so the buttons sit under the full
+	// message. Entity mode (parseMode == "") also carries the entities so
+	// bold/code formatting survives - sendTextMessage already does this,
+	// and the keyboard chunk below mirrors it.
 	messages, _ := a.formatMessages(msg.Text)
-	textContent := ""
-	if len(messages) > 0 {
-		textContent = messages[0].Text
+	if len(messages) == 0 {
+		messages = []tgmd.Message{{Text: msg.Text}}
 	}
-	if textContent == "" {
-		textContent = msg.Text
+	for i := 0; i < len(messages)-1; i++ {
+		if i > 0 {
+			select {
+			case <-time.After(tgInterMessageDelay):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		if err := a.sendTextMessage(ctx, chatID, messages[i], ""); err != nil {
+			return "", err
+		}
 	}
+	textContent := messages[len(messages)-1].Text
 
 	path := fmt.Sprintf(tgSendMessagePath, a.botToken)
 	body := map[string]any{
@@ -1549,6 +1581,11 @@ func (a *tgAdapter) SendInteractive(ctx context.Context, binding ChannelBinding,
 	}
 	if a.parseMode != "" {
 		body["parse_mode"] = a.parseMode
+	} else if len(messages[len(messages)-1].Entities) > 0 {
+		// #4527: entity mode must carry the entities, mirroring
+		// sendTextMessage - without them the button message goes out as
+		// plain text and all formatting is lost.
+		body["entities"] = tgEntitiesToRaw(messages[len(messages)-1].Entities)
 	}
 
 	var respData map[string]any

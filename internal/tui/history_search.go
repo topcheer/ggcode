@@ -2,7 +2,6 @@ package tui
 
 import (
 	"strings"
-	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -135,16 +134,17 @@ func (m Model) handleHistorySearchKey(msg tea.KeyPressMsg) (handled bool, out Mo
 	// Printable text (ASCII or CJK; single rune from a terminal, possibly
 	// several from a paste-like key event): extend the query and refine the
 	// match. Modifier combos always render as "mod+key" and never qualify.
-	key := msg.String()
-	if !strings.Contains(key, "+") && utf8.RuneCountInString(key) > 0 {
-		printable := true
-		for _, r := range key {
-			if r < 32 {
-				printable = false
-				break
-			}
-		}
-		if printable {
+	// #4490: the old string heuristic (!Contains("+") && all runes >= 32)
+	// also matched bubbletea NAMED keys - KeyPressMsg.String() returns the
+	// key NAME for them (up/delete/tab/home/...), every char printable, so
+	// arrows polluted the query instead of exiting search mode (the
+	// exit-on-other-keys contract below was unreachable for them). Gate on
+	// actual text instead: only real typed/pasted text (msg.Text != "", the
+	// v2 idiom - named keys carry empty Text; cf. inspector_panel) and the
+	// space bar are query input.
+	if msg.Text != "" || msg.Code == tea.KeySpace {
+		key := msg.String()
+		if key != "" && !strings.Contains(key, "+") {
 			m.historySearch.query += key
 			refreshHistorySearch(&m)
 			return true, m, nil

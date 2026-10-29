@@ -185,24 +185,6 @@ func jaCatalog(key string) string {
 		return "@ ファイル/フォルダ添付 • Tab/Shift+Tab 切替 • Enter 適用"
 	case "hint.mode":
 		return "モード"
-	case "mode.approval.ask":
-		return "毎回確認"
-	case "mode.approval.none":
-		return "承認不要"
-	case "mode.approval.critical":
-		return "重要な操作のみ確認"
-	case "mode.tools.rules":
-		return "ツールルール"
-	case "mode.tools.readonly":
-		return "読み取り専用"
-	case "mode.tools.safe":
-		return "安全"
-	case "mode.tools.open":
-		return "オープン"
-	case "mode.agent.waits":
-		return "エージェント待機"
-	case "mode.agent.autocontinue":
-		return "自動継続"
 	case "hint.enter_send":
 		return "Enter で送信"
 	case "hint.ctrlv_image":
@@ -879,14 +861,8 @@ func jaCatalog(key string) string {
 		return "利用可能: %d"
 	case "panel.qq.none":
 		return "（なし）"
-	case "panel.qq.default":
-		return "（デフォルト）"
 	case "panel.qq.adapter":
 		return "アダプタ: %s"
-	case "panel.qq.target":
-		return "ターゲット: %s"
-	case "panel.qq.channel":
-		return "チャネル: %s"
 	case "panel.qq.bot_list":
 		return "QQ Bot リスト"
 	case "panel.qq.no_bots":
@@ -961,8 +937,6 @@ func jaCatalog(key string) string {
 		return "QQアダプタ名が必要です"
 	case "panel.qq.error.not_configured":
 		return "QQ Bot %q は設定されていません"
-	case "panel.qq.error.disabled":
-		return "QQ Bot %q は無効です"
 	case "panel.qq.error.not_qq_adapter":
 		return "アダプタ %q はQQ Botではありません"
 	case "panel.qq.error.not_online":

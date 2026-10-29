@@ -190,24 +190,6 @@ func koCatalog(key string) string {
 		return "@ 파일/폴더 첨부 • Tab/Shift+Tab 전환 • Enter 적용"
 	case "hint.mode":
 		return "모드"
-	case "mode.approval.ask":
-		return "매번 확인"
-	case "mode.approval.none":
-		return "승인 불필요"
-	case "mode.approval.critical":
-		return "중요 작업만 확인"
-	case "mode.tools.rules":
-		return "도구 규칙"
-	case "mode.tools.readonly":
-		return "읽기 전용"
-	case "mode.tools.safe":
-		return "안전"
-	case "mode.tools.open":
-		return "열림"
-	case "mode.agent.waits":
-		return "에이전트 대기"
-	case "mode.agent.autocontinue":
-		return "자동 계속"
 	case "hint.enter_send":
 		return "Enter로 전송"
 	case "hint.ctrlv_image":
@@ -838,14 +820,8 @@ func koCatalog(key string) string {
 		return "사용 가능: %d"
 	case "panel.qq.none":
 		return "(없음)"
-	case "panel.qq.default":
-		return "(기본값)"
 	case "panel.qq.adapter":
 		return "어댑터: %s"
-	case "panel.qq.target":
-		return "대상: %s"
-	case "panel.qq.channel":
-		return "채널: %s"
 	case "panel.qq.bot_list":
 		return "QQ 봇 목록"
 	case "panel.qq.no_bots":
@@ -920,8 +896,6 @@ func koCatalog(key string) string {
 		return "QQ 어댑터 이름이 필요합니다"
 	case "panel.qq.error.not_configured":
 		return "QQ 봇 %q이(가) 구성되지 않았습니다"
-	case "panel.qq.error.disabled":
-		return "QQ 봇 %q이(가) 비활성화되었습니다"
 	case "panel.qq.error.not_qq_adapter":
 		return "어댑터 %q은(는) QQ 봇이 아닙니다"
 	case "panel.qq.error.not_online":

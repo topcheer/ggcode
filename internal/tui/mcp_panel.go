@@ -35,6 +35,16 @@ type mcpUninstallResultMsg struct {
 	err  error
 }
 
+// mcpRefreshResultMsg carries the outcome of the async f-key tool refresh.
+// The tools/list RPC must run OFF the UI goroutine: a wedged MCP server
+// used to freeze the whole TUI because Refresh was called inline in Update.
+type mcpRefreshResultMsg struct {
+	name    string
+	found   bool
+	outcome plugin.RefreshOutcome
+	count   int
+}
+
 func (m *Model) openMCPPanel() {
 	// Pull a fresh snapshot so the panel reflects any background state
 	// changes that happened while it was closed (the update message may
@@ -219,7 +229,9 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "enter", "r", "R":
 		m.mcpPanelReconnect(panel)
 	case "f", "F":
-		m.mcpPanelRefresh(panel)
+		if cmd := m.mcpPanelRefresh(panel); cmd != nil {
+			return *m, cmd
+		}
 	case " ", "space":
 		if m.mcpPanelToggle(panel) {
 			return *m, nil
@@ -303,29 +315,23 @@ func (m *Model) mcpPanelReconnect(panel *mcpPanelState) {
 }
 
 // mcpPanelRefresh handles f/F: refresh tool metadata for the selected server.
-func (m *Model) mcpPanelRefresh(panel *mcpPanelState) {
+// It returns a tea.Cmd so the blocking tools/list RPC runs on a background
+// goroutine - calling MCPManager.Refresh inline in Update froze the entire
+// TUI whenever the server hung (mcp-panel f-key hang).
+func (m *Model) mcpPanelRefresh(panel *mcpPanelState) tea.Cmd {
 	if len(m.mcpServers) == 0 {
-		return
+		return nil
 	}
 	if m.mcpManager == nil {
 		panel.message = m.t("panel.mcp.refresh_unavailable")
-		return
+		return nil
 	}
 	name := m.mcpServers[panel.selected].Name
-	found, outcome, count := m.mcpManager.Refresh(name)
-	switch {
-	case !found:
-		panel.message = m.t("panel.mcp.reconnect_failed", name)
-	case outcome == plugin.RefreshNotConnected:
-		panel.message = m.t("panel.mcp.refresh_not_connected", name)
-	case outcome == plugin.RefreshThrottled:
-		panel.message = m.t("panel.mcp.refresh_throttled")
-	case outcome == plugin.RefreshFailed:
-		panel.message = m.t("panel.mcp.refresh_failed", name)
-	case outcome == plugin.RefreshUnchanged:
-		panel.message = m.t("panel.mcp.refresh_unchanged", name, count)
-	default:
-		panel.message = m.t("panel.mcp.refreshed", name, count)
+	panel.message = fmt.Sprintf("Refreshing tools for %s...", name)
+	mgr := m.mcpManager
+	return func() tea.Msg {
+		found, outcome, count := mgr.Refresh(name)
+		return mcpRefreshResultMsg{name: name, found: found, outcome: outcome, count: count}
 	}
 }
 

@@ -184,24 +184,6 @@ func zhCatalog(key string) string {
 		return "@ 可附加文件/目录 • Tab/Shift+Tab 切换 • Enter 应用"
 	case "hint.mode":
 		return "模式"
-	case "mode.approval.ask":
-		return "按需询问"
-	case "mode.approval.none":
-		return "不会停下来审批"
-	case "mode.approval.critical":
-		return "仅关键操作"
-	case "mode.tools.rules":
-		return "遵循工具规则"
-	case "mode.tools.readonly":
-		return "仅只读"
-	case "mode.tools.safe":
-		return "仅安全操作"
-	case "mode.tools.open":
-		return "几乎全部工具"
-	case "mode.agent.waits":
-		return "等待你决策"
-	case "mode.agent.autocontinue":
-		return "自动继续推进"
 	case "hint.enter_send":
 		return "Enter 发送"
 	case "hint.ctrlv_image":
@@ -1056,14 +1038,8 @@ func zhCatalog(key string) string {
 		return "可用：%d"
 	case "panel.qq.none":
 		return "(无)"
-	case "panel.qq.default":
-		return "(默认)"
 	case "panel.qq.adapter":
 		return "机器人：%s"
-	case "panel.qq.target":
-		return "目标：%s"
-	case "panel.qq.channel":
-		return "渠道：%s"
 	case "panel.qq.bot_list":
 		return "QQ 机器人列表"
 	case "panel.qq.no_bots":
@@ -1136,8 +1112,6 @@ func zhCatalog(key string) string {
 		return "QQ 适配器名称不能为空"
 	case "panel.qq.error.not_configured":
 		return "QQ 机器人 %q 未配置"
-	case "panel.qq.error.disabled":
-		return "QQ 机器人 %q 已禁用"
 	case "panel.qq.error.not_qq_adapter":
 		return "适配器 %q 不是 QQ 机器人"
 	case "panel.qq.error.not_online":

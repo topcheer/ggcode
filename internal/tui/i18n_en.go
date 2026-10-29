@@ -186,24 +186,6 @@ func enCatalog(key string) string {
 		return "@ attaches files/folders • Tab/Shift+Tab cycle • Enter apply"
 	case "hint.mode":
 		return "mode"
-	case "mode.approval.ask":
-		return "ask as needed"
-	case "mode.approval.none":
-		return "no approval stops"
-	case "mode.approval.critical":
-		return "critical only"
-	case "mode.tools.rules":
-		return "follow tool rules"
-	case "mode.tools.readonly":
-		return "read-only only"
-	case "mode.tools.safe":
-		return "safe ops only"
-	case "mode.tools.open":
-		return "almost all tools"
-	case "mode.agent.waits":
-		return "waits for you"
-	case "mode.agent.autocontinue":
-		return "keeps going"
 	case "hint.enter_send":
 		return "Enter send"
 	case "hint.ctrlv_image":
@@ -1043,14 +1025,8 @@ func enCatalog(key string) string {
 		return "Available: %d"
 	case "panel.qq.none":
 		return "(none)"
-	case "panel.qq.default":
-		return "(default)"
 	case "panel.qq.adapter":
 		return "Adapter: %s"
-	case "panel.qq.target":
-		return "Target: %s"
-	case "panel.qq.channel":
-		return "Channel: %s"
 	case "panel.qq.bot_list":
 		return "QQ Bot List"
 	case "panel.qq.no_bots":
@@ -1123,8 +1099,6 @@ func enCatalog(key string) string {
 		return "QQ adapter name is required"
 	case "panel.qq.error.not_configured":
 		return "QQ bot %q is not configured"
-	case "panel.qq.error.disabled":
-		return "QQ bot %q is disabled"
 	case "panel.qq.error.not_qq_adapter":
 		return "adapter %q is not a QQ bot"
 	case "panel.qq.error.not_online":

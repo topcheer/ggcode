@@ -83,7 +83,17 @@ func CoerceEnumValues(schema json.RawMessage, args json.RawMessage) json.RawMess
 		}
 
 		// Extract the provided string value.
-		provided := strings.TrimSpace(strings.Trim(string(val), `"`))
+		// #4443: parse as JSON first - the raw-message Trim used to leave
+		// escape debris ("a\"b" kept the backslash) and fed non-string
+		// values (true/numbers) into string matching, letting the
+		// Levenshtein<=2 tolerance silently rewrite a polluted provided
+		// value to the WRONG enum. Unparseable/non-string values skip
+		// correction (the original schema error stands).
+		var provided string
+		if err := json.Unmarshal(val, &provided); err != nil {
+			continue
+		}
+		provided = strings.TrimSpace(provided)
 		if provided == "" {
 			continue
 		}

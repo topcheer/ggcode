@@ -216,94 +216,43 @@ func matchGlobSegments(pattern, name string) bool {
 // matchDoubleStar handles glob patterns containing **.
 // "src/**" matches anything under src/.
 // "src/**/test" matches src/a/test, src/a/b/test, etc.
+// #4443: '**' may appear anywhere ("**/a/**/b", "src/**/a/**/b"); the old
+// split-on-first-** implementation fed a non-trailing '**' in the suffix
+// into single-segment glob matching (it degraded to matching ONE segment,
+// never crossing '/'), so protected-path patterns with mid-'**' silently
+// failed OPEN. The segment-wise recursive matcher below handles '**' at
+// any position: it consumes zero or more whole segments with backtracking,
+// preserving the documented #445/#830/#4089 behaviors.
 func matchDoubleStar(pattern, name string) (bool, error) {
-	parts := strings.SplitN(pattern, "**", 2)
-	prefix := strings.TrimSuffix(parts[0], "/")
-	suffix := ""
-	if len(parts) > 1 {
-		suffix = strings.TrimPrefix(parts[1], "/")
-	}
+	return matchSegsFS(strings.Split(pattern, "/"), strings.Split(name, "/")), nil
+}
 
-	// If no prefix, ** matches everything
-	if prefix == "" {
-		if suffix == "" {
-			return true, nil
-		}
-		// #4089: a multi-segment suffix with no literal prefix
-		// ('**/secrets/**', '**/config/prod.yaml' style) previously fell
-		// through to matchSegFS(suffix, filepath.Base(name)); a suffix
-		// containing '/' can never equal a single base segment, so the
-		// guard silently failed OPEN. The '**' prefix anchors nothing,
-		// so the suffix must be tried at every segment offset; a trailing
-		// '**' segment consumes all remaining segments (crossing '/').
-		if strings.Contains(suffix, "/") {
-			sSegs := strings.Split(suffix, "/")
-			nSegs := strings.Split(name, "/")
-			for i := 0; i < len(nSegs); i++ {
-				ok := true
-				for j, s := range sSegs {
-					if s == "**" && j == len(sSegs)-1 {
-						break // trailing ** consumes the rest
-					}
-					if i+j >= len(nSegs) || !matchSegFS(s, nSegs[i+j]) { // #4060: FS-aware fold
-						ok = false
-						break
-					}
-				}
-				if ok {
-					return true, nil
+// matchSegsFS matches pattern segments against name segments, honoring
+// '**' (zero or more segments, with backtracking) and per-segment globs
+// via matchSegFS (#4060 FS-aware folding).
+func matchSegsFS(p, n []string) bool {
+	for len(p) > 0 {
+		if p[0] == "**" {
+			if len(p) == 1 {
+				// Trailing '**' consumes the rest (including zero
+				// remaining segments - the prefix-as-file case, e.g.
+				// "a/**" matching "a" itself per the old #445 path).
+				return true
+			}
+			// Non-trailing '**': try consuming 0..len(n) segments.
+			for i := 0; i <= len(n); i++ {
+				if matchSegsFS(p[1:], n[i:]) {
+					return true
 				}
 			}
-			return false, nil
+			return false
 		}
-		return matchSegFS(suffix, filepath.Base(name)), nil // #4060: FS-aware fold
-	}
-
-	// #445: the prefix may itself contain glob metacharacters (src/*-gen/**).
-	// Segment-wise matching: name must have at least len(prefix segments)+1
-	// segments, and every prefix segment must glob-match.
-	pSegs := strings.Split(prefix, "/")
-	nSegs := strings.Split(name, "/")
-	if len(nSegs) <= len(pSegs) {
-		// name is not strictly under the prefix — only an exact
-		// segment-wise match can hit (prefix itself matched as a file).
-		if matchGlobSegments(prefix, name) && suffix == "" {
-			return true, nil
+		if len(n) == 0 || !matchSegFS(p[0], n[0]) {
+			return false
 		}
-		return false, nil
+		p, n = p[1:], n[1:]
 	}
-	for i, p := range pSegs {
-		if !matchSegFS(p, nSegs[i]) { // #4060: FS-aware fold
-			return false, nil
-		}
-	}
-	rest := strings.Join(nSegs[len(pSegs):], "/")
-	if suffix == "" {
-		return true, nil
-	}
-	// #830: a multi-segment suffix ('src/**/gen/config.yaml' style) never
-	// matched — filepath.Match does not cross '/' and Base() drops the
-	// directory part, so the guard silently failed OPEN (at odds with the
-	// #445 fail-closed history). Accept a tail segment-wise match.
-	sSegs := strings.Split(suffix, "/")
-	if len(nSegs)-len(pSegs) >= len(sSegs) {
-		off := len(nSegs) - len(sSegs)
-		all := true
-		for i, s := range sSegs {
-			if !matchSegFS(s, nSegs[off+i]) { // #4060: FS-aware fold
-				all = false
-				break
-			}
-		}
-		if all {
-			return true, nil
-		}
-	}
-	// Single-segment or globbed suffix against the base.
-	if matchSegFS(suffix, filepath.Base(rest)) { // #4060: FS-aware fold
-		return true, nil
-	}
-	return matchSegFS(suffix, rest), nil
+	return len(n) == 0
 }
 
 // resolveSymlinkPrefix resolves symlinks for the longest existing prefix

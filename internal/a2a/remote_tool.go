@@ -219,7 +219,8 @@ func (t *RemoteTool) discover() ([]InstanceInfo, error) {
 	if t.cache != nil && time.Since(t.cacheAt) < 10*time.Second {
 		cache := t.cache
 		t.mu.RUnlock()
-		return cache, nil
+		// #4501: hand out a copy, not the cached backing array.
+		return append([]InstanceInfo(nil), cache...), nil
 	}
 	t.mu.RUnlock()
 
@@ -229,11 +230,14 @@ func (t *RemoteTool) discover() ([]InstanceInfo, error) {
 	}
 
 	t.mu.Lock()
-	t.cache = instances
+	// #4501: same defensive-copy posture as Registry.Discover - cache a
+	// private copy so in-place mutation of the returned slice cannot
+	// corrupt the cache or race concurrent readers.
+	t.cache = append([]InstanceInfo(nil), instances...)
 	t.cacheAt = time.Now()
 	t.mu.Unlock()
 
-	return instances, nil
+	return append([]InstanceInfo(nil), instances...), nil
 }
 
 // RemoteAgentMeta holds enrichment data (from lanchat presence) for a remote

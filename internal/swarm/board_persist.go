@@ -1,9 +1,11 @@
 package swarm
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -61,6 +63,14 @@ func persistTeamBoardAsync(teamID string, tm *task.Manager) {
 // file, corrupt data - RestoreJSON rejects bad versions/payloads) a fresh
 // empty board is returned. in_progress tasks are rolled back to pending:
 // after a restart their owners are gone, so the tasks must be re-claimable.
+//
+// #4363: an undecodable board is QUARANTINED (renamed to
+// board.json.corrupt-<ts>) before the empty board loads. Without the
+// rename, the very next board change would atomically overwrite the file
+// via persistTeamBoardNow (temp+rename full rewrite) and the original
+// content - the team's entire task history - would be unrecoverable. The
+// rename keeps the scene for manual recovery; the fresh board is identical
+// either way.
 func loadTeamBoard(teamID string) *task.Manager {
 	tm := task.NewManager()
 	data, err := os.ReadFile(boardPersistPath(teamID))
@@ -68,7 +78,13 @@ func loadTeamBoard(teamID string) *task.Manager {
 		return tm
 	}
 	if err := tm.RestoreJSON(data); err != nil {
-		debug.Log("swarm", "board restore for %s: %v (starting empty)", teamID, err)
+		src := boardPersistPath(teamID)
+		q := fmt.Sprintf("%s.corrupt-%d", src, time.Now().Unix())
+		if rerr := os.Rename(src, q); rerr == nil {
+			debug.Log("swarm", "board restore for %s FAILED (%v): original board quarantined at %s, starting empty - inspect the quarantine file before any board change", teamID, err, q)
+		} else {
+			debug.Log("swarm", "board restore for %s FAILED (%v); quarantine rename also failed (%v), starting empty - the original file may be overwritten by the next board change", teamID, err, rerr)
+		}
 		return task.NewManager()
 	}
 	// Crash recovery: re-open claims. The in_progress owner died with the

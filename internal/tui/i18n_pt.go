@@ -553,28 +553,10 @@ func ptCatalog(key string) string {
 	// ── Metrics ───────────────────────────────────────────────────
 
 	// ── Mode details ──────────────────────────────────────────────
-	case "mode.agent.autocontinue":
-		return "continua automaticamente"
-	case "mode.agent.waits":
-		return "espera por você"
-	case "mode.approval.ask":
-		return "perguntar conforme necessário"
-	case "mode.approval.critical":
-		return "apenas crítico"
-	case "mode.approval.none":
-		return "sem paradas de aprovação"
 	case "mode.current":
 		return "Modo atual: %s\nUso: /mode <supervised|bypass>\n  supervised  Padrao; a maioria das chamadas flui sem prompts - apenas os pisos de seguranca perguntam (destruicao de sistema, exfiltracao de credenciais, escritas de backdoor)\n  bypass      Superficie de cruzeiro; tudo permitido exceto destruicao de sistema e escritas de backdoor\n  (auto/autopilot sao aliases legados)\n"
 	case "mode.persist_failed":
 		return "Falha ao persistir preferência de modo: %v"
-	case "mode.tools.open":
-		return "quase todas as ferramentas"
-	case "mode.tools.readonly":
-		return "apenas leitura"
-	case "mode.tools.rules":
-		return "seguir regras de ferramentas"
-	case "mode.tools.safe":
-		return "apenas operações seguras"
 
 	// ── Pairing ───────────────────────────────────────────────────
 	case "pairing.blacklisted":
@@ -1073,8 +1055,6 @@ func ptCatalog(key string) string {
 		return "Vinculados: %d"
 	case "panel.qq.bound_directory":
 		return "Diretório Vinculado: %s"
-	case "panel.qq.channel":
-		return "Canal: %s"
 	case "panel.qq.create":
 		return "Criar"
 	case "panel.qq.create_example":
@@ -1089,8 +1069,6 @@ func ptCatalog(key string) string {
 		return "Canal do Diretório Atual: %s"
 	case "panel.qq.current_directory_target":
 		return "Alvo do Diretório Atual: %s"
-	case "panel.qq.default":
-		return "(padrão)"
 	case "panel.qq.details":
 		return "Detalhes"
 	case "panel.qq.directory":
@@ -1113,8 +1091,6 @@ func ptCatalog(key string) string {
 		return "Config do bot QQ deve ser: <bot-id> <appid> <appsecret>"
 	case "panel.qq.error.config_unavailable":
 		return "config indisponível"
-	case "panel.qq.error.disabled":
-		return "Bot QQ %q está desativado"
 	case "panel.qq.error.not_configured":
 		return "Bot QQ %q não está configurado"
 	case "panel.qq.error.not_online":
@@ -1161,8 +1137,6 @@ func ptCatalog(key string) string {
 		return "não iniciado"
 	case "panel.qq.status.unknown":
 		return "desconhecido"
-	case "panel.qq.target":
-		return "Alvo: %s"
 	case "panel.qq.transport":
 		return "Transporte: %s"
 	case "panel.qq.waiting_for_pairing":
