@@ -425,10 +425,14 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 		return
 	}
 
-	// Dedup by (channel, ts) (#968): Socket Mode delivery is at-least-once -
-	// unacked envelopes are redelivered and reconnect windows can replay
-	// events. Without this the same message produced duplicate agent replies.
-	if !a.markSeenDedup(channel, ts) {
+	// Dedup check (read-only) by (channel, ts) (#968): Socket Mode delivery
+	// is at-least-once - unacked envelopes are redelivered and reconnect
+	// windows can replay events. #4655 (mirrors mattermost #4465): the seen
+	// write is DEFERRED until attachment parsing and the empty-text filter
+	// have passed - writing it here would (a) swallow the message when Slack
+	// redelivers the same ts after a transient attachment-parse failure, and
+	// (b) burn dedup capacity on filtered empties, evicting live keys.
+	if !a.checkSeenDedup(channel, ts) {
 		debug.Log("slack", "adapter=%s dedup drop channel=%s ts=%s", a.name, channel, ts)
 		return
 	}
@@ -452,6 +456,11 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 	text = a.stripBotMention(text)
 	text = strings.TrimSpace(text)
 	if text == "" && len(attachments) == 0 {
+		return // filtered: dedup key must NOT be latched (#4655)
+	}
+	// All filters passed - latch the dedup key now (#4655).
+	if !a.markSeenDedup(channel, ts) {
+		debug.Log("slack", "adapter=%s dedup drop (late latch) channel=%s ts=%s", a.name, channel, ts)
 		return
 	}
 
@@ -514,6 +523,18 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 // markSeenDedup records an inbound "channel:ts" and reports whether this is
 // the first delivery (#968). Mirrors the signal adapter's seen[ts] dedup:
 // mutex-guarded, TTL-evicted, size-capped.
+// checkSeenDedup is the read-only half of the dedup pair (#4655).
+func (a *slackAdapter) checkSeenDedup(channel, ts string) bool {
+	if channel == "" || ts == "" {
+		return true
+	}
+	a.mu.Lock()
+	_, dup := a.seen[channel+":"+ts]
+	a.mu.Unlock()
+	return !dup
+}
+
+// markSeenDedup latches the seen key; returns false when already present.
 func (a *slackAdapter) markSeenDedup(channel, ts string) bool {
 	if channel == "" || ts == "" {
 		return true
@@ -1383,6 +1404,18 @@ func (a *slackAdapter) SendInteractive(ctx context.Context, binding ChannelBindi
 func (a *slackAdapter) handleInteractive(ctx context.Context, payload map[string]any) {
 	actionType, _ := payload["type"].(string)
 	if actionType != "block_actions" {
+		return
+	}
+
+	// #4654: Socket Mode redelivers unacked envelopes, and trigger_id is
+	// stable across redeliveries of the SAME interaction - dedup on it so a
+	// replayed envelope cannot re-fire a button action (side effects like
+	// approvals would run twice). Empty trigger_id (unexpected) passes
+	// through rather than being dropped: matching the events-path contract
+	// where a missing key never blocks delivery.
+	triggerID, _ := payload["trigger_id"].(string)
+	if triggerID != "" && !a.markSeenDedup("interactive", triggerID) {
+		debug.Log("slack", "adapter=%s interactive dedup drop trigger_id=%s", a.name, triggerID)
 		return
 	}
 
