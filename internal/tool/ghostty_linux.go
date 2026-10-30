@@ -219,7 +219,9 @@ func (g *GhosttyTool) executeNewTab(ctx context.Context, command, workingDir str
 		// #3140: sh -c so argumented commands survive execvp semantics.
 		// gdbus format for new-window-command: array of string args
 		argv := ghosttyLinuxCommandArgv(command, workingDir)
-		q := make([]string, 0, len(argv)+1)
+		// #4636: cap is a hint only - len(argv)+1 arithmetic trips CodeQL's
+		// allocation-overflow advisory; plain len(argv) is behavior-identical.
+		q := make([]string, 0, len(argv))
 		q = append(q, "\"-e\"")
 		for _, a := range argv {
 			q = append(q, fmt.Sprintf("%q", a))
@@ -243,7 +245,8 @@ func (g *GhosttyTool) executeNewWindow(ctx context.Context, command, workingDir 
 	if strings.TrimSpace(command) != "" {
 		// #3140: ditto (see executeNewTab).
 		argv := ghosttyLinuxCommandArgv(command, workingDir)
-		q := make([]string, 0, len(argv)+1)
+		// #4636: cap hint arithmetic (see executeNewTab).
+		q := make([]string, 0, len(argv))
 		q = append(q, "\"-e\"")
 		for _, a := range argv {
 			q = append(q, fmt.Sprintf("%q", a))
