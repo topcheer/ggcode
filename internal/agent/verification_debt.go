@@ -140,6 +140,19 @@ func isCommandChannelTool(name string) bool {
 	return false
 }
 
+// verifyDebtSpawnClearingTool reports whether a SUCCESSFUL result from the
+// named tool may itself clear verification debt at the tool-result wiring
+// site. start_command is excluded (#4649): its success only proves the job
+// was spawned, not that the verification passed - same rationale as the
+// #3682 scopeNarrow and #3989 recordSuccessfulCommand exclusions. The real
+// clearing event for a background test is its TERMINAL outcome, which the
+// bgVerifyJobs block (#2992/#3685-B) feeds into recordVerifyCommand when
+// wait_command/read_command_output observes it; letting spawn success clear
+// here would zero the debt before the result exists and double-count greens.
+func verifyDebtSpawnClearingTool(name string) bool {
+	return isCommandChannelTool(name) && name != "start_command"
+}
+
 // token = command runner, subsequent tokens = verify markers). The previous
 // anywhere-token and trimmed-prefix matching granted verification credit to
 // non-verification commands: "rm -rf build" (noun "build"), "yarn install",

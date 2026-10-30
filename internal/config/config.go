@@ -2182,6 +2182,21 @@ func mergeDefaultEndpoints(cfg, defaults *Config) {
 					agVC.Endpoints[epName] = oldVC.Endpoints[epNames[0]]
 				}
 			}
+			// #4633: carry EVERY legacy endpoint through the migration,
+			// namespaced under the gateway endpoint name - previously only
+			// the sort-lowest endpoint survived and the rest (endpoint-level
+			// API keys, model lists, tags) were silently dropped by the
+			// unconditional delete below, violating the "cannot
+			// irreversibly drop credentials" contract (#959, #4408-C1).
+			// The primary pick above keeps active-selection semantics; the
+			// suffixed copies preserve every credential for discovery.
+			// Existing names are never overwritten.
+			for legacyName, legacyEP := range oldVC.Endpoints {
+				namespaced := epName + "-" + legacyName
+				if _, taken := agVC.Endpoints[namespaced]; !taken {
+					agVC.Endpoints[namespaced] = legacyEP
+				}
+			}
 			carryGatewayVendorKey(&agVC, epName, oldVC.APIKey)
 			// #3986: if the top-level active selection points at the legacy
 			// vendor being deleted, redirect it to ai-gateway first —

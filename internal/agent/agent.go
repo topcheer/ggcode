@@ -5375,7 +5375,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// powershell are reachable tool names (OpenAI responses builtin)
 			// and a `go test` run through them clears debt exactly like
 			// run_command does.
-			if isCommandChannelTool(tc.Name) && !result.IsError && isVerificationCommand(extractCommandFromArgs(tc.Arguments)) {
+			// #4649: start_command's success only proves the job spawned -
+			// the real clearing event is the bgVerifyJobs terminal outcome
+			// below (#2992/#3685-B), so it is excluded here (see
+			// verifyDebtSpawnClearingTool).
+			if verifyDebtSpawnClearingTool(tc.Name) && !result.IsError && isVerificationCommand(extractCommandFromArgs(tc.Arguments)) {
 				a.verifyDebt.recordVerifyCommand(extractCommandFromArgs(tc.Arguments), result.IsError)
 			}
 			// #2992 case 2: the long-test workflow runs builds/tests via
