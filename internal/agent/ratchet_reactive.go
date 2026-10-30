@@ -1,9 +1,6 @@
 package agent
 
 import (
-	"regexp"
-	"strings"
-
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
@@ -25,29 +22,23 @@ func (rs *RuleStore) MatchingRulesForResult(resultContent string) []Rule {
 	defer rs.mu.Unlock()
 	rs.load()
 
-	// Quick exit: only check if the result looks like an error
-	// (case-insensitive check for common error markers)
-	lowerResult := strings.ToLower(resultContent)
-	hasErrorMarker := strings.Contains(lowerResult, "error") ||
-		strings.Contains(lowerResult, "fail") ||
-		strings.Contains(lowerResult, "undefined") ||
-		strings.Contains(lowerResult, "cannot find") ||
-		strings.Contains(lowerResult, "panic") ||
-		strings.Contains(lowerResult, "fatal") ||
-		strings.Contains(lowerResult, "not found") ||
-		strings.Contains(lowerResult, "denied") ||
-		strings.Contains(lowerResult, "refused")
-
-	if !hasErrorMarker {
-		return nil
-	}
-
+	// #4605: no error-marker gate. The old quick-exit required one of 9
+	// hardcoded English marker substrings ("error", "fail", "not found", ...)
+	// before ANY rule pattern was tried, but the learning path (ratchet LLM
+	// prompt: "match_pattern matches the error OUTPUT messages") puts no such
+	// restriction on patterns. Rules learned from marker-free error shapes
+	// ("signal: killed", "no such file or directory", "exit status 137",
+	// "context deadline exceeded", "unexpected EOF") could never fire their
+	// FixHint reactively - a silent false-negative that hit exactly the most
+	// expensive error classes. Patterns are tried against every result, using
+	// the shared regexCache (which the old gate path bypassed via
+	// regexp.Compile per call).
 	var result []Rule
 	for _, r := range rs.rules {
 		if r.MatchPattern == "" {
 			continue
 		}
-		re, err := regexp.Compile(r.MatchPattern)
+		re, err := rs.compilePattern(r.MatchPattern)
 		if err != nil {
 			continue
 		}
