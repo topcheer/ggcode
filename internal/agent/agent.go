@@ -4080,12 +4080,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// #1587-A: snapshot write-target existence BEFORE execution -
 			// the orphan detector consumes it post-execution.
 			a.orphanFile.recordPreExec(tc.Name, string(tc.Arguments), a.workingDir)
-			// Track tool call for reflection stats
-			runStats.recordToolCall(tc.Name)
-			a.toolCallBudget.record()
-			a.toolThermal.recordToolCall(tc.Name)
-			a.iterPressure.recordToolCall(tc.Name, i+1)
-			extractPathsFromToolCall(tc.Name, tc.Arguments, runStats)
 			// Check for consecutive duplicate tool calls (loop detection).
 			// If detected, inject a guidance message into the tool result.
 			var loopGuidance string
@@ -4200,6 +4194,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// execution recorded the name exactly once (contract:
 			// "appended only as tools execute during a run").
 			a.runToolNames = append(a.runToolNames, tc.Name)
+			// #4620: counters also live past the skip gates now - skipped
+			// calls (in-turn dedup, ask_user quality gate, redaction write
+			// guard) must not burn budget or inflate stats as phantoms,
+			// matching #4013's no-phantom-record contract.
+			runStats.recordToolCall(tc.Name)
+			a.toolCallBudget.record()
+			a.toolThermal.recordToolCall(tc.Name)
+			a.iterPressure.recordToolCall(tc.Name, i+1)
+			extractPathsFromToolCall(tc.Name, tc.Arguments, runStats)
 			var result tool.Result
 			memoHit := false
 			if memoResult, hit := a.toolMemo.get(tc.Name, tc.Arguments); hit && a.speculativeHitAllowed(ctx, tc) {
@@ -6428,6 +6431,13 @@ func hasNonThinkingContent(blocks []provider.ContentBlock) bool {
 		case "thinking", "redacted_thinking":
 			continue
 		case "tool_use":
+			return true
+		// #4621: server-tool blocks (executed in-API by the provider) are
+		// real output even though their Text is empty - a thinking-only
+		// reply must still count as empty, but a server-tool-only reply
+		// must not (prevents the #1672-family false-empty abort).
+		case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result",
+			"tool_search_tool_result", "code_execution_tool_result":
 			return true
 		default:
 			if strings.TrimSpace(b.Text) != "" {
