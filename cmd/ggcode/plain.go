@@ -608,8 +608,9 @@ func runLinearTurn(ctx context.Context, ag *agent.Agent, line string) {
 	// because provider streams emit Done per iteration (often with Usage)
 	// while tool results arrive between iterations.
 	pendingToolCalls := make(map[string]bool)
-	err := ag.RunStream(ctx, line, plainStreamPrinter(pendingToolCalls))
-	plainCloseTurn(pendingToolCalls)
+	printer, closeTurn := plainStreamPrinter(pendingToolCalls)
+	err := ag.RunStream(ctx, line, printer)
+	closeTurn()
 	if err != nil {
 		fmt.Printf("\n[error] turn failed: %v\n", err)
 	}
@@ -620,42 +621,64 @@ func runLinearTurn(ctx context.Context, ag *agent.Agent, line string) {
 // unit-testable: call lines print without a newline, the matching ToolResult
 // (by tool-call ID) appends " (ok)" or " (error)", unmatched results are
 // dropped, and Done closes at most one unterminated tail line.
-func plainStreamPrinter(pendingToolCalls map[string]bool) func(provider.StreamEvent) {
-	return func(event provider.StreamEvent) {
-		switch event.Type {
-		case provider.StreamEventText:
-			fmt.Print(event.Text)
-		case provider.StreamEventToolCallDone:
-			if event.Tool.Name != "" {
-				// Defer the status suffix until the matching ToolResult arrives
-				// (same call ID) or the turn ends without one - the linear model
-				// cannot rewrite the line, so "ok" is the implicit default.
-				fmt.Printf("\n[tool] %s", event.Tool.Name)
-				pendingToolCalls[event.Tool.ID] = true
-			}
-		case provider.StreamEventToolResult:
-			if !pendingToolCalls[event.Tool.ID] {
-				return // result without a printed call line (unexpected order)
-			}
-			if event.IsError {
-				fmt.Printf(" (error)\n")
-			} else {
-				fmt.Printf(" (ok)\n")
-			}
-			delete(pendingToolCalls, event.Tool.ID)
-		case provider.StreamEventError:
-			fmt.Printf("\n[error] %v\n", event.Error)
+func plainStreamPrinter(pendingToolCalls map[string]bool) (func(provider.StreamEvent), func()) {
+	// thinkOpen tracks whether a "[think] ..." line is currently open.
+	// Some providers (glm via OpenAI-compatible relays, DeepSeek) put the
+	// tool-turn narration ("let me check the directory first...") in the
+	// reasoning stream rather than text - streaming it keeps plain users
+	// from watching a silent tool call with no explanation.
+	thinkOpen := false
+	closeThink := func() {
+		if thinkOpen {
+			fmt.Println()
+			thinkOpen = false
 		}
 	}
-}
-
-// plainCloseTurn ends the output for one REPL turn: an unterminated tool
-// line gets its closing newline (one total, not per call), then the blank
-// separator line before the next prompt.
-func plainCloseTurn(pendingToolCalls map[string]bool) {
-	if len(pendingToolCalls) > 0 {
-		fmt.Println()
-	}
-	clear(pendingToolCalls)
-	fmt.Println()
+	return func(event provider.StreamEvent) {
+			switch event.Type {
+			case provider.StreamEventText:
+				closeThink()
+				fmt.Print(event.Text)
+			case provider.StreamEventReasoning:
+				if event.Text == "" {
+					return
+				}
+				if !thinkOpen {
+					fmt.Print("\n[think] ")
+					thinkOpen = true
+				}
+				fmt.Print(event.Text)
+			case provider.StreamEventToolCallDone:
+				if event.Tool.Name != "" {
+					closeThink()
+					// Defer the status suffix until the matching ToolResult arrives
+					// (same call ID) or the turn ends without one - the linear model
+					// cannot rewrite the line, so "ok" is the implicit default.
+					fmt.Printf("\n[tool] %s", event.Tool.Name)
+					pendingToolCalls[event.Tool.ID] = true
+				}
+			case provider.StreamEventToolResult:
+				if !pendingToolCalls[event.Tool.ID] {
+					return // result without a printed call line (unexpected order)
+				}
+				if event.IsError {
+					fmt.Printf(" (error)\n")
+				} else {
+					fmt.Printf(" (ok)\n")
+				}
+				delete(pendingToolCalls, event.Tool.ID)
+			case provider.StreamEventError:
+				closeThink()
+				fmt.Printf("\n[error] %v\n", event.Error)
+			}
+		}, func() {
+			// Turn close: end any open think line, then close an unterminated
+			// tool line (one newline total, not per call) + separator line.
+			closeThink()
+			if len(pendingToolCalls) > 0 {
+				fmt.Println()
+			}
+			clear(pendingToolCalls)
+			fmt.Println()
+		}
 }

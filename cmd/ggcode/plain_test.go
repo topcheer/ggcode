@@ -139,7 +139,7 @@ func TestPlainStreamPrinterToolStatusPairing(t *testing.T) {
 		{Type: provider.StreamEventToolResult, Tool: provider.ToolCallDelta{ID: "ghost"}},
 	}
 	pending := make(map[string]bool)
-	printer := plainStreamPrinter(pending)
+	printer, closeTurn := plainStreamPrinter(pending)
 	var out strings.Builder
 	orig := os.Stdout
 	r, w, _ := os.Pipe()
@@ -147,7 +147,7 @@ func TestPlainStreamPrinterToolStatusPairing(t *testing.T) {
 	for _, e := range events {
 		printer(e)
 	}
-	plainCloseTurn(pending)
+	closeTurn()
 	_ = w.Close()
 	os.Stdout = orig
 	_, _ = io.Copy(&out, r)
@@ -180,7 +180,7 @@ func TestPlainStreamPrinterDoneClosesUnterminatedTail(t *testing.T) {
 		{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{}},
 	}
 	pending := make(map[string]bool)
-	printer := plainStreamPrinter(pending)
+	printer, closeTurn := plainStreamPrinter(pending)
 	var out strings.Builder
 	orig := os.Stdout
 	r, w, _ := os.Pipe()
@@ -188,7 +188,7 @@ func TestPlainStreamPrinterDoneClosesUnterminatedTail(t *testing.T) {
 	for _, e := range events {
 		printer(e)
 	}
-	plainCloseTurn(pending)
+	closeTurn()
 	_ = w.Close()
 	os.Stdout = orig
 	_, _ = io.Copy(&out, r)
@@ -216,7 +216,7 @@ func TestPlainStreamPrinterIntermediateDoneKeepsPairing(t *testing.T) {
 		{Type: provider.StreamEventToolResult, Tool: provider.ToolCallDelta{ID: "a"}},
 	}
 	pending := make(map[string]bool)
-	printer := plainStreamPrinter(pending)
+	printer, closeTurn := plainStreamPrinter(pending)
 	var out strings.Builder
 	orig := os.Stdout
 	r, w, _ := os.Pipe()
@@ -224,7 +224,7 @@ func TestPlainStreamPrinterIntermediateDoneKeepsPairing(t *testing.T) {
 	for _, e := range events {
 		printer(e)
 	}
-	plainCloseTurn(pending)
+	closeTurn()
 	_ = w.Close()
 	os.Stdout = orig
 	_, _ = io.Copy(&out, r)
@@ -235,6 +235,73 @@ func TestPlainStreamPrinterIntermediateDoneKeepsPairing(t *testing.T) {
 	}
 	if n := strings.Count(got, "\n"); n != 3 { // 1 leading + 1 after (ok) + 1 separator
 		t.Errorf("expected 3 newlines, got %d:\n%q", n, got)
+	}
+}
+
+// TestPlainStreamPrinterReasoningStreams verifies reasoning (thinking) deltas
+// stream as a prefixed "[think] " line, and the line closes when text, a tool
+// call, or the turn boundary follows. glm/DeepSeek put the tool-turn narration
+// in the reasoning stream - without this branch plain users see silent tool
+// calls with no explanation.
+func TestPlainStreamPrinterReasoningStreams(t *testing.T) {
+	events := []provider.StreamEvent{
+		{Type: provider.StreamEventReasoning, Text: "let me check "},
+		{Type: provider.StreamEventReasoning, Text: "the directory"},
+		{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "a", Name: "glob"}},
+		{Type: provider.StreamEventToolResult, Tool: provider.ToolCallDelta{ID: "a"}},
+		{Type: provider.StreamEventText, Text: "5 files."},
+	}
+	pending := make(map[string]bool)
+	printer, closeTurn := plainStreamPrinter(pending)
+	var out strings.Builder
+	orig := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	for _, e := range events {
+		printer(e)
+	}
+	closeTurn()
+	_ = w.Close()
+	os.Stdout = orig
+	_, _ = io.Copy(&out, r)
+
+	got := out.String()
+	// think line opened with prefix, closed by the tool boundary
+	if !strings.Contains(got, "\n[think] let me check the directory\n") {
+		t.Errorf("reasoning must stream as one [think] line closed by the tool call, got:\n%q", got)
+	}
+	if !strings.Contains(got, "\n[tool] glob (ok)\n") {
+		t.Errorf("tool pairing must still work after reasoning, got:\n%q", got)
+	}
+	if !strings.HasSuffix(got, "5 files.\n") {
+		t.Errorf("final text must close with the turn separator newline, got:\n%q", got)
+	}
+}
+
+// TestPlainStreamPrinterThinkOnlyTurnCloses verifies a turn ending on an open
+// think line (thinking-only round) gets closed by the turn boundary so the
+// next prompt starts clean.
+func TestPlainStreamPrinterThinkOnlyTurnCloses(t *testing.T) {
+	events := []provider.StreamEvent{
+		{Type: provider.StreamEventReasoning, Text: "pondering..."},
+	}
+	pending := make(map[string]bool)
+	printer, closeTurn := plainStreamPrinter(pending)
+	var out strings.Builder
+	orig := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	for _, e := range events {
+		printer(e)
+	}
+	closeTurn()
+	_ = w.Close()
+	os.Stdout = orig
+	_, _ = io.Copy(&out, r)
+
+	got := out.String()
+	if !strings.Contains(got, "\n[think] pondering...\n") {
+		t.Errorf("think-only turn must close its line, got:\n%q", got)
 	}
 }
 
