@@ -321,6 +321,7 @@ type Agent struct {
 	bgVerifyJobs                 *bgVerifyRegistry           // background verify-job registry for debt clearing (#2992 case 2)
 	recklessExec                 *recklessExecState          // reckless execution detection (edits to unexplored files in early iterations)
 	irrevGate                    *irrevGateState             // irreversibility-weighted calibration gate (caution scales with action reversibility)
+	argComplexityGate            *argComplexityGateState     // argument-complexity justification gate (sa-131; run-scoped memo + fire budget)
 	verifyDebt                   *verifyDebtState            // verification debt accumulator (edits since last green build)
 	editPropagation              *editPropagationState       // cross-file edit propagation risk (distinct files since green build)
 	errorCascade                 *errorCascadeState          // cascading failure detection (common-root-cause error clustering)
@@ -581,6 +582,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		attentionFragment:      newAttentionFragmentState(),
 		recklessExec:           newRecklessExecState(),
 		irrevGate:              newIrrevGateState(),
+		argComplexityGate:      newArgComplexityGateState(),
 		verifyDebt:             newVerifyDebtState(),
 		editPropagation:        newEditPropagationState(),
 		fileChurn:              newChurnState(),

@@ -78,6 +78,9 @@ func (a *Agent) resetTurnDetectors() {
 	if a.irrevGate != nil {
 		a.irrevGate.reset()
 	}
+	if a.argComplexityGate != nil {
+		a.argComplexityGate.reset()
+	}
 	a.subgoalTrack.reset()
 	a.futileCycle.reset()
 	a.toolResultRedundancy.reset()
