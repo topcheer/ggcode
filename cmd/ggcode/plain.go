@@ -39,6 +39,7 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/tui"
 )
 
 // isDumbTerminal reports whether the environment cannot host the full TUI:
@@ -65,26 +66,27 @@ func plainApproval(_ context.Context, toolName, _ string) permission.Decision {
 // loop. It returns a process exit code.
 func RunLinearREPL(ag *agent.Agent, registry *tool.Registry, cfg *config.Config, cfgPath string, startupNotices []string) int {
 	_ = cfgPath // cfg.Save() persists to the scope the config was loaded from
+	plainLang = plainLangFromConfig(cfgLang(cfg))
 
 	// No questionnaire UI: the agent ends its turn and waits for the next
 	// typed line instead of calling ask_user (#4604 design decision).
 	if registry != nil && registry.Unregister("ask_user") {
-		fmt.Println("[plain] ask_user disabled - the agent ends its turn and you answer by typing the next line")
+		fmt.Println(plainTr(plainLang, "askuser.off"))
 	}
 	if ag != nil {
 		ag.SetApprovalHandler(plainApproval)
 	}
 
-	fmt.Println("ggcode linear frontend (no TUI) - /help for commands, Ctrl-D to exit")
+	fmt.Println(plainTr(plainLang, "banner"))
 	for _, n := range startupNotices {
-		fmt.Println("[notice]", n)
+		fmt.Println(plainTr(plainLang, "notice"), n)
 	}
 
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	ctx := context.Background()
 	for {
-		fmt.Print("ggcode> ")
+		fmt.Print(plainTr(plainLang, "prompt"))
 		if !sc.Scan() {
 			fmt.Println()
 			return 0
@@ -113,33 +115,25 @@ func handlePlainCommand(line string, ag *agent.Agent, cfg *config.Config) bool {
 	case "/exit", "/quit", "/q":
 		return true
 	case "/help", "/?":
-		fmt.Println("commands:")
-		fmt.Println("  /status                       show active vendor/endpoint/model")
-		fmt.Println("  /model <name>                 hot-switch model (persists)")
-		fmt.Println("  /provider <vendor> [ep]       switch vendor (optionally endpoint)")
-		fmt.Println("  /provider --list [--all]      list endpoints+models (default: keyed+modelled only)")
-		fmt.Println("  /provider --add-endpoint ...  add endpoint to active vendor")
-		fmt.Println("  /endpoint <id>                switch endpoint on current vendor")
-		fmt.Println("  /endpoint --show-models       all models on the active endpoint")
-		fmt.Println("  /endpoint --refresh-models    force model refetch, then show")
-		fmt.Println("  /endpoint --add-model ...     add a model to the active endpoint")
-		fmt.Println("  /endpoint --set-apikey ...    set the API key on the active endpoint")
-		fmt.Println("  /exit                         leave the REPL (also Ctrl-D)")
-		fmt.Println("anything else is sent to the agent; approvals default to Accept")
-		fmt.Println("(GGCODE_PLAIN_APPROVE=deny rejects instead); ask_user is disabled.")
+		fmt.Println(plainTr(plainLang, "help.title"))
+		for _, k := range []string{"help.status", "help.model", "help.provider", "help.plist", "help.padd", "help.endpoint", "help.emodels", "help.erefresh", "help.eadd", "help.ekey", "help.lang", "help.exit"} {
+			fmt.Println(plainTr(plainLang, k))
+		}
+		fmt.Println(plainTr(plainLang, "help.tail"))
+		fmt.Println(plainTr(plainLang, "help.tail2"))
 	case "/status":
 		if cfg == nil {
-			fmt.Println("[plain] config unavailable")
+			fmt.Println(plainTr(plainLang, "cfg.unavailable"))
 			return false
 		}
 		if resolved, _, err := agentruntime.ResolveCurrentSelection(cfg); err != nil {
-			fmt.Println("[plain] resolve failed:", err)
+			fmt.Println(plainTr(plainLang, "resolve.failed"), err)
 		} else {
 			fmt.Printf("vendor=%s endpoint=%s model=%s\n", resolved.VendorID, resolved.EndpointID, resolved.Model)
 		}
 	case "/model":
 		if len(args) != 1 {
-			fmt.Println("usage: /model <name>")
+			fmt.Println(plainTr(plainLang, "usage.model"))
 			return false
 		}
 		switchPlainSelection(ag, cfg, "", "", args[0])
@@ -147,8 +141,27 @@ func handlePlainCommand(line string, ag *agent.Agent, cfg *config.Config) bool {
 		handlePlainProvider(args, ag, cfg)
 	case "/endpoint":
 		handlePlainEndpoint(args, ag, cfg)
+	case "/lang":
+		if len(args) != 1 {
+			fmt.Println(plainTr(plainLang, "lang.usage"))
+			return false
+		}
+		next := tui.NormalizeLanguage(args[0])
+		if next != tui.LangEnglish && next != tui.LangZhCN {
+			fmt.Println(plainTr(plainLang, "lang.unknown"), args[0])
+			return false
+		}
+		plainLang = next
+		if cfg != nil {
+			cfg.Language = string(next)
+			if err := cfg.Save(); err != nil {
+				fmt.Println(plainTr(plainLang, "lang.nopersist"), err)
+				return false
+			}
+		}
+		fmt.Printf(plainTr(plainLang, "lang.switched")+"\n", next)
 	default:
-		fmt.Println("[plain] unknown command:", cmd, "- /help for the list")
+		fmt.Println(plainTr(plainLang, "cmd.unknown"), cmd)
 	}
 	return false
 }
@@ -159,19 +172,19 @@ func handlePlainCommand(line string, ag *agent.Agent, cfg *config.Config) bool {
 // then persists the config so the switch survives restarts.
 func switchPlainSelection(ag *agent.Agent, cfg *config.Config, vendor, endpoint, model string) {
 	if cfg == nil {
-		fmt.Println("[plain] config unavailable")
+		fmt.Println(plainTr(plainLang, "cfg.unavailable"))
 		return
 	}
 	resolved, prov, err := agentruntime.ActivateCurrentSelection(cfg, vendor, endpoint, model)
 	if err != nil {
-		fmt.Println("[plain] switch failed:", err)
+		fmt.Println(plainTr(plainLang, "switch.failed"), err)
 		return
 	}
 	if ag != nil {
 		agentruntime.ApplyProviderToAgent(ag, prov, resolved)
 	}
 	if err := cfg.Save(); err != nil {
-		fmt.Println("[plain] switch applied but not persisted:", err)
+		fmt.Println(plainTr(plainLang, "switch.nopersist"), err)
 		return
 	}
 	fmt.Printf("[plain] now on vendor=%s endpoint=%s model=%s\n", resolved.VendorID, resolved.EndpointID, resolved.Model)
@@ -199,7 +212,7 @@ func plainArgsAreFlags(args []string) bool {
 func handlePlainProvider(args []string, ag *agent.Agent, cfg *config.Config) {
 	if !plainArgsAreFlags(args) {
 		if len(args) < 1 || len(args) > 2 {
-			fmt.Println("usage: /provider <vendor> [endpoint] | --list [--all] | --add-endpoint ...")
+			fmt.Println(plainTr(plainLang, "usage.provider"))
 			return
 		}
 		ep := ""
@@ -235,7 +248,7 @@ func handlePlainProvider(args []string, ag *agent.Agent, cfg *config.Config) {
 		}
 		plainAddEndpoint(cfg, *name, *proto, *url, *model, *ctxWin, *maxOut, *apikey)
 	default:
-		fmt.Println("[plain] unknown /provider option:", mode, "- /help for the list")
+		fmt.Println(plainTr(plainLang, "opt.unknown"), mode)
 	}
 }
 
@@ -244,7 +257,7 @@ func handlePlainProvider(args []string, ag *agent.Agent, cfg *config.Config) {
 // --all includes the rest, annotated. Up to 10 models per endpoint.
 func plainListEndpoints(cfg *config.Config, all bool) {
 	if cfg == nil {
-		fmt.Println("[plain] config unavailable")
+		fmt.Println(plainTr(plainLang, "cfg.unavailable"))
 		return
 	}
 	vendors := make([]string, 0, len(cfg.Vendors))
@@ -268,7 +281,7 @@ func plainListEndpoints(cfg *config.Config, all bool) {
 				continue
 			}
 			if shown == 0 {
-				fmt.Printf("vendor %s:\n", vid)
+				fmt.Printf(plainTr(plainLang, "list.vendor")+"\n", vid)
 			}
 			shown++
 			mark := "  "
@@ -303,7 +316,7 @@ func plainListEndpoints(cfg *config.Config, all bool) {
 			}
 		}
 		if shown == 0 && all {
-			fmt.Printf("vendor %s: (no endpoints)\n", vid)
+			fmt.Printf(plainTr(plainLang, "list.noendpoints")+"\n", vid)
 		}
 	}
 }
@@ -312,7 +325,7 @@ func plainListEndpoints(cfg *config.Config, all bool) {
 // persists. Refuses to overwrite an existing endpoint id.
 func plainAddEndpoint(cfg *config.Config, name, proto, baseURL, model string, ctxWin, maxOut int, apikey string) {
 	if cfg == nil {
-		fmt.Println("[plain] config unavailable")
+		fmt.Println(plainTr(plainLang, "cfg.unavailable"))
 		return
 	}
 	if name == "" || proto == "" || baseURL == "" {
@@ -371,7 +384,7 @@ func switchHint(model string) string {
 func handlePlainEndpoint(args []string, ag *agent.Agent, cfg *config.Config) {
 	if !plainArgsAreFlags(args) {
 		if len(args) != 1 {
-			fmt.Println("usage: /endpoint <id> | --show-models | --refresh-models | --add-model ...")
+			fmt.Println(plainTr(plainLang, "usage.endpoint"))
 			return
 		}
 		switchPlainSelection(ag, cfg, "", args[0], "")
@@ -402,7 +415,7 @@ func handlePlainEndpoint(args []string, ag *agent.Agent, cfg *config.Config) {
 		}
 		plainSetEndpointAPIKey(cfg, *apikey)
 	default:
-		fmt.Println("[plain] unknown /endpoint option:", mode, "- /help for the list")
+		fmt.Println(plainTr(plainLang, "opt.unknown.ep"), mode)
 	}
 }
 
@@ -410,7 +423,7 @@ func handlePlainEndpoint(args []string, ag *agent.Agent, cfg *config.Config) {
 // static list merged with live discovery (cache-aware; force refetches).
 func plainShowModels(cfg *config.Config, force bool) {
 	if cfg == nil {
-		fmt.Println("[plain] config unavailable")
+		fmt.Println(plainTr(plainLang, "cfg.unavailable"))
 		return
 	}
 	resolved, _, err := agentruntime.ResolveCurrentSelection(cfg)
@@ -435,7 +448,7 @@ func plainShowModels(cfg *config.Config, force bool) {
 			epModels = ep.Models
 		}
 	}
-	fmt.Printf("models on %s/%s:\n", resolved.VendorID, resolved.EndpointID)
+	fmt.Printf(plainTr(plainLang, "models.title")+"\n", resolved.VendorID, resolved.EndpointID)
 	for _, m := range epModels {
 		if !seen[m] {
 			seen[m] = true
@@ -458,7 +471,7 @@ func plainShowModels(cfg *config.Config, force bool) {
 // resolution when present).
 func plainSetEndpointAPIKey(cfg *config.Config, apikey string) {
 	if cfg == nil {
-		fmt.Println("[plain] config unavailable")
+		fmt.Println(plainTr(plainLang, "cfg.unavailable"))
 		return
 	}
 	if apikey == "" {
@@ -491,7 +504,7 @@ func plainSetEndpointAPIKey(cfg *config.Config, apikey string) {
 // is the target by definition.
 func plainAddModel(cfg *config.Config, model, apikey string) {
 	if cfg == nil {
-		fmt.Println("[plain] config unavailable")
+		fmt.Println(plainTr(plainLang, "cfg.unavailable"))
 		return
 	}
 	if model == "" {
