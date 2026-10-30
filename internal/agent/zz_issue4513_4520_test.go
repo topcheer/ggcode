@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -58,5 +59,30 @@ func TestToolEquivDetectWarnsOnLateDivergence(t *testing.T) {
 	}
 	if !strings.Contains(w, "read_file") {
 		t.Fatalf("warning must name the tool, got %q", w)
+	}
+}
+
+// TestToolEquivDetectEscalationReachable (#4640): #4520's >= on the soft
+// warning made the old count==9 escalation branch unreachable - the
+// stronger "wastes significant iteration budget" wording was dead code.
+// With the per-fingerprint escalation latch it must fire once at >=9 even
+// after the soft warning already fired at 3, and never twice.
+func TestToolEquivDetectEscalationReachable(t *testing.T) {
+	s := newToolEquivDetectState()
+	escalated := 0
+	for i := 1; i <= 12; i++ {
+		// Same normalized fingerprint throughout; timestamp varies so raw
+		// bytes differ (rawSeen false, this detector's jurisdiction).
+		args := []byte(`{"timestamp":"2026-10-30T18:0` + string(rune('0'+i%10)) + `:00Z","offset":1,"path":"/tmp/a.go"}`)
+		w := s.recordCall("read_file", args, fmt.Sprintf("raw-%d", i))
+		if strings.Contains(w, "wastes significant iteration budget") {
+			escalated++
+			if i < equivWarnThreshold*3 {
+				t.Fatalf("escalation fired too early at call %d", i)
+			}
+		}
+	}
+	if escalated != 1 {
+		t.Fatalf("escalation must fire exactly once across calls 9-12, got %d", escalated)
 	}
 }
