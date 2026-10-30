@@ -58,23 +58,33 @@ func (a *Agent) checkGoalFinishGate() string {
 	if a.goalFinish == nil || a.goalFinish.fired {
 		return ""
 	}
-	a.goalFinish.fired = true
 	wd := a.WorkingDir()
 	if wd == "" {
 		return ""
 	}
 	data, err := os.ReadFile(filepath.Join(wd, ".ggcode", "goal-graph.json"))
 	if err != nil {
-		return "" // no tree: nothing claimed, nothing to gate
+		return "" // no tree (or transient read failure): retry next round, do not latch
 	}
 	var store goalFinishStore
 	if err := json.Unmarshal(data, &store); err != nil {
-		return "" // corrupt tree: tool-layer validation owns reporting
+		return "" // corrupt tree: tool-layer validation owns reporting; retry later
+	}
+	// #4626: leaf check - parents stay legitimately in_progress while their
+	// children run (goal_graph never auto-flips parent status), so a node
+	// referenced as someone's Parent is NOT a dangling leaf. Without this,
+	// a normal goal->milestone->task chain lists all three levels and the
+	// max-3 budget drowns out the actual task leaves.
+	parents := make(map[string]bool, len(store.Nodes))
+	for _, n := range store.Nodes {
+		if n != nil && n.Parent != "" {
+			parents[n.Parent] = true
+		}
 	}
 	now := time.Now()
 	var leaves []string
 	for _, n := range store.Nodes {
-		if n == nil || n.Status != "in_progress" {
+		if n == nil || n.Status != "in_progress" || parents[n.ID] {
 			continue
 		}
 		if now.Sub(n.UpdatedAt) > goalFinishStaleAfter {
@@ -92,6 +102,10 @@ func (a *Agent) checkGoalFinishGate() string {
 	if len(leaves) == 0 {
 		return ""
 	}
+	// #4626: latch only when a warning actually fired - "fire-once" means at
+	// most one WARNING per run, not at most one CHECK. A missing/half-written
+	// goal-graph.json must not permanently disable the gate for the run.
+	a.goalFinish.fired = true
 	return "[goal-finish-gate] goal-graph still has in_progress leaves while you are about to declare completion:\n" +
 		strings.Join(leaves, "\n") +
 		"\nFinish them, or explicitly update each to done/dropped via goal_graph (dropping IS a legitimate terminal state), then restate completion."
