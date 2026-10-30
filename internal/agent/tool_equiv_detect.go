@@ -187,7 +187,12 @@ func (s *toolEquivDetectState) recordCall(toolName string, args []byte, rawFp st
 
 	count := s.normalizedCounts[normFp]
 
-	if count == equivWarnThreshold && !s.rawSeen[normFp] {
+	// #4520: >= not == — rawSeen flips only when an occurrence diverges,
+	// which can happen AFTER count has passed the threshold (first N
+	// byte-identical, N+1 reorders keys). With == that divergence could
+	// never warn: the one chance to fire was already consumed by the
+	// identical prefix (or a later compact/reset shifted the counter).
+	if count >= equivWarnThreshold && !s.rawSeen[normFp] {
 		s.warnings++
 		// #3631: uncertain wording — normalization can miss semantics
 		// (e.g. volatile fields that DO carry meaning), so never assert
