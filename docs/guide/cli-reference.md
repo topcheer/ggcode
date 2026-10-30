@@ -281,5 +281,6 @@ ggcode version                         # Print version, commit, and build date
 | `--resume-picker` | Open session picker |
 | `--new-session` | Skip auto-resume, always start a new session |
 | `--plain` | Linear no-TUI frontend (also auto-selected when `TERM=dumb` or unset). See [Plain Mode](plain-mode.md) |
+| `--persist-session` | With `--plain`: append every message to the session store (write-only; auto-resume/picker ignore these sessions) |
 | `-v` | Shorthand for `--version` |
 | `-h, --help` | Show help |

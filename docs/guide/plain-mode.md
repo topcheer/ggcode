@@ -71,6 +71,7 @@ Appends a model to the **active endpoint** (deduplicated; optional `--apikey` up
 - **ask_user is disabled.** The agent ends its turn and waits; your next typed line is the answer — multi-turn conversation is the native pause point.
 - **HOME-directory warning is line-oriented**: the same localized warning text as the TUI, confirmed with a `y/N` prompt instead of a full-screen dialog.
 - **Language is global.** `/lang` persists to the `language` config field shared with the TUI (see [Configuration](configuration.md)); the session picks it up at startup, `en` when unset.
+- **Sessions are memory-only by default.** Conversations live in memory and are lost on exit. Pass `--persist-session` to append every message to the session store instead (the id is printed at startup). Persistence is write-only by design: auto-resume and the session picker ignore these files, so the next plain start is always fresh; explicit `--resume <id>` can still read them.
 
 ## Related
 
