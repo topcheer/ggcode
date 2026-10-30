@@ -15,6 +15,10 @@ Different from the session-scoped task board and todo list: those die with the s
 | `stats` | Counts by level/status, per-goal rollup, and >7-day stall flags. |
 | `delete` | Delete a node and its subtree (cascade). |
 
+## Finish gate
+
+Before the agent declares a run complete, a fire-once **goal finish gate** checks the tree's terminal state: fresh (≤7 days) `in_progress` leaves block the completion claim with an advisory listing up to three of them (title + next_step). Closing them out - or explicitly updating each to `done`/`dropped`, since dropping is a legitimate terminal state - releases the gate. Pure `pending` backlog never triggers it, and leaves older than 7 days are left to stall detection instead.
+
 ## Typical flow
 
 1. Start of a multi-day project: `add level=goal`, decompose into `milestone`s and `task`s, give tasks a `next_step`.

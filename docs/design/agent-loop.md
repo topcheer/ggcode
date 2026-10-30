@@ -95,6 +95,7 @@ Before the agent returns (no more tool calls), multiple gates check that the wor
 | Fulfillment gate | `fulfillment_gate.go` | Zero-LLM-cost heuristic that verifies the agent's actual work matches the user's request. Detects: action-but-no-changes, wrong-file detection, multi-part coverage gaps. Fires at most once per run. |
 | Complexity gate | `complexity_gate.go` | Post-completion code quality check: runs codehealth.Analyze on edited Go files after build passes, flags functions with complexity >= 15, length > 80, or nesting > 5. Advisory only. |
 | Sync verify | `verify.go` | Build/test verification with auto-repair on failure |
+| Goal finish gate | `goal_finish_gate.go` | Fire-once check of the agent's own goal-graph tree before completion is declared: fresh (≤7d) `in_progress` leaves get an advisory demanding done/dropped closure - long-horizon premature-completion guard (Anthropic failure mode 2). |
 | Async verify | `verify.go` | Background lint check after successful build |
 
 ## Reliability
