@@ -270,3 +270,47 @@ func TestArgComplexityGate_NilGatePasses(t *testing.T) {
 		t.Fatal("nil gate (stateless caller) must pass")
 	}
 }
+
+// TestArgComplexityDeadToolsScored (#4647): notebook_edit/git_checkout/
+// git_revert/git_add/git_commit sat in the override table with no scorer
+// case - always 0, so high-impact shapes never burned a justification.
+func TestArgComplexityDeadToolsScored(t *testing.T) {
+	cases := []struct {
+		name   string
+		args   string
+		want   int
+		reason string
+	}{
+		{"git_revert", `{"commit":"abc","no_commit":true}`, 4, "no_commit"},
+		{"git_revert", `{"commit":"abc"}`, 2, "revert"},
+		{"git_checkout", `{"branch":"feat","create":true,"start_point":"v1.2.3"}`, 2, "start_point"},
+		{"git_checkout", `{"branch":"main"}`, 0, "plain switch"},
+		{"git_add", `{"files":["."]}`, 2, "stage-all"},
+		{"git_add", `{"files":["a.go","b.go","c.go","d.go","e.go","f.go","g.go","h.go","i.go","j.go"]}`, 2, "10 paths"},
+		{"git_add", `{"files":["a.go"]}`, 0, "single path"},
+		{"git_commit", `{"all":true,"message":"fix"}`, 2, "all"},
+		{"notebook_edit", `{"operation":"delete","cell_number":2}`, 3, "delete cell"},
+		{"notebook_edit", `{"operation":"insert","cell_number":2}`, 0, "insert"},
+	}
+	for _, c := range cases {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(c.args), &m); err != nil {
+			t.Fatalf("%s: bad fixture: %v", c.name, err)
+		}
+		score, _ := scoreArgComplexity(c.name, m)
+		if score != c.want {
+			t.Errorf("%s %s: want score %d, got %d", c.name, c.reason, c.want, score)
+		}
+	}
+}
+
+// TestShellComplexityLogicalOrNotDoubleCounted (#4647): "a || b" holds 2
+// '|' chars but 0 pipelines - counting characters double-scored each ||.
+func TestShellComplexityLogicalOrNotDoubleCounted(t *testing.T) {
+	// 220 chars (>200: +1), one || (0 pipelines), one real pipe (1), no $().
+	long := strings.Repeat("x", 220)
+	cmd := "echo " + long + " | grep x || echo fallback"
+	if got := scoreShellComplexity(cmd); got != 2 {
+		t.Errorf("want 1(len)+1(pipe)=2, got %d", got)
+	}
+}
