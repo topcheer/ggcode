@@ -603,6 +603,12 @@ func (a *Agent) executeVerifyCommand(ctx context.Context, command string) *Verif
 // as failures injects bogus errors and spins auto-repair loops in projects
 // that simply lack tests or the toolchain.
 func isNonFailureExit(command string, code int) bool {
+	// #4638: compound detection must be SUBSTRING-based. ContainsAny takes a
+	// char SET, so "||;&&" meant any single | & ; - and the most common
+	// verification shape (`go test ./... 2>&1`, single pipes, bash &>
+	// redirects) lost the not-found/pytest amnesty, turned "verification
+	// skipped" into FAILED and burned 3-4 doomed auto-repair rounds.
+	isCompound := strings.Contains(command, "||") || strings.Contains(command, "&&") || strings.Contains(command, ";")
 	if code == 127 {
 		// Command not found. #1522 case B: only a MISSING LEADING binary is
 		// "nothing to verify" - `go test ./... || npm run build` with npm
@@ -611,7 +617,7 @@ func isNonFailureExit(command string, code int) bool {
 		// ("verification passed") with a genuine test failure swallowed.
 		// Compound commands (||, &&, ;) lose the amnesty: we cannot tell
 		// which leg exited 127 without shell semantics.
-		if strings.ContainsAny(command, "||;&&") {
+		if isCompound {
 			return false
 		}
 		return true
@@ -621,7 +627,7 @@ func isNonFailureExit(command string, code int) bool {
 	// case B) - `go test ./pkg; pytest` with a go compile failure exits 5
 	// from the pytest tail (0 collected); without the guard the real
 	// failure was swallowed into Passed=true ("silent green chain").
-	if strings.ContainsAny(command, "||;&&") {
+	if isCompound {
 		return false
 	}
 	return code == 5 && strings.Contains(command, "pytest")
