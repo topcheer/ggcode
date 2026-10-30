@@ -280,13 +280,13 @@ func TestIssue722_ToolCallDeltaNilIndex(t *testing.T) {
 			description:  "minimal relay omitting index on a single-call delta must not discard the tool call",
 		},
 		{
-			name: "multiple tool calls without index stay dropped",
+			name: "multiple tool calls without index or id stay dropped",
 			chunks: []string{
-				`{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"fn_one","arguments":"{}"}},{"id":"call_2","type":"function","function":{"name":"fn_two","arguments":"{}"}}]},"finish_reason":null}]}`,
+				`{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"type":"function","function":{"name":"fn_one","arguments":"{}"}},{"type":"function","function":{"name":"fn_two","arguments":"{}"}}]},"finish_reason":null}]}`,
 				`{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
 			},
 			wantToolCall: false,
-			description:  "multi-call deltas without index cannot be located safely and remain dropped",
+			description:  "#4535: multi-call deltas without index AND without id cannot be located and remain dropped (deltas carrying ids are covered by TestIssue4535_MultiToolCallDeltaNoIndexWithID)",
 		},
 		{
 			name: "indexed tool calls still work",
