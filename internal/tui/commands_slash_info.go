@@ -1404,6 +1404,7 @@ func (m *Model) handleContextCommand() tea.Cmd {
 	// Count messages by role
 	var userMsgs, asstMsgs, toolMsgs int
 	var userTokens, asstTokens, toolTokens int
+	provExtMsgs, provExtTokens, provFlagged := contextProvenance(messages)
 	for _, msg := range messages {
 		msgTokens := estimateMessageTokens(msg)
 		switch msg.Role {
@@ -1454,6 +1455,17 @@ func (m *Model) handleContextCommand() tea.Cmd {
 		sb.WriteString(fmt.Sprintf("  Tool results:    %d msgs, %s tokens\n", toolMsgs, humanizeTokenCount(toolTokens)))
 	}
 	sb.WriteString(fmt.Sprintf("  Conversation:    %s tokens\n\n", humanizeTokenCount(conversationTokens)))
+
+	// Provenance / trust breakdown: external-source content in context.
+	// The injection guard marks such results inline; this surfaces the
+	// aggregate so users can answer "how much of my context came from
+	// web/peer sources, and how much is injection-flagged" at a glance.
+	if toolMsgs > 0 {
+		sb.WriteString("Provenance:\n")
+		extPct := float64(provExtTokens) / float64(toolTokens) * 100
+		sb.WriteString(fmt.Sprintf("  External sources: %d msgs, %s tokens (%.0f%% of tool results)\n", provExtMsgs, humanizeTokenCount(provExtTokens), extPct))
+		sb.WriteString(fmt.Sprintf("  Injection-flagged: %d msgs\n\n", provFlagged))
+	}
 
 	sb.WriteString("Capacity:\n")
 	sb.WriteString(fmt.Sprintf("  Remaining:       %s tokens\n", humanizeTokenCount(remaining)))
