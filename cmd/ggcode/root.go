@@ -156,7 +156,14 @@ func NewRootCmd() *cobra.Command {
 					if cfg.Language != "" {
 						lang = tui.NormalizeLanguage(cfg.Language)
 					}
-					if !tui.ConfirmHomeDir(lang) {
+					// #4604: the linear frontend cannot host the full-screen
+					// Bubble Tea dialog (garbled on dumb terminals) - use the
+					// line-oriented y/N twin with the same i18n copy.
+					confirmed := tui.ConfirmHomeDir(lang)
+					if plainFlag || isDumbTerminal() {
+						confirmed = tui.ConfirmHomeDirPlain(lang)
+					}
+					if !confirmed {
 						fmt.Fprintln(os.Stderr, "Please cd into a project directory and run ggcode again.")
 						return nil
 					}
