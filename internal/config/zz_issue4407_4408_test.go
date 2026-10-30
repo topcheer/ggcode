@@ -110,3 +110,33 @@ func TestIssue4408C1_SecondLegacyKeyPreserved(t *testing.T) {
 		t.Fatalf("existing stub key must not be overwritten (#4408-C1)")
 	}
 }
+
+// #4678: when the target endpoint EXISTS and already carries its own key,
+// none of the three original switch branches fired - the legacy vendor-level
+// key was silently dropped and the subsequent delete made it unrecoverable.
+// It must be parked on a namespaced stub instead, and the endpoint's own
+// key must never be overwritten.
+func TestIssue4678_KeyPreservedWhenEndpointHasOwnKey(t *testing.T) {
+	agVC := &VendorConfig{
+		Endpoints: map[string]EndpointConfig{
+			"primary": {BaseURL: "https://gw", APIKey: "endpoint-own-key"},
+		},
+	}
+	carryGatewayVendorKey(agVC, "primary", "legacy-vendor-key")
+	// Endpoint's own key untouched.
+	if agVC.Endpoints["primary"].APIKey != "endpoint-own-key" {
+		t.Fatalf("endpoint's own key must never be overwritten, got %q", agVC.Endpoints["primary"].APIKey)
+	}
+	// Legacy key preserved on the namespaced stub.
+	stub, ok := agVC.Endpoints["primary-legacy-vendor-key"]
+	if !ok || stub.APIKey != "legacy-vendor-key" {
+		t.Fatalf("legacy vendor key must be parked on a namespaced stub, endpoints: %+v (#4678)", agVC.Endpoints)
+	}
+	// Idempotent: a second carry with the same shape must not clobber the
+	// existing stub (the hasEP&&APIKey=="" branch still doesn't fire - the
+	// primary endpoint keeps its own key).
+	carryGatewayVendorKey(agVC, "primary", "another-legacy-key")
+	if agVC.Endpoints["primary"].APIKey != "endpoint-own-key" {
+		t.Fatalf("endpoint's own key must survive a second carry (#4678)")
+	}
+}

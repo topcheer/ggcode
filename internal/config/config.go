@@ -2241,6 +2241,15 @@ func carryGatewayVendorKey(agVC *VendorConfig, epName, oldKey string) {
 	case hasEP && ep.APIKey == "":
 		ep.APIKey = oldKey
 		agVC.Endpoints[epName] = ep
+	case hasEP:
+		// #4678: the endpoint already carries its own key, so neither the
+		// placement branch above nor the !hasEP branches below fires - the
+		// legacy vendor-level key used to be silently dropped and the
+		// subsequent delete made it unrecoverable, contradicting the
+		// "cannot irreversibly drop credentials" contract. Park it on a
+		// namespaced stub so it survives the migration (never overwrite
+		// the endpoint's existing key).
+		agVC.Endpoints[epName+"-legacy-vendor-key"] = EndpointConfig{APIKey: oldKey}
 	case !hasEP && agVC.APIKey == "":
 		agVC.APIKey = oldKey
 	case !hasEP:
