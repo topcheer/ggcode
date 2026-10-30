@@ -225,7 +225,17 @@ func (m *Model) handleImpersonatePanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) 
 	// If version section is focused and input is focused
 	if panel.section == impSectionVersion && panel.versionInput.Focused() {
 		switch msg.String() {
-		case "esc", "enter":
+		case "enter":
+			// #4589: the version input had NO commit path of its own - enter
+			// merely blurred, and closing the panel (esc below / panel-close
+			// key) never applied either, so a freshly typed version was
+			// silently dropped. Enter now commits via the same
+			// applyImpersonateSettings the preset/header paths use; it reads
+			// the full panel state, so the current preset and custom
+			// headers are preserved alongside the new version.
+			panel.versionInput.Blur()
+			return *m, m.applyImpersonateSettings()
+		case "esc":
 			panel.versionInput.Blur()
 			return *m, nil
 		default:
