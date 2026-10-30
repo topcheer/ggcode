@@ -1016,12 +1016,16 @@ func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessa
 		return *r, nil
 	}
 	// Pre-flight argument-complexity gate (sa-131, arXiv:2601.18282):
-	// high-complexity WRITE calls must first justify their heavy parameters
-	// in one arg_rationale round-trip; the identical resend always passes.
-	if r := preflightArgComplexityCheck(t, args); r != nil {
+	// high-complexity WRITE calls must first justify their heavy parameters;
+	// the same-intent resend always passes (normalized intent memo, defect B
+	// fix) and the per-run fire budget fails the gate open.
+	if r := preflightArgComplexityCheck(a.argComplexityGate, t, args); r != nil {
 		a.auditToolResult(t.Name(), args, audit.StatusInvalid, r.Content, time.Since(startTime))
 		return *r, nil
 	}
+	// Strip the gate-only justification field before dispatch: tools never
+	// see arg_rationale (it is consumed by the gate above).
+	args = stripArgRationale(args)
 	// Deterministic replay (GGCODE_TOOL_TAPE=replay:<path>): serve recorded
 	// results without ever invoking the real tool. See tool_tape.go. A tape
 	// miss returns an explicit error result - never a silent live fallback.
