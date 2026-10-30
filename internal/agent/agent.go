@@ -2668,7 +2668,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// apply's previous read the leaked value) and ReasoningEffort()
 		// reported the wrong state for the rest of the session. The closure's
 		// defer restores on every exit including panic-unwind.
-		resp, textBuf, toolCalls, truncated, policyBlocked, err := func() (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, bool, error) {
+		// #4622: reasoning deltas bypass textBuf (they feed thinkingAcc), so
+		// streamChatResponse now also reports the turn's reasoning length -
+		// otherwise reasoning-heavy tool-dense turns read as "no thinking".
+		resp, textBuf, toolCalls, truncated, policyBlocked, reasoningChars, err := func() (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, bool, int, error) {
 			defer func() {
 				if effortApplied != "" {
 					a.restoreEffort(effortPrev)
@@ -4052,7 +4055,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// sat inside the no-tool-call branch (its second arg therefore
 		// constant false), so streak never accumulated and the detector was
 		// dead from birth. hasToolCall is structurally true here.
-		if a.mindlessAction.recordStep(len(textBuf), true) {
+		if a.mindlessAction.recordStep(len(textBuf)+reasoningChars, true) {
 			debug.Log("agent", "Iteration %d: mindless action detector triggered (streak=%d)", i+1, a.mindlessAction.streak)
 			a.injectGuidance(mindlessActionWarning(a.mindlessAction.streak))
 		}
@@ -6164,7 +6167,7 @@ func (a *Agent) injectPendingInterruptions(iter int) (bool, InterruptionKind) {
 // and returns the assembled response, the raw assistant text buffer, any
 // completed tool calls, and whether the stream ended truncated and/or blocked
 // by a provider policy filter.
-func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message, toolDefs []provider.ToolDefinition, onEvent func(provider.StreamEvent)) (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, bool, error) {
+func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message, toolDefs []provider.ToolDefinition, onEvent func(provider.StreamEvent)) (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, bool, int, error) {
 	// Normalize a nil onEvent once: the drain loop below calls it bare on
 	// every text/reasoning/tool event. Callers that don't need live events
 	// (e.g. the retrace gate passes nil) would panic on the first streamed
@@ -6177,7 +6180,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 	rawStream, err := a.provider.ChatStream(streamCtx, msgs, toolDefs)
 	if err != nil {
 		debug.Log("agent", "ChatStream error: %v", err)
-		return nil, "", nil, false, false, fmt.Errorf("chat error: %w", err)
+		return nil, "", nil, false, false, 0, fmt.Errorf("chat error: %w", err)
 	}
 	stream := streamWithStallDetection(rawStream, streamStallThreshold)
 	var (
@@ -6203,6 +6206,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 		textBuf.Reset()
 	}
 	var thinkingAcc thinkingAccumulator
+	turnReasoningChars := 0 // #4622: reasoning length reported for the mindless-action measure
 	// Metric tracking - records timestamps during streaming, fires onMetric on Done.
 	turnMetrics := newLLMTurnMetrics()
 	for event := range stream {
@@ -6217,6 +6221,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			// Forward to UI for streaming display (GUI uses it for collapsible reasoning panel).
 			onEvent(event)
 			if event.Text != "" {
+				turnReasoningChars += len(event.Text) // #4622: count reasoning toward the think measure
 				thinkingAcc.onText(event.Text)
 			}
 			// Anthropic sends signature at block_start, before any text deltas.
@@ -6327,7 +6332,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			onEvent(event)
 		case provider.StreamEventError:
 			debug.Log("agent", "ChatStream event error: %v", event.Error)
-			return nil, assistantTextBuf.String(), nil, false, false, fmt.Errorf("chat error: %w", event.Error)
+			return nil, assistantTextBuf.String(), nil, false, false, turnReasoningChars, fmt.Errorf("chat error: %w", event.Error)
 		}
 	}
 	flushText()
@@ -6347,7 +6352,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 	return &provider.ChatResponse{
 		Message: respMsg,
 		Usage:   usage,
-	}, assistantTextBuf.String(), toolCalls, truncated, policyBlocked, nil
+	}, assistantTextBuf.String(), toolCalls, truncated, policyBlocked, turnReasoningChars, nil
 }
 
 // --- Internal helpers ---

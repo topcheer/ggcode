@@ -20,11 +20,12 @@ func TestIssue4012_ToolPathWiringExists(t *testing.T) {
 	srcStr := string(src)
 
 	// Detection wiring: recordStep(..., true) on the tool path, near the
-	// batch boundary the tool path is known for.
-	if !strings.Contains(srcStr, "a.mindlessAction.recordStep(len(textBuf), true)") {
+	// batch boundary the tool path is known for. #4622 extended the length
+	// argument to sum text + reasoning; the wiring pin evolves with it.
+	if !strings.Contains(srcStr, "a.mindlessAction.recordStep(len(textBuf)+reasoningChars, true)") {
 		t.Fatalf("tool-path recordStep(true) wiring missing - detector is dead again (#4012 regression)")
 	}
-	toolIdx := strings.Index(srcStr, "a.mindlessAction.recordStep(len(textBuf), true)")
+	toolIdx := strings.Index(srcStr, "a.mindlessAction.recordStep(len(textBuf)+reasoningChars, true)")
 	batchIdx := strings.Index(srcStr, "a.cascade.beginBatch()")
 	if toolIdx < 0 || batchIdx < 0 || toolIdx < batchIdx {
 		t.Fatalf("tool-path wiring must sit at/after the beginBatch boundary")
