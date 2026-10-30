@@ -16,7 +16,7 @@ session_token_budget: 500000
 im:
   adapters:
     telegram:
-      token: "123456789:AAEhBOweik6ad9r_QXMENQjcrGbqCr4K-3s"
+      token: "000000000:AAFAKE_TOKEN_FAKE_TOKEN_FAKE_TOKEN_FAKE"
 mcp_servers:
   fetch:
     env:
