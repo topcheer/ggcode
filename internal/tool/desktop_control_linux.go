@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,18 +17,23 @@ import (
 // Wayland sessions (WAYLAND_DISPLAY set) need ydotool (uinput); X11 keeps
 // xdotool. Cached after first resolution since session type cannot change
 // within a process lifetime.
+// #4611: the cache is process-shared and desktop_control Execute calls this
+// on every invocation - concurrent sessions (sub-agents, swarm teammates, IM
+// adapters) can race the lazy init. sync.Once makes the one-shot resolution
+// safe; behavior is unchanged.
 var (
+	linuxBackendOnce     sync.Once
 	linuxBackendWayland  bool
 	linuxBackendResolved bool
 )
 
 func isWaylandSession() bool {
-	if !linuxBackendResolved {
+	linuxBackendOnce.Do(func() {
 		// XDG_SESSION_TYPE=wayland without WAYLAND_DISPLAY still has no
 		// wayland socket to talk over; require the socket variable.
 		linuxBackendWayland = os.Getenv("WAYLAND_DISPLAY") != ""
 		linuxBackendResolved = true
-	}
+	})
 	return linuxBackendWayland
 }
 
