@@ -9,6 +9,8 @@ package tui
 // fails in a test environment with no config file).
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -18,7 +20,17 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-func issue4589Model(version string) (*Model, *impersonatePanelState) {
+func issue4589Model(t *testing.T, version string) (*Model, *impersonatePanelState) {
+	t.Helper()
+	// The commit path persists via SaveImpersonation; #4590 rolls the runtime
+	// back when that save fails, so a FilePath-less config makes Enter look
+	// like it drops the value. Give the config a writable file so the happy
+	// path (save succeeds, identity applied) is what gets pinned here.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ggcode.yaml")
+	if err := os.WriteFile(path, []byte("vendor: va\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 	vi := textinput.New()
 	vi.SetValue(version)
 	vi.Focus()
@@ -28,13 +40,13 @@ func issue4589Model(version string) (*Model, *impersonatePanelState) {
 		currentPreset: "none",
 		editingHeader: -1, // 0 would route keys to the header-edit branch
 	}
-	m := &Model{config: &config.Config{}, impersonatePanel: panel}
+	m := &Model{config: &config.Config{FilePath: path}, impersonatePanel: panel}
 	provider.SetActiveImpersonation(nil, "", nil) // isolate globals
 	return m, panel
 }
 
 func TestIssue4589_VersionEnterCommits(t *testing.T) {
-	m, panel := issue4589Model("v131.0")
+	m, panel := issue4589Model(t, "v131.0")
 
 	m.handleImpersonatePanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 
@@ -48,7 +60,7 @@ func TestIssue4589_VersionEnterCommits(t *testing.T) {
 }
 
 func TestIssue4589_VersionEscDoesNotCommit(t *testing.T) {
-	m, panel := issue4589Model("v131.0")
+	m, panel := issue4589Model(t, "v131.0")
 
 	m.handleImpersonatePanelKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 
