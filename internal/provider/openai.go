@@ -903,8 +903,15 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							// byte-concatenated into invalid JSON). When the delta
 							// carries an ID, keep distinct IDs in distinct slots.
 							idx = resolveNoIndexToolCallSlot(toolCalls, tc.ID)
+						} else if tc.ID != "" {
+							// #4535: relays that batch several parallel tool calls
+							// into one delta while omitting index previously lost
+							// every one of them. A delta carrying an ID can still
+							// be located - resolve it to a slot the same way the
+							// single-delta path does (#4471).
+							idx = resolveNoIndexToolCallSlot(toolCalls, tc.ID)
 						} else {
-							// Multiple calls without index cannot be located safely.
+							// Multiple calls without index or ID cannot be located safely.
 							debug.Log("openai", "dropping tool-call delta without index (multi-call delta, id=%s name=%s)", tc.ID, tc.Function.Name)
 							continue
 						}
