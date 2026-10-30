@@ -11,6 +11,17 @@ TERM=dumb ggcode        # automatic
 
 It rides the same interactive runtime core as the TUI — agent, tools, sessions, and config hot-swap all work; only the visual panels are absent. A2A server, LAN chat, and other TUI-shaped services are not started on this path.
 
+## Output Format
+
+LLM text streams to the terminal as it arrives. Each tool call prints one boundary line with its result status:
+
+```
+[tool] glob (ok)
+[tool] run_command (error)
+```
+
+Tool arguments and raw results are not echoed (they would drown the prose); `(ok)`/`(error)` is the per-call verdict. A call whose result never arrives still gets its line closed when the turn ends.
+
 ## Slash Commands
 
 Anything not starting with `/` is sent to the agent as a conversation turn.
