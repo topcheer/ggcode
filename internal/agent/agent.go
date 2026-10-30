@@ -251,6 +251,7 @@ type Agent struct {
 	claimVerify                  *claimVerifyState           // tool output misinterpretation detection (AgentRx-inspired)
 	permDenyStreak               *permDenyStreakState        // consecutive permission-deny mode guard (#1210)
 	diffSummary                  *diffSummaryState           // pre-completion holistic change summary for self-review
+	goalFinish                   *goalFinishState            // r-goal-finish: goal-graph terminal-state check (premature completion guard)
 	oversightTriage              *oversightTriageState       // r397: novel-vs-routine triage for human review attention
 	autonomyDial                 *autonomyDialState          // r407: advisory progressive-autonomy dial
 	commitHint                   *commitHintState            // post-completion commit reminder for uncommitted changes
@@ -516,6 +517,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		claimVerify:            newClaimVerifyState(),
 		permDenyStreak:         newPermDenyStreakState(),
 		diffSummary:            newDiffSummaryState(),
+		goalFinish:             newGoalFinishState(),
 		oversightTriage:        newOversightTriageState(),
 		autonomyDial:           newAutonomyDialState(),
 		guidanceStats:          guidanceRunStats{},           // r402: also reset per-run in runPrompt
@@ -2155,6 +2157,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.permDenyStreak.reset()
 	a.crossFileImpact.reset()
 	a.diffSummary.reset()
+	a.goalFinish.reset()
 	a.commitHint.reset()
 	a.docDrift.reset()
 	a.draftPRHint.reset()
@@ -3809,6 +3812,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: diffSummaryMsg,
+					}},
+				})
+				continue
+			}
+			// Goal finish gate: verify the agent's own goal-graph tree is
+			// closed out before completion is declared (Anthropic long-running
+			// harness failure mode 2). Fire-once; only fresh in_progress leaves.
+			if goalMsg := a.checkGoalFinishGate(); goalMsg != "" {
+				debug.Log("agent", "Iteration %d: goal finish gate found dangling in_progress leaves", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: goalMsg,
 					}},
 				})
 				continue
