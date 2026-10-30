@@ -126,12 +126,15 @@ type foresightPrediction struct {
 	predictedOK bool   // true = predicted success, false = predicted failure
 	snippet     string // prediction text for reporting
 	toolName    string // tool that was about to be called
+	expectCheck string // non-empty = structured EXPECT declaration (sa-140), overrides polarity checks
 }
 
 type foresightCalibrateState struct {
-	predictions []foresightPrediction // pending predictions awaiting results
-	mismatches  int                   // total prediction-observation mismatches
-	warnCount   int                   // how many times we've injected guidance
+	predictions    []foresightPrediction // pending predictions awaiting results
+	mismatches     int                   // total prediction-observation mismatches
+	warnCount      int                   // how many times we've injected guidance
+	expectWarns    int                   // immediate asymmetric warnings issued (sa-140, cap 4)
+	protocolTaught bool                  // one-time EXPECT protocol announcement sent
 }
 
 func newForesightCalibrateState() *foresightCalibrateState {
@@ -148,6 +151,28 @@ func newForesightCalibrateState() *foresightCalibrateState {
 // are executed.
 func (s *foresightCalibrateState) recordPrediction(assistantText string, toolCalls []provider.ToolCallDelta, iteration int) {
 	if s == nil || len(toolCalls) == 0 {
+		return
+	}
+
+	// sa-140 (TVAE): structured EXPECT declarations take priority over the
+	// free-regex path. A declaration naming a tool is attributable even in a
+	// multi-tool turn (fixing the coverage hole where such turns were skipped
+	// entirely); an unattributed declaration is only safe for single-tool turns.
+	if decls := parseExpectDeclarations(assistantText); len(decls) > 0 {
+		called := make(map[string]bool, len(toolCalls))
+		for _, tc := range toolCalls {
+			called[tc.Name] = true
+		}
+		for _, d := range decls {
+			if d.toolName != "" {
+				if !called[d.toolName] {
+					continue // declaration for a tool not in this turn: stale text
+				}
+				s.recordExpect(d.toolName, d.check, iteration)
+			} else if len(toolCalls) == 1 {
+				s.recordExpect(toolCalls[0].Name, d.check, iteration)
+			}
+		}
 		return
 	}
 
@@ -189,7 +214,24 @@ func (s *foresightCalibrateState) recordPrediction(assistantText string, toolCal
 		snippet:     snippet,
 		toolName:    toolCalls[0].Name,
 	})
+	s.capPending()
+}
 
+// recordExpect stores one structured EXPECT declaration as a pending
+// prediction (sa-140). predictedOK mirrors the check's polarity so the legacy
+// consumption/matching path in checkCalibration works unchanged.
+func (s *foresightCalibrateState) recordExpect(toolName, check string, iteration int) {
+	s.predictions = append(s.predictions, foresightPrediction{
+		iteration:   iteration,
+		predictedOK: expectCheckPositive(check),
+		snippet:     "EXPECT: " + toolName + " " + check,
+		toolName:    toolName,
+		expectCheck: check,
+	})
+	s.capPending()
+}
+
+func (s *foresightCalibrateState) capPending() {
 	// Cap pending predictions to avoid unbounded growth.
 	if len(s.predictions) > 30 {
 		s.predictions = s.predictions[len(s.predictions)-30:]
@@ -266,6 +308,31 @@ func (s *foresightCalibrateState) checkCalibration(toolName string, resultConten
 	// Remove the matched prediction.
 	s.predictions = append(s.predictions[:matched], s.predictions[matched+1:]...)
 
+	// sa-140 (TVAE) structured path: deterministic check evaluation with
+	// ASYMMETRIC immediate feedback. A declared-positive check that FAILED is
+	// the hallucinated-success case VeriGUI penalizes 4x -- it fires on the
+	// step, ahead of the legacy threshold. A declared-negative check that
+	// succeeded is a false alarm: count it, never inject.
+	if pred.expectCheck != "" {
+		passed, detail := evaluateExpectCheck(pred.expectCheck, resultContent, isError)
+		if passed {
+			return ""
+		}
+		if !expectCheckPositive(pred.expectCheck) {
+			debug.Log("expect-declare", "Iteration %d: declared-fail check unexpectedly passed (%s)", iteration, pred.snippet)
+			return ""
+		}
+		if s.expectWarns >= 4 {
+			return ""
+		}
+		s.expectWarns++
+		debug.Log("expect-declare", "Iteration %d: declared expectation violated: %s", iteration, detail)
+		return fmt.Sprintf(
+			"[expectation] DECLARED \"%s\" but the actual result contradicts it: %s. Do NOT build on this step as if it succeeded -- re-read the result above and reconcile your expectation before proceeding.",
+			pred.snippet, detail,
+		)
+	}
+
 	// Determine actual outcome polarity.
 	actualOK := !isError && !foresightResultFailureRe.MatchString(resultContent)
 	actualEmpty := foresightResultEmpty(resultContent)
@@ -315,4 +382,6 @@ func (s *foresightCalibrateState) reset() {
 	s.predictions = nil
 	s.mismatches = 0
 	s.warnCount = 0
+	s.expectWarns = 0
+	s.protocolTaught = false
 }
