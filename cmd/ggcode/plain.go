@@ -556,20 +556,44 @@ func plainAddModel(cfg *config.Config, model, apikey string) {
 // ANSI beyond what NO_COLOR already disabled.
 func runLinearTurn(ctx context.Context, ag *agent.Agent, line string) {
 	if ag == nil {
-		fmt.Println("[plain] agent unavailable")
+		fmt.Println(plainTr(plainLang, "agent.unavailable"))
 		return
 	}
+	// pendingToolCalls tracks tool calls whose result event has not arrived
+	// yet, so Done can close their lines (no result = terminated turn).
+	pendingToolCalls := make(map[string]bool)
 	err := ag.RunStream(ctx, line, func(event provider.StreamEvent) {
 		switch event.Type {
 		case provider.StreamEventText:
 			fmt.Print(event.Text)
 		case provider.StreamEventToolCallDone:
 			if event.Tool.Name != "" {
-				fmt.Printf("\n[tool] %s\n", event.Tool.Name)
+				// Defer the status suffix until the matching ToolResult arrives
+				// (same call ID) or the turn ends without one - the linear model
+				// cannot rewrite the line, so "ok" is the implicit default.
+				fmt.Printf("\n[tool] %s", event.Tool.Name)
+				pendingToolCalls[event.Tool.ID] = true
 			}
+		case provider.StreamEventToolResult:
+			if !pendingToolCalls[event.Tool.ID] {
+				return // result without a printed call line (unexpected order)
+			}
+			if event.IsError {
+				fmt.Printf(" (error)\n")
+			} else {
+				fmt.Printf(" (ok)\n")
+			}
+			delete(pendingToolCalls, event.Tool.ID)
 		case provider.StreamEventError:
 			fmt.Printf("\n[error] %v\n", event.Error)
 		case provider.StreamEventDone:
+			// Any call still pending never got a result event - close its
+			// line so the next output does not run on.
+			for id := range pendingToolCalls {
+				delete(pendingToolCalls, id)
+				fmt.Println()
+				break // one newline per unterminated tail, not per call
+			}
 			fmt.Println()
 		}
 	})
