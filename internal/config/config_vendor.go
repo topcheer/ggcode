@@ -908,5 +908,18 @@ func refreshOpenCodeOAuthToken(store *auth.Store) (string, error) {
 		}
 		return strings.TrimSpace(tok.AccessToken), nil
 	}
+	// #4508: mirror the Claude path's #1805 case-1 block - a PERMANENT
+	// rejection (invalid_grant: the refresh token was rotated on a failed
+	// Save, or revoked server-side) must delete the stored token. Without
+	// this the dead token stayed on disk and every resolve did IsExpired →
+	// 30s refresh attempt → failure, with the status stuck on "expired"
+	// instead of flipping to re-onboarding. Transient errors keep the
+	// token; the next resolve retries.
+	if isPermanentRefreshFailure(refreshErr) {
+		debug.Log("config", "opencode oauth: refresh token permanently rejected (clearing dead token): %v", refreshErr)
+		if delErr := store.Delete("opencode"); delErr != nil {
+			debug.Log("config", "opencode oauth: clearing dead token failed: %v", delErr)
+		}
+	}
 	return "", fmt.Errorf("opencode oauth token refresh failed (run `ggcode login opencode`): %w", refreshErr)
 }
