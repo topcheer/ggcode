@@ -472,7 +472,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/commit":          "Stage changes and generate an AI commit message from the diff",
 	"/review":          "AI code review of current git diff (bugs, security, races)",
 	"/copy":            "Copy last assistant response to clipboard",
-	"/context":         "Show context window usage breakdown",
+	"/context":         "Show context usage + provenance (external/injection-flagged)",
 	"/notify":          "View or set notification preferences (mode, bell, desktop)",
 	"/regenerate":      "Regenerate last AI response (discard and re-run)",
 	"/regen":           "Regenerate last AI response (discard and re-run)",
