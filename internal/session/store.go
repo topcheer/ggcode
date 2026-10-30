@@ -2694,9 +2694,14 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 	meta := jsonlRecord{
-		Type:                 "meta",
-		SessionID:            ses.ID,
-		Title:                ses.Title,
+		Type:      "meta",
+		SessionID: ses.ID,
+		Title:     ses.Title,
+		// #4669: Preview/TasksEnvJSON were missing here while appendMetaLocked
+		// persists both — a fresh session whose only on-disk meta record came
+		// from EnsureMeta reloaded with an empty VCS fingerprint, so the
+		// workspace-change check misfired and rebuilt the task environment.
+		Preview:              ses.Preview,
 		Workspace:            ses.Workspace,
 		Vendor:               ses.Vendor,
 		Endpoint:             ses.Endpoint,
@@ -2712,6 +2717,7 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 		ContextWindow:        ses.ContextWindow,
 		MaxTokens:            ses.MaxTokens,
 		TasksJSON:            ses.TasksJSON,
+		TasksEnvJSON:         ses.TasksEnvJSON,
 		ParentSessionID:      ses.ParentSessionID,
 		ForkPoint:            ses.ForkPoint,
 	}
