@@ -482,15 +482,21 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 			debug.Log("slack", "adapter=%s unauthorized inbound channel=%s", a.name, channel)
 			return
 		}
+		// Unbound channel is a normal routing verdict, not a failure: with a
+		// message.channels subscription the bot sees every message in channels
+		// it was invited to, and replying "please retry" there just spams the
+		// channel with a misleading prompt (#4608). Silent debug, like Discord.
+		if err == ErrNoChannelBound {
+			debug.Log("slack", "adapter=%s inbound from unbound channel=%s ignored", a.name, channel)
+			return
+		}
 		// Processing failed — the message would otherwise be silently dropped.
 		// Acknowledge the failure back to the sender so they know to retry (#260).
 		// Reply failure is only logged, never recursed.
 		if _, sendErr := a.sendChannelMessage(ctx, channel, threadTS, "message could not be delivered (session not ready), please retry"); sendErr != nil {
 			debug.Log("slack", "adapter=%s failed to notify sender of delivery error: %v", a.name, sendErr)
 		}
-		if err != ErrNoChannelBound {
-			a.publishState(false, "warning", err.Error())
-		}
+		a.publishState(false, "warning", err.Error())
 	}
 }
 
@@ -518,6 +524,19 @@ func (a *slackAdapter) markSeenDedup(channel, ts string) bool {
 			if t.Before(cutoff) {
 				delete(a.seen, k)
 			}
+		}
+		// Burst within the 5-minute window can still leave the map oversized;
+		// evict oldest entries until back under the cap (#4608, mirrors the
+		// mattermost adapter's #963 eviction loop).
+		for len(a.seen) > slackDedupMaxSize {
+			oldestKey := ""
+			var oldestTime time.Time
+			for k, t := range a.seen {
+				if oldestKey == "" || t.Before(oldestTime) {
+					oldestKey, oldestTime = k, t
+				}
+			}
+			delete(a.seen, oldestKey)
 		}
 	}
 	return true
