@@ -236,12 +236,12 @@ func (a *Agent) runRetraceVerification(ctx context.Context, task, diff string) (
 	// ChatStream call and the stream drain loop. A panic inside the stall
 	// detection reader goroutine (streamWithStallDetection) does not
 	// propagate here; that goroutine runs under its own safego recover.
-	_, backward, _, _, _, err := a.streamChatResponse(ctx, buildBackwardMessages(diff), nil, nil)
+	_, backward, _, _, _, _, err := a.streamChatResponse(ctx, buildBackwardMessages(diff), nil, nil)
 	if err != nil || strings.TrimSpace(backward) == "" {
 		debug.Log("agent", "retrace: backward stage failed (%v), passing through", err)
 		return ""
 	}
-	_, recon, _, _, _, err2 := a.streamChatResponse(ctx, buildReconcileMessages(task, backward, diff), nil, nil)
+	_, recon, _, _, _, _, err2 := a.streamChatResponse(ctx, buildReconcileMessages(task, backward, diff), nil, nil)
 	if err2 != nil || strings.TrimSpace(recon) == "" {
 		debug.Log("agent", "retrace: reconcile stage failed (%v), passing through", err2)
 		return ""

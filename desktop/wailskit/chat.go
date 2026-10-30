@@ -4423,22 +4423,27 @@ func (b *ChatBridge) SwitchModel(model string) error {
 		return fmt.Errorf("activate current selection: %w", err)
 	}
 
+	// #4623: single critical section - previously agent snapshot and
+	// b.resolved write sat in two separate Lock/Unlock pairs, letting a
+	// concurrent ResetAgent (LoadSession/ResumeSession) swap the agent
+	// between them so ApplyProviderToAgent patched a discarded instance
+	// while b.resolved advertised the new model. The session pointer is
+	// snapshotted under the same lock; unlocked reads of b.currentSes
+	// below were also a data race against setSessionState.
 	b.mu.Lock()
 	a := b.agent
-	b.mu.Unlock()
-
-	b.mu.Lock()
 	b.resolved = resolved
+	ses := b.currentSes
 	b.mu.Unlock()
 	agentruntime.ApplyProviderToAgent(a, prov, resolved)
 
 	// Persist model selection to session JSONL (session-scoped).
-	if b.currentSes != nil {
-		b.currentSes.Vendor = b.cfg.Vendor
-		b.currentSes.Endpoint = b.cfg.Endpoint
-		b.currentSes.Model = resolved.Model
+	if ses != nil {
+		ses.Vendor = b.cfg.Vendor
+		ses.Endpoint = b.cfg.Endpoint
+		ses.Model = resolved.Model
 		if b.sessionStore != nil {
-			_ = b.sessionStore.AppendMetaToDisk(b.currentSes)
+			_ = b.sessionStore.AppendMetaToDisk(ses)
 		}
 	}
 
@@ -4449,9 +4454,9 @@ func (b *ChatBridge) SwitchModel(model string) error {
 	}
 
 	sessionCW2, sessionMT2 := 0, 0
-	if b.currentSes != nil {
-		sessionCW2 = b.currentSes.ContextWindow
-		sessionMT2 = b.currentSes.MaxTokens
+	if ses != nil {
+		sessionCW2 = ses.ContextWindow
+		sessionMT2 = ses.MaxTokens
 	}
 	agentruntime.StartAsyncRelayModelLimitRefreshWithSession(b.cfg, resolved, a, sessionCW2, sessionMT2, func(resp relaycatalog.ResolveResponse) {
 		b.mu.Lock()
