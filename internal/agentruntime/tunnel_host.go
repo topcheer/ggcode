@@ -31,6 +31,16 @@ type TunnelHost struct {
 	// Stream state
 	currentMsgID  string
 	needsFinalize bool
+	// #4564: pushMu serializes the (message-ID resolution + broker push)
+	// units against rollover's (finalize mark + PushTextDone). It is a
+	// SEPARATE lock from mu because broker pushes synchronously re-enter
+	// the host via the event recorder (recordEvent takes mu) - holding mu
+	// across a broker push would deadlock. finalized records message IDs
+	// whose Done has been (or is being) issued, so a late publisher that
+	// resolved an ID before the rollover rebinds to a fresh message
+	// instead of appending to a finalized one.
+	pushMu    sync.Mutex
+	finalized map[string]bool
 
 	// Session reference for recording
 	session      *session.Session
@@ -92,6 +102,8 @@ func (h *TunnelHost) BindSession(ses *session.Session, store session.Store) Proj
 	h.session = ses
 	h.sessionStore = store
 	h.currentMsgID = ""
+	// #4564: drop finalize marks with the stream state.
+	h.finalized = nil
 	h.needsFinalize = false
 
 	if ses == nil || strings.TrimSpace(ses.ID) == "" {
@@ -564,6 +576,8 @@ func (h *TunnelHost) ResetStreamState() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.currentMsgID = ""
+	// #4564: drop finalize marks with the stream state.
+	h.finalized = nil
 	h.needsFinalize = false
 }
 
@@ -619,16 +633,13 @@ func (h *TunnelHost) PushStreamEvent(ev provider.StreamEvent) {
 
 	switch ev.Type {
 	case provider.StreamEventText:
-		msgID := h.ensureMsgID(broker)
 		h.markActive()
-		broker.PushReasoningDone(TunnelReasoningMsgID(msgID))
-		broker.PushText(msgID, ev.Text)
+		h.pushTextEvent(broker, ev.Text)
 
 	case provider.StreamEventReasoning:
 		if chunk := tunnel.NormalizeReasoningChunk(ev.Text); chunk != "" {
-			msgID := h.ensureMsgID(broker)
 			h.markActive()
-			broker.PushReasoning(TunnelReasoningMsgID(msgID), chunk)
+			h.pushReasoningEvent(broker, chunk)
 		}
 
 	case provider.StreamEventToolCallDone:
@@ -716,13 +727,37 @@ func (h *TunnelHost) PushActivity(activity string) {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-func (h *TunnelHost) ensureMsgID(broker *tunnel.Broker) string {
+// pushTextEvent resolves the target message ID and pushes one text chunk
+// as a single unit serialized against rollover (#4564). An ID resolved
+// before a concurrent rollover used to be pushed AFTER that rollover's
+// PushTextDone - the append landed on a finalized message (projection
+// reorder). Under pushMu, a finalized ID rebinds to a fresh message instead.
+func (h *TunnelHost) pushTextEvent(broker *tunnel.Broker, text string) {
+	h.pushMu.Lock()
+	defer h.pushMu.Unlock()
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.currentMsgID == "" {
-		h.currentMsgID = broker.NextMessageID()
+	id := h.currentMsgID
+	if id == "" || h.finalized[id] {
+		id = broker.NextMessageID()
+		h.currentMsgID = id
 	}
-	return h.currentMsgID
+	h.mu.Unlock()
+	broker.PushReasoningDone(TunnelReasoningMsgID(id))
+	broker.PushText(id, text)
+}
+
+// pushReasoningEvent is pushTextEvent's reasoning counterpart.
+func (h *TunnelHost) pushReasoningEvent(broker *tunnel.Broker, chunk string) {
+	h.pushMu.Lock()
+	defer h.pushMu.Unlock()
+	h.mu.Lock()
+	id := h.currentMsgID
+	if id == "" || h.finalized[id] {
+		id = broker.NextMessageID()
+		h.currentMsgID = id
+	}
+	h.mu.Unlock()
+	broker.PushReasoning(TunnelReasoningMsgID(id), chunk)
 }
 
 func (h *TunnelHost) markActive() {
@@ -737,21 +772,36 @@ func (h *TunnelHost) rollover(broker *tunnel.Broker, startNew bool) {
 	// stream callback vs tunnel/IM inbound) could both read
 	// needsFinalize=true and each fire PushTextDone - a duplicate finalize
 	// event. Claim-and-clear in one window makes the push exactly-once.
+	//
+	// #4564: the whole claim → finalize mark → Done sequence now runs under
+	// pushMu, serialized against pushTextEvent/pushReasoningEvent. The mark
+	// is set under mu BEFORE PushTextDone leaves, so any later publisher
+	// observing the mark rebinds to a fresh ID; a publisher that already
+	// passed the check finished its broker pushes before we acquired
+	// pushMu, i.e. strictly before the Done event - correct order.
+	// PushTextDone itself stays outside mu (the broker's recorder callback
+	// re-enters recordEvent, which takes mu).
+	h.pushMu.Lock()
+	defer h.pushMu.Unlock()
 	h.mu.Lock()
 	msgID := h.currentMsgID
 	finalize := h.needsFinalize
 	h.needsFinalize = false
+	if broker != nil && msgID != "" && finalize {
+		if h.finalized == nil {
+			h.finalized = make(map[string]bool)
+		}
+		h.finalized[msgID] = true
+	}
+	if startNew && broker != nil {
+		h.currentMsgID = broker.NextMessageID()
+	}
 	h.mu.Unlock()
 	if broker == nil || msgID == "" {
 		return
 	}
 	if finalize {
 		broker.PushTextDone(msgID)
-	}
-	if startNew {
-		h.mu.Lock()
-		h.currentMsgID = broker.NextMessageID()
-		h.mu.Unlock()
 	}
 }
 
