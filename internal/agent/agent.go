@@ -1437,9 +1437,15 @@ func (a *Agent) SetSessionID(id string) {
 	// tools.Get acquires registry.mu and tw.SetSessionID acquires TodoWrite.mu;
 	// holding agent.mu during those calls risks deadlock if a registry or
 	// tool callback tries to call back into the agent.
-	if t, ok := a.tools.Get("todo_write"); ok {
-		if tw, ok := t.(*tool.TodoWrite); ok {
-			tw.SetSessionID(id)
+	// #4513: NewAgent explicitly supports a nil tool registry (plain/pipe
+	// callers construct agents without one) - dereferencing it here panicked.
+	// Guard instead: no registry means no todo_write to rebind, which is the
+	// same outcome Get's (zero, false) would give.
+	if a.tools != nil {
+		if t, ok := a.tools.Get("todo_write"); ok {
+			if tw, ok := t.(*tool.TodoWrite); ok {
+				tw.SetSessionID(id)
+			}
 		}
 	}
 }
