@@ -84,6 +84,44 @@ func TestPlainApprovalDefaultAllow(t *testing.T) {
 	}
 }
 
+// TestHandlePlainCommandLang verifies /lang switching semantics on the nil-cfg
+// path (pure in-memory, no persistence): valid targets switch plainLang and
+// keep the loop up; unsupported languages and missing args are refused
+// without changing the active language.
+func TestHandlePlainCommandLang(t *testing.T) {
+	orig := plainLang
+	defer func() { plainLang = orig }()
+
+	plainLang = "en"
+	if handlePlainCommand("/lang fr", nil, nil) {
+		t.Fatal("/lang must not exit the loop")
+	}
+	if plainLang != "en" {
+		t.Errorf("unsupported language must not change plainLang, got %q", plainLang)
+	}
+
+	if handlePlainCommand("/lang", nil, nil) {
+		t.Fatal("missing arg must not exit the loop")
+	}
+	if plainLang != "en" {
+		t.Errorf("missing arg must not change plainLang, got %q", plainLang)
+	}
+
+	if handlePlainCommand("/lang zh-CN", nil, nil) {
+		t.Fatal("valid switch must not exit the loop")
+	}
+	if plainLang != "zh-CN" {
+		t.Errorf("plainLang = %q, want zh-CN", plainLang)
+	}
+
+	if handlePlainCommand("/lang en", nil, nil) {
+		t.Fatal("switch back must not exit the loop")
+	}
+	if plainLang != "en" {
+		t.Errorf("plainLang = %q, want en", plainLang)
+	}
+}
+
 // TestHandlePlainCommandExit verifies only the exit-family commands terminate
 // the linear loop; every other command (including unknown ones) keeps it up.
 func TestHandlePlainCommandExit(t *testing.T) {
