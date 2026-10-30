@@ -5429,7 +5429,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// detector's own charter ("7 edits to 7 DIFFERENT files") was
 			// unreachable. Only a successful VERIFY COMMAND resets now.
 			// #3685-A: same six-channel widening as the verifyDebt gate above.
-			if isCommandChannelTool(tc.Name) && !result.IsError {
+			// #4660: but ALSO the same spawn exclusion - start_command success
+			// only proves the job was submitted, not that it went green.
+			// Clearing editPropagation/fileChurn at spawn time made both
+			// detectors go silent exactly when a background test later FAILED
+			// (the books were already wiped, with no revert path in the
+			// final-state replay which only clears on passed).
+			if verifyDebtSpawnClearingTool(tc.Name) && !result.IsError {
 				if cmd := extractCommandFromArgs(tc.Arguments); cmd != "" && isVerifyCommand(cmd) {
 					a.editPropagation.recordGreenBuild()
 					// #1460-C: a green verification confirms the edit
