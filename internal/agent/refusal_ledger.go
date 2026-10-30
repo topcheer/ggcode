@@ -508,6 +508,41 @@ func refusalTargets(excerpt string) []string {
 	return out
 }
 
+// refusalAnchorHit reports whether anchor hits text with flag-token
+// boundaries. #4632: flag-shaped anchors must match as a WHOLE token - the
+// old bare strings.Contains had no right boundary, so a refusal against
+// the plain force-push flag ("never use --force when pushing") also
+// blocked its safer lease variant, which merely CONTAINS the anchor as a
+// prefix. Non-flag anchors (paths, words) keep plain Contains semantics.
+// A boundary position is a byte not in the flag-body class [A-Za-z0-9-]
+// (or the string edge) on BOTH sides of the hit.
+func refusalAnchorHit(text, anchor string) bool {
+	if anchor == "" {
+		return false
+	}
+	if anchor[0] != '-' {
+		return strings.Contains(text, anchor)
+	}
+	for start := 0; ; {
+		i := strings.Index(text[start:], anchor)
+		if i < 0 {
+			return false
+		}
+		i += start
+		end := i + len(anchor)
+		leftOK := i == 0 || !isRefusalFlagBodyByte(text[i-1])
+		rightOK := end == len(text) || !isRefusalFlagBodyByte(text[end])
+		if leftOK && rightOK {
+			return true
+		}
+		start = i + 1
+	}
+}
+
+func isRefusalFlagBodyByte(b byte) bool {
+	return b == '-' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
+}
+
 // checkBlocked returns a hard-block message when a persisted refusal
 // deterministically matches this write-class tool call. Empty = allow.
 func (l *refusalLedger) checkBlocked(tool string, args string) string {
@@ -546,7 +581,7 @@ func (l *refusalLedger) checkBlocked(tool string, args string) string {
 			continue // expired; pruned lazily
 		}
 		for _, t := range refusalTargets(e.Excerpt) {
-			if strings.Contains(lower, t) {
+			if refusalAnchorHit(lower, t) { // #4632: whole-token flag match, no prefix pollution
 				age := refusalAgeWords(now - e.Ts)
 				return fmt.Sprintf(
 					"blocked by persisted user refusal (%s): \"%s\". "+
