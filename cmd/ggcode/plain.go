@@ -560,9 +560,12 @@ func runLinearTurn(ctx context.Context, ag *agent.Agent, line string) {
 		return
 	}
 	// pendingToolCalls tracks tool calls whose result event has not arrived
-	// yet, so Done can close their lines (no result = terminated turn).
+	// yet. The turn boundary is RunStream returning - NOT any StreamEventDone,
+	// because provider streams emit Done per iteration (often with Usage)
+	// while tool results arrive between iterations.
 	pendingToolCalls := make(map[string]bool)
 	err := ag.RunStream(ctx, line, plainStreamPrinter(pendingToolCalls))
+	plainCloseTurn(pendingToolCalls)
 	if err != nil {
 		fmt.Printf("\n[error] turn failed: %v\n", err)
 	}
@@ -598,15 +601,17 @@ func plainStreamPrinter(pendingToolCalls map[string]bool) func(provider.StreamEv
 			delete(pendingToolCalls, event.Tool.ID)
 		case provider.StreamEventError:
 			fmt.Printf("\n[error] %v\n", event.Error)
-		case provider.StreamEventDone:
-			// Any call still pending never got a result event - close the
-			// unterminated tail (one newline total, not per call) and drain
-			// the map so stale ids cannot pair with a later turn's results.
-			if len(pendingToolCalls) > 0 {
-				fmt.Println()
-			}
-			clear(pendingToolCalls)
-			fmt.Println()
 		}
 	}
+}
+
+// plainCloseTurn ends the output for one REPL turn: an unterminated tool
+// line gets its closing newline (one total, not per call), then the blank
+// separator line before the next prompt.
+func plainCloseTurn(pendingToolCalls map[string]bool) {
+	if len(pendingToolCalls) > 0 {
+		fmt.Println()
+	}
+	clear(pendingToolCalls)
+	fmt.Println()
 }

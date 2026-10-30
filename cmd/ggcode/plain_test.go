@@ -137,7 +137,6 @@ func TestPlainStreamPrinterToolStatusPairing(t *testing.T) {
 		{Type: provider.StreamEventToolResult, Tool: provider.ToolCallDelta{ID: "b"}, IsError: true},
 		// Result with no preceding call line: must be dropped entirely.
 		{Type: provider.StreamEventToolResult, Tool: provider.ToolCallDelta{ID: "ghost"}},
-		{Type: provider.StreamEventDone},
 	}
 	pending := make(map[string]bool)
 	printer := plainStreamPrinter(pending)
@@ -148,6 +147,7 @@ func TestPlainStreamPrinterToolStatusPairing(t *testing.T) {
 	for _, e := range events {
 		printer(e)
 	}
+	plainCloseTurn(pending)
 	_ = w.Close()
 	os.Stdout = orig
 	_, _ = io.Copy(&out, r)
@@ -162,7 +162,7 @@ func TestPlainStreamPrinterToolStatusPairing(t *testing.T) {
 		t.Errorf("ghost result must not print a line, got:\n%q", got)
 	}
 	if len(pending) != 0 {
-		t.Errorf("pending map must be drained after Done, got %v", pending)
+		t.Errorf("pending map must be drained after close, got %v", pending)
 	}
 }
 
@@ -173,7 +173,11 @@ func TestPlainStreamPrinterDoneClosesUnterminatedTail(t *testing.T) {
 	events := []provider.StreamEvent{
 		{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "a", Name: "slow"}},
 		{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "b", Name: "slower"}},
+		// Per-iteration provider Dones (with or without Usage) must be inert:
+		// tool results arrive between iterations and the turn only ends when
+		// RunStream returns.
 		{Type: provider.StreamEventDone},
+		{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{}},
 	}
 	pending := make(map[string]bool)
 	printer := plainStreamPrinter(pending)
@@ -184,22 +188,53 @@ func TestPlainStreamPrinterDoneClosesUnterminatedTail(t *testing.T) {
 	for _, e := range events {
 		printer(e)
 	}
+	plainCloseTurn(pending)
 	_ = w.Close()
 	os.Stdout = orig
 	_, _ = io.Copy(&out, r)
 
 	// Two unterminated calls: 2 leading newlines (one per [tool] line) +
-	// exactly one tail-closing newline + one Done newline = 4 total, ending
-	// in a blank line - never one closing newline per call.
+	// exactly one tail-closing newline + one separator newline = 4 total -
+	// never one closing newline per call.
 	got := out.String()
 	if n := strings.Count(got, "\n"); n != 4 {
-		t.Errorf("expected exactly 4 newlines (2 call-leads + 1 tail close + 1 Done), got %d:\n%q", n, got)
-	}
-	if !strings.HasSuffix(got, "\n\n") {
-		t.Errorf("output must end with the closed tail line + Done newline, got:\n%q", got)
+		t.Errorf("expected exactly 4 newlines (2 call-leads + 1 tail close + 1 separator), got %d:\n%q", n, got)
 	}
 	if len(pending) != 0 {
 		t.Errorf("pending map must be drained, got %v", pending)
+	}
+}
+
+// TestPlainStreamPrinterIntermediateDoneKeepsPairing reproduces the real
+// multi-iteration event order: ToolCallDone -> provider-stream Done ->
+// ToolResult. StreamEventDone is inert by design; pairing survives and the
+// turn only closes when plainCloseTurn runs after RunStream returns.
+func TestPlainStreamPrinterIntermediateDoneKeepsPairing(t *testing.T) {
+	events := []provider.StreamEvent{
+		{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "a", Name: "glob"}},
+		{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{}}, // intermediate, still inert
+		{Type: provider.StreamEventToolResult, Tool: provider.ToolCallDelta{ID: "a"}},
+	}
+	pending := make(map[string]bool)
+	printer := plainStreamPrinter(pending)
+	var out strings.Builder
+	orig := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	for _, e := range events {
+		printer(e)
+	}
+	plainCloseTurn(pending)
+	_ = w.Close()
+	os.Stdout = orig
+	_, _ = io.Copy(&out, r)
+
+	got := out.String()
+	if !strings.Contains(got, "[tool] glob (ok)\n") {
+		t.Errorf("intermediate Done must not break pairing, got:\n%q", got)
+	}
+	if n := strings.Count(got, "\n"); n != 3 { // 1 leading + 1 after (ok) + 1 separator
+		t.Errorf("expected 3 newlines, got %d:\n%q", n, got)
 	}
 }
 
