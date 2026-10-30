@@ -225,6 +225,63 @@ func scoreArgComplexity(toolName string, args map[string]json.RawMessage) (int, 
 		if strings.Contains(str("mode"), "hard") {
 			add(4, "mode")
 		}
+	case "git_revert":
+		// #4647: was a dead override-table entry - no case, always 0.
+		// no_commit rewrites history in place (like reset --hard): +4.
+		// A normal revert creates an undoable commit: +2.
+		if b, ok := args["no_commit"]; ok {
+			var bval bool
+			if json.Unmarshal(b, &bval) == nil && bval {
+				add(4, "no_commit")
+			}
+		}
+		if score == 0 {
+			add(2, "revert")
+		}
+	case "git_checkout":
+		// Plain branch switches are routine and carry their own dirty-tree
+		// guard: 0. Creating from an explicit start_point (arbitrary
+		// commit/tag, often mid-rebase surgery) is the heavier shape: +2.
+		if b, ok := args["create"]; ok {
+			var bval bool
+			if json.Unmarshal(b, &bval) == nil && bval && str("start_point") != "" {
+				add(2, "start_point")
+			}
+		}
+	case "git_add":
+		// Staging the whole tree at once (".", 10+ paths) widens the blast
+		// radius of whatever commit follows: +2.
+		if raw, ok := args["files"]; ok {
+			var files []string
+			if json.Unmarshal(raw, &files) == nil && (len(files) >= 10 || (len(files) == 1 && files[0] == ".")) {
+				add(2, "files")
+			}
+		}
+	case "git_commit":
+		// all=true auto-stages every tracked modification (scope creep into
+		// files the caller never named); very long messages often smuggle
+		// rationale that belongs in the diff review: +2 each.
+		if b, ok := args["all"]; ok {
+			var bval bool
+			if json.Unmarshal(b, &bval) == nil && bval {
+				add(2, "all")
+			}
+		}
+		if len(str("message")) >= 500 {
+			add(2, "message")
+		}
+	case "notebook_edit":
+		// #4647: dead entry, no case. Deleting a cell destroys content the
+		// next tool result will not show: +3. Replacing a large cell body
+		// mirrors write_file's 200-line tier: +2.
+		switch str("operation") {
+		case "delete":
+			add(3, "operation")
+		case "replace":
+			if strings.Count(str("source"), "\n") >= 200 {
+				add(2, "source")
+			}
+		}
 	}
 	return score, heavy
 }
@@ -275,7 +332,10 @@ func scoreShellComplexity(cmd string) int {
 	} else if len(cmd) > 200 {
 		n += 1
 	}
-	if pipes := strings.Count(cmd, "|"); pipes > 4 {
+	// #4647: "a || b" contributes 2 '|' characters but 0 pipelines -
+	// subtract the logical-or pairs so they are not double-counted.
+	pipes := strings.Count(cmd, "|") - 2*strings.Count(cmd, "||")
+	if pipes > 4 {
 		n += 4
 	} else {
 		n += pipes
