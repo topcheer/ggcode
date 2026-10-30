@@ -75,6 +75,13 @@ func RunLinearREPL(ag *agent.Agent, registry *tool.Registry, cfg *config.Config,
 	}
 	if ag != nil {
 		ag.SetApprovalHandler(plainApproval)
+		// The linear REPL is hand-driven line by line: opt out of the
+		// cruise (autopilot/bypass) BEHAVIORAL injections - the
+		// goal-collection meta-instruction and the end-of-turn strategist
+		// prompt that would restart the loop after every plain answer.
+		// The permission surface itself is untouched (still bypass if
+		// configured); plainApproval remains the approval decision point.
+		ag.SuppressAutopilotInjection()
 	}
 
 	fmt.Println(plainTr(plainLang, "banner"))

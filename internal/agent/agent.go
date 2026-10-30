@@ -189,6 +189,7 @@ type Agent struct {
 	autopilotGoalAsked           bool                        // true after the goal-collection instruction has been injected
 	autopilotGoalSet             bool                        // true after the user has confirmed a goal (goal text is non-empty)
 	autopilotStrategistCount     int                         // number of strategist calls this run (safety valve)
+	suppressAutopilotInjection   bool                        // cruise-mode injection opt-out (linear frontend): skip goal-collection and strategist prompts; permission surface unchanged
 	strategistBudgetAnnounced    bool                        // true once the budget-exhausted message has been injected
 	strategistNoProgressCount    int                         // consecutive strategist calls where agent made no tool calls
 	reflectionFunc               ReflectionFunc              // called after each run with accumulated stats
@@ -3318,7 +3319,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// strategist call, this covers ~500 tool operations - enough for
 			// large-scale implementation tasks. For very large projects, the user
 			// sends another message ("continue") to reset the budget.
-			if a.currentMode().IsCruiseMode() && a.hasAutopilotGoal() && a.autopilotStrategistCount < maxAutopilotStrategistCalls {
+			if !a.suppressAutopilotInjection && a.currentMode().IsCruiseMode() && a.hasAutopilotGoal() && a.autopilotStrategistCount < maxAutopilotStrategistCalls {
 				a.strategistNoProgressCount++
 				a.autopilotStrategistCount++
 				// Deadlock detection: if the agent has made NO tool calls for

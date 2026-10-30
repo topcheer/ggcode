@@ -63,7 +63,27 @@ func (a *Agent) clearGoalIfNotAutopilot() {
 // The LLM must declare the goal using a "GOAL:" sentinel line so the
 // agent runtime can extract it for the strategist.
 // detection.
+// SuppressAutopilotInjection opts this agent out of the cruise-mode
+// (autopilot) behavioral injections while leaving the permission surface
+// untouched: no goal-collection meta-instruction and no end-of-turn
+// strategist prompt, so a text-only turn ends the run normally. The linear
+// frontend uses this - its REPL is hand-driven line by line and the
+// strategist's "keep going" guidance would restart the loop after every
+// answer. Idempotent; there is deliberately no re-enable path because
+// mid-session re-entry would need goal-state resync.
+func (a *Agent) SuppressAutopilotInjection() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	a.suppressAutopilotInjection = true
+	a.mu.Unlock()
+}
+
 func (a *Agent) maybeInjectAutopilotGoalCollection() {
+	if a.suppressAutopilotInjection {
+		return
+	}
 	if !a.currentMode().IsCruiseMode() {
 		return
 	}
