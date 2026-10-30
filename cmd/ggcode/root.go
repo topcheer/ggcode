@@ -604,10 +604,6 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	trace.Mark("register acp client delegate tool")
 
-	// Detect git status
-	gitStatus := detectGitStatus(workingDir)
-	trace.Mark("detect git status")
-
 	// Collect tool names
 	tools := registry.List()
 	toolNames := make([]string, len(tools))
@@ -1110,13 +1106,17 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			}
 		}
 		return agentruntime.BuildSubAgentSystemPrompt(agentruntime.SubAgentPromptContext{
-			Cfg:              cfg,
-			WorkingDir:       workingDir,
-			Registry:         registry,
-			CommandMgr:       commandMgr,
-			GlobalAutoMem:    autoMem,
-			ProjectAutoMem:   projectAutoMem,
-			GitStatus:        func() string { return gitStatus },
+			Cfg:            cfg,
+			WorkingDir:     workingDir,
+			Registry:       registry,
+			CommandMgr:     commandMgr,
+			GlobalAutoMem:  autoMem,
+			ProjectAutoMem: projectAutoMem,
+			// #4570: lazy per-build detection, identical to the skillTool
+			// sub-agent builder (#4502) - the old closure returned the startup
+			// snapshot, so repl-created sub-agents carried a stale branch name
+			// and dirty count after any mid-session commit/checkout/worktree.
+			GitStatus:        func() string { return detectGitStatus(workingDir) },
 			RemoteAgentsInfo: func() string { return remoteAgentsInfo },
 		}, task, agentType)
 	})
