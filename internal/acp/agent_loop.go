@@ -154,10 +154,12 @@ func NewAgentLoop(
 		if mode == "bypass" || mode == "autopilot" {
 			return true
 		}
-		if mode == "auto" {
-			// Auto-approve file writes in auto mode
-			return true
-		}
+		// #4634: legacy "auto" is normalized to supervised everywhere else
+		// (approval handler, permission layer) - only an explicit bypass or
+		// autopilot session auto-approves workspace writes. A default session
+		// (client never called session/set_mode) must still get the diff
+		// confirmation request; the old auto branch silently wrote files
+		// with no Client confirmation at all.
 		approved, err := al.RequestPermission(ctx, "fs_write",
 			ToolCallUpdate{
 				Title:     fmt.Sprintf("Write file: %s", filePath),

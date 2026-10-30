@@ -97,6 +97,13 @@ func (h *TunnelHost) handleRTCSignal(cmd tunnel.GatewayMessage) {
 // Call this when the session changes or is first created.
 // Returns the projection broker state with replay events and authority epoch.
 func (h *TunnelHost) BindSession(ses *session.Session, store session.Store) ProjectionBrokerState {
+	// #4635: the stream-state reset below must serialize against
+	// pushTextEvent/rollover per the #4564 contract (publisher ID resolution
+	// and rollover finalize are pushMu-serialized; a reset that only takes
+	// mu races a concurrent push between the mu sections). pushMu is the
+	// OUTER lock to match pushTextEvent's pushMu→mu order.
+	h.pushMu.Lock()
+	defer h.pushMu.Unlock()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.session = ses
@@ -573,6 +580,9 @@ func (h *TunnelHost) ProjectionStore() *tunnel.ProjectionStore {
 
 // ResetStreamState resets the stream state for a new chat turn.
 func (h *TunnelHost) ResetStreamState() {
+	// #4635: same pushMu serialization as BindSession (#4564 contract).
+	h.pushMu.Lock()
+	defer h.pushMu.Unlock()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.currentMsgID = ""
