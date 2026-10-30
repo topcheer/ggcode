@@ -605,6 +605,13 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	// silently understates cost/budget. Mirror the streaming path's
 	// CountTokens + chars-based estimate fallback (ChatStream tail).
 	usage := openAIUsage(resp.Usage)
+	// #4664: estimation base mirrors the streaming path (which accumulates
+	// tool-call Name+Arguments into outputChars, openai.go:959) - content-only
+	// would undercount tool-call-heavy responses.
+	outputChars := len(choice.Message.Content)
+	for _, tc := range choice.Message.ToolCalls {
+		outputChars += len(tc.Function.Name) + len(tc.Function.Arguments)
+	}
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
 		inputTokens, err := p.CountTokens(ctx, messages)
 		if err != nil {
@@ -612,15 +619,26 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		}
 		usage = TokenUsage{
 			InputTokens:       inputTokens,
-			OutputTokens:      estimateTokensFromChars(len(choice.Message.Content)),
+			OutputTokens:      estimateTokensFromChars(outputChars),
 			PromptTokensTotal: inputTokens,
 		}
-	} else if usage.OutputTokens == 0 && len(choice.Message.Content) > 0 {
+	} else if usage.OutputTokens == 0 && outputChars > 0 {
 		// #4563: prompt-only usage (PromptTokens>0, CompletionTokens==0) from
 		// relays that report usage before generating - the non-streaming
 		// counterpart of the streaming #4472 backfill. Without this the
 		// compaction summarizer's cost/budget accounting understates output.
-		usage.OutputTokens = estimateTokensFromChars(len(choice.Message.Content))
+		usage.OutputTokens = estimateTokensFromChars(outputChars)
+	} else if usage.InputTokens == 0 {
+		// #4664: completion-only usage (CompletionTokens>0, PromptTokens==0,
+		// common with vLLM/gateway relays) - the mirror gap of the streaming
+		// #4563 backfill (openai.go:1008-1018). Neither earlier branch fires:
+		// not double-zero, not zero-output - so InputTokens stayed
+		// permanently 0 and the compaction summarizer (the only caller)
+		// understated the prompt side of cost/budget accounting.
+		if it, err := p.CountTokens(ctx, messages); err == nil {
+			usage.InputTokens = it
+			usage.PromptTokensTotal = it
+		}
 	}
 
 	// #1484-C: normalize finish_reason into the anthropic value family so
