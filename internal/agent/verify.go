@@ -686,6 +686,77 @@ func isNegationProseAt(lower, phrase string) bool {
 	}
 }
 
+// isNegationProseTerminal reports whether a word-boundary negation phrase
+// occurs at a sentence-terminal position (end of line, or followed only by
+// closing punctuation). #4524: "Error: function has no error handling" and
+// other noun/gerund uses of the phrase are real diagnostics and must NOT be
+// filtered — only lines where the negation is the concluding claim
+// ("... finished without error") are success noise.
+func isNegationProseTerminal(lower, phrase string) bool {
+	idx := 0
+	for {
+		i := strings.Index(lower[idx:], phrase)
+		if i < 0 {
+			return false
+		}
+		at := idx + i
+		end := at + len(phrase)
+		if end < len(lower) && lower[end] == 's' {
+			end++
+		}
+		leftOK := at == 0 || !sdIsLowerAZ(lower[at-1])
+		// Terminal: end of line, only closing punctuation after, or a
+		// ": trailer" elaboration whose trailer carries no failure signal
+		// (#4555: "checkout finished without errors: clean tree").
+		rest := strings.TrimRight(lower[end:], " ,.;!?)]\"")
+		terminal := end >= len(lower) || rest == ""
+		if !terminal && strings.HasPrefix(rest, ":") {
+			trailer := strings.TrimSpace(rest[1:])
+			if !strings.Contains(trailer, "fail") && !strings.Contains(trailer, "error") &&
+				!strings.Contains(trailer, "panic") {
+				terminal = true
+			}
+		}
+		if leftOK && terminal {
+			return true
+		}
+		idx = at + 1
+	}
+}
+
+// noErrorNoiseTail reports whether the text is a pure success-negation
+// phrase. Both the whole-line and "tool: <phrase>" prefix paths share it.
+func noErrorNoiseTail(s string) bool {
+	switch s {
+	case "no error", "no errors", "without error", "without errors",
+		"0 errors", "found 0 errors", "compilation finished without errors",
+		"no errors found", "no errors reported", "no error found",
+		"0 errors, 0 warnings", "found 0 issues":
+		return true
+	}
+	return false
+}
+
+// isNoErrorNoiseLine reports whether a trimmed output line is a bare
+// success-negation ("no errors") line, or a short tool-prefix summary
+// ("vet: 0 errors"), rather than a real error line. #4524: substring
+// matching dropped real diagnostics like "Error: function has no error
+// handling"; anchoring to whole lines and "tool: tail" mirrors keeps them.
+func isNoErrorNoiseLine(lower string) bool {
+	if noErrorNoiseTail(lower) {
+		return true
+	}
+	// Suffix form with a leading subject, e.g. "vet: no errors" — allow a
+	// short single-word ": " prefix but nothing that itself carries content
+	// (prose before the colon means real output).
+	const maxPrefixLen = 24
+	if idx := strings.Index(lower, ": "); idx > 0 && idx < maxPrefixLen &&
+		!strings.ContainsRune(lower[:idx], ' ') {
+		return noErrorNoiseTail(strings.TrimSpace(lower[idx+2:]))
+	}
+	return false
+}
+
 // carriesFailureContext reports whether the line carries failure-message
 // context around an otherwise-clean negation phrase, marking it as
 // assertion/prose content rather than a standalone success summary (#4555).
@@ -735,7 +806,10 @@ func extractErrorLines(output string) []string {
 			// failure signal simply don't match the capture predicates).
 			continue
 		}
-		if (isNegationProseAt(lower, "no error") || isNegationProseAt(lower, "without error")) &&
+		if isNoErrorNoiseLine(lower) {
+			continue
+		}
+		if (isNegationProseTerminal(lower, "no error") || isNegationProseTerminal(lower, "without error")) &&
 			!carriesFailureContext(lower) {
 			continue
 		}
