@@ -5393,7 +5393,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.bgVerifyJobs.register(psExtractJobID(result.Content), extractCommandFromArgs(tc.Arguments))
 			}
 			if tc.Name == "wait_command" || tc.Name == "read_command_output" {
-				if cmd, ok := a.bgVerifyJobs.peek(bgVerifyExtractJobID(tc.Arguments)); ok && isVerifyCommand(cmd) {
+				// #4661: consume-gate uses the SAME predicate as the
+				// foreground clearing gate (isVerificationCommand,
+				// verification_debt.go:163), not the narrower isVerifyCommand
+				// (verify_hint.go) - the two predicates evolved independently
+				// across issue cycles and their difference set (cargo check,
+				// mvn verify, tsc --noEmit, gradle build...) registered at
+				// start_command (no predicate above) but then short-circuited
+				// here: terminal-green background runs never cleared
+				// verifyDebt while the same command run in the foreground
+				// did. Registration accepts the full set, so consumption must
+				// too (registration/consumption symmetry).
+				if cmd, ok := a.bgVerifyJobs.peek(bgVerifyExtractJobID(tc.Arguments)); ok && isVerificationCommand(cmd) {
 					// Consume only on a TERMINAL status: the first poll usually
 					// sees Status: running - removing the registration there
 					// would orphan the job before its outcome poll arrives (#1153
