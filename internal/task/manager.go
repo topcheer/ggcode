@@ -270,7 +270,9 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 	// sticky-poisoned board (no remove-edge op exists; retry hit the
 	// pre-validation wall). Simulate the full edge set up front so every
 	// cycle check sees the post-apply graph.
-	virtualBlockedBy := make(map[string][]string, len(opts.AddBlocks)+1)
+	// #4636: cap is a hint only - len+1 arithmetic trips CodeQL's
+	// allocation-overflow advisory; plain len is behavior-identical.
+	virtualBlockedBy := make(map[string][]string, len(opts.AddBlocks))
 	if len(opts.AddBlockedBy) > 0 {
 		virtualBlockedBy[taskID] = opts.AddBlockedBy // apply writes taskID.BlockedBy += depID
 	}

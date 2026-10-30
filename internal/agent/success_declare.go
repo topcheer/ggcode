@@ -200,7 +200,7 @@ func (s *successDeclareState) recordAssistantText(text string, iter int) {
 	// and the follow-up work then "proved" it premature. #364 fixed
 	// negation only on the caveat side. A short lookbehind window before
 	// the phrase now vetoes negated declarations.
-	if sdHasNegationBefore(lower, declIdx) {
+	if sdHasNegationBefore(lower, declIdx, declIdx+len(declPhrase)) {
 		return
 	}
 
@@ -226,13 +226,20 @@ var sdNegationPatterns = []string{
 
 // sdHasNegationBefore reports whether a negation appears in the window
 // immediately before the declaration phrase (#1499 case B).
-func sdHasNegationBefore(lowerText string, declIdx int) bool {
+// #4637: the window now extends THROUGH the declaration phrase (declEnd):
+// 13 of the 14 negation patterns end with the declared word itself
+// ("isn't done", "not finished", ...) - a window ending at declIdx could
+// never contain them, making them dead code; only "not yet" could hit.
+func sdHasNegationBefore(lowerText string, declIdx, declEnd int) bool {
 	const lookbehind = 48
 	start := declIdx - lookbehind
 	if start < 0 {
 		start = 0
 	}
-	window := lowerText[start:declIdx]
+	if declEnd > len(lowerText) || declEnd < declIdx {
+		declEnd = declIdx
+	}
+	window := lowerText[start:declEnd]
 	for _, n := range sdNegationPatterns {
 		from := 0
 		for {
