@@ -576,7 +576,18 @@ func (a *Agent) executeVerifyCommand(ctx context.Context, command string) *Verif
 		result.Passed = false
 		result.Errors = extractErrorLines(outputStr)
 		if len(result.Errors) == 0 {
-			result.Errors = []string{fmt.Sprintf("command failed: %v", err)}
+			// #4607: marker-free failure output ("signal: killed", segfault,
+			// OOM) extracts zero lines via the substring gate above, leaving
+			// the auto-repair loop with only "exit status 1" - zero information
+			// (and ratchet MatchErrors cannot learn a pattern from it either).
+			// Attach the truncated raw output tail (same 2000-char budget as
+			// result.Output) so both errorSummary consumers inject the real
+			// failure text.
+			fallback := fmt.Sprintf("command failed: %v", err)
+			if tail := truncStr(strings.TrimSpace(outputStr), 2000); tail != "" {
+				fallback += "\noutput tail:\n" + tail
+			}
+			result.Errors = []string{fallback}
 		}
 		debug.Log("verify", "FAILED: %d errors", len(result.Errors))
 	} else {

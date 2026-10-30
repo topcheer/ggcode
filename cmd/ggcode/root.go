@@ -48,6 +48,10 @@ import (
 	"github.com/topcheer/ggcode/internal/webui"
 )
 
+// persistSessionFlag gates --persist-session: plain sessions append every
+// message to the session store (write-only; no auto-resume on startup).
+var persistSessionFlag bool
+
 func NewRootCmd() *cobra.Command {
 	var cfgFile string
 	var resumeID string
@@ -158,7 +162,17 @@ func NewRootCmd() *cobra.Command {
 					if cfg.Language != "" {
 						lang = tui.NormalizeLanguage(cfg.Language)
 					}
-					if !tui.ConfirmHomeDir(lang) {
+					// #4604: pick the variant by mode FIRST - the linear
+					// frontend cannot host the full-screen Bubble Tea dialog
+					// (garbled on dumb terminals); it gets the line-oriented
+					// y/N twin with the same i18n copy instead.
+					var confirmed bool
+					if plainFlag || isDumbTerminal() {
+						confirmed = tui.ConfirmHomeDirPlain(lang)
+					} else {
+						confirmed = tui.ConfirmHomeDir(lang)
+					}
+					if !confirmed {
 						fmt.Fprintln(os.Stderr, "Please cd into a project directory and run ggcode again.")
 						return nil
 					}
@@ -190,14 +204,14 @@ func NewRootCmd() *cobra.Command {
 				}
 				if selectedID == "" {
 					// User cancelled — start fresh (no auto-load)
-					return run(cfg, cfgFile, "__new__", bypassFlag)
+					return run(cfg, cfgFile, "__new__", bypassFlag, plainFlag)
 				}
-				return run(cfg, cfgFile, selectedID, bypassFlag)
+				return run(cfg, cfgFile, selectedID, bypassFlag, plainFlag)
 			}
 			if newSession {
-				return run(cfg, cfgFile, "__new__", bypassFlag)
+				return run(cfg, cfgFile, "__new__", bypassFlag, plainFlag)
 			}
-			return run(cfg, cfgFile, resumeID, bypassFlag)
+			return run(cfg, cfgFile, resumeID, bypassFlag, plainFlag)
 		},
 	}
 
@@ -217,7 +231,8 @@ func NewRootCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&readOnlyAllowedDirs, "readOnlyAllowedDir", nil, "extra read-only sandbox directory for pipe mode (can be repeated)")
 	_ = cmd.Flags().MarkHidden("readOnlyAllowedDir")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
-	cmd.Flags().BoolVar(&plainFlag, "plain", false, "disable ANSI colors and decorative rendering (dumb terminals, screen readers, piped output; sets NO_COLOR)")
+	cmd.Flags().BoolVar(&plainFlag, "plain", false, "linear frontend: no TUI frames, line-oriented IO for dumb terminals/screen readers (sets NO_COLOR; TERM=dumb auto-selects)")
+	cmd.Flags().BoolVar(&persistSessionFlag, "persist-session", false, "persist each message of a --plain session to the session store (write-only; no auto-resume)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
 	cmd.Flags().StringVar(&outputSchemaPath, "output-schema", "", "path to a JSON Schema the final response must conform to (structured outputs; supported endpoints constrain decoding, others fall back to prompt guidance)")
 	// r415: per-run budget overrides (this invocation only, not persisted).
@@ -471,7 +486,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
+func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error {
 	trace := newStartupTrace("root.run")
 	defer trace.Mark("return")
 
@@ -928,6 +943,22 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	// Build MCP info for TUI
 	mcpInfos := toTuiMCPInfos(mcpMgr.Snapshot())
 	trace.Mark("build tui mcp info")
+
+	// #4604 Track 1: --plain or TERM=dumb (blank) degrade to the linear
+	// frontend BEFORE any TUI-shaped service (A2A server, lanchat hub,
+	// Bubble Tea program) starts - raw-mode frame refresh is precisely what
+	// dumb terminals cannot carry. The linear REPL rides the same agent and
+	// registry built above, so config hot-swap, tools, and sessions all
+	// keep working; only the visual panels are absent.
+	if plain || isDumbTerminal() {
+		trace.Mark("linear frontend fork")
+		code := RunLinearREPL(ag, registry, cfg, cfgFile, startupNotices)
+		if code != 0 {
+			debug.Close()
+			os.Exit(code)
+		}
+		return nil
+	}
 
 	// Start A2A server if enabled.
 	var a2aServer *a2a.Server

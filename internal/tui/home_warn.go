@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"bufio"
 	"fmt"
+	"os"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -125,6 +128,27 @@ func ConfirmHomeDir(lang Language) bool {
 		return true
 	}
 	return model.(*homeWarnModel).ShouldContinue()
+}
+
+// ConfirmHomeDirPlain is the line-oriented twin of ConfirmHomeDir for the
+// linear frontend (#4604): same i18n title/message, but printed as plain
+// text with a y/N prompt read from stdin - no Bubble Tea program, no raw
+// mode, safe on dumb terminals where the full-screen dialog is garbled.
+// Defaults to continue on unreadable/EOF input (mirrors the TUI fallback).
+func ConfirmHomeDirPlain(lang Language) bool {
+	fmt.Println(tr(lang, "home.warn.title"))
+	fmt.Println(tr(lang, "home.warn.message"))
+	fmt.Print("Continue in HOME directory? [y/N]: ")
+	sc := bufio.NewScanner(os.Stdin)
+	if !sc.Scan() {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(sc.Text())) {
+	case "y", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 // NormalizeLanguage converts a language string to a Language value.

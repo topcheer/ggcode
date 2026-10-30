@@ -50,7 +50,7 @@ func TestMatchingRulesForResult_NoMatchForSuccess(t *testing.T) {
 	}
 }
 
-func TestMatchingRulesForResult_SkipsWithoutErrorMarkers(t *testing.T) {
+func TestMatchingRulesForResult_PatternMatchesWithoutErrorMarkers(t *testing.T) {
 	dir := t.TempDir()
 	rs := NewRuleStore(dir)
 
@@ -61,12 +61,14 @@ func TestMatchingRulesForResult_SkipsWithoutErrorMarkers(t *testing.T) {
 		FixHint:      "Run goimports",
 	})
 
-	// Contains "import" but no error markers — should skip
-	result := "This file import is fine."
+	// #4605: the marker-word gate is gone - the rule's own MatchPattern is
+	// authoritative. The result contains the pattern itself while carrying
+	// none of the 9 old marker substrings ("cycle" is not a marker).
+	result := "go build: import cycle not allowed in internal/graph"
 	matched := rs.MatchingRulesForResult(result, "")
 
-	if len(matched) != 0 {
-		t.Fatalf("expected 0 matches without error markers, got %d", len(matched))
+	if len(matched) != 1 {
+		t.Fatalf("expected 1 match without error markers, got %d", len(matched))
 	}
 }
 

@@ -225,6 +225,29 @@ func TestPlainFlagRegistered(t *testing.T) {
 	}
 }
 
+// TestPersistSessionFlagRegistered pins the CLI surface of
+// --persist-session: registered, bool, default off (persistence is opt-in;
+// the default plain behavior stays memory-only). Wiring semantics are
+// covered by TestWirePlainPersistNilAgentGuard and live verification.
+func TestPersistSessionFlagRegistered(t *testing.T) {
+	cmd := NewRootCmd()
+	if err := cmd.ParseFlags([]string{"--persist-session"}); err != nil {
+		t.Fatalf("ParseFlags() error = %v", err)
+	}
+	v, err := cmd.Flags().GetBool("persist-session")
+	if err != nil {
+		t.Fatalf("GetBool(persist-session) error = %v", err)
+	}
+	if !v {
+		t.Fatal("expected --persist-session to be true after parsing")
+	}
+	fresh := NewRootCmd()
+	def, _ := fresh.Flags().GetBool("persist-session")
+	if def {
+		t.Fatal("default must be false: persistence is opt-in")
+	}
+}
+
 func TestResumeFlagPickerKeywordTriggersPicker(t *testing.T) {
 	cmd := NewRootCmd()
 	if err := cmd.ParseFlags([]string{"--resume-picker"}); err != nil {

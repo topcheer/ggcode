@@ -42,22 +42,11 @@ func (rs *RuleStore) MatchingRulesForResult(resultContent, toolArgs string) []Ru
 	// Match against the payload, not the advisory wrapping.
 	cleaned := stripHarnessAdvisories(resultContent)
 
-	// Quick exit: only check if the result looks like an error
-	// (case-insensitive check for common error markers)
-	lowerResult := strings.ToLower(cleaned)
-	hasErrorMarker := strings.Contains(lowerResult, "error") ||
-		strings.Contains(lowerResult, "fail") ||
-		strings.Contains(lowerResult, "undefined") ||
-		strings.Contains(lowerResult, "cannot find") ||
-		strings.Contains(lowerResult, "panic") ||
-		strings.Contains(lowerResult, "fatal") ||
-		strings.Contains(lowerResult, "not found") ||
-		strings.Contains(lowerResult, "denied") ||
-		strings.Contains(lowerResult, "refused")
-
-	if !hasErrorMarker {
-		return nil
-	}
+	// #4605: no error-marker pre-gate. Real failures like "signal: killed",
+	// "exit status 1", or "no such file" carry none of the classic markers
+	// ("error"/"fail"/...) and were silently dropped before pattern matching
+	// ever ran. The compiled patterns below are the precision instrument -
+	// let them decide; the marker list was a recall-killing shortcut.
 
 	var result []Rule
 	for _, r := range rs.rules {

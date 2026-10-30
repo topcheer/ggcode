@@ -49,6 +49,18 @@ type modelDiscoveryCacheFile struct {
 
 // DiscoverModels fetches the latest model list for a resolved endpoint when the remote API exposes it.
 func DiscoverModels(ctx context.Context, resolved *config.ResolvedEndpoint) ([]string, error) {
+	return discoverModels(ctx, resolved, false)
+}
+
+// ForceDiscoverModels refetches the model list, bypassing the TTL cache -
+// the refresh path for users who know the registry changed server-side
+// (linear frontend /endpoint --refresh-models). The fresh list is cached
+// like a normal discovery.
+func ForceDiscoverModels(ctx context.Context, resolved *config.ResolvedEndpoint) ([]string, error) {
+	return discoverModels(ctx, resolved, true)
+}
+
+func discoverModels(ctx context.Context, resolved *config.ResolvedEndpoint, force bool) ([]string, error) {
 	if resolved == nil {
 		return nil, fmt.Errorf("resolved endpoint is nil")
 	}
@@ -66,6 +78,9 @@ func DiscoverModels(ctx context.Context, resolved *config.ResolvedEndpoint) ([]s
 		return nil, fmt.Errorf("protocol %q does not support model discovery", resolved.Protocol)
 	}
 	cacheKey := modelDiscoveryCacheKey(resolved)
+	if force {
+		invalidateCachedDiscoveredModels(cacheKey)
+	}
 	cachedModels, cacheErr := loadCachedDiscoveredModels(cacheKey)
 	if len(cachedModels) > 0 {
 		return cachedModels, nil
@@ -364,6 +379,24 @@ func normalizedDiscoveryHost(baseURL string) string {
 		host = strings.TrimSpace(parsed.Host)
 	}
 	return strings.ToLower(host)
+}
+
+// invalidateCachedDiscoveredModels drops the cache entry for cacheKey so the
+// next load refetches from the remote API (force-refresh path).
+func invalidateCachedDiscoveredModels(cacheKey string) {
+	if cacheKey == "" {
+		return
+	}
+	modelDiscoveryCacheMu.Lock()
+	defer modelDiscoveryCacheMu.Unlock()
+	if err := ensureModelDiscoveryCacheLoadedLocked(); err != nil {
+		return
+	}
+	if _, ok := modelDiscoveryCache[cacheKey]; !ok {
+		return
+	}
+	delete(modelDiscoveryCache, cacheKey)
+	_ = persistModelDiscoveryCacheLocked()
 }
 
 func loadCachedDiscoveredModels(cacheKey string) ([]string, error) {
