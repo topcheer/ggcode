@@ -2893,8 +2893,18 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 		}
 		b.mu.Lock()
 		if th := b.tunnelHost; th != nil {
+			// #4495: currentSes is a raw snapshot - it is nil until the first
+			// session is created. A phone connecting to the share tunnel on a
+			// cold start (no message sent yet) panicked here on the bare
+			// .Title deref while holding b.mu. Zero-value the session-derived
+			// fields instead; cf. the cur != nil gate before BindSession below
+			// and pushTunnelSessionInfo.
+			var title string
+			if currentSes != nil {
+				title = currentSes.Title
+			}
 			th.SetSessionInfo(tunnel.SessionInfoData{
-				Title:     currentSes.Title,
+				Title:     title,
 				Workspace: b.workingDir,
 				Model:     model,
 				Provider:  vendorName,
@@ -3172,7 +3182,24 @@ func (b *ChatBridge) RequestAskUser(ctx context.Context, requestID string, req t
 	// agent tool call forever. Bound the wait exactly like RequestApproval.
 	askCtx, cancelAsk := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Minute)
 	defer cancelAsk()
-	return b.interactions.AwaitAskUser(askCtx, request)
+	resp, err := b.interactions.AwaitAskUser(askCtx, request)
+	if askCtx.Err() != nil {
+		// #4493 (the #4250 pattern RequestApproval already follows): the
+		// timeout closed the wait on the AGENT side only - the desktop
+		// questionnaire modal and the mobile ask-user card keyed to this ID
+		// kept showing "waiting" forever, and a late tap looked accepted
+		// while being silently dropped. Emit the close events so neither
+		// end hangs.
+		if b.OnStreamEvent != nil {
+			raw, _ := json.Marshal(map[string]string{"requestID": requestID, "reason": "timeout"})
+			b.OnStreamEvent("ask_user:cancel", raw)
+		}
+		agentruntime.PushTunnelAskUserResult(b.currentTunnelBroker(), requestID, agentruntime.TunnelStateUpdate{
+			HasStatus: true,
+			Status:    tunnel.StatusBusy,
+		})
+	}
+	return resp, err
 }
 
 // RespondApproval delivers a desktop-originated approval decision to the
@@ -3252,6 +3279,17 @@ func (b *ChatBridge) PendingApprovalRequest() (string, string, bool) {
 // waiting channel.
 func (b *ChatBridge) RespondAskUser(requestID string, response tool.AskUserResponse) {
 	if _, ok := b.interactions.ResolveAskUser(requestID, response); !ok {
+		// #4493: a late desktop answer after the #1023 timeout (or any other
+		// close) was dropped silently - the user saw their click accepted.
+		// Tell both ends the request is gone (#4250 stale pattern).
+		if b.OnStreamEvent != nil {
+			raw, _ := json.Marshal(map[string]string{"requestID": requestID, "reason": "stale"})
+			b.OnStreamEvent("ask_user:cancel", raw)
+		}
+		agentruntime.PushTunnelAskUserResult(b.currentTunnelBroker(), requestID, agentruntime.TunnelStateUpdate{
+			HasStatus: true,
+			Status:    tunnel.StatusBusy,
+		})
 		return
 	}
 
@@ -3331,6 +3369,12 @@ func (b *ChatBridge) HandleMobileAskUserResponse(data tunnel.AskUserResponseData
 	}
 	response := agentruntime.BuildAskUserResponseFromTunnel(req.Request, data.Status, data.Answers)
 	if _, ok := b.interactions.ResolveAskUser(data.ID, response); !ok {
+		// #4493: symmetric stale feedback for the MOBILE side - a late tap
+		// after timeout was dropped with no UI feedback. Close the card.
+		agentruntime.PushTunnelAskUserResult(b.currentTunnelBroker(), data.ID, agentruntime.TunnelStateUpdate{
+			HasStatus: true,
+			Status:    tunnel.StatusBusy,
+		})
 		return
 	}
 
@@ -3753,6 +3797,45 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 		b.mu.Lock()
 		b.cancel = nil
 		b.mu.Unlock()
+
+		// #4150: mirror sendMessageData/SendContent run-end defers — this
+		// third run-starter was the only one NOT draining the pending queue,
+		// so a hidden message popped at the head left every later visible
+		// message stranded (UI idle, queue non-empty) until the next user
+		// action. All three run-end defers must pump the queue symmetrically.
+		if pending, ok := b.drainPending(); ok {
+			if b.OnStreamEvent != nil {
+				b.OnStreamEvent("pending_consumed", nil)
+			}
+			if pending.Hidden {
+				_ = b.SendHiddenText(pending.Text)
+			} else {
+				if broker := b.currentTunnelBroker(); broker != nil {
+					broker.PushSystemMessage("Processing queued message...")
+				}
+				data := tunnel.MessageData{Text: pending.Text}
+				src := "desktop"
+				exclude := ""
+				if pending.Meta != nil {
+					data = *pending.Meta
+					src = "mobile"
+				}
+				// #461/#475: pop this queued message's OWN source/exclude pair
+				// (FIFO, index-aligned with the queue), same as the other two
+				// drain sites.
+				b.mu.Lock()
+				if len(b.pendingSource) > 0 {
+					src = b.pendingSource[0]
+					b.pendingSource = b.pendingSource[1:]
+				}
+				if len(b.pendingExclude) > 0 {
+					exclude = b.pendingExclude[0]
+					b.pendingExclude = b.pendingExclude[1:]
+				}
+				b.mu.Unlock()
+				_ = b.sendMessageData(data, src, exclude)
+			}
+		}
 	}()
 
 	if b.agent == nil {
@@ -3781,17 +3864,18 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	b.mu.Lock()
 	b.runSes = b.currentSes
 	b.mu.Unlock()
-	// #1701 case 3: setRunPersistSnapshot bumps runGeneration itself; the
-	// re-read above raced another run's bump between the two lock windows
-	// and could capture THAT generation, defeating emitIfCurrent - the
-	// same inversion #1511 removed from the text main path. Hold the lock
-	// across bump-and-capture so runGen is exactly the generation this
-	// run created (#1181 guard pattern).
+	// #4494: do NOT bump runGeneration here — this run claimed ownership at
+	// entry (the bump above startDesktopTurnLocked). The old unconditional
+	// #1701-style bump re-claimed ownership after the long InitAgent window:
+	// a Cancel racing between entry and here finished against the OLD
+	// generation while the re-bump re-took the finish path - double run_done
+	// and the real run's persistRunMessages skipped (#1181/#1511 forbid this
+	// pattern; SendContent L4736 uses the same guarded refresh). Only refresh
+	// the persist target while this run is still the owner.
 	b.mu.Lock()
-	b.runGeneration++
-	b.activeRunGen = b.runGeneration
-	b.persistSession = b.runSes
-	runGen = b.runGeneration
+	if b.activeRunGen == runGen {
+		b.persistSession = b.runSes
+	}
 	b.mu.Unlock()
 	err := b.agent.RunStream(ctx, text, func(ev provider.StreamEvent) {
 		b.emitIfCurrent(runGen, ev)
@@ -4129,6 +4213,10 @@ func parseA2ATimeout(s string) time.Duration {
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
+		// #4397: silent fallback is undiagnosable (same fix as the
+		// cmd/ggcode twin) - name the rejected value and the default
+		// actually used.
+		fmt.Fprintf(os.Stderr, "warning: invalid a2a.task_timeout %q (%v), using default %v\n", s, err, 5*time.Minute)
 		return 5 * time.Minute
 	}
 	return d

@@ -230,6 +230,12 @@ type Skill struct {
 	Description string   `json:"description"`
 	Tags        []string `json:"tags,omitempty"`
 	Examples    []string `json:"examples,omitempty"`
+	// Source marks where the skill comes from: "" for the generic built-in
+	// set every instance advertises, or "user"/"project" for locally
+	// installed skills injected via SetSkills (#3547 gap: A2A peers could
+	// not discover an instance's real skill assets - all nodes broadcast
+	// the same hardcoded card).
+	Source string `json:"source,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

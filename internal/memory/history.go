@@ -110,6 +110,25 @@ func (am *AutoMemory) HistoryVersions(key string) []MemoryVersion {
 // participates as the newest version; archived versions fill earlier
 // intervals [version.ModTime, nextVersion.ModTime). Returns found=false when
 // the key did not exist at asOf yet.
+// tombstoneTimes returns every recorded deletion instant for safe: the
+// #4334 timestamp-suffixed tombstones plus the legacy single tombstone
+// (kept so pre-#4334 deletion instants remain visible). sanitized keys are
+// restricted to [a-zA-Z0-9_-], so the glob pattern itself is safe.
+func (am *AutoMemory) tombstoneTimes(safe string) []time.Time {
+	var times []time.Time
+	if matches, gErr := filepath.Glob(filepath.Join(am.dir, historyDirName, safe+".tombstone.*")); gErr == nil {
+		for _, m := range matches {
+			if info, statErr := os.Stat(m); statErr == nil {
+				times = append(times, info.ModTime())
+			}
+		}
+	}
+	if info, statErr := os.Stat(filepath.Join(am.dir, historyDirName, safe+".tombstone")); statErr == nil {
+		times = append(times, info.ModTime())
+	}
+	return times
+}
+
 func (am *AutoMemory) ReadMemoryAsOf(key string, asOf time.Time) (content string, held time.Time, found bool, err error) {
 	safe := disambiguateKey(key, sanitizeKey(key))
 	path := filepath.Join(am.dir, safe+".md")
@@ -125,19 +144,17 @@ func (am *AutoMemory) ReadMemoryAsOf(key string, asOf time.Time) (content string
 	if info, statErr := os.Stat(path); statErr == nil {
 		versions = append(versions, snap{modTime: info.ModTime(), path: path})
 	}
-	// #3880/#3924: a tombstone (written by DeleteMemory) marks the deletion
-	// instant and CUTS the interval of the last pre-delete version: an
-	// as_of at/after the deletion resolves nothing UNLESS a newer version
-	// (a recreate) was written after the tombstone - then that version's
-	// own interval starts and selection picks it naturally. This keeps the
-	// three-segment truth: old version / deleted gap / recreated version.
-	// (The tombstone has no .md suffix, so historyVersions never lists it
-	// as a content version.)
-	tombPath := filepath.Join(am.dir, historyDirName, safe+".tombstone")
-	tombMTime := time.Time{}
-	if tInfo, tErr := os.Stat(tombPath); tErr == nil {
-		tombMTime = tInfo.ModTime()
-	}
+	// #3880/#3924/#4334: tombstones (written by DeleteMemory) mark deletion
+	// instants and CUT the interval of the last pre-delete version: an as_of
+	// at/after ANY deletion newer than the chosen version resolves nothing
+	// UNLESS a newer version (a recreate) was written after it - then that
+	// version's own interval starts and selection picks it naturally. This
+	// keeps the three-segment truth: old version / deleted gap / recreated
+	// version, and #4334 extends it to delete->recreate->delete (every
+	// deletion keeps its own tombstone; the legacy single tombstone is
+	// still honored). (Tombstones have no .md suffix, so historyVersions
+	// never lists them as content versions.)
+	tombTimes := am.tombstoneTimes(safe)
 	if len(versions) == 0 {
 		return "", time.Time{}, false, nil
 	}
@@ -158,12 +175,16 @@ func (am *AutoMemory) ReadMemoryAsOf(key string, asOf time.Time) (content string
 	if readErr != nil {
 		return "", time.Time{}, false, readErr
 	}
-	// #3924: the chosen version predates the tombstone and the as_of is at
-	// or after the deletion - this is the DELETED GAP (no recreate landed
-	// before as_of), not the old version's interval.
-	if !tombMTime.IsZero() && versions[chosen].modTime.Before(tombMTime) && !asOf.Before(tombMTime) {
-		debug.Log("memory", "as_of %s falls in the deleted gap of %q", asOf.Format(time.RFC3339), key)
-		return "", time.Time{}, false, nil
+	// #3924/#4334: the chosen version predates a tombstone and the as_of is
+	// at or after that deletion - this is a DELETED GAP (no recreate landed
+	// before as_of), not the old version's interval. Every recorded
+	// deletion instant is checked independently so a double delete keeps
+	// BOTH gaps.
+	for _, t := range tombTimes {
+		if versions[chosen].modTime.Before(t) && !asOf.Before(t) {
+			debug.Log("memory", "as_of %s falls in the deleted gap of %q", asOf.Format(time.RFC3339), key)
+			return "", time.Time{}, false, nil
+		}
 	}
 	return string(data), versions[chosen].modTime, true, nil
 }

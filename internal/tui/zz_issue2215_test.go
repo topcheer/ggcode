@@ -33,15 +33,18 @@ func TestIssue2215TGRollbackWired(t *testing.T) {
 	}
 	src := string(b)
 	for _, frag := range []string{
-		"rollbackTGCreate(name, err)",   // ensure failure
-		"m.rollbackTGCreate(name, err)", // start failure (method recv)
-		"RemoveIMAdapter(name)",         // rollback removes
+		// #4486 extended the rollback signature with the pre-create
+		// IM.Enabled value so a failed create also restores the global
+		// switch; the wiring at both failure points is unchanged.
+		"rollbackTGCreate(name, err, imEnabledBefore)",   // ensure failure
+		"m.rollbackTGCreate(name, err, imEnabledBefore)", // start failure (method recv)
+		"RemoveIMAdapter(name)",                          // rollback removes
 	} {
 		if !strings.Contains(src, frag) {
 			t.Errorf("tg create path must wire %s (#2215 rollback)", frag)
 		}
 	}
-	if strings.Count(src, "rollbackTGCreate(name, err)") < 2 {
+	if strings.Count(src, "rollbackTGCreate(name, err, imEnabledBefore)") < 2 {
 		t.Error("both failure points (ensure + start) must roll back")
 	}
 }

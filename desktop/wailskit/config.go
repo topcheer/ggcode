@@ -32,6 +32,20 @@ func SetConfig(cfg *config.Config) {
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	globalCfg = cfg
+	// #4497: re-baseline the sync watcher on the (possibly new) workspace's
+	// file. startConfigFileSync's sync.Once only ever stats the FIRST
+	// workspace's config; after a switch the poller compared the new path's
+	// mtime against the OLD file's baseline - an external edit with a
+	// not-newer mtime never triggered a reload, and the next desktop save
+	// clobbered it with the stale in-memory snapshot (#1847 across
+	// workspaces). noteConfigFileSaved re-stats under our lock; if the new
+	// file does not exist yet, drop the baseline flag so its first
+	// appearance establishes a fresh one.
+	if st, err := os.Stat(trackedConfigPathLocked()); err == nil {
+		cfgFileLastMod, cfgFileLastModOnce = st.ModTime(), true
+	} else {
+		cfgFileLastModOnce = false
+	}
 	startConfigFileSync()
 }
 
@@ -376,6 +390,23 @@ func UpdateConfig(values map[string]interface{}) error {
 			return fmt.Errorf("unknown impersonation preset %q", v)
 		}
 	}
+	// #4385: defaultMode/a2aPort were written raw while the dedicated path
+	// (SaveDefaultModePreference) normalizes + whitelists. A typo'd value
+	// (" bypass") saved fine here, silently downgraded this process at
+	// ParsePermissionMode, then bricked the NEXT config.Load (hard error on
+	// unknown default_mode, config.go:1774; negative a2a.port ditto,
+	// config.go:1788) with no self-service recovery short of hand-editing
+	// the YAML. Validate before mutate (#740).
+	if v, ok := values["defaultMode"].(string); ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "supervised", "auto", "bypass", "autopilot":
+		default:
+			return fmt.Errorf("defaultMode %q must be supervised or bypass (legacy aliases auto/autopilot normalize)", v)
+		}
+	}
+	if v, ok := values["a2aPort"].(float64); ok && v < 0 {
+		return fmt.Errorf("a2aPort must not be negative")
+	}
 
 	if v, ok := values["vendor"].(string); ok && v != "" {
 		cfg.Vendor = v
@@ -393,7 +424,10 @@ func UpdateConfig(values map[string]interface{}) error {
 		cfg.ExtraPrompt = v
 	}
 	if v, ok := values["defaultMode"].(string); ok {
-		cfg.DefaultMode = v
+		// Whitelisted above (#4385); normalize the same way
+		// SaveDefaultModePreference does so the persisted value matches the
+		// dedicated path's write.
+		cfg.DefaultMode = strings.ToLower(strings.TrimSpace(v))
 	}
 	if v, ok := values["baseURL"].(string); ok && v != "" {
 		// Update the current endpoint's base_url. Existence was pre-validated
@@ -424,6 +458,16 @@ func UpdateConfig(values map[string]interface{}) error {
 	if v, ok := values["probeContext"].(bool); ok {
 		cfg.ProbeContext = v
 	}
+	impersonationRequested := false
+	var pendingImpersonationPreset *provider.ImpersonationPreset
+	// #4499: CustomVersion is an independent field (the snapshot side and
+	// ApplyImpersonation both treat it as such) - its only consumer used to
+	// sit INSIDE the impersonatePreset branch, so a form submitting just the
+	// changed version (omitting the unchanged preset) silently dropped the
+	// update. Consume it unconditionally when present.
+	if cv, ok := values["impersonateCustomVersion"].(string); ok {
+		cfg.Impersonation.CustomVersion = cv
+	}
 	if v, ok := values["impersonatePreset"].(string); ok {
 		// #1815 case 2: this path must go through the same validation and
 		// package-global update as ApplyImpersonation. Writing cfg directly
@@ -442,18 +486,11 @@ func UpdateConfig(values map[string]interface{}) error {
 				}
 			}
 		}
-		// #3852 B: CustomVersion must be written BEFORE
-		// SetActiveImpersonation below - the old order activated the
-		// runtime with the stale version while persisting the new one to
-		// disk, so impersonated header version numbers stayed wrong until
-		// the next unrelated config change.
-		if cv, ok := values["impersonateCustomVersion"].(string); ok {
-			cfg.Impersonation.CustomVersion = cv
-		}
-		// Preserve CustomHeaders/CustomVersion already in cfg; version falls
-		// back to the persisted one so SetActiveImpersonation sees the same
-		// state the next cold init would rebuild from.
-		provider.SetActiveImpersonation(preset, cfg.Impersonation.CustomVersion, cfg.Impersonation.CustomHeaders)
+		// #3852 B note: the CustomVersion write moved to the standalone block
+		// above (#4499); the version is on cfg before any runtime activation
+		// below, preserving the #3852 ordering contract.
+		impersonationRequested = true
+		pendingImpersonationPreset = preset
 		cfg.Impersonation.Preset = v
 	}
 	if v, ok := values["streamEncoder"].(string); ok {
@@ -505,6 +542,13 @@ func UpdateConfig(values map[string]interface{}) error {
 
 	if err := cfg.Save(); err != nil {
 		return err
+	}
+	// #4387: activate the runtime only after persistence succeeded - see the
+	// impersonatePreset branch above. "none"/"" presets still route through
+	// here (preset=nil) so switching back to no-impersonation clears the
+	// active headers at the same post-Save point.
+	if impersonationRequested {
+		provider.SetActiveImpersonation(pendingImpersonationPreset, cfg.Impersonation.CustomVersion, cfg.Impersonation.CustomHeaders)
 	}
 	noteConfigFileSaved()
 	// Save() strips instance-sourced keys from the global file write; persist
@@ -835,8 +879,6 @@ func applyImpersonationLocked(presetID, version string, customHeaders map[string
 		mergedHeaders = customHeaders
 	}
 
-	provider.SetActiveImpersonation(preset, version, mergedHeaders)
-
 	cfg.Impersonation = config.ImpersonationConfig{
 		Preset:        presetID,
 		CustomVersion: version,
@@ -845,6 +887,12 @@ func applyImpersonationLocked(presetID, version string, customHeaders map[string
 	if err := cfg.Save(); err != nil {
 		return err
 	}
+	// #4387: activate the runtime only after persistence succeeded - the old
+	// order set the package-global headers first, so a failed Save (disk
+	// full/permissions) left the running bridges impersonated while disk
+	// kept the old value: a session-long runtime/disk fork violating the
+	// #740 failure-atomicity contract (self-documented at UpdateConfig).
+	provider.SetActiveImpersonation(preset, version, mergedHeaders)
 	noteConfigFileSaved()
 	// #3852 A / #282 family: cfg.Save() strips instance-sourced keys from
 	// the global file. When the instance carries an impersonation section,
@@ -929,10 +977,28 @@ func (b *ChatBridge) SaveHooks(cfg hooks.HookConfig) error {
 		b.agent.SetHookConfig(cfg)
 	}
 	err := b.cfg.Save()
-	if err == nil {
-		noteConfigFileSaved()
+	if err != nil {
+		return err
 	}
-	return err
+	// #4384: hooks is an instance-managed field (mergeHookConfig registers
+	// tracked["hooks"]; #4315/#4316) — Save() strips instance-sourced keys
+	// from the global file write, so without the write-back below the edit
+	// lived only in memory and the next restart's instance merge silently
+	// reverted it while SaveHooks had already returned nil. Mirror
+	// persistTouchedInstanceFields' InstanceFields gate: write the instance
+	// file only when hooks is actually instance-sourced on this workspace.
+	if b.cfg.HasInstanceConfigAttached() {
+		for _, yk := range b.cfg.InstanceFields() {
+			if yk == "hooks" {
+				if err := b.cfg.SaveInstanceScoped(b.cfg.InstanceWorkspace()); err != nil {
+					return err
+				}
+				break
+			}
+		}
+	}
+	noteConfigFileSaved()
+	return nil
 }
 
 // TestHookMatchResult is the result of testing a hook match pattern.

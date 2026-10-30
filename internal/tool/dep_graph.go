@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"os"
@@ -181,7 +182,11 @@ func populateActionResult(result *depGraphResult, args struct {
 			return fmt.Errorf("target parameter is required for reverse_deps action")
 		}
 		result.Target = args.Target
-		result.ReverseDeps = findReverseDeps(graph, args.Target, args.MaxResults)
+		deps, err := findReverseDeps(graph, args.Target, args.MaxResults)
+		if err != nil {
+			return err
+		}
+		result.ReverseDeps = deps
 	case "cycles":
 		result.Cycles = findCycles(graph, args.MaxResults)
 	case "hotspots":
@@ -229,6 +234,15 @@ func buildDepGraph(ctx context.Context, modRoot, modulePath string) (map[string]
 			return filepath.SkipDir
 		}
 		if !shouldParseFile(info) {
+			return nil
+		}
+		// #4438: evaluate build constraints with the default build.Context
+		// (host GOOS/GOARCH + release tags, NO custom -tags) so files excluded
+		// from a plain `go build` - e.g. //go:build goolm guards - no longer
+		// pollute the graph with imports of packages that are not compiled.
+		// A constraint-read error falls through to INCLUDE the file: skipping
+		// on transient IO would silently drop real packages from the graph.
+		if match, merr := build.Default.MatchFile(filepath.Dir(path), filepath.Base(path)); merr == nil && !match {
 			return nil
 		}
 		select {
@@ -371,16 +385,25 @@ func buildOverview(graph map[string]*pkgNode, fileCount map[string]int, maxResul
 }
 
 // findReverseDeps finds all packages that import the target (directly or transitively).
-func findReverseDeps(graph map[string]*pkgNode, target string, maxResults int) []string {
+// #4438: a bare name matching several distinct packages is ambiguous - it
+// silently unioned unrelated subtrees into one result. It now errors
+// listing the candidates so the caller can pass a longer suffix. Zero
+// matches also errors: silent nil was indistinguishable from "nobody
+// imports this" and hid typos.
+func findReverseDeps(graph map[string]*pkgNode, target string, maxResults int) ([]string, error) {
 	// Find matching package(s)
 	var targets []string
 	for pkgPath := range graph {
-		if pkgPath == target || strings.HasSuffix(pkgPath, "/"+target) || filepath.Base(pkgPath) == target {
+		if pkgPath == target || strings.HasSuffix(pkgPath, "/"+target) {
 			targets = append(targets, pkgPath)
 		}
 	}
+	sort.Strings(targets)
 	if len(targets) == 0 {
-		return nil
+		return nil, fmt.Errorf("target %q not found in dependency graph; no package import path matches this suffix", target)
+	}
+	if len(targets) > 1 {
+		return nil, fmt.Errorf("target %q is ambiguous: matches %d packages (%s); use the full import path or a longer suffix", target, len(targets), strings.Join(targets, ", "))
 	}
 
 	// BFS to find all reverse dependencies (transitive)
@@ -410,7 +433,7 @@ func findReverseDeps(graph map[string]*pkgNode, target string, maxResults int) [
 		}
 	}
 	sort.Strings(result)
-	return result
+	return result, nil
 }
 
 // findCycles detects import cycles using DFS-based cycle detection.

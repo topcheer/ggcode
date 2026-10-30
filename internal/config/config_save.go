@@ -98,7 +98,18 @@ func (c *Config) Save() error {
 	//    with the Load-time disk snapshot (c.diskStrSnap) these identify fields
 	//    that were explicitly cleared: the deep-merge below would otherwise
 	//    keep the stale file value for a key the overlay no longer carries.
+	//    3b. (#4506) Same collection for ZERO NUMBERS: the public contract
+	//    (e.g. SetEndpointModelLimits "A value of 0 means 'unset' and will
+	//    clear the field") requires 0 to clear the persisted value, but the
+	//    overlay strips zeroes (3) and deep-merge keeps absent keys - so the
+	//    disk value survived every save. Collected here so the merged map can
+	//    be pruned below.
 	clearedInMemory := collectEmptyStringPaths(currentRaw)
+	// #4506 note: raw-map collection CANNOT see the zeros - ContextWindow/
+	// MaxTokens carry yaml omitempty, so yaml.Marshal drops 0 before we ever
+	// look. The contract fields are collected from the CONFIG STRUCT instead
+	// (endpointZeroClearPaths below).
+	clearedZeros := endpointZeroClearPaths(c)
 	cleanZeroYAMLValues(currentRaw)
 
 	// 4. Build the data to write: merge onto existing file, or full write.
@@ -115,6 +126,14 @@ func (c *Config) Save() error {
 			// key whose on-disk value changed since our Load (another process)
 			// is preserved — the #284 semantics.
 			applyClearedTombstones(existingRaw, c.diskStrSnap, clearedInMemory)
+			// (#4506) Delete numeric keys the merged view says are 0 - the
+			// "0 = unset/clear" contract. Numeric fields carry no Load-time
+			// string snapshot, so there is no #284 changed-on-disk guard
+			// here; a 0 in memory against a nonzero on-disk value is BY
+			// CONTRACT an explicit clear, so deleting is the documented
+			// behavior (a field merely never set is 0 in memory AND absent
+			// from disk, which this loop no-ops on).
+			applyZeroNumberClears(existingRaw, clearedZeros)
 			merged, marshalErr := yaml.Marshal(existingRaw)
 			if marshalErr != nil {
 				return fmt.Errorf("marshaling merged config: %w", marshalErr)
@@ -139,8 +158,14 @@ func (c *Config) Save() error {
 		return err
 	}
 	// Re-migrate any plaintext secrets that yaml.Marshal produced.
+	// #4505: the migration intent (config_migration.go) is "no plaintext
+	// key readable on disk" - a failure here (read-only/locked keys.env
+	// dir) previously only hit debug.Log, so Save() reported success while
+	// plaintext keys stayed in ggcode.yaml with no user-visible signal and
+	// no retry path. Surface it: the config IS saved, but the security
+	// migration did not complete.
 	if migrated, migrateErr := MigratePlaintextAPIKeys(c.FilePath); migrateErr != nil {
-		debug.Log("config", "Save: post-save migration error: %v", migrateErr)
+		return fmt.Errorf("config saved, but migrating plaintext API keys out of %s failed (they remain readable on disk): %w", c.FilePath, migrateErr)
 	} else if len(migrated) > 0 {
 		if err := recompactConfigFile(c.FilePath); err != nil {
 			debug.Log("config", "Save: recompact error: %v", err)
@@ -152,7 +177,8 @@ func (c *Config) Save() error {
 	// vendors were excluded from the file, any plaintext key found here is
 	// global-sourced and belongs in the global keys.env (#293).
 	if migrated, migrateErr := MigrateVendorsFilePlaintextAPIKeys(VendorsPath(extDir), ""); migrateErr != nil {
-		debug.Log("config", "Save: vendors.yaml migration error: %v", migrateErr)
+		// #4505: same security-visibility rationale as the main-file migration.
+		return fmt.Errorf("config saved, but migrating plaintext API keys out of vendors.yaml failed (they remain readable on disk): %w", migrateErr)
 	} else if len(migrated) > 0 {
 		debug.Log("config", "Save: migrated %d plaintext API keys out of vendors.yaml", len(migrated))
 	}
@@ -167,9 +193,17 @@ func globalOnlyVendors(merged, globalSnapVendors map[string]VendorConfig) map[st
 		return merged
 	}
 	out := make(map[string]VendorConfig, len(merged))
-	for name, vc := range merged {
-		if _, isGlobal := globalSnapVendors[name]; isGlobal {
-			out[name] = vc
+	for name := range merged {
+		if gvc, isGlobal := globalSnapVendors[name]; isGlobal {
+			// #4262: a same-named vendor OVERRIDDEN by the instance merge
+			// (#2289 instance-wins) carries instance-sourced fields (api_key/
+			// base_url overrides); writing the merged struct to the global
+			// vendors.yaml/keys.env would leak the workspace-private key into
+			// the shared ~/.ggcode every other workspace loads. Write the
+			// snapshot's ORIGINAL struct instead. Runtime global edits are
+			// unaffected: they flow through SyncVendorToGlobalSnapshot (#368),
+			// which refreshes the snapshot before Save runs.
+			out[name] = gvc
 		}
 	}
 	return out
@@ -225,6 +259,41 @@ func snapshotDiskStringKeys(m map[string]interface{}) map[string]string {
 	}
 	walk(nil, m)
 	return out
+}
+
+// endpointZeroClearPaths returns the YAML paths of the two documented
+// "0 = unset/clear" contract fields (SetEndpointModelLimits: context_window
+// and max_tokens) for every endpoint whose in-memory value is 0. Struct-level
+// collection is required because yaml omitempty drops 0 at marshal time, so
+// no raw-map pass can see them.
+func endpointZeroClearPaths(c *Config) map[string]bool {
+	out := map[string]bool{}
+	if c == nil {
+		return out
+	}
+	for vName, vc := range c.Vendors {
+		for eName, ep := range vc.Endpoints {
+			if ep.ContextWindow == 0 {
+				out["vendors."+vName+".endpoints."+eName+".context_window"] = true
+			}
+			if ep.MaxTokens == 0 {
+				out["vendors."+vName+".endpoints."+eName+".max_tokens"] = true
+			}
+		}
+	}
+	return out
+}
+
+// applyZeroNumberClears deletes the collected zero-number paths from the
+// merged disk view (#4506): without this, the "0 clears the field"
+// contract never reached the file because the merge overlay strips zeroes
+// and deep-merge preserves absent keys.
+func applyZeroNumberClears(existingRaw map[string]interface{}, zeros map[string]bool) {
+	for path := range zeros {
+		if _, exists := yamlPathLookup(existingRaw, path); exists {
+			yamlPathDelete(existingRaw, strings.Split(path, "."))
+		}
+	}
 }
 
 // collectEmptyStringPaths returns the dotted paths of "" string leaves in m.

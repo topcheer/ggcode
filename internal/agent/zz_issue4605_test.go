@@ -32,7 +32,7 @@ func TestIssue4605_MarkerFreeErrorShapesStillMatch(t *testing.T) {
 				MatchPattern: tc.pattern,
 				FixHint:      "GOFLAGS=-p=1 retry",
 			})
-			matched := rs.MatchingRulesForResult(tc.result)
+			matched := rs.MatchingRulesForResult(tc.result, "")
 			if len(matched) != 1 {
 				t.Fatalf("expected 1 reactive match for marker-free error %q, got %d", tc.result, len(matched))
 			}
@@ -53,7 +53,7 @@ func TestIssue4605_NonMatchingSuccessStillQuiet(t *testing.T) {
 		FixHint:      "retry with GOFLAGS=-p=1",
 	})
 	// Successful output must still not trigger injection.
-	if got := rs.MatchingRulesForResult("ok  all tests passed"); len(got) != 0 {
+	if got := rs.MatchingRulesForResult("ok  all tests passed", ""); len(got) != 0 {
 		t.Fatalf("expected 0 matches for success output, got %d", len(got))
 	}
 }

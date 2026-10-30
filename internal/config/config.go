@@ -225,10 +225,18 @@ type MCPServerConfig struct {
 	// approved baseline are logged silently instead of raising the
 	// OnToolDrift callback. For servers under active development whose
 	// tool definitions legitimately churn.
-	AllowToolDrift bool   `yaml:"allow_tool_drift,omitempty" json:"allow_tool_drift,omitempty"`
-	Source         string `yaml:"-" json:"-"`
-	OriginPath     string `yaml:"-" json:"-"`
-	Migrated       bool   `yaml:"-" json:"-"`
+	AllowToolDrift bool `yaml:"allow_tool_drift,omitempty" json:"allow_tool_drift,omitempty"`
+	// #4386 form clear sentinels: Command/URL are strings, so the patch
+	// layer's "empty = not provided" semantics leave the form no way to
+	// clear them - an emptied field saved "successfully" while the old
+	// value silently resurrected. Mirrors #979's env_clear / #1434-B's
+	// args_clear (which use non-nil empties because their fields are
+	// maps/slices). Never serialized.
+	CommandClear bool   `yaml:"-" json:"-"`
+	URLClear     bool   `yaml:"-" json:"-"`
+	Source       string `yaml:"-" json:"-"`
+	OriginPath   string `yaml:"-" json:"-"`
+	Migrated     bool   `yaml:"-" json:"-"`
 }
 
 // PluginConfigEntry describes a single plugin from the config file.
@@ -1733,6 +1741,12 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(ep.AuthType) == "" {
 		ep.AuthType = "api_key"
+		// #4504: ep is a MAP-VALUE COPY - the defaults written above (and
+		// ep.Provider below) landed on the copy and never reached
+		// vc.Endpoints, so post-Load readers of the map still saw an empty
+		// AuthType. ResolveCurrentProvider's own fallback masked it, but any
+		// direct reader got "". Write the endpoint back.
+		vc.Endpoints[c.Endpoint] = ep
 	}
 	if strings.TrimSpace(c.Model) == "" && strings.TrimSpace(ep.SelectedModel) == "" && strings.TrimSpace(ep.DefaultModel) == "" {
 		return fmt.Errorf("model must not be empty")
@@ -1939,6 +1953,16 @@ func BuildSystemPrompt(extraPrompt, workingDir, language string, toolNames []str
 
 	var sb strings.Builder
 	sb.WriteString(DefaultSystemPrompt)
+	// GGCODE_NO_COAUTHOR opts out of the automatic Co-Authored-By trailer
+	// (see internal/tool coAuthorInjectionDisabled). Drop the prompt-side
+	// directive too, otherwise the model keeps hand-writing the trailer and
+	// the env var is meaningless.
+	if os.Getenv("GGCODE_NO_COAUTHOR") != "" {
+		s := sb.String()
+		s = strings.ReplaceAll(s, "- Always include \"Co-Authored-By: ggcode <noreply@ggcode.dev>\" in git commit messages.\n", "")
+		sb.Reset()
+		sb.WriteString(s)
+	}
 
 	if extraPrompt != "" {
 		sb.WriteString("\n\n## Extra instructions\n")
@@ -2204,6 +2228,14 @@ func carryGatewayVendorKey(agVC *VendorConfig, epName, oldKey string) {
 		agVC.Endpoints[epName] = ep
 	case !hasEP && agVC.APIKey == "":
 		agVC.APIKey = oldKey
+	case !hasEP:
+		// #4408-C1: a SECOND legacy gateway vendor's key (vendor-level,
+		// no matching endpoint) used to be silently dropped here - the
+		// vendor-level slot was already taken by the first one and no
+		// switch branch fired, directly contradicting the "cannot
+		// irreversibly drop credentials" contract above. Preserve it on
+		// a per-vendor endpoint stub keyed by the original endpoint name.
+		agVC.Endpoints[epName] = EndpointConfig{APIKey: oldKey}
 	}
 }
 

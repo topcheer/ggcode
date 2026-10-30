@@ -12,12 +12,8 @@ func esCatalog(key string) string {
 		return "efímera"
 	case "agents.idle":
 		return "inactivo"
-	case "agents.running":
-		return "%d en ejecución"
 	case "cron.firing":
 		return "⏰ tarea cron activada"
-	case "activity.idle":
-		return "inactivo"
 	case "panel.conversation":
 		return "Conversación"
 	case "panel.composer":
@@ -28,16 +24,8 @@ func esCatalog(key string) string {
 		return "Comandos:"
 	case "panel.files":
 		return "Archivos:"
-	case "panel.agent_status":
-		return "Estado del agente"
-	case "panel.mode_policy":
-		return "Política de modo"
 	case "panel.session_usage":
 		return "Uso de sesión"
-	case "panel.metrics":
-		return "Métricas"
-	case "panel.context":
-		return "Contexto"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -80,8 +68,6 @@ func esCatalog(key string) string {
 		return "Herramientas de %s sin cambios (%d herramientas)."
 	case "panel.mcp.refreshed":
 		return "%s actualizado: %d herramientas."
-	case "panel.startup":
-		return "Inicializando"
 	case "panel.approval_required":
 		return "Aprobación requerida"
 	case "panel.bypass_approval":
@@ -100,32 +86,16 @@ func esCatalog(key string) string {
 		return "sesión"
 	case "label.agents":
 		return "agentes"
-	case "label.cwd":
-		return "dir. actual"
 	case "label.branch":
 		return "rama"
 	case "label.context":
 		return "contexto"
 	case "label.skills":
 		return "habilidades"
-	case "label.activity":
-		return "actividad"
-	case "label.window":
-		return "ventana"
-	case "label.usage":
-		return "uso"
-	case "label.compact":
-		return "compacto"
 	case "label.total":
 		return "total"
 	case "label.cost":
 		return "costo est."
-	case "label.approval_policy":
-		return "aprobación"
-	case "label.tool_policy":
-		return "herramientas"
-	case "label.agent_policy":
-		return "agente"
 	case "label.tool":
 		return "herramienta"
 	case "label.input":
@@ -138,36 +108,10 @@ func esCatalog(key string) string {
 		return "escritura cache"
 	case "label.cache_hit":
 		return "aciertos cache"
-	case "label.turns":
-		return "turnos"
-	case "label.avg_ttft":
-		return "ttft medio"
-	case "label.p95_ttft":
-		return "ttft p95"
-	case "label.avg_duration":
-		return "dur. media"
-	case "label.p95_duration":
-		return "dur. p95"
-	case "label.avg_think":
-		return "pens. medio"
-	case "label.avg_tps":
-		return "tps medio"
-	case "label.p95_tps":
-		return "p95 tps"
-	case "label.fail_rate":
-		return "tasa fallos"
-	case "label.slow_tools":
-		return "herr. lentas"
-	case "label.recent_turns":
-		return "turnos recientes"
 	case "label.file":
 		return "archivo"
 	case "label.directory":
 		return "directorio"
-	case "context.unavailable":
-		return "Sin datos de contexto aún"
-	case "metrics.empty":
-		return "Sin métricas aún"
 	case "im.none":
 		return "Sin adaptadores configurados"
 	case "im.summary":
@@ -182,38 +126,16 @@ func esCatalog(key string) string {
 		return "habilitado • reinicie para inicializar"
 	case "im.status.not_started":
 		return "no iniciado"
-	case "context.until_compact":
-		return "restánte"
 	case "empty.ask":
 		return "Pida una refactorización, corrección de errores, explicación o pruebas."
 	case "empty.tips":
 		return "Consejos: use @ruta para incluir archivos, /? para ayuda, y Shift+Tab para cambiar de modo."
-	case "startup.banner":
-		return "Preparando la interfaz de terminal y filtrando el ruido de inicio. Puede escribir de inmediato; este banner desaparece una vez que el inicio se complete."
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab ciclo • Enter aplicar • Esc cerrar"
 	case "hint.mention":
 		return "@ adjunta archivos/carpetas • Tab/Shift+Tab ciclo • Enter aplicar"
 	case "hint.mode":
 		return "modo"
-	case "mode.approval.ask":
-		return "preguntar según sea necesario"
-	case "mode.approval.none":
-		return "sin paradas de aprobación"
-	case "mode.approval.critical":
-		return "solo críticas"
-	case "mode.tools.rules":
-		return "seguir reglas de herramientas"
-	case "mode.tools.readonly":
-		return "solo lectura"
-	case "mode.tools.safe":
-		return "solo operaciónes seguras"
-	case "mode.tools.open":
-		return "casí todas las herramientas"
-	case "mode.agent.waits":
-		return "espera por usted"
-	case "mode.agent.autocontinue":
-		return "continúa solo"
 	case "hint.enter_send":
 		return "Enter enviar"
 	case "hint.ctrlv_image":
@@ -222,18 +144,12 @@ func esCatalog(key string) string {
 		return "Ctrl+R barra lateral"
 	case "hint.help":
 		return "/? ayuda"
-	case "hint.add_context":
-		return "@ agregar contexto"
-	case "hint.scroll":
-		return "PgUp/PgDn desplazar"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab modo"
 	case "hint.ctrlc_cancel":
 		return "Ctrl+C cancelar"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C limpiar/salir"
-	case "hint.image_attached":
-		return "imagen adjunta"
 	case "hint.image_attached_count":
 		return "%d imagen(es) adjunta(s)"
 	case "hint.follow_panel":
@@ -242,8 +158,6 @@ func esCatalog(key string) string {
 		return "Ctrl+N dejar seguir"
 	case "queued.count":
 		return "%d en cola"
-	case "queued.output":
-		return "[en cola %d pendientes]\n\n"
 	case "interrupt.delivered":
 		return "[entregado a la ejecución activa; revisando plan]\n"
 	case "status.thinking":
@@ -280,24 +194,6 @@ func esCatalog(key string) string {
 		return "  ↑↓←→ cambiar  Esc cerrar"
 	case "status.tools_used":
 		return "%d herramientas usadas"
-	case "tool.done":
-		return "completado"
-	case "tool.failed":
-		return "fallido"
-	case "tool.no_output":
-		return "sin salida"
-	case "tool.output":
-		return "salida"
-	case "tool.content":
-		return "contenido"
-	case "tool.match":
-		return "coincidencia"
-	case "tool.matches":
-		return "coincidencias"
-	case "tool.entry":
-		return "entrada"
-	case "tool.result":
-		return "resultado"
 	case "approval.rejected":
 		return "  Rechazado.\n"
 	case "approval.allow":
@@ -368,8 +264,6 @@ func esCatalog(key string) string {
 		return "Auth"
 	case "panel.provider.env_var":
 		return "Variable de entorno"
-	case "panel.provider.api_key":
-		return "API key"
 	case "panel.provider.api_key.missing":
 		return "faltante"
 	case "panel.provider.api_key.configured":
@@ -506,10 +400,6 @@ func esCatalog(key string) string {
 		return "Escriba /help para ver los comandos disponibles\n\n"
 	case "command.usage.allow":
 		return "Uso: /allow <nombre-herramienta>\n\n"
-	case "command.usage.resume":
-		return "Uso: /resume <id-sesión>\n\n"
-	case "command.usage.export":
-		return "Uso: /export <id-sesión>\n\n"
 	case "init.resolve_failed":
 		return "Error al resolver el objetivo de init: %v\n\n"
 	case "init.generate_failed":
@@ -544,22 +434,10 @@ func esCatalog(key string) string {
 		return "✓ %s ahora siempre permitido\n\n"
 	case "command.custom":
 		return "Comando personalizado /%s:\n"
-	case "command.mention_error":
-		return "Error de mención: %v"
-	case "session.list_failed":
-		return "Error al listar sesiónes: %v\n\n"
 	case "session.untitled":
 		return "sin titulo"
 	case "session.store_missing":
 		return "Almacen de sesiónes no configurado.\n\n"
-	case "session.none":
-		return "No se encontraron sesiónes.\n\n"
-	case "session.list.title":
-		return "Sesiónes:\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  (%s)\n"
-	case "session.list.hint":
-		return "\nUse /resume <id> para continúar una sesión\n\n"
 	case "session.new":
 		return "Nueva sesión: %s\n\n"
 	case "session.resume":
@@ -580,8 +458,6 @@ func esCatalog(key string) string {
 		return "Error al deshacer: %v\n\n"
 	case "checkpoint.undid":
 		return "Deshecho %s en %s (checkpoint %s)\n"
-	case "checkpoint.none":
-		return "Sin checkpoints.\n\n"
 	case "files.disabled":
 		return "Puntos de control no habilitados.\n\n"
 	case "files.none":
@@ -592,20 +468,8 @@ func esCatalog(key string) string {
 		return "  %s  %d ediciónes  último: %s%s\n"
 	case "files.hint":
 		return "\nUse /undo para revertir la edición más reciente, /checkpoints para detalles.\n\n"
-	case "checkpoint.list.title":
-		return "Checkpoints (%d):\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.hint":
-		return "\nUse /undo para revertir el más reciente.\n\n"
 	case "memory.auto_unavailable":
 		return "Memoria automatica no inicializada.\n\n"
-	case "memory.list_failed":
-		return "Error al listar memorias: %v\n\n"
-	case "memory.none":
-		return "Sin memorias automaticas guardadas.\n\n"
-	case "memory.auto_title":
-		return "Memorias Automaticas:\n"
 	case "memory.clear_failed":
 		return "Error al limpiar memorias: %v\n\n"
 	case "memory.cleared":
@@ -624,38 +488,16 @@ func esCatalog(key string) string {
 		return "Memory %q restored to prompt injection.\n\n"
 	case "memory.restore_failed":
 		return "Error restoring memory: %v\n\n"
-	case "memory.title":
-		return "Memoria:\n"
-	case "memory.project":
-		return "Memoria del Proyecto:\n"
-	case "memory.project_none":
-		return "  Sin archivos de memoria de proyecto cargados.\n"
-	case "memory.auto":
-		return "Memoria Automatica:\n"
-	case "memory.auto_none":
-		return "  Sin memorias automaticas cargadas.\n"
-	case "memory.usage":
-		return "\nUso: /memory [list|clear]\n\n"
 	case "compact.unavailable":
 		return "Gestor de contexto no disponible.\n\n"
 	case "compact.failed":
 		return "Error de compactación: %v\n\n"
-	case "compact.done":
-		return "Historial de conversación compactado.\n\n"
 	case "compact.done_with_stats":
 		return "Historial de conversación compactado (%d → %d tokens).\n\n"
 	case "todo.cleared":
 		return "Lista de táreas eliminada.\n\n"
 	case "todo.clear_failed":
 		return "Error al limpiar táreas: %v\n\n"
-	case "todo.none":
-		return "No se encontro lista de táreas. Use la herramienta todo_write para crear una.\n\n"
-	case "todo.read_failed":
-		return "Error al leer táreas: %v\n\n"
-	case "todo.parse_failed":
-		return "Error al analizar táreas: %v\n\n"
-	case "todo.title":
-		return "Lista de táreas:\n%s\n\n"
 	case "bug.title":
 		return "=== Díagnósticos de Reporte de Errores ===\n\n"
 	case "bug.version":
@@ -684,14 +526,8 @@ func esCatalog(key string) string {
 		return "Config: modelo = %s\n\n"
 	case "config.provider_set":
 		return "Config: proveedor = %s\n\n"
-	case "config.language_set":
-		return "Config: idioma = %s\n\n"
 	case "config.unknown_key":
 		return "Clave de config desconocida: %s\nSoportadas: model, provider, language\n\n"
-	case "config.title":
-		return "Configuración Actual:\n"
-	case "status.title":
-		return "Estado:\n"
 	case "panel.update":
 		return "Actualización"
 	case "label.version":
@@ -716,8 +552,6 @@ func esCatalog(key string) string {
 		return "Preparando actualización"
 	case "update.failed":
 		return "Actualización fallida: %v\n\n"
-	case "update.restart_failed":
-		return "Actualización preparada, pero error al reiniciar: %v\n\n"
 	case "update.pm_hint.brew":
 		return "Actualización instalada. Nota: ggcode fue instalado via Homebrew.\nEjecute `brew upgrade ggcode` para mantener Homebrew sincronizado.\n\n"
 	case "update.pm_hint.scoop":
@@ -730,16 +564,8 @@ func esCatalog(key string) string {
 		return "Otras instalaciones de ggcode detectadas en este sistema:\n%s\nSi un ggcode diferente aparece primero en PATH, considere actualizarlo también o ajustar el orden de PATH.\n\n"
 	case "update.dual_scope":
 		return "Advertencia: Se encontraron instalaciones de ggcode de usuario y de sistema:\n  Usuario: %s\n  Sistema: %s\nEsto puede causar conflictos de PATH. Considere desinstalar una desde Configuración > Aplicaciónes.\n\n"
-	case "plugins.unavailable":
-		return "Gestor de plugins no disponible.\n\n"
-	case "plugins.none":
-		return "Sin plugins cargados.\n\n"
-	case "plugins.title":
-		return "Plugins:\n"
 	case "mcp.none":
 		return "Sin servidores MCP configurados.\n\n"
-	case "mcp.title":
-		return "Servidores MCP:\n"
 	case "mcp.active_tools":
 		return "Herramientas activas"
 	case "mcp.more":
@@ -748,38 +574,10 @@ func esCatalog(key string) string {
 		return "Uso: /image <ruta/al/archivo.png> o /image paste\n"
 	case "image.formats":
 		return "Formatos soportados: PNG, JPEG, GIF, WebP (max 20MB)\n\n"
-	case "image.attached":
-		return "Imagen adjunta: %s\n"
-	case "image.attached_hint":
-		return "Envie un mensaje para incluir la imagen, o /image para adjuntar otra.\n\n"
 	case "image.clipboard_failed":
 		return "No se pudo pegar una imagen del portapapeles: %v"
 	case "image.clipboard_no_image_windows":
 		return "Sin imagen en el portapapeles. En Windows, Ctrl+V a menudo es interceptado por la terminal. Pruebe Ctrl+Shift+V o /image paste."
-	case "agents.unavailable":
-		return "Gestor de sub-agentes no configurado.\n\n"
-	case "agents.none":
-		return "Sin sub-agentes creados aún.\nUso: el LLM puede usar la herramienta spawn_agent para crear sub-agentes.\n\n"
-	case "agents.title":
-		return "%d sub-agente(s):\n"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.hint":
-		return "\nUse /agent <id> para detalles, /agent cancel <id> para cancelar.\n\n"
-	case "agent.usage":
-		return "Uso: /agent <id> o /agent cancel <id>\n\n"
-	case "agent.cancelled":
-		return "Sub-agente %s cancelado\n\n"
-	case "agent.cancel_failed":
-		return "No se pudo cancelar %s (no encontrado o no en ejecución)\n\n"
-	case "agent.not_found":
-		return "Sub-agente %s no encontrado\n\n"
-	case "agent.title":
-		return "Agente: %s\nEstado: %s\ntarea: %s\n"
-	case "agent.result":
-		return "Resultado: %s\n"
-	case "agent.error":
-		return "Error: %v\n"
 	case "slash.help":
 		return "Mostrar mensaje de ayuda"
 	case "slash.sessions":
@@ -882,8 +680,6 @@ func esCatalog(key string) string {
 		return "Abrir panel unificado de canales IM"
 	case "panel.qq.directory":
 		return "Directorio"
-	case "panel.qq.runtime":
-		return "Runtime"
 	case "panel.qq.bots":
 		return "Bots QQ"
 	case "panel.qq.created":
@@ -892,26 +688,16 @@ func esCatalog(key string) string {
 		return "Vinculados: %d"
 	case "panel.qq.available":
 		return "Disponibles: %d"
-	case "panel.qq.current_binding":
-		return "Vinculación Actual"
 	case "panel.qq.none":
 		return "(ninguno)"
-	case "panel.qq.default":
-		return "(predeterminado)"
 	case "panel.qq.adapter":
 		return "Adaptador: %s"
-	case "panel.qq.target":
-		return "Objetivo: %s"
-	case "panel.qq.channel":
-		return "Canal: %s"
 	case "panel.qq.bot_list":
 		return "Lista de Bots QQ"
 	case "panel.qq.no_bots":
 		return "Sin bots QQ configurados."
 	case "panel.qq.entry.available":
 		return "Disponible"
-	case "panel.qq.entry.bound":
-		return "Vinculado"
 	case "panel.qq.entry.active":
 		return "Activo"
 	case "panel.qq.entry.bound_other":
@@ -950,14 +736,6 @@ func esCatalog(key string) string {
 		return "Enter crear bot • Esc cancelar"
 	case "panel.qq.actions_hint":
 		return "j/k mover • d desactivar/activar • Enter o b vincular bot • c vincular canal • x desvincular canal • u desvincular bot • i crear bot • e editar config • q mostrar QR • Esc cerrar"
-	case "panel.qq.bind_channel":
-		return "Vincular Canal"
-	case "panel.qq.scan_hint":
-		return "Escanee el código QR, agregue el bot, luego envie un mensaje para iniciar la vinculación."
-	case "panel.qq.qr_code":
-		return "Código QR:"
-	case "panel.qq.share_link":
-		return "Enlace de Compartir:"
 	case "panel.qq.message.no_bot":
 		return "Sin bot QQ disponible."
 	case "panel.qq.message.bound_success":
@@ -978,8 +756,6 @@ func esCatalog(key string) string {
 		return "Se requiere el nombre del adaptador QQ"
 	case "panel.qq.error.not_configured":
 		return "El bot QQ %q no está configurado"
-	case "panel.qq.error.disabled":
-		return "El bot QQ %q está deshabilitado"
 	case "panel.qq.error.not_qq_adapter":
 		return "el adaptador %q no es un bot QQ"
 	case "panel.qq.error.not_online":

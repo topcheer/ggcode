@@ -20,7 +20,7 @@ func TestMatchingRulesForResult_MatchesKnownError(t *testing.T) {
 	})
 
 	result := "Error: cannot find package \"github.com/tul/olm\" in any of /usr/local/go/src"
-	matched := rs.MatchingRulesForResult(result)
+	matched := rs.MatchingRulesForResult(result, "go build ./...")
 
 	if len(matched) != 1 {
 		t.Fatalf("expected 1 reactive match, got %d", len(matched))
@@ -43,7 +43,7 @@ func TestMatchingRulesForResult_NoMatchForSuccess(t *testing.T) {
 
 	// Successful output — should not match
 	result := "Build successful. All tests passed."
-	matched := rs.MatchingRulesForResult(result)
+	matched := rs.MatchingRulesForResult(result, "go build ./...")
 
 	if len(matched) != 0 {
 		t.Fatalf("expected 0 matches for success output, got %d", len(matched))
@@ -57,15 +57,15 @@ func TestMatchingRulesForResult_PatternMatchesWithoutErrorMarkers(t *testing.T) 
 	rs.AddRule(Rule{
 		Category:     "build",
 		Rule:         "Check for missing imports",
-		MatchPattern: `import`,
+		MatchPattern: `import cycle not allowed`,
 		FixHint:      "Run goimports",
 	})
 
 	// #4605: the marker-word gate is gone - the rule's own MatchPattern is
-	// authoritative. "import" hits even though the result carries none of the
-	// 9 old marker substrings.
-	result := "This file import is fine."
-	matched := rs.MatchingRulesForResult(result)
+	// authoritative. The result contains the pattern itself while carrying
+	// none of the 9 old marker substrings ("cycle" is not a marker).
+	result := "go build: import cycle not allowed in internal/graph"
+	matched := rs.MatchingRulesForResult(result, "")
 
 	if len(matched) != 1 {
 		t.Fatalf("expected 1 match without error markers, got %d", len(matched))
@@ -90,7 +90,7 @@ func TestMatchingRulesForResult_MatchesMultipleRules(t *testing.T) {
 	})
 
 	result := "Error: cannot find olm header. Also: copy lock detected"
-	matched := rs.MatchingRulesForResult(result)
+	matched := rs.MatchingRulesForResult(result, "go vet ./...")
 
 	if len(matched) != 2 {
 		t.Fatalf("expected 2 matches, got %d", len(matched))
@@ -136,8 +136,8 @@ func TestMatchingRulesForResult_DetectsVariousErrorMarkers(t *testing.T) {
 	rs := NewRuleStore(dir)
 
 	// Add rules with different patterns
-	rs.AddRule(Rule{ID: "r-1", Category: "build", Rule: "Build error", MatchPattern: `FAIL`})
-	rs.AddRule(Rule{ID: "r-2", Category: "security", Rule: "Permission error", MatchPattern: `denied`})
+	rs.AddRule(Rule{ID: "r-1", Category: "build", Rule: "Build error", MatchPattern: `FAIL to build`})
+	rs.AddRule(Rule{ID: "r-2", Category: "security", Rule: "Permission error", MatchPattern: `permission denied`})
 
 	tests := []struct {
 		name   string
@@ -146,13 +146,13 @@ func TestMatchingRulesForResult_DetectsVariousErrorMarkers(t *testing.T) {
 	}{
 		{"fail marker", "test FAIL to build", 1},
 		{"denied marker", "Error: permission denied", 1},
-		{"both markers", "FAIL: permission denied", 2},
+		{"both markers", "FAIL to build: permission denied", 2},
 		{"no markers", "everything looks good", 0},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matched := rs.MatchingRulesForResult(tt.result)
+			matched := rs.MatchingRulesForResult(tt.result, "go test ./...")
 			if len(matched) != tt.want {
 				t.Errorf("MatchingRulesForResult(%q) = %d matches, want %d", tt.result, len(matched), tt.want)
 			}

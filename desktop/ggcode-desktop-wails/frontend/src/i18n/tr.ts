@@ -6,7 +6,6 @@ const tr = {
   'nav.mcp': 'MCP Sunucuları',
   'nav.settings': 'Ayarlar',
   'nav.debug': 'Hata Ayıklama Konsolu',
-  'nav.lanchat': 'LAN Sohbeti',
   'nav.cron': 'Zamanlanmış Görevler',
   'cron.title': 'Zamanlanmış Görevler',
   'cron.newTask': 'Yeni Görev',
@@ -61,7 +60,6 @@ const tr = {
   'sidebar.newSession': 'Yeni Oturum',
   'sidebar.untitled': 'Başlıksız',
   'sidebar.delete': 'Sil',
-  'sidebar.loading': 'Yükleniyor...',
   'sidebar.group.pinned': 'Sabitlenenler',
   'sidebar.group.today': 'Bugün',
   'sidebar.group.yesterday': 'Dün',
@@ -75,7 +73,6 @@ const tr = {
   // StatusBar
   'status.ready': 'Hazır',
   'status.thinking': 'Düşünüyor...',
-  'status.streaming': 'Akıyor',
   'status.offline': 'Cevrimdisi',
 
   // ChatView
@@ -98,9 +95,6 @@ const tr = {
   'cmd.exportJSON': 'Oturumu JSON olarak dışa aktar',
   'cmd.copyMarkdown': 'Oturumu Markdown olarak kopyala',
   'cmd.searchSessions': 'Oturumları Ara',
-  'cmd.clearHistory': 'Geçmişi Temizle',
-  'cmd.compactContext': 'Bağlamı Sıkıştır',
-  'cmd.undoLast': 'Sonuncuyu Geri Al',
   'cmd.shareSession': 'Oturumu Paylaş',
   'cmd.toggleContext': 'Bağlam Panelini Aç/Kapat',
   'cmd.toggleTheme': 'Temayı Değiştir',
@@ -166,8 +160,6 @@ const tr = {
   // ContextPanel
   'context.title': 'Bağlam',
   'context.usage': 'Bağlam Kullanımı',
-  'context.permission': 'İzin Modu',
-  'context.files': 'Bağlamdaki Dosyalar',
   'context.input': 'Girdi',
   'context.output': 'Çıktı',
   'context.cacheRead': 'Önbellek Okuma',
@@ -187,12 +179,9 @@ const tr = {
   'settings.apiKey': 'API Anahtarı',
   'settings.apiKeyPlaceholder': 'API anahtarınızı girin',
   'settings.model': 'Model',
-  'settings.modelPlaceholder': 'örn. claude-sonnet-4-20250514',
   'settings.permissionMode': 'İzin Modu',
   'settings.language': 'Dil',
   'settings.identity': 'Kimlik',
-  'settings.identityPlaceholder': 'Adınız veya rumuzunuz',
-  'settings.version': 'Sürüm',
   'settings.save': 'Kaydet',
   'settings.saved': 'Kaydedildi!',
   'settings.saving': 'Kaydediliyor...',
@@ -202,32 +191,18 @@ const tr = {
   'settings.impersonateApply': 'Uygula',
 
   // Onboarding
-  'onboarding.title': 'GGCode\'a Hoş Geldiniz',
-  'onboarding.subtitle': 'Birkaç adımda başlayın',
   'onboarding.next': 'İleri',
   'onboarding.back': 'Geri',
   'onboarding.getStarted': 'Başla',
-  'onboarding.step.vendor': 'AI Sağlayıcısı Seçin',
-  'onboarding.step.apiKey': 'API Anahtarını Girin',
-  'onboarding.step.configure': 'Yapılandır',
   'onboarding.vendorHint': 'Kullanmak istediğiniz AI sağlayıcısını seçin',
-  'onboarding.apiKeyHint': 'API anahtarınız yerel olarak saklanır ve asla sunucularımıza gönderilmez',
   'onboarding.configHint': 'Bu ayarları düzenleyin veya varsayılanları koruyun',
-  'onboarding.skip': 'Kurulumu Atla',
-  'onboarding.workDir': 'Çalışma Dizini',
-  'onboarding.browse': 'Gözat',
-  'onboarding.workDirHint': 'Çalışılacak proje dizinini seçin',
   'onboarding.welcome': 'GGCode\'a Hoş Geldiniz',
   'onboarding.selectDirHint': 'Başlamak için bir proje dizini seçin',
   'onboarding.chooseDir': 'Dizin Seç',
   'onboarding.modeSupervised': 'Denetimli',
   'onboarding.modeSupervisedDesc': 'Her araç çağrısını yürütmeden önce gözden geçirin ve onaylayın',
-  'onboarding.modeAuto': 'Otomatik',
-  'onboarding.modeAutoDesc': 'Salt okunur araçları otomatik onayla, yıkıcı işlemleri onayla',
   'onboarding.modeBypass': 'Baypas',
   'onboarding.modeBypassDesc': 'Tüm araçları otomatik onayla, onay gerekmez',
-  'onboarding.modeAutopilot': 'Otopilot',
-  'onboarding.modeAutopilotDesc': 'Tamamen otonom — agent hiçbir onay olmadan çalışır',
   'onboarding.fetchingModels': 'Getiriliyor...',
   'onboarding.fetchModels': 'Modelleri Getir',
   'onboarding.noModelsFound': 'Model bulunamadı. Model adını elle girin.',
@@ -250,27 +225,18 @@ const tr = {
 
   // Dialogs (About)
   'about.title': 'GGCode Hakkında',
-  'about.version': 'Sürüm',
   'about.description': 'Terminal için AI kodlama agentı',
-  'about.close': 'Kapat',
 
   // PairingCodeDialog
   'pairing.title': 'Cihaz Eşle',
-  'pairing.code': 'Eşleştirme Kodu',
-  'pairing.expiresIn': '{n} sn içinde sona eriyor',
   'pairing.close': 'Kapat',
 
   // ShareDialog
   'share.title': 'Oturumu Paylaş',
-  'share.connectUrl': 'Bağlanma URL\'si',
-  'share.qrCode': 'QR Kodu',
   'share.copy': 'Kopyala',
   'share.copied': 'Kopyalandı!',
-  'share.openInBrowser': 'Tarayıcıda Aç',
   'share.stopSharing': 'Paylaşmayı Durdur',
   'share.generating': 'Oluşturuluyor...',
-  'share.scanQr': 'Bağlanmak için QR kodunu tarayın',
-  'share.activeDevices': '{n} cihaz bağlı',
 
   // IMManagement
   'im.title': 'IM Adaptrleri',
@@ -281,55 +247,23 @@ const tr = {
   'im.unbound': 'Bağlanmamış',
   'im.online': 'Çevrimiçi',
   'im.offline': 'Çevrimdışı',
-  'im.muted': 'Sessize Alındı',
   'im.mute': 'Sessize Al',
   'im.unmute': 'Sessizden Çıkar',
-  'im.delete': 'Sil',
-  'im.configure': 'Yapılandır',
   'im.platform': 'Platform',
   'im.name': 'Ad',
-  'im.workspace': 'Çalışma Alanı',
-  'im.enabled': 'Etkin',
   'im.save': 'Kaydet',
   'im.cancel': 'İptal',
   'im.selectPlatform': 'Platform seç...',
-  'im.adapterName': 'Adaptör Adı',
-  'im.adapterNamePlaceholder': 'örn. Slack\'im',
-  'im.bindToWorkspace': 'Çalışma Alanına Bağla',
-  'im.enabledHint': 'Bu adaptörü etkinleştir',
-  'im.pairing': 'Eşleştiriliyor...',
-  'im.paired': 'Eşleşti',
-  'im.notPaired': 'Eşleşmedi',
-  'im.startPairing': 'Eşleştirmeyi Başlat',
 
   // MCPServers
   'mcp.title': 'MCP Sunucuları',
   'mcp.add': 'Ekle',
-  'mcp.noServers': 'MCP sunucusu yapılandırılmadı. Eklemek için "Ekle"yi tıklayın.',
   'mcp.name': 'Ad',
-  'mcp.command': 'Komut',
-  'mcp.args': 'Argümanlar',
-  'mcp.url': 'URL',
-  'mcp.headers': 'Başlıklar',
-  'mcp.type': 'Tür',
-  'mcp.typeLocal': 'Yerel (stdio)',
-  'mcp.typeRemote': 'Uzak (HTTP)',
-  'mcp.enabled': 'Etkin',
-  'mcp.save': 'Kaydet',
   'mcp.cancel': 'İptal',
-  'mcp.delete': 'Sil',
-  'mcp.namePlaceholder': 'Sunucu adı',
-  'mcp.commandPlaceholder': 'örn. npx @modelcontextprotocol/server',
-  'mcp.argsPlaceholder': 'Argümanlar (boşlukla ayrılmış)',
-  'mcp.urlPlaceholder': 'örn. http://localhost:3000/mcp',
-  'mcp.selectType': 'Tür seç...',
 
   // FileBrowser
   'files.fileTooLarge': 'Dosya önizleme için çok büyük (>2MB)',
   'files.binaryFile': 'İkili dosya',
-  'files.imagePreview': 'Görüntü Önizleme',
-  'files.noPreview': 'Önizleme mevcut değil',
-  'files.openInEditor': 'Düzenleyicide Aç',
 
   // DebugConsole
   'debug.title': 'Hata Ayıklama Konsolu',
@@ -359,19 +293,15 @@ const tr = {
 
   // SettingsPage sections
   'settings.agentSafety': 'Agent ve Güvenlik',
-  'settings.workspaceAccess': 'Çalışma Alanı ve dosya erişimi',
   'settings.appearance': 'Görünüm',
   'settings.integrations': 'Entegrasyonlar',
-  'settings.languageServers': 'Dil Sunucuları',
   'settings.diagnostics': 'Tanılama',
-  'settings.hooks': 'Hooks',
   'settings.hooksTitle': 'Yaşam döngüsü kancaları',
   'settings.hooksAdd': '+ Ekle',
   'settings.hooksEdit': 'düzenle',
   'settings.hooksDelete': 'sil',
   'settings.hooksInject': 'enjekte et',
   'settings.hooksNone': '(yok)',
-  'settings.hooksEditTitle': '{0} Hook — {1}',
   'settings.hooksMatch': 'Eşleşme (* hepsi için)',
   'settings.hooksType': 'Tür (command/http)',
   'settings.hooksCommand': 'Komut',
@@ -393,13 +323,11 @@ const tr = {
   'settings.hooksMatchMode': 'Eşleşme modu',
   'settings.hooksTesterTitle': 'Regex test aracı',
   'settings.hooksTesterPlaceholder': 'örn: run_command git push',
-  'settings.hooksTestBtn': 'Test et',
   'settings.hooksTestMatched': 'Eşleşti!',
   'settings.hooksTestNotMatched': 'Eşleşmedi',
   'settings.hooksTestError': 'Hata: {0}',
   'settings.addCustomEndpoint': 'Özel Uç Nokta Ekle',
   'settings.configured': 'Yapılandırıldı',
-  'settings.install': 'Yükle:',
   'settings.saveLimits': 'Limitleri kaydet',
   'settings.refreshModels': 'Modelleri API\'den yenile',
   'settings.versionPlaceholder': 'Sürüm dizesi...',
@@ -434,8 +362,6 @@ const tr = {
   'settings.theme': 'Tema',
   'settings.themeLight': 'Açık',
   'settings.themeDark': 'Koyu',
-  'settings.themeSystem': 'Sistem',
-  'settings.integrationsHint': 'Araçlara hızlı erişim için entegrasyon özelliklerini etkinleştirin.',
   'settings.lspHint': 'Dil Sunucu Protokolü (LSP) sunucuları, agent\'a kod zekası sağlar: tanıma git, referansları bul, vurgu bilgisi, tanılama ve daha fazlası.',
   'settings.lspNoServers': 'Bu çalışma alanında dil sunucusu algılanmadı.',
   'settings.lspConfigured': '(yapılandırıldı)',
@@ -463,17 +389,9 @@ const tr = {
   'chat.copyError': 'Hatayı kopyala',
 
   // Permission mode dropdown options
-  'mode.supervisedDesc': 'Denetimli (her aracı onayla)',
-  'mode.autoDesc': 'Otomatik (yalnızca güvenli araçlar)',
-  'mode.planDesc': 'Plan (salt okunur)',
-  'mode.bypassDesc': 'Baypas (çoğu aracı otomatik onayla)',
-  'mode.autopilotDesc': 'Otopilot (yüksek özerklik)',
 
   // Common dropdown placeholders
-  'common.chooseVendor': 'Sağlayıcı seç...',
-  'common.chooseEndpoint': 'Uç nokta seç...',
   'common.chooseModel': 'Model seç...',
-  'common.english': 'İngilizce',
 
   // ChatView activity descriptions
   'chat.activity.reading': 'Dosyalar okunuyor...',
@@ -488,13 +406,10 @@ const tr = {
   'chat.activity.subagent': 'Alt-agent çalıştırılıyor...',
   'chat.activity.waiting': 'Girdi bekleniyor...',
   'chat.activity.saving': 'Bellek kaydediliyor...',
-  'chat.activity.writingResponse': 'Yanıt yazılıyor...',
   'chat.activity.planMode': 'Plan moduna giriliyor...',
 
   // ChatView UI labels
   'chat.findPlaceholder': 'Konuşmada bul...',
-  'chat.noModel': 'Model yok',
-  'chat.selectWorkspace': 'Çalışma alanı seç',
   'chat.sending': 'Gönderiliyor...',
   'chat.failedToSend': 'Gönderme başarısız',
   'chat.nickname': 'Rumuz',
@@ -518,11 +433,7 @@ const tr = {
   'chat.title.copyReasoning': 'Akıl yürütme kopyala',
   'chat.title.editResend': 'Düzenle ve yeniden gönder',
   'chat.title.copyMessage': 'Mesajı kopyala',
-  'chat.title.regenerate': 'Yeniden üret',
-  'chat.title.copyResult': 'Sonucu kopyala',
-  'chat.title.copyError': 'Hatayı kopyala',
   'chat.title.teamBoard': 'Takım panosunu aç',
-  'chat.title.editIdentity': 'Rumuzunuzu, rolünüzü ve takımınızı düzenlemek için tıklayın',
 
   // MCPServers
   'mcp.transport': 'Aktarım',
@@ -553,51 +464,30 @@ const tr = {
   'lanchat.noMessagesDM': 'Henüz doğrudan mesaj yok.',
   'lanchat.broadcastPlaceholder': 'Herkese yayın yap...',
   'lanchat.dmPlaceholder': '{name} kişisine mesaj...',
-  'lanchat.enterNickname': 'Yeni rumuz girin:',
 
   // ApprovalDialog hints
-  'approval.denyHint': 'Reddet',
-  'approval.allowHint': 'İzin Ver',
-  'approval.alwaysHint': 'Her Zaman',
-  'approval.copyToClipboard': 'Panoya kopyala',
-  'approval.ariaLabel': 'Araç onayı',
 
   // AskUserDialog
   'askUser.typeAnswer': 'Yanıtınızı yazın...',
-  'askUser.additionalNotes': 'Ek notlar (isteğe bağlı)',
-  'askUser.close': 'İletişimi kapat',
-  'askUser.cancel': 'İptal',
 
   // IMManagement
   'im.editAdapter': 'Düzenle: {name}',
-  'im.addTitle': 'IM adaptörü ekle',
-  'im.adapterNameRequired': 'Bir adaptör adı girin',
 
   // FileBrowser
   'files.searchPlaceholder': 'Dosyalarda ara...',
   'files.officeDocument': 'Office belgesi',
   'files.openExternal': 'Görüntülemek için harici uygulamayla aç',
-  'files.renderingMermaid': 'Diyagram oluşturuluyor...',
   'files.htmlPreview': 'HTML Önizleme',
 
   // Dialogs / About
-  'about.checkUpdates': 'Güncellemeleri Kontrol Et',
-  'about.checking': 'Kontrol ediliyor...',
-  'about.newVersion': 'Yeni sürüm mevcut: v{version}',
-  'about.download': 'İndir',
 
   // TopDragBar (window controls)
-  'window.close': 'Kapat',
-  'window.minimize': 'Küçült',
-  'window.maximize': 'Büyült',
-  'window.restore': 'Pencereyi geri yükle',
 
   // StatusBar
   'status.toggleContext': 'Bağlam panelini aç/kapat',
 
   // TeamBoard
   'team.boardTitle': 'Takım Panosu',
-  'team.closeBoard': 'Takım panosunu kapat',
 
   // Common shared
   'common.dismiss': 'Bildirimi kapat',
@@ -650,12 +540,8 @@ const tr = {
   'settings.chooseVendor': 'Sağlayıcı seç...',
   'settings.chooseEndpoint': 'Uç nokta seç...',
   'settings.modeSupervised': 'Denetimli (her aracı onayla)',
-  'settings.modeAuto': 'Otomatik (yalnızca güvenli araçlar)',
-  'settings.modePlan': 'Plan (salt okunur)',
   'settings.modeBypass': 'Baypas (güvenli araçları otomatik onayla)',
   'settings.modeBypassAll': 'Baypas (çoğu aracı otomatik onayla)',
-  'settings.modeAutopilot': 'Otopilot (her şeyi onayla)',
-  'settings.modeAutopilotHigh': 'Otopilot (yüksek özerklik)',
   'settings.saveModeHint': 'Bu varsayılan modu kalıcı yapmak için kaydetin. Çalışma zamanı mod değişiklikleri yine de uygulamanın normal mod işlemesini izler.',
 
   // Dialogs
@@ -689,11 +575,6 @@ const tr = {
   'onboarding.languageHint': "Bunu daha sonra Ayarlar'da değiştirebilirsiniz",
 
   // SettingsPage mode descriptions (FeatureCard)
-  'settings.modeDescSupervised': 'Her araç yürütmeyi gözden geçirin ve onaylayın',
-  'settings.modeDescAuto': 'Yalnızca güvenli işlemleri otomatik onayla',
-  'settings.modeDescPlan': 'Değişiklik yapmadan kodu keşfetme',
-  'settings.modeDescBypass': 'Çoğu işlemi otomatik onayla',
-  'settings.modeDescAutopilot': 'Minimal kesintiyle tam özerklik',
   'settings.agentSafetyHint': 'Masaüstü agent\'ının ne kadar özerkliğe sahip olduğunu gözden geçirin. Bu, gelişmiş araç politikalarını değiştirmeden mevcut davranışı özetler.',
   'settings.workspaceAccessHint': 'Dosya araçları, geçerli çalışma alanı ve yapılandırılmış izin verilen dizinler içinde çalışır. Gelişmiş izin verilen dizin düzenleme, güvenlik sınırlarını yanlışlıkla değiştirmemek için burada henüz kasıtlı olarak gösterilmemektedir.',
   'settings.appearanceHint': 'Görsel temayı özelleştirin. Uygulama varsayılan olarak sistem tercihinizi izler.',
@@ -752,9 +633,6 @@ const tr = {
   'toast.copiedMessages': '{count} mesaj panoya kopyalandı',
 
   // FileBrowser
-  'files.emptyDirectory': 'Boş dizin',
-  'files.noMatchingFiles': 'Eşleşen dosya yok',
-  'files.selectToPreview': 'Önizlemek için bir dosya seçin',
 
   // ApprovalDialog risk levels
   'approval.riskHigh': 'Yüksek Risk',
@@ -762,59 +640,12 @@ const tr = {
   'approval.riskLow': 'Düşük Risk',
 
   // DebugConsole
-  'debug.filterLogs': 'Hata ayıklama günlüklerini filtrele',
 
   // Sidebar context menu
-  'sidebar.ctxOpen': 'Aç',
-  'sidebar.ctxRename': 'Yeniden Adlandır',
-  'sidebar.ctxCopyId': 'Kimliği Kopyala',
-  'sidebar.ctxDelete': 'Sil',
-  'sidebar.ctxPin': 'Sabitle',
-  'sidebar.ctxUnpin': 'Sabitlemeyi Kaldır',
-  'sidebar.startConversation': 'Konuşma başlat',
-  'sidebar.noMatching': '"{search}" ile eşleşen oturum yok',
-  'sidebar.clearSearch': 'Aramayı temizle',
-  'sidebar.noSessionsYet': 'Henüz oturum yok',
 
   // ChatView context menu & run stats
-  'chat.ctxCopy': 'Kopyala',
-  'chat.ctxEdit': 'Düzenle',
-  'chat.ctxRegenerate': 'Yeniden Üret',
-  'chat.runDuration': 'Süre',
-  'chat.runTools': 'Araçlar',
-  'chat.runFiles': 'Dosyalar',
-  'chat.runErrors': 'Hatalar',
-  'chat.runTokens': 'Token',
-  'chat.dropImages': 'Eklemek için görüntüleri sürükleyin',
-  'chat.slashHelp': 'Mevcut komutları göster',
-  'chat.slashModel': 'AI modelini değiştir veya görüntüle',
-  'chat.slashMode': 'İzin modunu değiştir (otomatik/denetimli/plan/baypas)',
-  'chat.slashClear': 'Sohbet geçmişini temizle',
-  'chat.slashCompact': 'Bağlam penceresini sıkıştır',
-  'chat.slashContext': 'Bağlam kullanım detaylarını göster',
-  'chat.slashCost': 'Token kullanımını ve maliyeti göster',
-  'chat.slashCopy': 'Konuşmayı panoya kopyala',
-  'chat.slashExport': 'Konuşmayı markdown dosyası olarak indir',
-  'chat.slashSessions': 'Oturumlara göz at ve değiştir',
-  'chat.slashConfig': 'Yapılandırmayı görüntüle veya düzenle',
-  'chat.slashStatus': 'Çalışma zamanı durumunu göster',
-  'chat.slashSkills': 'Mevcut becerilere göz at',
-  'chat.slashMcp': 'MCP sunucularını yönet',
-  'chat.slashReview': 'Kod değişikliklerini incele (git diff)',
-  'chat.slashDiff': 'Çalışma ağacı diff\'ini göster',
-  'chat.slashReflect': 'Kendi kendini değerlendirmeyi tetikle',
-  'chat.slashUndo': 'Son dosya düzenlemesini geri al',
-  'chat.slashRegenerate': 'Son yanıtı yeniden üret',
-  'chat.slashTodo': 'Görev yönetimi',
-  'chat.slashInit': 'Proje bellek dosyalarını başlat',
-  'chat.slashLang': 'Arayüz dilini değiştir',
-  'chat.slashBug': 'Hata bildir',
 
   // Dialogs links
-  'dialogs.linkGitHub': 'GitHub',
-  'dialogs.linkReleases': 'Sürümler',
-  'dialogs.linkIssues': 'Sorunlar',
-  'dialogs.linkDiscord': 'Discord',
 
   // MCPServers transports
   'mcp.transportHttp': 'HTTP / SSE',
@@ -823,20 +654,14 @@ const tr = {
   'mcp.descWs': 'WebSocket aracılığıyla uzak sunucu',
 
   // IMManagement
-  'im.qrAuthHint': 'Bu platform QR kodu kimlik doğrulaması kullanır. Eşleştirme işlemini başlatmak için kaydedin.',
-  'im.noConfigurableFields': 'Bu adaptör için yapılandırılabilir alan yok.',
 
   // PairingCodeDialog
-  'pairing.enterCode': 'Bu kodu IM kanalınızda girin:',
 
   // LanChatView
-  'lanchat.noContactsOnline': 'Çevrimiçi kişi yok',
 
   // ContextPanel
-  'context.noImAdapters': 'Bağlı IM adaptörü yok',
 
   // SettingsPage
-  'settings.maxTokensHint': 'Model teknik özelliklerinden otomatik algılama için 0 yapın veya boş bırakın.',
   'settings.oauthConnected': 'Bağlı',
   'settings.oauthNotConnected': 'Bağlı değil',
   'settings.oauthLoggingIn': 'Giriş yapılıyor...',

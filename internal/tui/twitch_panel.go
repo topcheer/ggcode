@@ -304,8 +304,10 @@ func (m *Model) createTwitchAdapterCmd(spec string) tea.Cmd {
 		// enabled the adapter inside the Cmd goroutine (SetIMAdapterEnabled
 		// map write + save while the render loop ranges the same map).
 		// The enable decision now lives here, in apply, on the Update loop.
+		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
 		return configMutationMsg{
 			apply: func(m *Model) error {
+				imEnabledBefore = m.config.IM.Enabled
 				m.config.IM.Enabled = true
 				if err := m.config.AddIMAdapter(name, adapter); err != nil {
 					return err
@@ -330,6 +332,7 @@ func (m *Model) createTwitchAdapterCmd(spec string) tea.Cmd {
 								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 									return rerr
 								}
+								m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
 								return m.saveConfig()
 							},
 							next: func(m *Model) tea.Cmd {

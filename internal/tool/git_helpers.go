@@ -24,6 +24,13 @@ func truncateUTF8Safe(s string, maxBytes int) string {
 
 const coAuthorTrailer = "Co-Authored-By: ggcode <noreply@ggcode.dev>"
 
+// coAuthorInjectionDisabled reports whether the user opted out of the
+// automatic Co-Authored-By trailer via GGCODE_NO_COAUTHOR (any non-empty
+// value). Follows the GGCODE_SKIP_AUTOCONFIG "set = disable" convention.
+func coAuthorInjectionDisabled() bool {
+	return os.Getenv("GGCODE_NO_COAUTHOR") != ""
+}
+
 // resolveDir returns the first non-empty path from the given values.
 // Used by git tools to fall back from explicit path arg to WorkingDir.
 func resolveDir(paths ...string) string {
@@ -121,6 +128,9 @@ func isGitCommitCommand(cmd string) bool {
 // injectCoAuthorTrailer injects Co-Authored-By into a git commit command.
 // If the command already contains the trailer, it is not duplicated.
 func injectCoAuthorTrailer(cmd string) string {
+	if coAuthorInjectionDisabled() {
+		return cmd
+	}
 	if strings.Contains(cmd, coAuthorTrailer) {
 		return cmd
 	}

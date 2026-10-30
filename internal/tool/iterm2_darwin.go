@@ -4,6 +4,7 @@ package tool
 
 import (
 	"context"
+	"encoding/base64"
 
 	"fmt"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -483,12 +484,42 @@ func (t *Iterm2Tool) executeSendKey(ctx context.Context, sessionID, key, modifie
 
 	var data string
 	if seq, ok := escMap[keyLower]; ok {
+		// #4450: the escMap branch used to ignore modifiers entirely,
+		// sending the bare sequence while the Result still claimed
+		// "modifiers+key sent" - a #2625-style false success. Modifier
+		// escapes for these keys are not implemented; fail explicitly
+		// instead of silently sending the wrong keystroke.
+		if strings.TrimSpace(modifiers) != "" {
+			return Result{IsError: true, Content: fmt.Sprintf("iterm2 send_key: unsupported key combo: %s+%s (modifiers are only supported with single-character keys)", modifiers, key)}
+		}
 		data = seq
 	} else if len(key) == 1 {
-		// Single character - apply modifier transformations
+		// Single character - apply modifier transformations.
 		data = key
 		mods := strings.ToLower(modifiers)
-		if strings.Contains(mods, "control") || strings.Contains(mods, "ctrl") {
+		// #4550: cmd/shift/meta (and any unrecognized modifier) have no
+		// terminal-escape representation in this legacy path - the old code
+		// silently sent the bare character and reported success, injecting
+		// the letter into the target session's input line while the agent
+		// believed cmd+c had been sent (data pollution + false success).
+		// Fail explicitly, per this file's own contract ("we fail explicitly
+		// rather than lie to the caller", #4450/#2625) and kitty's
+		// sendKeyViaAction unsupported-combo semantics.
+		hasCtrl := false
+		hasOpt := false
+		for _, tok := range strings.FieldsFunc(mods, func(r rune) bool {
+			return r == '+' || r == '-' || r == ',' || r == ' ' || r == '\t'
+		}) {
+			switch tok {
+			case "ctrl", "control":
+				hasCtrl = true
+			case "option", "alt":
+				hasOpt = true
+			default:
+				return Result{IsError: true, Content: fmt.Sprintf("iterm2 send_key: unsupported key combo: %s+%s (this legacy path supports only ctrl/control and option/alt modifiers; use the kitty-protocol-capable session or no modifier)", modifiers, key)}
+			}
+		}
+		if hasCtrl {
 			// Ctrl+letter → control code
 			ch := strings.ToUpper(key)
 			if ch[0] >= 'A' && ch[0] <= 'Z' {
@@ -503,7 +534,7 @@ func (t *Iterm2Tool) executeSendKey(ctx context.Context, sessionID, key, modifie
 				return Result{IsError: true, Content: fmt.Sprintf("iterm2 send_key: unsupported key combo: %s+%s (ctrl is only supported with letters a-z)", modifiers, key)}
 			}
 		}
-		if strings.Contains(mods, "option") || strings.Contains(mods, "alt") {
+		if hasOpt {
 			data = "\x1b" + data
 		}
 	} else {
@@ -542,9 +573,13 @@ func (t *Iterm2Tool) executeResize(ctx context.Context, sessionID, axis string, 
 	// However, these are user-configurable. A more reliable approach is to
 	// resize the window itself via AppleScript.
 
-	// Focus target session
+	// Focus target session. #4550 附带: the discarded Result hid focus
+	// failures - the resize keystrokes then went to whatever pane happened
+	// to be focused. Propagate the error instead of ignoring it.
 	if sessionID != "" {
-		t.executeFocus(ctx, sessionID)
+		if res := t.executeFocus(ctx, sessionID); res.IsError {
+			return res
+		}
 	} else {
 		// #1691 case 5: swallow + no ctx were both wrong - route through
 		// the shared helper (ctx-aware, stderr captured).
@@ -557,6 +592,15 @@ func (t *Iterm2Tool) executeResize(ctx context.Context, sessionID, axis string, 
 	ax := strings.ToLower(strings.TrimSpace(axis))
 	if ax == "" {
 		ax = "horizontal"
+	}
+	// #4450: any unrecognized value used to fall into the vertical else
+	// branch while the success message echoed the caller's typo back
+	// ("grew width by 20" while actually adding rows). Mirror kitty's
+	// explicit whitelist (kitty_impl.go resize).
+	switch ax {
+	case "horizontal", "vertical":
+	default:
+		return Result{IsError: true, Content: fmt.Sprintf("invalid axis %q (use horizontal or vertical)", axis)}
 	}
 
 	// Use iTerm2's native AppleScript to adjust columns/rows directly.
@@ -718,7 +762,7 @@ func (t *Iterm2Tool) executeBadge(ctx context.Context, sessionID, badgeText stri
 		return Result{Content: "iterm2 badge cleared"}
 	}
 
-	err := t.iterm2WriteToTTY(ctx, sessionID, fmt.Sprintf("\033]1337;SetBadgeFormat=%s\007", badgeText))
+	err := t.iterm2WriteToTTY(ctx, sessionID, fmt.Sprintf("\033]1337;SetBadgeFormat=%s\007", base64.StdEncoding.EncodeToString([]byte(badgeText))))
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 badge failed: %v", err)}
 	}

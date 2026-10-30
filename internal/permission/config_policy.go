@@ -98,10 +98,20 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	// RLock.
 	p.mu.RLock()
 	denyRule, hasDenyRule := p.rules[toolName]
+	askRule, hasAskRule := p.rules[toolName]
 	cmdRuleSnapshot := p.cmdRules
 	p.mu.RUnlock()
 	if hasDenyRule && denyRule == Deny {
 		return Deny, nil
+	}
+	// #4533: explicit ask rules must outrank every fast- Allow path -
+	// the mirror of the Deny pre-check above. IsAlwaysAllowedTool, im
+	// benign actions and save_memory used to return Allow BEFORE the ask
+	// scan, so a user pinning any of them to ask got the promised Ask in
+	// GetDecision but a silent Allow in Check (deny was honored, ask was
+	// not - L180-188's own comment promises both survive the refactor).
+	if hasAskRule && askRule == Ask {
+		return Ask, nil
 	}
 
 	// Interactive/communication tools are always auto-approved regardless of mode.
@@ -246,8 +256,15 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		// credential-exfil floors above still apply).
 		if isWriteFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {
-				if path != "" && isSensitivePath(path) {
-					return Ask, nil
+				if path != "" {
+					// #4532: expand ~ BEFORE the sensitive check - the
+					// redirect gates above (L234/305/351) all expand, but
+					// these write gates passed the raw path, so
+					// "~/.backdoorrc" missed the home-root dotfile rules and
+					// silently Allowed while the absolute path asked.
+					if isSensitivePath(expandTilde(path)) {
+						return Ask, nil
+					}
 				}
 			}
 		}
@@ -269,6 +286,23 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 			return Allow, nil
 		}
 		if isWriteFileTool(toolName) {
+			return Deny, nil
+		}
+		// #4261: restore the #712 plan read-only floors - the two-mode
+		// rewrite (8a8ca1e05) dropped this call site while keeping the
+		// function, so sensitive out-of-sandbox reads (~/.ssh into model
+		// context) and web calls carrying secret material became silent
+		// Allows in plan mode. Deny, not Ask: plan mode has no human loop.
+		if d := p.checkPlanReadOnlyExceptions(toolName, input); d != Allow {
+			return d, nil
+		}
+		// #4261/#596-P2: MCP write tools are not name-classifiable as file
+		// tools, but drop_table/apply_patch/send_message are write
+		// operations - plan mode's own contract (only explicit file-writing
+		// denied) must extend to them. IsReadOnlyTool encodes the verified
+		// read-only MCP whitelist; everything else mcp__ denies.
+		if strings.HasPrefix(toolName, "mcp__") && !IsReadOnlyTool(toolName) {
+			debug.Log("permission", "non-read-only MCP tool denied in plan mode (#596-P2/#4261)")
 			return Deny, nil
 		}
 		if isCommandTool(toolName) {
@@ -341,8 +375,11 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		}
 		if isWriteFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {
-				if path != "" && isSensitivePath(path) {
-					return Ask, nil
+				if path != "" {
+					// #4532: same expand-before-check as the bypass write gate.
+					if isSensitivePath(expandTilde(path)) {
+						return Ask, nil
+					}
 				}
 			}
 		}
@@ -1077,6 +1114,16 @@ func (p *ConfigPolicy) checkPlanReadOnlyExceptions(toolName string, input json.R
 		for _, path := range extractFilePaths(input) {
 			if path != "" {
 				resolved := expandTilde(path)
+				// #4534: explicit read-only grants must survive plan mode.
+				// AllowedPath honors readOnlySandbox ("grant read-only access
+				// to X") the same way the normal read path does; without
+				// this the same policy object Allow-ed the read outside plan
+				// and Deny-ed it inside - the user's explicit grant was
+				// silently overridden. The sensitive check stays for paths
+				// with NO explicit grant (the #712 secret-exfil floor).
+				if p.AllowedPath(resolved) {
+					continue
+				}
 				if !p.sandbox.Allowed(resolved) && isSensitivePath(resolved) {
 					debug.Log("permission", "sensitive-path read denied in plan mode (#712)")
 					return Deny

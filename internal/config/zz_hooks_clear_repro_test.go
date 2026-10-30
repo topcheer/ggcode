@@ -72,21 +72,26 @@ func TestInstanceHooksClearToEmptySilentlyLost(t *testing.T) {
 		t.Fatalf("SaveInstance(clear): %v", err)
 	}
 
-	// Write side: BUG - the cleared hooks remain on disk.
+	// Write side: FIXED (#4315) - the cleared hooks must NOT remain on disk.
+	// With hooks as the only instance key, the post-reset prune may remove
+	// the instance file entirely (existing family behavior for fully-reset
+	// instances) - absence is the strongest pass.
 	instData, err = os.ReadFile(instPath)
-	if err != nil {
+	if err == nil {
+		if strings.Contains(string(instData), "echo A") {
+			t.Errorf("#4315 regression (write side): cleared hooks still on disk after SaveInstance")
+		}
+	} else if !os.IsNotExist(err) {
 		t.Fatalf("read instance file after clear: %v", err)
 	}
-	if !strings.Contains(string(instData), "echo A") {
-		t.Errorf("BUG APPEARS FIXED (write side): cleared hooks no longer on disk after SaveInstance. Invert this assertion when fixing.")
-	}
 
-	// Read side: BUG - the cleared hooks resurrect on reload.
+	// Read side: FIXED (#4315) - no resurrection on reload (global has no
+	// hooks in this fixture, so the merged config must be empty).
 	cfg3, err := LoadWithInstance(globalPath, workspace)
 	if err != nil {
 		t.Fatalf("reload after clear: %v", err)
 	}
-	if len(cfg3.Hooks.PreToolUse) == 0 {
-		t.Errorf("BUG APPEARS FIXED (read side): cleared hooks did not resurrect on reload. Invert this assertion when fixing.")
+	if len(cfg3.Hooks.PreToolUse) != 0 || len(cfg3.Hooks.PostToolUse) != 0 {
+		t.Errorf("#4315 regression (read side): cleared hooks resurrected on reload: pre=%d post=%d", len(cfg3.Hooks.PreToolUse), len(cfg3.Hooks.PostToolUse))
 	}
 }

@@ -309,8 +309,10 @@ func (m *Model) createWeComAdapterCmd(spec string) tea.Cmd {
 		// #1367 family batch 3: config write + explicit persist (#1399)
 		// moved onto the Update loop via configMutationMsg (see
 		// config_mutation.go).
+		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
 		return configMutationMsg{
 			apply: func(m *Model) error {
+				imEnabledBefore = m.config.IM.Enabled
 				m.config.IM.Enabled = true
 				if err := m.config.AddIMAdapter(name, adapter); err != nil {
 					return err
@@ -332,17 +334,17 @@ func (m *Model) createWeComAdapterCmd(spec string) tea.Cmd {
 					if err := m.ensureWeComRuntime(); err != nil {
 						// #2232: roll back the just-persisted adapter - the dirty
 						// Enabled:true credentials retried forever (#2215 tg pattern).
-						return m.rollbackWecomCreate(name, err)
+						return m.rollbackWecomCreate(name, err, imEnabledBefore)
 					}
 					if err := m.startWeComAdapterIfNeeded(name); err != nil {
 						if errors.Is(err, errWecomEnableNeeded) {
 							// #1792 case 3: enable on the Update loop, then restart.
 							// #2232: a failure inside the enable mutation also rolls
 							// back (its single caller is this create flow).
-							return m.wecomEnableMutation(name, m.wecomEnableRollback(name))
+							return m.wecomEnableMutation(name, imEnabledBefore, m.wecomEnableRollback(name, imEnabledBefore))
 						}
 						// #2232: generic start failure rolls back too.
-						return m.rollbackWecomCreate(name, err)
+						return m.rollbackWecomCreate(name, err, imEnabledBefore)
 					}
 					return wecomBindResultMsg{message: m.t("panel.wecom.message.added_bot", name)}
 				}
@@ -356,9 +358,9 @@ func (m *Model) createWeComAdapterCmd(spec string) tea.Cmd {
 
 // wecomEnableRollback adapts the #2232 create-flow rollback into the
 // next-continuation shape wecomEnableMutation expects.
-func (m *Model) wecomEnableRollback(name string) func(m *Model) tea.Msg {
+func (m *Model) wecomEnableRollback(name string, imEnabledBefore bool) func(m *Model) tea.Msg {
 	return func(m *Model) tea.Msg {
-		return m.rollbackWecomCreate(name, fmt.Errorf("wecom enable-restart failed for %s", name))
+		return m.rollbackWecomCreate(name, fmt.Errorf("wecom enable-restart failed for %s", name), imEnabledBefore)
 	}
 }
 
@@ -366,12 +368,13 @@ func (m *Model) wecomEnableRollback(name string) func(m *Model) tea.Msg {
 // runtime start failed (#2232) - mirrors rollbackTGCreate (#2215):
 // map REMOVE rides configMutationMsg (#1370 pattern), the original
 // error still surfaces, and a failed rollback is appended to it.
-func (m *Model) rollbackWecomCreate(name string, origErr error) tea.Msg {
+func (m *Model) rollbackWecomCreate(name string, origErr error, imEnabledBefore bool) tea.Msg {
 	return configMutationMsg{
 		apply: func(m *Model) error {
 			if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 				return rerr
 			}
+			m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
 			return m.saveConfig()
 		},
 		next: func(m *Model) tea.Cmd {
@@ -389,7 +392,7 @@ var errWecomEnableNeeded = errors.New("wecom adapter needs enable-on-update-loop
 
 // wecomEnableMutation performs the auto-enable on the Update loop, then
 // restarts the adapter and continues with next.
-func (m *Model) wecomEnableMutation(name string, next func(m *Model) tea.Msg) tea.Msg {
+func (m *Model) wecomEnableMutation(name string, imEnabledBefore bool, next func(m *Model) tea.Msg) tea.Msg {
 	return configMutationMsg{
 		apply: func(m *Model) error {
 			if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
@@ -405,7 +408,7 @@ func (m *Model) wecomEnableMutation(name string, next func(m *Model) tea.Msg) te
 				if err := im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager); err != nil {
 					// #2232: create-flow enable-restart failure rolls back the
 					// just-added adapter instead of a bare error over dirty config.
-					return m.rollbackWecomCreate(name, err)
+					return m.rollbackWecomCreate(name, err, imEnabledBefore)
 				}
 				if next == nil {
 					return nil

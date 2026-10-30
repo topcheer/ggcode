@@ -36,9 +36,13 @@ const (
 )
 
 var (
-	// diffHeaderRe matches "diff --git a/<old> b/<new>" headers; the old
-	// path is capture 1, the new path capture 2.
-	diffHeaderRe = regexp.MustCompile(`^diff --git a/(.+?) b/(.+)$`)
+	// diffHeaderRe matches "diff --git a/<old> b/<new>" headers.
+	// #4433: git quotes paths containing spaces (always) and non-ASCII
+	// bytes (core.quotePath) as "a/\344\270\255.go"; a whole-token capture
+	// with an explicit quoted alternative is the only ambiguity-free form
+	// (optional-quote suffixes let the lazy group absorb the closing quote).
+	// Quoted side -> capture pair (1,3); bare side -> (2,4).
+	diffHeaderRe = regexp.MustCompile(`^diff --git (?:"a/([^"]+)"|a/(\S+)) (?:"b/([^"]+)"|b/(\S+))$`)
 	// diffSymbolRe matches added/removed top-level Go-style declarations
 	// ("+func Foo", "-type bar") whose name is capture 2.
 	diffSymbolRe = regexp.MustCompile(`^[-+](?:func|type|const|var)\s+(?:\([^)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)`)
@@ -58,7 +62,7 @@ func AnalyzeMessageDiffConsistency(message, diffOutput string) string {
 	if strings.TrimSpace(message) == "" || strings.TrimSpace(diffOutput) == "" {
 		return ""
 	}
-	files, symbols, diffLower := parseDiffFacts(diffOutput)
+	files, oldFiles, symbols, diffLower := parseDiffFacts(diffOutput)
 
 	var findings []string
 
@@ -67,6 +71,10 @@ func AnalyzeMessageDiffConsistency(message, diffOutput string) string {
 	for _, tok := range msgFileTokenRe.FindAllString(message, -1) {
 		base := pathBase(tok)
 		if _, ok := files[base]; ok {
+			continue
+		}
+		// #4436: rename source names are legitimate message references.
+		if _, ok := oldFiles[base]; ok {
 			continue
 		}
 		// #3448: filter abbreviation-shaped tokens ("e.g", "i.e", "a.m",
@@ -124,7 +132,15 @@ func AnalyzeMessageDiffConsistency(message, diffOutput string) string {
 
 	// Rule 3: coverage — a large multi-file diff whose message references
 	// none of the changed files reads like a description of different work.
-	if len(files) >= minDiffFilesForCoverage && !mentionsAnyFile(message, files) {
+	// #4436: rename source names count as references too (union).
+	allFiles := make(map[string]struct{}, len(files)+len(oldFiles))
+	for f := range files {
+		allFiles[f] = struct{}{}
+	}
+	for f := range oldFiles {
+		allFiles[f] = struct{}{}
+	}
+	if len(files) >= minDiffFilesForCoverage && !mentionsAnyFile(message, allFiles) {
 		findings = append(findings, fmt.Sprintf(
 			"staged diff touches %d files but the commit message references none of them — is the message describing this change?", len(files)))
 	}
@@ -138,20 +154,89 @@ func AnalyzeMessageDiffConsistency(message, diffOutput string) string {
 
 // parseDiffFacts extracts the changed-file basenames, changed top-level
 // symbol names, and a lowercased blob of the whole diff for substring probes.
-func parseDiffFacts(diffOutput string) (files map[string]struct{}, symbols map[string]struct{}, lower string) {
+// files counts each changed file once (renames count as the new name, #4433);
+// oldFiles holds rename source basenames so message references to the OLD
+// name ("rename handler.go to api.go") do not read as phantoms (#4436).
+func parseDiffFacts(diffOutput string) (files map[string]struct{}, oldFiles map[string]struct{}, symbols map[string]struct{}, lower string) {
 	files = map[string]struct{}{}
+	oldFiles = map[string]struct{}{}
 	symbols = map[string]struct{}{}
 	for _, line := range strings.Split(diffOutput, "\n") {
 		if m := diffHeaderRe.FindStringSubmatch(line); m != nil {
-			files[pathBase(m[1])] = struct{}{}
-			files[pathBase(m[2])] = struct{}{}
+			// #4433: quoted alternative is pair (1,3), bare is (2,4).
+			oldPath, newPath := m[1], m[3]
+			if oldPath == "" {
+				oldPath = m[2]
+			}
+			if newPath == "" {
+				newPath = m[4]
+			}
+			// #4433: strip git quoting ("a/\344\270\255.go" -> a/中.go) so
+			// basename matching sees the real name, not octal debris.
+			oldB := pathBase(gitUnquotePath(oldPath))
+			newB := pathBase(gitUnquotePath(newPath))
+			files[newB] = struct{}{}
+			// #4433: a rename header (old side != new side) counts the file
+			// ONCE - both sides used to be added, so 3 pure renames inflated
+			// len(files) to 6 and tripped the minDiffFilesForCoverage gate.
+			// #4436: the OLD name still goes to oldFiles so "rename handler.go
+			// to api.go" does not flag handler.go as a phantom file.
+			if oldB == newB {
+				files[oldB] = struct{}{}
+			} else {
+				oldFiles[oldB] = struct{}{}
+			}
 			continue
 		}
 		if m := diffSymbolRe.FindStringSubmatch(line); m != nil {
 			symbols[m[1]] = struct{}{}
 		}
 	}
-	return files, symbols, strings.ToLower(diffOutput)
+	return files, oldFiles, symbols, strings.ToLower(diffOutput)
+}
+
+// gitUnquotePath reverses git's diff-header quoting for the escapes that
+// appear in practice: octal byte escapes (\344) from core.quotePath for
+// non-ASCII bytes, plus \" and \\ for embedded quotes/backslashes. Paths
+// without escapes round-trip unchanged.
+func gitUnquotePath(s string) string {
+	if !strings.ContainsAny(s, "\\") {
+		return s
+	}
+	var b []byte
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 >= len(s) {
+			b = append(b, s[i])
+			continue
+		}
+		switch s[i+1] {
+		case '"', '\\':
+			b = append(b, s[i+1])
+			i++
+		case '0', '1', '2', '3', '4', '5', '6', '7':
+			if i+3 < len(s)+1 && i+3 <= len(s) {
+				v := 0
+				ok := true
+				for j := 1; j <= 3 && i+j < len(s); j++ {
+					d := s[i+j]
+					if d < '0' || d > '7' {
+						ok = false
+						break
+					}
+					v = v*8 + int(d-'0')
+				}
+				if ok && v <= 255 {
+					b = append(b, byte(v))
+					i += 3
+				} else {
+					b = append(b, s[i])
+				}
+			}
+		default:
+			b = append(b, s[i])
+		}
+	}
+	return string(b)
 }
 
 // mentionsAnyFile reports whether the message references any changed file

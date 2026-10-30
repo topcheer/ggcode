@@ -251,8 +251,13 @@ func (a *androidBackend) screenshot(ctx context.Context, device, format string, 
 		return Result{Content: fmt.Sprintf("Screenshot captured (%d bytes, PNG).", len(data))}, nil
 	}
 
-	return imageResult(data, format, quality,
-		fmt.Sprintf("Screenshot captured (%d bytes, %s). The image is included for visual analysis.", len(data), strings.ToUpper(format))), nil
+	// #4575: adb screencap -p always emits PNG and no transcoding happens
+	// here - honoring the format/quality args produced PNG bytes labeled
+	// image/jpeg with a "JPEG" description, contradicting the schema
+	// contract and strict decoders. Return PNG truthfully; quality is
+	// documented as PNG-only on this backend.
+	return imageResult(data, "png", quality,
+		fmt.Sprintf("Screenshot captured (%d bytes, PNG). The image is included for visual analysis.", len(data))), nil
 }
 
 func (a *androidBackend) tap(ctx context.Context, device, ref string, x, y int) (Result, error) {
@@ -303,6 +308,13 @@ func (a *androidBackend) typeText(ctx context.Context, device, ref, text string,
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+	// #4457: adb input text has NO escape syntax - AOSP Input.java
+	// unconditionally decodes %s back to a space on the device. A literal
+	// %s in user text would silently arrive as a space while we report
+	// success. Refuse instead of corrupting the payload.
+	if strings.Contains(text, "%s") {
+		return Result{IsError: true, Content: fmt.Sprintf("text contains literal %%s, which adb input text cannot type (the device would decode it to a space and corrupt the payload) - use clipboard paste or type in segments without %%s")}, nil
+	}
 	// #1330: modern adb (shell v2) joins args and runs them through the
 	// device-side /bin/sh, so metacharacters (;, $(), backticks, |, &&)
 	// executed as shell on the device. Single-quote the whole text with
@@ -320,7 +332,7 @@ func (a *androidBackend) typeText(ctx context.Context, device, ref, text string,
 	return Result{Content: fmt.Sprintf("Typed: %q", text)}, nil
 }
 
-func (a *androidBackend) swipe(ctx context.Context, device, ref string, x, y, endX, endY int) (Result, error) {
+func (a *androidBackend) swipe(ctx context.Context, device, ref string, x, y int, endX, endY *int) (Result, error) {
 	// #1694 case 2: a ref-only swipe used to run (0,0)->(0,0) and report
 	// success. Resolve the ref to the element center as the swipe START.
 	if ref != "" {
@@ -330,14 +342,20 @@ func (a *androidBackend) swipe(ctx context.Context, device, ref string, x, y, en
 		}
 		x, y = cx, cy
 	}
+	// #4576: #1694 only fixed the START; a missing end still swiped to
+	// (0,0) - from the element center straight into the top-left corner,
+	// then reported success. Both ends must be explicit.
+	if endX == nil || endY == nil {
+		return Result{IsError: true, Content: "swipe requires end_x and end_y (the swipe destination); provide both explicitly"}, nil
+	}
 	args := adbDeviceArgs(device)
 	args = append(args, "shell", "input", "swipe",
-		strconv.Itoa(x), strconv.Itoa(y), strconv.Itoa(endX), strconv.Itoa(endY), "300")
+		strconv.Itoa(x), strconv.Itoa(y), strconv.Itoa(*endX), strconv.Itoa(*endY), "300")
 	_, stderr, err := runCommand(ctx, 10*time.Second, a.adbPath, args...)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("swipe failed: %v\n%s", err, stderr)}, nil
 	}
-	return Result{Content: fmt.Sprintf("Swiped from (%d,%d) to (%d,%d).", x, y, endX, endY)}, nil
+	return Result{Content: fmt.Sprintf("Swiped from (%d,%d) to (%d,%d).", x, y, *endX, *endY)}, nil
 }
 
 func (a *androidBackend) press(ctx context.Context, device, key string) (Result, error) {
@@ -447,12 +465,26 @@ func parseAndroidUIXML(xmlData string) *uiElement {
 		return nil
 	}
 
-	// Build root from first node
-	root := parseAndroidNode(nodes[0][1])
+	// Build root from first non-nil node. (#4457: parseAndroidNode returns
+	// nil when a node has no label AND an unparseable Rect - uiautomator
+	// dumps malformed XML like this when bounds are missing or an attribute
+	// value contains '>' and the outer regex truncates the attr list. The
+	// old code only nil-checked children; a nil root panicked on the append
+	// below.)
+	var root *uiElement
+	first := 0
+	for ; first < len(nodes); first++ {
+		if root = parseAndroidNode(nodes[first][1]); root != nil {
+			break
+		}
+	}
+	if root == nil {
+		return nil
+	}
 	// Android XML is a flat list but hierarchical via parent pointers.
 	// In practice, uiautomator dump creates a nested hierarchy.
 	// For simplicity, we flatten into root's children.
-	for i := 1; i < len(nodes); i++ {
+	for i := first + 1; i < len(nodes); i++ {
 		child := parseAndroidNode(nodes[i][1])
 		if child != nil {
 			root.Children = append(root.Children, child)
@@ -543,7 +575,16 @@ func xmlAttr(attrs, name string) string {
 
 // trimTree removes deeply nested empty nodes to keep output token-efficient.
 func trimTree(el *uiElement, depth int) {
-	if el == nil || depth > 8 {
+	if el == nil {
+		return
+	}
+	// #4480: at depth > 8 the old code just returned, leaving the 9th-level
+	// node's ENTIRE subtree unpruned - the opposite of the "avoid excessive
+	// depth" intent (every descendant survived, only the recursion stopped).
+	// Keep the node itself (its parent already filtered it in) but cut the
+	// subtree: clear Children instead of returning untouched.
+	if depth > 8 {
+		el.Children = nil
 		return
 	}
 	filtered := el.Children[:0]

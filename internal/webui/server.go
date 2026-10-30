@@ -278,11 +278,6 @@ func (s *Server) saveConfig() error {
 	return s.cfg.SaveScoped(s.saveScope)
 }
 
-// SetSaveScope sets the config save scope for WebUI operations.
-func (s *Server) SetSaveScope(scope string) {
-	s.saveScope = scope
-}
-
 // Start starts the HTTP server on the given address (e.g. "127.0.0.1:0" for auto).
 // Returns the actual listening address.
 func (s *Server) Start(addr string) (string, error) {
