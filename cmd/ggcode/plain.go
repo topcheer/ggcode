@@ -562,7 +562,19 @@ func runLinearTurn(ctx context.Context, ag *agent.Agent, line string) {
 	// pendingToolCalls tracks tool calls whose result event has not arrived
 	// yet, so Done can close their lines (no result = terminated turn).
 	pendingToolCalls := make(map[string]bool)
-	err := ag.RunStream(ctx, line, func(event provider.StreamEvent) {
+	err := ag.RunStream(ctx, line, plainStreamPrinter(pendingToolCalls))
+	if err != nil {
+		fmt.Printf("\n[error] turn failed: %v\n", err)
+	}
+}
+
+// plainStreamPrinter renders one agent turn as plain linear output. It is
+// extracted from runLinearTurn so the tool-call/result pairing contract is
+// unit-testable: call lines print without a newline, the matching ToolResult
+// (by tool-call ID) appends " (ok)" or " (error)", unmatched results are
+// dropped, and Done closes at most one unterminated tail line.
+func plainStreamPrinter(pendingToolCalls map[string]bool) func(provider.StreamEvent) {
+	return func(event provider.StreamEvent) {
 		switch event.Type {
 		case provider.StreamEventText:
 			fmt.Print(event.Text)
@@ -587,17 +599,14 @@ func runLinearTurn(ctx context.Context, ag *agent.Agent, line string) {
 		case provider.StreamEventError:
 			fmt.Printf("\n[error] %v\n", event.Error)
 		case provider.StreamEventDone:
-			// Any call still pending never got a result event - close its
-			// line so the next output does not run on.
-			for id := range pendingToolCalls {
-				delete(pendingToolCalls, id)
+			// Any call still pending never got a result event - close the
+			// unterminated tail (one newline total, not per call) and drain
+			// the map so stale ids cannot pair with a later turn's results.
+			if len(pendingToolCalls) > 0 {
 				fmt.Println()
-				break // one newline per unterminated tail, not per call
 			}
+			clear(pendingToolCalls)
 			fmt.Println()
 		}
-	})
-	if err != nil {
-		fmt.Printf("\n[error] turn failed: %v\n", err)
 	}
 }

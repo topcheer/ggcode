@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 // withEnv sets env[k]=v for the duration of fn, restoring the prior value
@@ -119,6 +122,84 @@ func TestHandlePlainCommandLang(t *testing.T) {
 	}
 	if plainLang != "en" {
 		t.Errorf("plainLang = %q, want en", plainLang)
+	}
+}
+
+// TestPlainStreamPrinterToolStatusPairing verifies the linear frontend's
+// tool-call/result pairing contract: call lines carry no trailing newline,
+// the matching ToolResult appends " (ok)"/" (error)", unmatched results are
+// dropped, and Done closes at most one unterminated tail line.
+func TestPlainStreamPrinterToolStatusPairing(t *testing.T) {
+	events := []provider.StreamEvent{
+		{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "a", Name: "glob"}},
+		{Type: provider.StreamEventToolResult, Tool: provider.ToolCallDelta{ID: "a"}},
+		{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "b", Name: "run_command"}},
+		{Type: provider.StreamEventToolResult, Tool: provider.ToolCallDelta{ID: "b"}, IsError: true},
+		// Result with no preceding call line: must be dropped entirely.
+		{Type: provider.StreamEventToolResult, Tool: provider.ToolCallDelta{ID: "ghost"}},
+		{Type: provider.StreamEventDone},
+	}
+	pending := make(map[string]bool)
+	printer := plainStreamPrinter(pending)
+	var out strings.Builder
+	orig := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	for _, e := range events {
+		printer(e)
+	}
+	_ = w.Close()
+	os.Stdout = orig
+	_, _ = io.Copy(&out, r)
+
+	got := out.String()
+	for _, want := range []string{"\n[tool] glob (ok)\n", "\n[tool] run_command (error)\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output must contain %q, got:\n%q", want, got)
+		}
+	}
+	if strings.Count(got, "[tool]") != 2 {
+		t.Errorf("ghost result must not print a line, got:\n%q", got)
+	}
+	if len(pending) != 0 {
+		t.Errorf("pending map must be drained after Done, got %v", pending)
+	}
+}
+
+// TestPlainStreamPrinterDoneClosesUnterminatedTail verifies a call whose
+// result never arrives gets exactly one closing newline (not one per call),
+// so the next turn's output starts on a fresh line.
+func TestPlainStreamPrinterDoneClosesUnterminatedTail(t *testing.T) {
+	events := []provider.StreamEvent{
+		{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "a", Name: "slow"}},
+		{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "b", Name: "slower"}},
+		{Type: provider.StreamEventDone},
+	}
+	pending := make(map[string]bool)
+	printer := plainStreamPrinter(pending)
+	var out strings.Builder
+	orig := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	for _, e := range events {
+		printer(e)
+	}
+	_ = w.Close()
+	os.Stdout = orig
+	_, _ = io.Copy(&out, r)
+
+	// Two unterminated calls: 2 leading newlines (one per [tool] line) +
+	// exactly one tail-closing newline + one Done newline = 4 total, ending
+	// in a blank line - never one closing newline per call.
+	got := out.String()
+	if n := strings.Count(got, "\n"); n != 4 {
+		t.Errorf("expected exactly 4 newlines (2 call-leads + 1 tail close + 1 Done), got %d:\n%q", n, got)
+	}
+	if !strings.HasSuffix(got, "\n\n") {
+		t.Errorf("output must end with the closed tail line + Done newline, got:\n%q", got)
+	}
+	if len(pending) != 0 {
+		t.Errorf("pending map must be drained, got %v", pending)
 	}
 }
 
