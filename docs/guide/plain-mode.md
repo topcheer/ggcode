@@ -22,6 +22,15 @@ LLM text streams to the terminal as it arrives. Each tool call prints one bounda
 
 Tool arguments and raw results are not echoed (they would drown the prose); `(ok)`/`(error)` is the per-call verdict. A call whose result never arrives still gets its line closed when the turn ends.
 
+Reasoning/thinking deltas stream as a prefixed line, closed by the next text/tool boundary:
+
+```
+[think] The user asks for md files - one glob call at the root should do.
+[tool] glob (ok)
+```
+
+Providers that carry the tool-turn narration in the reasoning stream (glm via OpenAI-compatible relays, DeepSeek) show it here; providers without reasoning output simply skip the line.
+
 ## Slash Commands
 
 Anything not starting with `/` is sent to the agent as a conversation turn.
