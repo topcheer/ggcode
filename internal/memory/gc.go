@@ -178,11 +178,23 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 // and writes a #4334 timestamp-suffixed tombstone so ReadMemoryAsOf sees
 // the deletion gap instead of time-traveling to older archived content.
 func (am *AutoMemory) archiveAndTombstone(safe, path, key string) error {
-	if _, err := am.archiveVersion(safe, path); err != nil {
+	// #4657: capture dst and roll the rename back if the tombstone write
+	// fails. The rename IS the removal, so without a rollback a tombstone
+	// fault (ENOSPC/EACCES/read-only remount) left the live file gone, no
+	// tombstone, and an error to the caller - a permanent half-deleted state
+	// that silently violates the #3880 invariant (as_of reads time-travel to
+	// the archived "live" version) and makes the caller's retry report
+	// "memory not found" (history.go:52 keeps the pre-delete mtime, so the
+	// gap is invisible to ReadMemoryAsOf). Rolling back restores the live
+	// file so a retry takes the normal, full path - the #3818 precedent
+	// (history.go:58 "caller rolls back from dst if the swap-in fails").
+	dst, err := am.archiveVersion(safe, path)
+	if err != nil {
 		return err
 	}
 	hdir := filepath.Join(am.dir, historyDirName)
 	if err := os.MkdirAll(hdir, 0755); err != nil {
+		am.rollbackArchive(path, dst, err)
 		return err
 	}
 	// #4334: each deletion gets its OWN timestamp-suffixed tombstone. The
@@ -193,9 +205,30 @@ func (am *AutoMemory) archiveAndTombstone(safe, path, key string) error {
 	now := time.Now()
 	tomb := filepath.Join(hdir, safe+".tombstone."+strconv.FormatInt(now.UnixNano(), 10))
 	if err := os.WriteFile(tomb, []byte(key+"\n"), 0o644); err != nil {
+		am.rollbackArchive(path, dst, err)
 		return err
 	}
-	return os.Chtimes(tomb, now, now)
+	if err := os.Chtimes(tomb, now, now); err != nil {
+		am.rollbackArchive(path, dst, err)
+		return err
+	}
+	return nil
+}
+
+// rollbackArchive undoes archiveVersion's rename after a post-rename failure
+// (#4657): the archived copy moves back to the live path. Best-effort - the
+// fault is logged either way, and a rollback failure just means the memory
+// stays archived (the pre-fix behavior); the caller still receives the
+// original error.
+func (am *AutoMemory) rollbackArchive(path, dst string, cause error) {
+	if dst == "" {
+		return // archiveVersion made no change (first-write case)
+	}
+	if err := os.Rename(dst, path); err != nil {
+		debug.Log("memory", "archiveAndTombstone: tombstone fault %v AND rollback failed (%s -> %s): %v", cause, dst, path, err)
+		return
+	}
+	debug.Log("memory", "archiveAndTombstone: tombstone fault %v, rolled back archive %s -> %s (memory left live; retry will redo the full delete)", cause, dst, path)
 }
 
 // DeleteMemory removes a single memory entry by key. Returns an error if the
