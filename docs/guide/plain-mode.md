@@ -55,6 +55,7 @@ Appends a model to the **active endpoint** (deduplicated; optional `--apikey` up
 
 ## Behavior Differences
 
+- **No autopilot injections.** Even when the global default mode is `bypass`/`autopilot`, the linear frontend skips the goal-collection meta-instruction and the end-of-turn strategist prompt — a text answer ends the run and returns to the prompt. The permission surface itself is unchanged (still bypass if configured); only the behavioral injections are suppressed.
 - **Approvals default to Accept.** There is no dialog UI; set `GGCODE_PLAIN_APPROVE=deny` to reject instead.
 - **ask_user is disabled.** The agent ends its turn and waits; your next typed line is the answer — multi-turn conversation is the native pause point.
 - **HOME-directory warning is line-oriented**: the same localized warning text as the TUI, confirmed with a `y/N` prompt instead of a full-screen dialog.
