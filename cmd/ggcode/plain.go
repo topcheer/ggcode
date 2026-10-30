@@ -38,6 +38,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tui"
 )
@@ -82,6 +83,15 @@ func RunLinearREPL(ag *agent.Agent, registry *tool.Registry, cfg *config.Config,
 		// The permission surface itself is untouched (still bypass if
 		// configured); plainApproval remains the approval decision point.
 		ag.SuppressAutopilotInjection()
+	}
+
+	// --persist-session: append every message to the session store
+	// (write-only by design): the JSONL lands in the session dir for
+	// explicit --resume <id>, but is deliberately NOT indexed (store.Save)
+	// so auto-resume and the picker never pick it up - the next plain
+	// start must stay a fresh session.
+	if persistSessionFlag {
+		wirePlainPersist(ag, cfg)
 	}
 
 	fmt.Println(plainTr(plainLang, "banner"))
@@ -548,6 +558,40 @@ func plainAddModel(cfg *config.Config, model, apikey string) {
 		return
 	}
 	fmt.Printf("[plain] model %q added to endpoint %q - switch with: /model %s\n", model, cfg.Endpoint, model)
+}
+
+// wirePlainPersist attaches a per-message persistence handler to the plain
+// agent, mirroring the TUI's SetPersistHandler wiring (async JSONL append on
+// every context Add). It returns the store and the fresh session; nils when
+// anything is unavailable (agent nil, store failure) - persistence is
+// best-effort and must never block the REPL.
+func wirePlainPersist(ag *agent.Agent, cfg *config.Config) (*session.JSONLStore, *session.Session) {
+	if ag == nil {
+		return nil, nil
+	}
+	dir, err := session.DefaultDir()
+	if err != nil {
+		fmt.Printf("[plain] persist unavailable: %v\n", err)
+		return nil, nil
+	}
+	store, err := session.NewJSONLStore(dir)
+	if err != nil {
+		fmt.Printf("[plain] persist unavailable: %v\n", err)
+		return nil, nil
+	}
+	v, ep, m := "unknown", "unknown", "unknown"
+	if resolved, _, rerr := agentruntime.ResolveCurrentSelection(cfg); rerr == nil {
+		v, ep, m = resolved.VendorID, resolved.EndpointID, resolved.Model
+	}
+	ses := session.NewSession(v, ep, m)
+	ses.Title = "plain session"
+	ag.SetPersistHandler(func(msg provider.Message) {
+		if err := store.AppendMessageToDisk(ses, msg); err != nil {
+			debug.Log("plain", "persist append failed: %v", err)
+		}
+	})
+	fmt.Printf("[plain] persisting session %s\n", ses.ID)
+	return store, ses
 }
 
 // runLinearTurn streams one agent turn as plain linear output: text deltas

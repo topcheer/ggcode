@@ -48,6 +48,10 @@ import (
 	"github.com/topcheer/ggcode/internal/webui"
 )
 
+// persistSessionFlag gates --persist-session: plain sessions append every
+// message to the session store (write-only; no auto-resume on startup).
+var persistSessionFlag bool
+
 func NewRootCmd() *cobra.Command {
 	var cfgFile string
 	var resumeID string
@@ -228,6 +232,7 @@ func NewRootCmd() *cobra.Command {
 	_ = cmd.Flags().MarkHidden("readOnlyAllowedDir")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
 	cmd.Flags().BoolVar(&plainFlag, "plain", false, "linear frontend: no TUI frames, line-oriented IO for dumb terminals/screen readers (sets NO_COLOR; TERM=dumb auto-selects)")
+	cmd.Flags().BoolVar(&persistSessionFlag, "persist-session", false, "persist each message of a --plain session to the session store (write-only; no auto-resume)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
 	cmd.Flags().StringVar(&outputSchemaPath, "output-schema", "", "path to a JSON Schema the final response must conform to (structured outputs; supported endpoints constrain decoding, others fall back to prompt guidance)")
 	// r415: per-run budget overrides (this invocation only, not persisted).

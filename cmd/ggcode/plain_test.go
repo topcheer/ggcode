@@ -238,6 +238,16 @@ func TestPlainStreamPrinterIntermediateDoneKeepsPairing(t *testing.T) {
 	}
 }
 
+// TestWirePlainPersistNilAgentGuard verifies the best-effort contract: a nil
+// agent (config unavailable path) returns nils instead of panicking, so
+// --persist-session never blocks REPL startup.
+func TestWirePlainPersistNilAgentGuard(t *testing.T) {
+	store, ses := wirePlainPersist(nil, nil)
+	if store != nil || ses != nil {
+		t.Fatalf("nil agent must yield nil store/session, got %v/%v", store, ses)
+	}
+}
+
 // TestHandlePlainCommandExit verifies only the exit-family commands terminate
 // the linear loop; every other command (including unknown ones) keeps it up.
 func TestHandlePlainCommandExit(t *testing.T) {
