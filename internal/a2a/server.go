@@ -20,6 +20,11 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
+// maxPushConfigs caps the push-notification config registry (#4629): the
+// map grew without bound on trusted peers (fresh nano-second IDs, no TTL,
+// no eviction). Re-registering an existing ID stays an upsert.
+const maxPushConfigs = 256
+
 // Server is an A2A protocol server that handles JSON-RPC requests over HTTP.
 type Server struct {
 	handler        *TaskHandler
@@ -942,6 +947,19 @@ func (s *Server) handlePushConfigSet(w http.ResponseWriter, req *JSONRPCRequest)
 		return
 	}
 	s.pushMu.Lock()
+	// #4629: trusted-peer resource bound - the map grows without limit
+	// otherwise (new nano-second ID per call, no TTL, no eviction). Cap the
+	// registration count; re-registering an existing ID stays an upsert.
+	if _, exists := s.pushConfigs[cfg.ID]; !exists && len(s.pushConfigs) >= maxPushConfigs {
+		s.pushMu.Unlock()
+		debug.Log("a2a.push", "push config registry full (%d entries), rejecting id=%s", maxPushConfigs, cfg.ID)
+		writeRPCError(w, req.ID, &JSONRPCError{
+			Code:    ErrInvalidParams.Code,
+			Message: ErrInvalidParams.Message,
+			Data:    fmt.Sprintf("push config registry full (%d entries); delete stale configs before registering new ones", maxPushConfigs),
+		})
+		return
+	}
 	s.pushConfigs[cfg.ID] = cfg
 	s.pushMu.Unlock()
 	writeRPCResult(w, req.ID, cfg)

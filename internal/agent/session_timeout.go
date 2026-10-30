@@ -159,7 +159,7 @@ func (s *sessionTimeoutState) check() string {
 		return fmt.Sprintf(
 			"[session-timeout] 80%% of the %s wall-clock budget consumed (%.0fs remaining). "+
 				"Wrap up secondary work and focus on the core deliverables.",
-			s.timeout.Round(time.Second), remaining.Seconds(),
+			s.runTimeout.Round(time.Second), remaining.Seconds(),
 		)
 	}
 
@@ -169,10 +169,14 @@ func (s *sessionTimeoutState) check() string {
 // shouldStop returns true when the wall-clock timeout has been exceeded.
 // Used to break the agent loop.
 func (s *sessionTimeoutState) shouldStop() bool {
-	if s == nil || s.timeout <= 0 || s.startTime.IsZero() {
+	// #4631: judge against runTimeout (the resolved per-run value), not the
+	// configured s.timeout - with the default configured=0 + autopilot,
+	// s.timeout stays 0 while runTimeout holds the 600m default, so the old
+	// check made shouldStop permanently false and the loop never broke.
+	if s == nil || s.runTimeout <= 0 || s.startTime.IsZero() {
 		return false
 	}
-	return time.Since(s.startTime) >= s.timeout
+	return time.Since(s.startTime) >= s.runTimeout
 }
 
 // effectiveTimeout returns the timeout to use given the mode and config.

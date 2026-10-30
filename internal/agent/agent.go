@@ -6049,7 +6049,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		summary := runStats.Summary()
 		onEvent(provider.StreamEvent{
 			Type: provider.StreamEventText,
-			Text: fmt.Sprintf("\nSession wall-clock timeout reached (limit: %s). Summary: %s.\nYour task may be partially complete - review the changes above. You can continue by sending a follow-up message.", a.sessionTimeout.timeout.Round(time.Second), summary),
+			Text: fmt.Sprintf("\nSession wall-clock timeout reached (limit: %s). Summary: %s.\nYour task may be partially complete - review the changes above. You can continue by sending a follow-up message.", a.sessionTimeout.runTimeout.Round(time.Second), summary),
 		})
 		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ErrSessionTimeout})
 		return ErrSessionTimeout
