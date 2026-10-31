@@ -102,12 +102,18 @@ func TestCheckCrashedRun_DetectsCrash(t *testing.T) {
 	dir := journalDirFunc()
 	path := filepath.Join(dir, "crashed-session_"+journalFileName)
 
-	// Write a stale "running" entry with a dead PID
+	// Write a stale "running" entry with a PID that never enters the
+	// liveness branch. #4816 family: 999999 was "very unlikely to exist"
+	// luck, not a guarantee - with StartTime only 2h back (inside the 4h
+	// trust window), a live process holding that PID on a busy runner turns
+	// the crash verdict into nil ("concurrent access"). PID 0 makes the
+	// detection deterministic on every machine; the genuine live-PID paths
+	// stay covered by run_journal_3222_test.go (os.Getpid()).
 	entry := RunJournalEntry{
 		SessionID:  "crashed-session",
 		State:      "running",
 		StartTime:  time.Now().Add(-2 * time.Hour),
-		PID:        999999, // very unlikely to exist
+		PID:        0,
 		UserPrompt: "complex refactor",
 	}
 	data, _ := json.Marshal(entry)
