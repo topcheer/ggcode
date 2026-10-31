@@ -3756,6 +3756,35 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 	if !firstRealTimestamp.IsZero() && firstRealTimestamp.Before(backfillBase) {
 		backfillBase = firstRealTimestamp
 	}
+	// #4715: ts-less records BEFORE the first real timestamp used to start
+	// the cursor AT firstReal (+1ms, +2ms, ...) - landing AFTER the real
+	// record that follows them in file order and breaking the very
+	// monotonicity this backfill exists to preserve (#198 file order ==
+	// chronological order). Count the zero-ts message prefix K and anchor
+	// the cursor K+1 milliseconds BELOW firstReal, so the prefix climbs to
+	// firstReal-1ms - strictly before the first real record. The suffix
+	// path is untouched: the cursor still max-tracks real timestamps
+	// (#4670).
+	if !firstRealTimestamp.IsZero() {
+		prefixZero := 0
+		for _, line := range lines {
+			var rec jsonlRecord
+			if json.Unmarshal([]byte(line), &rec) != nil {
+				continue
+			}
+			if rec.Type != "message" || isSummaryNoteMessage(rec.Message) {
+				continue
+			}
+			if rec.Timestamp.IsZero() {
+				prefixZero++
+				continue
+			}
+			break // firstReal reached - stop counting the prefix
+		}
+		if prefixZero > 0 {
+			backfillBase = firstRealTimestamp.Add(-time.Duration(prefixZero+1) * time.Millisecond)
+		}
+	}
 	cursor := backfillBase
 	changed := false
 	for i, line := range lines {
