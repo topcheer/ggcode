@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -559,9 +560,10 @@ func (rs *RuleStore) topRulesForPrompt(maxRules int, filterIntent string) string
 
 	now := time.Now()
 	type ruleScore struct {
-		rule  string
-		hint  string
-		score float64
+		rule     string
+		hint     string
+		score    float64
+		taskType string
 	}
 	var active, intentActive []ruleScore
 	useIntent := filterIntent != "" && filterIntent != "other"
@@ -570,9 +572,10 @@ func (rs *RuleStore) topRulesForPrompt(maxRules int, filterIntent string) string
 			continue
 		}
 		sc := ruleScore{
-			rule:  r.Rule,
-			hint:  r.FixHint,
-			score: recencyWeightedScore(r.HitCount, r.LastSeen, now),
+			rule:     r.Rule,
+			hint:     r.FixHint,
+			score:    recencyWeightedScore(r.HitCount, r.LastSeen, now),
+			taskType: r.TaskType,
 		}
 		active = append(active, sc)
 		if useIntent && r.TaskType == filterIntent {
@@ -583,11 +586,34 @@ func (rs *RuleStore) topRulesForPrompt(maxRules int, filterIntent string) string
 		return ""
 	}
 
-	// Intent view is only adopted when the same-type subset is rich
-	// enough to fill a meaningful prompt slice; otherwise fall back to
-	// the global ranking so thin stores keep injecting their best rules.
+	// Intent view is a QUOTA MIX over UNIVERSAL rules, not a replacement
+	// (#4512): the old len(intentActive)>=2 gate let two weak single-hit
+	// same-intent rules evict every general high-hit rule from the prompt,
+	// permanently. Intent rules lead; remaining slots fill from UNTAGGED
+	// (TaskType=="") universal rules only - other intents stay excluded,
+	// preserving the topic-purity design pinned by
+	// TestTopRulesForPromptFiltered_PrefersSameIntent.
 	if useIntent && len(intentActive) >= 2 {
-		active = intentActive
+		sort.SliceStable(intentActive, func(i, j int) bool {
+			return intentActive[i].score > intentActive[j].score
+		})
+		intentSet := make(map[string]bool, len(intentActive))
+		for _, sc := range intentActive {
+			intentSet[sc.rule] = true
+		}
+		var universal []ruleScore
+		for _, sc := range active {
+			if sc.taskType == "" && !intentSet[sc.rule] {
+				universal = append(universal, sc)
+			}
+		}
+		sort.SliceStable(universal, func(i, j int) bool {
+			return universal[i].score > universal[j].score
+		})
+		mixed := make([]ruleScore, 0, len(intentActive)+len(universal))
+		mixed = append(mixed, intentActive...)
+		mixed = append(mixed, universal...)
+		active = mixed
 	}
 
 	// Sort by combined score descending (small N, insertion sort)
