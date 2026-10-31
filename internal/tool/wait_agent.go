@@ -127,7 +127,7 @@ func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 		// #3237: snap.Task carries the nudge spawn appended; strip it so
 		// both reminders extract the ORIGINAL acceptance criteria.
 		task := stripReadBackNudge(snap.Task)
-		return Result{Content: annotateWorktree(snap.Result+formatExploreRegions(snap.Result)+readBackReminder(task, snap.Result)+acceptanceReminder(task, snap.Result), snap)}, nil
+		return Result{Content: annotateWorktree(provenanceHeader(snap.ExternalSources)+snap.Result+formatExploreRegions(snap.Result)+readBackReminder(task, snap.Result)+acceptanceReminder(task, snap.Result), snap)}, nil
 	}
 	var reminder string
 	if snap.Status == subagent.StatusCompleted {

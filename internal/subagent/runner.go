@@ -237,6 +237,12 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			// Increment tool call count for this subagent
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.IncrementToolCalls()
+				// Provenance tracking (trust-cascade defense): count calls
+				// to external-source tools so wait_agent can surface the
+				// result's provenance at the delegation boundary.
+				if isExternalSourceTool(meta.Name) {
+					sa.RecordExternalSource(meta.Name)
+				}
 				sa.setActivity("tool", meta.Name, meta.RawArgs)
 				sa.setToolExecuting(true)
 				sa.appendEvent(AgentEvent{
