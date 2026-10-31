@@ -143,12 +143,17 @@ func (m Model) handleHistorySearchKey(msg tea.KeyPressMsg) (handled bool, out Mo
 	// v2 idiom - named keys carry empty Text; cf. inspector_panel) and the
 	// space bar are query input.
 	if msg.Text != "" || msg.Code == tea.KeySpace {
-		key := msg.String()
-		if key != "" && !strings.Contains(key, "+") {
-			m.historySearch.query += key
-			refreshHistorySearch(&m)
-			return true, m, nil
+		// #4731: Key.String() returns the keystroke NAME for the space bar
+		// ("space"), so multi-word queries became "gitspacestatus". The
+		// decoded text lives in msg.Text; the space bar enters through the
+		// Code gate above with empty Text, so append it explicitly.
+		if msg.Code == tea.KeySpace {
+			m.historySearch.query += " "
+		} else {
+			m.historySearch.query += msg.Text
 		}
+		refreshHistorySearch(&m)
+		return true, m, nil
 	}
 	// Any other key (arrows, readline shortcuts, ...) exits search mode and
 	// is then handled by the composer as usual; the matched text stays in
