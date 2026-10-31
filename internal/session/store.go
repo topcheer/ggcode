@@ -188,6 +188,13 @@ type Store interface {
 	// Tags are trimmed, deduplicated case-insensitively, and capped (16 tags,
 	// 32 chars each) by the implementation.
 	SetTags(s *Session, tags []string) error
+
+	// WithSessionLocked runs fn while holding the store lock, so in-memory
+	// session-field mutations are mutually excluded with the meta
+	// serialization the SetTags/SetPinned path performs (#4717: the
+	// streaming usage writer and the slash-command path previously raced
+	// across two different locks).
+	WithSessionLocked(s *Session, fn func())
 }
 
 // indexEntry is a lightweight record for fast session listing.
@@ -2652,6 +2659,22 @@ func (s *JSONLStore) SetTags(ses *Session, tags []string) error {
 	defer s.mu.Unlock()
 	ses.Tags = normalizeTags(tags)
 	return s.appendMetaLocked(ses)
+}
+
+// WithSessionLocked runs fn against ses while holding the store lock, so
+// in-memory session-field mutations are mutually excluded with the meta
+// serialization in appendMetaLocked (SetTags/SetPinned path) - both sides
+// hold s.mu. #4717: the streaming usage writer previously mutated
+// TokenUsage/UpdatedAt under the TUI sessionMutex only, while /tag //untag
+// //pin's appendMetaLocked read the same fields under s.mu - two different
+// locks, no exclusion, a -race-reproducible data race that could persist a
+// torn usage record. Callers that already hold the TUI sessionMutex keep
+// doing so; the lock order is sessionMutex -> s.mu (the store never takes
+// TUI locks, so no cycle is possible).
+func (s *JSONLStore) WithSessionLocked(ses *Session, fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fn()
 }
 
 // Tag bounds enforced by SetTags/normalizeTags.

@@ -1073,11 +1073,19 @@ func (m *Model) recordSessionUsage(usage provider.TokenUsage, source string) {
 		mu.Unlock()
 		return
 	}
-	m.session.TokenUsage = m.session.TokenUsage.Add(usage)
-	m.session.AddUsageForEndpoint(m.session.Vendor, m.session.Endpoint, usage)
-	m.session.UpdatedAt = time.Now()
 	ses := m.session
 	store := m.sessionStore
+	// #4717: these session-field writes must hold the STORE lock too:
+	// /tag //untag //pin's appendMetaLocked serializes TokenUsage/UpdatedAt
+	// under s.mu, and two different locks (sessionMutex here vs s.mu there)
+	// provide no exclusion - the -race-detected tear. WithSessionLocked
+	// nests s.mu inside sessionMutex (the store never takes TUI locks, no
+	// cycle).
+	store.WithSessionLocked(m.session, func() {
+		m.session.TokenUsage = m.session.TokenUsage.Add(usage)
+		m.session.AddUsageForEndpoint(m.session.Vendor, m.session.Endpoint, usage)
+		m.session.UpdatedAt = time.Now()
+	})
 	// Use the ACTUAL model the agent is running with (activeModel),
 	// not the session-stored model which may be stale after a model
 	// switch. activeModel is set by setActiveRuntimeSelection() every
