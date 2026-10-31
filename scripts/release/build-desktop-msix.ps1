@@ -104,23 +104,11 @@ foreach ($arch in ($Archs -split ",")) {
   $manifestPath = Join-Path $stageDir "AppxManifest.xml"
   [System.IO.File]::WriteAllText($manifestPath, $manifest)
 
-  # 4. mapping file + makeappx
-  $mapping = Join-Path $stageDir "mapping.txt"
-  $lines = @(
-    "[Files]"
-    "`"$((Join-Path $stageDir 'GGCode-Desktop.exe'))`" `"$((Join-Path $stageDir 'GGCode-Desktop.exe'))`""
-    "`"$manifestPath`" `"AppxManifest.xml`""
-    "`"$assetsDir\Square44x44Logo.png`" `"Assets\Square44x44Logo.png`""
-    "`"$assetsDir\Square150x150Logo.png`" `"Assets\Square150x150Logo.png`""
-    "`"$assetsDir\Wide310x150Logo.png`" `"Assets\Wide310x150Logo.png`""
-    "`"$assetsDir\Square310x310Logo.png`" `"Assets\Square310x310Logo.png`""
-    "`"$assetsDir\SplashScreen.png`" `"Assets\SplashScreen.png`""
-    "`"$assetsDir\StoreLogo.png`" `"Assets\StoreLogo.png`""
-  )
-  Set-Content -Path $mapping -Value ($lines -join "`r`n") -Encoding ASCII
-
+  # Directory pack: stageDir already holds GGCode-Desktop.exe + Assets\ +
+  # AppxManifest.xml, so /d packs everything without a mapping file (mapping
+  # quoting proved fragile across CI environments).
   $outMsix = Join-Path $AbsOutputDir "ggcode-desktop_${PackageVersion}_windows_${arch}.msix"
-  & $makeappx pack /m $manifestPath /f $mapping /p $outMsix /v
+  & $makeappx pack /d $stageDir /p $outMsix /v
   if ($LASTEXITCODE -ne 0) { throw "makeappx failed for $arch" }
   Write-Host "Built MSIX: $outMsix"
 

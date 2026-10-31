@@ -19,7 +19,7 @@ on:
         description: "Partner Center Publisher ID (CN=...)"
         required: true
       archs:
-        description: "Architectures (x64,arm64)"
+        description: "Architectures (unused; matrix is fixed x64+arm64, kept for future gating)"
         required: false
         default: "x64,arm64"
 
@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: ${{ fromJSON(format('["{0}"]', join(split(github.event.inputs.archs, ','), '","'))) }}
+        arch: [x64, arm64]
     steps:
       - uses: actions/checkout@v4
 

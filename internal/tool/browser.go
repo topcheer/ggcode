@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
@@ -624,7 +625,7 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 	// bootstrap cleanly, and the next action retries rather than stacking
 	// zombie Chrome processes.
 	startDone := make(chan error, 1)
-	safego.Go("browser.tabStart", func() { startDone <- chromedp.Run(taskCtx) })
+	safego.Go("browser.tabStart", func() { startDone <- chromedp.Do(taskCtx) })
 	select {
 	case runErr := <-startDone:
 		if runErr != nil {
@@ -639,11 +640,16 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 	// Auto-dismiss JS dialogs (alert/confirm/prompt/beforeunload) to prevent
 	// Chrome from hanging when a page shows a dialog. Dialogs are dismissed
 	// (not accepted) so automation can continue.
-	chromedp.ListenTarget(taskCtx, func(ev interface{}) {
-		if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
-			safego.Go("browser.dialogHandler", func() {
-				_ = chromedp.Run(taskCtx, page.HandleJavaScriptDialog(false))
-			})
+	// chromedp v0.21: ListenTarget is replaced by the typed Events iterator
+	// (page.JavascriptDialogOpening is the typed event handle); subscribing
+	// buffers events without loss. The loop ends when taskCtx is cancelled.
+	safego.Go("browser.dialogHandler", func() {
+		for _, evErr := range chromedp.Events(taskCtx, page.JavascriptDialogOpening) {
+			if evErr != nil {
+				return
+			}
+			_, _ = cdp.Call(taskCtx, chromedp.FromContext(taskCtx).Target, page.HandleJavaScriptDialog,
+				page.HandleJavaScriptDialogParams{Accept: false})
 		}
 	})
 
@@ -682,9 +688,9 @@ func (b *Browser) doNavigate(ctx context.Context, profile, session, rawURL, wait
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
-	actions := []chromedp.Action{chromedp.Navigate(rawURL)}
+	actions := []chromedp.Action[chromedp.Void]{chromedp.Navigate(rawURL)}
 	if waitFor != "" {
-		actions = append(actions, chromedp.WaitVisible(waitFor, chromedp.ByQuery))
+		actions = append(actions, chromedp.WaitVisible(chromedp.CSS(waitFor)))
 	}
 
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(waitTimeout+15)*time.Second)
@@ -699,15 +705,12 @@ func (b *Browser) doNavigate(ctx context.Context, profile, session, rawURL, wait
 		}
 	})
 
-	if err := chromedp.Run(timeoutCtx, actions...); err != nil {
+	if err := chromedp.Do(timeoutCtx, actions...); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("navigation failed: %v", err)}, nil
 	}
 
-	var title, finalURL string
-	_ = chromedp.Run(timeoutCtx,
-		chromedp.Title(&title),
-		chromedp.Location(&finalURL),
-	)
+	title, _ := chromedp.Run(timeoutCtx, chromedp.Title())
+	finalURL, _ := chromedp.Run(timeoutCtx, chromedp.Location())
 
 	return Result{Content: fmt.Sprintf("Navigated to: %s\nTitle: %s\nURL: %s\nProfile: %s\nSession: %s\n\nUse action 'content' for page text, 'extract' with selector, or 'screenshot' for visual capture.", rawURL, title, finalURL, profile, session)}, nil
 }
@@ -727,24 +730,22 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 	// return ok with zero effect, the #1 source of cascading agent errors in
 	// 2026 computer-use postmortems. Capture state BEFORE clicking so the
 	// after-check has a baseline.
-	var urlBefore string
-	_ = chromedp.Run(timeoutCtx, chromedp.Location(&urlBefore))
+	urlBefore, _ := chromedp.Run(timeoutCtx, chromedp.Location())
 	stateBefore := b.evaluateClickState(timeoutCtx, selector)
 
-	actions := []chromedp.Action{
-		chromedp.WaitVisible(selector, chromedp.ByQuery),
-		chromedp.Click(selector, chromedp.ByQuery),
+	actions := []chromedp.Action[chromedp.Void]{
+		chromedp.WaitVisible(chromedp.CSS(selector)),
+		chromedp.Click(chromedp.CSS(selector)),
 	}
 	if waitFor != "" {
-		actions = append(actions, chromedp.WaitVisible(waitFor, chromedp.ByQuery))
+		actions = append(actions, chromedp.WaitVisible(chromedp.CSS(waitFor)))
 	}
 
-	if err := chromedp.Run(timeoutCtx, actions...); err != nil {
+	if err := chromedp.Do(timeoutCtx, actions...); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("click failed: %v", err)}, nil
 	}
 
-	var urlAfter string
-	_ = chromedp.Run(timeoutCtx, chromedp.Location(&urlAfter))
+	urlAfter, _ := chromedp.Run(timeoutCtx, chromedp.Location())
 	stateAfter := b.evaluateClickState(timeoutCtx, selector)
 	note := clickEffectNote(urlBefore, urlAfter, stateBefore, stateAfter)
 	return Result{Content: fmt.Sprintf("Clicked: %s\nCurrent URL: %s%s", selector, urlAfter, note)}, nil
@@ -769,10 +770,10 @@ func (b *Browser) evaluateClickState(timeoutCtx context.Context, selector string
 	// check was reported as no-effect 100% of the time (the false-negative
 	// mirror of the truthy-string false-positive #3410 fixed). Unmarshal to
 	// any and dispatch by concrete type.
-	var raw any
 	expr := fmt.Sprintf(`(function(){var e=document.querySelector(%q);if(!e)return "";`+
 		`return e.checked||e.selected||e.getAttribute("aria-expanded")||e.getAttribute("aria-checked")||"";})()`, selector)
-	if err := chromedp.Run(timeoutCtx, chromedp.Evaluate(expr, &raw)); err != nil {
+	raw, err := chromedp.Run(timeoutCtx, chromedp.Evaluate[any](expr))
+	if err != nil {
 		return stateProbeFailed
 	}
 	if v := stateFromRaw(raw); v != "" {
@@ -838,18 +839,18 @@ func (b *Browser) doType(ctx context.Context, profile, session, selector, text, 
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(waitTimeout+5)*time.Second)
 	defer cancel()
 
-	actions := []chromedp.Action{
-		chromedp.WaitVisible(selector, chromedp.ByQuery),
-		chromedp.Clear(selector, chromedp.ByQuery),
+	actions := []chromedp.Action[chromedp.Void]{
+		chromedp.WaitVisible(chromedp.CSS(selector)),
+		chromedp.Clear(chromedp.CSS(selector)),
 	}
 	if text != "" {
-		actions = append(actions, chromedp.SendKeys(selector, text, chromedp.ByQuery))
+		actions = append(actions, chromedp.SendKeys(chromedp.CSS(selector), text))
 	}
 	if waitFor != "" {
-		actions = append(actions, chromedp.WaitVisible(waitFor, chromedp.ByQuery))
+		actions = append(actions, chromedp.WaitVisible(chromedp.CSS(waitFor)))
 	}
 
-	if err := chromedp.Run(timeoutCtx, actions...); err != nil {
+	if err := chromedp.Do(timeoutCtx, actions...); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("type failed: %v", err)}, nil
 	}
 
@@ -880,11 +881,13 @@ func (b *Browser) doExtract(ctx context.Context, profile, session, selector stri
 				}));
 			})()`, selector)
 
-		if err := chromedp.Run(timeoutCtx, chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
+		if err := chromedp.Do(timeoutCtx, chromedp.WaitReady(chromedp.CSS("body"))); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("wait failed: %v", err)}, nil
 		}
-		if err := chromedp.Run(timeoutCtx, chromedp.Evaluate(js, &results)); err != nil {
-			return Result{IsError: true, Content: fmt.Sprintf("extract failed: %v", err)}, nil
+		var evalErr error
+		results, evalErr = chromedp.Run(timeoutCtx, chromedp.Evaluate[[]map[string]string](js))
+		if evalErr != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("extract failed: %v", evalErr)}, nil
 		}
 		if len(results) == 0 {
 			return Result{Content: fmt.Sprintf("No elements matched: %s", selector)}, nil
@@ -924,11 +927,11 @@ func (b *Browser) doExtract(ctx context.Context, profile, session, selector stri
 	}
 
 	// Full page text
-	var pageText string
-	if err := chromedp.Run(timeoutCtx,
-		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.Evaluate(`document.body.innerText.substring(0, 50000)`, &pageText),
-	); err != nil {
+	if err := chromedp.Do(timeoutCtx, chromedp.WaitReady(chromedp.CSS("body"))); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("extract failed: %v", err)}, nil
+	}
+	pageText, err := chromedp.Run(timeoutCtx, chromedp.Evaluate[string](`document.body.innerText.substring(0, 50000)`))
+	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("extract failed: %v", err)}, nil
 	}
 	return Result{Content: pageText}, nil
@@ -946,14 +949,16 @@ func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector s
 
 	var buf []byte
 	if selector != "" {
-		if err := chromedp.Run(timeoutCtx,
-			chromedp.WaitVisible(selector, chromedp.ByQuery),
-			chromedp.Screenshot(selector, &buf, chromedp.ByQuery),
-		); err != nil {
+		if err := chromedp.Do(timeoutCtx, chromedp.WaitVisible(chromedp.CSS(selector))); err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("screenshot failed: %v", err)}, nil
+		}
+		buf, err = chromedp.Run(timeoutCtx, chromedp.Screenshot(chromedp.CSS(selector)))
+		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("screenshot failed: %v", err)}, nil
 		}
 	} else {
-		if err := chromedp.Run(timeoutCtx, chromedp.FullScreenshot(&buf, 90)); err != nil {
+		buf, err = chromedp.Run(timeoutCtx, chromedp.FullScreenshot(90))
+		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("screenshot failed: %v", err)}, nil
 		}
 	}
@@ -1006,8 +1011,8 @@ func (b *Browser) doEvaluate(ctx context.Context, profile, session, expression, 
 		})()`, frame, frame, frame, expression)
 	}
 
-	var result interface{}
-	if err := chromedp.Run(timeoutCtx, chromedp.Evaluate(actualExpr, &result)); err != nil {
+	result, err := chromedp.Run(timeoutCtx, chromedp.Evaluate[any](actualExpr))
+	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("JavaScript evaluation failed: %v", err)}, nil
 	}
 
@@ -1028,7 +1033,7 @@ func (b *Browser) doWait(ctx context.Context, profile, session, selector string,
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	if err := chromedp.Run(timeoutCtx, chromedp.WaitVisible(selector, chromedp.ByQuery)); err != nil {
+	if err := chromedp.Do(timeoutCtx, chromedp.WaitVisible(chromedp.CSS(selector))); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("wait timed out after %ds: %v", timeout, err)}, nil
 	}
 	return Result{Content: fmt.Sprintf("Element appeared: %s", selector)}, nil
@@ -1057,17 +1062,18 @@ func (b *Browser) doLinks(ctx context.Context, profile, session string, headless
 		}));
 	})()`
 
-	if err := chromedp.Run(timeoutCtx,
-		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.Evaluate(js, &links),
-	); err != nil {
+	if err := chromedp.Do(timeoutCtx, chromedp.WaitReady(chromedp.CSS("body"))); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("links extraction failed: %v", err)}, nil
+	}
+	var linksErr error
+	links, linksErr = chromedp.Run(timeoutCtx, chromedp.Evaluate[[]linkData](js))
+	if linksErr != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("links extraction failed: %v", linksErr)}, nil
 	}
 
 	var sb strings.Builder
-	var currentURL string
 	locCtx, locCancel := context.WithTimeout(tab.ctx, 5*time.Second)
-	_ = chromedp.Run(locCtx, chromedp.Location(&currentURL))
+	currentURL, _ := chromedp.Run(locCtx, chromedp.Location())
 	locCancel()
 	sb.WriteString(fmt.Sprintf("Links on %s (%d total):\n\n", currentURL, len(links)))
 	for i, l := range links {
@@ -1098,14 +1104,14 @@ func (b *Browser) doScroll(ctx context.Context, profile, session, selector strin
 	defer cancel()
 
 	if selector != "" {
-		if err := chromedp.Run(timeoutCtx, chromedp.ScrollIntoView(selector, chromedp.ByQuery)); err != nil {
+		if err := chromedp.Do(timeoutCtx, chromedp.ScrollIntoView(chromedp.CSS(selector))); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("scroll failed: %v", err)}, nil
 		}
 		return Result{Content: fmt.Sprintf("Scrolled %s into view.", selector)}, nil
 	}
 
-	if err := chromedp.Run(timeoutCtx,
-		chromedp.Evaluate(`window.scrollTo(0, document.body.scrollHeight)`, nil),
+	if _, err := chromedp.Run(timeoutCtx,
+		chromedp.Evaluate[any](`window.scrollTo(0, document.body.scrollHeight)`),
 	); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("scroll failed: %v", err)}, nil
 	}
@@ -1122,12 +1128,11 @@ func (b *Browser) doBack(ctx context.Context, profile, session string, headless 
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 30*time.Second)
 	defer cancel()
 
-	if err := chromedp.Run(timeoutCtx, chromedp.NavigateBack()); err != nil {
+	if err := chromedp.Do(timeoutCtx, chromedp.NavigateBack()); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("back navigation failed: %v", err)}, nil
 	}
 
-	var urlAfter string
-	_ = chromedp.Run(timeoutCtx, chromedp.Location(&urlAfter))
+	urlAfter, _ := chromedp.Run(timeoutCtx, chromedp.Location())
 	return Result{Content: fmt.Sprintf("Navigated back. Current URL: %s", urlAfter)}, nil
 }
 
@@ -1161,11 +1166,13 @@ func (b *Browser) doContent(ctx context.Context, profile, session string, headle
 		};
 	})()`
 
-	if err := chromedp.Run(timeoutCtx,
-		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.Evaluate(js, &content),
-	); err != nil {
+	if err := chromedp.Do(timeoutCtx, chromedp.WaitReady(chromedp.CSS("body"))); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("content extraction failed: %v", err)}, nil
+	}
+	var contentErr error
+	content, contentErr = chromedp.Run(timeoutCtx, chromedp.Evaluate[pageContent](js))
+	if contentErr != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("content extraction failed: %v", contentErr)}, nil
 	}
 
 	var sb strings.Builder
@@ -1198,10 +1205,8 @@ func (b *Browser) doStatus() (Result, error) {
 			var url, title string
 			if tab.ctx.Err() == nil {
 				statusCtx, statusCancel := context.WithTimeout(tab.ctx, 5*time.Second)
-				_ = chromedp.Run(statusCtx,
-					chromedp.Location(&url),
-					chromedp.Title(&title),
-				)
+				url, _ = chromedp.Run(statusCtx, chromedp.Location())
+				title, _ = chromedp.Run(statusCtx, chromedp.Title())
 				statusCancel()
 			}
 			status := "active"
@@ -1288,8 +1293,8 @@ func (b *Browser) doSelect(ctx context.Context, profile, session, selector, valu
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(waitTimeout+5)*time.Second)
 	defer cancel()
 
-	actions := []chromedp.Action{
-		chromedp.WaitVisible(selector, chromedp.ByQuery),
+	if err := chromedp.Do(timeoutCtx, chromedp.WaitVisible(chromedp.CSS(selector))); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("select failed: %v", err)}, nil
 	}
 
 	// Try to set the value via JS - this handles both value and visible text matching
@@ -1308,14 +1313,14 @@ func (b *Browser) doSelect(ctx context.Context, profile, session, selector, valu
 		return { ok: false, error: 'option not found', available: Array.from(sel.options).map(o => o.value + ':' + o.text.trim()) };
 	})()`, selector, value, value)
 
-	var selResult map[string]interface{}
-	actions = append(actions, chromedp.Evaluate(js, &selResult))
-	if waitFor != "" {
-		actions = append(actions, chromedp.WaitVisible(waitFor, chromedp.ByQuery))
-	}
-
-	if err := chromedp.Run(timeoutCtx, actions...); err != nil {
+	selResult, err := chromedp.Run(timeoutCtx, chromedp.Evaluate[map[string]interface{}](js))
+	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("select failed: %v", err)}, nil
+	}
+	if waitFor != "" {
+		if err := chromedp.Do(timeoutCtx, chromedp.WaitVisible(chromedp.CSS(waitFor))); err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("select failed: %v", err)}, nil
+		}
 	}
 
 	if ok, _ := selResult["ok"].(bool); !ok {
@@ -1354,12 +1359,10 @@ func (b *Browser) doHover(ctx context.Context, profile, session, selector string
 		return true;
 	})()`, selector)
 
-	actions := []chromedp.Action{
-		chromedp.WaitVisible(selector, chromedp.ByQuery),
-		chromedp.Evaluate(js, nil),
+	if err := chromedp.Do(timeoutCtx, chromedp.WaitVisible(chromedp.CSS(selector))); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("hover failed: %v", err)}, nil
 	}
-
-	if err := chromedp.Run(timeoutCtx, actions...); err != nil {
+	if _, err := chromedp.Run(timeoutCtx, chromedp.Evaluate[any](js)); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("hover failed: %v", err)}, nil
 	}
 
@@ -1422,7 +1425,7 @@ func (b *Browser) doPress(ctx context.Context, profile, session, key string, hea
 		}
 	}
 
-	if err := chromedp.Run(timeoutCtx, chromedp.KeyEvent(cdpKeyName)); err != nil {
+	if err := chromedp.Do(timeoutCtx, chromedp.KeyEvent(cdpKeyName)); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("key press failed: %v", err)}, nil
 	}
 
@@ -1447,12 +1450,12 @@ func (b *Browser) doUpload(ctx context.Context, profile, session, selector, file
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 15*time.Second)
 	defer cancel()
 
-	if err := chromedp.Run(timeoutCtx,
+	if err := chromedp.Do(timeoutCtx,
 		// WaitReady, NOT WaitVisible - many sites hide the real <input type="file">
 		// with display:none and use a styled button. SetUploadFiles only needs the
 		// DOM node to exist, not be visible.
-		chromedp.WaitReady(selector, chromedp.ByQuery),
-		chromedp.SetUploadFiles(selector, []string{absPath}, chromedp.ByQuery),
+		chromedp.WaitReady(chromedp.CSS(selector)),
+		chromedp.SetUploadFiles(chromedp.CSS(selector), []string{absPath}),
 	); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("upload failed: %v", err)}, nil
 	}
@@ -1460,9 +1463,9 @@ func (b *Browser) doUpload(ctx context.Context, profile, session, selector, file
 	// r34 post-action effect verification: SetUploadFiles "ok" does not mean
 	// the file landed — React controlled inputs and shadow DOM routinely clear
 	// .files right after. Read back the node state; zero files is a hard error.
-	var fileCount int
 	countExpr := fmt.Sprintf(`(function(){var e=document.querySelector(%q);return e&&e.files?e.files.length:-1;})()`, selector)
-	if err := chromedp.Run(timeoutCtx, chromedp.Evaluate(countExpr, &fileCount)); err == nil && fileCount == 0 {
+	fileCount, countErr := chromedp.Run(timeoutCtx, chromedp.Evaluate[int](countExpr))
+	if countErr == nil && fileCount == 0 {
 		return Result{IsError: true, Content: fmt.Sprintf("upload had no effect: %s reports 0 selected files (controlled input cleared it?) — retry via a visible file chooser or verify the selector", selector)}, nil
 	}
 	countNote := ""
@@ -1484,8 +1487,9 @@ func (b *Browser) doCookies(ctx context.Context, profile, session, value, name, 
 	defer cancel()
 
 	if name != "" && value != "" && rawURL != "" {
-		if err := chromedp.Run(timeoutCtx, chromedp.ActionFunc(func(ctx context.Context) error {
-			return network.SetCookie(name, value).WithURL(rawURL).Do(ctx)
+		if err := chromedp.Do(timeoutCtx, chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+			_, err := cdp.Call(ctx, t, network.SetCookie, network.SetCookieParams{Name: name, Value: value, URL: rawURL})
+			return err
 		})); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("set cookie failed: %v", err)}, nil
 		}
@@ -1493,8 +1497,9 @@ func (b *Browser) doCookies(ctx context.Context, profile, session, value, name, 
 	}
 
 	if name != "" && value == "" && rawURL != "" {
-		if err := chromedp.Run(timeoutCtx, chromedp.ActionFunc(func(ctx context.Context) error {
-			return network.DeleteCookies(name).WithURL(rawURL).Do(ctx)
+		if err := chromedp.Do(timeoutCtx, chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+			_, err := cdp.Call(ctx, t, network.DeleteCookies, network.DeleteCookiesParams{Name: name, URL: rawURL})
+			return err
 		})); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("delete cookie failed: %v", err)}, nil
 		}
@@ -1502,9 +1507,9 @@ func (b *Browser) doCookies(ctx context.Context, profile, session, value, name, 
 	}
 
 	var cookies []*network.Cookie
-	if err := chromedp.Run(timeoutCtx, chromedp.ActionFunc(func(ctx context.Context) error {
-		var err error
-		cookies, err = network.GetCookies().Do(ctx)
+	if err := chromedp.Do(timeoutCtx, chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+		res, err := cdp.Call(ctx, t, network.GetCookies, network.GetCookiesParams{})
+		cookies = res.Cookies
 		return err
 	})); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("get cookies failed: %v", err)}, nil
@@ -1530,8 +1535,14 @@ func (b *Browser) doResize(ctx context.Context, profile, session string, width, 
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 10*time.Second)
 	defer cancel()
 
-	if err := chromedp.Run(timeoutCtx, chromedp.ActionFunc(func(ctx context.Context) error {
-		return emulation.SetDeviceMetricsOverride(int64(width), int64(height), 1.0, false).Do(ctx)
+	if err := chromedp.Do(timeoutCtx, chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+		_, err := cdp.Call(ctx, t, emulation.SetDeviceMetricsOverride, emulation.SetDeviceMetricsOverrideParams{
+			Width:             int64(width),
+			Height:            int64(height),
+			DeviceScaleFactor: 1.0,
+			Mobile:            false,
+		})
+		return err
 	})); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("resize failed: %v", err)}, nil
 	}
@@ -1548,7 +1559,7 @@ func (b *Browser) doWaitNot(ctx context.Context, profile, session, selector stri
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	if err := chromedp.Run(timeoutCtx, chromedp.WaitNotPresent(selector, chromedp.ByQuery)); err != nil {
+	if err := chromedp.Do(timeoutCtx, chromedp.WaitNotPresent(chromedp.CSS(selector))); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("element still present after %ds: %v", timeout, err)}, nil
 	}
 	return Result{Content: fmt.Sprintf("Element disappeared: %s", selector)}, nil
@@ -1583,11 +1594,11 @@ func (b *Browser) doDrag(ctx context.Context, profile, session, sourceSel, targe
 		return { ok: true };
 	})()`, sourceSel, targetSel)
 
-	var dragResult map[string]interface{}
-	if err := chromedp.Run(timeoutCtx,
-		chromedp.WaitVisible(sourceSel, chromedp.ByQuery),
-		chromedp.Evaluate(js, &dragResult),
-	); err != nil {
+	if err := chromedp.Do(timeoutCtx, chromedp.WaitVisible(chromedp.CSS(sourceSel))); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("drag failed: %v", err)}, nil
+	}
+	dragResult, err := chromedp.Run(timeoutCtx, chromedp.Evaluate[map[string]interface{}](js))
+	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("drag failed: %v", err)}, nil
 	}
 
