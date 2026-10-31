@@ -5718,8 +5718,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// backgrounded `git checkout main && go test` must not slip the
 			// gate either (the command text is fixed at launch; no need to
 			// also gate the later read_command_output).
+			// #4583: bash/powershell are peer command channels (they run the
+			// same shell lines) and their arguments carry the script in the
+			// same `command` field - the repo's own peer surfaces parse all
+			// three uniformly via args["command"] (sfCommandArg,
+			// strategy_fixation.go:81; agent.go:5568/5613; verification_debt.go:137).
+			// A `bash`-carried `git checkout` between two reads of the same
+			// file must invalidate exactly like run_command's.
 			if (isWTMutatingTool(tc.Name) ||
-				((tc.Name == "run_command" || tc.Name == "start_command") && runCommandMutatesTree(string(tc.Arguments)))) && !result.IsError {
+				((tc.Name == "run_command" || tc.Name == "start_command" || tc.Name == "bash" || tc.Name == "powershell") && runCommandMutatesTree(string(tc.Arguments)))) && !result.IsError {
 				if wtMsg := a.wtInvalidation.checkMutation(tc.Name, string(tc.Arguments)); wtMsg != "" {
 					debug.Log("agent", "Iteration %d: working-tree invalidation detector triggered", i+1)
 					a.appendGuidance(&result, wtMsg)
