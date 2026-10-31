@@ -3538,13 +3538,25 @@ func (b *ChatBridge) recordMetric(ev interface{}) {
 		// emit time by the agent that produced them - e.g. sub-agents with a
 		// model override) keep their own attribution; blanket overwriting
 		// with the session model corrupts per-model cost reporting.
+		// #4619: the fill must stay triple-coherent. Sub-agent events carry
+		// a Model but no Vendor/Endpoint (stampMetricModel only stamps the
+		// model); independently filling their empty V/E from this session
+		// would still bill their usage to the HOST endpoint bucket. Instead
+		// their V/E stays empty and the keyed append below skips them -
+		// consistent with the endpoint_stats rebuild path, which also skips
+		// key=="" events. Fully-unattributed events inherit the whole
+		// session triple and land in the session bucket as before.
 		if me.Model == "" {
 			me.Model = b.currentSes.Model
 			me.Vendor = b.currentSes.Vendor
 			me.Endpoint = b.currentSes.Endpoint
 		}
 		b.currentSes.AppendMetricEvent(me) // #3086: lock-guarded append (was a bare slice append)
-		b.currentSes.AppendMetricForEndpoint(b.currentSes.Vendor, b.currentSes.Endpoint, me)
+		// #4619: key the bucket from the event's own attribution (post-fill)
+		// instead of the session's - host events resolve to the session
+		// bucket, self-attributed events to their own, sub-agent events
+		// without endpoint info to no bucket at all (never the host's).
+		b.currentSes.AppendMetricForEndpoint(me.Vendor, me.Endpoint, me)
 	}
 	b.metricEvents = append(b.metricEvents, me)
 	b.mu.Unlock()
