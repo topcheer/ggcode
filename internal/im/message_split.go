@@ -259,6 +259,35 @@ func truncateRunes(text string, maxLen int, suffix string) string {
 	return string(runes[:maxLen-len(suffixRunes)]) + suffix
 }
 
+// SplitMarkdownBytes splits markdown text under a BYTE budget for platforms
+// whose wire limit is expressed in bytes (Matrix: Synapse max_event_size is
+// ~100KB while SplitMarkdown counts runes). It derives an effective rune cap
+// from the text's actual byte/rune ratio so that every chunk's UTF-8 length
+// stays within maxBytes, then reuses SplitMarkdown's fence-aware splitting
+// unchanged. #4769: a plain rune cap makes long CJK messages (3 bytes/rune)
+// exceed the event budget deterministic.
+func SplitMarkdownBytes(text string, maxBytes int) []string {
+	if maxBytes <= 0 {
+		return []string{text}
+	}
+	// Reserve for the fence markers SplitMarkdown re-adds on boundary chunks
+	// (```<lang>\n + \n```), same 20-rune reserve it applies internally,
+	// priced conservatively in bytes.
+	budget := maxBytes - 40
+	if budget < 1 {
+		budget = 1
+	}
+	if len(text) <= budget {
+		return []string{text}
+	}
+	runes := []rune(text)
+	effRunes := budget * len(runes) / len(text)
+	if effRunes < 1 {
+		effRunes = 1
+	}
+	return SplitMarkdown(text, effRunes)
+}
+
 // SplitMarkdown splits text for markdown-capable platforms (Discord, Slack,
 // Mattermost, Matrix), ensuring fenced code blocks are not broken across
 // chunk boundaries. When a split point falls inside a ``` code block, the

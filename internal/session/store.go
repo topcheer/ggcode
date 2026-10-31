@@ -844,7 +844,15 @@ func (s *JSONLStore) removeFromIndex(id string) error {
 			filtered = append(filtered, e)
 		}
 	}
-	return s.saveIndex(filtered)
+	// #4769: mirror updateIndex - a failed final save must set the dirty
+	// flag so runMaintenance's early reconciliation rebuilds the index
+	// instead of waiting out the full maintenance interval with index and
+	// disk state diverged.
+	if err := s.saveIndex(filtered); err != nil {
+		s.setIndexDirty(true)
+		return err
+	}
+	return nil
 }
 
 func sessionToIndexEntry(s *Session) indexEntry {

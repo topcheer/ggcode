@@ -34,9 +34,15 @@ import (
 )
 
 const (
-	matrixMaxMessageLen = 60000 // Synapse default max_event_size is 100KB; 60K leaves room for event JSON metadata
-	matrixSyncTimeout   = 30000
-	matrixCryptoDBName  = "matrix-crypto.db"
+	// #4769: the Synapse max_event_size (~100KB) is a BYTE budget, and the
+	// event carries Body + the goldmark-rendered FormattedBody (~2.2x the
+	// plain text). 40000 bytes of plain text keeps Body+HTML+envelope safely
+	// under the limit for ASCII AND CJK content; the previous 60000-rune cap
+	// let CJK chunks reach ~180KB+ and fail with M_TOO_LARGE after partial
+	// delivery.
+	matrixMaxMessageBytes = 40000
+	matrixSyncTimeout     = 30000
+	matrixCryptoDBName    = "matrix-crypto.db"
 	// matrixCryptoPickleKey encrypts crypto material at rest in the
 	// SQLite store. Device-identity continuity, not secrecy against the
 	// local user, is the goal (#1404-A); a fixed key keeps the store
@@ -1290,7 +1296,7 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 	// Each chunk gets proper ``` open/close markers, producing valid HTML when
 	// goldmark renders it. Plain rune-based splitting (chunkText) would break
 	// code blocks, causing goldmark to emit malformed/incomplete HTML.
-	chunks := SplitMarkdown(text, matrixMaxMessageLen)
+	chunks := SplitMarkdownBytes(text, matrixMaxMessageBytes)
 	for i, chunk := range chunks {
 		// Rate limit: most homeservers limit ~1 msg/sec/user.
 		if i > 0 {

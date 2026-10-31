@@ -593,13 +593,21 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 			return nil, fmt.Errorf("browser profile %q was evicted while creating the session; retry the operation", profileName)
 		}
 	}
-	defer b.mu.Unlock()
+	// #4769: do NOT hold b.mu across the tab-start handshake below - it
+	// blocks up to 60s on the Chrome boot/DevTools dance, and b.mu guards
+	// every profile, so one slow handshake stalled all 19 getSession call
+	// sites (every browser action) plus profile eviction. The lock is
+	// released before the handshake and re-acquired (with re-validation)
+	// for the tab write.
+	b.mu.Unlock()
 
 	if tab, ok := p.tabs[sessionID]; ok {
 		if tab.ctx.Err() == nil {
 			return tab, nil
 		}
+		b.mu.Lock()
 		delete(p.tabs, sessionID)
+		b.mu.Unlock()
 	}
 
 	taskCtx, cancel := chromedp.NewContext(p.allocCtx)
@@ -654,7 +662,17 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 	})
 
 	tab := &browserTab{ctx: taskCtx, cancel: cancel}
+	// Re-acquire the lock and re-validate the profile pointer: an eviction
+	// sweep may have removed p (and cancelled allocCtx) while the handshake
+	// ran unlocked - same identity guard as the pre-handshake check.
+	b.mu.Lock()
+	if cur, ok := b.profiles[profileName]; !ok || cur != p {
+		b.mu.Unlock()
+		cancel()
+		return nil, fmt.Errorf("browser profile %q was evicted while starting the tab; retry the operation", profileName)
+	}
 	p.tabs[sessionID] = tab
+	b.mu.Unlock()
 	return tab, nil
 }
 
