@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/checkpoint"
@@ -280,6 +281,7 @@ type Agent struct {
 	obsContract                  *observationContractTracker // sa-111: observation contract guard (arXiv:2605.17281)
 	interventionLedger           *interventionLedger         // r395: user-takeover history → proactive defer hints
 	refusalLedger                *refusalLedger              // r23: persisted user refusals → enforceable write-block (arXiv 2605.00055)
+	remoteRefusalInhibit         atomic.Bool                 // #4726: per-instance remote-run marker for the refusal-ledger gate (was package-level - cross-Agent steal)
 	lastExecutedTool             string                      // r395: tool behind the most recent tool result (guarded by mu)
 	planDrift                    *planDriftState             // plan drift detection (exit_plan_mode item tracking)
 	unverifiedClaim              *unverifiedClaimState       // unverified success claim detection (text claims vs actual verification)
@@ -1839,7 +1841,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// #3460: remote-origin runs (LAN @agent DM / IM inbound) are exempt -
 	// FromRole is self-reported and a forged DM must not poison (or lift)
 	// the local user's 30-day enforceable blocks.
-	if !consumeRemoteRefusalInhibit() {
+	if !a.consumeRemoteRefusalInhibit() {
 		a.ReleaseMatchingRefusals(userText)
 		a.recordUserRefusals(userText)
 	}
