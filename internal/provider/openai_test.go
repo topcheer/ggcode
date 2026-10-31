@@ -264,7 +264,7 @@ func TestRetryWithBackoffCtxHonorsRetryAfter(t *testing.T) {
 			}
 		}
 		return nil
-	}, providerRetryAttempts)
+	}, providerRetryAttempts, false)
 	if err != nil {
 		t.Fatalf("expected retry to succeed, got %v", err)
 	}
@@ -337,7 +337,7 @@ func TestRetryWithBackoffCtxRetriesDeadlineExceededWhenContextActive(t *testing.
 			return context.DeadlineExceeded
 		}
 		return nil
-	}, providerRetryAttempts)
+	}, providerRetryAttempts, false)
 	if err != nil {
 		t.Fatalf("expected retry to succeed, got %v", err)
 	}
@@ -357,7 +357,7 @@ func TestRetryWithBackoffCtxDoesNotRetryExpiredCallerContext(t *testing.T) {
 	err := retryWithBackoffCtx(ctx, func() error {
 		attempts++
 		return context.DeadlineExceeded
-	}, providerRetryAttempts)
+	}, providerRetryAttempts, false)
 	if err == nil {
 		t.Fatal("expected deadline error")
 	}

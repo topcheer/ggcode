@@ -12,7 +12,7 @@ import (
 
 // flushResidualToolCalls emits tool_calls that accumulated but never saw a
 // chunk with a non-empty finish_reason (#302-era LiteLLM/vLLM/ZAI compat
-// flush). Extracted verbatim from ChatStream's deferred flush — behavior
+// flush). Extracted verbatim from ChatStream's deferred flush - behavior
 // identical: skip unnamed/id-less calls, repair nearly-valid JSON args, never
 // flush on retry (double-execute) or hard error (untrustworthy partial args).
 // Returns the character count added and whether anything was emitted; ok=false
@@ -60,12 +60,22 @@ func (p *OpenAIProvider) flushResidualToolCalls(ctx context.Context, ch chan<- S
 // the caller must emit Error{terminalErr}, set streamError, and return;
 // slept=false with nil err means the consumer context died mid-emit, return.
 func (p *OpenAIProvider) sleepBeforeRetry(ctx context.Context, ch chan<- StreamEvent, budget *retryBudget, cause error, attempt int) (bool, error) {
+	// #4729: timeout-class failures retry in place - lift the cumulative
+	// backoff budget so the loop is bounded only by context cancellation.
+	if isTimeoutClassError(cause) {
+		budget.unlimited = true
+	}
 	delay := retryDelay(cause, attempt)
 	if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}) {
 		return false, nil
 	}
+	if notice := TimeoutRetryNotice(cause, attempt); notice != "" { // #4729: periodic unbounded-retry notice
+		if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: notice}) {
+			return false, nil
+		}
+	}
 	if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
-		// #722: budget exhausted — stop retrying now; wrap with the
+		// #722: budget exhausted - stop retrying now; wrap with the
 		// sentinel so the failover layer switches immediately.
 		if sleepErr == errRetryBudgetExhausted {
 			sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, cause)

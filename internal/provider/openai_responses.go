@@ -835,8 +835,8 @@ func responsesRejectsServiceTier(snippet []byte) bool {
 // ---- non-streaming Chat ----
 
 func (p *OpenAIResponsesProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
-	// #2573: honor the configured per-call deadline; the wrapped ctx also
-	// governs background polling (chatBackground -> pollBackground).
+	// sa-78 + #4729: single-wrap deadline when configured (fail-fast, zz_issue2573_test.go);
+	// in-place timeout retry only on the default path.
 	ctx, cancel := p.policy.withTimeout(ctx)
 	defer cancel()
 	req, err := p.buildRequest(messages, tools, false)
@@ -850,7 +850,7 @@ func (p *OpenAIResponsesProvider) Chat(ctx context.Context, messages []Message, 
 		var callErr error
 		resp, callErr = p.post(ctx, req)
 		return callErr
-	}, p.policy.attempts()); err != nil {
+	}, p.policy.attempts(), p.policy.timeoutRetryInPlace()); err != nil {
 		return nil, err
 	}
 	if p.background {
@@ -1049,26 +1049,43 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 	ch := make(chan StreamEvent, 64)
 	safego.Go("provider.openaiResponses.streamRead", func() {
 		defer close(ch)
-		// #2573: per-call deadline applied inside the goroutine so it covers
-		// the full stream lifetime (ChatStream returns immediately).
-		ctx, cancel := p.policy.withTimeout(ctx)
-		defer cancel()
-		budget := newRetryBudget() // #722: cap cumulative retry backoff sleep per stream call
-		for attempt := 0; attempt < p.policy.attempts(); attempt++ {
+		// #4729: per-ATTEMPT deadline (was one withTimeout around the whole
+		// retry loop - see anthropic.go Chat's note). Parent ctx stays live.
+		parentCtx := ctx
+		var cancelAttempt context.CancelFunc
+		defer func() { cancelAttempt() }() // idempotent; covers mid-loop returns
+		budget := newRetryBudget()         // #722: cap cumulative retry backoff sleep per stream call
+		attempts := p.policy.attempts()
+		for attempt := 0; attempt < attempts; attempt++ {
 			if attempt > 0 {
+				cancelAttempt() // release the previous attempt's deadline timer
 				debug.Log("openai-responses", "Stream retry attempt %d/%d model=%s baseURL=%s", attempt+1, p.policy.attempts(), p.model, p.baseURL)
+			}
+			// #4729: renewal is a no-op on the default path (parent stays live);
+			// with a configured deadline only attempt 0 derives one (#2573).
+			if attempt == 0 || p.policy.requestTimeout <= 0 {
+				ctx, cancelAttempt = p.policy.withTimeout(parentCtx)
 			}
 			httpResp, err := p.post(ctx, req)
 			if err != nil {
-				if isRetryableForContext(ctx, err) && attempt < p.policy.attempts()-1 {
+				if isRetryableForContext(ctx, err) && attempt < attempts-1 {
 					delay := retryDelay(err, attempt)
 					debug.Log("openai-responses", "CONNECT FAILED model=%s baseURL=%s attempt=%d/%d delay=%v: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), delay, err, err)
 					// Notify user about retry
 					if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}) {
 						return
 					}
+					if isTimeoutClassError(err) && p.policy.timeoutRetryInPlace() { // #4729: in-place retry, unbounded
+						budget.unlimited = true
+						attempts = retryAlwaysAttempts
+					}
+					if notice := TimeoutRetryNotice(err, attempt); notice != "" {
+						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: notice}) {
+							return
+						}
+					}
 					if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
-						// #722: budget exhausted — stop retrying now; wrap with the
+						// #722: budget exhausted - stop retrying now; wrap with the
 						// sentinel so the failover layer switches immediately.
 						if sleepErr == errRetryBudgetExhausted {
 							sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
@@ -1094,6 +1111,15 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 			if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}) {
 				return
 			}
+			if isTimeoutClassError(scanErr) && p.policy.timeoutRetryInPlace() { // #4729: in-place retry, unbounded
+				budget.unlimited = true
+				attempts = retryAlwaysAttempts
+			}
+			if notice := TimeoutRetryNotice(scanErr, attempt); notice != "" {
+				if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: notice}) {
+					return
+				}
+			}
 			if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
 				if sleepErr == errRetryBudgetExhausted {
 					sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, scanErr)
@@ -1110,7 +1136,7 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 // readResponsesStream pumps SSE events from one established /responses
 // stream into ch until a terminal event (Done/Error) or transport failure.
 // It returns retry=true only when the stream died to a retryable transport
-// error BEFORE any content event reached ch — every request replays the full
+// error BEFORE any content event reached ch - every request replays the full
 // stateless input so a retry duplicates nothing, but content already
 // delivered can never be unsent and must not be replayed.
 func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpResp *http.Response, ch chan<- StreamEvent) (retryable bool, lastErr error) {
@@ -1293,7 +1319,7 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 	}
 	if err := scanner.Err(); err != nil {
 		// #2573: transport failure. Retryable only when nothing was emitted
-		// yet — the retry is a lossless idempotent replay of the same input.
+		// yet - the retry is a lossless idempotent replay of the same input.
 		if !emitted && isRetryableForContext(ctx, err) {
 			return true, err
 		}

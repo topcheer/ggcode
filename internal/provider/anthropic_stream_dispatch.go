@@ -12,16 +12,24 @@ import (
 
 // sleepBeforeRetry emits the "[Retry n/m...]" system event and sleeps under
 // the shared retry budget (#722). Mirrors openai.go's sleepBeforeRetry except
-// the send is a bare blocking ch<- (historical anthropic semantics — this
+// the send is a bare blocking ch<- (historical anthropic semantics - this
 // provider has no ctx-aware sendEvent). Extracted verbatim from ChatStream's
 // stream-phase retry block. Returns (slept, terminalErr): terminalErr non-nil
-// means the budget is exhausted — caller must emit Error{terminalErr}, set
+// means the budget is exhausted - caller must emit Error{terminalErr}, set
 // streamError, and return.
 func (p *AnthropicProvider) sleepBeforeRetry(ctx context.Context, ch chan<- StreamEvent, budget *retryBudget, cause error, attempt int) (bool, error) {
+	// #4729: timeout-class failures retry in place - lift the cumulative
+	// backoff budget so the loop is bounded only by context cancellation.
+	if isTimeoutClassError(cause) {
+		budget.unlimited = true
+	}
 	delay := retryDelay(cause, attempt)
 	ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
+	if notice := TimeoutRetryNotice(cause, attempt); notice != "" { // #4729: periodic unbounded-retry notice
+		ch <- StreamEvent{Type: StreamEventSystem, Text: notice}
+	}
 	if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
-		// #722: budget exhausted — stop retrying now; wrap with the
+		// #722: budget exhausted - stop retrying now; wrap with the
 		// sentinel so the failover layer switches immediately.
 		if sleepErr == errRetryBudgetExhausted {
 			sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, cause)
@@ -33,7 +41,7 @@ func (p *AnthropicProvider) sleepBeforeRetry(ctx context.Context, ch chan<- Stre
 
 // handleContentBlockStart registers or directly emits content_block_start
 // blocks (tool_use / server_tool_use / tool results / thinking variants).
-// Verbatim extraction from ChatStream — no branch/order/guard changes.
+// Verbatim extraction from ChatStream - no branch/order/guard changes.
 // Returns whether the block produced a user-visible event.
 func handleContentBlockStart(ch chan<- StreamEvent, toolCalls map[int]*ToolCallDelta, event anthropic.MessageStreamEventUnion) bool {
 	cb := event.ContentBlock
@@ -49,7 +57,7 @@ func handleContentBlockStart(ch chan<- StreamEvent, toolCalls map[int]*ToolCallD
 	case "server_tool_use":
 		// Anthropic server-side tool invocation (executed in-API).
 		// Input arrives via input_json_delta like a client tool_use,
-		// but the block must NOT be surfaced as a client tool call —
+		// but the block must NOT be surfaced as a client tool call -
 		// it is emitted verbatim at content_block_stop.
 		idx := int(event.Index)
 		toolCalls[idx] = &ToolCallDelta{Index: idx, ID: cb.ID, Name: cb.Name, ServerTool: true}
@@ -85,7 +93,7 @@ func handleContentBlockStart(ch chan<- StreamEvent, toolCalls map[int]*ToolCallD
 		debug.Log("anthropic", "content_block_start redacted_thinking idx=%d data_len=%d", event.Index, len(cb.Data))
 		// Register with empty Name (like the thinking branch)
 		// so content_block_stop's `tc.Name != ""` check skips
-		// it — redacted thinking is reasoning data, not a
+		// it - redacted thinking is reasoning data, not a
 		// tool call. Echo-back happens via the reasoning
 		// event below (#224).
 		toolCalls[int(event.Index)] = &ToolCallDelta{

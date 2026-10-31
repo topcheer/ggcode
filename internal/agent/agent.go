@@ -2760,7 +2760,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: cancelErr})
 				return cancelErr
 			}
-			friendlyErr := fmt.Errorf("%s", provider.FriendlyError(err))
+			// #4729: keep the error chain (errors.Is/As) alive while still
+			// rendering the FriendlyError text — the old fmt.Errorf("%s", ...)
+			// stringification made UserFacingErrorLang's net.Error /
+			// DeadlineExceeded assertions fail and the TUI fell into the
+			// unrecognized-error blind spot on plain connection timeouts.
+			friendlyErr := provider.WrapFriendly(err)
 			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: friendlyErr})
 			return friendlyErr
 		}

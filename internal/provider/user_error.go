@@ -220,7 +220,11 @@ func UserFacingErrorLang(err error, lang string) string {
 	// through to the blind-spot fallback, losing the network/Base URL hint.
 	// `lower` is hoisted here and reused by the finish_reason section.
 	lower := strings.ToLower(raw)
-	if strings.Contains(lower, "connection refused") || strings.Contains(lower, "no such host") {
+	// #4729: "connection timed out" must map here too — it is FriendlyError's
+	// own timeout wording, and relays that stringify before we see the typed
+	// chain would otherwise fall through to the unrecognized-error blind spot.
+	if strings.Contains(lower, "connection refused") || strings.Contains(lower, "no such host") ||
+		strings.Contains(lower, "connection timed out") {
 		if zh {
 			return "无法连接到 API 服务器，请检查网络和 Base URL 设置"
 		}

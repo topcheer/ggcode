@@ -30,13 +30,13 @@ type AnthropicProvider struct {
 	transport        *headerInjectingTransport            // kept for runtime header updates
 	calibrator       *tokenCountCalibrator                // periodic real-API token calibration
 	files            *fileUploader                        // Anthropic Files API (large-image file_id referencing)
-	reasoningEffort  string                               // "", "low", "medium", "high", "xhigh", "max" — maps to thinking budget
-	toolChoice       string                               // "", "auto", "required", "none" — maps to Anthropic tool_choice
+	reasoningEffort  string                               // "", "low", "medium", "high", "xhigh", "max" - maps to thinking budget
+	toolChoice       string                               // "", "auto", "required", "none" - maps to Anthropic tool_choice
 	temperature      float64                              // 0 = provider default
 	topP             float64                              // 0 = provider default
 	serverTools      []ServerToolConfig                   // Anthropic server-side tools (web_search/web_fetch), executed in-API
 	memoryTool       bool                                 // Anthropic Memory Tool (memory_20250818): declared here, executed agent-side
-	thinkingMode     string                               // "", "manual", "adaptive" — thinking carrier override ("" = auto-detect from model)
+	thinkingMode     string                               // "", "manual", "adaptive" - thinking carrier override ("" = auto-detect from model)
 	contextEditing   atomic.Pointer[ContextEditingConfig] // server-side context editing (beta)
 	strictTools      map[string]bool                      // strict tool use allowlist (empty = disabled)
 	toolSearchBeta   bool                                 // a tool_search_tool_* declaration is configured (beta header + defer_loading)
@@ -52,7 +52,7 @@ type AnthropicProvider struct {
 	// Top-level effort carrier (output_config.effort, GA effort parameter).
 	// Cache-aware per Anthropic's 2026 effort guidance: a top-level effort
 	// change does not preserve cached prefixes, so the carrier is attached
-	// only once a level stabilizes across consecutive requests — per-turn
+	// only once a level stabilizes across consecutive requests - per-turn
 	// adaptive-effort oscillation never touches it (see beginEffortTracking).
 	effortCarrier       atomic.Bool // true until the endpoint rejects output_config
 	lastCallEffort      string      // effort level observed on the previous request
@@ -130,7 +130,7 @@ func (p *AnthropicProvider) ReasoningEffort() string { return p.reasoningEffort 
 
 // SetThinkingMode overrides the extended-thinking carrier: "manual" forces
 // budget_tokens, "adaptive" forces thinking:{type:"adaptive"} (Claude 4.6+/
-// 5.x only — older models reject it with 400), "" (default) auto-detects
+// 5.x only - older models reject it with 400), "" (default) auto-detects
 // per model. Opt in per endpoint via config (`thinking_mode: adaptive`).
 func (p *AnthropicProvider) SetThinkingMode(mode string) {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
@@ -174,7 +174,7 @@ func (p *AnthropicProvider) useAdaptiveThinking() bool {
 }
 
 // adaptiveEffort maps a reasoning effort level to the output_config.effort
-// value used by adaptive-thinking models (their only depth control —
+// value used by adaptive-thinking models (their only depth control -
 // budget_tokens is forbidden there). Returns "" for empty/unknown levels.
 func adaptiveEffort(effort string) string {
 	effort = strings.ToLower(strings.TrimSpace(effort))
@@ -248,7 +248,7 @@ func (p *AnthropicProvider) SetMaxTokens(n int) {
 //
 // Hysteresis (Anthropic effort guidance, 2026): hold the top-level effort
 // constant within a conversation. A level is adopted as the carrier only
-// after TWO consecutive requests at the same level — the adaptive-effort
+// after TWO consecutive requests at the same level - the adaptive-effort
 // adapter sets a level before each call and restores the previous level
 // right after, so its oscillation never stabilizes and never reaches the
 // carrier (budget_tokens alone modulates per-turn thinking, which is
@@ -310,7 +310,7 @@ func (p *AnthropicProvider) SetServerTools(tools []ServerToolConfig) {
 // ServerToolSearchActive reports whether the Anthropic server-side Tool
 // Search Tool (tool_search_tool_regex/bm25, advanced-tool-use-2025-11-20)
 // is configured. The agent layer checks this to hand MCP schema discovery
-// to the provider (defer_loading) instead of its client-side meta-tool —
+// to the provider (defer_loading) instead of its client-side meta-tool -
 // the two mechanisms are mutually exclusive: the client meta-tool strips
 // deferred schemas from the request, which the server-side search needs.
 func (p *AnthropicProvider) ServerToolSearchActive() bool { return p.toolSearchBeta }
@@ -509,7 +509,7 @@ var effortErrorAnchors = []string{
 }
 
 // isEffortError reports whether an API error is a genuine rejection of the
-// top-level output_config effort carrier — e.g. an Anthropic-compatible
+// top-level output_config effort carrier - e.g. an Anthropic-compatible
 // gateway that predates the parameter. Mirrors isThinkingError: status must
 // be a 4xx parameter class and the message must contain an anchored phrase.
 func isEffortError(err error) bool {
@@ -612,7 +612,7 @@ func (p *AnthropicProvider) Name() string {
 }
 
 // UpdateRuntimeHeaders updates the injected headers at runtime.
-// GGCode-SessionID is session-lifecycle state owned by SetSessionID —
+// GGCode-SessionID is session-lifecycle state owned by SetSessionID -
 // callers that replace the whole header set (e.g. the impersonation
 // panel) must not silently drop it, so it is carried over (#sa-142).
 func (p *AnthropicProvider) UpdateRuntimeHeaders(headers http.Header) {
@@ -646,7 +646,9 @@ func (p *AnthropicProvider) SetSessionID(sessionID string) {
 }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
-	// sa-78: honor the configured per-call deadline for non-streaming calls.
+	// sa-78 + #4729: single-wrap deadline when a request_timeout is CONFIGURED
+	// (fail-fast contract, zz_issue2573_test.go); the #4729 in-place timeout
+	// retry only applies on the default path (no configured deadline).
 	ctx, cancel := p.policy.withTimeout(ctx)
 	defer cancel()
 	debug.Log("anthropic", "Chat START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
@@ -659,7 +661,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 		var callErr error
 		resp, callErr = p.client.Messages.New(ctx, params, append(callOpts, p.contextEditingOptions()...)...)
 		return callErr
-	}, p.policy.attempts())
+	}, p.policy.attempts(), p.policy.timeoutRetryInPlace())
 	// Retry once without extended thinking if the model rejects it.
 	if err != nil && params.Thinking.OfEnabled != nil && isThinkingError(err) {
 		debug.Log("anthropic", "Chat: retrying without extended thinking (model rejected thinking parameters)")
@@ -668,7 +670,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 			var callErr error
 			resp, callErr = p.client.Messages.New(ctx, params, append(callOpts, p.contextEditingOptions()...)...)
 			return callErr
-		}, p.policy.attempts())
+		}, p.policy.attempts(), p.policy.timeoutRetryInPlace())
 	}
 	// Retry once without the effort carrier if the endpoint rejects
 	// output_config (Anthropic-compatible gateways predating the parameter).
@@ -680,7 +682,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 			var callErr error
 			resp, callErr = p.client.Messages.New(ctx, params, append(callOpts, p.contextEditingOptions()...)...)
 			return callErr
-		}, p.policy.attempts())
+		}, p.policy.attempts(), p.policy.timeoutRetryInPlace())
 	}
 	if err != nil {
 		if rejected, parsed := maxTokensRejection(err); rejected {
@@ -733,10 +735,12 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 	safego.Go("provider.anthropic.streamRead", func() {
 		defer close(ch)
-		// sa-78: per-call deadline applied inside the goroutine so it covers
-		// the full stream lifetime (ChatStream returns immediately).
-		ctx, cancel := p.policy.withTimeout(ctx)
-		defer cancel()
+		// #4729: per-ATTEMPT deadline (was: one withTimeout around the whole
+		// retry loop - see Chat's note). The parent ctx stays live for the
+		// retryability checks; each attempt renews its own deadline below.
+		parentCtx := ctx
+		var cancelAttempt context.CancelFunc
+		defer func() { cancelAttempt() }() // idempotent; covers mid-loop returns
 
 		var usage *TokenUsage
 		var outputChars int
@@ -744,16 +748,24 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 		streamError := false       // set when a non-retryable error was sent to ch
 		budget := newRetryBudget() // #722: cap cumulative retry backoff sleep per stream call
 
-		for attempt := 0; attempt < p.policy.attempts(); attempt++ {
+		attempts := p.policy.attempts()
+		for attempt := 0; attempt < attempts; attempt++ {
 			if attempt > 0 {
+				cancelAttempt() // release the previous attempt's deadline timer
 				debug.Log("anthropic", "Stream retry attempt %d", attempt)
+			}
+
+			// #4729: renewal is a no-op on the default path (parent stays live);
+			// with a configured deadline only attempt 0 derives one (#2573).
+			if attempt == 0 || p.policy.requestTimeout <= 0 {
+				ctx, cancelAttempt = p.policy.withTimeout(parentCtx)
 			}
 
 			toolCalls := make(map[int]*ToolCallDelta)
 			var inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int
 			emitted := false
 			retry := false
-			// #577(C): reset truncated per attempt — attempt 1 could observe
+			// #577(C): reset truncated per attempt - attempt 1 could observe
 			// stop_reason=max_tokens and then die to a retryable error; a
 			// complete attempt 2 must not inherit Truncated=true. Mirrors the
 			// gemini.go per-attempt declaration (#561-C) and openai.go (#577-B).
@@ -834,7 +846,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						if stopReason := string(event.Delta.StopReason); stopReason != "" {
 							debug.Log("anthropic", "stop_reason=%s", stopReason)
 							if stopReason == "max_tokens" {
-								// Output was truncated — NOT an error. Keep partial content.
+								// Output was truncated - NOT an error. Keep partial content.
 								p.cap.OnTruncated()
 								truncated = true
 							} else if stopErr := anthropicStopReasonError(stopReason); stopErr != nil {
@@ -845,7 +857,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						}
 
 					case "message_start":
-						// #722: same non-zero guard as message_delta above — an
+						// #722: same non-zero guard as message_delta above - an
 						// out-of-order (protocol-violating) stream must not zero out
 						// input tokens already counted.
 						if event.Message.Usage.InputTokens > 0 && inputTokens == 0 {
@@ -882,7 +894,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						p.cap.OnRejected(parsed)
 					}
 					// Retry without extended thinking if the model rejects it.
-					if !emitted && params.Thinking.OfEnabled != nil && isThinkingError(err) && attempt < p.policy.attempts()-1 {
+					if !emitted && params.Thinking.OfEnabled != nil && isThinkingError(err) && attempt < attempts-1 {
 						debug.Log("anthropic", "Stream: retrying without extended thinking (model rejected thinking parameters)")
 						// #2115: the downgrade must be VISIBLE - the user set a
 						// reasoning effort and silently losing it for the rest of
@@ -898,7 +910,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 					// sets retry=true, and the for-postfix attempt++ exhausts the
 					// loop into the fallback path that fabricates usage and emits
 					// a false StreamEventDone.
-					if !emitted && isEffortError(err) && attempt < p.policy.attempts()-1 && p.effortCarrier.CompareAndSwap(true, false) {
+					if !emitted && isEffortError(err) && attempt < attempts-1 && p.effortCarrier.CompareAndSwap(true, false) {
 						debug.Log("anthropic", "Stream: retrying without output_config (endpoint rejected the effort carrier)")
 						ch <- StreamEvent{Type: StreamEventSystem, Text: "[Endpoint rejected output_config effort - retrying without it] "}
 						params.OutputConfig = anthropic.OutputConfigParam{}
@@ -906,7 +918,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						return
 					}
 					// Retry if no content has been emitted yet and the error is retryable.
-					if !emitted && isRetryableForContext(ctx, err) && attempt < p.policy.attempts()-1 {
+					if !emitted && isRetryableForContext(ctx, err) && attempt < attempts-1 {
 						slept, sErr := p.sleepBeforeRetry(ctx, ch, budget, err, attempt)
 						if !slept {
 							if sErr != nil {
@@ -914,6 +926,9 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 								streamError = true
 							}
 							return
+						}
+						if isTimeoutClassError(err) && p.policy.timeoutRetryInPlace() { // #4729: keep retrying timeouts in place
+							attempts = retryAlwaysAttempts
 						}
 						retry = true
 						return
@@ -941,7 +956,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 		}
 
 		// #602(R5): the "retries exhausted" guard that used to live here was
-		// unreachable dead code — every iteration of the attempt loop above
+		// unreachable dead code - every iteration of the attempt loop above
 		// ends in `continue` (retry), `return` (streamError sent), or the
 		// unconditional usage assignment plus the single `break`, so the loop
 		// can never exit with usage == nil. The defensive estimate fallback
@@ -1445,7 +1460,7 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 	}
 
 	// Extended thinking carrier (Anthropic 2026):
-	//   - adaptive: thinking:{type:"adaptive"} + output_config.effort — the
+	//   - adaptive: thinking:{type:"adaptive"} + output_config.effort - the
 	//     only mode that interleaves thinking between tool calls on Claude
 	//     4.6+/5.x models (manual budget_tokens is deprecated on 4.6 and
 	//     rejected on 4.7+). No budget_tokens: the API forbids combining
@@ -1486,7 +1501,7 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 	}
 	// Adaptive models have no budget_tokens: effort is their only depth
 	// control, so it rides every request from the first call (subject to
-	// the endpoint latch — an endpoint that rejected output_config keeps
+	// the endpoint latch - an endpoint that rejected output_config keeps
 	// running on the default level, mirroring the manual-mode degradation).
 	// The per-turn effort cannot ride the top-level slot raw: adaptive-adapter
 	// levels oscillate per call and a top-level change does not preserve
@@ -1567,7 +1582,7 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 		}
 		// Cache control breakpoint on the last NON-deferred tool definition
 		// so Anthropic caches all tool schemas (which are large and static
-		// across turns). Only the last item needs the breakpoint — Anthropic
+		// across turns). Only the last item needs the breakpoint - Anthropic
 		// caches everything from the start up to each breakpoint.
 		if lastCacheable >= 0 && toolParams[lastCacheable].OfTool != nil {
 			toolParams[lastCacheable].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
@@ -1615,7 +1630,7 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 	}
 
 	// Anthropic Memory Tool (memory_20250818): declared with no input schema
-	// — the schema is fixed API-side. Execution happens agent-side (see
+	// - the schema is fixed API-side. Execution happens agent-side (see
 	// internal/agent/memory_tool.go). Place a cache breakpoint here only when
 	// this is the trailing static declaration; otherwise the loop above
 	// already put one on the last server tool.
@@ -1896,7 +1911,7 @@ func toolUseBlockParam(id string, input any, name string, callerRaw json.RawMess
 }
 
 // hasPendingProgrammaticToolCalls reports whether the conversation tail ends
-// with unanswered programmatic (code execution) tool_use blocks — i.e. this
+// with unanswered programmatic (code execution) tool_use blocks - i.e. this
 // request is the container continuation.
 func hasPendingProgrammaticToolCalls(messages []Message) bool {
 	for i := len(messages) - 1; i >= 0; i-- {

@@ -69,6 +69,15 @@ func (c callPolicy) attempts() int {
 	return providerRetryAttempts
 }
 
+// timeoutRetryInPlace reports whether timeout-class failures should retry
+// in place without caps (#4729). Only the DEFAULT path (no configured
+// request_timeout) qualifies: an explicitly configured deadline is a
+// fail-fast contract (#2573, zz_issue2573_test.go) - a slow relay must hand
+// over to the fallback chain quickly instead of being retried forever.
+func (c callPolicy) timeoutRetryInPlace() bool {
+	return c.requestTimeout <= 0
+}
+
 // withTimeout returns ctx wrapped with the configured per-call deadline, plus
 // a cancel func the caller MUST defer (it is a no-op when no deadline is
 // configured). For streaming calls, invoke this INSIDE the reader goroutine
