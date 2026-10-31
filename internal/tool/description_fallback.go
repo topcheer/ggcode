@@ -61,6 +61,14 @@ func InjectDescriptionFallback(schema, args json.RawMessage, toolName string) js
 	if err := json.Unmarshal(args, &argMap); err != nil {
 		return args
 	}
+	// #4693: arguments can be the JSON literal null - Unmarshal succeeds
+	// with a nil map, and the argMap["description"] assignment below would
+	// panic (assignment to entry in nil map). An absent-args call is exactly
+	// the "description missing" shape this fallback exists for: treat null
+	// like an empty object.
+	if argMap == nil {
+		argMap = map[string]json.RawMessage{}
+	}
 	if v, ok := argMap["description"]; ok {
 		var s string
 		if err := json.Unmarshal(v, &s); err == nil && strings.TrimSpace(s) != "" {
