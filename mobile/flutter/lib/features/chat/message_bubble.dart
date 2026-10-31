@@ -148,7 +148,7 @@ class MessageBubble extends StatelessWidget {
                             width: 120,
                             height: 120,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Icon(
+                            errorBuilder: (_, _, _) => Icon(
                               Icons.broken_image_outlined,
                               size: 32,
                               color: Theme.of(context).disabledColor,
