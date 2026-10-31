@@ -170,6 +170,7 @@ const en = {
   'context.critical': 'Cửa sổ ngữ cảnh đã đầy {pct}%. Tin nhắn cũ có thể bị loại bỏ.',
   'context.estimatedCost': 'Chi phí ước tính',
   'context.costDisclaimer': 'Ước tính dựa trên mức sử dụng token và giá mô hình. Chi phí thực tế có thể khác.',
+  'context.planIncluded': "Đã bao gồm trong {plan}",
 
   // SettingsPage
   'settings.title': 'Cài đặt',

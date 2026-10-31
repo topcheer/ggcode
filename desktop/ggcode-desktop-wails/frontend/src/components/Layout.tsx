@@ -144,6 +144,8 @@ function LayoutInner() {
     cacheRead: 0,
     cacheWrite: 0,
     cacheHit: 0,
+    pricingType: '',
+    planLabel: '',
     status: 'Ready',
   })
 
@@ -186,6 +188,8 @@ function LayoutInner() {
             cacheRead: (info as any)?.cacheRead ?? prev.cacheRead,
             cacheWrite: (info as any)?.cacheWrite ?? prev.cacheWrite,
             cacheHit: (info as any)?.cacheHit ?? prev.cacheHit,
+            pricingType: (info as any)?.pricingType ?? prev.pricingType,
+            planLabel: (info as any)?.planLabel ?? prev.planLabel,
           }))
         }
       } catch {
@@ -277,6 +281,8 @@ function LayoutInner() {
           cacheRead: (info as any).cacheRead ?? prev.cacheRead,
           cacheWrite: (info as any).cacheWrite ?? prev.cacheWrite,
           cacheHit: (info as any).cacheHit ?? prev.cacheHit,
+          pricingType: (info as any).pricingType ?? prev.pricingType,
+          planLabel: (info as any).planLabel ?? prev.planLabel,
           status: working ? 'Working' : 'Ready',
         }))
       } catch {}

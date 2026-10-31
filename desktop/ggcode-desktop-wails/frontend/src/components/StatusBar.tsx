@@ -31,6 +31,8 @@ export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, on
     cacheRead: 0,
     cacheWrite: 0,
     cacheHit: 0,
+    pricingType: '',
+    planLabel: '',
     status: t('status.ready'),
   })
 

@@ -170,6 +170,7 @@ const en = {
   'context.critical': 'A janela de contexto está {pct}% cheia. Mensagens antigas podem ser descartadas.',
   'context.estimatedCost': 'Custo Estimado',
   'context.costDisclaimer': 'Estimado com base no uso de tokens e preços do modelo. O custo real pode variar.',
+  'context.planIncluded': "Incluído no {plan}",
 
   // SettingsPage
   'settings.title': 'Configurações',

@@ -170,6 +170,7 @@ const en = {
   'context.critical': 'Окно контекста заполнено на {pct}%. Старые сообщения могут быть потеряны.',
   'context.estimatedCost': 'Примерная стоимость',
   'context.costDisclaimer': 'Оценка основана на использовании токенов и ценах модели. Фактическая стоимость может отличаться.',
+  'context.planIncluded': "Входит в {plan}",
 
   // SettingsPage
   'settings.title': 'Настройки',

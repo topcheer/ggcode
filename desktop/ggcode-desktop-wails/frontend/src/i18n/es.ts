@@ -170,6 +170,7 @@ const en = {
   'context.critical': 'La ventana de contexto está al {pct}%. Los mensajes antiguos pueden perderse.',
   'context.estimatedCost': 'Costo est.',
   'context.costDisclaimer': 'Estimado según el uso de tokens y los precios del modelo. El costo real puede variar.',
+  'context.planIncluded': "Incluido en {plan}",
 
   // SettingsPage
   'settings.title': 'Configuración',

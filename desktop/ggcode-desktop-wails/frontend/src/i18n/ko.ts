@@ -170,6 +170,7 @@ const en = {
   'context.critical': '컨텍스트 창이 {pct}% 찼습니다. 오래된 메시지가 누락될 수 있습니다.',
   'context.estimatedCost': '예상 비용',
   'context.costDisclaimer': '토큰 사용량과 모델 가격을 기준으로 예상한 비용입니다. 실제 비용은 다를 수 있습니다.',
+  'context.planIncluded': "{plan}에 포함됨",
 
   // SettingsPage
   'settings.title': '설정',

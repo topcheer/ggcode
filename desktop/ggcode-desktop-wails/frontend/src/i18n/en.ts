@@ -179,6 +179,7 @@ const en = {
   'context.critical': 'Context window is {pct}% full. Older messages may be dropped.',
   'context.estimatedCost': 'Est. Cost',
   'context.costDisclaimer': 'Estimated based on token usage and model pricing. Actual cost may vary.',
+  'context.planIncluded': "Included in {plan}",
 
   // SettingsPage
   'settings.title': 'Settings',
