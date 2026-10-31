@@ -3,6 +3,7 @@ package subagent
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -98,6 +99,7 @@ type SubAgent struct {
 	Mailbox          chan AgentMessage
 	events           []AgentEvent
 	eventsDropped    int
+	externalSources  map[string]int // per-tool external-source call counts (provenance)
 	cancel           context.CancelFunc
 	done             chan struct{} // closed when the sub-agent reaches any terminal state
 	goroutineStarted bool          // true once Run() has started the goroutine (SetCancel alone doesn't set this)
@@ -123,6 +125,10 @@ type Snapshot struct {
 	Result          string
 	Error           string
 	EventsDropped   int
+	// ExternalSources counts calls to external-source tools (web/peer
+	// channels) - surfaced at the delegation boundary so the parent can
+	// weigh the result's provenance (trust-cascade defense).
+	ExternalSources map[string]int
 	CreatedAt       time.Time
 	StartedAt       time.Time
 	EndedAt         time.Time
@@ -289,6 +295,19 @@ func (s *SubAgent) IncrementToolCalls() {
 	s.ToolCallCount++
 }
 
+// RecordExternalSource tracks a call to an external-source tool (web/peer
+// channels) by this sub-agent (trust-cascade defense, EMNLP 2026 provenance-
+// erasure finding): the delegation boundary (wait_agent) surfaces the
+// aggregate so the parent knows what provenance the result carries.
+func (s *SubAgent) RecordExternalSource(toolName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.externalSources == nil {
+		s.externalSources = make(map[string]int)
+	}
+	s.externalSources[toolName]++
+}
+
 func (s *SubAgent) setStatus(st Status) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -374,6 +393,7 @@ func (s *SubAgent) snapshot() Snapshot {
 		EndedAt:         s.EndedAt,
 		Events:          append([]AgentEvent(nil), s.events...),
 		EventsDropped:   s.eventsDropped,
+		ExternalSources: maps.Clone(s.externalSources),
 	}
 	if s.Error != nil {
 		snap.Error = s.Error.Error()
