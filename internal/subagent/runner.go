@@ -430,8 +430,8 @@ func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
 					return "", ctx.Err()
 				}
 			}
-			// Re-read after the grace window (Result AND Error: Complete
-			// backfills both).
+			// Re-read after the grace window — Result for the backfill (#713),
+			// Error for consistency with the Complete path (#4358).
 			sa.mu.Lock()
 			result = sa.Result
 			err = sa.Error
