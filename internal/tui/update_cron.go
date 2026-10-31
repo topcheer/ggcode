@@ -49,7 +49,13 @@ func (m *Model) handleCronPromptMsg(msg cronPromptMsg) (Model, tea.Cmd) {
 		debug.Log("cron", "queued firing (agent busy, queue_if_busy=true): %s", msg.Prompt)
 		return *m, nil
 	}
-	// queue_if_busy=false and agent busy: skip silently (debug log for observability)
+	// queue_if_busy=false and agent busy: skip the firing. #4793 (S-23): the
+	// skip used to vanish with only a debug log - a one-shot cron eaten by a
+	// busy window left no user-visible trace (watchdog's 09:31 sweep was
+	// discovered only via git log). Record a visible system line; the
+	// schedule itself (recurring vs one-shot) is unchanged.
+	sysMsg := fmt.Sprintf("%s (%s)", m.t("cron.skipped_busy"), ts)
+	m.chatWriteSystem(nextSystemID(), sysMsg)
 	debug.Log("cron", "skipped firing (agent busy, queue_if_busy=false): %s", msg.Prompt)
 	return *m, nil
 }

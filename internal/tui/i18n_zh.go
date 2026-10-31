@@ -730,6 +730,8 @@ func zhCatalog(key string) string {
 		return "剪贴板中没有找到图片。Windows 终端通常会拦截 Ctrl+V，请尝试 Ctrl+Shift+V 或输入 /image paste。"
 	case "cron.firing":
 		return "⏰ 定时任务触发"
+	case "cron.skipped_busy":
+		return "⏭ 定时任务触发被跳过（agent 忙，queue_if_busy=false）"
 	case "slash.help":
 		return "显示帮助"
 	case "slash.sessions":

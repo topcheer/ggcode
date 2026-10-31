@@ -296,7 +296,7 @@ knight:
 
 Cron jobs support a `queue_if_busy` parameter (default: `false`):
 
-- `queue_if_busy: false` - If the agent is busy when the job fires, the prompt is **skipped**. Use for non-critical periodic checks.
+- `queue_if_busy: false` - If the agent is busy when the job fires, the prompt is **skipped** (a system line in the chat records the skip). Use for non-critical periodic checks.
 - `queue_if_busy: true` - The prompt is **queued** and runs after the current task finishes. Use for important tasks that must run.
 
 Only recurring jobs are persisted to `~/.ggcode/cron-jobs.json` (grouped by workspace).
