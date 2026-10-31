@@ -4,7 +4,7 @@ publish_to: 'none'
 version: 1.3.270+2026103101
 
 environment:
-  sdk: '>=3.4.0 <4.0.0'
+  sdk: '>=3.13.0 <4.0.0'
 
 dependencies:
   flutter:
@@ -19,7 +19,7 @@ dependencies:
   flutter_secure_storage: ^11.2.0
   uuid: ^4.2.2
   url_launcher: ^6.2.2
-  google_fonts: ^8.0.0
+  google_fonts: ^9.0.0
   animations: ^3.0.0
   flutter_mermaid: ^0.1.0
   cryptography: ^2.9.0
