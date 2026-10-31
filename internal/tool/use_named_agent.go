@@ -143,6 +143,30 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 		}
 	}
 
+	// #4775 (S-03): validate the template's tool allowlist against the
+	// registry BEFORE Spawn - a declared-but-missing tool (e.g. lanchat
+	// declared in a config where the session's registry never registered
+	// it) previously spawned anyway and the sub-agent only discovered the
+	// absence mid-run ("no lanchat in this session"). Same fail-loudly
+	// shape as the #551-C model gate below: checked before Spawn so a
+	// rejection leaves no zombie sub-agent entry. Skip only when the
+	// registry is unavailable (nil Tools = cannot enumerate; the existing
+	// blocked_tools path already documents that degradation).
+	if len(tmpl.Tools) > 0 && t.Tools != nil {
+		available := t.Tools.ToolNames()
+		var missing []string
+		for _, declared := range tmpl.Tools {
+			if !sliceContains(available, declared) {
+				missing = append(missing, declared)
+			}
+		}
+		if len(missing) > 0 {
+			return Result{IsError: true, Content: fmt.Sprintf(
+				"named subagent '%s' declares tool(s) %s which are not available in this session's toolset. Available tools: %s. Fix the template (create_namedagent tools=...) or register the tool before invoking it.",
+				tmpl.Name, strings.Join(missing, ", "), strings.Join(available, ", "))}, nil
+		}
+	}
+
 	// Resolve the effective model override: a per-invocation model takes
 	// precedence over the template's Model field. The invocation-level
 	// override is the escalation lever for model-tiered cascades: when a
