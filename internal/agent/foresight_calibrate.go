@@ -69,7 +69,7 @@ import (
 
 // predictionRe matches sentences containing forward-looking predictions about
 // tool outcomes. Captures the prediction context for later comparison.
-var foresightPredictionRe = regexp.MustCompile(`(?i)(?:this\s+(?:should|will|should)\s+(?:contain|return|show|reveal|have|include)|the\s+(?:test|build|command|file|function|api|response)\s+(?:should|will|must)\s+(?:pass|fail|succeed|work|return|contain|show|be)|i\s+expect\s+(?:this|the|it)\s+to|this\s+will\s+(?:likely\s+)?(?:pass|fail|work|succeed|return|contain)|the\s+output\s+(?:should|will)\s+be|should\s+(?:now\s+)?(?:pass|work|succeed|compile|build)|probably\s+(?:returns?|contains?|is)|likely\s+(?:returns?|contains?|is|will))`)
+var foresightPredictionRe = regexp.MustCompile(`(?i)(?:this\s+(?:should|will|should)\s+(?:contain|return|show|reveal|have|include)|the\s+(?:test|build|command|file|function|api|response)\s+(?:should|will|must|might|may)\s+(?:pass|fail|succeed|work|return|contain|show|be)|i\s+expect\s+(?:this|the|it)\s+to|this\s+will\s+(?:likely\s+)?(?:pass|fail|work|succeed|return|contain)|the\s+output\s+(?:should|will)\s+be|should\s+(?:now\s+)?(?:pass|work|succeed|compile|build)|(?:should|will|might|may)\s+(?:it\s+to\s+)?be\s+empty|(?:might|may)\s+(?:it\s+to\s+)?(?:fail|error|throw|crash|not\s+(?:work|exist|be\s+found|compile|pass))|probably\s+(?:returns?|contains?|is)|likely\s+(?:returns?|contains?|is|will))`)
 
 // successPredictionRe matches predictions that the outcome will be positive
 // (pass, succeed, work, return expected content). #4625: `be empty` was
@@ -175,17 +175,26 @@ func (s *foresightCalibrateState) recordPrediction(assistantText string, toolCal
 		for _, tc := range toolCalls {
 			called[tc.Name] = true
 		}
+		// #4747-A: only swallow the turn when at least one declaration was
+		// actually attributable. Stale leftovers (every decl hitting the
+		// not-called continue path) used to trigger the unconditional return and
+		// silently drop the free-regex predictions in the same text.
+		recorded := 0
 		for _, d := range decls {
 			if d.toolName != "" {
 				if !called[d.toolName] {
 					continue // declaration for a tool not in this turn: stale text
 				}
 				s.recordExpect(d.toolName, d.check, iteration)
+				recorded++
 			} else if len(toolCalls) == 1 {
 				s.recordExpect(toolCalls[0].Name, d.check, iteration)
+				recorded++
 			}
 		}
-		return
+		if recorded > 0 {
+			return
+		}
 	}
 
 	// Only scan text near tool calls (the prediction context). Use the full
@@ -204,11 +213,21 @@ func (s *foresightCalibrateState) recordPrediction(assistantText string, toolCal
 	hasSuccess := foresightSuccessPredRe.MatchString(assistantText)
 	hasFailure := foresightFailurePredRe.MatchString(assistantText)
 	hasEmpty := foresightEmptyPredRe.MatchString(assistantText)
-	if hasEmpty {
+	if hasEmpty && hasFailure {
+		// #4747-B: empty+failure coexistence ("should be empty; otherwise the
+		// lookup might fail") is ambiguous — hard-wiring either polarity
+		// scores a correct prediction as a mismatch. Same skip as below.
+		return
+	}
+	if hasEmpty && !hasFailure {
 		// #4625: emptiness is its own polarity — a success expectation OF
 		// emptiness. It must not flow through the content-success branch
 		// ("predicted content but empty" misjudge), and dropping it would
 		// leave empty predictions permanently unverified.
+		// #4747-B: "should be empty or missing" hits BOTH the empty and the
+		// failure polarity regexes; letting empty unconditionally win scored a
+		// correctly-predicted missing-file error as a mismatch. Coexistence now
+		// takes the same ambiguous skip as success+failure below.
 		predictedOK = true
 		predictedEmpty = true
 	} else if hasSuccess && !hasFailure {

@@ -504,6 +504,17 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 			debug.Log("slack", "adapter=%s unauthorized inbound channel=%s", a.name, channel)
 			return
 		}
+		// #4608: an unbound channel is routine routing (app subscription
+		// covers message.channels while the workspace only bound message.im)
+		// - the message was never meant for this agent, so there is no
+		// delivery failure to report. Replying "session not ready, please
+		// retry" made the bot answer every ordinary message in any channel
+		// it was joined to, and retrying could never succeed. Silent like
+		// ErrInboundChannelDenied above and the Discord adapter.
+		if err == ErrNoChannelBound {
+			debug.Log("slack", "adapter=%s channel not bound to any workspace session, ignoring channel=%s", a.name, channel)
+			return
+		}
 		// Processing failed — the message would otherwise be silently dropped.
 		// Acknowledge the failure back to the sender so they know to retry (#260).
 		// Reply failure is only logged, never recursed.

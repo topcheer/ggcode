@@ -333,6 +333,14 @@ func (t FileOps) executeOne(action, source, destination string, recursive bool) 
 					// exists - leave it untracked (it was never read).
 					return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: fmt.Sprintf("moved but failed to remove source: %v", err)}
 				}
+				// #4602: EXDEV success physically removed the source, but the
+				// failure-entry restore above re-created its tracked key. Drop it
+				// or the tracker keeps a "read" record for a path that no longer
+				// exists - recreating a file at the source path would then skip
+				// the blind-write warning (#4448's detection surface).
+				if srcSeen {
+					defaultFileTracker.RemoveTracking(source)
+				}
 			} else {
 				return fileOpsItemResult{Action: action, Source: source, Destination: destination, Status: "error", Detail: fmt.Sprintf("rename error: %v", err)}
 			}
