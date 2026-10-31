@@ -15,7 +15,22 @@ import (
 // SingletonLock equivalent).
 
 func TestIssue3114GCNeverDeletesSystemProfile(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	// Deliberately NOT t.TempDir(): the framework's RemoveAll cleanup races
+	// the async debug.Log writer (gcStale's eviction path logs, and the
+	// global logger flushes to $HOME/.ggcode on its own goroutine). With
+	// t.TempDir the cleanup ran after HOME already pointed back here,
+	// reliably unlinkat-failing on CI ("directory not empty") while the
+	// test's own assertions all passed in 0.00s. A plain temp dir without
+	// framework cleanup sidesteps the race; best-effort removal at the end
+	// tolerates a late writer (the dir is under os.TempDir either way).
+	home, err := os.MkdirTemp("", "issue3114-home-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Cleanup(func() {
+		os.RemoveAll(home) //nolint:errcheck // best-effort; async logger may still hold it briefly
+	})
 	t.Setenv("GGCODE_BROWSER_PROFILE_TTL_DAYS", "0") // TTL 0: everything is "stale"
 	root := browserProfilesRoot()
 	if err := os.MkdirAll(root, 0755); err != nil {
