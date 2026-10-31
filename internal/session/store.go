@@ -1843,10 +1843,23 @@ func (s *JSONLStore) mergeMaintainedIndex(idx, validIdx, currentIdx []indexEntry
 	for _, e := range currentIdx {
 		currentSet[e.ID] = true
 	}
+	// #4668 hardening: the two append loops union two snapshots that may
+	// BOTH carry a row for the same ID (e.g. the locked reload already
+	// contains an entry that is also a prune survivor). Emit each ID at most
+	// once - a duplicate row would make List show the same session twice
+	// forever (every later merge preserves both copies).
+	seen := make(map[string]bool, len(currentIdx)+len(validIdx))
 	merged := make([]indexEntry, 0, len(currentIdx))
+	emit := func(e indexEntry) {
+		if seen[e.ID] {
+			return
+		}
+		seen[e.ID] = true
+		merged = append(merged, e)
+	}
 	for _, e := range currentIdx {
 		if validSet[e.ID] || !originalSet[e.ID] {
-			merged = append(merged, e)
+			emit(e)
 		}
 	}
 	for _, e := range validIdx {
@@ -1856,7 +1869,7 @@ func (s *JSONLStore) mergeMaintainedIndex(idx, validIdx, currentIdx []indexEntry
 				continue
 			}
 		}
-		merged = append(merged, e)
+		emit(e)
 	}
 	return merged
 }
