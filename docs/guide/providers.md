@@ -94,6 +94,29 @@ vendors:
 
 Switch vendors at runtime using the `/provider` slash command or the `config` tool.
 
+## Timeouts & Retry Behavior
+
+Network errors (connection refused, DNS failures) and connection timeouts are retried automatically with exponential backoff. On the **default path** (no `request_timeout` configured), connection timeouts retry **in place without giving up**: the attempt cap and the backoff budget are lifted and only Ctrl-C (or the agent turn ending) stops the loop. So an unbounded retry never looks frozen, a system notice is printed after every 3rd consecutive timeout retry:
+
+```
+[Retry 4/20, waiting 5s...] [Timeout retry 3: provider still not responding - retrying in place until it recovers (Ctrl-C to stop)]
+```
+
+Endpoints behind a slow or flaky relay can instead set a per-call deadline so the failover chain takes over quickly:
+
+```yaml
+vendors:
+  acme:
+    protocol: openai
+    endpoints:
+      default:
+        base_url: https://relay.example.com/v1
+        request_timeout: 45s   # per-call deadline ("45s" style); 0/unset = none
+        max_retries: 4         # attempt budget override; 0/unset = default (20)
+```
+
+With `request_timeout` set, the deadline is a **fail-fast contract**: when it fires the call stops retrying and the fallback provider (if configured) takes over — a persistently slow relay must not block the session. Related keys are documented in `docs/releases/v1.3.243.md` (per-endpoint call policy).
+
 ## Custom Vendors
 
 Vendors not in the built-in preset list (e.g. OpenRouter, Azure, local LLMs) can be configured manually:
