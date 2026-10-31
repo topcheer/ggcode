@@ -140,9 +140,9 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 			// "+++ b/x" header for the same path - keep counting into the
 			// entry the rename branch opened instead of flushing a
 			// duplicate 0/0 record.
-			if m[1] != currentFile {
+			if p := diffHeaderPath(m); p != currentFile {
 				flush()
-				currentFile = m[1]
+				currentFile = p
 			}
 			lastOldFile = ""
 			newLineNum = 0
@@ -165,7 +165,11 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 		// the b/ path comes from the "Binary files a/x and b/x differ" line.
 		if m := diffBinaryHeader.FindStringSubmatch(line); m != nil && len(m) > 2 {
 			flush()
-			currentFile = m[2]
+			bSide := m[3]
+			if bSide == "" {
+				bSide = m[4]
+			}
+			currentFile = bSide
 			lastOldFile = ""
 			newLineNum = 0
 			continue
@@ -203,7 +207,7 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 		// counters below, exactly what the #3164 comment prescribes.
 		if m := diffOldFileHeader.FindStringSubmatch(line); m != nil &&
 			i+1 < len(lines) && strings.HasPrefix(lines[i+1], "+++ ") {
-			lastOldFile = m[1]
+			lastOldFile = diffHeaderPath(m)
 			prevWasOldHeader = true
 			continue
 		}

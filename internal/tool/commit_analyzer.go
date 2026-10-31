@@ -207,8 +207,11 @@ type diffStats struct {
 // delete (a/x and /dev/null). #4047: the old a/...b/-only pattern missed
 // the add/delete forms entirely - newly added binaries (the most common
 // accidental-commit shape #1650 targeted) bypassed the maxFilesPerCommit
-// warnings 100% of the time.
-var diffBinaryHeader = regexp.MustCompile(`^Binary files (?:a/(\S+)|/dev/null) and (?:b/(\S+)|/dev/null) differ$`)
+// warnings 100% of the time. #4683-C: git quotes space-containing and
+// non-ASCII paths as `Binary files "a/my file.png" and ... differ` -
+// without a quoted alternative those binaries bypass the check 100% of
+// the time (same as #4047's miss, for a different path shape).
+var diffBinaryHeader = regexp.MustCompile(`^Binary files (?:a/(\S+)|"a/([^"]+)"|/dev/null) and (?:b/(\S+)|"b/([^"]+)"|/dev/null) differ$`)
 
 // diffModeChange matches the pure mode-change markers ("old mode"/
 // "new mode") - these hunks carry no +/- lines and previously no file
@@ -240,7 +243,8 @@ func parseDiffStats(diffOutput string) diffStats {
 	// being "+++"-prefixed is then a residual header, not content.
 	prevWasOldHeader := false
 
-	for _, line := range strings.Split(diffOutput, "\n") {
+	lines := strings.Split(diffOutput, "\n")
+	for i, line := range lines {
 		// #3956 (#3164 parity): capture-and-clear the header-adjacency flag
 		// for THIS line before any branch consumes it.
 		afterOld := prevWasOldHeader
@@ -255,7 +259,7 @@ func parseDiffStats(diffOutput string) diffStats {
 		}
 		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
 			lastOldFile = ""
-			add(m[1])
+			add(diffHeaderPath(m))
 			continue
 		}
 		// Deleted file: "--- a/path" followed by "+++ /dev/null" - the +++
@@ -266,8 +270,14 @@ func parseDiffStats(diffOutput string) diffStats {
 			lastOldFile = ""
 			continue
 		}
-		if m := diffOldFileHeader.FindStringSubmatch(line); m != nil {
-			lastOldFile = m[1]
+		if m := diffOldFileHeader.FindStringSubmatch(line); m != nil &&
+			// #4683-A: the --- header is only real when the NEXT line is
+			// its +++ counterpart (#4433 guard, mirrored from
+			// commit_partition.go) - a deleted CONTENT line that happens to
+			// start with "--- a/" otherwise poisons lastOldFile and drops
+			// the following additions.
+			i+1 < len(lines) && strings.HasPrefix(lines[i+1], "+++") {
+			lastOldFile = diffHeaderPath(m)
 			prevWasOldHeader = true
 			continue
 		}
@@ -275,10 +285,19 @@ func parseDiffStats(diffOutput string) diffStats {
 		if m := diffBinaryHeader.FindStringSubmatch(line); m != nil {
 			// #4047: register the non-/dev/null side - added binaries only
 			// have a b-side name, deleted ones only an a-side name.
-			if m[1] != "" {
-				add(m[1])
+			// #4683-C: quoted sides live in groups 3/4 alongside bare 1/2.
+			aSide := m[1]
+			if aSide == "" && len(m) > 2 {
+				aSide = m[2]
+			}
+			bSide := m[3]
+			if bSide == "" && len(m) > 4 {
+				bSide = m[4]
+			}
+			if aSide != "" {
+				add(normalizeGitDiffPath(aSide))
 			} else {
-				add(m[2])
+				add(normalizeGitDiffPath(bSide))
 			}
 			lastOldFile = ""
 			continue
