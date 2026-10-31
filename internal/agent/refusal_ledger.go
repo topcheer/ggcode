@@ -766,7 +766,14 @@ func (a *Agent) InhibitNextRefusalLedgerWrite() { a.remoteRefusalInhibit.Store(t
 func (a *Agent) consumeRemoteRefusalInhibit() bool { return a.remoteRefusalInhibit.Swap(false) }
 
 // ReleaseMatchingRefusals lifts refusals matching the user's lift text.
+// #4736: nil-ledger guard - test-constructed Agents (tunnel inbound path)
+// reach this method before any ledger is attached; a missing ledger means
+// nothing was ever recorded, so there is nothing to release. Main CI
+// panicked here (refusal_ledger.go:761) wedging the merge queue.
 func (a *Agent) ReleaseMatchingRefusals(text string) int {
+	if a.refusalLedger == nil {
+		return 0
+	}
 	return a.refusalLedger.release(text)
 }
 
