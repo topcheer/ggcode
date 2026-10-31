@@ -1,7 +1,6 @@
 package config
 
 import (
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,17 +60,12 @@ func TestIssue4697_ExternalSectionFailureSurfaces(t *testing.T) {
 		t.Fatalf("baseline Save (writable dirs) must succeed: %v", err)
 	}
 
-	// Locate the persisted vendors.yaml and poison it: replace with a
-	// directory so SaveVendors fails while everything else stays writable.
-	var vendorsPath string
-	err = filepath.WalkDir(home, func(p string, d fs.DirEntry, werr error) error {
-		if werr == nil && !d.IsDir() && d.Name() == "vendors.yaml" {
-			vendorsPath = p
-		}
-		return nil
-	})
-	if err != nil || vendorsPath == "" {
-		t.Fatalf("baseline Save must persist vendors.yaml under HOME (err=%v)", err)
+	// Locate the persisted vendors.yaml deterministically (same resolution
+	// Save uses) and poison it: replace with a directory so SaveVendors
+	// fails while everything else stays writable.
+	vendorsPath := VendorsPath(filepath.Dir(cfg.FilePath))
+	if _, serr := os.Stat(vendorsPath); serr != nil {
+		t.Fatalf("baseline Save must persist vendors.yaml at %s: %v", vendorsPath, serr)
 	}
 	if err := os.Remove(vendorsPath); err != nil {
 		t.Fatal(err)
