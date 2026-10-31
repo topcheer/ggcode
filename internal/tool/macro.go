@@ -181,7 +181,11 @@ func (t *MacroTool) doDefine(name, desc string, steps []macroStep) (Result, erro
 			return Result{IsError: true, Content: fmt.Sprintf("step %d: tool %q is not in the read-only set - macros may only compose read-only tools so write operations keep their normal per-call approval flow", i+1, s.Tool)}, nil
 		}
 		if len(s.Args) > 0 {
-			var probe any
+			// #4553-A: unmarshal into a map so only a JSON OBJECT passes - the
+			// old `var probe any` accepted arrays/strings/numbers (syntax-only
+			// check) while the error text claimed "must be a JSON object", so a
+			// bad macro defined fine and exploded at run time instead.
+			var probe map[string]any
 			if err := json.Unmarshal(s.Args, &probe); err != nil {
 				return Result{IsError: true, Content: fmt.Sprintf("step %d: args must be a JSON object: %v", i+1, err)}, nil
 			}
