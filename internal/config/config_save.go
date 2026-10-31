@@ -64,7 +64,13 @@ func (c *Config) Save() error {
 	if c.globalSnap != nil {
 		vendorsToSave = globalOnlyVendors(c.Vendors, c.globalSnap.Vendors)
 	}
-	saveExternalSections(c, extDir, vendorsToSave)
+	// #4697 (defect B): external-section write failures must surface - the
+	// old discard made Save() report success while vendors.yaml/im.yaml/
+	// mcp_servers.yaml silently failed (read-only dir, full disk, lock),
+	// and the config reverted on restart with no user-visible warning.
+	if err := saveExternalSections(c, extDir, vendorsToSave); err != nil {
+		return fmt.Errorf("saving external sections: %w", err)
+	}
 
 	// 1. Marshal current config into a raw map.
 	currentData, err := yaml.Marshal(c)
@@ -115,6 +121,15 @@ func (c *Config) Save() error {
 	// 4. Build the data to write: merge onto existing file, or full write.
 	var data []byte
 	existingData, readErr := os.ReadFile(c.FilePath)
+	// #4697 (defect A): a real read error (EACCES/EIO/transient) must ABORT
+	// - falling into the full-write branch skipped deep-merge/tombstone
+	// protection and silently wiped disk-only fields, reporting success.
+	// Only a missing (or empty) file legitimately takes the full-write path
+	// (#1160 semantics; patchConfigFile/patchExternalFile already behave
+	// this way).
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return fmt.Errorf("reading existing config %s: %w", c.FilePath, readErr)
+	}
 	if readErr == nil && len(existingData) > 0 {
 		// File exists — deep-merge current onto existing.
 		existingRaw := map[string]interface{}{}

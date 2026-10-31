@@ -609,8 +609,16 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 					}
 					// Bounded retry: the key may already be queued in the
 					// to-device stream (ProcessSyncResponse handles shares).
+					// #4698: the wait is ctx-aware - a raw Sleep held the
+					// serial syncer pipeline for up to 2.4s per bad event even
+					// after cancellation, stalling every room behind it.
 					for attempt := 0; attempt < 3 && err != nil; attempt++ {
-						time.Sleep(800 * time.Millisecond)
+						select {
+						case <-ctx.Done():
+							debug.Log("matrix", "adapter=%s key-retry aborted by ctx cancellation room=%s (#4698)", a.name, roomID)
+							return
+						case <-time.After(800 * time.Millisecond):
+						}
 						decrypted, err = a.mach.DecryptMegolmEvent(ctx, evt)
 					}
 				}
