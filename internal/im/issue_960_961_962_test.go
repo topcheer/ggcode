@@ -217,9 +217,13 @@ func TestMatrixCheckIsDMViaAPINoPermanentCache(t *testing.T) {
 	a := &matrixAdapter{name: "test"}
 	a.dmRooms = make(map[string]bool)
 
-	// call on a client-less adapter: must be false and must not populate cache
-	if a.checkIsDMViaAPI(context.Background(), "!two:example.org") {
-		t.Fatal("nil client should not report DM")
+	// call on a client-less adapter: must fail OPEN (#4645 - failing closed
+	// sent real DM traffic into the mention gate and silently dropped
+	// mention-less DMs) and must not populate the cache. The #961 security
+	// intent is the cache assertion below: no heuristic path may write the
+	// permanent dmRooms map.
+	if !a.checkIsDMViaAPI(context.Background(), "!two:example.org") {
+		t.Fatal("nil client must fail open, not silently drop DM traffic (#4645)")
 	}
 	if len(a.dmRooms) != 0 {
 		t.Fatalf("dmRooms must stay empty, got %v", a.dmRooms)
