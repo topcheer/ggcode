@@ -464,7 +464,11 @@ func (l *refusalLedger) release(text string) int {
 		hit := false
 		if strong || refusalReleasePattern.MatchString(lower) {
 			for _, t := range refusalTargets(e.Excerpt) {
-				if strings.Contains(lower, t) {
+				// #4679: whole-token anchor match, symmetric with checkBlocked
+				// (#4632). A bare Contains prefix-released the original refusal
+				// when the user approved only the SAFER variant whose name
+				// contains the anchor (strong-lift gate passed on its own).
+				if refusalAnchorHit(lower, t) {
 					hit = true
 					break
 				}
