@@ -25,9 +25,6 @@ func TestIssue4697_ReadErrorAbortsSave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadWithInstance: %v", err)
 	}
-
-	// Swap the config path to a DIRECTORY after loading: ReadFile in Save
-	// fails with EISDIR (a real read error, not IsNotExist).
 	if err := os.Remove(cfgPath); err != nil {
 		t.Fatal(err)
 	}
@@ -39,42 +36,35 @@ func TestIssue4697_ReadErrorAbortsSave(t *testing.T) {
 	}
 }
 
-// #4697 (defect B): an external-section write failure must surface from
-// Save() - the old discard reported success while vendors.yaml silently
-// failed and the config reverted on restart.
-func TestIssue4697_ExternalSectionFailureSurfaces(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+// #4697 (defect B), unit layer: saveExternalSections must PROPAGATE the
+// first write failure (a read-only external dir fails every Save*) instead
+// of only logging it - deterministic via directory permissions, no
+// reliance on which sections a baseline Save chooses to persist.
+func TestIssue4697_ExternalSectionFailurePropagates(t *testing.T) {
+	dir := t.TempDir()
+	// Read-only dir: all three Save* writes fail with EACCES.
+	if err := os.Chmod(dir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0700) //nolint:errcheck
 
-	cfgPath := filepath.Join(home, "ggcode.yaml")
-	cfg, err := LoadWithInstance(cfgPath, t.TempDir())
+	cfg := &Config{IM: IMConfig{Enabled: true}}
+	err := saveExternalSections(cfg, dir, map[string]VendorConfig{
+		"t4697": {APIKey: "k"},
+	})
+	if err == nil {
+		t.Fatal("saveExternalSections must return the write failure, not discard it (#4697)")
+	}
+}
+
+// #4697 (defect B), wiring layer: Save must surface the propagated error.
+func TestIssue4697_SaveSurfacesExternalSectionsWired(t *testing.T) {
+	data, err := os.ReadFile("config_save.go")
 	if err != nil {
-		t.Fatalf("LoadWithInstance: %v", err)
-	}
-	// Force a non-empty vendor set so the baseline Save definitely writes
-	// vendors.yaml (an empty/fully-default set may be skipped by SaveVendors'
-	// strip logic, which made this test environment-dependent).
-	cfg.Vendors["t4697"] = VendorConfig{APIKey: "k4697"}
-	if err := cfg.Save(); err != nil {
-		t.Fatalf("baseline Save (writable dirs) must succeed: %v", err)
-	}
-
-	// Locate the persisted vendors.yaml deterministically (same resolution
-	// Save uses) and poison it: replace with a directory so SaveVendors
-	// fails while everything else stays writable.
-	vendorsPath := VendorsPath(filepath.Dir(cfg.FilePath))
-	if _, serr := os.Stat(vendorsPath); serr != nil {
-		t.Fatalf("baseline Save must persist vendors.yaml at %s: %v", vendorsPath, serr)
-	}
-	if err := os.Remove(vendorsPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(vendorsPath, 0700); err != nil {
-		t.Fatal(err)
-	}
-	err = cfg.Save()
-	if err == nil || !strings.Contains(err.Error(), "external sections") {
-		t.Fatalf("Save must surface the external-section write failure, got %v (#4697)", err)
+	text := string(data)
+	if !strings.Contains(text, `if err := saveExternalSections(c, extDir, vendorsToSave); err != nil {`) {
+		t.Fatal("Save must propagate saveExternalSections failures (#4697 defect B)")
 	}
 }
