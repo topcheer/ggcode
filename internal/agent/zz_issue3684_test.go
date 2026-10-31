@@ -25,7 +25,14 @@ func TestIssue3684_RealRunningStillDetected(t *testing.T) {
 	_, cleanup := journalDirForTest(t)
 	defer cleanup()
 	sid := "issue3684-crash"
-	MarkRunning(sid, "probe prompt", 4242)
+	// #4816: PID 0, not a hardcoded lucky number. The crash verdict at this
+	// young journal age hinges on isProcessAlive(entry.PID): a fixed PID like
+	// 4242 is fate-dependent - green where that PID is unused, red on any
+	// runner where a real process happens to hold it ("concurrent access",
+	// nil). PID 0 never enters the liveness branch, so the leftover-running
+	// detection is deterministic on every machine. The genuine live-PID
+	// branches are covered by run_journal_3222_test.go via os.Getpid().
+	MarkRunning(sid, "probe prompt", 0)
 	// No close - a genuine crash leaves the running entry behind.
 	if info := CheckCrashedRun(sid); info == nil {
 		t.Fatal("a genuine leftover running entry must still be detected as crashed")
