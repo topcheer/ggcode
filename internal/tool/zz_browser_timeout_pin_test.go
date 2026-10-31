@@ -44,8 +44,8 @@ func TestBrowserWindowsTimeoutPins(t *testing.T) {
 	// The race goroutine runs under safego.Go (goroutine protection gate);
 	// the pinned regression shape is: Run(taskCtx) result sent into the
 	// startDone channel from a background goroutine racing a 60s timer.
-	if !strings.Contains(span, `startDone <- chromedp.Run(taskCtx)`) || !strings.Contains(span, "safego.Go(") {
-		t.Fatal("tab-start chromedp.Run must race a timer goroutine (safego-wrapped) for its bound")
+	if !strings.Contains(span, `startDone <- chromedp.Do(taskCtx)`) || !strings.Contains(span, "safego.Go(") {
+		t.Fatal("tab-start chromedp.Do must race a timer goroutine (safego-wrapped) for its bound")
 	}
 	if !strings.Contains(span, "time.After(60 * time.Second)") {
 		t.Fatal("tab-start bound must remain 60s")
