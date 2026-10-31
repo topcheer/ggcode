@@ -78,3 +78,4 @@ ggreport.html
 # which both dirties the tree and desyncs the committed stamp from pubspec.yaml.
 mobile/flutter/ios/Flutter/Generated.xcconfig
 mobile/flutter/ios/Flutter/flutter_export_environment.sh
+ggcode-latest
