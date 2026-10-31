@@ -1053,7 +1053,13 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 		m.statusToolCount = 0
 		// #3466: tunnel is a remote channel - arm the refusal-ledger
 		// inhibit right before the run starts (direct idle path).
-		m.agent.InhibitNextRefusalLedgerWrite()
+		// #4736: test-constructed models carry a nil agent (NewModel(nil,
+		// ...)); the #4726 move to an Agent-instance method made this call
+		// panic on them, wedging main's CI. No agent = no run = nothing to
+		// inhibit.
+		if m.agent != nil {
+			m.agent.InhibitNextRefusalLedgerWrite()
+		}
 		cmd := m.startAgent(text)
 		return m, tea.Batch(m.startLoadingSpinner(m.statusActivity), cmd)
 	}
