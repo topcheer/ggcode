@@ -12,10 +12,10 @@ require (
 	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/charmbracelet/x/term v0.2.2
-	github.com/chromedp/cdproto v0.158.6
+	github.com/chromedp/cdproto v0.159.0
 	github.com/chromedp/chromedp v0.21.0
 	github.com/creack/pty/v2 v2.0.1
-	github.com/dop251/goja v0.0.0-20261030192516-032d024709ca
+	github.com/dop251/goja v0.0.0-20261031103838-cf2ff0ec0b31
 	github.com/eekstunt/telegramify-markdown-go v0.2.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
@@ -54,7 +54,7 @@ require (
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	maunium.net/go/mautrix v0.32.0
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.61.1
 )
 
 require (
