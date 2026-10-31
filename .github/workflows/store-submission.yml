@@ -1,0 +1,56 @@
+name: store-submission
+
+# Build MSIX packages and submit them to Microsoft Store certification
+# via the official Store Submission API. Manual trigger only - each
+# submission enters the 1-3 day certification pipeline.
+#
+# Required repo secrets (see STORE_SUBMISSION.md for one-time setup):
+#   STORE_TENANT_ID / STORE_CLIENT_ID / STORE_CLIENT_SECRET / STORE_PRODUCT_ID
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Four-part package version (e.g. 1.3.269.0)"
+        required: true
+      release_notes:
+        description: "What's new notes (optional)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-submit:
+    name: Build + submit to Store
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build MSIX packages
+        shell: pwsh
+        run: .\scripts\release\build-desktop-msix.ps1 -Version "${{ github.event.inputs.version }}" -OutputDir dist -IdentityName "GuangGuangAIStudio.GGCodeDesktop" -Publisher "CN=C2C7AF54-16DE-44AC-9393-7EA6D433CCD2" -Archs "x64"
+
+      - name: Submit to Microsoft Store
+        shell: pwsh
+        env:
+          TENANT: ${{ secrets.STORE_TENANT_ID }}
+          CLIENT: ${{ secrets.STORE_CLIENT_ID }}
+          SECRET: ${{ secrets.STORE_CLIENT_SECRET }}
+        run: .\scripts\release\submit-store.ps1 -TenantId $env:TENANT -ClientId $env:CLIENT -ClientSecret $env:SECRET -ProductId "${{ secrets.STORE_PRODUCT_ID }}" -PackageDir dist -ReleaseNotes "${{ github.event.inputs.release_notes }}"
+
+      - name: Keep packages as artifact (audit trail)
+        uses: actions/upload-artifact@v4
+        with:
+          name: submitted-msix
+          path: dist/*.msix
+          if-no-files-found: error
