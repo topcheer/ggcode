@@ -103,14 +103,14 @@ func (t *ListMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 			if s.mem == nil {
 				continue
 			}
-			cur, err := s.mem.LoadKey(params.Key)
-			if err != nil {
-				return Result{IsError: true, Content: fmt.Sprintf("failed to read %s memory: %v", s.label, err)}, nil
-			}
-			if cur == "" {
-				continue
-			}
 			if params.AsOf != "" {
+				// #4710: the temporal read must not be gated by the CURRENT
+				// existence of the key - DeleteMemory archives + tombstones
+				// (the .history versions stay), so a deleted key still holds
+				// its archived past. LoadKey returning empty previously
+				// skipped the scope entirely and the archived version was
+				// misreported as a bare "key not found". Consult the temporal
+				// store directly; the current view (below) keeps the gate.
 				content, held, ok, rerr := s.mem.ReadMemoryAsOf(params.Key, asOf)
 				if rerr != nil {
 					return Result{IsError: true, Content: fmt.Sprintf("as_of read failed: %v", rerr)}, nil
@@ -127,6 +127,13 @@ func (t *ListMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 				}
 				return Result{Content: fmt.Sprintf("[%s] %s @ as_of %s (version held since %s):\n%s",
 					s.label, params.Key, params.AsOf, held.Format(time.RFC3339), content)}, nil
+			}
+			cur, err := s.mem.LoadKey(params.Key)
+			if err != nil {
+				return Result{IsError: true, Content: fmt.Sprintf("failed to read %s memory: %v", s.label, err)}, nil
+			}
+			if cur == "" {
+				continue
 			}
 			vers := s.mem.HistoryVersions(params.Key)
 			return Result{Content: fmt.Sprintf("[%s] %s (%d archived version(s)):\n%s", s.label, params.Key, len(vers), cur)}, nil
