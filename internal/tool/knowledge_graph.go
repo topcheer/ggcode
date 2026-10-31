@@ -322,6 +322,18 @@ func (t *KnowledgeGraphTool) doLink(s *kgStore, p *kgParams) (Result, error) {
 				return Result{Content: fmt.Sprintf("Edge %s --[%s]--> %s already exists (valid from %s).",
 					p.ID, p.Type, p.To, from)}, nil
 			}
+			// #4708 defect A: a closed interval is only re-assertable when the
+			// NEW interval starts after the old one closed. The comment above
+			// has always said "Reject on interval overlap", but closed edges
+			// fell straight through to relink - a link(T1, open) ->
+			// invalidate(T2) -> link(T1.5) sequence appended [T1.5, inf) on
+			// top of [T1, T2), and trace as_of inside the overlap showed two
+			// parallel same-type edges (bi-temporal consistency broken).
+			if e.ValidFrom != nil && newFrom.Before(*e.ValidUntil) {
+				return Result{Content: fmt.Sprintf(
+					"Edge %s --[%s]--> %s overlaps its prior interval [%s, %s); re-assert with valid_from >= %s.",
+					p.ID, p.Type, p.To, e.ValidFrom.Format(time.RFC3339), e.ValidUntil.Format(time.RFC3339), e.ValidUntil.Format(time.RFC3339))}, nil
+			}
 			relink = true
 		}
 	}
@@ -499,7 +511,11 @@ func (t *KnowledgeGraphTool) doTrace(s *kgStore, p *kgParams) (Result, error) {
 	}
 	now := time.Now()
 	hidden := 0
-	visited := map[string]bool{p.ID: true}
+	// #4708 defect B: dedupe traversal by (node, edgeType), not node alone -
+	// a second relation to an already-visited node (A--depends-on-->B and
+	// A--relates-to-->B) is a distinct edge the old key silently dropped
+	// without even counting it hidden, truncating multi-relation traces.
+	visited := map[string]bool{p.ID + "\x00": true}
 	type fi struct {
 		id    string
 		depth int
@@ -525,14 +541,15 @@ func (t *KnowledgeGraphTool) doTrace(s *kgStore, p *kgParams) (Result, error) {
 			at = asOf
 		}
 		for _, e := range s.Edges {
-			if e.From != item.id || visited[e.To] {
+			vkey := e.To + "\x00" + e.Type
+			if e.From != item.id || visited[vkey] {
 				continue
 			}
 			if !kgEdgeValidAt(&e, at) {
 				hidden++
 				continue
 			}
-			visited[e.To] = true
+			visited[vkey] = true
 			tgt := s.Nodes[e.To]
 			if tgt == nil {
 				continue
