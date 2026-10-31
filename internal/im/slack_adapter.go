@@ -1093,29 +1093,63 @@ func (a *slackAdapter) uploadFile(ctx context.Context, channelID, threadTS, file
 		return fmt.Errorf("close multipart writer: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &buf)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+a.botToken)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
+	// #4811: multipart upload is more rate-limit-prone than the text path
+	// (larger payloads, higher token cost per call), yet it had no 429
+	// retry while every sibling sender did - a mixed text+image message
+	// silently lost the image on 429. Mirror the sendMessage retry loop:
+	// Retry-After backoff, bounded by maxRateLimitRetries, and Slack's
+	// ok=false "ratelimited" inside a 200 body.
+	for attempt := 0; ; attempt++ {
+		// Rewind the multipart body: http.NewRequestWithContext captured &buf
+		// at its current position, so each retry needs a fresh reader.
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(buf.Bytes()))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+a.botToken)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	respData, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			return err
+		}
 
-	var result map[string]any
-	if err := json.Unmarshal(respData, &result); err != nil {
-		return fmt.Errorf("Slack files.upload parse error: %w", err)
+		if resp.StatusCode == http.StatusTooManyRequests {
+			resp.Body.Close()
+			if attempt < maxRateLimitRetries {
+				delay := parseRetryAfter(resp)
+				debug.Log("slack", "adapter=%s files.upload rate limited (429), retrying in %v (attempt %d/%d)",
+					a.name, delay, attempt+1, maxRateLimitRetries)
+				if err := sleepRetry(ctx, delay); err != nil {
+					return err
+				}
+				continue
+			}
+			return rateLimitExhausted("Slack")
+		}
+
+		respData, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+		resp.Body.Close()
+
+		var result map[string]any
+		if err := json.Unmarshal(respData, &result); err != nil {
+			return fmt.Errorf("Slack files.upload parse error: %w", err)
+		}
+		if ok, _ := result["ok"].(bool); !ok {
+			errMsg, _ := result["error"].(string)
+			// Slack may return ok=false with error="ratelimited" inside a 200 body.
+			if errMsg == "ratelimited" && attempt < maxRateLimitRetries {
+				debug.Log("slack", "adapter=%s files.upload ratelimited error, retrying (attempt %d/%d)",
+					a.name, attempt+1, maxRateLimitRetries)
+				if err := sleepRetry(ctx, defaultRetryDelay); err != nil {
+					return err
+				}
+				continue
+			}
+			return fmt.Errorf("Slack files.upload error: %s", errMsg)
+		}
+		return nil
 	}
-	if ok, _ := result["ok"].(bool); !ok {
-		errMsg, _ := result["error"].(string)
-		return fmt.Errorf("Slack files.upload error: %s", errMsg)
-	}
-	return nil
 }
 
 // markdownToMrkdwn converts basic Markdown to Slack mrkdwn format.
