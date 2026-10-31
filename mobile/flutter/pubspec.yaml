@@ -20,7 +20,7 @@ dependencies:
   uuid: ^4.2.2
   url_launcher: ^6.2.2
   google_fonts: ^8.0.0
-  animations: ^2.0.8
+  animations: ^3.0.0
   flutter_mermaid: ^0.1.0
   cryptography: ^2.9.0
   wakelock_plus: ^1.6.0
