@@ -434,9 +434,13 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 	m.mu.RUnlock()
 	lastProgress := time.Now()
 
-	for _, absPath := range files {
+	breakIdx := -1 // #4735: index where truncation stopped - everything after it belongs in overflow
+	for i, absPath := range files {
 		if maxTerms > 0 && totalTerms >= maxTerms {
 			truncated = true
+			// The file at i is also unprocessed (loop-top break) - include it
+			// in the tail: files[breakIdx+1:] == files[i:].
+			breakIdx = i - 1
 			break
 		}
 		if ctx.Err() != nil {
@@ -450,6 +454,7 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 			// select case it would only exit the select)
 			debug.Log("codeindex", "build timed out after %d files - publishing the indexed subset", indexed)
 			truncated = true
+			breakIdx = i
 			break
 		}
 
@@ -471,6 +476,7 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 				if maxTerms > 0 && totalTerms+len(cached.TF) > maxTerms {
 					truncated = true
 					overflow[relPath] = mtime // #4684
+					breakIdx = i
 					break
 				}
 				docs = append(docs, bm25Doc{
@@ -503,6 +509,7 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 		if maxTerms > 0 && totalTerms+len(tf) > maxTerms {
 			truncated = true
 			overflow[relPath] = mtime // #4684
+			breakIdx = i
 			break
 		}
 		docs = append(docs, bm25Doc{
@@ -523,6 +530,17 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 		debug.Log("codeindex", "term budget reached (%d terms over %d docs) - index truncated at %d of %d files; "+
 			"set GGCODE_CODE_INDEX_MAX_TERMS to adjust, or start ggcode inside a single project",
 			totalTerms, len(docs), len(docs), len(files))
+		// #4735: files AFTER the truncation point were neither indexed nor
+		// recorded - every scan tick re-marked them dirty (ReadFile+tokenize
+		// churn, then dropped again). Record the whole tail in overflow so
+		// scanForExternalChanges treats it as known-and-deliberately-absent.
+		for _, p := range files[breakIdx+1:] {
+			if info, err := os.Stat(p); err == nil && !info.IsDir() {
+				if rel, err := filepath.Rel(m.workingDir, p); err == nil {
+					overflow[rel] = info.ModTime().Unix()
+				}
+			}
+		}
 	}
 
 	if len(docs) == 0 {
@@ -543,7 +561,7 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 	}
 
 	// Phase 5: Persist to disk.
-	m.persistIndex(ctx, docs)
+	m.persistIndex(ctx, docs, overflow)
 
 	// Phase 6: Publish.
 	m.mu.Lock()
@@ -702,8 +720,12 @@ func isCodeFile(path string) bool {
 	}
 }
 
-// persistIndex writes the index to disk atomically.
-func (m *CodeIndexManager) persistIndex(ctx context.Context, docs []bm25Doc) {
+// persistIndex writes the index to disk atomically. excluded is the
+// budget-exclusion set to persist; doBuild passes its fresh overflow (#4735:
+// Phase 5 persist runs BEFORE Phase 6 publishes m.budgetExcluded, so reading
+// the field there persisted an empty set on every fresh build), other
+// callers pass the already-published m.budgetExcluded.
+func (m *CodeIndexManager) persistIndex(ctx context.Context, docs []bm25Doc, excluded map[string]int64) {
 	pi := persistedIndex{
 		Version:    codeIndexVersion,
 		WorkingDir: m.workingDir,
@@ -711,15 +733,14 @@ func (m *CodeIndexManager) persistIndex(ctx context.Context, docs []bm25Doc) {
 		Docs:       make([]persistedDoc, 0, len(docs)),
 	}
 	// #4684: persist the budget-excluded set so the next process/session's
-	// scan knows these files are intentionally absent from Docs.
-	m.mu.RLock()
-	if len(m.budgetExcluded) > 0 {
-		pi.Excluded = make([]persistedExcluded, 0, len(m.budgetExcluded))
-		for p, mt := range m.budgetExcluded {
+	// scan knows these files are intentionally absent from Docs. excluded is
+	// caller-owned (fresh overflow, or a snapshot taken under m.mu).
+	if len(excluded) > 0 {
+		pi.Excluded = make([]persistedExcluded, 0, len(excluded))
+		for p, mt := range excluded {
 			pi.Excluded = append(pi.Excluded, persistedExcluded{Path: p, Mtime: mt})
 		}
 	}
-	m.mu.RUnlock()
 	// #4573: write the BUILD-TIME mtime captured when each doc's content
 	// was read (doBuild/rebuildDirty), never a re-Stat here. The old
 	// re-Stat closed a TOCTOU window the width of the whole build: a file
@@ -1229,7 +1250,10 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 	}
 
 	// Persist updated index to disk.
-	m.persistIndex(context.Background(), idx.docs)
+	m.mu.RLock()
+	snapshotExcluded := m.budgetExcluded
+	m.mu.RUnlock()
+	m.persistIndex(context.Background(), idx.docs, snapshotExcluded)
 
 	// Update stats.
 	m.mu.Lock()
