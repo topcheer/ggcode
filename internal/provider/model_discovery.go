@@ -351,7 +351,17 @@ func modelDiscoveryCacheKey(resolved *config.ResolvedEndpoint) string {
 	if isGatewayModelDiscovery(resolved) {
 		return fmt.Sprintf("endpoint:%s:%s:%s", vendorID, strings.TrimSpace(strings.ToLower(resolved.EndpointID)), host)
 	}
-	return fmt.Sprintf("host:%s:%s", vendorID, host)
+	// #4665: the non-gateway key must distinguish same-host upstreams, not
+	// just the host. The old key used bare Hostname() - no port, no path - so
+	// (a) localhost:11434 vs localhost:1234 collided, and (b) a reverse
+	// proxy splitting gw.example.com/oa -> upstream A and /gw -> upstream B
+	// cross-contaminated model lists for the 6h TTL (persisted to disk): the
+	// second endpoint silently returned the first endpoint's models and
+	// model selection 404'd on the wrong upstream. Keying by host:port plus
+	// the normalized base path keeps the intentional oneapi/litellm sharing
+	// (same host:port AND same base path = one registry) while isolating
+	// port-distinct and path-split upstreams.
+	return fmt.Sprintf("host:%s:%s|%s", vendorID, host, normalizedDiscoveryPath(resolved.BaseURL))
 }
 
 func isGatewayModelDiscovery(resolved *config.ResolvedEndpoint) bool {
@@ -374,11 +384,40 @@ func normalizedDiscoveryHost(baseURL string) string {
 	if err != nil {
 		return strings.ToLower(strings.TrimSpace(baseURL))
 	}
-	host := strings.TrimSpace(parsed.Hostname())
-	if host == "" {
-		host = strings.TrimSpace(parsed.Host)
+	// #4665: keep the port (parsed.Host), not bare Hostname() - different
+	// ports on one host are different upstreams (localhost:11434 ollama vs
+	// localhost:1234 lm-studio). Scheme-default ports (443/https, 80/http)
+	// normalize away so gw.io and gw.io:443 still share one entry.
+	hostPort := strings.TrimSpace(parsed.Host)
+	if hostPort == "" {
+		hostPort = strings.TrimSpace(parsed.Hostname())
 	}
-	return strings.ToLower(host)
+	lower := strings.ToLower(hostPort)
+	switch {
+	case (parsed.Scheme == "https" || parsed.Scheme == "wss") && strings.HasSuffix(lower, ":443"):
+		hostPort = strings.TrimSuffix(hostPort, ":443")
+	case (parsed.Scheme == "http" || parsed.Scheme == "ws") && strings.HasSuffix(lower, ":80"):
+		hostPort = strings.TrimSuffix(hostPort, ":80")
+	}
+	return strings.ToLower(strings.TrimSpace(hostPort))
+}
+
+// normalizedDiscoveryPath returns the base path component of the discovery
+// URL for cache keying (#4665): trimmed, trailing slashes collapsed, empty
+// path normalized to "/". NOT lowercased - paths are case-sensitive.
+func normalizedDiscoveryPath(baseURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return "/"
+	}
+	p := strings.TrimSpace(parsed.Path)
+	for len(p) > 1 && strings.HasSuffix(p, "/") {
+		p = strings.TrimSuffix(p, "/")
+	}
+	if p == "" {
+		return "/"
+	}
+	return p
 }
 
 // invalidateCachedDiscoveredModels drops the cache entry for cacheKey so the
