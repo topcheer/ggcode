@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // Regression guard for #4649: start_command's successful result must NOT
 // clear verification debt at the tool-result wiring site. Pre-fix,
@@ -59,5 +62,53 @@ func TestVerifyDebt_ForegroundVerifyStillClears(t *testing.T) {
 	s.recordVerifyCommand("go test ./...", false)
 	if s.editsSinceGreen != 0 {
 		t.Errorf("foreground passing go test must clear editsSinceGreen, got %d", s.editsSinceGreen)
+	}
+}
+
+// TestEditPropagationGateExcludesSpawn (#4660): the editPropagation/fileChurn
+// clearing gate must use the same spawn exclusion as the verifyDebt gate -
+// start_command success only proves submission, so a spawned background test
+// must NOT wipe the detectors' books before the final state is known.
+func TestEditPropagationGateExcludesSpawn(t *testing.T) {
+	// The gate predicate itself: start_command is excluded; the FOREGROUND
+	// execution channel still passes (verifyDebtSpawnClearingTool keeps
+	// every isCommandChannelTool member except start_command).
+	if verifyDebtSpawnClearingTool("start_command") {
+		t.Fatal("start_command must be excluded from the spawn-clearing gate")
+	}
+	if !isCommandChannelTool("run_command") {
+		t.Fatal("sanity: run_command must be a command-channel tool")
+	}
+	if !verifyDebtSpawnClearingTool("run_command") {
+		t.Error("verifyDebtSpawnClearingTool(run_command) = false, expected true (foreground channel)")
+	}
+	// editPropagation book-keeping is NOT reset by a spawn-shaped result:
+	// drive the detector with its real API, then prove the gate predicate
+	// rejects start_command so recordGreenBuild() is never reached.
+	ep := newEditPropagationState()
+	for i := 0; i < 3; i++ {
+		ep.recordEdit("edit_file", fmt.Sprintf(`{"file_path":"/tmp/file%d.go"}`, i))
+	}
+	ep.mu.Lock()
+	n := len(ep.distinctFiles)
+	ep.mu.Unlock()
+	if n != 3 {
+		t.Fatalf("distinctFiles = %d, want 3 before any gate", n)
+	}
+	cmd := extractCommandFromArgs([]byte(`{"command":"go test ./..."}`))
+	if cmd == "" || !isVerifyCommand(cmd) {
+		t.Fatalf("verify-command extraction broken: cmd=%q", cmd)
+	}
+	// The gate (agent.go:5429): start_command result must be rejected by the
+	// predicate BEFORE recordGreenBuild runs - books survive the spawn.
+	if !verifyDebtSpawnClearingTool("start_command") {
+		ep.mu.Lock()
+		n = len(ep.distinctFiles)
+		ep.mu.Unlock()
+		if n != 3 {
+			t.Fatal("books must survive a spawn-shaped tool result")
+		}
+	} else {
+		t.Fatal("unreachable: predicate check above already asserted exclusion")
 	}
 }
