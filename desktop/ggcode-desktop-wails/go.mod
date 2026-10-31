@@ -41,7 +41,7 @@ require (
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
-	github.com/chromedp/cdproto v0.158.6 // indirect
+	github.com/chromedp/cdproto v0.159.0 // indirect
 	github.com/chromedp/chromedp v0.21.0 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
@@ -51,7 +51,7 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
 	github.com/dgrr/quickxml v0.0.0-20201022091424-4977de546d6c // indirect
 	github.com/dlclark/regexp2/v2 v2.12.0 // indirect
-	github.com/dop251/goja v0.0.0-20261030192516-032d024709ca // indirect
+	github.com/dop251/goja v0.0.0-20261031103838-cf2ff0ec0b31 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/eekstunt/telegramify-markdown-go v0.2.0 // indirect
 	github.com/elliotchance/orderedmap/v3 v3.1.1 // indirect
@@ -186,7 +186,7 @@ require (
 	modernc.org/libc v1.79.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	modernc.org/sqlite v1.61.0 // indirect
+	modernc.org/sqlite v1.61.1 // indirect
 )
 
 // replace github.com/wailsapp/wails/v2 v2.12.0 => /Users/zhanju/go/pkg/mod
