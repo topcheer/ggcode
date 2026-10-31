@@ -1252,6 +1252,11 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 				lastCpLastMsgID = rec.CheckpointLastMsgID
 				lastCpTokens = rec.CheckpointTokens
 				haveCheckpoint = true
+				// #4536: a later new-format checkpoint is authoritative - drop any
+				// earlier legacy snapshot so a lost/corrupt summary message cannot
+				// fall through to the legacy rebuild and silently resurrect the
+				// stale pre-new-format context.
+				lastCpMessages = nil
 				// postCPEntries are NOT cleared — we'll filter by ID later.
 			} else if len(rec.CheckpointMessages) > 0 {
 				// Legacy checkpoint: migrate — find summary message, write to JSONL.
@@ -1260,6 +1265,12 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 				lastCpLastMsgID = "" // legacy checkpoints don't have last_msg_id
 				lastCpTokens = rec.CheckpointTokens
 				postCPEntries = nil
+				// #4591: symmetric authority - a later legacy checkpoint must also
+				// drop any earlier new-format summary pointer, or the summary
+				// branch below wins on a stale pre-legacy summary (its async flush
+				// can land after this line) and serves outdated context over this
+				// snapshot.
+				lastCpSummaryMsgID = ""
 				haveCheckpoint = true
 			}
 		case "usage":
