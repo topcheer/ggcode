@@ -74,6 +74,12 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 
 		switch decision {
 		case permission.Deny:
+			// #4692-lineage audit gap: policy-rule denials were the ONLY
+			// silent permission outcome - user denials were recorded but
+			// the configured rule firing left zero trace. Governance/audit
+			// consumers need the policy's effect too.
+			a.auditToolResult(tc.Name, tc.Arguments, audit.StatusPolicyDenied,
+				"denied by permission policy (mode-independent rule)", 0, "")
 			return tool.Result{
 				Content: a.permissionDeniedMessage(tc.Name),
 				IsError: true,
