@@ -23,10 +23,14 @@ func TestContextProvenanceClassification(t *testing.T) {
 		toolMsg("grep", "match at main.go:3"),                               // local: not external
 		toolMsg("lanchat", "--- BEGIN UNTRUSTED CONTENT ---\npeer says hi"), // external + flagged
 		toolMsg("run_command", "ok"),                                        // local exec: not external
+		toolMsg("delegate", "sub-agent report"),                             // external (#4720: peer-authored content)
+		toolMsg("wait_agent", "result snapshot"),                            // external (#4720)
+		toolMsg("a2a_send_task", "remote reply"),                            // external (#4720: r406 original set)
+		toolMsg("task_output", "bg job output"),                             // NOT external (source axis narrower than guard)
 	}
 	extMsgs, _, flagged := contextProvenance(msgs)
-	if extMsgs != 2 {
-		t.Errorf("external msgs = %d, want 2 (web_fetch + lanchat)", extMsgs)
+	if extMsgs != 5 {
+		t.Errorf("external msgs = %d, want 5 (web_fetch + lanchat + delegate + wait_agent + a2a_send_task)", extMsgs)
 	}
 	if flagged != 1 {
 		t.Errorf("flagged msgs = %d, want 1 (UNTRUSTED marker in lanchat result)", flagged)
