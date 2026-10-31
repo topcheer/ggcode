@@ -331,8 +331,7 @@ class ConnectionService {
   /// Called when P2P DataChannel connects/disconnects.
   void Function(bool active)? onP2PStateChanged;
 
-  ConnectionService({required ShareConnectionDescriptor descriptor})
-      : _descriptor = descriptor {
+  ConnectionService({required this._descriptor}) {
     // v3: crypto key is established via key exchange, not set at construction.
     _keyExchangeReady = Completer<void>();
   }

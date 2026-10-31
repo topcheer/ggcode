@@ -18,8 +18,8 @@
 @import flutter_webrtc;
 #endif
 
-#if __has_include(<image_picker_ios/FLTImagePickerPlugin.h>)
-#import <image_picker_ios/FLTImagePickerPlugin.h>
+#if __has_include(<image_picker_ios/ImagePickerPlugin.h>)
+#import <image_picker_ios/ImagePickerPlugin.h>
 #else
 @import image_picker_ios;
 #endif
@@ -65,7 +65,7 @@
 + (void)registerWithRegistry:(NSObject<FlutterPluginRegistry>*)registry {
   [FlutterSecureStorageDarwinPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterSecureStorageDarwinPlugin"]];
   [FlutterWebRTCPlugin registerWithRegistrar:[registry registrarForPlugin:@"FlutterWebRTCPlugin"]];
-  [FLTImagePickerPlugin registerWithRegistrar:[registry registrarForPlugin:@"FLTImagePickerPlugin"]];
+  [ImagePickerPlugin registerWithRegistrar:[registry registrarForPlugin:@"ImagePickerPlugin"]];
   [MobileScannerPlugin registerWithRegistrar:[registry registrarForPlugin:@"MobileScannerPlugin"]];
   [FPPPackageInfoPlusPlugin registerWithRegistrar:[registry registrarForPlugin:@"FPPPackageInfoPlusPlugin"]];
   [FPPSharePlusPlugin registerWithRegistrar:[registry registrarForPlugin:@"FPPSharePlusPlugin"]];
