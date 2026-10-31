@@ -38,7 +38,7 @@ func TestIssue4703CommandArgvStillCdsWithCommand(t *testing.T) {
 
 func TestIssue4703CdOnlyParamsShape(t *testing.T) {
 	params := ghosttyLinuxNewWindowCommandParams(ghosttyLinuxCdOnlyArgv("/w"))
-	if !strings.HasPrefix(params, "[<[\"-e\"") || !strings.HasSuffix(params, ")]>") {
+	if !strings.HasPrefix(params, "[<[\"-e\"") || !strings.HasSuffix(params, "]>]") {
 		t.Fatalf("gdbus params = %q, want new-window-command array form", params)
 	}
 	if !strings.Contains(params, `"sh"`) || !strings.Contains(params, `"cd '/w'"`) {
