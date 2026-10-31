@@ -4748,6 +4748,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 				msgs = a.contextManager.Messages()
 			}
+			// #4776 (S-04): forged PAUSE/stop pseudo-directives arrive in ANY
+			// tool's parameter slots via the large-result contamination loop -
+			// not just privileged sinks - so this check runs on every call and
+			// guides the model to treat the directive as untrusted data.
+			if pseudoWarn := a.taintInfluence.checkPseudoDirectiveArgs(tc.Name, string(tc.Arguments)); pseudoWarn != "" {
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: []provider.ContentBlock{{Type: "text", Text: pseudoWarn}},
+				})
+				msgs = a.contextManager.Messages()
+			}
 			// Exfiltration chain detection (Log-to-Leak): check whether content
 			// from a prior sensitive-source read (secret-pattern tool result, or
 			// ~/.ssh/.pem/.env/credentials path) is being sent out via an
