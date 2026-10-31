@@ -271,6 +271,28 @@ end tell`, x, y)
 // (2 for Retina, 3 for Plus/Pro Max; 1 when unknown) (#842). Derived by
 // capturing a screenshot and comparing its pixel width against the
 // device's logical screen width from simctl list --json.
+// iosLogicalWidths is the probe table for probeLogicalScale: common iPhone
+// and iPad logical (point) widths, ascending. #4713: 402 (iPhone 16/17 Pro)
+// and 440 (17 Pro Max) were missing - a 1206px/1320px screenshot matched
+// nothing and the fallback (1,1) sent raw physical-pixel coordinates to
+// AppleScript, tapping off-screen while reporting success.
+var iosLogicalWidths = []int{320, 375, 390, 393, 402, 414, 428, 430, 440, 744, 768, 1024}
+
+// probeLogicalScale derives the Retina scale factor from a screenshot's
+// pixel width by probing known logical widths (pxW % logical == 0 and
+// 1 <= s <= 3). Pure for testability; callers own the xcrun probes.
+func probeLogicalScale(pxW int) (int, int) {
+	for _, logical := range iosLogicalWidths {
+		if pxW%logical == 0 {
+			s := pxW / logical
+			if s >= 1 && s <= 3 {
+				return s, s
+			}
+		}
+	}
+	return 1, 1
+}
+
 func (b *iosBackend) scaleForDevice(device string) (int, int) {
 	// Screenshot pixel size: PNG header bytes 16-24 hold width/height.
 	tmp, err := os.CreateTemp("", "ggcode-scale-*.png")
@@ -307,15 +329,7 @@ func (b *iosBackend) scaleForDevice(device string) (int, int) {
 		for _, devs := range list.Devices {
 			for _, d := range devs {
 				if d.UDID == device {
-					// Probe common logical widths against pixel width.
-					for _, logical := range []int{320, 375, 390, 393, 414, 428, 430, 744, 768, 1024} {
-						if pxW%logical == 0 {
-							s := pxW / logical
-							if s >= 1 && s <= 3 {
-								return s, s
-							}
-						}
-					}
+					return probeLogicalScale(pxW)
 				}
 			}
 		}
