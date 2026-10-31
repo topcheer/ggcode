@@ -46,7 +46,7 @@
       <uap:VisualElements
           DisplayName="GGCode Desktop"
           Description="AI coding agent with desktop workflow"
-          BackgroundColor="Transparent"
+          BackgroundColor="transparent"
           Square150x150Logo="Assets\Square150x150Logo.png"
           Square44x44Logo="Assets\Square44x44Logo.png">
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png"
