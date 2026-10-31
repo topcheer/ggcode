@@ -53,6 +53,13 @@ var (
 	msgFileTokenRe = regexp.MustCompile(`[\w./-]+\.[A-Za-z][A-Za-z0-9]{0,5}\b`)
 	// msgIdentTokenRe matches identifier-looking words in the message.
 	msgIdentTokenRe = regexp.MustCompile(`\b[A-Za-z_][A-Za-z0-9_]*\b`)
+	// #4688: URLs and email addresses in the message body masquerade as file
+	// references - "https://github.com/topcheer/ggcode/pull/4648" tokenizes to
+	// base "github.com", "foo@bar.com" to "bar.com", "www.example.com/page.html"
+	// to "page.html" - so any commit message carrying a PR/issue link raised a
+	// phantom absent-file warning. Strip them before Rule 1/2 matching.
+	msgUrlRe   = regexp.MustCompile(`\b(?:[a-zA-Z][a-zA-Z0-9+.-]*://|www\.)\S+`)
+	msgEmailRe = regexp.MustCompile(`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b`)
 )
 
 // AnalyzeMessageDiffConsistency cross-checks the commit message against the
@@ -62,6 +69,11 @@ func AnalyzeMessageDiffConsistency(message, diffOutput string) string {
 	if strings.TrimSpace(message) == "" || strings.TrimSpace(diffOutput) == "" {
 		return ""
 	}
+	// #4688: strip URLs and emails BEFORE any token matching - both rules
+	// would otherwise treat link domains and mail hosts as file/symbol
+	// references absent from the diff (phantom warnings on any message
+	// carrying a PR link). Stripping once here covers Rules 1, 2 and 3.
+	message = stripUrlsAndEmails(message)
 	files, oldFiles, symbols, diffLower := parseDiffFacts(diffOutput)
 
 	var findings []string
@@ -85,6 +97,12 @@ func AnalyzeMessageDiffConsistency(message, diffOutput string) string {
 		// Rule 1 has no min-count gate (unlike Rule 2), so precision here
 		// is the only defense.
 		if abbrevLikeFileToken(base) {
+			continue
+		}
+		// #4688: a bare domain mention ("see github.com for details") is not a
+		// file reference either - the URL stripper only catches scheme'd/www'd
+		// forms, so cover scheme-less hosts by public-suffix shape.
+		if domainLikeFileToken(base) {
 			continue
 		}
 		if !consistencyHas(phantoms, base) {
@@ -290,6 +308,35 @@ func pathBase(p string) string {
 		p = p[i+1:]
 	}
 	return p
+}
+
+// stripUrlsAndEmails removes URL tokens (any scheme, plus www. forms) and
+// email addresses from a commit message, replacing them with spaces so token
+// boundaries stay intact (#4688). Commit messages routinely reference PR/issue
+// links; their domains and path tails are not file references.
+func stripUrlsAndEmails(message string) string {
+	message = msgUrlRe.ReplaceAllString(message, " ")
+	return msgEmailRe.ReplaceAllString(message, " ")
+}
+
+// domainLikeFileToken reports whether a msgFileTokenRe match is shaped like a
+// scheme-less public domain mention ("github.com", "example.io") rather than
+// a repository file basename (#4688): exactly dot-separated segments with no
+// path part and a common public suffix. Real basenames keep a path context
+// (dir/file.go) or a code extension (.go/.ts/.py), which public suffixes are not.
+func domainLikeFileToken(tok string) bool {
+	if strings.ContainsAny(tok, "/\\") {
+		return false // a path context makes it a real path reference
+	}
+	segs := strings.Split(tok, ".")
+	if len(segs) != 2 {
+		return false // "a.b.c" chains are rare as bare domains in prose
+	}
+	switch strings.ToLower(segs[1]) {
+	case "com", "org", "net", "io", "dev", "co", "me", "ai", "app", "sh", "gg", "cn", "eu", "us", "uk":
+		return len(segs[0]) >= 2
+	}
+	return false
 }
 
 // abbrevLikeFileToken reports whether a msgFileTokenRe match shaped like an

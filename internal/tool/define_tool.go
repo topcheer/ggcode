@@ -259,7 +259,12 @@ func (t *DefineTool) doCall(ctx context.Context, name string, params map[string]
 		}
 	}
 	for _, req := range schemaDoc.Required {
-		if _, ok := params[req]; !ok {
+		// #4687: a JSON null value passes the key-existence check but is not a
+		// usable param - the placeholder substitution would Marshal(nil) into
+		// the literal string "null", silently grepping for "null" instead of
+		// erroring. Treat null as missing.
+		v, ok := params[req]
+		if !ok || v == nil {
 			return Result{IsError: true, Content: fmt.Sprintf("missing required param %q", req)}, nil
 		}
 	}

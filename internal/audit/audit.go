@@ -52,6 +52,12 @@ const (
 	StatusUserApproved = "approved"
 	StatusUserDenied   = "user_denied"
 	StatusAskTimeout   = "ask_timeout"
+	// StatusPolicyDenied: rejected by an explicit policy rule (mode-
+	// independent Deny or command rule), NOT a human decision. Governance
+	// requires the policy's own effect to be auditable too - the most
+	// compliance-relevant event ("rule X fired") was previously the only
+	// silent one, while user denials were recorded.
+	StatusPolicyDenied = "policy_denied"
 )
 
 // GenesisPrevHash is the prev_hash of the first entry in a chain.

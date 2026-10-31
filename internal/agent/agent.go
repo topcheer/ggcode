@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/checkpoint"
@@ -280,6 +281,7 @@ type Agent struct {
 	obsContract                  *observationContractTracker // sa-111: observation contract guard (arXiv:2605.17281)
 	interventionLedger           *interventionLedger         // r395: user-takeover history → proactive defer hints
 	refusalLedger                *refusalLedger              // r23: persisted user refusals → enforceable write-block (arXiv 2605.00055)
+	remoteRefusalInhibit         atomic.Bool                 // #4726: per-instance remote-run marker for the refusal-ledger gate (was package-level - cross-Agent steal)
 	lastExecutedTool             string                      // r395: tool behind the most recent tool result (guarded by mu)
 	planDrift                    *planDriftState             // plan drift detection (exit_plan_mode item tracking)
 	unverifiedClaim              *unverifiedClaimState       // unverified success claim detection (text claims vs actual verification)
@@ -1839,7 +1841,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// #3460: remote-origin runs (LAN @agent DM / IM inbound) are exempt -
 	// FromRole is self-reported and a forged DM must not poison (or lift)
 	// the local user's 30-day enforceable blocks.
-	if !consumeRemoteRefusalInhibit() {
+	if !a.consumeRemoteRefusalInhibit() {
 		a.ReleaseMatchingRefusals(userText)
 		a.recordUserRefusals(userText)
 	}
@@ -2235,6 +2237,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	sessionTimedOut := false   // set when the loop breaks due to session wall-clock timeout (#611)
 	guidanceAtBudget := false  // #3778: mid-run guidance landed on the final iteration
 	sessionBudgetStop := false // #3945: hard-stop gate armed by RecordSessionToken/TimeUsage stop=true
+	// #4650: per-run budget for detector-guidance continues - bounded so
+	// detector + gate continues cannot stack into a loop, while a fired
+	// detector's guidance still gets consumed in-run instead of becoming a
+	// dead letter on the clean-exit path.
+	detectorContinueBudget := 2
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		// #3945: the winding-down summary was requested via the injected
 		// System event + guidance; this run makes no further LLM calls. The
@@ -3146,6 +3153,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// makes exhaustiveness claims after receiving a truncated tool
 			// result. The agent may claim "only N files" or "no other
 			// matches" without realizing data was cut off.
+			// #4650: snapshot the context length before the no-tool-path
+			// detector block - any growth means a guidance fired this
+			// iteration and must reach the model in THIS run.
+			detectorMsgsBefore := len(a.contextManager.Messages())
 			if truncHint := a.truncClaim.maybeWarnTruncClaim(assistantText, i); truncHint != "" {
 				debug.Log("agent", "Iteration %d: truncated output completeness fallacy detected", i+1)
 				a.contextManager.Add(provider.Message{
@@ -3337,6 +3348,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if gdHint := a.goalDriftCtx.checkDrift(i + 1); gdHint != "" {
 				debug.Log("agent", "Iteration %d: context-length goal drift detected", i+1)
 				a.injectGuidance(gdHint)
+			}
+			// #4650: a fired detector guidance without a continue was a
+			// dead letter on the clean-exit path (#3850/#367 precedent: the
+			// message never reached the LLM in-run and resurfaced as stale
+			// context next turn). Give the guidance a turn to be consumed,
+			// bounded by a per-run budget so detector + gate continues cannot
+			// stack into a loop.
+			if len(a.contextManager.Messages()) > detectorMsgsBefore && detectorContinueBudget > 0 {
+				detectorContinueBudget--
+				debug.Log("agent", "Iteration %d: detector guidance injected; continuing run to consume it (#4650)", i+1)
+				continue
 			}
 			if injected, kind := a.injectPendingInterruptions(i + 1); injected {
 				a.recordIntervention(i + 1)

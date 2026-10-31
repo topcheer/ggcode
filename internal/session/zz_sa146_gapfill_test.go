@@ -468,11 +468,35 @@ func TestSA146BackfillTimestampsSkipsTimestampedSessions(t *testing.T) {
 	m2 := `{"type":"message","session_id":"` + id + `","message":{"role":"assistant","content":[{"type":"text","text":"no ts but skipped"}]}}`
 	sa146WriteLegacyJSONL(t, s, id, []string{m1, m2})
 
-	before, _ := os.ReadFile(s.sessionPath(id))
-	s.backfillTimestamps(id) // first message has a timestamp -> whole file skipped
-	after, _ := os.ReadFile(s.sessionPath(id))
-	if !bytes.Equal(before, after) {
-		t.Error("session with a timestamped first message must not be rewritten")
+	s.backfillTimestamps(id)
+	// #4670 semantics update: a mixed file is no longer skipped wholesale -
+	// the ts-less record gets backfilled, anchored AFTER the preceding real
+	// timestamp (monotonic #198 contract). The already-timestamped record
+	// must be untouched.
+	data, err := os.ReadFile(s.sessionPath(id))
+	if err != nil {
+		t.Fatalf("read backfilled file: %v", err)
+	}
+	var ts1, ts2 time.Time
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var rec jsonlRecord
+		if json.Unmarshal([]byte(line), &rec) != nil || rec.Type != "message" {
+			continue
+		}
+		if strings.Contains(line, "has ts") {
+			ts1 = rec.Timestamp
+		} else {
+			ts2 = rec.Timestamp
+		}
+	}
+	if ts1.IsZero() || time.Since(ts1) < time.Hour || time.Since(ts1) > 3*time.Hour {
+		t.Errorf("timestamped record must keep its original -2h timestamp, got %v", ts1)
+	}
+	if ts2.IsZero() {
+		t.Fatal("ts-less record in a mixed session must be backfilled (#4670)")
+	}
+	if !ts2.After(ts1) {
+		t.Errorf("backfilled suffix timestamp %v must land after the real one %v (#4670/#198)", ts2, ts1)
 	}
 }
 

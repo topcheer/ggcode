@@ -1,0 +1,58 @@
+name: msix-store
+
+# Manual MSIX build for Microsoft Store submission (first-time package).
+# Identity values come from Partner Center -> App management -> App identity:
+#   identity-name : "Package/Identity Name"
+#   publisher     : "Publisher ID" (CN=...)
+# The produced .msix files are UNSIGNED on purpose: Partner Center re-signs
+# packages on ingestion, so developer signing is not required for submission.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Four-part package version (e.g. 1.3.268.0)"
+        required: true
+      identity_name:
+        description: "Partner Center Package/Identity Name"
+        required: true
+      publisher:
+        description: "Partner Center Publisher ID (CN=...)"
+        required: true
+      archs:
+        description: "Architectures (x64,arm64)"
+        required: false
+        default: "x64,arm64"
+
+permissions:
+  contents: read
+
+jobs:
+  build-msix:
+    name: Build MSIX (${{ matrix.arch }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(format('["{0}"]', join(split(github.event.inputs.archs, ','), '","'))) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build MSIX package
+        shell: pwsh
+        run: .\scripts\release\build-desktop-msix.ps1 -Version "${{ github.event.inputs.version }}" -OutputDir dist -IdentityName "${{ github.event.inputs.identity_name }}" -Publisher "${{ github.event.inputs.publisher }}" -Archs "${{ matrix.arch }}"
+
+      - name: Upload MSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: msix-${{ matrix.arch }}
+          path: dist/*.msix
+          if-no-files-found: error

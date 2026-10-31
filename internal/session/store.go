@@ -1322,9 +1322,18 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	}
 
 	// Backfill timestamps for historical sessions (created before timestamp feature).
-	// If the first message has no timestamp, all messages get set to 6 hours ago.
-	// If the first message already has a timestamp, the session is skipped.
-	if len(allMessages) > 0 && allMessages[0].Timestamp.IsZero() {
+	// #4670: backfill whenever ANY message lacks a timestamp - the old
+	// first-message gate skipped mixed sessions wholesale (ts-less records
+	// never repaired). backfillTimestamps itself only rewrites zero-ts
+	// records, so fully-timestamped sessions still short-circuit (changed=false).
+	anyMissing := false
+	for _, m := range allMessages {
+		if m.Timestamp.IsZero() {
+			anyMissing = true
+			break
+		}
+	}
+	if len(allMessages) > 0 && anyMissing {
 		s.backfillTimestamps(id)
 	}
 
@@ -1834,10 +1843,23 @@ func (s *JSONLStore) mergeMaintainedIndex(idx, validIdx, currentIdx []indexEntry
 	for _, e := range currentIdx {
 		currentSet[e.ID] = true
 	}
+	// #4668 hardening: the two append loops union two snapshots that may
+	// BOTH carry a row for the same ID (e.g. the locked reload already
+	// contains an entry that is also a prune survivor). Emit each ID at most
+	// once - a duplicate row would make List show the same session twice
+	// forever (every later merge preserves both copies).
+	seen := make(map[string]bool, len(currentIdx)+len(validIdx))
 	merged := make([]indexEntry, 0, len(currentIdx))
+	emit := func(e indexEntry) {
+		if seen[e.ID] {
+			return
+		}
+		seen[e.ID] = true
+		merged = append(merged, e)
+	}
 	for _, e := range currentIdx {
 		if validSet[e.ID] || !originalSet[e.ID] {
-			merged = append(merged, e)
+			emit(e)
 		}
 	}
 	for _, e := range validIdx {
@@ -1847,7 +1869,7 @@ func (s *JSONLStore) mergeMaintainedIndex(idx, validIdx, currentIdx []indexEntry
 				continue
 			}
 		}
-		merged = append(merged, e)
+		emit(e)
 	}
 	return merged
 }
@@ -3563,13 +3585,11 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 		}
 	}()
 
-	// Fast path: stream-scan only until the first message record.
-	// If it already has a timestamp, the entire session is skipped without
-	// reading the rest of the file. This avoids full-file I/O + memory
-	// allocation for sessions that don't need backfilling (the common case).
-	if firstMessageHasTimestamp(path) {
-		return
-	}
+	// #4670: the old fast path skipped the WHOLE session whenever the first
+	// message had a timestamp - mixed sessions (ts-less records after a
+	// timestamped one) never got repaired. The full scan below is required
+	// to find them; fully-timestamped sessions still short-circuit via
+	// changed=false, so the common case pays one extra read, no rewrite.
 
 	f, err := os.Open(path)
 	if err != nil {
@@ -3602,36 +3622,51 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 		}
 	}
 
-	// Check first message record — if it already has a timestamp, skip entirely.
-	firstMsgHasTimestamp := !firstRealTimestamp.IsZero()
-	if firstMsgHasTimestamp {
-		return
-	}
+	// #4670: no early return when any message has a timestamp - mixed
+	// sessions (ts-less records + real-timestamped records) must still
+	// backfill the missing ones; the assignment loop only touches zero-ts
+	// records.
 
 	// Assign strictly increasing timestamps (+1ms per backfilled line) so
 	// mixed sessions (backfilled prefix + real-timestamped suffix) stay
 	// monotonic: a single shared timestamp broke findMessageCutoff's
 	// binary search, which assumes file order == chronological order (#198).
-	// Use min(firstRealTimestamp, now-6h) to ensure monotonicity:
-	// - If first real timestamp is older than 6h, use it as base.
+	// Base is min(firstRealTimestamp, now-6h):
+	// - If the first real timestamp is older than 6h, use it as base.
 	// - Otherwise use now-6h to avoid polluting recent sessions.
+	// The cursor never falls below a real timestamp seen earlier in the
+	// file, so a ts-less SUFFIX also lands after its predecessor (#4670).
 	backfillBase := time.Now().Add(-6 * time.Hour)
 	if !firstRealTimestamp.IsZero() && firstRealTimestamp.Before(backfillBase) {
 		backfillBase = firstRealTimestamp
 	}
-	backfillTime := backfillBase
+	cursor := backfillBase
 	changed := false
-	n := 0
 	for i, line := range lines {
 		var rec jsonlRecord
 		if json.Unmarshal([]byte(line), &rec) != nil {
 			continue
 		}
-		if rec.Type != "message" || !rec.Timestamp.IsZero() {
+		if rec.Type != "message" {
 			continue
 		}
-		rec.Timestamp = backfillTime.Add(time.Duration(n) * time.Millisecond)
-		n++
+		// #4670/#558 reconciliation: migration-inserted summary notes are
+		// synthetic-NOW records, not legacy-old ones - findMessageCutoff's
+		// binary search never excludes zero-ts records, so stamping a
+		// summary with a cursor anchored at an old predecessor would drop
+		// it out of the rendering window (the #558 invariant). Summaries
+		// keep zero ts (always in-window).
+		if isSummaryNoteMessage(rec.Message) {
+			continue
+		}
+		if !rec.Timestamp.IsZero() {
+			if rec.Timestamp.After(cursor) {
+				cursor = rec.Timestamp
+			}
+			continue
+		}
+		cursor = cursor.Add(time.Millisecond)
+		rec.Timestamp = cursor
 		if data, err := json.Marshal(rec); err == nil {
 			lines[i] = string(data)
 			changed = true

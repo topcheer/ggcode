@@ -904,6 +904,18 @@ func truncStr(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
+// truncTail keeps the LAST maxLen-3 chars of s (head replaced by "...").
+// #4690: truncStr head-truncates, but the #4607 marker-free failure
+// fallback labels its snippet "output tail" - for unmarked failures
+// (signal/segfault/panic) the diagnostic signal lives at the END, so a
+// head cut discarded exactly what the fallback existed to preserve.
+func truncTail(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return "..." + s[len(s)-maxLen+3:]
+}
+
 // generalizeErrorsWithRetry wraps ProcessErrorsWithLLM with retry logic.
 // On final failure, logs a system-level debug message.
 // Returns whatever rules were successfully generalized.

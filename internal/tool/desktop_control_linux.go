@@ -157,7 +157,12 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 			return Result{}, fmt.Errorf("set_window_bounds requires positive to_x (width) and to_y (height)")
 		}
 		// Target the named window when given; otherwise the active window.
-		base := []string{"getactivewindow"}
+		// #4696: xdotool command chaining needs windowmove BEFORE the
+		// coordinates and %1 to reference the selected window — the bare
+		// getactivewindow base made "X" parse as the next command name
+		// (Unknown command), so the default active-window path always
+		// failed. Aligns with the named branch below (and #4440/#4459).
+		base := []string{"getactivewindow", "windowmove", "%1"}
 		if strings.TrimSpace(p.Text) != "" {
 			// #4440: xdotool chaining defaults to %@ = ALL matches, so a broad
 			// --name pattern moved and resized every matching window at once.
