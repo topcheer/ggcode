@@ -55,13 +55,6 @@ func (l *List) SetMaxItems(n int) {
 	l.mu.Unlock()
 }
 
-// MaxItems returns the display-cache cap (0 = unlimited).
-func (l *List) MaxItems() int {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	return l.maxItems
-}
-
 // trimLocked drops the oldest items when the cache exceeds maxItems.
 // It trims down to 75% of the cap (hysteresis) so the O(n) copy happens
 // only once every cap/4 appends instead of on every append. The viewport

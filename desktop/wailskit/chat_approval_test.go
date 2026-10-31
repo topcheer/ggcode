@@ -62,13 +62,17 @@ func TestMobileAlwaysAllowGrantsCommandPatternNotWholeTool(t *testing.T) {
 	if d, err := policy.Check("run_command", gitInput); err != nil || d != permission.Allow {
 		t.Fatalf("git push should be allowed by the granted pattern, got %v (err=%v)", d, err)
 	}
-	// ...but NOT blanket-allow the whole tool: a different, unrelated command
-	// must still require approval (old SetOverride behavior allowed it).
-	otherInput, _ := json.Marshal(map[string]string{"command": "docker system prune -af"})
-	if d, err := policy.Check("run_command", otherInput); err != nil {
+	// ...but NOT blanket-allow the whole tool. two-mode refactor: supervised
+	// defaults to Allow, so the #1038 probe can no longer be "an unrelated
+	// command is not Allow" - use an extremely dangerous command instead:
+	// a correct pattern grant leaves the supervised safety floor intact
+	// (Ask), while a blanket SetOverride would have bypassed nothing anyway
+	// now, but this still pins that granting a pattern never disarms the floor.
+	edInput, _ := json.Marshal(map[string]string{"command": "rm -rf /"})
+	if d, err := policy.Check("run_command", edInput); err != nil {
 		t.Fatalf("check error: %v", err)
-	} else if d == permission.Allow {
-		t.Fatal("always_allow on 'git push' must not blanket-allow unrelated commands like 'docker system prune' (#1038 regression)")
+	} else if d != permission.Ask {
+		t.Fatalf("always_allow on 'git push' must not disarm the extremely-dangerous floor (#1038 regression), got %v", d)
 	}
 }
 

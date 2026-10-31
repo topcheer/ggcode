@@ -33,8 +33,6 @@ import (
 // The detector fires AT MOST ONCE per run, injecting a reminder that gives
 // the agent a chance to actually run verification before returning.
 
-const maxUnverifiedClaimWarnings = 1
-
 // successClaimPhrases are phrases that indicate the agent is asserting
 // verification results in its response text. These are lowercased for matching.
 var successClaimPhrases = []string{

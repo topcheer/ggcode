@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -57,7 +58,7 @@ hold_key presses a key/combo, holds it for duration_ms, then releases — e.g.
 set_window_bounds positions and sizes a window: x,y = top-left; to_x,to_y = width,height. Target selection: macOS always the frontmost window; Linux/Windows target by 'text' (window title substring; Linux falls back to the active window when omitted, Windows requires a title match). The 'app' param is not yet honored for this action.
 open launches a URL or file path with the default handler app (use "app" to force a specific app).
 
-Platform support: all actions on macOS; on Linux both X11 (xdotool/wmctrl; UI-tree actions via AT-SPI python3-gi) and Wayland (ydotool + ydotoold for input; UI-tree actions via AT-SPI — display-server independent; scroll has no ydotool equivalent and window management has no Wayland protocol for external clients); on Windows mouse/keyboard/app plus window management (Win32: list/focus/close/minimize/maximize/set_window_bounds, display_info) via SendInput and EnumWindows — UI-tree and menu actions pending UI Automation.`
+Platform support: all actions on macOS; on Linux both X11 (xdotool/wmctrl; UI-tree actions via AT-SPI python3-gi) and Wayland (ydotool + ydotoold for input; UI-tree actions via AT-SPI — display-server independent; scroll has no ydotool equivalent and window management has no Wayland protocol for external clients); on Windows mouse/keyboard/app plus window management (Win32: list/focus/close/minimize/maximize/set_window_bounds, display_info) via SendInput and EnumWindows — UI-tree and menu actions pending UI Automation. maximize_window is idempotent on every platform: a no-op when the window is already maximized/fullscreen, so retries never restore the window (#4058).`
 }
 
 func (DesktopControlTool) Parameters() json.RawMessage {
@@ -76,7 +77,7 @@ func (DesktopControlTool) Parameters() json.RawMessage {
     },
     "x": {"type": "integer", "description": "X coordinate (logical pixels from left). Required for mouse position actions."},
     "y": {"type": "integer", "description": "Y coordinate (logical pixels from top). Required for mouse position actions."},
-    "text": {"type": "string", "description": "Text to type (for 'type') or key combo string (for 'key_combo'/'key_press') or app name (for 'launch_app'/'quit_app'/'focus_window') or menu path like 'File > Save' (for 'menu_select') or modifiers like 'cmd+shift' (for 'modifier_click') or URL/file path (for 'open') or window title substring (for 'set_window_bounds' on Linux/Windows)."},
+    "text": {"type": "string", "description": "Text to type (for 'type') or key combo string (for 'key_combo'/'key_press') or app name (for 'launch_app'/'quit_app'/'focus_window') or menu path like 'File > Save' (for 'menu_select') or modifiers like 'cmd+shift' (for 'modifier_click') or URL/file path (for 'open') or window title substring (for 'set_window_bounds' on Linux/Windows). Key names: 'delete' is backspace on macOS but forward delete on Windows/Linux; use 'backspace' or 'forward-delete' (macOS only) for unambiguous behavior."},
     "app": {"type": "string", "description": "Application name: to open the target with (for 'open'), or the app whose menu bar to use (for 'menu_select', default frontmost). Not yet honored for 'set_window_bounds': target that action's window via 'text' (title substring) on Linux/Windows, or the frontmost window on macOS."},
     "button": {"type": "string", "enum": ["left", "right"], "default": "left", "description": "Mouse button for click actions."},
     "direction": {"type": "string", "enum": ["up", "down"], "default": "down", "description": "Scroll direction."},
@@ -191,6 +192,48 @@ func holdKeyDurationClamp(ms int) (int, error) {
 // any platform. The linux-only executor (desktop_control_linux.go) consumes
 // them. ydotool event codes follow linux/input-event-codes.h as used by the
 // ydotool README: BTN_LEFT=0xC0, BTN_RIGHT=0xC1.
+
+// ydoClickCode maps the schema button enum to the ydotool click event
+// code (BTN_LEFT=0xC0, BTN_RIGHT=0xC1, BTN_MIDDLE=0xC2). Pure and
+// platform-untagged (x11ButtonCode precedent) so the #4459 middle-button
+// mapping is unit-testable on every CI runner.
+func ydoClickCode(button string) (string, error) {
+	switch button {
+	case "", "left":
+		return "0xC0", nil
+	case "right":
+		return "0xC1", nil
+	case "middle":
+		return "0xC2", nil
+	default:
+		return "", fmt.Errorf("unsupported button %q (supported: left, right, middle)", button)
+	}
+}
+
+// ydoButtonMask maps the schema button enum to the ydotool click bitmask
+// low bits (0 left, 1 right, 2 middle) used by the down-only/up-only forms.
+func ydoButtonMask(button string) (int, error) {
+	switch button {
+	case "", "left":
+		return 0x0, nil
+	case "right":
+		return 0x1, nil
+	case "middle":
+		return 0x2, nil
+	default:
+		return 0, fmt.Errorf("unsupported button %q (supported: left, right, middle)", button)
+	}
+}
+
+// xdLiteralPattern renders a window-title substring as a literal POSIX
+// regex for xdotool search. The schema documents `text` as a "title
+// substring", but xdotool compiles it as a REGEX — a bare "." or ".*"
+// slipped past the #349 empty-string guard and matched EVERY window,
+// so `%@` closed/minimized the whole desktop session (#4459). Quoting
+// the metacharacters restores the documented literal-substring contract.
+func xdLiteralPattern(p string) string {
+	return regexp.QuoteMeta(strings.TrimSpace(p))
+}
 
 // ydoMoveArgs returns the argv to move the cursor absolutely.
 func ydoMoveArgs(x, y int) []string {
@@ -312,22 +355,49 @@ func (t DesktopControlTool) Execute(ctx context.Context, input json.RawMessage) 
 	if err := json.Unmarshal(input, &params); err != nil {
 		return Result{}, fmt.Errorf("parse params: %w", err)
 	}
+	clampDesktopDefaults(&params)
+	return executeDesktopControl(ctx, params)
+}
+
+// clampDesktopDefaults applies the documented defaults for Button,
+// Direction, Amount, MaxDepth and TimeoutMs. #4440: the zero-checks became
+// lower-bounds - schema "minimum" constraints are not enforced by
+// json.Unmarshal, so negative values used to flow through untouched.
+func clampDesktopDefaults(params *desktopParams) {
 	if params.Button == "" {
 		params.Button = "left"
 	}
 	if params.Direction == "" {
 		params.Direction = "down"
 	}
-	if params.Amount == 0 {
+	if params.Amount < 1 {
 		params.Amount = 1
 	}
-	if params.MaxDepth == 0 {
+	if params.MaxDepth < 1 {
 		params.MaxDepth = 8
 	}
-	if params.TimeoutMs == 0 {
+	if params.TimeoutMs < 1 {
 		params.TimeoutMs = 5000
 	}
-	return executeDesktopControl(ctx, params)
+}
+
+// unknownAlphaKeyName reports whether key looks like a mistyped key NAME
+// rather than text meant to be typed: longer than one character and purely
+// ASCII letters ("backspace", "f13"). Digits and mixed strings ("123",
+// "a1") stay eligible for literal typing fallbacks (#4054: on macOS an
+// unknown multi-char alphabetic name used to be keystroked literally into
+// the focused control with a fake success).
+func unknownAlphaKeyName(key string) bool {
+	if len(key) <= 1 {
+		return false
+	}
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return false
+		}
+	}
+	return true
 }
 
 // xdModifierName maps a normalized modifier (as produced by

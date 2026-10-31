@@ -333,8 +333,10 @@ func (m *Model) createFeishuAdapterCmd(spec string) tea.Cmd {
 		// #1367 family: config write + disk save moved off the Cmd
 		// goroutine onto the Update loop via configMutationMsg - see
 		// dingtalk_panel.go for the template comment.
+		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
 		return configMutationMsg{
 			apply: func(m *Model) error {
+				imEnabledBefore = m.config.IM.Enabled
 				m.config.IM.Enabled = true
 				if err := m.config.AddIMAdapter(name, adapter); err != nil {
 					return err
@@ -362,6 +364,7 @@ func (m *Model) createFeishuAdapterCmd(spec string) tea.Cmd {
 								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 									return rerr
 								}
+								m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
 								return m.saveConfig()
 							},
 							next: func(m *Model) tea.Cmd {
@@ -376,6 +379,16 @@ func (m *Model) createFeishuAdapterCmd(spec string) tea.Cmd {
 						return rollback(err)
 					}
 					if err := m.startFeishuAdapterIfNeeded(name); err != nil {
+						if errors.Is(err, errFeishuEnableNeeded) {
+							// #4486 (a #1719/#1794 case-1 recurrence): enable on the
+							// Update loop, then retry - never write config here.
+							// #4724: pass the success callback so the auto-enable
+							// path ALSO surfaces the added_bot confirmation
+							// (#4580 mirrored to dingtalk/discord, missed here).
+							return m.feishuEnableMutation(name, func(m *Model) tea.Msg {
+								return feishuBindResultMsg{message: m.t("panel.feishu.message.added_bot", name)}
+							})
+						}
 						return rollback(err)
 					}
 					return feishuBindResultMsg{message: m.t("panel.feishu.message.added_bot", name)}
@@ -385,6 +398,43 @@ func (m *Model) createFeishuAdapterCmd(spec string) tea.Cmd {
 				return feishuBindResultMsg{err: err}
 			},
 		}
+	}
+}
+
+// errFeishuEnableNeeded signals the auto-enable must run on the Update
+// loop via configMutationMsg (#4486; as dingtalk_panel's
+// errDingtalkEnableNeeded, #1719).
+var errFeishuEnableNeeded = errors.New("feishu adapter needs enable-on-update-loop")
+
+// feishuEnableMutation performs the auto-enable on the Update loop, then
+// starts the adapter and continues with next.
+func (m *Model) feishuEnableMutation(name string, next func(m *Model) tea.Msg) tea.Msg {
+	return configMutationMsg{
+		apply: func(m *Model) error {
+			if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
+				return fmt.Errorf("enable %s: %w", name, err)
+			}
+			if m.imManager != nil {
+				_ = m.imManager.EnableBinding(name)
+			}
+			return nil
+		},
+		next: func(m *Model) tea.Cmd {
+			return func() tea.Msg {
+				if err := im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager); err != nil {
+					return feishuBindResultMsg{err: err}
+				}
+				if next == nil {
+					// #4724: nil-next used to return nil here - the auto-enable
+					// success was completely silent (no UI confirmation at all).
+					return nil
+				}
+				return next(m)
+			}
+		},
+		fail: func(err error) tea.Msg {
+			return feishuBindResultMsg{err: err}
+		},
 	}
 }
 
@@ -407,13 +457,13 @@ func (m *Model) startFeishuAdapterIfNeeded(name string) error {
 		return errors.New(m.t("panel.feishu.error.not_configured", name))
 	}
 	if !adapterCfg.Enabled {
-		// Auto-enable when user explicitly tries to bind from panel.
-		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
-			return fmt.Errorf("enable %s: %w", name, err)
-		}
-		if m.imManager != nil {
-			_ = m.imManager.EnableBinding(name)
-		}
+		// #4486 (a #1719/#1794 case-1 recurrence): this branch used to run
+		// SetIMAdapterEnabled+EnableBinding right HERE on the Cmd goroutine,
+		// racing the Update loop and overriding a user's just-pressed 'd'
+		// disable (TOCTOU: apply enables on the Update loop, next() re-reads
+		// disabled, then writes enabled=true back from this goroutine).
+		// Signal the caller to route the enable through configMutationMsg.
+		return errFeishuEnableNeeded
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformFeishu)) {
 		return errors.New(m.t("panel.feishu.error.not_feishu_adapter", name))

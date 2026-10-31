@@ -101,10 +101,30 @@ var mergeConflictMarkers = []*regexp.Regexp{
 // in test files).
 var testFilePattern = regexp.MustCompile(`(_test\.go|\.test\.[jt]sx?|\.spec\.[jt]sx?|test_.*\.py|.*_test\.py|\.test\.ts|\.test\.js|__tests__/.*|Test\.cs|_spec\.rb|\.spec\.rb|_test\.rs)$`)
 
-// diffFileHeader matches the "diff --git a/file b/file" or "+++ b/file" lines
-// in unified diff output to track the current file.
-var diffFileHeader = regexp.MustCompile(`^\+\+\+\s+b/(.+)`)
-var diffOldFileHeader = regexp.MustCompile(`^---\s+a/(.+)`)
+// diffFileHeader matches the "+++ b/file" lines in unified diff output to
+// track the current file. #4686: git quotes paths containing spaces
+// (always) and non-ASCII bytes (core.quotePath) as `+++ b/"my file.go"` -
+// the quote sits BEFORE b/, so the bare b/ prefix never matches and the
+// whole header is skipped (the file silently vanishes from downstream
+// plans). Bare -> group 1; quoted -> group 2 (the #4433 paired-capture
+// form; optional-quote suffixes let a lazy group absorb the quote).
+var diffFileHeader = regexp.MustCompile(`^\+\+\+\s+(?:b/"([^"]+)"|b/([^"\s]\S*))`)
+
+// diffOldFileHeader matches the "--- a/file" side; same quoted alternative.
+var diffOldFileHeader = regexp.MustCompile(`^---\s+(?:a/"([^"]+)"|a/([^"\s]\S*))`)
+
+// diffHeaderPath extracts the path from a diffFileHeader/diffOldFileHeader
+// match, handling the #4686 paired capture (quoted -> group 1, bare ->
+// group 2) and stripping git quoting via normalizeGitDiffPath.
+func diffHeaderPath(m []string) string {
+	if len(m) >= 3 && m[2] != "" {
+		return normalizeGitDiffPath(m[2])
+	}
+	if len(m) >= 2 {
+		return normalizeGitDiffPath(m[1])
+	}
+	return ""
+}
 
 // #3133: accept BOTH plain hunks (@@ -a,b +c,d @@) and combined-diff
 // hunks (@@@ -a,b -c,d +e,f @@@ - emitted for unmerged paths during
@@ -149,7 +169,10 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 	for _, line := range lines {
 		// Track current file from "+++ b/file" headers.
 		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
-			currentFile = m[1]
+			// #4436: git quotes space-containing paths as `+++ b/"my file.go"`;
+			// strip the quotes and octal escapes or issues get attributed to a
+			// path with literal quote debris.
+			currentFile = diffHeaderPath(m)
 			isTestFile = testFilePattern.MatchString(currentFile)
 			continue
 		}

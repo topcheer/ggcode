@@ -186,15 +186,28 @@ func mergeSkillSuggestions(existing, line string) string {
 	return strings.Join(kept, "\n")
 }
 
-// suggestionTaskKey extracts the "[date] task" identity from a suggestion
-// line, ignoring the trailing tool/hint tail so a changed tool mix still
-// dedupes against the same workflow.
+// suggestionTaskKey extracts the task identity from a suggestion line,
+// ignoring the leading date prefix ("- [2006-01-02] ") and the trailing
+// tool/hint tail so the same workflow dedupes across days regardless of
+// tool mix. #4178: with the date left in the key, a workflow re-suggested
+// on a later day never matched its earlier line, so mergeSkillSuggestions
+// appended day-variants instead of replacing in place and the cap filled
+// with duplicates of one workflow. The date-stripped key also feeds
+// skill_accept's slug, so derived skill names no longer carry the date.
 func suggestionTaskKey(line string) string {
-	if i := strings.Index(line, " (tools:"); i >= 0 {
-		return strings.TrimSpace(line[:i])
+	s := line
+	if i := strings.Index(s, " (tools:"); i >= 0 {
+		s = s[:i]
+	} else if i := strings.Index(s, " — recurring"); i >= 0 {
+		s = s[:i]
 	}
-	if i := strings.Index(line, " — recurring"); i >= 0 {
-		return strings.TrimSpace(line[:i])
+	s = strings.TrimSpace(s)
+	// Strip the "- [YYYY-MM-DD] " prefix: the identity is the task text,
+	// which is stable across days.
+	if strings.HasPrefix(s, "- [") {
+		if j := strings.Index(s, "] "); j >= 0 {
+			s = strings.TrimSpace(s[j+2:])
+		}
 	}
-	return strings.TrimSpace(line)
+	return s
 }

@@ -29,7 +29,7 @@ type WaitAgentTool struct {
 func (t WaitAgentTool) Name() string { return "wait_agent" }
 
 func (t WaitAgentTool) Description() string {
-	return "Wait briefly (15-60s, default 30) for an agent run, then return its status snapshot (completed runs include their result). Keep wait_seconds short and re-poll instead of waiting the full expected runtime: runs fail or stall early. Waiting only observes - it never sends instructions to the run. When a run completes, check the result against the original task's acceptance criteria before treating it as done."
+	return "Wait briefly (15-60s, default 30) for an agent run, then return its status snapshot (completed runs include their result). Before calling this, finish the work that does not depend on the result; do not wait idle. Keep wait_seconds short and re-poll instead of waiting the full expected runtime: runs fail or stall early. Waiting only observes - it never sends instructions to the run. When a run completes, check the result against the original task's acceptance criteria before treating it as done."
 }
 
 func (t WaitAgentTool) Parameters() json.RawMessage {
@@ -46,7 +46,7 @@ func (t WaitAgentTool) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 		}
 	},
 	"required": [
@@ -113,7 +113,17 @@ func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{IsError: true, Content: fmt.Sprintf("wait failed: %v", err)}, nil
 	}
 
-	if snap.Status == subagent.StatusCompleted && snap.ProgressSummary == "" && snap.CurrentTool == "" && snap.Result != "" {
+	// #4139: any completed run with a non-empty result takes the full-result
+	// path. The old condition also demanded ProgressSummary=="" &&
+	// CurrentTool=="" - but Complete() already clears CurrentTool on terminal
+	// states while NOTHING clears ProgressSummary, so a run whose last tool
+	// was a command tool (the only category that sets a progress summary)
+	// fell through to the snapshot formatter, which truncates Result to 200
+	// chars for the list_agents multi-row display (#3176). A 100KB delivery
+	// report was silently cut to 200 chars depending on the type of the
+	// sub-agent's last tool. Snapshot status lines remain for non-terminal
+	// runs and completed runs with an empty result.
+	if snap.Status == subagent.StatusCompleted && snap.Result != "" {
 		// #3237: snap.Task carries the nudge spawn appended; strip it so
 		// both reminders extract the ORIGINAL acceptance criteria.
 		task := stripReadBackNudge(snap.Task)

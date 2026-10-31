@@ -33,7 +33,6 @@ package agent
 
 import (
 	"github.com/topcheer/ggcode/internal/debug"
-	"github.com/topcheer/ggcode/internal/provider"
 )
 
 // cascadeMinLowBatches is how many consecutive all-read-only, error-free
@@ -149,8 +148,3 @@ func (a *Agent) restoreModelCascade() {
 	a.cascadeSavedProvider = nil
 	debug.Log("model-cascade", "restored main model provider")
 }
-
-// cascadeTurnProvider is the provider a NEW agent-level request would use;
-// exposed for tests to assert swap/restore behavior without racing the
-// loop.
-func (a *Agent) cascadeTurnProvider() provider.Provider { return a.provider }

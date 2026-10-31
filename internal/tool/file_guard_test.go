@@ -132,30 +132,6 @@ func TestMergeFileGuards_ProtectedPath(t *testing.T) {
 	}
 }
 
-func TestLoadProtectedPatternsFromFile(t *testing.T) {
-	dir := t.TempDir()
-
-	// Non-existent file returns nil
-	pats := LoadProtectedPatternsFromFile(dir)
-	if pats != nil {
-		t.Errorf("expected nil for non-existent file, got %v", pats)
-	}
-
-	// Create file
-	ggcodeDir := filepath.Join(dir, ".ggcode")
-	os.MkdirAll(ggcodeDir, 0755)
-	content := "# Comment\n*.lock\n\n.env\n# another comment\nsecrets/**\n"
-	os.WriteFile(filepath.Join(ggcodeDir, "protect"), []byte(content), 0644)
-
-	pats = LoadProtectedPatternsFromFile(dir)
-	if len(pats) != 3 {
-		t.Fatalf("expected 3 patterns, got %d: %v", len(pats), pats)
-	}
-	if pats[0] != "*.lock" || pats[1] != ".env" || pats[2] != "secrets/**" {
-		t.Errorf("unexpected patterns: %v", pats)
-	}
-}
-
 func TestFileGuard_SymlinkEnv(t *testing.T) {
 	// .env should be blocked regardless of working directory
 	dir := t.TempDir()

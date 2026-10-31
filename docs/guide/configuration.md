@@ -26,10 +26,11 @@ Per-workspace overrides are stored in `~/.ggcode/instances/<hash>/`. Use `scope=
 | `model` | string | Model override (e.g. `gpt-4o`, `claude-sonnet-4-20250514`) |
 | `aux_model` | string | Optional cheaper model on the SAME endpoint for auxiliary LLM calls (context compaction summarization, autopilot strategist, health check). Task-tier model routing cuts cost without touching the primary loop. Empty = all calls use `model`. Construction failure degrades permanently to the main model. |
 | `api_key` | string | API key (use `${ENV_VAR}` syntax; stored in `keys.env`) |
-| `default_mode` | string | Permission mode for **new** sessions: `supervised` (default), `plan`, `auto`, `bypass`, `autopilot` |
+| `default_mode` | string | Permission mode for **new** sessions: `supervised` (default) or `bypass`. Legacy names `auto`/`autopilot` normalize to supervised/bypass; `plan` is tool-internal (a stored legacy `plan` value normalizes to `supervised` instead of failing config load) |
 | `language` | string | Interface language: `en` or `zh-CN` |
 | `max_iterations` | int | Agent loop limit per turn (0 = unlimited) |
-| `session_token_budget` | int | Max total tokens (input + output) per agent run. Progressive warnings at 75%/90%, hard stop at 100%. |
+| `session_token_budget` | int | Max total tokens (input + output) per agent run, including sub-agent spend (spawn_agent / use_namedagent). Progressive warnings at 80%/95%, hard stop at 100%. |
+| `session_cost_limit_usd` | float | Max priced USD spend per agent run for metered models with known pricing. Same 80%/95%/100% ladder as `session_token_budget`, priced from the cost table (input/output/cache rates). Subscription/bundled/free or unknown-pricing models accumulate $0 — use `session_token_budget` for those. Default 0 (disabled). |
 | `tool_call_budget` | int | Max total tool calls per agent run. Warnings at 80%/95%, hard stop at 100%. When unset, auto-derived from `max_iterations` (x8), or 500 for unlimited. |
 | `output_style` | string | Response verbosity: `default`, `concise` (terse), `detailed` (reasoning + context), `socratic` (guided learning). Default: `default`. Cycle at runtime with `Ctrl+O` or `/style`. |
 | `allowed_dirs` | []string | Directories the agent may access |
@@ -334,6 +335,11 @@ the window to pre-compact the context if usage is at/above
 `precompact_ratio` (default 0.6). The compaction LLM call happens while you
 are away instead of adding latency to your next message.
 
+Every idle fire additionally re-runs the memory consolidation sweep
+(staleness / contradiction / near-duplicate scan), independent of the
+pre-compact ratio gate — so long-lived sessions surface stale or
+conflicting memories without waiting for the next process start.
+
 ```yaml
 idle:
   enabled: true
@@ -387,6 +393,9 @@ IM adapters (QQ, Telegram, Discord, Slack, DingTalk, Feishu, etc.) are configure
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `OPENAI_API_KEY` | OpenAI API key |
 | `GGCODE_DEBUG` | Enable debug logging (`1` to enable) |
+| `GGCODE_TOOL_TAPE` | Deterministic tool-call cassette: `record:<path>` or `replay:<path>` (JSONL). Replay misses fail closed — never a silent live call |
+| `GGCODE_LLM_TAPE` | LLM response cassette: `record:<path>` or `replay:<path>` (JSONL). Set together with `GGCODE_TOOL_TAPE` to reproduce a full trajectory offline with zero network calls |
+| `GGCODE_LLM_FAULT` | Deterministic LLM fault injection for agent chaos testing (sa-65): comma-separated `<kind>@<call>` directives with 1-based call index; kinds `crash`, `omit-tool`, `omit-content`, `value-args`, `value-text`. Pairs with `GGCODE_LLM_TAPE=replay:<path>` to test resilience mechanisms offline; invalid directives are skipped |
 | `${ENV_VAR}` | Expansion syntax used throughout YAML config |
 
 > API keys in `keys.env` are referenced via `${VAR}` expansion in the YAML - they are never stored directly in `ggcode.yaml`.

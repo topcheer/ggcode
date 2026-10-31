@@ -61,14 +61,14 @@ func TestSaveInstanceScopedDoesNotChangeStickyScope(t *testing.T) {
 	}
 
 	// A preference save after the limits save must go to the GLOBAL file.
-	if err := cfg.SaveDefaultModePreference("plan"); err != nil {
+	if err := cfg.SaveDefaultModePreference("bypass"); err != nil {
 		t.Fatalf("SaveDefaultModePreference: %v", err)
 	}
 	globData, err := os.ReadFile(globalPath)
 	if err != nil {
 		t.Fatalf("reading global config: %v", err)
 	}
-	if !strings.Contains(string(globData), "default_mode: plan") {
+	if !strings.Contains(string(globData), "default_mode: bypass") {
 		t.Errorf("default_mode should be written to the global file; got:\n%s", globData)
 	}
 	instAfter, _ := os.ReadFile(filepath.Join(InstanceDir(workspace), "ggcode.yaml"))

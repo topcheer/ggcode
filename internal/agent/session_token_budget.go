@@ -55,6 +55,17 @@ type sessionTokenBudgetState struct {
 	budget int64 // maximum total tokens; 0 = no enforcement
 	used   int64 // cumulative input+output tokens this run
 
+	// delegatedUsed is the portion of `used` contributed by sub-agent runs
+	// (delegation budgets: sub-agent spend must land in the parent's budget
+	// ladder, not just the session JSONL).
+	delegatedUsed int64
+
+	// Pending alert produced by a RecordDelegatedTokenUsage call from a
+	// sub-agent callback goroutine, where injecting guidance directly is
+	// unsafe. The agent loop drains it via SessionTokenBudgetAlert.
+	pendingMsg  string
+	pendingStop bool
+
 	// Threshold flags so each fires at most once per run.
 	warn80Given bool
 	warn95Given bool
@@ -133,6 +144,54 @@ func (a *Agent) RecordSessionTokenUsage(inputTokens, outputTokens int64) (string
 	return st.checkLocked()
 }
 
+// RecordDelegatedTokenUsage accumulates sub-agent token spend into this
+// agent's session budget (delegation budgets: the OnUsage callback fires on
+// sub-agent goroutines, so guidance cannot be injected synchronously; the
+// threshold message is parked as pending for the agent loop to drain).
+func (a *Agent) RecordDelegatedTokenUsage(inputTokens, outputTokens int64) {
+	if a == nil || (inputTokens <= 0 && outputTokens <= 0) {
+		return
+	}
+	st := sessionTokenBudgetStateFor(a)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.used += inputTokens + outputTokens
+	st.delegatedUsed += inputTokens + outputTokens
+	if msg, stop := st.checkLocked(); msg != "" {
+		st.pendingMsg = msg
+		st.pendingStop = st.pendingStop || stop
+		debug.Log("session-token-budget", "delegated threshold crossed: used=%d delegated=%d budget=%d",
+			st.used, st.delegatedUsed, st.budget)
+	}
+}
+
+// SessionTokenBudgetAlert drains any pending delegated-usage alert. Called
+// from the agent loop each iteration; returns ("", false) when nothing is
+// pending or no budget is enforced.
+func (a *Agent) SessionTokenBudgetAlert() (string, bool) {
+	if a == nil {
+		return "", false
+	}
+	st := sessionTokenBudgetStateFor(a)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	msg, stop := st.pendingMsg, st.pendingStop
+	st.pendingMsg, st.pendingStop = "", false
+	return msg, stop
+}
+
+// DelegatedTokenUsage returns the cumulative sub-agent token spend recorded
+// against this agent's session budget (attribution audit getter).
+func (a *Agent) DelegatedTokenUsage() int64 {
+	if a == nil {
+		return 0
+	}
+	st := sessionTokenBudgetStateFor(a)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.delegatedUsed
+}
+
 // resetSessionTokenUsage clears per-run accumulation (budget config is
 // kept). Wire-ready for the run-start reset site alongside
 // toolCallBudget.reset().
@@ -143,6 +202,9 @@ func (a *Agent) resetSessionTokenUsage() {
 	st := sessionTokenBudgetStateFor(a)
 	st.mu.Lock()
 	st.used = 0
+	st.delegatedUsed = 0
+	st.pendingMsg = ""
+	st.pendingStop = false
 	st.warn80Given = false
 	st.warn95Given = false
 	st.stopGiven = false

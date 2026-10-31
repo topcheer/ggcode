@@ -20,6 +20,7 @@
 package runeval
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -530,12 +531,23 @@ func isCorrectionSignal(text string) bool {
 // canonicalJSON normalizes raw input JSON so semantically identical inputs
 // (key order/whitespace differences) hash to the same key. Non-JSON inputs
 // degrade to the raw string.
+//
+// #4341: numbers decode via UseNumber (json.Number lexemes) instead of the
+// default float64 path. float64 loses precision above 2^53, so distinct
+// large integers (9007199254740992 vs ...93) collapsed into the same
+// canonical string, fusing distinct tool calls into one callRecord and
+// fabricating DuplicateGroup / WastedRepeatCalls. Exact lexemes keep distinct
+// inputs distinct; the cost is that differently-written equal numbers (1 vs
+// 1.0) no longer dedupe - a false-split, never a false-merge, which is the
+// fail-safe direction for a dedup key.
 func canonicalJSON(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return "{}"
 	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
+	if err := dec.Decode(&v); err != nil {
 		return string(raw)
 	}
 	// encoding/json marshals map[string]any with sorted keys, giving a

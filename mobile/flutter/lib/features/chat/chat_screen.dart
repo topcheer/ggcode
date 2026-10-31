@@ -13,6 +13,7 @@ import '../../core/connection_service.dart';
 import 'message_bubble.dart';
 import 'approval_sheet.dart';
 import 'input_bar.dart';
+import 'session_rail.dart';
 import '../status/status_bar.dart';
 
 /// Decode workspace display name from base64url workspaceKey.
@@ -61,6 +62,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     }
     return false; // keep bubbling (other listeners may exist)
   }
+
   final _inputController = TextEditingController();
   TabController? _tabController;
   List<String> _tabIds = [];
@@ -155,7 +157,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
   @override
   Widget build(BuildContext context) {
-    watchAppTheme(ref); // re-run on theme switch: AppColors is static/non-reactive
+    watchAppTheme(
+        ref); // re-run on theme switch: AppColors is static/non-reactive
     ref.listen<ApprovalInfo?>(approvalProvider, (prev, next) {
       if (next != null && prev == null) {
         FocusManager.instance.primaryFocus?.unfocus();
@@ -217,6 +220,100 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
     final showTabs = _tabIds.length > 1 && _tabController != null;
 
+    final chatBody = Stack(
+      children: [
+        Column(
+          children: [
+            const StatusBar(),
+            if (connState.relaySync != null)
+              _RelaySyncBanner(sync: connState.relaySync!),
+            if (isHistorical)
+              _HistoricalSessionBanner(
+                onReturnToLive: () async {
+                  final liveWorkspaceKey = cache.liveWorkspaceKey;
+                  final liveSessionId = cache.liveSessionId;
+                  if (liveWorkspaceKey == null ||
+                      liveWorkspaceKey.isEmpty ||
+                      liveSessionId == null ||
+                      liveSessionId.isEmpty) {
+                    return;
+                  }
+                  await ref
+                      .read(workspaceCacheProvider.notifier)
+                      .selectSession(liveSessionId);
+                },
+              ),
+            Expanded(
+              child: Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (_) => _dismissComposerFocus(),
+                child: NotificationListener<ScrollNotification>(
+                  onNotification: _onListScroll,
+                  child: ListView.builder(
+                    controller: _scrollController,
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                    itemCount: messages.length,
+                    itemBuilder: (context, index) {
+                      final msg = messages[index];
+                      if (msg.toolName != null) {
+                        return _buildToolMessage(msg);
+                      }
+                      return MessageBubble(message: msg);
+                    },
+                  ),
+                ),
+              ),
+            ),
+            if (approval != null) ApprovalSheet(approval: approval),
+            InputBar(controller: _inputController),
+          ],
+        ),
+        // Scroll-to-bottom FAB: visible only when the list sits far from
+        // the bottom (see _onListScroll). Animated jump; also used as the
+        // escape hatch when the #1024 auto-follow guard (<=120px) has
+        // stopped following the stream.
+        if (_showJumpButton)
+          Positioned(
+            right: 16,
+            bottom: 96,
+            child: Material(
+              color: AppColors.surfaceElevated,
+              shape: const CircleBorder(),
+              elevation: 4,
+              shadowColor: Colors.black54,
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: () => _scrollController.hasClients
+                    ? _scrollController.animateTo(
+                        _scrollController.position.maxScrollExtent,
+                        duration: const Duration(milliseconds: 250),
+                        curve: Curves.easeOutCubic,
+                      )
+                    : null,
+                child: Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: Icon(Icons.arrow_downward,
+                      size: 20, color: AppColors.textSecondary),
+                ),
+              ),
+            ),
+          ),
+        if (!connState.sessionReady &&
+            connState.status != ConnectionStatus.disconnected)
+          _SyncingOverlay(
+            status: connState.status,
+            sync: connState.relaySync,
+          ),
+      ],
+    );
+
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(
@@ -247,8 +344,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                             Flexible(
                               child: Text(
                                 currentWorkspace?.key != null
-                                    ? _decodeWorkspaceName(currentWorkspace!.key)
-                                    : info?.workspace.split('/').last ?? 'GGCode',
+                                    ? _decodeWorkspaceName(
+                                        currentWorkspace!.key)
+                                    : info?.workspace.split('/').last ??
+                                        'GGCode',
                                 style: const TextStyle(fontSize: 16),
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -264,13 +363,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                               if (currentSession.title.isNotEmpty) {
                                 return currentSession.title;
                               }
-                              final wsName = currentSession.workspaceKey.isNotEmpty
-                                  ? _decodeWorkspaceName(currentSession.workspaceKey)
-                                  : '';
+                              final wsName =
+                                  currentSession.workspaceKey.isNotEmpty
+                                      ? _decodeWorkspaceName(
+                                          currentSession.workspaceKey)
+                                      : '';
                               final date = currentSession.sessionId.length >= 8
                                   ? currentSession.sessionId.substring(0, 8)
                                   : currentSession.sessionId;
-                              return wsName.isNotEmpty ? '$wsName · $date' : date;
+                              return wsName.isNotEmpty
+                                  ? '$wsName · $date'
+                                  : date;
                             }(),
                             style: TextStyle(
                               fontSize: 11,
@@ -323,8 +426,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   value: code,
                   child: Row(children: [
                     if (code == lang)
-                      const Icon(Icons.check, size: 16,
-                          color: Colors.blue)
+                      const Icon(Icons.check, size: 16, color: Colors.blue)
                     else
                       const SizedBox(width: 16),
                     const SizedBox(width: 8),
@@ -483,100 +585,74 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               )
             : null,
       ),
-      body: Stack(
-        children: [
-          Column(
-            children: [
-              const StatusBar(),
-              if (connState.relaySync != null)
-                _RelaySyncBanner(sync: connState.relaySync!),
-              if (isHistorical)
-                _HistoricalSessionBanner(
-                  onReturnToLive: () async {
-                    final liveWorkspaceKey = cache.liveWorkspaceKey;
-                    final liveSessionId = cache.liveSessionId;
-                    if (liveWorkspaceKey == null ||
-                        liveWorkspaceKey.isEmpty ||
-                        liveSessionId == null ||
-                        liveSessionId.isEmpty) {
-                      return;
-                    }
-                    await ref
+      // #4585: expanded widths (iPhone Duo unfolded, iPad) get a
+      // persistent two-pane layout with the session rail; compact keeps
+      // the single column plus the modal workspace switcher.
+      body: windowSizeClassOf(context) == WindowSizeClass.expanded
+          ? Row(
+              children: [
+                SizedBox(
+                  width: 300,
+                  child: SessionRail(
+                    workspaces: ref
                         .read(workspaceCacheProvider.notifier)
-                        .selectSession(liveSessionId);
-                  },
-                ),
-              Expanded(
-                child: Listener(
-                  behavior: HitTestBehavior.translucent,
-                  onPointerDown: (_) => _dismissComposerFocus(),
-                  child: NotificationListener<ScrollNotification>(
-                    onNotification: _onListScroll,
-                    child: ListView.builder(
-                      controller: _scrollController,
-                      keyboardDismissBehavior:
-                          ScrollViewKeyboardDismissBehavior.onDrag,
-                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-                      itemCount: messages.length,
-                      itemBuilder: (context, index) {
-                        final msg = messages[index];
-                        if (msg.toolName != null) {
-                          return _buildToolMessage(msg);
-                        }
-                        return MessageBubble(message: msg);
-                      },
-                    ),
+                        .sortedWorkspaces(),
+                    sessionsFor: (key) => ref
+                        .read(workspaceCacheProvider.notifier)
+                        .sessionsForWorkspace(key),
+                    activeWorkspaceKey:
+                        ref.read(workspaceCacheProvider).selectedWorkspaceKey ??
+                            '',
+                    liveSessionId:
+                        ref.read(connectionProvider.notifier).currentSessionId,
+                    liveSessionIds: ref
+                        .read(backgroundConnectionProvider.notifier)
+                        .liveSessionIds,
+                    onSessionTap: _switchToSession,
                   ),
                 ),
-              ),
-              if (approval != null) ApprovalSheet(approval: approval),
-              InputBar(controller: _inputController),
-            ],
-          ),
-          // Scroll-to-bottom FAB: visible only when the list sits far from
-          // the bottom (see _onListScroll). Animated jump; also used as the
-          // escape hatch when the #1024 auto-follow guard (<=120px) has
-          // stopped following the stream.
-          if (_showJumpButton)
-            Positioned(
-              right: 16,
-              bottom: 96,
-              child: Material(
-                color: AppColors.surfaceElevated,
-                shape: const CircleBorder(),
-                elevation: 4,
-                shadowColor: Colors.black54,
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: () => _scrollController.hasClients
-                      ? _scrollController.animateTo(
-                          _scrollController.position.maxScrollExtent,
-                          duration: const Duration(milliseconds: 250),
-                          curve: Curves.easeOutCubic,
-                        )
-                      : null,
-                  child: Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(color: AppColors.border),
-                    ),
-                    child: Icon(Icons.arrow_downward,
-                        size: 20, color: AppColors.textSecondary),
-                  ),
-                ),
-              ),
-            ),
-          if (!connState.sessionReady &&
-              connState.status != ConnectionStatus.disconnected)
-            _SyncingOverlay(
-              status: connState.status,
-              sync: connState.relaySync,
-            ),
-        ],
-      ),
+                VerticalDivider(
+                    width: 1, thickness: 1, color: AppColors.border),
+                Expanded(child: chatBody),
+              ],
+            )
+          : chatBody,
     );
+  }
+
+  /// #4585: shared session-switch path for the rail and the modal
+  /// switcher (extracted from the modal's onSessionTap closure).
+  Future<void> _switchToSession(CachedSessionRecord session) async {
+    final notifier = ref.read(workspaceCacheProvider.notifier);
+    final bgConn = ref.read(backgroundConnectionProvider.notifier);
+    final connNotifier = ref.read(connectionProvider.notifier);
+    if (session.sessionId == connNotifier.currentSessionId) {
+      return;
+    }
+    if (session.url.isNotEmpty) {
+      await notifier.selectSession(session.sessionId);
+      var connUrl = session.url;
+      try {
+        final desc = ShareConnectionDescriptor.parse(connUrl);
+        final stored = ConnectionStore.instance.findByRoomId(desc.roomId);
+        if (stored != null &&
+            stored.url.contains('renew_token') &&
+            !connUrl.contains('renew_token')) {
+          final storedDesc = ShareConnectionDescriptor.parse(stored.url);
+          if (storedDesc.roomId == desc.roomId) {
+            connUrl = stored.url;
+          }
+        }
+      } catch (_) {}
+      final bgService = bgConn.adoptService(session.sessionId);
+      if (bgService != null) {
+        connNotifier.adoptService(bgService, session.sessionId, connUrl);
+      } else {
+        await connNotifier.connect(connUrl);
+      }
+    } else {
+      await notifier.selectSession(session.sessionId);
+    }
   }
 
   void _closeTab(String agentId) {
@@ -627,20 +703,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   ),
                   SizedBox(height: 8),
                   for (final workspace in workspaces) ...[
-                    _WorkspaceGroup(
+                    WorkspaceGroup(
                       workspace: workspace,
-                      sessions:
-                          notifier.sessionsForWorkspace(workspace.key),
+                      sessions: notifier.sessionsForWorkspace(workspace.key),
                       isActiveWorkspace:
                           workspace.key == cache.selectedWorkspaceKey,
                       liveSessionId: liveSessionId,
                       liveSessionIds: bgConn.liveSessionIds,
                       onSessionTap: (session) async {
-                        debugPrint('[chat] onSessionTap: session=${session.sessionId} url=${session.url.substring(0, session.url.length > 60 ? 60 : session.url.length)}...');
+                        debugPrint(
+                            '[chat] onSessionTap: session=${session.sessionId} url=${session.url.substring(0, session.url.length > 60 ? 60 : session.url.length)}...');
                         Navigator.of(ctx).pop();
                         if (session.sessionId ==
                             connNotifier.currentSessionId) {
-                          debugPrint('[chat] onSessionTap: same session, skipping');
+                          debugPrint(
+                              '[chat] onSessionTap: same session, skipping');
                           return;
                         }
                         // If session has a background service, adopt it.
@@ -657,21 +734,28 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                           // session.url from SQLite may have expired auth_ticket.
                           var connUrl = session.url;
                           try {
-                            final desc = ShareConnectionDescriptor.parse(connUrl);
-                            final stored = ConnectionStore.instance.findByRoomId(desc.roomId);
-                            if (stored != null && stored.url.contains('renew_token') &&
+                            final desc =
+                                ShareConnectionDescriptor.parse(connUrl);
+                            final stored = ConnectionStore.instance
+                                .findByRoomId(desc.roomId);
+                            if (stored != null &&
+                                stored.url.contains('renew_token') &&
                                 !connUrl.contains('renew_token')) {
                               // Verify the renew_token actually belongs to this room
-                              final storedDesc = ShareConnectionDescriptor.parse(stored.url);
+                              final storedDesc =
+                                  ShareConnectionDescriptor.parse(stored.url);
                               if (storedDesc.roomId == desc.roomId) {
-                                debugPrint('[chat] onSessionTap: using renew_token URL for room=${desc.roomId}');
+                                debugPrint(
+                                    '[chat] onSessionTap: using renew_token URL for room=${desc.roomId}');
                                 connUrl = stored.url;
                               } else {
-                                debugPrint('[chat] onSessionTap: renew_token room mismatch ${storedDesc.roomId} != ${desc.roomId}, ignoring');
+                                debugPrint(
+                                    '[chat] onSessionTap: renew_token room mismatch ${storedDesc.roomId} != ${desc.roomId}, ignoring');
                               }
                             }
                           } catch (e) {
-                            debugPrint('[chat] onSessionTap: URL lookup failed: $e');
+                            debugPrint(
+                                '[chat] onSessionTap: URL lookup failed: $e');
                           }
                           final bgService =
                               bgConn.adoptService(session.sessionId);
@@ -711,8 +795,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                             ),
                             content: Text(
                               t('workspace.clear_cache_confirm_body'),
-                              style:
-                                  TextStyle(color: AppColors.textSecondary),
+                              style: TextStyle(color: AppColors.textSecondary),
                             ),
                             actions: [
                               TextButton(
@@ -720,8 +803,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                                 child: Text(t('common.cancel')),
                               ),
                               TextButton(
-                                onPressed: () =>
-                                    Navigator.of(dctx).pop(true),
+                                onPressed: () => Navigator.of(dctx).pop(true),
                                 style: TextButton.styleFrom(
                                   foregroundColor: Colors.red,
                                 ),
@@ -733,7 +815,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                         if (confirmed == true) {
                           bgConn.disposeAll();
                           connNotifier.disconnect();
-                          await ref.read(workspaceCacheProvider.notifier).clearAll();
+                          await ref
+                              .read(workspaceCacheProvider.notifier)
+                              .clearAll();
                           setModalState(() {});
                         }
                       },
@@ -1405,7 +1489,13 @@ class _ToolResultCardState extends State<_ToolResultCard> {
               _buildMarkdownResult()
             else
               Text(
-                _expanded && _usesPayload ? widget.payload! : preview,
+                // Expanded state must show the FULL text: payload when the
+                // host sent a dedicated payload, else the complete result.
+                // Falling back to `preview` here made >120-char results
+                // permanently unreachable in the UI (#4286).
+                _expanded
+                    ? (_usesPayload ? widget.payload! : widget.result)
+                    : preview,
                 style: TextStyle(
                   color: widget.isError
                       ? AppColors.danger
@@ -1632,257 +1722,5 @@ class _ConnectionStatusIcon extends StatelessWidget {
           tooltip: t('connect.status_disconnected'),
         );
     }
-  }
-}
-
-
-/// A collapsible workspace group with its sessions underneath.
-
-/// Derive display name from workspaceKey for session titles.
-String _displayNameFromKeyForSession(String key, String fallback) {
-  if (fallback.isNotEmpty) return fallback;
-  try {
-    final padded = key + '=' * ((4 - key.length % 4) % 4);
-    final decoded = utf8.decode(base64Url.decode(padded));
-    final parts = decoded.split('/').where((s) => s.isNotEmpty).toList();
-    return parts.isNotEmpty ? parts.last : fallback;
-  } catch (_) {
-    return fallback;
-  }
-}
-
-class _WorkspaceGroup extends StatefulWidget {
-  final WorkspaceRecord workspace;
-  final List<CachedSessionRecord> sessions;
-  final bool isActiveWorkspace;
-  final String liveSessionId;
-  final Set<String> liveSessionIds;
-  final void Function(CachedSessionRecord) onSessionTap;
-
-  const _WorkspaceGroup({
-    required this.workspace,
-    required this.sessions,
-    required this.isActiveWorkspace,
-    required this.liveSessionId,
-    required this.liveSessionIds,
-    required this.onSessionTap,
-  });
-
-  @override
-  State<_WorkspaceGroup> createState() => _WorkspaceGroupState();
-}
-
-class _WorkspaceGroupState extends State<_WorkspaceGroup> {
-  bool _expanded = false;
-
-  @override
-  void initState() {
-    super.initState();
-    // Auto-expand the active workspace
-    _expanded = widget.isActiveWorkspace;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final hasLiveSession = widget.sessions.any(
-        (s) => s.sessionId == widget.liveSessionId);
-    final hasBackgroundLive = widget.sessions.any(
-        (s) => widget.liveSessionIds.contains(s.sessionId));
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Workspace header
-        ListTile(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
-          tileColor: AppColors.backgroundElevated.withValues(alpha: 0.5),
-          contentPadding: EdgeInsets.zero,
-          leading: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                _expanded ? Icons.folder_open : Icons.folder,
-                color: widget.isActiveWorkspace
-                    ? Colors.blueAccent
-                    : AppColors.textSecondary,
-                size: 20,
-              ),
-              if (hasLiveSession)
-                Container(
-                  margin: EdgeInsets.only(left: 2),
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: Colors.greenAccent,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              if (!hasLiveSession && hasBackgroundLive)
-                Container(
-                  margin: EdgeInsets.only(left: 2),
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: Colors.orangeAccent,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-            ],
-          ),
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                widget.workspace.displayName,
-                style: TextStyle(
-                  color: AppColors.textPrimary,
-                  fontSize: 14,
-                  fontWeight: widget.isActiveWorkspace
-                      ? FontWeight.w600
-                      : FontWeight.normal,
-                ),
-              ),
-              // Show parent dir when display name might be ambiguous
-              if (widget.workspace.parentPath != null &&
-                  widget.workspace.parentPath!.isNotEmpty)
-                Text(
-                  widget.workspace.parentPath!,
-                  style: TextStyle(
-                    color: AppColors.textMuted,
-                    fontSize: 11,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-            ],
-          ),
-          // trailing removed — status dots are inline in leading
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (widget.isActiveWorkspace)
-                Padding(
-                  padding: EdgeInsets.only(right: 4),
-                  child: const Icon(Icons.check, color: Colors.blueAccent,
-                      size: 18),
-                ),
-              Icon(
-                _expanded ? Icons.expand_less : Icons.expand_more,
-                color: AppColors.textSecondary,
-                size: 20,
-              ),
-            ],
-          ),
-          onTap: () => setState(() => _expanded = !_expanded),
-        ),
-        // Sessions underneath
-        if (_expanded && widget.sessions.isNotEmpty)
-          Padding(
-            padding: EdgeInsets.only(left: 16),
-            child: Column(
-              children: [
-                for (final session in widget.sessions)
-                  ListTile(
-                    dense: true,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    tileColor: AppColors.backgroundElevated
-                        .withValues(alpha: 0.25),
-                    contentPadding: EdgeInsets.only(left: 8, right: 8),
-                    leading: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          session.sessionId == widget.liveSessionId
-                              ? Icons.bolt
-                              : Icons.chat_bubble_outline,
-                          color: session.sessionId == widget.liveSessionId
-                              ? Colors.greenAccent
-                              : (widget.liveSessionIds
-                                      .contains(session.sessionId)
-                                  ? Colors.orangeAccent
-                                  : AppColors.textMuted),
-                          size: 16,
-                        ),
-                        if (session.sessionId == widget.liveSessionId ||
-                            widget.liveSessionIds
-                                .contains(session.sessionId))
-                          Container(
-                            margin: EdgeInsets.only(left: 2),
-                            width: 5,
-                            height: 5,
-                            decoration: BoxDecoration(
-                              color: session.sessionId == widget.liveSessionId
-                                  ? Colors.greenAccent
-                                  : Colors.orangeAccent,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                      ],
-                    ),
-                    title: Text(
-                      () {
-                        // Prefer host-provided session title
-                        if (session.title.isNotEmpty) {
-                          return session.title;
-                        }
-                        // Fallback: workspace name + date
-                        final wsName = _displayNameFromKeyForSession(
-                            widget.workspace.key, widget.workspace.displayName);
-                        final date = session.sessionId.length >= 8
-                            ? session.sessionId.substring(0, 8)
-                            : session.sessionId;
-                        return '$wsName · $date';
-                      }(),
-                      style: TextStyle(
-                        color: AppColors.textPrimary,
-                        fontSize: 13,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(
-                      session.model.isNotEmpty
-                          ? '${session.provider} / ${session.model}'
-                          : session.provider,
-                      style: TextStyle(color: AppColors.textMuted, fontSize: 11),
-                    ),
-                    trailing: session.sessionId == widget.liveSessionId
-                        ? Text(t('chat.live'),
-                            style: TextStyle(
-                              color: Colors.greenAccent,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                            ))
-                        : (widget.liveSessionIds.contains(session.sessionId)
-                            ? Text('online',
-                                style: TextStyle(
-                                  color: Colors.orangeAccent,
-                                  fontSize: 10,
-                                ))
-                            : Text(_formatTimeAgo(session.lastUpdatedAt),
-                                style: TextStyle(
-                                  color: AppColors.textMuted,
-                                  fontSize: 10,
-                                ))),
-                    onTap: () => widget.onSessionTap(session),
-                  ),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-
-  String _formatTimeAgo(DateTime dt) {
-    final diff = DateTime.now().difference(dt);
-    if (diff.inMinutes < 1) return 'now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    if (diff.inHours < 24) return '${diff.inHours}h ago';
-    if (diff.inDays < 7) return '${diff.inDays}d ago';
-    return '${(diff.inDays / 7).floor()}w ago';
   }
 }

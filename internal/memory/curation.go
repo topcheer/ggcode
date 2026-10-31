@@ -39,6 +39,19 @@ type MemoryMeta struct {
 	Uses       int       // prompt-injection count (debounced)
 	LastUsedAt time.Time // last injection time
 	Source     string    // origin label: save_memory:<scope>, run-reflection, ...
+
+	// Outcome (sa-139, MemGuard arXiv:2608.21867): verification signal of the
+	// run that last wrote this entry - "success"/"partial"/"failed". Empty
+	// means unknown (legacy or agent-curated without run telemetry). Feeds
+	// recall arbitration trust scoring; NOT an admission blocker - failed-run
+	// observations keep negative-example value, they just rank lower.
+	Outcome string
+
+	// Conflicts (sa-146, REALM arXiv:2609.33226): count of high-confidence
+	// recall arbitration losses (retrieval-time signal, unlike the
+	// write-time Outcome above). Consumed by cap eviction order and trust
+	// scoring; never a deletion trigger (non-destructive contract, r488).
+	Conflicts int
 }
 
 // transientExpiry is how long transient memories stay active.
@@ -85,9 +98,13 @@ var yearPattern = regexp.MustCompile(`^\d{4}$`)
 // twoDigitPattern matches 2-digit month/day segments.
 var twoDigitPattern = regexp.MustCompile(`^\d{2}$`)
 
-// versionPattern matches r1, r2, r3, cycle1, cycle2, summary, r4 etc.
-// These are always stripped regardless of position.
-var versionPattern = regexp.MustCompile(`^(r\d+|cycle\d+|summary)$`)
+// versionPattern matches r1, r2, r3, cycle1, cycle2, r4 etc.
+// #3826: `summary` is no longer stripped UNCONDITIONALLY. Mid-key it
+// carries real semantics (research-summary-methods collapsed onto the
+// unrelated research-methods key and GC deleted the loser); as a TRAILING
+// segment it is still a version-suffix (impl-task-...-cycle1-summary) and
+// dedupKeyFor strips it positionally.
+var versionPattern = regexp.MustCompile(`^(r\d+|cycle\d+)$`)
 
 // monthDayPattern matches jul6, jul10, aug1 etc. #1278: restricted to REAL
 // month abbreviations - the old `^[a-z]{3}\d+$` swallowed semantic
@@ -107,8 +124,10 @@ func dedupKeyFor(key string) string {
 	afterDate := false    // past the date, skip version/monthday segments
 
 	for i, part := range parts {
-		// Version segments (r1, cycle2, summary) always stripped
-		if versionPattern.MatchString(part) {
+		// Version segments (r1, cycle2) always stripped; a TRAILING
+		// `summary` is a version-suffix too (#3826) - but a mid-key summary
+		// is semantic content and must survive.
+		if versionPattern.MatchString(part) || (part == "summary" && i == len(parts)-1) {
 			continue
 		}
 		if skippingDate {
@@ -149,9 +168,13 @@ func dedupKeyFor(key string) string {
 
 // classifyMemory determines the curation category from the memory key.
 func classifyMemory(key string) MemoryCategory {
-	for _, p := range transientPatterns {
+	// #3826: strong intent (persistent/evolving PREFIX patterns) wins over
+	// weak transient INFIXES. The old transient-first order let `-fix-`
+	// hijack `^release-`: release-fix-runbook was classified transient and
+	// expired after 30 days although its persistent prefix meant forever.
+	for _, p := range persistentPatterns {
 		if p.MatchString(key) {
-			return CategoryTransient
+			return CategoryPersistent
 		}
 	}
 	for _, p := range evolvingPatterns {
@@ -159,9 +182,9 @@ func classifyMemory(key string) MemoryCategory {
 			return CategoryEvolving
 		}
 	}
-	for _, p := range persistentPatterns {
+	for _, p := range transientPatterns {
 		if p.MatchString(key) {
-			return CategoryPersistent
+			return CategoryTransient
 		}
 	}
 	return CategoryDefault
@@ -272,16 +295,22 @@ func capByCountSplit(active []MemoryMeta, max int) (kept, evicted []MemoryMeta) 
 	// Eviction order is interference-aware (Microsoft Human-Inspired Memory
 	// 2026, interference-based forgetting; arXiv:2603.07670 9.4 learning to
 	// forget): a never-injected entry is pure interference - it costs prompt
-	// budget but has never earned it - so Uses==0 entries are evicted FIRST
-	// (oldest-first within that group); entries with Uses>0 are evicted only
-	// after all never-used ones, still oldest-first. The old CreatedAt-only
+	// budget but has never earned it - so Uses==0 entries are evicted before
+	// used ones (oldest-first within each group). The old CreatedAt-only
 	// order could evict a frequently-injected old default entry while keeping
 	// a never-used one that had simply been saved later.
+	// sa-146 (REALM 2609.33226): repeatedly-arbitrated losers (Conflicts>=2)
+	// rank below even never-used entries - a contradictory signal re-injected
+	// every recall is worse than absent signal, so it is the first to go when
+	// the cap bites.
 	usageTier := func(m MemoryMeta) int {
-		if m.Uses == 0 {
-			return 0 // evict first: never contributed
+		if m.Conflicts >= 2 {
+			return 0 // evict first: repeated high-confidence arbitration loser
 		}
-		return 1 // evict later: has retrieval history
+		if m.Uses == 0 {
+			return 1 // evict next: never contributed
+		}
+		return 2 // evict last: has retrieval history
 	}
 	sort.Slice(defaults, func(i, j int) bool {
 		ti, tj := usageTier(defaults[i]), usageTier(defaults[j])

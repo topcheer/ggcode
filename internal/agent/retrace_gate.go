@@ -66,8 +66,8 @@ func retraceShouldCheck(pv postEditVerifyState, researchMode, fired bool) bool {
 }
 
 // uncommittedDiff returns `git diff HEAD` output capped to retraceDiffCap
-// chars. Empty string on any error (non-repo, git missing) - the gate then
-// passes through (non-interference).
+// chars, plus diffs of untracked (new) files. Empty string on any error
+// (non-repo, git missing) - the gate then passes through (non-interference).
 func uncommittedDiff(workingDir string) string {
 	out, err := exec.Command("git", "-C", workingDir, "diff", "HEAD").Output()
 	if err != nil {
@@ -75,10 +75,60 @@ func uncommittedDiff(workingDir string) string {
 		return ""
 	}
 	s := strings.TrimSpace(string(out))
+	// #4210: `git diff HEAD` is blind to untracked files, and brand-new file
+	// delivery (write_file of a new module + its test) is one of the most
+	// common agent outputs. Without this, an all-new-file delivery produced
+	// a 0-byte diff and the gate silently skipped (scenario A), while a mixed
+	// tracked+untracked delivery fed the reconstruction a biased partial diff
+	// that could misjudge a correct change as partial/misaligned (scenario B).
+	if extra := untrackedDiff(workingDir); extra != "" {
+		if s == "" {
+			s = extra
+		} else {
+			s = s + "\n" + extra
+		}
+	}
 	if len(s) > retraceDiffCap {
 		s = s[:retraceDiffCap] + "\n... (diff truncated)"
 	}
 	return s
+}
+
+// untrackedDiff returns concatenated diffs for untracked files, so new-file
+// deliveries are visible to the reconstruction. Uses
+// `git ls-files --others --exclude-standard` + per-file
+// `git diff --no-index /dev/null <file>` - deliberately NOT `git add -N`,
+// which would leave intent-to-add marks in the user's index and perturb
+// `git status`/`git stash` after the gate finishes. Best-effort: any error
+// on an individual file skips just that file.
+func untrackedDiff(workingDir string) string {
+	ls, err := exec.Command("git", "-C", workingDir, "ls-files", "--others", "--exclude-standard").Output()
+	if err != nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, f := range strings.Split(strings.TrimRight(string(ls), "\n"), "\n") {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		out, derr := exec.Command("git", "-C", workingDir, "diff", "--no-index", "--", "/dev/null", f).Output()
+		// git diff --no-index exits 1 when differences exist - that IS the
+		// success case here; only skip on other failures (missing file, etc).
+		if derr != nil {
+			if ee, ok := derr.(*exec.ExitError); !ok || ee.ExitCode() != 1 {
+				continue
+			}
+		}
+		body := strings.TrimRight(string(out), "\n")
+		if body != "" {
+			if sb.Len() > 0 {
+				sb.WriteByte('\n')
+			}
+			sb.WriteString(body)
+		}
+	}
+	return sb.String()
 }
 
 // buildBackwardMessages constructs the anchoring-free completion request.
@@ -168,13 +218,30 @@ func retraceInjectMessage(verdict, guidance string) string {
 
 // runRetraceVerification executes both stages and returns the gate injection
 // message ("" = pass through). Errors never block the stop.
-func (a *Agent) runRetraceVerification(ctx context.Context, task, diff string) string {
-	_, backward, _, _, _, err := a.streamChatResponse(ctx, buildBackwardMessages(diff), nil, nil)
+func (a *Agent) runRetraceVerification(ctx context.Context, task, diff string) (msg string) {
+	// Best-effort gate: a panic inside the verification stream (provider
+	// bug, nil deref, ...) must never kill a run that already earned its
+	// stop - same doctrine as the error paths below. Real-world basis:
+	// crash agent-20261016-101603 (nil pointer dereference inside
+	// ChatStream reached this gate and took down the whole agent goroutine;
+	// the outer recover in RunStreamWithContent only wrote a crash log,
+	// losing the run).
+	defer func() {
+		if r := recover(); r != nil {
+			debug.Log("agent", "retrace: recovered from panic in verification stream (%v), passing through", r)
+			msg = ""
+		}
+	}()
+	// Note: this recover covers ONLY the gate goroutine — the synchronous
+	// ChatStream call and the stream drain loop. A panic inside the stall
+	// detection reader goroutine (streamWithStallDetection) does not
+	// propagate here; that goroutine runs under its own safego recover.
+	_, backward, _, _, _, _, err := a.streamChatResponse(ctx, buildBackwardMessages(diff), nil, nil)
 	if err != nil || strings.TrimSpace(backward) == "" {
 		debug.Log("agent", "retrace: backward stage failed (%v), passing through", err)
 		return ""
 	}
-	_, recon, _, _, _, err2 := a.streamChatResponse(ctx, buildReconcileMessages(task, backward, diff), nil, nil)
+	_, recon, _, _, _, _, err2 := a.streamChatResponse(ctx, buildReconcileMessages(task, backward, diff), nil, nil)
 	if err2 != nil || strings.TrimSpace(recon) == "" {
 		debug.Log("agent", "retrace: reconcile stage failed (%v), passing through", err2)
 		return ""

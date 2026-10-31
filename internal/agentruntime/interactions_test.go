@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"testing"
 	"time"
@@ -157,4 +158,65 @@ func TestAwaitApprovalCtxDoneReturnsNonDecision(t *testing.T) {
 			t.Fatalf("cancelled ctx.Done -> %v, want Cancelled", d)
 		}
 	})
+}
+
+// #4151: concurrent approvals must resolve independently when each carries a
+// distinct request ID. This is the routing premise the desktop fix relies on:
+// unique IDs per request mean one approval's decision can never silence or
+// cross-wire another pending waiter.
+func TestConcurrentDistinctIDsResolveIndependently(t *testing.T) {
+	b := NewInteractionBroker()
+
+	const waiters = 8
+	perWaiter := make([]chan permission.Decision, waiters)
+	for i := range perWaiter {
+		perWaiter[i] = make(chan permission.Decision, 1)
+	}
+	for i := 0; i < waiters; i++ {
+		id := fmt.Sprintf("req-%d", i)
+		go func() {
+			perWaiter[i] <- b.AwaitApproval(context.Background(), ApprovalRequest{ID: id, ToolName: "run_command", Input: "echo"})
+		}()
+	}
+
+	// Registrations are keyed by ID; wait for all to be pending so resolves
+	// hit registered waiters deterministically.
+	deadline := time.After(5 * time.Second)
+	for {
+		if b.ApprovalCount() == waiters {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for %d registrations, got %d", waiters, b.ApprovalCount())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	// Even-indexed waiters are allowed, odd denied.
+	for i := 0; i < waiters; i += 2 {
+		if _, ok := b.ResolveApproval(fmt.Sprintf("req-%d", i), permission.Allow); !ok {
+			t.Fatalf("resolve req-%d should hit a registered waiter", i)
+		}
+	}
+	for i := 1; i < waiters; i += 2 {
+		if _, ok := b.ResolveApproval(fmt.Sprintf("req-%d", i), permission.Deny); !ok {
+			t.Fatalf("resolve req-%d should hit a registered waiter", i)
+		}
+	}
+
+	for i := 0; i < waiters; i++ {
+		select {
+		case got := <-perWaiter[i]:
+			want := permission.Deny
+			if i%2 == 0 {
+				want = permission.Allow
+			}
+			if got != want {
+				t.Fatalf("waiter %d: cross-wired decision, want %v got %v", i, want, got)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("waiter %d never received its decision (dead waiter)", i)
+		}
+	}
 }

@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestQueryConvergeNoQueries(t *testing.T) {
 	q := newQueryConvergeState()
@@ -64,19 +67,24 @@ func TestQueryConvergeWarnCap(t *testing.T) {
 	if msg1 := q.maybeWarn(4); msg1 == "" {
 		t.Fatal("expected first warning")
 	}
-	// Second warning suppressed (1 per run, batch 2 guidance-noise cleanup)
-	q.warned = false
+	// Second warning ESCALATES (cap 2 per run per the field contract; the
+	// old cap-1 encoding was the #3570 defect - the second escalation was
+	// unreachable and the detector went silent after one hint)
 	q.recordToolCall("grep", `{"pattern":"authentication login"}`, 5)
 	q.recordToolCall("grep", `{"pattern":"auth login handler"}`, 6)
-	if msg2 := q.maybeWarn(7); msg2 != "" {
-		t.Fatalf("expected second warning to be suppressed, got: %s", msg2)
+	msg2 := q.maybeWarn(7)
+	if msg2 == "" {
+		t.Fatal("expected escalated second warning")
 	}
-	if q.warnCount != 1 {
-		t.Fatalf("expected warnCount=1, got %d", q.warnCount)
+	if !strings.Contains(msg2, "escalated") {
+		t.Fatalf("second warning must escalate, got: %s", msg2)
 	}
-	// Third should also not fire
-	q.warned = false
-	if msg3 := q.maybeWarn(8); msg3 != "" {
+	if q.warnCount != 2 {
+		t.Fatalf("expected warnCount=2, got %d", q.warnCount)
+	}
+	// Third is capped
+	q.recordToolCall("grep", `{"pattern":"auth handler login session"}`, 8)
+	if msg3 := q.maybeWarn(9); msg3 != "" {
 		t.Fatalf("expected no third warning, got: %s", msg3)
 	}
 }

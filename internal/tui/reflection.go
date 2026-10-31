@@ -71,6 +71,19 @@ func setupReflection(a *agent.Agent) {
 			return
 		}
 
+		// sa-147 (LIMBO arXiv:2609.14138, inference-time memory allocation):
+		// scan the run's assistant corpus for injected-memory fingerprints.
+		// Consumption signal feeds EffectiveInlineBudget, so stores whose
+		// injections are never quoted stop paying the full inline budget.
+		// Runs before the insights early-return: consumption evidence is
+		// independent of whether this run produced insights.
+		if corpus := stats.AssistantCorpus(); corpus != "" {
+			autoMem.ScanConsumption(corpus)
+			if globalMem := memory.NewAutoMemory(); globalMem != nil {
+				globalMem.ScanConsumption(corpus)
+			}
+		}
+
 		key := "run-insights"
 		// #1388: LoadAll merges EVERY active memory key ("### {key}" per
 		// entry) - using it here ingested all unrelated memories into
@@ -92,10 +105,26 @@ func setupReflection(a *agent.Agent) {
 		if err := autoMem.SaveMemory(key, insights); err != nil {
 			debug.Log("tui", "reflection: failed to save insights: %v", err)
 		} else {
-			debug.Log("tui", "reflection: saved insights (%d chars, %d tools, %d files, %d commands)",
-				len(insights), len(stats.ToolCalls), len(stats.FilesEdited), len(stats.CommandsRun))
+			// sa-139 (MemGuard): attach the writing run's verification outcome
+			// to the sidecar so recall arbitration and curation can consume it.
+			autoMem.RecordOutcome(key, runOutcome(stats))
+			debug.Log("tui", "reflection: saved insights (%d chars, %d tools, %d files, %d commands, outcome=%s)",
+				len(insights), len(stats.ToolCalls), len(stats.FilesEdited), len(stats.CommandsRun), runOutcome(stats))
 		}
 	})
+}
+
+// runOutcome (sa-139, MemGuard) distills the run's verification signal to
+// the three-state label consumed by memory provenance and experience cases.
+func runOutcome(stats agent.RunStats) string {
+	switch {
+	case stats.Success && stats.ErrorCount == 0:
+		return "success"
+	case !stats.Success:
+		return "failed"
+	default:
+		return "partial"
+	}
 }
 
 // recordExperienceCase distills a completed run into the project experience
@@ -114,13 +143,7 @@ func recordExperienceCase(a *agent.Agent, stats agent.RunStats) (repeatedTask bo
 		return false
 	}
 
-	outcome := "partial"
-	switch {
-	case stats.Success && stats.ErrorCount == 0:
-		outcome = "success"
-	case !stats.Success:
-		outcome = "failed"
-	}
+	outcome := runOutcome(stats)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d LLM turns, %d tool calls", stats.Iterations, len(stats.ToolCalls))

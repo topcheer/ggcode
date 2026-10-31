@@ -97,9 +97,9 @@ func retryHintFor(code browserErrCode) string {
 // cancelled, tab gone) - callers must treat that as no-information, never
 // as element-missing.
 func probeSelectorExists(ctx context.Context, selector string) (exists, ok bool) {
-	var found bool
 	expr := fmt.Sprintf(`(function(){return !!document.querySelector(%q);})()`, selector)
-	if err := chromedp.Run(ctx, chromedp.Evaluate(expr, &found)); err != nil {
+	found, err := chromedp.Run(ctx, chromedp.Evaluate[bool](expr))
+	if err != nil {
 		return false, false
 	}
 	return found, true

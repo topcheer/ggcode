@@ -79,39 +79,83 @@ func detectGoBuildTags(workingDir string) []string {
 			continue
 		}
 		content := string(data)
-		words := strings.Fields(content)
+		// #3619: resolve Makefile variable references first. The repo's
+		// real form is `TAGS := goolm` + `-tags "$(TAGS)"` - the old code
+		// took the next Fields token verbatim and returned the literal
+		// "$(TAGS)" as a build tag.
+		vars := makefileVars(content)
+		words := strings.Fields(expandMakefileVars(content, vars))
 		for i, w := range words {
 			// Match -tags <tags> (space-separated)
 			if w == "-tags" && i+1 < len(words) {
-				tag := strings.Trim(words[i+1], "'\"")
-				tags := strings.Split(tag, ",")
-				var result []string
-				for _, t := range tags {
-					t = strings.TrimSpace(t)
-					if t != "" {
-						result = append(result, t)
-					}
-				}
-				return result
+				return splitBuildTagList(words[i+1])
 			}
 			// Match -tags=<tags>
 			if strings.HasPrefix(w, "-tags=") {
-				tag := strings.TrimPrefix(w, "-tags=")
-				tag = strings.Trim(tag, "'\"")
-				tags := strings.Split(tag, ",")
-				var result []string
-				for _, t := range tags {
-					t = strings.TrimSpace(t)
-					if t != "" {
-						result = append(result, t)
-					}
-				}
-				return result
+				return splitBuildTagList(strings.TrimPrefix(w, "-tags="))
 			}
 		}
 		break // found Makefile but no tags — stop searching
 	}
 	return nil
+}
+
+// makefileVars extracts simple `NAME := value` / `NAME = value` / `NAME ?=
+// value` assignments (first wins, matching make).
+func makefileVars(content string) map[string]string {
+	vars := map[string]string{}
+	for _, ln := range strings.Split(content, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" || strings.HasPrefix(ln, "#") {
+			continue
+		}
+		eq := strings.Index(ln, "=")
+		if eq <= 0 {
+			continue
+		}
+		name := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(ln[:eq], ":"), "+"))
+		if name == "" || strings.ContainsAny(name, " \t$") {
+			continue
+		}
+		if _, dup := vars[name]; dup {
+			continue
+		}
+		vars[name] = strings.TrimSpace(ln[eq+1:])
+	}
+	return vars
+}
+
+// expandMakefileVars substitutes $(NAME) references (two passes so
+// VAR := $(OTHER) chains resolve).
+func expandMakefileVars(s string, vars map[string]string) string {
+	for pass := 0; pass < 2; pass++ {
+		changed := false
+		for name, val := range vars {
+			ref := "$(" + name + ")"
+			if strings.Contains(s, ref) {
+				s = strings.ReplaceAll(s, ref, val)
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	return s
+}
+
+// splitBuildTagList trims quotes and splits a -tags argument value.
+func splitBuildTagList(v string) []string {
+	tag := strings.Trim(v, "'\"")
+	tags := strings.Split(tag, ",")
+	var result []string
+	for _, t := range tags {
+		t = strings.TrimSpace(t)
+		if t != "" && !strings.HasPrefix(t, "$") {
+			result = append(result, t)
+		}
+	}
+	return result
 }
 
 // buildImportGraph runs `go list` to build a map of package import paths to
@@ -275,11 +319,13 @@ func appendNonEmpty(dst []string, src []string) []string {
 // tests should also run because they are affected by the change to util via
 // the intermediate dependency.
 //
-// Returns nil if the import graph can't be built or no importers are found.
-func transitiveImporters(workingDir string, changedDirs []string) []string {
+// Returns nil if no importers are found. The second return value is false
+// when the import graph itself could not be built (buildImportGraph returned
+// nil), letting callers annotate the degradation (#3648).
+func transitiveImporters(workingDir string, changedDirs []string) ([]string, bool) {
 	graph, modPath := buildImportGraph(workingDir)
 	if graph == nil || len(changedDirs) == 0 {
-		return nil
+		return nil, graph != nil
 	}
 
 	// Build initial target set: modPath/dir for each changed dir.
@@ -332,7 +378,7 @@ func transitiveImporters(workingDir string, changedDirs []string) []string {
 	debug.Log("test-impact", "transitiveImporters: BFS complete, seen=%d packages", len(seen))
 
 	if len(seen) == 0 {
-		return nil
+		return nil, true
 	}
 
 	// Collect importers in sorted order for determinism.
@@ -349,7 +395,7 @@ func transitiveImporters(workingDir string, changedDirs []string) []string {
 	}
 	sort.Strings(importers)
 	debug.Log("test-impact", "transitiveImporters: result=%v", importers)
-	return importers
+	return importers, true
 }
 
 // impactScopedTestCommandWithDeps builds a `go test` command that covers all
@@ -363,7 +409,10 @@ func transitiveImporters(workingDir string, changedDirs []string) []string {
 // occurs, the suffix indicates how many importers were omitted (e.g., "# +5
 // importers omitted").
 //
-// Falls back to impactScopedTestCommand if the import graph can't be built.
+// #3648: if the import graph can't be built (cold cache, go list failure),
+// the command degrades to changed-packages-only and is annotated "#
+// import graph unavailable, importers not included" so the agent can tell
+// degradation apart from "no importers exist".
 func impactScopedTestCommandWithDeps(workingDir string) string {
 	if workingDir == "" {
 		return ""
@@ -377,8 +426,10 @@ func impactScopedTestCommandWithDeps(workingDir string) string {
 		return ""
 	}
 
-	// Find downstream consumers.
-	importerDirs := transitiveImporters(workingDir, changedDirs)
+	// Find downstream consumers. graphOK=false means the import graph
+	// could not be built (cold cache, go list failure/timeout) - #1296
+	// keeps this non-fatal, but the degradation must be visible.
+	importerDirs, graphOK := transitiveImporters(workingDir, changedDirs)
 
 	// Merge changed dirs and importer dirs, deduplicating.
 	allDirs := make(map[string]bool, len(changedDirs)+len(importerDirs))
@@ -390,7 +441,7 @@ func impactScopedTestCommandWithDeps(workingDir string) string {
 	}
 
 	if len(allDirs) == 0 {
-		return impactScopedTestCommand(workingDir)
+		return "" // unreachable in practice (changedDirs non-empty) but stay safe
 	}
 
 	// Build changedSet for quick lookup.
@@ -444,7 +495,7 @@ func impactScopedTestCommandWithDeps(workingDir string) string {
 
 	parts := make([]string, len(finalList))
 	for i, d := range finalList {
-		parts[i] = "./" + d + "/"
+		parts[i] = goPkgArg(d)
 	}
 	// #1296: keep go list and go test tag semantics symmetric - a project
 	// gated by build tags (e.g. goolm across the whole tree) made the bare
@@ -456,6 +507,9 @@ func impactScopedTestCommandWithDeps(workingDir string) string {
 	cmd += " " + strings.Join(parts, " ")
 	if omitted > 0 {
 		cmd += fmt.Sprintf(" # +%d packages omitted", omitted)
+	}
+	if !graphOK {
+		cmd += " # import graph unavailable, importers not included"
 	}
 
 	if len(importerDirs) > 0 {

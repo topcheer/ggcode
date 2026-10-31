@@ -213,6 +213,20 @@ Multiple instances in the same workspace each appear as separate entries.
 
 Stale port files (from crashed or killed processes) are automatically cleaned up on read.
 
+### bom
+
+Print a bill of materials for the agent's learning artifacts (see [Learning-Artifact BOM](learning-artifact-bom.md)):
+
+```bash
+ggcode bom                      # Inventory for the current workspace + home
+ggcode bom --workspace /path    # Inventory for another workspace
+```
+
+Aggregates skills, staged skills, memories, and trajectory insights into one
+deterministic JSON inventory with content hash, source path, and the promotion
+gate each artifact passed (`knight` / `knight-staging` / `auto` / `manual` /
+`holdout`). Read-only.
+
 ### report
 
 Generate a self-contained HTML analytics report from all session JSONL files:
@@ -266,5 +280,7 @@ ggcode version                         # Print version, commit, and build date
 | `--resume [id]` | Resume a session |
 | `--resume-picker` | Open session picker |
 | `--new-session` | Skip auto-resume, always start a new session |
+| `--plain` | Linear no-TUI frontend (also auto-selected when `TERM=dumb` or unset). See [Plain Mode](plain-mode.md) |
+| `--persist-session` | With `--plain`: append every message to the session store (write-only; auto-resume/picker ignore these sessions) |
 | `-v` | Shorthand for `--version` |
 | `-h, --help` | Show help |

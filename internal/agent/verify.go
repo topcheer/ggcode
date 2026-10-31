@@ -86,6 +86,13 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 	if len(runStats.FilesEdited) > 0 {
 		a.verifyProgress("Choosing scoped verification…")
 		cmd = a.llmDecideVerifyCommand(ctx, runStats.FilesEdited)
+		if cmd == skipVerifyCommand {
+			// #4523: the oracle explicitly decided no verification applies
+			// (e.g. markdown-only edits). Do NOT override with the
+			// detectBuildSystem fallback.
+			debug.Log("verify", "async: skipping - oracle decided no verification applies")
+			return
+		}
 	}
 	if cmd == "" {
 		cmd = detectBuildSystem(workingDir)
@@ -149,7 +156,7 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 	}
 	errorSummary += "\nFix these issues and ensure the build passes."
 	if a.verifyRegression != nil {
-		transition, regressionSummary := a.verifyRegression.classifyErrorsWithTransition(result.Errors)
+		transition, regressionSummary := a.verifyRegression.classifyErrorsWithTransition(result.Errors, cmd)
 		errorSummary += regressionSummary
 
 		// Feed the per-round transition into the self-correction stability gate.
@@ -216,7 +223,12 @@ func buildVerifyContext(workingDir string) string {
 		content := string(data)
 		var targets []string
 		for _, t := range []string{"test", "verify", "check", "lint", "ci", "build"} {
-			if strings.Contains(content, t+":") {
+			// #3801 A: bare strings.Contains(t+":") matches LONGER targets'
+			// prefixes (Makefile with only "unit-test:" claimed a phantom
+			// `test` target) and variable assignments. detectBuildSystem's
+			// hasMakeTarget already anchors at line start, skips comments
+			// and `=`/`:=` assignments - reuse it instead of a weaker copy.
+			if hasMakeTarget(content, t) {
 				targets = append(targets, t)
 			}
 		}
@@ -292,6 +304,13 @@ Scoping rules - verification must be proportional to the change:
 	}
 	return sysText + summary
 }
+
+// skipVerifyCommand is the sentinel llmDecideVerifyCommand returns for an
+// EXPLICIT oracle SKIP decision (#4523) - distinct from "" (no decision
+// obtained: provider failure/empty output), so callers do not override a
+// deliberate "no verification applies" with the detectBuildSystem
+// fallback (a full make verify-ci on a docs-only change).
+const skipVerifyCommand = "\x00SKIP"
 
 // llmDecideVerifyCommand asks the LLM to output a single verification command
 // for the CHANGED FILES of the current run. Returns empty string if no
@@ -379,7 +398,15 @@ func (a *Agent) llmDecideVerifyCommand(ctx context.Context, changedFiles []strin
 	a.emitUsageWithSource(resp.Usage, "verify")
 
 	cmd := stripCodeFence(strings.TrimSpace(extractText(resp.Message)))
-	if strings.EqualFold(cmd, "SKIP") || cmd == "" {
+	if strings.EqualFold(cmd, "SKIP") {
+		// #4523: an explicit SKIP is a DECISION (e.g. markdown-only edits
+		// need no build/test) - surfacing the sentinel keeps the callers
+		// from overriding it with the detectBuildSystem fallback (a full
+		// repo make verify-ci on a docs change). Provider failure and empty
+		// output still return "" (no decision obtained → fallback is right).
+		return skipVerifyCommand
+	}
+	if cmd == "" {
 		return ""
 	}
 
@@ -401,17 +428,80 @@ func (a *Agent) llmDecideVerifyCommand(ctx context.Context, changedFiles []strin
 // fenced command reached the pre-flight LookPath as a 3-backtick prefix,
 // failed, and came back Passed=true "verification skipped" - a silent
 // false green for every fenced oracle answer.
+//
+// #3743: the old prefix-strip + LastIndex-truncate pipeline broke on the
+// prose-then-fence shape common for non-English models ("建议运行：\n```bash
+// ..."). The LastIndex hit the CLOSING fence, leaving "prose + opening
+// fence" behind; the first-line cut then reduced it to the bare prose, which
+// leaked into executeVerifyCommand, failed LookPath, got skip-amnestied to
+// Passed=true, AND bypassed the deterministic fallback (a non-empty string
+// was returned). Now, whenever a fence opener appears ANYWHERE, the command
+// is the content of the LAST fenced block - prose before it is discarded.
+// isFirstTokenLangTag reports whether s's first whitespace-delimited token
+// is a Markdown code-fence language tag rather than a command verb (#3801 B).
+// "go" is deliberately ABSENT: in a single-line fence like ```go test ./x/`
+// it is the compiler command, not the Go language tag.
+func isFirstTokenLangTag(s string) bool {
+	sp := strings.IndexAny(s, " \t")
+	if sp < 0 {
+		return false
+	}
+	switch strings.ToLower(s[:sp]) {
+	case "bash", "sh", "shell", "zsh", "console", "shell-session",
+		"python", "python3", "py", "ruby", "node", "js", "javascript",
+		"typescript", "ts", "java", "rust", "c", "cpp", "sql", "yaml",
+		"json", "makefile", "dockerfile":
+		return true
+	}
+	return false
+}
+
 func stripCodeFence(s string) string {
 	t := strings.TrimSpace(s)
-	for _, fence := range []string{"```go", "```bash", "```sh", "```shell", "```"} {
-		if strings.HasPrefix(t, fence) {
-			t = strings.TrimPrefix(t, fence)
-			t = strings.TrimSpace(t)
+	// Collect every fence marker; fences pair left-to-right (opener, closer).
+	var fences []int
+	for i := 0; i+3 <= len(t); {
+		if j := strings.Index(t[i:], "```"); j >= 0 {
+			fences = append(fences, i+j)
+			i += j + 3
+		} else {
 			break
 		}
 	}
-	if idx := strings.LastIndex(t, "```"); idx >= 0 {
-		t = strings.TrimSpace(t[:idx])
+	if n := len(fences); n > 0 {
+		var block string
+		// Fences pair sequentially: f0/f1, f2/f3, ... (opener, closer).
+		// Use the LAST COMPLETE pair: a trailing ODD fence is stray noise
+		// (prose mentioning ``` or an unclosed aside), not a block
+		// boundary; pairing it with the preceding closer leaked
+		// inter-block prose (#3743 review follow-up).
+		if n >= 2 {
+			closerIdx := n - 1 - n%2 // n even -> n-1; n odd -> n-2
+			openerIdx := closerIdx - 1
+			block = t[fences[openerIdx]+3 : fences[closerIdx]]
+		} else {
+			// Single fence: an opener with unterminated content (prose
+			// before it, command after - the #3743 shape), or trailing
+			// noise after a bare command. Either way the command, if any,
+			// is what follows the fence's language-tag line.
+			block = t[fences[0]+3:]
+		}
+		if nl := strings.IndexByte(block, '\n'); nl >= 0 {
+			block = block[nl+1:] // drop the language-tag line
+		} else if sp := strings.IndexAny(block, " \t"); sp >= 0 {
+			// #3801 B: single-LINE fence (```go test ./x/```): there is no
+			// language-tag LINE. If the first token is a known tag, strip
+			// it and the remainder IS the command; if not (```go test ./x/`
+			// - "go" is also a command verb), the whole content is the
+			// command. Blank it and the oracle's scoped command silently
+			// fell back to whole-repo verification.
+			if isFirstTokenLangTag(block) {
+				block = strings.TrimSpace(block[sp+1:])
+			}
+		} else {
+			block = "" // lang-only / trailing fence: no command, use fallback
+		}
+		t = block
 	}
 	// Single line only - the oracle is asked for ONE command.
 	if nl := strings.IndexByte(t, '\n'); nl >= 0 {
@@ -486,7 +576,18 @@ func (a *Agent) executeVerifyCommand(ctx context.Context, command string) *Verif
 		result.Passed = false
 		result.Errors = extractErrorLines(outputStr)
 		if len(result.Errors) == 0 {
-			result.Errors = []string{fmt.Sprintf("command failed: %v", err)}
+			// #4607: marker-free failure output ("signal: killed", segfault,
+			// OOM) extracts zero lines via the substring gate above, leaving
+			// the auto-repair loop with only "exit status 1" - zero information
+			// (and ratchet MatchErrors cannot learn a pattern from it either).
+			// Attach the truncated raw output tail (same 2000-char budget as
+			// result.Output) so both errorSummary consumers inject the real
+			// failure text.
+			fallback := fmt.Sprintf("command failed: %v", err)
+			if tail := truncTail(strings.TrimSpace(outputStr), 2000); tail != "" { // #4690: keep the END - unmarked-failure signals live there
+				fallback += "\noutput tail:\n" + tail
+			}
+			result.Errors = []string{fallback}
 		}
 		debug.Log("verify", "FAILED: %d errors", len(result.Errors))
 	} else {
@@ -502,6 +603,12 @@ func (a *Agent) executeVerifyCommand(ctx context.Context, command string) *Verif
 // as failures injects bogus errors and spins auto-repair loops in projects
 // that simply lack tests or the toolchain.
 func isNonFailureExit(command string, code int) bool {
+	// #4638: compound detection must be SUBSTRING-based. ContainsAny takes a
+	// char SET, so "||;&&" meant any single | & ; - and the most common
+	// verification shape (`go test ./... 2>&1`, single pipes, bash &>
+	// redirects) lost the not-found/pytest amnesty, turned "verification
+	// skipped" into FAILED and burned 3-4 doomed auto-repair rounds.
+	isCompound := strings.Contains(command, "||") || strings.Contains(command, "&&") || strings.Contains(command, ";")
 	if code == 127 {
 		// Command not found. #1522 case B: only a MISSING LEADING binary is
 		// "nothing to verify" - `go test ./... || npm run build` with npm
@@ -510,14 +617,105 @@ func isNonFailureExit(command string, code int) bool {
 		// ("verification passed") with a genuine test failure swallowed.
 		// Compound commands (||, &&, ;) lose the amnesty: we cannot tell
 		// which leg exited 127 without shell semantics.
-		if strings.ContainsAny(command, "||;&&") {
+		if isCompound {
 			return false
 		}
 		return true
 	}
 	// pytest exit 5: no tests were collected - not a code defect.
+	// #4402: same compound-command guard as the 127 branch above (#1522
+	// case B) - `go test ./pkg; pytest` with a go compile failure exits 5
+	// from the pytest tail (0 collected); without the guard the real
+	// failure was swallowed into Passed=true ("silent green chain").
+	if isCompound {
+		return false
+	}
 	return code == 5 && strings.Contains(command, "pytest")
 }
+
+// zeroFailSummary reports a passing "0 failed"/"0 failures" summary
+// with a left digit boundary, so real failure summaries like "10 failed,
+// 2 passed" (or 20/100...) are not swallowed by the #4403 success-
+// negation filter (#4415 V1).
+func zeroFailSummary(lower string) bool {
+	for _, pat := range []string{"0 failed", "0 failures"} {
+		idx := 0
+		for {
+			i := strings.Index(lower[idx:], pat)
+			if i < 0 {
+				break
+			}
+			at := idx + i
+			if at == 0 || (lower[at-1] < '0' || lower[at-1] > '9') {
+				return true
+			}
+			idx = at + 1
+		}
+	}
+	return false
+}
+
+// isNegationProse reports whether the phrase occurs as a standalone
+// success assertion (word-boundary "no error(s)"/"without error(s)"),
+// NOT inside a larger failure message. #4555: pytest assertions like
+// "AssertionError: expected error, got no error" carry "no error" as
+// part of the failure context and must survive the noise filter; only
+// lines where the phrase stands as its own sentence/summary ("no errors",
+// "completed without error", "exit without error: clean") are noise.
+// Word boundary + left colon/quote independence keeps "got no error"
+// (phrase preceded by other prose words) out of the exemption.
+// isNegationProseAt reports whether the phrase occurs with word
+// boundaries as its own word sequence (optionally pluralized: "no errors",
+// "without errors"). #4555: bare strings.Contains swallowed pytest
+// assertion lines like "AssertionError: expected error, got no error".
+func isNegationProseAt(lower, phrase string) bool {
+	idx := 0
+	for {
+		i := strings.Index(lower[idx:], phrase)
+		if i < 0 {
+			return false
+		}
+		at := idx + i
+		end := at + len(phrase)
+		// Absorb a trailing plural so "no errors" still counts.
+		if end < len(lower) && lower[end] == 's' {
+			end++
+		}
+		// Left boundary: start of line, or a non-letter (space/punct).
+		leftOK := at == 0 || !sdIsLowerAZ(lower[at-1])
+		// Right boundary: end of line, or a non-letter.
+		rightOK := end >= len(lower) || !sdIsLowerAZ(lower[end])
+		if leftOK && rightOK {
+			return true
+		}
+		idx = at + 1
+	}
+}
+
+// carriesFailureContext reports whether the line carries failure-message
+// context around an otherwise-clean negation phrase, marking it as
+// assertion/prose content rather than a standalone success summary (#4555).
+func carriesFailureContext(lower string) bool {
+	for _, m := range []string{"assert", "expected", "got ", "runtimeerror", "exception"} {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeDiffBody reports whether a "-"-prefixed line is a unified diff
+// deletion body (e.g. "-errors.New(...)") rather than a flag echo (#4555).
+func looksLikeDiffBody(trimmed string) bool {
+	// Diff deletion bodies contain code punctuation typical of source lines:
+	// balanced call parens, quoted strings, or dot-qualified identifiers.
+	if strings.Count(trimmed, "(") > 0 && strings.Count(trimmed, ")") > 0 {
+		return true
+	}
+	return strings.Contains(trimmed, "\"") || strings.Contains(trimmed, ".")
+}
+
+func sdIsLowerAZ(b byte) bool { return b >= 'a' && b <= 'z' }
 
 // extractErrorLines pulls likely error lines from build/test output.
 func extractErrorLines(output string) []string {
@@ -526,6 +724,36 @@ func extractErrorLines(output string) []string {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		lower := strings.ToLower(trimmed)
+		// #4403: bare substring matching pulled success negations and flag
+		// echoes into the ratchet learning pipeline: "0 failed, 3 passed"
+		// summaries from passing packages, "without error" prose, and
+		// "--fail-fast" argument echoes all generalized into bogus rules.
+		// #4415 V1: the first cut over-filtered - "0 failed" as a bare
+		// substring also swallowed "10 failed, 2 passed" (and 20/100...),
+		// and the HasPrefix("-") flag filter swallowed go test's standard
+		// "--- FAIL: TestX" per-test failure lines (only the package-level
+		// FAIL summary survived). Left-digit-boundary the zero counts and
+		// keep "--- " test-output markers out of the flag-echo filter.
+		if zeroFailSummary(lower) {
+			// #4555: "0 failed, 1 errored" merged-count lines lost the
+			// errored count to whole-line dropping; keep the line and let
+			// the per-segment filter below decide (segments without a real
+			// failure signal simply don't match the capture predicates).
+			continue
+		}
+		if (isNegationProseAt(lower, "no error") || isNegationProseAt(lower, "without error")) &&
+			!carriesFailureContext(lower) {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "--- ") &&
+			!looksLikeDiffBody(trimmed) &&
+			(strings.Contains(lower, "fail") || strings.Contains(lower, "error")) {
+			// flag/argument echo (e.g. "--fail-fast", "-errorflags"), not
+			// command output. "--- FAIL:"/"--- PASS:" test markers carry a
+			// space and are real output; diff deletion bodies like
+			// "-errors.New(...)" are unified-diff context, not echoes (#4555).
+			continue
+		}
 		if strings.Contains(lower, "error") || strings.Contains(lower, "fail") ||
 			strings.Contains(lower, "undefined:") || strings.Contains(lower, "cannot find") ||
 			strings.Contains(lower, "panic:") || strings.Contains(lower, "fatal") {
@@ -590,6 +818,11 @@ func (a *Agent) AutoVerifyEnabled() bool {
 // where the same hint (e.g. "use -tags goolm") appears on every go build call.
 const maxRuleInjectPerSession = 2
 
+// maxRulesPerInjection caps how many distinct rules may ride on ONE tool
+// result (#4293). Beyond this the block stops being a targeted hint and
+// becomes context noise that trains the agent to ignore it.
+const maxRulesPerInjection = 3
+
 // injectRulesIntoResult prepends matching rules to a tool result.
 // Rules are matched via two paths:
 //  1. Preventive: MatchingRulesForTool matches rule patterns against tool ARGS
@@ -611,7 +844,7 @@ func (a *Agent) injectRulesIntoResult(toolName string, args json.RawMessage, res
 	}
 
 	preventive := rs.MatchingRulesForTool(toolName, string(args))
-	reactive := rs.MatchingRulesForResult(resultContent)
+	reactive := rs.MatchingRulesForResult(resultContent, string(args))
 	matching := mergeRuleSets(preventive, reactive)
 	if len(matching) == 0 {
 		return resultContent
@@ -624,6 +857,9 @@ func (a *Agent) injectRulesIntoResult(toolName string, args json.RawMessage, res
 	}
 	var filtered []Rule
 	for _, r := range matching {
+		if len(filtered) >= maxRulesPerInjection {
+			break
+		}
 		if a.ruleInjectCount[r.ID] < maxRuleInjectPerSession {
 			filtered = append(filtered, r)
 			a.ruleInjectCount[r.ID]++
@@ -693,6 +929,12 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 		start := time.Now()
 		cmd = a.llmDecideVerifyCommand(ctx, runStats.FilesEdited)
 		debug.Log("verify", "sync: oracle chose verify command in %s: %q", time.Since(start), cmd)
+		if cmd == skipVerifyCommand {
+			// #4523: explicit oracle SKIP - same exit as "no command
+			// determined", but WITHOUT the detectBuildSystem override.
+			debug.Log("verify", "sync: skipping - oracle decided no verification applies")
+			return false, false
+		}
 	}
 	if cmd == "" {
 		cmd = detectBuildSystem(workingDir)
@@ -776,7 +1018,7 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 	}
 	errorSummary += "\nFix these issues and ensure the build passes."
 	if a.verifyRegression != nil {
-		transition, regressionSummary := a.verifyRegression.classifyErrorsWithTransition(result.Errors)
+		transition, regressionSummary := a.verifyRegression.classifyErrorsWithTransition(result.Errors, cmd)
 		errorSummary += regressionSummary
 
 		// Feed the per-round transition into the self-correction stability gate.

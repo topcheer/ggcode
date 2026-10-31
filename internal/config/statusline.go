@@ -13,6 +13,12 @@ type StatusLineConfig struct {
 	// TimeoutMS caps each invocation. Zero uses the 2s default. The last
 	// good output stays on screen while a refresh runs or times out.
 	TimeoutMS int `yaml:"timeout_ms,omitempty" json:"timeout_ms,omitempty"`
+	// OSC7501 opts into the OSC 7501 Program Status Protocol
+	// (https://mitchellh.com/writing/program-status-osc7501): ggcode emits
+	// state=idle/working/blocked/done/error escape records so terminals and
+	// agent-inbox tools can show whether it is busy or waiting on the user.
+	// Independent of Command; only emitted when stdout is a TTY.
+	OSC7501 bool `yaml:"osc_7501,omitempty" json:"osc_7501,omitempty"`
 }
 
 // Enabled reports whether a statusline command is configured.

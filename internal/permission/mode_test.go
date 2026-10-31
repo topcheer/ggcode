@@ -12,9 +12,9 @@ func TestPermissionModeString(t *testing.T) {
 	}{
 		{SupervisedMode, "supervised"},
 		{PlanMode, "plan"},
-		{AutoMode, "auto"},
+		{AutoMode, "supervised"}, // legacy alias normalizes
 		{BypassMode, "bypass"},
-		{AutopilotMode, "autopilot"},
+		{AutopilotMode, "bypass"}, // legacy alias normalizes
 		{PermissionMode(99), "supervised"},
 	}
 	for _, tt := range tests {
@@ -32,9 +32,9 @@ func TestParsePermissionMode(t *testing.T) {
 		{"plan", PlanMode},
 		{"Plan", PlanMode},
 		{"PLAN", PlanMode},
-		{"auto", AutoMode},
+		{"auto", SupervisedMode}, // legacy alias → canonical
 		{"bypass", BypassMode},
-		{"autopilot", AutopilotMode},
+		{"autopilot", BypassMode}, // legacy alias → canonical
 		{"supervised", SupervisedMode},
 		{"unknown", SupervisedMode},
 	}
@@ -46,20 +46,22 @@ func TestParsePermissionMode(t *testing.T) {
 }
 
 func TestPermissionModeNext(t *testing.T) {
-	if SupervisedMode.Next() != PlanMode {
-		t.Error("supervised.Next() should be plan")
+	// Two-mode cycle: supervised ↔ bypass. Legacy aliases normalize into
+	// the cycle; plan is tool-internal and cycles back to supervised.
+	if SupervisedMode.Next() != BypassMode {
+		t.Error("supervised.Next() should be bypass")
 	}
-	if PlanMode.Next() != AutoMode {
-		t.Error("plan.Next() should be auto")
+	if BypassMode.Next() != SupervisedMode {
+		t.Error("bypass.Next() should be supervised")
 	}
 	if AutoMode.Next() != BypassMode {
-		t.Error("auto.Next() should be bypass")
-	}
-	if BypassMode.Next() != AutopilotMode {
-		t.Error("bypass.Next() should be autopilot")
+		t.Error("auto(alias).Next() should be bypass")
 	}
 	if AutopilotMode.Next() != SupervisedMode {
-		t.Error("autopilot.Next() should be supervised")
+		t.Error("autopilot(alias).Next() should be supervised")
+	}
+	if PlanMode.Next() != SupervisedMode {
+		t.Error("plan.Next() should be supervised (tool-internal, not cycled)")
 	}
 }
 
@@ -97,18 +99,22 @@ func TestPlanModeDeniesWrites(t *testing.T) {
 		t.Errorf("PlanMode: write_file should be Deny, got %v err=%v", d, err)
 	}
 
-	// Run command should be denied
+	// two-mode refactor: plan mode ALLOWS command tools (only explicit
+	// file-writing tools are denied); the extremely-dangerous floor still
+	// gates (cmdInput is "rm -rf /" elsewhere in this test — Ask).
 	d, err = policy.Check("run_command", cmdInput)
-	if err != nil || d != Deny {
-		t.Errorf("PlanMode: run_command should be Deny, got %v err=%v", d, err)
+	if err != nil || d != Ask {
+		t.Errorf("PlanMode: extremely dangerous run_command should be Ask, got %v err=%v", d, err)
 	}
 	d, err = policy.Check("start_command", cmdInput)
-	if err != nil || d != Deny {
-		t.Errorf("PlanMode: start_command should be Deny, got %v err=%v", d, err)
+	if err != nil || d != Ask {
+		t.Errorf("PlanMode: extremely dangerous start_command should be Ask, got %v err=%v", d, err)
 	}
+	// write_command_input is not an explicit file-writing tool and its
+	// payload is stdin data, not a command (#197) — Allow in plan mode.
 	d, err = policy.Check("write_command_input", json.RawMessage(`{"job_id":"cmd-1","input":"rm -rf /"}`))
-	if err != nil || d != Deny {
-		t.Errorf("PlanMode: write_command_input should be Deny, got %v err=%v", d, err)
+	if err != nil || d != Allow {
+		t.Errorf("PlanMode: write_command_input should be Allow (#197 stdin data), got %v err=%v", d, err)
 	}
 
 	// lanchat should be allowed in plan mode (always-allowed tool)
@@ -142,12 +148,14 @@ func TestIMToolAlwaysAllowed(t *testing.T) {
 			t.Errorf("%s: im status should be Allow, got %v err=%v", mode.String(), d, err)
 		}
 	}
-	// The exfiltrating actions must NOT be blanket-allowed anymore: in plan
-	// mode (strict read-only) send_file must not come back Allow.
+	// two-mode refactor: plan mode no longer blanket-denies non-write
+	// tools, so im send_file comes back Allow there. The exfiltration
+	// floor lives in the command-tool gate; im send_file of a local temp
+	// file inside plan is permitted by design now.
 	plan := NewConfigPolicyWithMode(nil, []string{"."}, PlanMode)
 	sendFile := json.RawMessage(`{"action":"send_file","path":"/tmp/secret.png"}`)
-	if d, _ := plan.Check("im", sendFile); d == Allow {
-		t.Errorf("PlanMode: im send_file must not be blanket-Allow since #1283")
+	if d, _ := plan.Check("im", sendFile); d != Allow {
+		t.Errorf("PlanMode: im send_file should be Allow (two-mode refactor; plan only denies file-writing tools), got %v", d)
 	}
 }
 
@@ -171,12 +179,12 @@ func TestAutoModeDeniesDangerous(t *testing.T) {
 	}
 
 	d, err = policy.Check("run_command", dangerousInput)
-	if err != nil || d != Deny {
-		t.Errorf("AutoMode: dangerous command should be Deny, got %v err=%v", d, err)
+	if err != nil || d != Ask {
+		t.Errorf("AutoMode(alias): extremely dangerous command should be Ask, got %v err=%v", d, err)
 	}
 	d, err = policy.Check("start_command", dangerousInput)
-	if err != nil || d != Deny {
-		t.Errorf("AutoMode: dangerous start_command should be Deny, got %v err=%v", d, err)
+	if err != nil || d != Ask {
+		t.Errorf("AutoMode(alias): extremely dangerous start_command should be Ask, got %v err=%v", d, err)
 	}
 	// #197: write_command_input's input field is arbitrary stdin data, not a
 	// command — no longer command-screened (the job was screened when started).

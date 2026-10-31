@@ -24,6 +24,7 @@ import csv
 import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -1151,6 +1152,17 @@ def main():
                         help="Skip appending trend.jsonl (default: append)")
     args = parser.parse_args()
 
+    # #4100: fail fast when the daemon binary is unresolvable. Without this,
+    # start_daemon's bare `ggcode` command raises FileNotFoundError inside the
+    # round loop, every round is swallowed as "FAILED", and the run exits 0
+    # with an empty trend - the gate rejects it but the log hides the cause.
+    if args.auto and shutil.which("ggcode") is None:
+        sys.exit(
+            "[eval] FATAL: `ggcode` binary not found on PATH but --auto needs "
+            "it to start the daemon. Build it (go build -tags goolm -o bin/ggcode "
+            "./cmd/ggcode) and add bin/ to PATH."
+        )
+
     if args.repeat < 1:
         parser.error("--repeat must be >= 1")
 
@@ -1166,6 +1178,19 @@ def main():
         template_sets["teamclaw"] = TEAMCLAW_TASKS
     except ImportError:
         pass
+
+    # r15 pr-replay: merged-fix-PR task synthesis (Change2Task-style supply).
+    # Offline JSON is prefetched by the main session via
+    # `pr_task_replay.py prefetch`; absent file = set simply not offered.
+    try:
+        from pr_task_replay import load_prefetch
+        _pr_json = Path(__file__).parent / "pr_replay_tasks.json"
+        if _pr_json.exists():
+            _pr_tasks = load_prefetch(_pr_json)
+            if _pr_tasks:
+                template_sets["pr-replay"] = _pr_tasks
+    except Exception as exc:  # noqa: BLE001 - eval harness must not die on one set
+        print(f"warning: pr-replay set unavailable: {exc}", file=sys.stderr)
 
     all_templates = template_sets.get(args.templates, TASKS)
 

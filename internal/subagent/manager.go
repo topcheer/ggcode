@@ -221,9 +221,24 @@ func (s *SubAgent) appendEvent(ev AgentEvent) {
 				}
 			}
 			remaining := s.events[dropIdx:]
-			if savedText.Len() > 0 && len(remaining) > 0 && remaining[0].Type == AgentEventText {
-				// Merge dropped text into the first remaining text event.
-				remaining[0].Text = savedText.String() + remaining[0].Text
+			if savedText.Len() > 0 && len(remaining) > 0 {
+				if remaining[0].Type == AgentEventText {
+					// Merge dropped text into the first remaining text event.
+					remaining[0].Text = savedText.String() + remaining[0].Text
+				} else {
+					// #4359: the first remaining event is not text (e.g.
+					// Reasoning in an interleaved text/reasoning stream with
+					// no tool calls - isTurnBoundary never fires). Merging
+					// was skipped and the rescued text silently dropped,
+					// defeating the PRESERVE promise above. Insert a
+					// standalone text event carrying it instead.
+					anchor := remaining[0].Time
+					rescue := AgentEvent{Type: AgentEventText, Text: savedText.String(), Time: anchor}
+					kept := make([]AgentEvent, 0, len(remaining)+1)
+					kept = append(kept, rescue)
+					kept = append(kept, remaining...)
+					remaining = kept
+				}
 			}
 			s.events = remaining
 		} else {
@@ -873,6 +888,25 @@ func (m *Manager) Cancel(id string) bool {
 // mutated from multiple goroutines (Cancel/Complete/watchdog); readers
 // outside the package must use this accessor instead of reading the field
 // directly - a bare read races with locked writes.
+// SetModel updates the display model under sa.mu. Every Model writer must
+// go through this - snapshot()/statusInfo() read the field inside the lock,
+// so a bare assignment from another goroutine is a data race (#4161).
+func (sa *SubAgent) SetModel(model string) {
+	sa.mu.Lock()
+	sa.Model = model
+	sa.mu.Unlock()
+}
+
+// IsSyntheticID reports whether id is one of the pre-failed synthetic IDs
+// returned by Spawn (sa-shutdown-*, sa-budget-*, sa-limit-*). Such entries
+// never run a goroutine, so callers must not allocate resources (worktrees,
+// branches) for them - the entry is purged with no cleanup hook (#4160).
+func IsSyntheticID(id string) bool {
+	return strings.HasPrefix(id, "sa-shutdown-") ||
+		strings.HasPrefix(id, "sa-budget-") ||
+		strings.HasPrefix(id, "sa-limit-")
+}
+
 func (sa *SubAgent) CurrentStatus() Status {
 	sa.mu.Lock()
 	defer sa.mu.Unlock()

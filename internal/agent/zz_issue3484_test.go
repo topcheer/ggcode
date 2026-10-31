@@ -16,7 +16,7 @@ import (
 // refused file.
 func TestIssue3484ReadOnlyExemptionBypassClosed(t *testing.T) {
 	l := &refusalLedger{workingDir: t.TempDir()}
-	l.record("don't touch config.yaml", "nl")
+	l.record("don't touch config.yaml", "nl", refusalKindDirect)
 
 	bypass := []string{
 		`echo pwned > config.yaml`,
@@ -44,7 +44,7 @@ func TestIssue3484ReadOnlyExemptionBypassClosed(t *testing.T) {
 // target - harmless verification (#3469 note preserved).
 func TestIssue3484ReadOnlyExemptionStillWorks(t *testing.T) {
 	l := &refusalLedger{workingDir: t.TempDir()}
-	l.record("don't touch config.yaml", "nl")
+	l.record("don't touch config.yaml", "nl", refusalKindDirect)
 
 	readonly := []string{
 		`cat config.yaml`,

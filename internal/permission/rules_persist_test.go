@@ -137,10 +137,11 @@ func TestSupervisedReadOnlyAutoAllow(t *testing.T) {
 		t.Errorf("expected read_file outside sandbox non-sensitive to be auto-allowed, got %s", d)
 	}
 
-	// read_file on sensitive path outside sandbox: still Ask
+	// two-mode refactor: the sensitive-path read gate is gone; reads
+	// outside the sandbox flow Allow (exfil floor is command-side).
 	d, _ = p.Check("read_file", json.RawMessage(`{"file_path":"/root/.ssh/id_rsa"}`))
-	if d != Ask {
-		t.Errorf("expected read_file sensitive path to be Ask, got %s", d)
+	if d != Allow {
+		t.Errorf("expected read_file sensitive path to be Allow (two-mode refactor), got %s", d)
 	}
 
 	// grep: read-only, always allowed
@@ -149,9 +150,10 @@ func TestSupervisedReadOnlyAutoAllow(t *testing.T) {
 		t.Errorf("expected grep to be auto-allowed, got %s", d)
 	}
 
-	// Non-read-only tools: still Ask by default
+	// Non-read-only tools: default Allow (two-mode refactor removed the
+	// Ask-for-anything-unspecified fallback).
 	d, _ = p.Check("edit_file", json.RawMessage(`{"file_path":"/tmp/work/test.go"}`))
-	if d != Ask {
-		t.Errorf("expected edit_file to be Ask, got %s", d)
+	if d != Allow {
+		t.Errorf("expected edit_file to be Allow (default Allow), got %s", d)
 	}
 }

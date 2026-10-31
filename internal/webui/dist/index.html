@@ -1768,6 +1768,9 @@ let chatWs = null;
 let chatStreaming = false;
 let chatAssistantEl = null;
 let chatTextBuffer = '';
+// #sa-82: prefix cache of rendered stable blocks (port of the TUI
+// streamRenderCache semantics from internal/chat/stream_markdown.go).
+let chatStreamBlocks = [];
 let chatToolCalls = [];
 let chatStatusEl = null;
 let chatMessagesEl = null;
@@ -1864,6 +1867,7 @@ function handleChatMessage(msg) {
     case 'user_ack':
       appendUserBubble(msg.text, msg.image_count, msg.file_names);
       chatTextBuffer = '';
+      chatStreamBlocks = [];
       chatToolCalls = [];
       chatAssistantEl = createAssistantBubble();
       chatStreaming = true;
@@ -1932,13 +1936,57 @@ function createAssistantBubble() {
   return div;
 }
 
+// #sa-82: split streamed markdown into blank-line-separated blocks without
+// splitting inside fenced code regions (``` / ~~~). Blocks separated by blank
+// lines outside fences are stable once a later block exists.
+function splitMarkdownBlocks(text) {
+  const blocks = [];
+  let cur = [];
+  let fence = false;
+  for (const line of text.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) fence = !fence;
+    if (!fence && line.trim() === '') {
+      if (cur.length) { blocks.push(cur.join('\n')); cur = []; }
+      continue;
+    }
+    cur.push(line);
+  }
+  if (cur.length) blocks.push(cur.join('\n'));
+  return blocks;
+}
+
+// #sa-82: incremental streaming render - stable blocks (all blocks on final,
+// all but the last while streaming) are rendered once and cached; each delta
+// re-renders only the growing tail block. Replaces the previous per-delta
+// full-buffer re-render (O(n^2) markdown re-parse) with O(n + tail).
+function renderChatTextHTML(final) {
+  const blocks = splitMarkdownBlocks(chatTextBuffer);
+  const stableCount = final ? blocks.length : Math.max(0, blocks.length - 1);
+  let reused = 0;
+  while (reused < Math.min(stableCount, chatStreamBlocks.length) &&
+         chatStreamBlocks[reused].text === blocks[reused]) reused++;
+  let html = '';
+  for (let i = 0; i < reused; i++) html += chatStreamBlocks[i].html;
+  for (let i = reused; i < stableCount; i++) {
+    const bh = renderMarkdown(blocks[i]);
+    chatStreamBlocks[i] = { text: blocks[i], html: bh };
+    html += bh;
+  }
+  chatStreamBlocks.length = stableCount;
+  if (!final) {
+    const tail = blocks.length > 0 ? renderMarkdown(blocks[blocks.length - 1]) : '';
+    html += tail + '<span class="chat-cursor"></span>';
+  }
+  return html;
+}
+
 function renderAssistantBubble(final) {
   if (!chatAssistantEl) return;
   let html = '<div class="chat-role">Assistant</div>';
 
   // Text with optional cursor
   if (chatTextBuffer) {
-    html += `<div class="chat-text">${renderMarkdown(chatTextBuffer)}${final ? '' : '<span class="chat-cursor"></span>'}</div>`;
+    html += `<div class="chat-text">${renderChatTextHTML(!!final)}</div>`;
   } else if (!final && chatToolCalls.length === 0) {
     html += '<div class="chat-text"><span class="chat-typing">Thinking</span></div>';
   }

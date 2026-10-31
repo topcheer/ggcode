@@ -75,6 +75,32 @@ type Task struct {
 	LastUpdatedAt string `json:"lastUpdatedAt,omitempty"`
 }
 
+// UnmarshalJSON accepts both the 2025-11-25 experimental field names
+// (ttl, pollInterval) and the stable io.modelcontextprotocol/tasks
+// extension names (ttlMs, pollIntervalMs; 2026-07-28 snapshot, SEP-2663)
+// so new-style servers keep their poll/TTL hints instead of silently
+// degrading to the 1s default poll. Old names win when both are present.
+func (t *Task) UnmarshalJSON(data []byte) error {
+	type taskAlias Task
+	var a taskAlias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	var ms struct {
+		TTLMs          int64 `json:"ttlMs,omitempty"`
+		PollIntervalMs int64 `json:"pollIntervalMs,omitempty"`
+	}
+	_ = json.Unmarshal(data, &ms) // absent fields stay zero; shape already validated above
+	if a.TTL == 0 {
+		a.TTL = ms.TTLMs
+	}
+	if a.PollInterval == 0 {
+		a.PollInterval = ms.PollIntervalMs
+	}
+	*t = Task(a)
+	return nil
+}
+
 // CreateTaskResult is the flat result returned by a task-augmented
 // tools/call: the standard Result members (none required here) merged with
 // the Task fields and the resultType discriminator.
@@ -236,12 +262,24 @@ func (c *Client) taskPollDelay(task Task) time.Duration {
 	return task.pollInterval()
 }
 
+// taskLookupError translates a failed tasks/get or tasks/result round
+// trip. The stable tasks extension (SEP-2663, 2026-07-28 snapshot) makes
+// servers answer expired, TTL-deleted, or unknown tasks with JSON-RPC
+// -32602; without this mapping the caller sees "Invalid params" and
+// reads a server-side expiry as a client bug.
+func taskLookupError(server, taskID, method string, err error) error {
+	if je, ok := jsonRPCErrorOf(err); ok && je.Code == ErrCodeInvalidParams {
+		return fmt.Errorf("mcp[%s]: %s: task %s expired or deleted (server TTL; re-issue the tool call if needed)", server, method, taskID)
+	}
+	return fmt.Errorf("mcp[%s]: %s: %w", server, method, err)
+}
+
 // GetTask fetches the current task descriptor via tasks/get.
 func (c *Client) GetTask(ctx context.Context, taskID string) (Task, error) {
 	var result Task
 	params := map[string]string{"taskId": taskID}
 	if err := c.sendRequest(ctx, "tasks/get", params, &result); err != nil {
-		return Task{}, fmt.Errorf("mcp[%s]: tasks/get: %w", c.name, err)
+		return Task{}, taskLookupError(c.name, taskID, "tasks/get", err)
 	}
 	if result.TaskID == "" {
 		result.TaskID = taskID
@@ -255,7 +293,7 @@ func (c *Client) TaskResult(ctx context.Context, taskID string) (*CallToolResult
 	var result CallToolResult
 	params := map[string]string{"taskId": taskID}
 	if err := c.sendRequest(ctx, "tasks/result", params, &result); err != nil {
-		return nil, fmt.Errorf("mcp[%s]: tasks/result: %w", c.name, err)
+		return nil, taskLookupError(c.name, taskID, "tasks/result", err)
 	}
 	return &result, nil
 }

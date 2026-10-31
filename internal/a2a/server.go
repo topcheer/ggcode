@@ -20,6 +20,11 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
+// maxPushConfigs caps the push-notification config registry (#4629): the
+// map grew without bound on trusted peers (fresh nano-second IDs, no TTL,
+// no eviction). Re-registering an existing ID stays an upsert.
+const maxPushConfigs = 256
+
 // Server is an A2A protocol server that handles JSON-RPC requests over HTTP.
 type Server struct {
 	handler        *TaskHandler
@@ -44,6 +49,10 @@ type Server struct {
 	pushClient               *http.Client
 
 	extensions []AgentExtension // A2A protocol extensions supported by this server
+
+	// delegation is the inbound enforcement policy for the A-JWT-lite
+	// ggcode.dev/* declarations (sa-84). Zero value = disabled.
+	delegation DelegationPolicy
 }
 
 // ServerConfig holds A2A server configuration.
@@ -77,6 +86,11 @@ type ServerConfig struct {
 	// negotiated per-request via the A2A-Extensions header. Clients that fail
 	// to activate a required extension are rejected with -32004.
 	Extensions []AgentExtension
+
+	// Delegation configures inbound enforcement of the A-JWT-lite delegation
+	// declarations (ggcode.dev/* message metadata, sa-84). Zero value
+	// disables all checks (zero behavior change).
+	Delegation DelegationPolicy
 }
 
 // NewServer creates a new A2A server.
@@ -91,6 +105,7 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 		handler:                  handler,
 		apiKeys:                  apiKeys,
 		extensions:               cfg.Extensions,
+		delegation:               cfg.Delegation,
 		done:                     make(chan struct{}),
 		pushConfigs:              make(map[string]PushNotificationConfig),
 		pushGuard:                newPushGuard(cfg.PushCallbackAllowlist),
@@ -482,6 +497,9 @@ func (s *Server) handleMessageSend(w http.ResponseWriter, r *http.Request, req *
 		writeRPCError(w, req.ID, ErrInvalidParams)
 		return
 	}
+	if !s.checkDelegation(w, req.ID, &params.Message) {
+		return
+	}
 
 	// Validate acceptedOutputModes if provided.
 	if params.Configuration != nil && len(params.Configuration.AcceptedOutputModes) > 0 {
@@ -549,6 +567,9 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 	var params SendMessageParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		writeRPCError(w, req.ID, ErrInvalidParams)
+		return
+	}
+	if !s.checkDelegation(w, req.ID, &params.Message) {
 		return
 	}
 
@@ -926,6 +947,19 @@ func (s *Server) handlePushConfigSet(w http.ResponseWriter, req *JSONRPCRequest)
 		return
 	}
 	s.pushMu.Lock()
+	// #4629: trusted-peer resource bound - the map grows without limit
+	// otherwise (new nano-second ID per call, no TTL, no eviction). Cap the
+	// registration count; re-registering an existing ID stays an upsert.
+	if _, exists := s.pushConfigs[cfg.ID]; !exists && len(s.pushConfigs) >= maxPushConfigs {
+		s.pushMu.Unlock()
+		debug.Log("a2a.push", "push config registry full (%d entries), rejecting id=%s", maxPushConfigs, cfg.ID)
+		writeRPCError(w, req.ID, &JSONRPCError{
+			Code:    ErrInvalidParams.Code,
+			Message: ErrInvalidParams.Message,
+			Data:    fmt.Sprintf("push config registry full (%d entries); delete stale configs before registering new ones", maxPushConfigs),
+		})
+		return
+	}
 	s.pushConfigs[cfg.ID] = cfg
 	s.pushMu.Unlock()
 	writeRPCResult(w, req.ID, cfg)
@@ -1007,6 +1041,21 @@ func (s *Server) SetExtendedCard(card json.RawMessage) {
 	if len(card) > 0 {
 		s.card.Capabilities.ExtendedAgentCard = true
 	}
+	s.cardMu.Unlock()
+}
+
+// SetSkills replaces the skills advertised in the Agent Card. Passing an
+// empty slice keeps DefaultSkills (the generic set). Callers typically pass
+// append(DefaultSkills(), localSkills...) so peers see both the generic
+// capabilities and the instance's real, locally installed skills.
+// Guarded by cardMu: the card is read concurrently by HTTP handlers (#565,
+// #1114 - same discipline as SetExtendedCard).
+func (s *Server) SetSkills(skills []Skill) {
+	if len(skills) == 0 {
+		return
+	}
+	s.cardMu.Lock()
+	s.card.Skills = skills
 	s.cardMu.Unlock()
 }
 

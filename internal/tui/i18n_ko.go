@@ -5,7 +5,6 @@ package tui
 // enCatalog via the default branch below (that fallback is why partial
 // coverage is safe). #1373: the old header claimed "All 722 keys
 // translated", which was false on both counts.
-
 func koCatalog(key string) string {
 	switch key {
 	case "workspace.tagline":
@@ -16,12 +15,8 @@ func koCatalog(key string) string {
 		return "임시"
 	case "agents.idle":
 		return "대기 중"
-	case "agents.running":
-		return "%d개 실행 중"
 	case "cron.firing":
 		return "실행 중"
-	case "activity.idle":
-		return "대기 중"
 	case "panel.conversation":
 		return "대화"
 	case "panel.composer":
@@ -32,16 +27,8 @@ func koCatalog(key string) string {
 		return "명령"
 	case "panel.files":
 		return "파일"
-	case "panel.agent_status":
-		return "에이전트 상태"
-	case "panel.mode_policy":
-		return "모드"
 	case "panel.session_usage":
 		return "세션 사용량"
-	case "panel.metrics":
-		return "메트릭"
-	case "panel.context":
-		return "컨텍스트"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -84,8 +71,6 @@ func koCatalog(key string) string {
 		return "%s 의 도구에 변화가 없습니다 (%d개)."
 	case "panel.mcp.refreshed":
 		return "%s 새로고침 완료: 도구 %d개."
-	case "panel.startup":
-		return "시작 중..."
 	case "panel.approval_required":
 		return "승인 필요"
 	case "panel.bypass_approval":
@@ -104,32 +89,16 @@ func koCatalog(key string) string {
 		return "세션"
 	case "label.agents":
 		return "에이전트"
-	case "label.cwd":
-		return "작업 디렉토리"
 	case "label.branch":
 		return "브랜치"
 	case "label.context":
 		return "컨텍스트"
 	case "label.skills":
 		return "스킬"
-	case "label.activity":
-		return "활동"
-	case "label.window":
-		return "창"
-	case "label.usage":
-		return "사용량"
-	case "label.compact":
-		return "압축"
 	case "label.total":
 		return "합계"
 	case "label.cost":
 		return "예상 비용"
-	case "label.approval_policy":
-		return "승인"
-	case "label.tool_policy":
-		return "도구"
-	case "label.agent_policy":
-		return "에이전트"
 	case "label.tool":
 		return "도구"
 	case "label.input":
@@ -142,36 +111,10 @@ func koCatalog(key string) string {
 		return "캐시 쓰기"
 	case "label.cache_hit":
 		return "캐시 적중"
-	case "label.turns":
-		return "턴"
-	case "label.avg_ttft":
-		return "평균 TTFT"
-	case "label.p95_ttft":
-		return "P95 TTFT"
-	case "label.avg_duration":
-		return "평균 소요"
-	case "label.p95_duration":
-		return "P95 소요"
-	case "label.avg_think":
-		return "평균 사고"
-	case "label.avg_tps":
-		return "평균 TPS"
-	case "label.p95_tps":
-		return "P95 TPS"
-	case "label.fail_rate":
-		return "실패율"
-	case "label.slow_tools":
-		return "느린 도구"
-	case "label.recent_turns":
-		return "최근 턴"
 	case "label.file":
 		return "파일"
 	case "label.directory":
 		return "디렉토리"
-	case "context.unavailable":
-		return "아직 컨텍스트 데이터가 없습니다"
-	case "metrics.empty":
-		return "메트릭이 없습니다"
 	case "im.none":
 		return "IM 어댑터 없음"
 	case "im.summary":
@@ -186,38 +129,16 @@ func koCatalog(key string) string {
 		return "활성화됨 • 초기화하려면 재시작"
 	case "im.status.not_started":
 		return "시작되지 않음"
-	case "context.until_compact":
-		return "남음"
 	case "empty.ask":
 		return "리팩토링, 버그 수정, 설명 또는 테스트를 요청하세요."
 	case "empty.tips":
 		return "팁: @path로 파일 포함, /?로 도움말, Shift+Tab으로 모드 변경."
-	case "startup.banner":
-		return "터미널 UI를 준비하고 시작 터미널 노이즈를 필터링하는 중입니다. 지금 바로 입력할 수 있으며, 시작이 완료되면 이 배너가 사라집니다."
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab 전환 • Enter 적용 • Esc 닫기"
 	case "hint.mention":
 		return "@ 파일/폴더 첨부 • Tab/Shift+Tab 전환 • Enter 적용"
 	case "hint.mode":
 		return "모드"
-	case "mode.approval.ask":
-		return "매번 확인"
-	case "mode.approval.none":
-		return "승인 불필요"
-	case "mode.approval.critical":
-		return "중요 작업만 확인"
-	case "mode.tools.rules":
-		return "도구 규칙"
-	case "mode.tools.readonly":
-		return "읽기 전용"
-	case "mode.tools.safe":
-		return "안전"
-	case "mode.tools.open":
-		return "열림"
-	case "mode.agent.waits":
-		return "에이전트 대기"
-	case "mode.agent.autocontinue":
-		return "자동 계속"
 	case "hint.enter_send":
 		return "Enter로 전송"
 	case "hint.ctrlv_image":
@@ -226,18 +147,12 @@ func koCatalog(key string) string {
 		return "Ctrl+R 사이드바"
 	case "hint.help":
 		return "/help 도움말"
-	case "hint.add_context":
-		return "@ 컨텍스트 추가"
-	case "hint.scroll":
-		return "PgUp/PgDn 스크롤"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab으로 모드 전환"
 	case "hint.ctrlc_cancel":
 		return "Ctrl+C로 취소"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C 지우기/종료"
-	case "hint.image_attached":
-		return "이미지 첨부됨"
 	case "hint.image_attached_count":
 		return "이미지 %d개 첨부됨"
 	case "hint.follow_panel":
@@ -246,8 +161,6 @@ func koCatalog(key string) string {
 		return "Ctrl+N 언팔로우"
 	case "queued.count":
 		return "%d개 대기 중"
-	case "queued.output":
-		return "[대기 %d 보류 중]\n\n"
 	case "interrupt.delivered":
 		return "[활성 실행에 전달됨; 계획 수정 중]\n"
 	case "status.thinking":
@@ -284,24 +197,6 @@ func koCatalog(key string) string {
 		return "  ↑↓←→ 전환  Esc 닫기"
 	case "status.tools_used":
 		return "도구 %d회 사용"
-	case "tool.done":
-		return "완료"
-	case "tool.failed":
-		return "실패"
-	case "tool.no_output":
-		return "출력 없음"
-	case "tool.output":
-		return "출력"
-	case "tool.content":
-		return "내용"
-	case "tool.match":
-		return "일치"
-	case "tool.matches":
-		return "일치"
-	case "tool.entry":
-		return "항목"
-	case "tool.result":
-		return "결과"
 	case "approval.rejected":
 		return "거부됨"
 	case "approval.allow":
@@ -337,7 +232,7 @@ func koCatalog(key string) string {
 	case "lang.first_use.hint":
 		return " Tab/j/k 이동 • Enter 확인 • e/z 단축키"
 	case "mode.current":
-		return "현재 모드: %s\n사용법: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  규칙이 없는 도구는 확인 후 실행\n  plan        읽기 전용 탐색; 쓰기와 명령 거부\n  auto        안전한 작업 허용, 위험 작업 거부\n  bypass      거의 모든 것 허용; 치명적 작업만 차단\n  autopilot   bypass + 되묻는 질문에도 계속 진행\n\n"
+		return "현재 모드: %s\n사용법: /mode <supervised|bypass>\n  supervised  기본값; 대부분 호출이 중단 없이 진행 - 안전 바닥(시스템 파괴/자격증명 유출/백도어 쓰기)만 확인\n  bypass      순항 면; 시스템 파괴와 백도어 쓰기 외 모두 허용\n  (auto/autopilot는 기존 별칭)\n"
 	case "mode.persist_failed":
 		return "모드 설정 저장 실패: %v"
 	case "input.placeholder":
@@ -372,8 +267,6 @@ func koCatalog(key string) string {
 		return "인증"
 	case "panel.provider.env_var":
 		return "환경 변수"
-	case "panel.provider.api_key":
-		return "API 키"
 	case "panel.provider.api_key.missing":
 		return "누락"
 	case "panel.provider.api_key.configured":
@@ -494,6 +387,12 @@ func koCatalog(key string) string {
 		return "재시도할 이전 제출이 없습니다."
 	case "command.retry_busy":
 		return "에이전트가 실행 중입니다. 재시도 전 현재 실행이 완료될 때까지 기다리세요."
+	case "command.continue_task_empty":
+		return "이 세션에서 재개할 크래시 작업이 없습니다."
+	case "command.continue_task_busy":
+		return "에이전트가 실행 중입니다. 작업 재개 전 현재 실행이 완료될 때까지 기다리세요."
+	case "command.continue_task_sent":
+		return "중단된 작업을 재개하는 중…"
 	case "command.edit_empty":
 		return "편집할 이전 제출이 없습니다."
 	case "command.edit_busy":
@@ -504,10 +403,6 @@ func koCatalog(key string) string {
 		return "사용 가능한 명령은 /help를 입력하세요\n\n"
 	case "command.usage.allow":
 		return "사용법: /allow <도구-이름>\n\n"
-	case "command.usage.resume":
-		return "사용법: /resume <세션-id>\n\n"
-	case "command.usage.export":
-		return "사용법: /export <세션-id>\n\n"
 	case "init.resolve_failed":
 		return "초기화 대상 확인 실패: %v\n\n"
 	case "init.generate_failed":
@@ -542,22 +437,10 @@ func koCatalog(key string) string {
 		return "✓ %s이(가) 항상 허용되었습니다\n\n"
 	case "command.custom":
 		return "사용자 정의 명령 /%s:\n"
-	case "command.mention_error":
-		return "멘션 확장 오류: %v"
-	case "session.list_failed":
-		return "세션 목록 조회 오류: %v\n\n"
 	case "session.untitled":
 		return "제목 없음"
 	case "session.store_missing":
 		return "세션 저장소가 구성되지 않았습니다.\n\n"
-	case "session.none":
-		return "세션을 찾을 수 없습니다.\n\n"
-	case "session.list.title":
-		return "세션:\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  (%s)\n"
-	case "session.list.hint":
-		return "\n/resume <id>로 세션을 계속하세요\n\n"
 	case "session.new":
 		return "새 세션: %s\n\n"
 	case "session.resume":
@@ -578,8 +461,6 @@ func koCatalog(key string) string {
 		return "실행 취소 실패: %v\n\n"
 	case "checkpoint.undid":
 		return "%s의 %s 실행 취소 (체크포인트 %s)\n"
-	case "checkpoint.none":
-		return "체크포인트가 없습니다.\n\n"
 	case "files.disabled":
 		return "파일 브라우저 비활성화"
 	case "files.none":
@@ -590,56 +471,36 @@ func koCatalog(key string) string {
 		return "  %s  %d회 편집  마지막: %s%s\n"
 	case "files.hint":
 		return "파일 선택"
-	case "checkpoint.list.title":
-		return "체크포인트 (%d):\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.hint":
-		return "\n/undo로 가장 최근 항목을 되돌리세요\n\n"
 	case "memory.auto_unavailable":
 		return "자동 메모리가 초기화되지 않았습니다.\n\n"
-	case "memory.list_failed":
-		return "메모리 목록 조회 오류: %v\n\n"
-	case "memory.none":
-		return "메모리가 없습니다"
-	case "memory.auto_title":
-		return "자동 메모리:\n"
 	case "memory.clear_failed":
 		return "메모리 삭제 오류: %v\n\n"
 	case "memory.cleared":
 		return "모든 자동 메모리가 삭제되었습니다.\n\n"
-	case "memory.title":
-		return "메모리"
-	case "memory.project":
-		return "프로젝트 메모리:\n"
-	case "memory.project_none":
-		return "  로드된 프로젝트 메모리 파일이 없습니다.\n"
-	case "memory.auto":
-		return "자동 메모리:\n"
-	case "memory.auto_none":
-		return "  로드된 자동 메모리가 없습니다.\n"
-	case "memory.usage":
-		return "\n사용법: /memory [list|clear]\n\n"
+	case "memory.forget_usage":
+		return "Usage: /memory forget <key> | /memory restore <key> | /memory forgotten\n\n"
+	case "memory.forgot":
+		return "Memory %q forgotten (restorable via /memory restore until next GC).\n\n"
+	case "memory.forget_failed":
+		return "Error forgetting memory: %v\n\n"
+	case "memory.forgotten_empty":
+		return "No forgotten memories.\n\n"
+	case "memory.forgotten_title":
+		return "Forgotten memories:\n"
+	case "memory.restored":
+		return "Memory %q restored to prompt injection.\n\n"
+	case "memory.restore_failed":
+		return "Error restoring memory: %v\n\n"
 	case "compact.unavailable":
 		return "컨텍스트 관리자를 사용할 수 없습니다.\n\n"
 	case "compact.failed":
 		return "압축 실패: %v\n\n"
-	case "compact.done":
-		return "압축 완료"
 	case "compact.done_with_stats":
 		return "대화 기록이 압축되었습니다 (%d → %d 토큰).\n\n"
 	case "todo.cleared":
 		return "TODO 목록이 삭제되었습니다.\n\n"
 	case "todo.clear_failed":
 		return "TODO 삭제 오류: %v\n\n"
-	case "todo.none":
-		return "TODO 목록을 찾을 수 없습니다. todo_write 도구로 생성하세요.\n\n"
-	case "todo.read_failed":
-		return "TODO 읽기 오류: %v\n\n"
-	case "todo.parse_failed":
-		return "TODO 파싱 오류: %v\n\n"
-	case "todo.title":
-		return "TODO 목록:\n%s\n\n"
 	case "bug.title":
 		return "=== 버그 보고 진단 ===\n\n"
 	case "bug.version":
@@ -668,14 +529,8 @@ func koCatalog(key string) string {
 		return "설정: 모델 = %s\n\n"
 	case "config.provider_set":
 		return "설정: 제공자 = %s\n\n"
-	case "config.language_set":
-		return "설정: 언어 = %s\n\n"
 	case "config.unknown_key":
 		return "알 수 없는 설정 키: %s\n지원됨: model, provider, language\n\n"
-	case "config.title":
-		return "현재 설정:\n"
-	case "status.title":
-		return "상태:\n"
 	case "panel.update":
 		return "업데이트"
 	case "label.version":
@@ -700,8 +555,6 @@ func koCatalog(key string) string {
 		return "업데이트 준비 중"
 	case "update.failed":
 		return "업데이트 실패: %v\n\n"
-	case "update.restart_failed":
-		return "업데이트가 준비되었지만 재시작에 실패했습니다: %v\n\n"
 	case "update.pm_hint.brew":
 		return "업데이트 설치 완료. 참고: Homebrew로 설치되었습니다.\nHomebrew 동기화를 위해 `brew upgrade ggcode`를 실행하세요.\n\n"
 	case "update.pm_hint.scoop":
@@ -714,16 +567,8 @@ func koCatalog(key string) string {
 		return "이 시스템에서 다른 ggcode 설치가 감지되었습니다:\n%s\n다른 ggcode가 PATH에 먼저 나타나면 함께 업데이트하거나 PATH 순서를 조정하세요.\n\n"
 	case "update.dual_scope":
 		return "경고: 사용자 및 시스템 전체 ggcode 설치가 모두 발견되었습니다:\n  사용자: %s\n  시스템: %s\nPATH 충돌이 발생할 수 있습니다. 설정 > 앱에서 하나를 제거하는 것을 고려하세요.\n\n"
-	case "plugins.unavailable":
-		return "플러그인 관리자를 사용할 수 없습니다.\n\n"
-	case "plugins.none":
-		return "로드된 플러그인이 없습니다.\n\n"
-	case "plugins.title":
-		return "플러그인:\n"
 	case "mcp.none":
 		return "구성된 MCP 서버가 없습니다.\n\n"
-	case "mcp.title":
-		return "MCP 서버:\n"
 	case "mcp.active_tools":
 		return "활성 도구"
 	case "mcp.more":
@@ -732,46 +577,18 @@ func koCatalog(key string) string {
 		return "사용법: /image <경로/파일.png> 또는 /image paste\n"
 	case "image.formats":
 		return "지원 형식: PNG, JPEG, GIF, WebP (최대 20MB)\n\n"
-	case "image.attached":
-		return "이미지 첨부됨: %s\n"
-	case "image.attached_hint":
-		return "메시지를 보내 이미지를 포함하거나, /image로 다른 이미지를 첨부하세요.\n\n"
 	case "image.clipboard_failed":
 		return "클립보드에서 이미지를 붙여널 수 없습니다: %v"
 	case "image.clipboard_no_image_windows":
 		return "클립보드에서 이미지를 찾을 수 없습니다. Windows에서는 Ctrl+V가 종종 가로채집니다."
-	case "agents.unavailable":
-		return "서브에이전트 관리자가 구성되지 않았습니다.\n\n"
-	case "agents.none":
-		return "아직 생성된 서브에이전트가 없습니다.\nLLLM이 spawn_agent 도구를 사용하여 서브에이전트를 생성할 수 있습니다.\n\n"
-	case "agents.title":
-		return "서브에이전트 %d개:\n"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.hint":
-		return "\n/agent <id>로 상세 정보, /agent cancel <id>로 취소하세요.\n\n"
-	case "agent.usage":
-		return "사용법: /agent <id> 또는 /agent cancel <id>\n\n"
-	case "agent.cancelled":
-		// #1373: en baseline takes the agent id - the verb-less ko text
-		// silently dropped it in Sprintf.
-		return "하위 에이전트 %s 취소됨\n\n"
-	case "agent.cancel_failed":
-		return "%s을(를) 취소할 수 없습니다 (찾을 수 없거나 실행 중이 아님)\n\n"
-	case "agent.not_found":
-		return "서브에이전트 %s을(를) 찾을 수 없습니다\n\n"
-	case "agent.title":
-		return "에이전트: %s\n상태: %s\n작업: %s\n"
-	case "agent.result":
-		return "결과: %s\n"
-	case "agent.error":
-		return "오류: %v\n"
 	case "slash.help":
 		return "도움말 표시"
 	case "slash.sessions":
 		return "저장된 세션 목록"
 	case "slash.resume":
 		return "이전 세션 재개"
+	case "slash.continue_task":
+		return "크래시로 중단된 작업 재개"
 	case "slash.export":
 		return "세션을 Markdown으로 내보내기"
 	case "slash.model":
@@ -866,8 +683,6 @@ func koCatalog(key string) string {
 		return "IM 어댑터 관리"
 	case "panel.qq.directory":
 		return "디렉토리"
-	case "panel.qq.runtime":
-		return "런타임"
 	case "panel.qq.bots":
 		return "QQ 봇"
 	case "panel.qq.created":
@@ -876,26 +691,16 @@ func koCatalog(key string) string {
 		return "바인딩됨: %d"
 	case "panel.qq.available":
 		return "사용 가능: %d"
-	case "panel.qq.current_binding":
-		return "현재 바인딩"
 	case "panel.qq.none":
 		return "(없음)"
-	case "panel.qq.default":
-		return "(기본값)"
 	case "panel.qq.adapter":
 		return "어댑터: %s"
-	case "panel.qq.target":
-		return "대상: %s"
-	case "panel.qq.channel":
-		return "채널: %s"
 	case "panel.qq.bot_list":
 		return "QQ 봇 목록"
 	case "panel.qq.no_bots":
 		return "구성된 QQ 봇이 없습니다."
 	case "panel.qq.entry.available":
 		return "사용 가능"
-	case "panel.qq.entry.bound":
-		return "바인딩됨"
 	case "panel.qq.entry.active":
 		return "활성"
 	case "panel.qq.entry.bound_other":
@@ -934,14 +739,6 @@ func koCatalog(key string) string {
 		return "Enter 봇 생성 • Esc 취소"
 	case "panel.qq.actions_hint":
 		return "j/k 이동 • d 비활성/활성 • Enter 또는 b 봇 바인딩 • c 채널 바인딩 • x 채널 언바인딩 • u 봇 언바인딩 • i 봇 생성 • e 구성 편집 • q QR 표시 • Esc 닫기"
-	case "panel.qq.bind_channel":
-		return "채널 바인딩"
-	case "panel.qq.scan_hint":
-		return "QR 코드를 스캔하고 봇을 추가한 후 메시지를 보내 페어링을 시작하세요."
-	case "panel.qq.qr_code":
-		return "QR 코드:"
-	case "panel.qq.share_link":
-		return "공유 링크:"
 	case "panel.qq.message.no_bot":
 		return "사용 가능한 QQ 봇이 없습니다."
 	case "panel.qq.message.bound_success":
@@ -962,8 +759,6 @@ func koCatalog(key string) string {
 		return "QQ 어댑터 이름이 필요합니다"
 	case "panel.qq.error.not_configured":
 		return "QQ 봇 %q이(가) 구성되지 않았습니다"
-	case "panel.qq.error.disabled":
-		return "QQ 봇 %q이(가) 비활성화되었습니다"
 	case "panel.qq.error.not_qq_adapter":
 		return "어댑터 %q은(는) QQ 봇이 아닙니다"
 	case "panel.qq.error.not_online":
@@ -1026,6 +821,14 @@ func koCatalog(key string) string {
 		return "컨텍스트 관리자를 사용할 수 없습니다."
 	case "regenerate.no_response":
 		return "재생성할 어시스턴트 응답이 없습니다."
+	case "rewind.bad_arg":
+		return "사용법: /rewind [N] (N >= 1, 되감을 사용자 턴 수)"
+	case "rewind.revert_failed":
+		return "파일 롤백이 거부되어 되감기를 중단했습니다 (변경된 것 없음): %v"
+	case "rewind.success":
+		return "%d턴을 되감았습니다. 파일 편집을 되돌렸습니다 (%s). 세션 %s에서 계속합니다 - 원본은 보존됩니다."
+	case "rewind.success_no_edits":
+		return "%d턴을 되감았습니다. 되감은 턴에는 추적된 파일 편집이 없습니다. 세션 %s에서 계속합니다 - 원본은 보존됩니다."
 	case "branch.busy":
 		return "에이전트가 실행 중에는 분기할 수 없습니다. 취소하려면 Ctrl+C를 누르세요."
 	case "branch.no_session":
@@ -1108,7 +911,7 @@ func koCatalog(key string) string {
 모델 & 프로바이더:
   /model [name]      모델 패널 열기 또는 직접 전환
   /provider [vendor] 프로바이더 관리자 열기
-  /mode <mode>       에이전트 모드 설정 (supervised|plan|auto|bypass|autopilot)
+  /mode <mode>       에이전트 모드 설정 (supervised|bypass)
 
 개발:
   /diff [opts]       채팅에 git diff 표시 (--cached, --stat, <file>)

@@ -43,6 +43,9 @@ type ContextManager interface {
 	CheckAndSummarize(ctx context.Context, prov provider.Provider) (bool, error)
 	TruncateOldestGroupForRetry() bool
 	RemoveLastAssistantGroup() string
+	// RemoveLastUserMessage drops the trailing real (non-tool-result
+	// carrier) user message (#4188 vision-fallback retry de-duplication).
+	RemoveLastUserMessage() bool
 	Clear()
 	UsageRatio() float64
 	AutoCompactThreshold() int
@@ -161,6 +164,7 @@ type Manager struct {
 	providerCountChecked     bool // whether providerCountSupportsRPC has been determined
 	providerCountSupportsRPC bool // cached: does provider.CountTokens do real RPC?
 	todoPath                 string
+	compactedArchive         []CompactedEntry // recall_compacted (#re-retrieval): 压缩丢弃原文的旁路归档，供 SearchCompactedArchive 按需找回
 	onUsage                  func(provider.TokenUsage)
 	calibrator               *TokenCalibrator
 	onPersist                func(msg provider.Message) // called on every Add() for real-time JSONL persistence
@@ -1073,6 +1077,10 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 
 	// Messages appended after the marker (or after OrigLen in fallback) are
 	// preserved as-is.
+	// recall_compacted: archive the messages the summary is about to replace
+	// (skip system prompt) so their verbatim text stays retrievable after the
+	// live window moves on. Must happen before m.messages is reassigned below.
+	m.archiveCompactedMessages(m.messages[:extraStart])
 	extra := append([]provider.Message(nil), m.messages[extraStart:]...)
 	newMsgs := append([]provider.Message(nil), result.Messages...)
 	newMsgs = append(newMsgs, extra...)
@@ -1364,7 +1372,8 @@ func (m *Manager) compositionLocked() (asciiChars, cjkChars, latinExtChars int) 
 func (m *Manager) Clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.userReset = true // #663: /clear is a user-driven semantic reset
+	m.userReset = true             // #663: /clear is a user-driven semantic reset
+	m.lastSummarizeApplied = false // #4179 defensive: stale applied-flag must not survive a reset
 	oldTokens := m.tokenCountLocked()
 	oldMsgCount := len(m.messages)
 	if len(m.messages) > 0 && m.messages[0].Role == "system" {
@@ -1424,6 +1433,15 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 	plan, ok := m.buildSummaryPlan()
 	if !ok {
 		debug.Log("ctx", "Summarize: no plan built, nothing to summarize")
+		// #4179: nothing was applied on this path either. Without this
+		// reset, a stale `true` from a previous successful Summarize leaks
+		// into CheckAndSummarize, which then reports changed=true and the
+		// caller skips its fallbacks (e.g. PTL truncate retry) while the
+		// context is still over budget: the exact failure mode #702b
+		// fixed for the TOCTOU-discard path below.
+		m.mu.Lock()
+		m.lastSummarizeApplied = false // #702b/#4179: nothing was applied
+		m.mu.Unlock()
 		return nil
 	}
 
@@ -1578,6 +1596,50 @@ func (m *Manager) TruncateOldestGroupForRetry() bool {
 // discard the agent's last response so it can be re-generated. Returns the
 // text of the last remaining user message, or "" if no regeneration is
 // possible (no assistant message found or no preceding user message).
+// isToolResultCarrier reports whether a Role:"user" message is actually a
+// tool_result carrier inserted by ReconcileToolCalls rather than a real user
+// prompt: all its blocks are tool outputs (#3745).
+func isToolResultCarrier(msg provider.Message) bool {
+	hasToolResult := false
+	for _, b := range msg.Content {
+		if b.Type == "tool_result" {
+			hasToolResult = true
+			continue
+		}
+		if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+			return false // real prompt text present
+		}
+	}
+	return hasToolResult
+}
+
+// RemoveLastUserMessage removes the trailing real (non-tool-result-carrier)
+// user message from the in-memory history and reports whether one was
+// removed. #4188: RunStreamWithContent adds the user message BEFORE the
+// provider call; when the caller retries the same turn with a different
+// projection of that message (desktop vision fallback: image content ->
+// text-only), the pre-retry original must be dropped or the turn is
+// duplicated in the live context AND the persisted JSONL. Disk JSONL keeps
+// the already-appended first copy (append-only store); the session-index
+// view is rebuilt from the in-memory history on resume after adoption of
+// the projection, so the surviving copy is the one the next provider call
+// actually saw.
+func (m *Manager) RemoveLastUserMessage() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].Role != "user" {
+			continue
+		}
+		if isToolResultCarrier(m.messages[i]) {
+			continue
+		}
+		m.messages = append(m.messages[:i], m.messages[i+1:]...)
+		return true
+	}
+	return false
+}
+
 func (m *Manager) RemoveLastAssistantGroup() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1595,13 +1657,23 @@ func (m *Manager) RemoveLastAssistantGroup() string {
 	if lastAsstIdx < 0 {
 		return ""
 	}
-	// Find the last user message before the assistant message.
+	// Find the last REAL user message before the assistant message.
+	// #3745: ReconcileToolCalls inserts tool_result carriers with
+	// Role:"user" (L598); stopping the reverse scan on one truncates at the
+	// carrier, deleting the trailing assistant while keeping the earlier
+	// assistant(tool_use) - the next API call then fails with unpaired
+	// tool_use. Skip carriers: a user message whose blocks are (only)
+	// tool_result outputs is not a prompt.
 	lastUserIdx := -1
 	for i := lastAsstIdx - 1; i >= 0; i-- {
-		if m.messages[i].Role == "user" {
-			lastUserIdx = i
-			break
+		if m.messages[i].Role != "user" {
+			continue
 		}
+		if isToolResultCarrier(m.messages[i]) {
+			continue
+		}
+		lastUserIdx = i
+		break
 	}
 	if lastUserIdx < 0 {
 		return ""
@@ -1614,15 +1686,28 @@ func (m *Manager) RemoveLastAssistantGroup() string {
 			break
 		}
 	}
+	// #3745: an empty userText (image-only input, or a carrier that slipped
+	// through) means there is nothing to re-submit. The contract treats "" as
+	// "cannot regenerate" and the caller gives up - but the truncation below
+	// used to run FIRST, irreversibly deleting the assistant reply with no
+	// undo path. Fail safe: no recoverable text, no deletion.
+	if userText == "" {
+		return ""
+	}
 	// Truncate: keep everything up to and including the last user message,
 	// discard the assistant response and any trailing tool messages.
+	// #3797: compute removed BEFORE the slice assignment - after it,
+	// len(m.messages) == lastUserIdx+1 and the old expression evaluated to
+	// a constant 1 (plus a meaningless +1 counting the KEPT user message),
+	// misreporting every regenerate in the debug log.
+	removed := len(m.messages) - lastUserIdx - 1
 	m.messages = m.messages[:lastUserIdx+1]
 	m.markBenignRemoval() // #663: retry/regenerate truncation — no semantic loss
 	m.version++
 	m.nonTailMutSeq++
 	m.recalcTokens()
 	debug.Log("ctx", "RemoveLastAssistantGroup: removed %d messages from index %d, remaining=%d tokens=%d",
-		len(m.messages)-lastUserIdx-1+1, lastAsstIdx, len(m.messages), m.tokenCountLocked())
+		removed, lastAsstIdx, len(m.messages), m.tokenCountLocked())
 	return userText
 }
 
@@ -1851,8 +1936,27 @@ func (m *Manager) CompactSupersededReads() int {
 		allFilesSuperseded := true
 		for p := range toolIDToPaths[id] {
 			ids := pathToToolIDs[p]
-			// This file is superseded if a later tool_id also read it.
-			if len(ids) <= 1 || ids[len(ids)-1] == id {
+			// #3726: supersession requires CONTENT coverage, not mere
+			// existence of a later read (#718 principle, as phase-2 above
+			// implements for the triggering path). The old check - "some
+			// later tool_id read this path" - let a LATER PARTIAL read of
+			// this path (an offset re-read of a slice the original read
+			// already covered) mark the whole multi-file read superseded,
+			// dropping tool results the conversation still depends on.
+			covered := false
+			for i, x := range ids {
+				if x != id {
+					continue
+				}
+				for _, laterID := range ids[i+1:] {
+					if readCovers(toolIDToRange[laterID], toolIDToRange[id]) {
+						covered = true
+						break
+					}
+				}
+				break // tool ids appear once per path
+			}
+			if !covered {
 				allFilesSuperseded = false
 				break
 			}
@@ -1956,6 +2060,9 @@ func (m *Manager) compactSupersededToolResults(supersededIDs map[string]bool, re
 			if origLen < 200 {
 				continue // skip small results — not worth compacting
 			}
+			// recall_compacted: keep the original output retrievable before the
+			// stub rewrite drops it from the live window.
+			m.archiveSupersededToolOutput(m.messages[i].Role, b.ToolID, reason, b.Output)
 			b.Output = fmt.Sprintf("[superseded: %s, output was %d chars]", reason, origLen)
 			b.Images = nil
 			freedChars += origLen
@@ -2410,7 +2517,8 @@ Omit entirely:
 			if summaryText, ok := summarizeParallel(ctx, prov, blocks, summaryTokenLimit, onUsage); ok {
 				// sa-237 fact retention: deterministically re-attach dropped
 				// constraints and recurring paths on every summary path.
-				return applyFactRetention(summaryText, payload), nil
+				// #3675: constraints come from user-role text only.
+				return applyFactRetention(summaryText, payload, userConstraintSource(msgs)), nil
 			}
 		}
 
@@ -2441,7 +2549,8 @@ Omit entirely:
 		}
 		debug.Log("ctx", "summarizeMessages: summary len=%d chars estimated=%d tokens limit=%d usage=%+v",
 			len(summaryText), EstimateTokens(summaryText), summaryTokenLimit, resp.Usage)
-		return applyFactRetention(summaryText, payload), nil
+		// #3675: constraints come from user-role text only.
+		return applyFactRetention(summaryText, payload, userConstraintSource(msgs)), nil
 	}
 	return "", fmt.Errorf("summarization returned empty text")
 }

@@ -560,6 +560,13 @@ func (p *OpenAIResponsesProvider) pollBackground(ctx context.Context, payload *r
 		next, err := p.get(ctx, payload.ID)
 		if err != nil {
 			if ctx.Err() != nil {
+				// #3894: when ctx.Done and the delay timer are BOTH ready
+				// the select may pick the timer, and this get then fails on
+				// the canceled context - this early return used to skip the
+				// best-effort server-side cancel the Done branch performs,
+				// so the /cancel endpoint was never hit (flaky
+				// TestBackgroundChatCancelOnContextCancel under -race).
+				p.cancelResponse(payload.ID)
 				return nil, ctx.Err()
 			}
 			errStreak++
@@ -671,20 +678,33 @@ func (p *OpenAIResponsesProvider) chatStreamBackground(ctx context.Context, req 
 	safego.Go("provider.openaiResponses.pollLoop", func() {
 		defer close(ch)
 		var emitted int
+		// #4230 case C: every send honors cancellation - the consumer may
+		// stop reading after ctx cancel (agent abort), and a bare send on
+		// the 64-buffer channel would block this goroutine forever once
+		// >64 events backlog, leaking the goroutine and the final payload.
+		send := func(ev StreamEvent) bool {
+			select {
+			case ch <- ev:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
 		onPoll := func(cur *responsesPayload) {
 			full := responsesOutputText(cur)
 			if len(full) > emitted {
-				ch <- StreamEvent{Type: StreamEventText, Text: full[emitted:]}
-				emitted = len(full)
+				if send(StreamEvent{Type: StreamEventText, Text: full[emitted:]}) {
+					emitted = len(full)
+				}
 			}
 		}
 		final, err := p.pollBackground(ctx, payload, onPoll)
 		if err != nil {
-			ch <- StreamEvent{Type: StreamEventError, Error: err}
+			send(StreamEvent{Type: StreamEventError, Error: err})
 			return
 		}
 		if final.Status == responsesStatusFailed || final.Status == responsesStatusCancelled {
-			ch <- StreamEvent{Type: StreamEventError, Error: backgroundTerminalError(final)}
+			send(StreamEvent{Type: StreamEventError, Error: backgroundTerminalError(final)})
 			return
 		}
 		for _, rawItem := range final.Output {
@@ -702,10 +722,14 @@ func (p *OpenAIResponsesProvider) chatStreamBackground(ctx context.Context, req 
 				// sa-54: forward the raw reasoning item through the reasoning
 				// channel; the thinking accumulator stores it verbatim for
 				// stateless replay.
-				ch <- StreamEvent{Type: StreamEventReasoning, ThinkingSignature: string(rawItem)}
+				if !send(StreamEvent{Type: StreamEventReasoning, ThinkingSignature: string(rawItem)}) {
+					return
+				}
 			case "web_search_call":
 				// sa-62: keep the hosted tool exchange replayable.
-				ch <- StreamEvent{Type: StreamEventServerTool, Block: responsesServerToolBlock(rawItem)}
+				if !send(StreamEvent{Type: StreamEventServerTool, Block: responsesServerToolBlock(rawItem)}) {
+					return
+				}
 			case "function_call":
 				args := item.Arguments
 				if args == "" {
@@ -716,13 +740,21 @@ func (p *OpenAIResponsesProvider) chatStreamBackground(ctx context.Context, req 
 						args = string(repaired)
 					}
 				}
-				ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: ToolCallDelta{
+				if !send(StreamEvent{Type: StreamEventToolCallDone, Tool: ToolCallDelta{
 					ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(args),
-				}}
+				}}) {
+					return
+				}
 			}
 		}
-		usage := &TokenUsage{InputTokens: final.Usage.InputTokens, OutputTokens: final.Usage.OutputTokens}
-		ch <- StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: final.Status == responsesStatusIncomplete}
+		usage := &TokenUsage{
+			InputTokens:  final.Usage.InputTokens,
+			OutputTokens: final.Usage.OutputTokens,
+			// #4230 case B: cache discount for background cost accounting,
+			// same decode as parseResponsesFinal on the streaming path.
+			CacheRead: final.Usage.InputTokensDetails.CachedTokens,
+		}
+		send(StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: final.Status == responsesStatusIncomplete})
 	})
 	return ch, nil
 }
@@ -847,6 +879,11 @@ type responsesPayload struct {
 	Usage  struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
+		// #4230 case B: cached-token detail for background/non-stream cost
+		// accounting, same shape parseResponsesFinal already decodes.
+		InputTokensDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"input_tokens_details"`
 	} `json:"usage"`
 	IncompleteDetails struct {
 		Reason string `json:"reason"`
@@ -882,7 +919,6 @@ func (p *OpenAIResponsesProvider) chatBackground(ctx context.Context, payload *r
 
 func chatResponseFromPayload(payload *responsesPayload) *ChatResponse {
 	out := &ChatResponse{Message: Message{Role: "assistant"}}
-	var texts []string
 	for _, rawItem := range payload.Output {
 		var item struct {
 			Type    string `json:"type"`
@@ -906,14 +942,19 @@ func chatResponseFromPayload(payload *responsesPayload) *ChatResponse {
 				if c.Type == "output_text" && (c.Text != "" || len(c.Annotations) > 0) {
 					// sa-63: keep generated-file / retrieval citations next to
 					// the text that referenced them.
-					texts = append(texts, appendResponsesCitations(c.Text, c.Annotations))
+					// #4230 case A: append at encounter position so Content keeps
+					// generation order (text-then-tool_call); the old collect-then-
+					// append-at-end reversed [message, function_call] outputs.
+					out.Message.Content = append(out.Message.Content,
+						TextBlock(appendResponsesCitations(c.Text, c.Annotations)))
 				}
 			}
 		case "code_interpreter_call", "file_search_call":
 			// sa-63: server-executed tool results; surface the transcript
 			// as text (observability only, nothing is replayed to the API).
+			// #4230 case A: encounter-position append (order fidelity).
 			if block, ok := formatResponsesServerItem(rawItem); ok {
-				texts = append(texts, block)
+				out.Message.Content = append(out.Message.Content, TextBlock(block))
 			}
 		case "function_call":
 			args := item.Arguments
@@ -955,10 +996,14 @@ func chatResponseFromPayload(payload *responsesPayload) *ChatResponse {
 			}
 		}
 	}
-	if len(texts) > 0 {
-		out.Message.Content = append(out.Message.Content, TextBlock(strings.Join(texts, "")))
+	out.Usage = TokenUsage{
+		InputTokens:  payload.Usage.InputTokens,
+		OutputTokens: payload.Usage.OutputTokens,
+		// #4230 case B: cached-token detail, same decode as the streaming
+		// path (parseResponsesFinal) so background/non-stream cost accounting
+		// gets the cache discount too.
+		CacheRead: payload.Usage.InputTokensDetails.CachedTokens,
 	}
-	out.Usage = TokenUsage{InputTokens: payload.Usage.InputTokens, OutputTokens: payload.Usage.OutputTokens}
 	if payload.Status == responsesStatusIncomplete {
 		out.StopReason = "max_tokens"
 	}
@@ -966,6 +1011,32 @@ func chatResponseFromPayload(payload *responsesPayload) *ChatResponse {
 }
 
 // ---- streaming ----
+
+// #4266: the same leak family as #3068 (gemini) / #3071 (openai chat) /
+// #4230 case C (background path here): a bare send on the 64-buffer
+// channel parks the producer goroutine forever once a cancelling consumer
+// stops reading. Every send on the SSE (non-background) path must go
+// through here.
+func (p *OpenAIResponsesProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
+	// #flake (CI 39042845474/39042902916): when the deadline fires at the
+	// same instant the terminal error event is sent, the select below had
+	// BOTH cases ready and picked ctx.Done 50/50 - dropping the very error
+	// the deadline produced (consumer saw a silent close). ch is buffered
+	// and the consumer drains until close, so a non-blocking send succeeds
+	// deterministically here; only a full buffer (slow consumer) falls
+	// through to the racing select, preserving the #4266/#3068 leak guard.
+	select {
+	case ch <- ev:
+		return true
+	default:
+	}
+	select {
+	case ch <- ev:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
 
 func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
 	req, err := p.buildRequest(messages, tools, true)
@@ -993,20 +1064,22 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 					delay := retryDelay(err, attempt)
 					debug.Log("openai-responses", "CONNECT FAILED model=%s baseURL=%s attempt=%d/%d delay=%v: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), delay, err, err)
 					// Notify user about retry
-					ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
+					if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}) {
+						return
+					}
 					if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
 						// #722: budget exhausted — stop retrying now; wrap with the
 						// sentinel so the failover layer switches immediately.
 						if sleepErr == errRetryBudgetExhausted {
 							sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
 						}
-						ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
+						p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sleepErr})
 						return
 					}
 					continue
 				}
 				debug.Log("openai-responses", "CONNECT FATAL model=%s baseURL=%s attempt=%d/%d: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), err, err)
-				ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)}
+				p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)})
 				return
 			}
 			retry, scanErr := p.readResponsesStream(ctx, httpResp, ch)
@@ -1018,16 +1091,18 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 			// lossless. Content already delivered can never be unsent, which is
 			// exactly why readResponsesStream only retries pre-emission.
 			delay := retryDelay(scanErr, attempt)
-			ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
+			if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}) {
+				return
+			}
 			if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
 				if sleepErr == errRetryBudgetExhausted {
 					sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, scanErr)
 				}
-				ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
+				p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sleepErr})
 				return
 			}
 		}
-		ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %d retry attempts exhausted", p.policy.attempts())}
+		p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %d retry attempts exhausted", p.policy.attempts())})
 	})
 	return ch, nil
 }
@@ -1066,12 +1141,16 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 		switch ev.Type {
 		case "response.output_text.delta":
 			if ev.Delta != "" {
-				ch <- StreamEvent{Type: StreamEventText, Text: ev.Delta}
+				if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventText, Text: ev.Delta}) {
+					return false, ctx.Err()
+				}
 				emitted = true
 			}
 		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 			if ev.Delta != "" {
-				ch <- StreamEvent{Type: StreamEventReasoning, Text: ev.Delta}
+				if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventReasoning, Text: ev.Delta}) {
+					return false, ctx.Err()
+				}
 				emitted = true
 			}
 		case "response.output_item.added":
@@ -1086,9 +1165,11 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 				if args == "" {
 					args = "{}"
 				}
-				ch <- StreamEvent{Type: StreamEventToolCallChunk, Tool: ToolCallDelta{
+				if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventToolCallChunk, Tool: ToolCallDelta{
 					ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(args),
-				}}
+				}}) {
+					return false, ctx.Err()
+				}
 				emitted = true
 			}
 			// sa-67: apply_patch_call is a client-executed tool call; surface
@@ -1099,9 +1180,11 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 				if len(args) == 0 {
 					args = json.RawMessage("{}")
 				}
-				ch <- StreamEvent{Type: StreamEventToolCallChunk, Tool: ToolCallDelta{
+				if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventToolCallChunk, Tool: ToolCallDelta{
 					ID: id, Name: applyPatchInternalToolName, Arguments: args,
-				}}
+				}}) {
+					return false, ctx.Err()
+				}
 				emitted = true
 			}
 		case "response.output_item.done":
@@ -1116,7 +1199,9 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 				// the agent's thinking accumulator stores it verbatim in a
 				// "thinking" block for stateless replay. Text stays empty so
 				// UIs render nothing for the opaque payload.
-				ch <- StreamEvent{Type: StreamEventReasoning, ThinkingSignature: string(ev.Item)}
+				if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventReasoning, ThinkingSignature: string(ev.Item)}) {
+					return false, ctx.Err()
+				}
 				emitted = true
 			}
 			if json.Unmarshal(ev.Item, &item) == nil && item.Type == "function_call" && item.CallID != "" {
@@ -1129,9 +1214,11 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 						args = string(repaired)
 					}
 				}
-				ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: ToolCallDelta{
+				if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventToolCallDone, Tool: ToolCallDelta{
 					ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(args),
-				}}
+				}}) {
+					return false, ctx.Err()
+				}
 				emitted = true
 			}
 			// sa-67: final apply_patch_call item; emit the authoritative done
@@ -1141,29 +1228,37 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 				if len(args) == 0 {
 					args = json.RawMessage("{}")
 				}
-				ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: ToolCallDelta{
+				if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventToolCallDone, Tool: ToolCallDelta{
 					ID: id, Name: applyPatchInternalToolName, Arguments: args,
-				}}
+				}}) {
+					return false, ctx.Err()
+				}
 				emitted = true
 			}
 			if json.Unmarshal(ev.Item, &item) == nil && item.Type == "web_search_call" {
 				// sa-62: hosted web_search item finished; forward it once
 				// through the server-tool channel so the agent stores the
 				// raw item and the next stateless request echoes it back.
-				ch <- StreamEvent{Type: StreamEventServerTool, Block: responsesServerToolBlock(ev.Item)}
+				if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventServerTool, Block: responsesServerToolBlock(ev.Item)}) {
+					return false, ctx.Err()
+				}
 				emitted = true
 			}
 			if json.Unmarshal(ev.Item, &item) == nil && (item.Type == "code_interpreter_call" || item.Type == "file_search_call") {
 				// sa-63: server-executed built-in tool completed; surface the
 				// in-band result as a text block (like Gemini grounding).
 				if block, ok := formatResponsesServerItem(ev.Item); ok {
-					ch <- StreamEvent{Type: StreamEventText, Text: block}
+					if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventText, Text: block}) {
+						return false, ctx.Err()
+					}
 					emitted = true
 				}
 			}
 		case "response.completed", "response.incomplete":
 			usage, stop := parseResponsesFinal(data)
-			ch <- StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: stop == "max_tokens" || ev.Type == "response.incomplete"}
+			if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: stop == "max_tokens" || ev.Type == "response.incomplete"}) {
+				return false, ctx.Err()
+			}
 			doneSent = true
 		case "response.failed":
 			var respErr struct {
@@ -1178,7 +1273,7 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 			if msg == "" {
 				msg = "responses stream failed"
 			}
-			ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses: %s", msg)}
+			p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses: %s", msg)})
 			doneSent = true
 		case "error":
 			var errPayload struct {
@@ -1189,7 +1284,7 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 			if msg == "" {
 				msg = "responses stream error"
 			}
-			ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses: %s", msg)}
+			p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses: %s", msg)})
 			doneSent = true
 		}
 		if doneSent {
@@ -1203,20 +1298,20 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 			return true, err
 		}
 		if ctx.Err() == nil {
-			ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)}
+			p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)})
 		} else {
-			ch <- StreamEvent{Type: StreamEventError, Error: ctx.Err()}
+			p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: ctx.Err()})
 		}
 		return false, err
 	}
 	if !doneSent {
 		if ctx.Err() != nil {
-			ch <- StreamEvent{Type: StreamEventError, Error: ctx.Err()}
+			p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: ctx.Err()})
 			return false, ctx.Err()
 		}
 		// Stream closed without a terminal event: still emit Done so the
 		// agent loop finalizes the turn instead of hanging.
-		ch <- StreamEvent{Type: StreamEventDone}
+		p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventDone})
 	}
 	return false, nil
 }

@@ -26,7 +26,11 @@ const (
 	ircPongTimeout         = 30 * time.Second
 	ircReconnectBackoff    = 5 * time.Second
 	ircMaxReconnectBackoff = 120 * time.Second
-	ircMaxMessageLen       = 400
+	// ircHealthySession is how long a connection must stay up before a
+	// disconnect is treated as a fresh transient (backoff reset) instead of
+	// resuming an accumulated wait - same threshold family as matrix #432.
+	ircHealthySession = 60 * time.Second
+	ircMaxMessageLen  = 400
 	// ircInterMessageDelay is the delay between consecutive PRIVMSG lines.
 	// IRC servers enforce flood protection; 300ms is conservative.
 	// Source: RFC 2812 §2.3.1, common IRC server flood protection policies.
@@ -60,6 +64,10 @@ type ircAdapter struct {
 	conn      net.Conn
 	connected bool
 	closed    bool
+	// healthySince marks when the current connection was established
+	// (#3562); run() uses it to reset reconnect backoff after a healthy
+	// session. Only the run-loop goroutine reads and writes it.
+	healthySince time.Time
 
 	// writeMu serializes raw writes to conn. a.mu (RLock) does not serialize
 	// concurrent writers, and three goroutines (read loop, keepalive, send path)
@@ -159,6 +167,17 @@ func (a *ircAdapter) Close() error {
 // Main run loop
 // ---------------------------------------------------------------------------
 
+// ircBackoffAfterDisconnect (#3562) decides the next reconnect wait after a
+// disconnect: a session that stayed healthy past ircHealthySession resets
+// the accumulated backoff to the base (fresh transient); anything shorter
+// keeps the accumulated value so rapid-fail loops still back off.
+func ircBackoffAfterDisconnect(current, healthyFor time.Duration) time.Duration {
+	if healthyFor >= ircHealthySession {
+		return ircReconnectBackoff
+	}
+	return current
+}
+
 func (a *ircAdapter) run(ctx context.Context) {
 	backoff := ircReconnectBackoff
 	for {
@@ -166,9 +185,17 @@ func (a *ircAdapter) run(ctx context.Context) {
 			a.publishState(false, "stopped", "")
 			return
 		}
+		a.healthySince = time.Time{}
 		if err := a.connectAndServe(ctx); err != nil {
 			a.publishState(false, "error", err.Error())
 			debug.Log("irc", "adapter=%s error: %v", a.name, err)
+		}
+		// #3562: after a HEALTHY connection (stayed up past the healthy
+		// threshold), the next disconnect is a fresh transient - reset the
+		// backoff like matrix #432 / discord #389 instead of resuming the
+		// accumulated 120s wait after hours of stable connectivity.
+		if !a.healthySince.IsZero() {
+			backoff = ircBackoffAfterDisconnect(backoff, time.Since(a.healthySince))
 		}
 		a.mu.RLock()
 		isClosed := a.closed
@@ -225,6 +252,7 @@ func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 	a.conn = conn
 	a.connected = true
 	a.mu.Unlock()
+	a.healthySince = time.Now() // #3562: healthy connection established
 	a.publishState(true, "connected", "")
 	debug.Log("irc", "adapter=%s connected to %s", a.name, addr)
 

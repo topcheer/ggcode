@@ -128,6 +128,7 @@ func (m *Model) startAgentWithExpand(text string) tea.Cmd {
 	}
 	m.rebuildSystemPrompt()
 	m.refreshStatusline() // external statusline refresh at run start (sa-160)
+	m.oscWorking("")      // OSC 7501: run in flight
 	imgs := m.pendingImages
 	m.pendingImages = nil
 	ctx, cancel := context.WithCancel(context.Background())

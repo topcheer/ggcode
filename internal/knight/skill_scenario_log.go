@@ -213,15 +213,30 @@ func (k *Knight) skillScenarioLogPath() string {
 // are rate-limited to the single most recent one; a wider fetch window
 // (limit*4) keeps older REAL lessons reachable past a run of self-reflections.
 func (k *Knight) formatRecentSemanticMemoryForEval(limit int) string {
+	return k.formatSemanticMemoryForEvalIDs(limit).text
+}
+
+// formatSemanticMemoryForEvalIDs is formatRecentSemanticMemoryForEval plus
+// the injected entry IDs, so the caller can feed eval outcomes back into
+// each lesson's utility score (#r25 feedback loop).
+type semanticEvalContext struct {
+	text string
+	ids  []string
+}
+
+func (k *Knight) formatSemanticMemoryForEvalIDs(limit int) semanticEvalContext {
 	wide := limit * 4
 	if wide < limit {
 		wide = limit
 	}
-	entries, err := k.RecentSemanticMemory(wide)
+	// #r25: rank by empirical utility (ties by recency) instead of plain
+	// recency, per ICML 2026 top-ranked-principles retrieval.
+	entries, err := k.TopSemanticMemoryByUtility(wide)
 	if err != nil || len(entries) == 0 {
-		return ""
+		return semanticEvalContext{}
 	}
 	lines := make([]string, 0, limit)
+	ids := make([]string, 0, limit)
 	selfReflectionSeen := false
 	for _, e := range entries {
 		if e.Kind == "self-reflection" {
@@ -239,8 +254,11 @@ func (k *Knight) formatRecentSemanticMemoryForEval(limit int) string {
 			when = e.Time.Format("2006-01-02") + " "
 		}
 		lines = append(lines, fmt.Sprintf("- %s[%s] %s", when, e.Kind, summary))
+		if e.ID != "" {
+			ids = append(ids, e.ID)
+		}
 	}
-	return strings.Join(lines, "\n")
+	return semanticEvalContext{text: strings.Join(lines, "\n"), ids: ids}
 }
 
 func readSkillScenarios(path string) ([]SkillScenarioLogEntry, error) {

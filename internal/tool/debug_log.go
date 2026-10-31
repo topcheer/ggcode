@@ -48,7 +48,7 @@ func (t DebugLogTool) Parameters() json.RawMessage {
 			},
 			"description": {
 				"type": "string",
-				"description": "REQUIRED. Brief activity label shown in the UI. You MUST always provide this field."
+				"description": "REQUIRED. Brief activity label shown in the UI, in the user's language."
 			}
 		},
 		"required": ["description"]

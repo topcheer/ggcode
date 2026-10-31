@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // InjectDescriptionFallback inspects the tool schema for a "description"
@@ -60,6 +61,14 @@ func InjectDescriptionFallback(schema, args json.RawMessage, toolName string) js
 	if err := json.Unmarshal(args, &argMap); err != nil {
 		return args
 	}
+	// #4693: arguments can be the JSON literal null - Unmarshal succeeds
+	// with a nil map, and the argMap["description"] assignment below would
+	// panic (assignment to entry in nil map). An absent-args call is exactly
+	// the "description missing" shape this fallback exists for: treat null
+	// like an empty object.
+	if argMap == nil {
+		argMap = map[string]json.RawMessage{}
+	}
 	if v, ok := argMap["description"]; ok {
 		var s string
 		if err := json.Unmarshal(v, &s); err == nil && strings.TrimSpace(s) != "" {
@@ -97,8 +106,11 @@ func deriveActivityLabel(toolName string, args map[string]json.RawMessage) strin
 		s = strings.TrimSpace(s)
 		// Collapse whitespace and newlines so multi-line blobs stay single-line.
 		s = strings.Join(strings.Fields(s), " ")
-		if len(s) > 60 {
-			s = s[:57] + "..."
+		// #4438: truncate by RUNE, not byte - a byte slice cut multi-byte
+		// characters (CJK paths/commands) in half, emitting invalid UTF-8
+		// into the UI activity label.
+		if utf8.RuneCountInString(s) > 60 {
+			s = string([]rune(s)[:57]) + "..."
 		}
 		return fmt.Sprintf("%s %s", toolName, s)
 	}

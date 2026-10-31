@@ -33,19 +33,33 @@ func TestIssue1093_SupervisedModeNotBypassedByStalePolicy(t *testing.T) {
 	}
 
 	// Switch to supervised BEFORE any call: the stale closure used the
-	// captured AutoMode policy, so an in-sandbox WRITE tool (auto-allowed in
-	// AutoMode, but Ask in supervised) would short-circuit to Allow without
-	// asking the client.
+	// captured AutoMode policy, so a write tool the original auto-mode
+	// policy marked Allow would short-circuit to Allow without asking the
+	// client.
 	al.SetMode("supervised")
 
 	// With the fix, the handler reads the CURRENT (supervised) policy: a
-	// write tool must NOT short-circuit - supervised mode asks the client.
-	// No client answers (empty transport), so RequestPermission aborts on
-	// ctx timeout and the handler must return Deny rather than Allow.
+	// SENSITIVE-path write must NOT short-circuit - supervised mode asks
+	// the client. No client answers (empty transport), so RequestPermission
+	// aborts on ctx timeout and the handler must return Deny rather than
+	// Allow.
+	//
+	// two-mode refactor (#4279): the input is a sensitive path
+	// (~/.ssh/authorized_keys), not an arbitrary out-of-sandbox write -
+	// ordinary out-of-sandbox writes are Allow in supervised now, so they
+	// no longer prove the ask path. The stale-policy property (#1093's
+	// soul) is unchanged: the handler must consult the CURRENT policy.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	decision := handler(ctx, "edit_file", `{"file_path":"/tmp/nonexistent-zz/x.go","old_text":"a","new_text":"b"}`)
+	decision := handler(ctx, "edit_file", `{"file_path":"~/.ssh/authorized_keys","old_text":"a","new_text":"b"}`)
 	if decision == permission.Allow {
-		t.Fatal("supervised mode must not bypass client approval for write tools (#1093)")
+		t.Fatal("supervised mode must not bypass client approval for sensitive-path writes (#1093)")
+	}
+
+	// Companion to the new contract: an ordinary out-of-sandbox write IS
+	// Allow in supervised (user-friction ruling #4279) - asserted so the
+	// sensitive-path case above can't regress back to gating everything.
+	if d := handler(ctx, "edit_file", `{"file_path":"/tmp/nonexistent-zz/x.go","old_text":"a","new_text":"b"}`); d != permission.Allow {
+		t.Fatalf("supervised mode must allow ordinary out-of-sandbox writes (#4279), got %v", d)
 	}
 }

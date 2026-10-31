@@ -40,7 +40,7 @@ func (p *GeminiProvider) ModelName() string { return p.model }
 
 // CloneWithModel returns a shallow copy of this provider with a different model.
 func (p *GeminiProvider) CloneWithModel(model string) Provider {
-	return &GeminiProvider{
+	clone := &GeminiProvider{
 		client:    p.client,
 		model:     model,
 		maxTokens: p.maxTokens,
@@ -56,7 +56,19 @@ func (p *GeminiProvider) CloneWithModel(model string) Provider {
 		serverTools:     append([]ServerToolConfig(nil), p.serverTools...),
 		policy:          p.policy,
 		logprobs:        p.logprobs,
+		// #4419: these two were silently dropped by the struct literal -
+		// the same trap #3066 fixed for anthropic. responseSchema is a
+		// plain slice (zero-value = constraint silently lost);
+		// samplingOverride is an atomic.Pointer whose literal copy carries
+		// only zero state. Clone AFTER the literal via Load/Store.
+		responseSchema: append(json.RawMessage(nil), p.responseSchema...),
 	}
+	// #4419/#3066: atomic.Pointer must be carried via Load/Store AFTER the
+	// literal - a struct-literal copy only carries zero state.
+	if ov := p.samplingOverride.Load(); ov != nil {
+		clone.samplingOverride.Store(ov)
+	}
+	return clone
 }
 
 // SetReasoningEffort sets the reasoning effort, which maps to Gemini's
@@ -331,6 +343,17 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 // wrapper layer only - this is the underlying-provider half. Every send in
 // the streamRead goroutine must go through here.
 func (p *GeminiProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
+	// #4295 family: same fix as openai_responses (#4293) - when the
+	// per-call deadline fires at the same instant the terminal error event
+	// is sent, the racing select below dropped the very error the deadline
+	// produced (silent stream close). Buffered channel + draining consumer
+	// makes a non-blocking send deterministic; only a full buffer falls
+	// through to the racing select (#3068 leak guard preserved).
+	select {
+	case ch <- ev:
+		return true
+	default:
+	}
 	select {
 	case ch <- ev:
 		return true

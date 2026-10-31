@@ -88,7 +88,7 @@ When `read_only: true`, ggcode blocks any MCP tool whose name matches a write/cr
 
 A compromised or updated MCP server can silently change its tool definitions after you approved them — swapped descriptions, added tools, or rolled-back versions (the "rug pull" pattern). ggcode content-hashes each server's tool definitions at first connection, persists the baseline to `mcp_baselines.json` under the config directory, and re-checks it on every reconnect and `tools/list_changed` refresh, surviving restarts.
 
-When the hash changes after the approved baseline, the drift is reported through the host's alert channel (`OnToolDrift`), diffed at tool-name granularity. Two false-positive guards are built in:
+When the hash changes after the approved baseline, the drift is reported through the host's alert channel (`OnToolDrift`), which the MCP manager wires on every construction path into its server warnings list and UI update broadcast, diffed at tool-name granularity. If no alert channel is wired at all, the approved baseline is kept instead of being overwritten, so the tampered tool set is re-detected on every reconnect rather than silently accepted. Two false-positive guards are built in:
 
 - **Onboarding window**: changes within 24h of approval update the baseline silently (first-day iteration of a server under active development).
 - **Escape hatch**: for a server whose definitions legitimately churn, opt out of the alert:
@@ -184,7 +184,7 @@ No configuration is needed — elicitation is enabled automatically when an inte
 Since protocol revision 2025-11-25, MCP servers may execute tool calls asynchronously. When ggcode sends a `tools/call` with the `task` request option, a compliant server can answer immediately with a *task descriptor* (`resultType: "task"`) instead of blocking until the tool finishes.
 
 ggcode's client implements the full task protocol:
-- `CallToolAsTask` sends the task-augmented call, then polls `tasks/get` until the task reaches a terminal state, and fetches the final tool result via `tasks/result`. The server's `pollInterval` hint is honored, clamped to [200ms, 10s], and the total polling budget is capped at 10 minutes so a stuck server cannot hang a call forever.
+- `CallToolAsTask` sends the task-augmented call, then polls `tasks/get` until the task reaches a terminal state, and fetches the final tool result via `tasks/result`. The server's `pollInterval` hint is honored, clamped to [200ms, 10s], and the total polling budget is capped at 10 minutes so a stuck server cannot hang a call forever. Both the 2025-11-25 field names (`pollInterval`/`ttl`) and the stable-extension names (`pollIntervalMs`/`ttlMs`) are decoded. A task lookup answered with JSON-RPC `-32602` (expired, TTL-deleted, or unknown task per the stable extension) surfaces as an explicit "expired or deleted" error instead of a bare "Invalid params".
 - `ListTasks`, `GetTask`, `CancelTask`, and `HasTasks` expose task management; listing is gated on the server's advertised `tasks` capability (uncapable servers get an empty list, never an error).
 - During initialize, ggcode declares client `tasks` support in both the legacy handshake and the modern per-request `_meta` envelope.
 
@@ -285,3 +285,28 @@ Servers implementing the MCP 2026-07-28 spec (SEP-2549) attach a `ttlMs` freshne
 - `notifications/tools/list_changed`, `notifications/prompts/list_changed`, `notifications/resources/list_changed` and `notifications/resources/updated` invalidate the affected entries immediately, so hot tool refreshes still observe fresh data.
 - Re-initializing a connection (including reconnects) clears the whole cache.
 - Servers that do not send `ttlMs` (all pre-2026-07-28 servers) are never cached — behavior is unchanged for them.
+
+## Agent Plugins (agent-plugins.org)
+
+Repositories may ship MCP servers as [Agent Plugins](https://agent-plugins.org)
+packages (open standard published 2026-08 by OpenAI, AWS, Cursor, GitHub,
+VS Code, and Vercel). A plugin lives in `.agent-plugins/<dir>/` with a
+required `plugin.json` manifest and an optional `mcp.json` (Claude
+`mcpServers` shape; `streamable-http` maps to the native `http` transport):
+
+```
+.agent-plugins/
+  toolkit/
+    plugin.json        {"name": "toolkit", "$schema": "https://agent-plugins.org/schema/v1.json"}
+    skills/            optional agentskills.io skills (see /skills docs)
+    mcp.json           {"mcpServers": {"linter": {"type": "stdio", "command": "run", "args": ["--root", "${PLUGIN_ROOT}"]}}}
+```
+
+Plugin MCP servers are gated exactly like workspace `.mcp.json` entries:
+they launch only after `ggcode mcp approve-project <name>` (or setting
+`GGCODE_ALLOW_PROJECT_MCP=1`), because plugin content arrives with the
+cloned repository. `${PLUGIN_ROOT}` expands to the plugin directory and
+`${PLUGIN_DATA}` to `~/.ggcode/plugin-data/<name>/` in args and env values
+only - never in command, url, or headers, per the spec. An invalid package
+(bad or missing `plugin.json`) is skipped whole with a debug log; sibling
+plugins are unaffected.

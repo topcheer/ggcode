@@ -132,14 +132,31 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 	}
 
 	// Check if the previous run in this session was interrupted by a crash.
-	// If so, display a recovery message to the user via the chat list.
-	if recoveryMsg := agentruntime.CheckCrashRecovery(ses.ID); recoveryMsg != "" {
+	// If so, show the recovery message to the user AND inject it into the
+	// agent context (G8-1, sa-158): FormatCrashRecoveryMessage's contract
+	// always said "the agent can inject as context", but only the chat list
+	// ever consumed it - so after a crash the model resumed blind to the
+	// half-finished workspace state while a Ctrl+C user (r445 CheckContinuation
+	// below) got the structured injection. Mutual exclusion with the
+	// interrupted path is structural: a crashed journal (State=running + dead
+	// PID) was consumed and deleted by CheckCrashedRun, so CheckContinuation
+	// below sees no snapshot; an interrupted run stamped State=completed, so
+	// CheckCrashedRun returned nil. Only one of the two can ever fire.
+	if recoveryMsg, resumeTask := agentruntime.CheckCrashRecovery(ses.ID); recoveryMsg != "" {
 		m.chatWrite(chat.NewSystemItem("crash-recovery", recoveryMsg, m.chatStyles))
+		if m.agent != nil {
+			m.agent.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: recoveryMsg}}})
+		}
 		// Crash-restore idempotency window: pre-crash successful mutating
 		// calls are re-seeded into the dedup ledger so the recovery-prompted
 		// replay (double push / double IM send) is suppressed with an
 		// advisory instead of re-executing the side effect.
 		agentruntime.SeedCrashDedupWindow(m.agent, ses.ID)
+		// sa-117: capture the interrupted task so /continue-task can offer
+		// explicit user-confirmed resumption. Empty for corrupt journals
+		// (placeholder carries no real task) - the command then reports
+		// nothing to resume.
+		m.crashResumeTask = resumeTask
 	}
 	// r445: user-interrupted (Ctrl+C) runs get a structured continuation
 	// point - shown to the user AND injected into the agent's context so
@@ -342,6 +359,7 @@ func (m *Model) handleApproval(d permission.Decision) tea.Cmd {
 		return nil
 	}
 	m.pushTunnelApprovalResult(requestID, tunnelDecisionString(d))
+	m.oscWorking("") // OSC 7501: approval decided, run resumes
 	safego.Go("tui.commands.approvalRespond", func() {
 		select {
 		case pa.Response <- d:
@@ -408,6 +426,7 @@ func (m *Model) handleDiffConfirm(approved bool) tea.Cmd {
 	if pd == nil || pd.Response == nil {
 		return nil
 	}
+	m.oscWorking("") // OSC 7501: diff decided, run resumes
 	safego.Go("tui.commands.diffConfirm", func() {
 		select {
 		case pd.Response <- approved:
@@ -737,6 +756,9 @@ func (m *Model) handleBranchCommand(parts []string) tea.Cmd {
 	// the task board too.
 	m.snapshotTasksInto(oldSes)
 	branched.TasksJSON = append([]byte(nil), oldSes.TasksJSON...)
+	// #3792: same fingerprint gap as /rewind - the branch inherits the
+	// workspace fingerprint so resume reconciliation survives.
+	branched.TasksEnvJSON = append([]byte(nil), oldSes.TasksEnvJSON...)
 	if oldSes.SidebarVisible != nil {
 		val := *oldSes.SidebarVisible
 		branched.SidebarVisible = &val
@@ -808,6 +830,148 @@ func (m *Model) handleBranchCommand(parts []string) tea.Cmd {
 	m.applyResumedSession(branched)
 
 	m.chatWriteSystem(nextSystemID(), m.t("branch.success", branched.ID, origTitle))
+	m.chatListScrollToBottom()
+	return nil
+}
+
+// handleBranchesCommand lists the branch tree around the current session:
+// when the current session was forked via /branch, its parent and siblings;
+// plus every session forked from the current one. Before this, lineage
+// (ParentSessionID/ForkPoint) was write-only — users could not see which
+// branches existed or jump between them.
+func (m *Model) handleBranchesCommand(parts []string) tea.Cmd {
+	if m.session == nil || m.sessionStore == nil {
+		m.chatWriteSystem(nextSystemID(), m.t("branch.no_session"))
+		m.chatListScrollToBottom()
+		return nil
+	}
+	jsonlStore, ok := m.sessionStore.(*session.JSONLStore)
+	if !ok {
+		m.chatWriteSystem(nextSystemID(), "Branch listing requires a JSONL session store.")
+		m.chatListScrollToBottom()
+		return nil
+	}
+	own, err := jsonlStore.ListChildren(m.session.ID)
+	if err != nil {
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to list branches: %v", err))
+		m.chatListScrollToBottom()
+		return nil
+	}
+
+	var lines []string
+	if m.session.ParentSessionID != "" {
+		if parent, perr := jsonlStore.Load(m.session.ParentSessionID); perr == nil && parent != nil {
+			pt := parent.Title
+			if pt == "" {
+				pt = parent.ID
+			}
+			lines = append(lines, fmt.Sprintf("Parent: %s (%s)", pt, parent.ID))
+		} else {
+			lines = append(lines, fmt.Sprintf("Parent: %s", m.session.ParentSessionID))
+		}
+		siblings, serr := jsonlStore.ListChildren(m.session.ParentSessionID)
+		if serr == nil && len(siblings) > 0 {
+			lines = append(lines, "Sibling branches ('>' marks this session):")
+			for _, sib := range siblings {
+				marker := "  "
+				if sib.ID == m.session.ID {
+					marker = "> "
+				}
+				lines = append(lines, fmt.Sprintf("%s%s (%s, forked at msg %d)", marker, sib.Title, sib.ID, sib.ForkPoint))
+			}
+		}
+	}
+	if len(own) > 0 {
+		lines = append(lines, fmt.Sprintf("Branches of this session (%d):", len(own)))
+		for _, ch := range own {
+			lines = append(lines, fmt.Sprintf("  %s (%s, forked at msg %d)", ch.Title, ch.ID, ch.ForkPoint))
+		}
+	} else if m.session.ParentSessionID == "" {
+		lines = append(lines, "No branches yet. Use /branch [N] to fork this session.")
+	}
+	m.chatWriteSystem(nextSystemID(), strings.Join(lines, "\n"))
+	m.chatListScrollToBottom()
+	return nil
+}
+
+// handleBranchSwitchCommand switches to another session in the current
+// branch tree. The target must be related to the current session (parent,
+// child, or sibling); arbitrary sessions stay on /resume.
+func (m *Model) handleBranchSwitchCommand(parts []string) tea.Cmd {
+	if m.loading {
+		m.chatWriteSystem(nextSystemID(), m.t("branch.busy"))
+		m.chatListScrollToBottom()
+		return nil
+	}
+	if m.session == nil || m.sessionStore == nil {
+		m.chatWriteSystem(nextSystemID(), m.t("branch.no_session"))
+		m.chatListScrollToBottom()
+		return nil
+	}
+	if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+		m.chatWriteSystem(nextSystemID(), "Usage: /branch-switch <session-id> (see /branches for IDs)")
+		m.chatListScrollToBottom()
+		return nil
+	}
+	id := strings.TrimSpace(parts[1])
+
+	jsonlStore, ok := m.sessionStore.(*session.JSONLStore)
+	if !ok {
+		m.chatWriteSystem(nextSystemID(), "Branch switching requires a JSONL session store.")
+		m.chatListScrollToBottom()
+		return nil
+	}
+	related := id == m.session.ID || id == m.session.ParentSessionID
+	if !related {
+		if own, err := jsonlStore.ListChildren(m.session.ID); err == nil {
+			for _, ch := range own {
+				if ch.ID == id {
+					related = true
+					break
+				}
+			}
+		}
+	}
+	if !related && m.session.ParentSessionID != "" {
+		if sibs, err := jsonlStore.ListChildren(m.session.ParentSessionID); err == nil {
+			for _, sib := range sibs {
+				if sib.ID == id {
+					related = true
+					break
+				}
+			}
+		}
+	}
+	if !related {
+		m.chatWriteSystem(nextSystemID(), "That session is not in the current branch tree. Use /resume <id> for arbitrary sessions.")
+		m.chatListScrollToBottom()
+		return nil
+	}
+
+	target, err := m.sessionStore.Load(id)
+	if err != nil || target == nil {
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to load session %s: %v", id, err))
+		m.chatListScrollToBottom()
+		return nil
+	}
+
+	// Flush current session meta before switching (mirrors /branch).
+	oldSes := m.session
+	oldStore := m.sessionStore
+	safego.Go("tui.branchSwitch.metaFlush", func() {
+		if js, ok := oldStore.(*session.JSONLStore); ok {
+			if err := js.AppendMetaToDisk(oldSes); err != nil {
+				debug.Log("tui", "branchSwitch meta persist: %v", err)
+			}
+		}
+	})
+
+	m.applyResumedSession(target)
+	title := target.Title
+	if title == "" {
+		title = target.ID
+	}
+	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Switched to %s (%s).", title, target.ID))
 	m.chatListScrollToBottom()
 	return nil
 }

@@ -384,7 +384,13 @@ func (m *Model) drainPendingInterrupt(runID int) []provider.ContentBlock {
 		m.setNextTunnelUserMessageOverride(*override)
 	}
 	if len(imgs) > 0 {
-		m.pendingImages = imgs
+		// #4598: this runs on the AGENT goroutine (the interruption
+		// handler set up in submit.go), while the Update goroutine may be
+		// appending a freshly pasted image to m.pendingImages right now.
+		// The old `m.pendingImages = imgs` REPLACED the slice and silently
+		// dropped anything pasted mid-run. Merge instead - same shape as
+		// restorePendingInput's #1744 restore above.
+		m.pendingImages = append(m.pendingImages, imgs...)
 	}
 	_ = hidden
 	// Don't send agentInterruptMsg — the user already saw their input rendered

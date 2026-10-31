@@ -97,10 +97,10 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		sa.setActivity("thinking", "", "")
 		sa.setStartedAt(time.Now())
 		// Set model for display in follow strip and tool call labels.
+		// #4161: route through SetModel - snapshot()/statusInfo() read this
+		// field under sa.mu, so every writer must take the same lock.
 		if cfg.Model != "" {
-			sa.mu.Lock()
-			sa.Model = cfg.Model
-			sa.mu.Unlock()
+			sa.SetModel(cfg.Model)
 		}
 		// Mark that a real goroutine is running this agent.
 		// CancelAll() uses this to decide whether to wait on done.
@@ -398,8 +398,6 @@ func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
 
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	timer := time.NewTimer(500 * time.Millisecond)
-	defer timer.Stop()
 
 	for {
 		sa.mu.Lock()
@@ -412,19 +410,31 @@ func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
 		case StatusCompleted:
 			return result, nil
 		case StatusFailed, StatusCancelled:
-			// Grace: if the runner's Complete backfill is still in flight,
-			// give it a moment to land before returning a possibly empty result.
+			// #4358: the entry timer previously created before the loop had
+			// long since fired for any real run (>500ms), so the old
+			// done/timer race returned immediately and the #713 post-signal
+			// grace was effectively zero. Block on done first (terminal
+			// transitions close it), THEN run a fresh short grace timer for
+			// the runner's Complete backfill, then re-read Result and Error.
 			if done != nil {
 				select {
 				case <-done:
-				case <-timer.C:
 				case <-ctx.Done():
 					return "", ctx.Err()
 				}
+				grace := time.NewTimer(200 * time.Millisecond)
+				select {
+				case <-grace.C:
+				case <-ctx.Done():
+					grace.Stop()
+					return "", ctx.Err()
+				}
 			}
-			// Re-read after the grace window.
+			// Re-read after the grace window (Result AND Error: Complete
+			// backfills both).
 			sa.mu.Lock()
 			result = sa.Result
+			err = sa.Error
 			sa.mu.Unlock()
 			return result, err
 		}

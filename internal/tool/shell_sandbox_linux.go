@@ -132,9 +132,11 @@ func applyLandlockWriteDeny(allowPaths []string) error {
 	var attrSize uintptr
 	switch {
 	case abi >= 4:
-		// ABI 4+ struct carries Access_fs + Access_net (+ Scoped in ABI 6);
-		// only Access_fs is used, the rest stays zero.
-		attr := unix.LandlockRulesetAttr{Access_fs: handled}
+		// ABI 4+ struct carries Handled_access_fs + Handled_access_net
+		// (+ Scoped in ABI 6); only Handled_access_fs is used, the rest
+		// stays zero. (Field renamed Access_fs → Handled_access_fs in
+		// golang.org/x/sys ≥ v0.48.)
+		attr := unix.LandlockRulesetAttr{Handled_access_fs: handled}
 		attrPtr, attrSize = unsafe.Pointer(&attr), unsafe.Sizeof(attr)
 	default:
 		// ABI 1-3: the struct is exactly { __u64 access_fs }.

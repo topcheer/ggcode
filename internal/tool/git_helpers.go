@@ -24,6 +24,13 @@ func truncateUTF8Safe(s string, maxBytes int) string {
 
 const coAuthorTrailer = "Co-Authored-By: ggcode <noreply@ggcode.dev>"
 
+// coAuthorInjectionDisabled reports whether the user opted out of the
+// automatic Co-Authored-By trailer via GGCODE_NO_COAUTHOR (any non-empty
+// value). Follows the GGCODE_SKIP_AUTOCONFIG "set = disable" convention.
+func coAuthorInjectionDisabled() bool {
+	return os.Getenv("GGCODE_NO_COAUTHOR") != ""
+}
+
 // resolveDir returns the first non-empty path from the given values.
 // Used by git tools to fall back from explicit path arg to WorkingDir.
 func resolveDir(paths ...string) string {
@@ -121,6 +128,9 @@ func isGitCommitCommand(cmd string) bool {
 // injectCoAuthorTrailer injects Co-Authored-By into a git commit command.
 // If the command already contains the trailer, it is not duplicated.
 func injectCoAuthorTrailer(cmd string) string {
+	if coAuthorInjectionDisabled() {
+		return cmd
+	}
 	if strings.Contains(cmd, coAuthorTrailer) {
 		return cmd
 	}
@@ -188,13 +198,27 @@ func injectIntoMFlag(cmd string, mIdx int) string {
 		return cmd + " --trailer \"" + coAuthorTrailer + "\""
 	}
 
-	// Quoted message — find closing quote
+	// Quoted message — find closing quote, skipping backslash escapes.
+	// #4077: strings.IndexByte hits the quote INSIDE \" and cuts the message
+	// mid-way (odd-quote leftover variant = bash syntax error, no commit at
+	// all; balanced variant = message truncated with args spilling outside
+	// -m). Scan with escape state instead; on any parse trouble fall back to
+	// the proven --trailer form (#831).
 	pos++ // skip opening quote
-	closeIdx := strings.IndexByte(cmd[pos:], quote)
-	if closeIdx < 0 {
+	var absClose = -1
+	for i := pos; i < len(cmd); i++ {
+		if cmd[i] == '\\' {
+			i++ // consume the escaped byte (\" \\ etc.) in pairs
+			continue
+		}
+		if cmd[i] == quote {
+			absClose = i
+			break
+		}
+	}
+	if absClose < 0 {
 		return cmd + " --trailer \"" + coAuthorTrailer + "\""
 	}
-	absClose := pos + closeIdx
 	msg := cmd[pos:absClose]
 	newMsg := msg + "\n\n" + coAuthorTrailer
 	return cmd[:pos] + newMsg + cmd[absClose:]

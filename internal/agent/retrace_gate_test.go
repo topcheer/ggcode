@@ -2,8 +2,14 @@ package agent
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 // r440 probes: RETRACE bidirectional stop gate. Unit level - the two LLM
@@ -119,4 +125,114 @@ func TestRetraceGateStateZeroValue(t *testing.T) {
 		t.Fatal("zero-value retraceGateState must not be fired")
 	}
 	_ = context.Background() // keep context import honest for future probes
+}
+
+// The gate is best-effort: a provider panic inside ChatStream must be
+// recovered and pass through ("" injection) instead of killing the agent
+// run. Real-world basis: crash agent-20261016-101603 — the drain loop's
+// bare onEvent call (gate passed nil) nil-derefed on the first streamed
+// event. Must complete fast: the panic is synchronous in ChatStream, so a
+// stall-timeout-shaped duration (>10s) means the test took the wrong path.
+func TestRetraceVerificationSurvivesProviderPanic(t *testing.T) {
+	a := &Agent{provider: &panicStreamProvider{}}
+	done := make(chan string, 1)
+	go func() {
+		done <- a.runRetraceVerification(context.Background(), "fix the bug", "diff --git a/x.go b/x.go")
+	}()
+	select {
+	case msg := <-done:
+		if msg != "" {
+			t.Fatalf("panic must pass through with empty injection, got %.60q", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("gate did not recover the panic fast enough — likely took the stall-timeout path, not the recover path")
+	}
+}
+
+// panicStreamProvider panics inside ChatStream (synchronously, before any
+// stream is produced), simulating a provider-side fatal bug. Embeds the
+// interface so only the method under test is implemented.
+type panicStreamProvider struct{ provider.Provider }
+
+func (p *panicStreamProvider) ChatStream(ctx context.Context, messages []provider.Message, tools []provider.ToolDefinition) (<-chan provider.StreamEvent, error) {
+	var nilMap map[string]int
+	nilMap["boom"] = 1 // deliberate nil map WRITE — assignment to entry in nil map panics
+	return nil, nil
+}
+
+// --- #4210: uncommittedDiff must include untracked (new) files ---
+
+// newGitRepo creates a temp git repo with one tracked, committed file and
+// returns its dir. Skips the test when git is unavailable.
+func newGitRepo(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("config", "user.email", "t@example.com")
+	run("config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "tracked.txt")
+	run("commit", "-q", "-m", "base")
+	return dir
+}
+
+// Scenario A: all-new-file delivery. git diff HEAD is 0 bytes; the gate must
+// still see the new file or it silently skips verification (#4210).
+func TestUncommittedDiffUntrackedOnly(t *testing.T) {
+	dir := newGitRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "newmod.go"), []byte("package newmod\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := uncommittedDiff(dir)
+	if !strings.Contains(got, "newmod.go") || !strings.Contains(got, "package newmod") {
+		t.Fatalf("scenario A: untracked-only delivery invisible to retrace gate, diff =\n%s", got)
+	}
+	if strings.TrimSpace(got) == "" {
+		t.Fatal("scenario A: empty diff for untracked-only delivery")
+	}
+}
+
+// Scenario B: mixed tracked modification + untracked new file. The diff must
+// contain BOTH halves, or the reconstruction is biased toward the tracked
+// part and can misjudge a correct change (#4210).
+func TestUncommittedDiffMixed(t *testing.T) {
+	dir := newGitRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("base\nedited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "helper.go"), []byte("package helper\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := uncommittedDiff(dir)
+	if !strings.Contains(got, "edited") {
+		t.Fatalf("scenario B: tracked modification missing from diff:\n%s", got)
+	}
+	if !strings.Contains(got, "helper.go") || !strings.Contains(got, "package helper") {
+		t.Fatalf("scenario B: untracked half missing from diff (biased reconstruction):\n%s", got)
+	}
+}
+
+// Control: gitignored files must NOT leak into the gate's diff (noise).
+func TestUncommittedDiffIgnoresIgnored(t *testing.T) {
+	dir := newGitRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.log\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "noise.log"), []byte("build noise\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := uncommittedDiff(dir); strings.Contains(got, "noise.log") {
+		t.Fatalf("ignored file leaked into retrace diff:\n%s", got)
+	}
 }

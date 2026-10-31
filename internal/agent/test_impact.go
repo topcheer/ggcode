@@ -21,7 +21,6 @@ package agent
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -79,9 +78,13 @@ func changedGoPackageDirs(workingDir string) []string {
 	var dirs []string
 	for _, f := range files {
 		dir := filepath.ToSlash(filepath.Dir(f))
-		if dir == "." || dir == "" {
+		if dir == "" {
 			continue
 		}
+		// #3648: keep "." - the module root package (main.go at repo root,
+		// the single-binary CLI layout) is one of Go's most common shapes.
+		// Skipping it made changedDirs empty and the whole Go TIA chain
+		// silently return "" for root-only edits.
 		if !seen[dir] {
 			seen[dir] = true
 			dirs = append(dirs, dir)
@@ -101,11 +104,13 @@ func hasGoTestFile(workingDir, goFile string) bool {
 		abs = filepath.Join(workingDir, goFile)
 	}
 	absDir := filepath.Dir(abs)
-	base := filepath.Base(goFile)
-	name := strings.TrimSuffix(base, ".go")
-	testFile := name + "_test.go"
-	_, err := os.Stat(filepath.Join(absDir, testFile))
-	return err == nil
+	// #3620: package-level semantics, same as missing_test_check.go - Go
+	// convention allows ANY _test.go in the package to test a file's
+	// exported functions (this repo: internal/agent functions covered by
+	// zz_issueNNNN_test.go across files). Exact same-name sibling matching
+	// reported 8% of non-test files as test-less on that convention alone.
+	matches, _ := filepath.Glob(filepath.Join(absDir, "*_test.go"))
+	return len(matches) > 0
 }
 
 // untestedChangedFiles returns changed Go source files that lack a
@@ -150,9 +155,18 @@ func impactScopedTestCommand(workingDir string) string {
 	}
 	parts := make([]string, len(dirs))
 	for i, d := range dirs {
-		parts[i] = "./" + d + "/"
+		parts[i] = goPkgArg(d)
 	}
 	return "go test " + strings.Join(parts, " ")
+}
+
+// goPkgArg renders a changed dir as a `go test` package argument. The module
+// root package is ".", not "./." (invalid) or "./" (module path itself).
+func goPkgArg(d string) string {
+	if d == "." {
+		return "."
+	}
+	return "./" + d + "/"
 }
 
 // testCoverageNudge generates a hint string about changed Go files that lack

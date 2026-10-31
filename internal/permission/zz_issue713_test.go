@@ -50,15 +50,17 @@ func TestDenyRuleBlocksTerminalTextChannelEveryMode(t *testing.T) {
 }
 
 func TestTerminalTextDangerousDetectedInModes(t *testing.T) {
-	// Auto mode denies dangerous commands; the same command via iterm2 text must not slip through.
+	// two-mode refactor: auto is an alias for the supervised surface — the
+	// extremely-dangerous floor gates with Ask (not the old hard Deny). The
+	// same command via iterm2/warp text must hit the identical floor.
 	p := newTestPolicyWithMode(t, AutoMode)
 	input := json.RawMessage(`{"action":"send","text":"rm -rf /"}`)
 	d, err := p.Check("warp", input)
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
-	if d != Deny {
-		t.Errorf("auto mode: dangerous command via warp text not denied: got %v", d)
+	if d != Ask {
+		t.Errorf("auto(alias=supervised) mode: extremely dangerous command via warp text not gated: got %v, want Ask", d)
 	}
 }
 

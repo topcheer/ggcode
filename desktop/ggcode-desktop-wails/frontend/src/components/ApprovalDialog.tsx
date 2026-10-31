@@ -4,7 +4,11 @@ import * as App from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
 
 export interface ApprovalRequest {
-  requestId: string
+  // #4151: key must match the backend event payload ("requestID"); the old
+  // "requestId" typo made request.requestId undefined, so desktop dialog
+  // replies resolved the legacy empty-string ID (or nothing) instead of the
+  // actual pending request.
+  requestID: string
   toolName: string
   input: string
 }
@@ -514,12 +518,12 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
     if (responding) return
     setResponding(true)
     try {
-      await App.RespondApproval(request.requestId, decision)
+      await App.RespondApproval(request.requestID, decision)
     } catch (e) {
       console.error('Approval response error:', e)
     }
     onClose()
-  }, [responding, request.requestId, onClose])
+  }, [responding, request.requestID, onClose])
 
   // Keyboard shortcuts: Esc=Deny, Enter=Allow, Shift+Enter=Always Allow
   useEffect(() => {

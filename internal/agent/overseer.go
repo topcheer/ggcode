@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,11 @@ const (
 	researchStallThreshold = 40 // read-only iterations before stall in research mode
 	researchSpamThreshold  = 15 // same read tool calls before spam in research mode
 	researchDriftThreshold = 50 // iterations without productive action in research mode
+
+	// #3990: research mode RAISES the file-stuck threshold instead of
+	// disabling the detector - circling one file is still a stall signal
+	// during research, just a weaker one.
+	fileStuckResearchThreshold = 8 // same file read >N times without edit in research mode
 )
 
 // overseerState tracks the agent's tool-call trajectory for analysis.
@@ -60,6 +66,10 @@ type overseerState struct {
 
 	// Iterations since last productive action (edit/write/command/commit).
 	itersSinceProductive int
+	// lastUnitIter is the iteration whose unproductive tool calls were
+	// last counted into itersSinceProductive (#4069: per-iteration advance,
+	// not per-call — parallel batches must not multiply the count).
+	lastUnitIter int
 
 	// Intervention tracking — which patterns have already fired.
 	fired map[string]bool
@@ -71,6 +81,11 @@ type overseerState struct {
 
 	// Last analysis iteration (to avoid re-analyzing too frequently).
 	lastAnalysisIter int
+
+	// Research synthesis findings (r343/sa-130): one entry per successful
+	// web_search/web_fetch result, collected post-redaction for the
+	// research-report gate's pre-folded draft. Capped at maxResearchFindings.
+	researchFindings []ResearchFinding
 
 	// researchMode is set when the task involves research, analysis, audit,
 	// or exploration. In research mode, thresholds for read-only stall, spam,
@@ -89,6 +104,17 @@ type trajectoryEntry struct {
 	toolName string
 	isError  bool
 	fileHint string // file path if extractable, empty otherwise
+	// productive is the #3568-gated forward-progress verdict computed at
+	// record time (productive tool AND (!isError || partial written paths),
+	// research union included). #3997: checkToolSpam reads this instead of
+	// re-scanning toolName maps - a failed run_command/edit_file no longer
+	// blinds the spam detector for the whole run.
+	productive bool
+	// iter is the loop iteration this call belongs to (#4075): detectors
+	// that promise ITERATION-based thresholds (checkReadOnlyStall) must
+	// window over distinct iterations, not over per-call entries - a
+	// parallel batch of N reads in one iteration used to count as N.
+	iter int
 }
 
 // productiveTools are tools that represent forward progress on the task.
@@ -158,17 +184,66 @@ var readOnlyTools = map[string]bool{
 }
 
 func newOverseerState() *overseerState {
+	// lastUnitIter sentinel -1 (#4069): a fresh run's iteration 0 must
+	// still count as a NEW iteration - zero-valued 0 would swallow it.
 	return &overseerState{
 		fileReadsSinceEdit: make(map[string]int),
 		fired:              make(map[string]bool),
+		lastUnitIter:       -1, // #4069 sentinel: iteration 0 counts as new
 	}
+}
+
+// fixIntentRe is the #3990 fix-intent override for detectResearchMode.
+// #4044: position-sensitive on purpose. A bare-word alternation matched
+// nouns ("survey of automated patch generation") and subordinate-clause
+// verbs ("how databases resolve deadlocks", "Go's GC fixes memory leaks"),
+// silently disabling research mode for read-only research tasks. The fix
+// intent must sit where the task itself commands the fix:
+//  1. an imperative sentence-start (also after . ! ? : or a newline,
+//     optionally led by please/now/first/go), or
+//  2. a coordinated/imperative follow-on clause - ", then fix", "and fix
+//     it", "and repair the handler" - where the verb takes a determiner
+//     object (it/them/that/this/the/a/an/our/my/all) or ends the text.
+//
+// Broader make-verbs like "refactor"/"migrate" stay out: they appear in
+// research wording ("assess the impact of the refactoring").
+var fixIntentRe = regexp.MustCompile(
+	`(?:^|[.!?:\n]\s+)(?:please\s+|now\s+|first\s+|go\s+)?(?:fix|repair|patch|resolve|implement)\b` +
+		`|(?:,\s*|\b(?:and|then)\s+)(?:please\s+)?(?:then\s+)?(?:fix|repair|patch|resolve|implement)\b(?:\s+(?:it|them|that|this|the|a|an|our|my|all)\b|$)`)
+
+// fixIntentStripRe scrubs tokens where a fix verb is part of a larger
+// identifier, not an imperative: branch/PR/ticket names (fix-4012,
+// patch-4013, resolve-4016, fix_4012) and hyphenated compounds led by the
+// verb (fix-intent, patch-set). In those tokens the hyphen/underscore
+// satisfies \b, so fixIntentRe fired on research tasks that merely MENTION
+// a branch like "analyze branch fix-4012 divergence" and wrongly disabled
+// research mode (#4065). RE2 has no lookahead, so the guard works by
+// replacing the token with a verb-neutral placeholder before matching.
+var fixIntentStripRe = regexp.MustCompile(`\b(?:fix|repair|patch|resolve|implement)[_-][a-z0-9]+(?:-[a-z0-9]+)*`)
+
+// stripFixIntentTokens applies fixIntentStripRe and returns text safe to
+// run fixIntentRe against. Placeholder "ref" shares no token with any fix
+// verb and keeps surrounding boundaries intact.
+func stripFixIntentTokens(lower string) string {
+	return fixIntentStripRe.ReplaceAllString(lower, "ref")
 }
 
 // detectResearchMode checks if a task description indicates research work.
 // Returns true for tasks involving research, analysis, audit, exploration,
 // evaluation, or comparison — where extensive reading IS the primary work.
+//
+// #3990: a concrete make/fix deliverable overrides research verbs. Research
+// verbs ("analyze", "investigate", "review", ...) are ordinary wording in
+// bug-fix tasks ("investigate why tests fail and fix it"), yet research mode
+// disables/degrades all four stuck detectors for the whole run - including
+// file_stuck, which targets exactly the implementation-phase stall. When the
+// task text also states a fix/make intent, that intent wins and detectors run
+// at normal thresholds.
 func detectResearchMode(taskText string) bool {
 	p := strings.ToLower(taskText)
+	if fixIntentRe.MatchString(stripFixIntentTokens(p)) {
+		return false
+	}
 	keywords := []string{
 		"research", "analyze", "analysis", "audit", "investigate",
 		"explore", "evaluate", "assess", "examine", "compare",
@@ -207,15 +282,45 @@ func (o *overseerState) effectiveDriftThreshold() int {
 	return driftThreshold
 }
 
-// recordToolCall adds a tool call to the trajectory.
-func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint string) {
+// recordToolCall adds a tool call to the trajectory. resultContent is the
+// tool's result body (may be empty): #3568 uses extractWrittenPaths on it to
+// honor partial_success semantics (IsError=true but files actually reached
+// disk counts as productive, matching #1762's correction everywhere else).
+func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint, resultContent string, iteration int) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
+	// #4069: this method fires once per TOOL RESULT, but itersSinceProductive
+	// is calibrated and reported in ITERATIONS. A parallel read-only batch of
+	// N tools used to advance it N times (3 real iterations hit the 15-
+	// iteration stall threshold). Advance it at most once per new iteration;
+	// trajectory/search counters stay per-call (their consumers count calls).
+	newIteration := iteration != o.lastUnitIter
+	o.lastUnitIter = iteration
+
+	// A tool call is productive if it's a productive tool AND it succeeded
+	// (or, #3568, partially succeeded with files actually on disk —
+	// extractWrittenPaths is the same partial_success signal #1762 case 1
+	// wired into the other trackers). Failed edit_file calls (old_text
+	// mismatch) and failed builds alike don't represent forward progress:
+	// counting them as productive reset itersSinceProductive and cleared
+	// fileReadsSinceEdit on every failure, letting read→edit-fail loops
+	// escape the drift and file-stuck detectors entirely.
+	//
+	// In research mode, research-specific tools (web_search, code_search, etc.)
+	// also count as productive because reading and searching IS the work.
+	isProductive := productiveTools[toolName]
+	if o.researchMode && !isProductive {
+		isProductive = researchProductiveTools[toolName]
+	}
+	isProductive = isProductive && (!isError || len(extractWrittenPaths(resultContent)) > 0)
+
 	o.trajectory = append(o.trajectory, trajectoryEntry{
-		toolName: toolName,
-		isError:  isError,
-		fileHint: fileHint,
+		toolName:   toolName,
+		isError:    isError,
+		fileHint:   fileHint,
+		productive: isProductive,
+		iter:       iteration,
 	})
 
 	// r365: count retrieval calls for the research-report gate (successful
@@ -230,25 +335,16 @@ func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint s
 		}
 	}
 
-	// A tool call is productive if it's a productive tool AND it succeeded.
-	// Failed run_command calls (e.g. failed builds) are NOT productive —
-	// they don't represent forward progress. This prevents the drift detector
-	// from being suppressed when the agent is stuck running failing commands.
-	//
-	// In research mode, research-specific tools (web_search, code_search, etc.)
-	// also count as productive because reading and searching IS the work.
-	isProductive := productiveTools[toolName]
-	if o.researchMode && !isProductive {
-		isProductive = researchProductiveTools[toolName]
-	}
-	if isProductive && !(isError && toolName == "run_command") {
+	// Forward-progress accounting uses the same #3568-gated verdict that
+	// was recorded on the entry above.
+	if isProductive {
 		o.itersSinceProductive = 0
 		// Reset file-read tracking after an edit.
 		o.fileReadsSinceEdit = make(map[string]int)
 		// Reset drift level — a productive action means the agent is
 		// making progress, so future drift should start from level 1 again.
 		o.driftLevel = 0
-	} else {
+	} else if newIteration {
 		o.itersSinceProductive++
 	}
 
@@ -267,6 +363,7 @@ func (o *overseerState) reset() {
 	o.trajectory = nil
 	o.fileReadsSinceEdit = make(map[string]int)
 	o.itersSinceProductive = 0
+	o.lastUnitIter = -1 // #4069: per-run iteration-unit bookkeeping (sentinel)
 	o.driftLevel = 0
 	o.fired = make(map[string]bool)
 	o.lastAnalysisIter = 0
@@ -329,9 +426,13 @@ func (o *overseerState) checkToolSpam(traj []trajectoryEntry) string {
 	}
 	threshold := o.effectiveSpamThreshold()
 	// Only check spam if there are no productive tools at all.
+	// #3997: use the #3568-gated per-entry verdict recorded at tool-call
+	// time - a FAILED run_command/edit_file is not productive (unless it
+	// carried partial written paths), so one failed call can no longer
+	// switch the whole run's spam detector off.
 	hasProductive := false
 	for _, e := range traj {
-		if productiveTools[e.toolName] || (o.researchMode && researchProductiveTools[e.toolName]) {
+		if e.productive {
 			hasProductive = true
 			break
 		}
@@ -378,11 +479,30 @@ func (o *overseerState) checkReadOnlyStall(traj []trajectoryEntry) string {
 		return ""
 	}
 	threshold := o.effectiveStallThreshold()
-	// Look at the last threshold entries.
-	if len(traj) < threshold {
-		return ""
+	// #4075: the window is the last `threshold` DISTINCT ITERATIONS (every
+	// entry of them), not the last `threshold` entries. recordToolCall
+	// appends one entry per tool result, so a parallel batch of 5 reads per
+	// iteration used to fill the 15-slot window in 3 real iterations and
+	// report "spent 15 iterations" at iteration 12 - arithmetically
+	// impossible. Walk back counting distinct iteration numbers; the
+	// window starts where the (threshold+1)-th most recent iteration begins.
+	distinct := 0
+	last := -1
+	start := 0
+	for i := len(traj) - 1; i >= 0; i-- {
+		if traj[i].iter != last {
+			distinct++
+			last = traj[i].iter
+		}
+		if distinct > threshold {
+			start = i + 1
+			break
+		}
 	}
-	recent := traj[len(traj)-threshold:]
+	if distinct < threshold {
+		return "" // fewer than threshold iterations observed so far
+	}
+	recent := traj[start:]
 	allReadOnly := true
 	for _, e := range recent {
 		if !readOnlyTools[e.toolName] {
@@ -415,18 +535,20 @@ func (o *overseerState) checkReadOnlyStall(traj []trajectoryEntry) string {
 
 // checkFileStuck detects when the same file is read repeatedly without
 // being edited, suggesting the agent can't figure out what to change.
-// In research mode, this check is skipped entirely — re-reading files
-// during analysis is normal.
+// In research mode the threshold is raised instead of disabled (#3990):
+// even pure research tasks can get stuck circling one file, and a
+// disabled detector is blind to it; a higher threshold keeps the hint
+// while tolerating legitimate re-reading during analysis.
 func (o *overseerState) checkFileStuck(traj []trajectoryEntry) string {
 	if o.fired["file_stuck"] {
 		return ""
 	}
-	// Skip in research mode: re-reading files during research/analysis is normal.
+	threshold := fileStuckThreshold
 	if o.researchMode {
-		return ""
+		threshold = fileStuckResearchThreshold
 	}
 	for file, count := range o.fileReadsSinceEdit {
-		if count >= fileStuckThreshold {
+		if count >= threshold {
 			o.fired["file_stuck"] = true
 			debug.Log("overseer", "file stuck: %s read %d times without edit", file, count)
 			return fmt.Sprintf(
@@ -555,28 +677,42 @@ func (o *overseerState) checkDrift(traj []trajectoryEntry) string {
 
 // overseerCheck is called from the agent loop. It records the tool call and
 // periodically runs analysis, returning guidance if intervention is needed.
-func (a *Agent) overseerCheck(toolName string, isError bool, fileHint string, iteration int) string {
+func (a *Agent) overseerCheck(toolName string, isError bool, fileHint, resultContent string, iteration int) string {
 	if a.overseer == nil {
 		return ""
 	}
-	a.overseer.recordToolCall(toolName, isError, fileHint)
+	a.overseer.recordToolCall(toolName, isError, fileHint, resultContent, iteration)
 	return a.overseer.analyze(iteration)
 }
 
-// resetOverseer clears trajectory for a new run.
-func (a *Agent) resetOverseer() {
+// resetOverseer clears trajectory for a new run. runTask is the CURRENT
+// run's user task text (#4003): researchMode must track what the agent is
+// working on right now, not the first message of the whole session -
+// multi-turn sessions would otherwise keep the run-1 verdict forever
+// (same per-run signal plannerAnalyze/maybeInjectResearchPlan use).
+func (a *Agent) resetOverseer(runTask string) {
 	if a.overseer == nil {
 		return
 	}
-	// Detect research mode from the autopilot goal or the first user message.
+	// Detect research mode from the autopilot goal or the current run's
+	// user text (both per-run fresh sources).
 	taskText := a.getAutopilotGoal()
-	msgs := a.Messages()
-	if taskText == "" && len(msgs) > 0 {
-		// Scan the first user message for research indicators.
-		for _, block := range msgs[0].Content {
-			if block.Type == "text" {
-				taskText = block.Text
-				break
+	if taskText == "" {
+		taskText = runTask
+	}
+	if taskText == "" {
+		// Last resort, kept for callers without run text: fall back to the
+		// latest user message instead of msgs[0] - still closer to "now".
+		msgs := a.Messages()
+		for i := len(msgs) - 1; i >= 0 && taskText == ""; i-- {
+			if msgs[i].Role != "user" {
+				continue
+			}
+			for _, block := range msgs[i].Content {
+				if block.Type == "text" {
+					taskText = block.Text
+					break
+				}
 			}
 		}
 	}

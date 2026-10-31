@@ -55,6 +55,23 @@ type ScoredExperience struct {
 	Score float64
 }
 
+// outcomeRankWeight (sa-139, MemGuard) scales retrieval scores by the
+// verification outcome recorded on the case. Unknown ("") sits below
+// verified success but above failure - no signal is weaker than a positive
+// one, yet not suspect like a negative one.
+func outcomeRankWeight(outcome string) float64 {
+	switch outcome {
+	case "success":
+		return 1.0
+	case "partial":
+		return 0.7
+	case "failed":
+		return 0.45
+	default:
+		return 0.85
+	}
+}
+
 // NewExperienceStore builds a store rooted at dir (the "experience"
 // subdirectory itself, created on demand). A nil-safe empty root is allowed
 // for tests.
@@ -185,6 +202,10 @@ func (es *ExperienceStore) RetrieveExcluding(query string, max int, excludeIDs m
 			score += idf * (float64(tf) / (float64(tf) + 1.2)) * float64(minInt(qCount, 3))
 		}
 		if distinct >= minDistinct && score >= 0.5 {
+			// sa-139 (MemGuard): outcome is a retrieval-time ranker, not an
+			// admission blocker - failed cases keep negative-example value but
+			// rank below verified successes at equal lexical relevance.
+			score *= outcomeRankWeight(c.Outcome)
 			scored = append(scored, ScoredExperience{Experience: c, Score: score})
 		}
 	}
@@ -275,16 +296,25 @@ func formatScoredExperiences(scored []ScoredExperience) string {
 	return b.String()
 }
 
-// evictLocked trims the store to MaxExperienceCases, oldest Created first.
+// evictLocked trims the store to MaxExperienceCases, oldest Updated first.
+// Eviction must key on Updated, not Created: Record's reconsolidation
+// preserves the original Created and only refreshes Updated, so an early
+// case that is still being strengthened by repeated evidence has the oldest
+// Created but the freshest knowledge — evicting by Created would discard
+// exactly the cases the reconsolidation semantics exist to protect (#3873).
 // Caller must hold es.mu.
 func (es *ExperienceStore) evictLocked() {
 	cases, err := es.List()
 	if err != nil || len(cases) <= MaxExperienceCases {
 		return
 	}
-	excess := len(cases) - MaxExperienceCases
+	// List returns Created-ascending; re-sort for eviction by Updated.
+	byUpdated := make([]Experience, len(cases))
+	copy(byUpdated, cases)
+	sort.Slice(byUpdated, func(i, j int) bool { return byUpdated[i].Updated.Before(byUpdated[j].Updated) })
+	excess := len(byUpdated) - MaxExperienceCases
 	for i := 0; i < excess; i++ {
-		_ = os.Remove(filepath.Join(es.dir, cases[i].ID+".md"))
+		_ = os.Remove(filepath.Join(es.dir, byUpdated[i].ID+".md"))
 	}
 }
 

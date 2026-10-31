@@ -24,15 +24,15 @@ func newIssue3460Agent(t *testing.T) *Agent {
 func TestIssue3460_InhibitConsumeOncePolarity(t *testing.T) {
 	a := newIssue3460Agent(t)
 	// Fresh state: local default, consume is false (gate runs, records).
-	if consumeRemoteRefusalInhibit() {
+	if a.consumeRemoteRefusalInhibit() {
 		t.Fatal("default consume must be false - local runs record")
 	}
 	// Armed: first consume true (gate skips), second false (consume-once).
 	a.InhibitNextRefusalLedgerWrite()
-	if !consumeRemoteRefusalInhibit() {
+	if !a.consumeRemoteRefusalInhibit() {
 		t.Fatal("armed inhibit must consume true (remote run skips ledger)")
 	}
-	if consumeRemoteRefusalInhibit() {
+	if a.consumeRemoteRefusalInhibit() {
 		t.Fatal("second consume must be false (consume-once)")
 	}
 }
@@ -52,7 +52,7 @@ func TestIssue3460_RemoteRunSkipsLedger(t *testing.T) {
 	a := newIssue3460Agent(t)
 	// Simulate the agent.go gate exactly: armed inhibit -> skip BOTH calls.
 	a.InhibitNextRefusalLedgerWrite()
-	if !consumeRemoteRefusalInhibit() {
+	if !a.consumeRemoteRefusalInhibit() {
 		t.Fatal("armed consume must be true")
 	}
 	// gate body skipped: record never ran

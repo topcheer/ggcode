@@ -207,6 +207,20 @@ func (rs *RuleStore) MatchErrors(errors []string) (matched []string, unmatched [
 	for _, errMsg := range errors {
 		found := false
 		for i := range rs.rules {
+			// #4389: same quality floor as the reactive path
+			// (minMatchPatternLen). A non-empty pattern shorter than the
+			// floor is a keyword fragment ("fail") that matches almost any
+			// error output - counting it as a match starves real rule
+			// extraction (the error looks handled) while the rule can never
+			// be injected reactively, the #1008 count-but-invisible shape.
+			// Empty MatchPattern must be skipped too: compilePattern("")
+			// yields a match-everything regex, so user_edit /
+			// preventive-only rules (keyed on ToolPattern alone, r444)
+			// swallowed EVERY error as matched - same #1008 family found by
+			// the #4389 regression test.
+			if rs.rules[i].MatchPattern == "" || len(rs.rules[i].MatchPattern) < minMatchPatternLen {
+				continue
+			}
 			re, err := rs.compilePattern(rs.rules[i].MatchPattern)
 			if err != nil {
 				continue
@@ -293,6 +307,18 @@ func (rs *RuleStore) AddRule(r Rule) {
 	// to "convention" for anything unrecognized.
 	r.Category = normalizeRuleCategory(r.Category)
 
+	// #4389: reject degenerate short patterns at the door. The reactive
+	// path refuses to inject rules with a MatchPattern below
+	// minMatchPatternLen, so admitting them here creates rules that only
+	// accrue HitCount and pollute the 60-slot LRU without ever being
+	// injectable. Empty MatchPattern stays legal: user_edit and
+	// preventive-only rules are keyed on ToolPattern alone.
+	if r.MatchPattern != "" && len(r.MatchPattern) < minMatchPatternLen {
+		debug.Log("ratchet", "rejected short MatchPattern rule (%d chars < %d): %q",
+			len(r.MatchPattern), minMatchPatternLen, r.MatchPattern)
+		return
+	}
+
 	// Check for semantic duplicates before adding.
 	// #3229: user_edit rules generated from a fixed template tokenize to
 	// near-identical token sets for ANY two files (Jaccard >= 0.75 always),
@@ -304,7 +330,16 @@ func (rs *RuleStore) AddRule(r Rule) {
 			continue
 		}
 		if ruleSimilarity(rs.rules[i], r) >= 0.75 {
-			// Merge into existing rule: bump hit count and update LastSeen
+			// Merge into existing rule: bump hit count and update LastSeen.
+			// #4595: keep the incoming rule's MatchPattern/FixHint when the
+			// existing rule never had one - merging used to silently drop
+			// them, losing auto-verify/injection data on the first merge.
+			if rs.rules[i].MatchPattern == "" && r.MatchPattern != "" {
+				rs.rules[i].MatchPattern = r.MatchPattern
+			}
+			if rs.rules[i].FixHint == "" && r.FixHint != "" {
+				rs.rules[i].FixHint = r.FixHint
+			}
 			rs.rules[i].HitCount += r.HitCount
 			rs.rules[i].LastSeen = r.LastSeen
 			debug.Log("ratchet", "merged duplicate rule into %s (similarity >= 0.75): %s", rs.rules[i].ID, r.Rule)
@@ -350,10 +385,15 @@ func ruleSimilarity(a, b Rule) float64 {
 	union := len(tokensA) + len(tokensB) - intersection
 	base := float64(intersection) / float64(union)
 
-	// If both rules target the same tool pattern, boost similarity.
-	// Rules like "run gofmt before commit" vs "run gofmt before staging"
-	// have low Jaccard but are clearly the same concept.
-	if a.ToolPattern == b.ToolPattern && a.ToolPattern != "" {
+	// If both rules target the same tool pattern AND already look
+	// semantically related, boost similarity. Rules like "run gofmt before
+	// commit" vs "run gofmt before staging" have low Jaccard but are the
+	// same concept. #4595: the bonus is gated on base >= 0.3 - without the
+	// gate, any two rules sharing a broad ToolPattern (e.g. git_commit.*
+	// or go build|go test) merged at Jaccard 0.45, silently swallowing
+	// semantically unrelated lessons and dropping their MatchPattern/
+	// FixHint in the merge.
+	if a.ToolPattern == b.ToolPattern && a.ToolPattern != "" && base >= 0.3 {
 		base += 0.3
 	}
 	return base
@@ -416,8 +456,17 @@ func (rs *RuleStore) DeduplicateRules() int {
 	for i := 1; i < len(rs.rules); i++ {
 		isDup := false
 		for j := range kept {
+			// #4390: 0.55 merged rule pairs that AddRule had just judged
+			// distinct at its 0.75 enqueue gate - the store contradicted
+			// itself, silently dropping the merged rule's MatchPattern and
+			// FixHint. Align with AddRule's single similarity verdict, and
+			// honor the same #3229 user_edit identity guard: two user_edit
+			// rules bound to different files are distinct by definition.
+			if userEditIdentityDistinct(kept[j], rs.rules[i]) {
+				continue
+			}
 			sim := ruleSimilarity(kept[j], rs.rules[i])
-			if sim >= 0.55 {
+			if sim >= 0.75 {
 				// Merge into the kept rule: sum hit counts, keep latest LastSeen.
 				// #1011: the previous unconditional assignment ran BEFORE this
 				// comparison, making the After check dead (both sides equal) and
@@ -638,7 +687,14 @@ func categoryMatchesTool(category, toolName string) bool {
 	case "convention":
 		return toolName == "write_file" || toolName == "edit_file" || toolName == "multi_edit_file"
 	case "security":
-		return true
+		// #4293: security rules used to match EVERY tool, which made this
+		// category the loosest coupling in the store - a security rule with
+		// a broad ToolPattern fired on read/grep/lsp calls it had nothing to
+		// say about. Security lessons are about executing commands, writing
+		// files, and git history; scope them to those tool families.
+		return toolName == "run_command" || toolName == "start_command" ||
+			toolName == "write_file" || toolName == "edit_file" || toolName == "multi_edit_file" ||
+			strings.HasPrefix(toolName, "git_")
 	default:
 		return false
 	}
@@ -671,8 +727,28 @@ func (rs *RuleStore) evict() {
 	})
 	evictCount := len(rs.rules) - rs.maxRules
 	toEvict := make(map[int]bool)
-	for i := 0; i < evictCount; i++ {
+	// #4511: honor the staleRuleMinHits promise - rules with at least that
+	// many hits are never evicted by the recency-weighted score, so a
+	// high-signal rule merely idle for staleRuleThreshold is not crowded
+	// out by a single-hit newcomer (score is HitCount/(1+days): 3 hits at
+	// 100d scores ~0.03 vs 0.5 for a day-old single hit). If EVERY rule is
+	// protected (pathological), fall back to pure lowest-score eviction -
+	// an unbounded store is worse than breaking the promise.
+	picked := 0
+	for i := 0; i < len(scores) && picked < evictCount; i++ {
+		if rs.rules[scores[i].idx].HitCount >= staleRuleMinHits {
+			continue
+		}
 		toEvict[scores[i].idx] = true
+		picked++
+	}
+	if picked < evictCount {
+		for i := 0; i < len(scores) && picked < evictCount; i++ {
+			if !toEvict[scores[i].idx] {
+				toEvict[scores[i].idx] = true
+				picked++
+			}
+		}
 	}
 	var kept []Rule
 	for i, r := range rs.rules {
@@ -826,6 +902,18 @@ func truncStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// truncTail keeps the LAST maxLen-3 chars of s (head replaced by "...").
+// #4690: truncStr head-truncates, but the #4607 marker-free failure
+// fallback labels its snippet "output tail" - for unmarked failures
+// (signal/segfault/panic) the diagnostic signal lives at the END, so a
+// head cut discarded exactly what the fallback existed to preserve.
+func truncTail(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return "..." + s[len(s)-maxLen+3:]
 }
 
 // generalizeErrorsWithRetry wraps ProcessErrorsWithLLM with retry logic.

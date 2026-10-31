@@ -140,6 +140,73 @@ var filePayloadTools = map[string]bool{
 	"multi_file_read": true,
 }
 
+// runCommandPoorResult applies the run_command-specific line-anchored
+// marker check (#3632). Unique-phrasing forms stay as raw Contains;
+// bracket forms must start a line (after optional leading whitespace or a
+// leading ellipsis) to count as tool-layer advisories rather than payload.
+func runCommandPoorResult(content string) bool {
+	lower := strings.ToLower(content)
+	// truncateMiddle head+tail markers (run_command.go) - unique phrasing.
+	if strings.Contains(lower, "truncated, showing tail]") {
+		return true
+	}
+	if strings.HasPrefix(lower, "output truncated") ||
+		strings.HasPrefix(lower, "result too large") ||
+		strings.HasPrefix(lower, "max results reached") {
+		return true
+	}
+	for _, line := range strings.Split(lower, "\n") {
+		line = strings.TrimLeft(line, " \t")
+		candidates := []string{line}
+		if strings.HasPrefix(line, "...") {
+			candidates = append(candidates, strings.TrimLeft(line[3:], " "))
+		}
+		for _, ln := range candidates {
+			if lineStartsWithAdvisoryMarker(ln) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// lineStartsWithAdvisoryMarker reports whether ln begins with one of the
+// bracketed truncation advisories the tool layer emits (LSP, MCP adapters,
+// plugin output; #1208 list).
+func lineStartsWithAdvisoryMarker(ln string) bool {
+	for _, m := range []string{
+		"[output truncated]",
+		"[result too large]",
+		"[max results reached]",
+		"[lsp output truncated]",
+		"[... mcp result truncated:",
+		"[... mcp resource truncated:",
+		"[output truncated at",
+		"[... truncated:",
+	} {
+		if strings.HasPrefix(ln, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// sourceEchoTools are the tools whose result content ECHOES repository
+// source text (patches, previews, fetched page/source dumps) rather than a
+// status the tool layer composed (#3663, the #3632 residual): git_show and
+// git_diff of this repository's own tool sources embed the truncation
+// marker literals verbatim, batch_replace dry-run previews them, and
+// browser content fetches pages that mention them - none of these tools
+// ever APPENDS a marker from the truncation list, so a bare substring hit
+// is always payload, never a degradation advisory. Same skip semantics as
+// filePayloadTools.
+var sourceEchoTools = map[string]bool{
+	"git_show":      true,
+	"git_diff":      true,
+	"batch_replace": true,
+	"browser":       true,
+}
+
 // isPoorResult checks if a non-error result is still effectively a failure
 // (e.g., empty search results, truncated output with advisory).
 func isPoorResult(toolName, content string) bool {
@@ -148,8 +215,18 @@ func isPoorResult(toolName, content string) bool {
 	}
 	// File-payload tools: content is file data, not a tool-layer report -
 	// marker literals are payload (#2964). See filePayloadTools doc comment.
-	if filePayloadTools[toolName] {
+	if filePayloadTools[toolName] || sourceEchoTools[toolName] {
 		return false
+	}
+	// run_command payloads are arbitrary command stdout/stderr: cat-ing or
+	// grepping this repository's own sources surfaces the bracketed marker
+	// literals MID-LINE (a self-referential but successful lookup, #3632).
+	// Tool-layer advisories, in contrast, always sit on their own line
+	// (possibly ellipsis-prefixed from a head-cut). So for run_command the
+	// bracket markers are line-start anchored (#1208 emitted forms keep
+	// firing; mid-line payload mentions do not) instead of raw Contains.
+	if toolName == "run_command" {
+		return runCommandPoorResult(content)
 	}
 	// Check for truncation advisory markers in tool output. Anchored to the
 	// bracketed advisory form or the result-header form so file CONTENT that

@@ -139,13 +139,24 @@ func (e *Encoder) Start() error {
 }
 
 // WriteFrame writes a single raw RGBA frame to the encoder.
+// #4352: like Read (#1294), never hold e.mu across the blocking stdin
+// write: raw frames (~8.3MB at 1080p) dwarf the 64KB pipe buffer, so a
+// frame write blocks until ffmpeg drains it; holding the lock meanwhile
+// wedges Read (fan-out consumers), IsRunning, and the monitor's reap
+// path (which needs the same lock before close(exitCh)), turning Stop's
+// graceful flush window into a full timeout wait. Snapshot under the
+// lock, write outside it; e.stdin is only nilled by Stop, and a write
+// racing Stop's Close gets the standard EPIPE/"file already closed"
+// error - same failure surface the old code already had.
 func (e *Encoder) WriteFrame(data []byte) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.running || e.stdin == nil {
+	running := e.running
+	stdin := e.stdin
+	e.mu.Unlock()
+	if !running || stdin == nil {
 		return fmt.Errorf("encoder not running")
 	}
-	_, err := e.stdin.Write(data)
+	_, err := stdin.Write(data)
 	return err
 }
 

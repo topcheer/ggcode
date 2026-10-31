@@ -165,9 +165,14 @@ func AnalyzeStagingQuality(diffOutput string) string {
 	fileSet := make(map[string]bool)
 	for _, line := range strings.Split(diffOutput, "\n") {
 		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
-			fileSet[m[1]] = true
+			fileSet[diffHeaderPath(m)] = true
 		} else if m := diffGitHeader.FindStringSubmatch(line); m != nil {
-			fileSet[m[1]] = true
+			// #4436: quoted alternative lives in group 2.
+			path := m[1]
+			if path == "" {
+				path = m[2]
+			}
+			fileSet[normalizeGitDiffPath(path)] = true
 		}
 	}
 
@@ -321,7 +326,18 @@ func stagingPatternMatch(path, pattern string) bool {
 
 // diffGitHeader matches the b/ side of `diff --git a/X b/Y` headers -
 // the only reliable path source for binary and pure-rename diffs (#1704).
-var diffGitHeader = regexp.MustCompile(`^diff --git a/\S+ b/(\S+)`)
+// #4436: git quotes paths containing spaces as `diff --git "a/foo bar.go" "b/foo bar.go"`;
+// a quoted alternative is required or the whole header misses and the file
+// never enters the staging fileSet. Bare side -> group 1; quoted -> group 2.
+var diffGitHeader = regexp.MustCompile(`^diff --git (?:a/\S+ |"a/[^"]+" )(?:b/(\S+)|"b/([^"]+)")`)
+
+// normalizeGitDiffPath strips git's diff-header quoting (#4436): outer
+// double quotes (paths with spaces) and octal/escape sequences
+// (core.quotePath) via gitUnquotePath.
+func normalizeGitDiffPath(s string) string {
+	s = strings.Trim(s, `"`)
+	return gitUnquotePath(s)
+}
 
 // formatStagingIssues formats staging quality issues into a human-readable warning.
 func formatStagingIssues(issues []StagingIssue) string {

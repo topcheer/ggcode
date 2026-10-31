@@ -9,6 +9,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +43,24 @@ func TestDiscoverModelsOpenCodeZenPublicListing(t *testing.T) {
 		APIKey: "public-listing",
 	})
 	if err != nil {
+		// The listing was public at implementation time, but upstream auth
+		// policy can change (CI red 38162326220: "status 401 Invalid API key"
+		// across unrelated PRs). Same rule as the DNS guard above: a live
+		// smoke test must not block unrelated changes on upstream-side auth
+		// shifts - skip WITH A REASON, keep failing on real regressions.
+		if strings.Contains(err.Error(), "401") {
+			t.Skipf("opencode.ai now rejects the public listing key (upstream auth change): %v", err)
+		}
+		// Transient upstream latency: the reachability probe (DNS/TCP)
+		// passed but the listing GET timed out awaiting headers (run
+		// 39049486644: 8.03s "Client.Timeout exceeded while awaiting
+		// headers" on a PR that touches internal/agent only). Same rule as
+		// the guards above: a live smoke test must not block unrelated
+		// changes on upstream-side slowness - skip WITH A REASON; real
+		// regressions still fail the listing assertions below.
+		if strings.Contains(err.Error(), "context deadline exceeded") || strings.Contains(err.Error(), "Client.Timeout exceeded") {
+			t.Skipf("opencode.ai listing timed out awaiting headers (transient upstream latency): %v", err)
+		}
 		t.Fatalf("DiscoverModels: %v", err)
 	}
 	if len(models) < 20 {

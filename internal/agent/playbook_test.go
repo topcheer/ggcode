@@ -566,3 +566,48 @@ func TestPlaybookPruneDegraded(t *testing.T) {
 		t.Errorf("degraded entry (uses=5, rate=0.2) must be pruned, got %d entries", len(pb.entries))
 	}
 }
+
+// TestRecordPlaybookFailureDegrades pins the integration path (#3557): a
+// failed run must reach Playbook.Record via recordPlaybook so SuccessRate
+// degrades and prune stays reachable in production. The unit tests above call
+// pb.Record directly, which is why the old !stats.Success gate in
+// recordPlaybook (predating the r389 failure-degradation semantics) went
+// unnoticed: tests were green while the production path dropped every
+// failure sample.
+func TestRecordPlaybookFailureDegrades(t *testing.T) {
+	tmp := t.TempDir()
+	a := &Agent{workingDir: tmp}
+
+	mkStats := func(success bool) *RunStats {
+		return &RunStats{Success: success, Iterations: 6, ToolCalls: map[string]int{"read_file": 2, "edit_file": 2}}
+	}
+
+	// Success creates the entry (rate 1.0).
+	a.recordPlaybook(mkStats(true))
+	pb := NewPlaybook(tmp)
+	if pb == nil {
+		t.Fatal("NewPlaybook returned nil")
+	}
+	pb.load()
+	if len(pb.entries) != 1 {
+		t.Fatalf("expected 1 entry after success, got %d", len(pb.entries))
+	}
+
+	// Failure through the integration path must degrade the rate to 0.5.
+	// With the old gate this call was a no-op and the rate stayed 1.0.
+	a.recordPlaybook(mkStats(false))
+	pb = NewPlaybook(tmp)
+	pb.load()
+	if len(pb.entries) != 1 {
+		t.Fatalf("failure must not delete the entry, got %d entries", len(pb.entries))
+	}
+	if got := pb.entries[0].SuccessRate; got != 0.5 {
+		t.Errorf("SuccessRate after failure via recordPlaybook = %v, want 0.5 (gate regressed?)", got)
+	}
+	if got := pb.entries[0].Uses; got != 2 {
+		t.Errorf("Uses after failure via recordPlaybook = %d, want 2", got)
+	}
+
+	// nil stats stays a no-op.
+	a.recordPlaybook(nil)
+}

@@ -933,13 +933,14 @@ func TestScenario_UserRunsHelpCommand(t *testing.T) {
 
 func TestScenario_UserRunsModeCommand(t *testing.T) {
 	m := newTestModel()
+	// two-mode refactor: legacy names normalize to canonical modes.
 	_ = m.handleCommand("/mode auto")
-	if m.mode != permission.AutoMode {
-		t.Errorf("expected mode=auto, got %v", m.mode)
+	if m.mode != permission.SupervisedMode {
+		t.Errorf("expected mode=supervised (auto normalizes), got %v", m.mode)
 	}
 	_ = m.handleCommand("/mode autopilot")
-	if m.mode != permission.AutopilotMode {
-		t.Errorf("expected mode=autopilot, got %v", m.mode)
+	if m.mode != permission.BypassMode {
+		t.Errorf("expected mode=bypass (autopilot normalizes), got %v", m.mode)
 	}
 }
 
@@ -1137,21 +1138,20 @@ func TestScenario_UserTypesShellCommand(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario: Mode.Next() cycles correctly through all 5 modes
+// Scenario: Mode.Next() cycles between the two user modes
 // ---------------------------------------------------------------------------
 
 func TestScenario_PermissionModeCycleCompletes(t *testing.T) {
-	modes := []permission.PermissionMode{
-		permission.SupervisedMode,
-		permission.PlanMode,
-		permission.AutoMode,
+	// two-mode refactor: the cycle is supervised <-> bypass; legacy aliases
+	// normalize into it and plan is tool-internal (never cycled).
+	cycle := []permission.PermissionMode{
 		permission.BypassMode,
-		permission.AutopilotMode,
+		permission.SupervisedMode,
 	}
 	current := permission.SupervisedMode
-	for i := 0; i < len(modes)*2; i++ {
+	for i := 0; i < len(cycle)*5; i++ {
 		current = current.Next()
-		expected := modes[(i+1)%len(modes)]
+		expected := cycle[i%len(cycle)]
 		if current != expected {
 			t.Errorf("cycle step %d: got %v, want %v", i+1, current, expected)
 		}

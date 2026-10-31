@@ -42,7 +42,7 @@ Scan the QR code with the ggcode Mobile app to complete pairing.
 
 ### Session Management
 - **Multi-session** — switch between multiple sessions
-- **Mode switching** — change permission mode (supervised/plan/auto/bypass/autopilot)
+- **Mode switching** — change permission mode (supervised/bypass; auto/autopilot accepted as legacy aliases)
 - **Language sync** — interface language follows desktop setting
 - **Notifications** — receive push alerts for task completions, errors, and review requests
 

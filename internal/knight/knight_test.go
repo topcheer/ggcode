@@ -1921,11 +1921,11 @@ Previous
 
 func TestValidateSkillNameRejectsUnsafePaths(t *testing.T) {
 	for _, name := range []string{"../escape", "nested/name", `nested\name`} {
-		if err := validateSkillName(name); err == nil {
+		if _, err := validateSkillName(name); err == nil {
 			t.Fatalf("expected unsafe name %q to be rejected", name)
 		}
 	}
-	if err := validateSkillName("safe-name_1"); err != nil {
+	if _, err := validateSkillName("safe-name_1"); err != nil {
 		t.Fatalf("expected safe skill name to pass, got %v", err)
 	}
 }

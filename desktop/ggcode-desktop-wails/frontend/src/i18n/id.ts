@@ -6,7 +6,6 @@ const id = {
   'nav.mcp': 'Server MCP',
   'nav.settings': 'Pengaturan',
   'nav.debug': 'Konsol Debug',
-  'nav.lanchat': 'Obrolan LAN',
   'nav.cron': 'Tugas Terjadwal',
   'cron.title': 'Tugas Terjadwal',
   'cron.newTask': 'Tugas Baru',
@@ -61,7 +60,6 @@ const id = {
   'sidebar.newSession': 'Sesi Baru',
   'sidebar.untitled': 'Tanpa Judul',
   'sidebar.delete': 'Hapus',
-  'sidebar.loading': 'Memuat...',
   'sidebar.group.pinned': 'Disematkan',
   'sidebar.group.today': 'Hari Ini',
   'sidebar.group.yesterday': 'Kemarin',
@@ -75,7 +73,6 @@ const id = {
   // StatusBar
   'status.ready': 'Siap',
   'status.thinking': 'Berpikir...',
-  'status.streaming': 'Streaming',
   'status.offline': 'Offline',
 
   // ChatView
@@ -98,9 +95,6 @@ const id = {
   'cmd.exportJSON': 'Ekspor sesi sebagai JSON',
   'cmd.copyMarkdown': 'Salin sesi sebagai Markdown',
   'cmd.searchSessions': 'Cari Sesi',
-  'cmd.clearHistory': 'Hapus Riwayat',
-  'cmd.compactContext': 'Kompres Konteks',
-  'cmd.undoLast': 'Batalkan Terakhir',
   'cmd.shareSession': 'Bagikan Sesi',
   'cmd.toggleContext': 'Aktifkan Panel Konteks',
   'cmd.toggleTheme': 'Alihkan Tema',
@@ -166,8 +160,6 @@ const id = {
   // ContextPanel
   'context.title': 'Konteks',
   'context.usage': 'Penggunaan Konteks',
-  'context.permission': 'Mode Izin',
-  'context.files': 'File dalam Konteks',
   'context.input': 'Input',
   'context.output': 'Output',
   'context.cacheRead': 'Baca Cache',
@@ -187,12 +179,9 @@ const id = {
   'settings.apiKey': 'Kunci API',
   'settings.apiKeyPlaceholder': 'Masukkan kunci API Anda',
   'settings.model': 'Model',
-  'settings.modelPlaceholder': 'mis. claude-sonnet-4-20250514',
   'settings.permissionMode': 'Mode Izin',
   'settings.language': 'Bahasa',
   'settings.identity': 'Identitas',
-  'settings.identityPlaceholder': 'Nama atau alias Anda',
-  'settings.version': 'Versi',
   'settings.save': 'Simpan',
   'settings.saved': 'Tersimpan!',
   'settings.saving': 'Menyimpan...',
@@ -202,32 +191,18 @@ const id = {
   'settings.impersonateApply': 'Terapkan',
 
   // Onboarding
-  'onboarding.title': 'Selamat Datang di GGCode',
-  'onboarding.subtitle': 'Mulai dalam beberapa langkah',
   'onboarding.next': 'Berikutnya',
   'onboarding.back': 'Kembali',
   'onboarding.getStarted': 'Mulai',
-  'onboarding.step.vendor': 'Pilih Penyedia AI',
-  'onboarding.step.apiKey': 'Masukkan Kunci API',
-  'onboarding.step.configure': 'Konfigurasi',
   'onboarding.vendorHint': 'Pilih penyedia AI yang ingin Anda gunakan',
-  'onboarding.apiKeyHint': 'Kunci API Anda disimpan secara lokal dan tidak pernah dikirim ke server kami',
   'onboarding.configHint': 'Sesuaikan pengaturan ini atau biarkan default',
-  'onboarding.skip': 'Lewati Pengaturan',
-  'onboarding.workDir': 'Direktori Kerja',
-  'onboarding.browse': 'Jelajahi',
-  'onboarding.workDirHint': 'Pilih direktori proyek untuk bekerja',
   'onboarding.welcome': 'Selamat Datang di GGCode',
   'onboarding.selectDirHint': 'Pilih direktori proyek untuk memulai',
   'onboarding.chooseDir': 'Pilih Direktori',
   'onboarding.modeSupervised': 'Terawasi',
   'onboarding.modeSupervisedDesc': 'Tinjau dan setujui setiap panggilan tool sebelum eksekusi',
-  'onboarding.modeAuto': 'Otomatis',
-  'onboarding.modeAutoDesc': 'Setujui otomatis tool hanya-baca, konfirmasi operasi destruktif',
   'onboarding.modeBypass': 'Lewati',
   'onboarding.modeBypassDesc': 'Setujui otomatis semua tool, tanpa konfirmasi',
-  'onboarding.modeAutopilot': 'Otopilot',
-  'onboarding.modeAutopilotDesc': 'Sepenuhnya otonom — agent berjalan tanpa konfirmasi apa pun',
   'onboarding.fetchingModels': 'Mengambil...',
   'onboarding.fetchModels': 'Ambil Model',
   'onboarding.noModelsFound': 'Tidak ada model ditemukan. Masukkan nama model secara manual.',
@@ -250,27 +225,18 @@ const id = {
 
   // Dialogs (About)
   'about.title': 'Tentang GGCode',
-  'about.version': 'Versi',
   'about.description': 'Agent coding AI untuk terminal',
-  'about.close': 'Tutup',
 
   // PairingCodeDialog
   'pairing.title': 'Pasangkan Perangkat',
-  'pairing.code': 'Kode Pasangan',
-  'pairing.expiresIn': 'Kedaluwarsa dalam {n}d',
   'pairing.close': 'Tutup',
 
   // ShareDialog
   'share.title': 'Bagikan Sesi',
-  'share.connectUrl': 'URL Koneksi',
-  'share.qrCode': 'Kode QR',
   'share.copy': 'Salin',
   'share.copied': 'Tersalin!',
-  'share.openInBrowser': 'Buka di Browser',
   'share.stopSharing': 'Hentikan Berbagi',
   'share.generating': 'Membuat...',
-  'share.scanQr': 'Pindai kode QR untuk terhubung',
-  'share.activeDevices': '{n} perangkat terhubung',
 
   // IMManagement
   'im.title': 'Adapter IM',
@@ -281,55 +247,23 @@ const id = {
   'im.unbound': 'Tidak Terikat',
   'im.online': 'Daring',
   'im.offline': 'Luring',
-  'im.muted': 'Dibisukan',
   'im.mute': 'Bisukan',
   'im.unmute': 'Bunyikan',
-  'im.delete': 'Hapus',
-  'im.configure': 'Konfigurasi',
   'im.platform': 'Platform',
   'im.name': 'Nama',
-  'im.workspace': 'Workspace',
-  'im.enabled': 'Diaktifkan',
   'im.save': 'Simpan',
   'im.cancel': 'Batal',
   'im.selectPlatform': 'Pilih platform...',
-  'im.adapterName': 'Nama Adapter',
-  'im.adapterNamePlaceholder': 'mis. Slack Saya',
-  'im.bindToWorkspace': 'Ikat ke Workspace',
-  'im.enabledHint': 'Aktifkan adapter ini',
-  'im.pairing': 'Memasangkan...',
-  'im.paired': 'Terpasang',
-  'im.notPaired': 'Belum Terpasang',
-  'im.startPairing': 'Mulai Pasangan',
 
   // MCPServers
   'mcp.title': 'Server MCP',
   'mcp.add': 'Tambah',
-  'mcp.noServers': 'Tidak ada server MCP dikonfigurasi. Klik "Tambah" untuk menambahkan.',
   'mcp.name': 'Nama',
-  'mcp.command': 'Perintah',
-  'mcp.args': 'Argumen',
-  'mcp.url': 'URL',
-  'mcp.headers': 'Header',
-  'mcp.type': 'Tipe',
-  'mcp.typeLocal': 'Lokal (stdio)',
-  'mcp.typeRemote': 'Jarak Jauh (HTTP)',
-  'mcp.enabled': 'Diaktifkan',
-  'mcp.save': 'Simpan',
   'mcp.cancel': 'Batal',
-  'mcp.delete': 'Hapus',
-  'mcp.namePlaceholder': 'Nama server',
-  'mcp.commandPlaceholder': 'mis. npx @modelcontextprotocol/server',
-  'mcp.argsPlaceholder': 'Argumen (dipisahkan spasi)',
-  'mcp.urlPlaceholder': 'mis. http://localhost:3000/mcp',
-  'mcp.selectType': 'Pilih tipe...',
 
   // FileBrowser
   'files.fileTooLarge': 'File terlalu besar untuk pratinjau (>2MB)',
   'files.binaryFile': 'File biner',
-  'files.imagePreview': 'Pratinjau Gambar',
-  'files.noPreview': 'Tidak ada pratinjau tersedia',
-  'files.openInEditor': 'Buka di Editor',
 
   // DebugConsole
   'debug.title': 'Konsol Debug',
@@ -359,19 +293,15 @@ const id = {
 
   // SettingsPage sections
   'settings.agentSafety': 'Agent & Keamanan',
-  'settings.workspaceAccess': 'Workspace & akses file',
   'settings.appearance': 'Tampilan',
   'settings.integrations': 'Integrasi',
-  'settings.languageServers': 'Server Bahasa',
   'settings.diagnostics': 'Diagnostik',
-  'settings.hooks': 'Hooks',
   'settings.hooksTitle': 'Hooks siklus hidup',
   'settings.hooksAdd': '+ Tambah',
   'settings.hooksEdit': 'edit',
   'settings.hooksDelete': 'hapus',
   'settings.hooksInject': 'injeksi',
   'settings.hooksNone': '(tidak ada)',
-  'settings.hooksEditTitle': '{0} Hook — {1}',
   'settings.hooksMatch': 'Cocok (* untuk semua)',
   'settings.hooksType': 'Tipe (command/http)',
   'settings.hooksCommand': 'Perintah',
@@ -393,13 +323,11 @@ const id = {
   'settings.hooksMatchMode': 'Mode pencocokan',
   'settings.hooksTesterTitle': 'Tester regex',
   'settings.hooksTesterPlaceholder': 'cth: run_command git push',
-  'settings.hooksTestBtn': 'Tes',
   'settings.hooksTestMatched': 'Cocok!',
   'settings.hooksTestNotMatched': 'Tidak cocok',
   'settings.hooksTestError': 'Error: {0}',
   'settings.addCustomEndpoint': 'Tambah Endpoint Kustom',
   'settings.configured': 'Dikonfigurasi',
-  'settings.install': 'Instal:',
   'settings.saveLimits': 'Simpan batas',
   'settings.refreshModels': 'Segarkan model dari API',
   'settings.versionPlaceholder': 'String versi...',
@@ -434,8 +362,6 @@ const id = {
   'settings.theme': 'Tema',
   'settings.themeLight': 'Terang',
   'settings.themeDark': 'Gelap',
-  'settings.themeSystem': 'Sistem',
-  'settings.integrationsHint': 'Aktifkan fitur integrasi untuk akses cepat ke alat.',
   'settings.lspHint': 'Server Language Server Protocol (LSP) menyediakan agent dengan kecerdasan kode: go-to-definition, find references, info hover, diagnostik, dan lainnya.',
   'settings.lspNoServers': 'Tidak ada server bahasa terdeteksi di workspace ini.',
   'settings.lspConfigured': '(dikonfigurasi)',
@@ -463,17 +389,9 @@ const id = {
   'chat.copyError': 'Salin kesalahan',
 
   // Permission mode dropdown options
-  'mode.supervisedDesc': 'Terawasi (konfirmasi setiap tool)',
-  'mode.autoDesc': 'Otomatis (hanya tool aman)',
-  'mode.planDesc': 'Rencana (hanya-baca)',
-  'mode.bypassDesc': 'Lewati (setujui otomatis sebagian besar tool)',
-  'mode.autopilotDesc': 'Otopilot (otonomi tinggi)',
 
   // Common dropdown placeholders
-  'common.chooseVendor': 'Pilih vendor...',
-  'common.chooseEndpoint': 'Pilih endpoint...',
   'common.chooseModel': 'Pilih model...',
-  'common.english': 'Inggris',
 
   // ChatView activity descriptions
   'chat.activity.reading': 'Membaca file...',
@@ -488,13 +406,10 @@ const id = {
   'chat.activity.subagent': 'Menjalankan sub-agent...',
   'chat.activity.waiting': 'Menunggu input...',
   'chat.activity.saving': 'Menyimpan memori...',
-  'chat.activity.writingResponse': 'Menulis respons...',
   'chat.activity.planMode': 'Memasuki mode rencana...',
 
   // ChatView UI labels
   'chat.findPlaceholder': 'Cari dalam percakapan...',
-  'chat.noModel': 'Tidak ada model',
-  'chat.selectWorkspace': 'Pilih workspace',
   'chat.sending': 'Mengirim...',
   'chat.failedToSend': 'Gagal mengirim',
   'chat.nickname': 'Nama Panggilan',
@@ -518,11 +433,7 @@ const id = {
   'chat.title.copyReasoning': 'Salin penalaran',
   'chat.title.editResend': 'Edit & kirim ulang',
   'chat.title.copyMessage': 'Salin pesan',
-  'chat.title.regenerate': 'Buat ulang respons',
-  'chat.title.copyResult': 'Salin hasil',
-  'chat.title.copyError': 'Salin kesalahan',
   'chat.title.teamBoard': 'Buka papan tim',
-  'chat.title.editIdentity': 'Klik untuk mengedit nama panggilan, peran, dan tim Anda',
 
   // MCPServers
   'mcp.transport': 'Transportasi',
@@ -553,51 +464,30 @@ const id = {
   'lanchat.noMessagesDM': 'Belum ada pesan langsung.',
   'lanchat.broadcastPlaceholder': 'Siaran ke semua...',
   'lanchat.dmPlaceholder': 'Pesan ke {name}...',
-  'lanchat.enterNickname': 'Masukkan nama panggilan baru:',
 
   // ApprovalDialog hints
-  'approval.denyHint': 'Tolak',
-  'approval.allowHint': 'Izinkan',
-  'approval.alwaysHint': 'Selalu',
-  'approval.copyToClipboard': 'Salin ke clipboard',
-  'approval.ariaLabel': 'Persetujuan tool',
 
   // AskUserDialog
   'askUser.typeAnswer': 'Ketik jawaban Anda...',
-  'askUser.additionalNotes': 'Catatan tambahan (opsional)',
-  'askUser.close': 'Tutup dialog',
-  'askUser.cancel': 'Batal',
 
   // IMManagement
   'im.editAdapter': 'Edit: {name}',
-  'im.addTitle': 'Tambah adapter IM',
-  'im.adapterNameRequired': 'Masukkan nama adapter',
 
   // FileBrowser
   'files.searchPlaceholder': 'Cari file...',
   'files.officeDocument': 'Dokumen Office',
   'files.openExternal': 'Buka dengan aplikasi eksternal untuk melihat',
-  'files.renderingMermaid': 'Merender diagram...',
   'files.htmlPreview': 'Pratinjau HTML',
 
   // Dialogs / About
-  'about.checkUpdates': 'Periksa Pembaruan',
-  'about.checking': 'Memeriksa...',
-  'about.newVersion': 'Versi baru tersedia: v{version}',
-  'about.download': 'Unduh',
 
   // TopDragBar (window controls)
-  'window.close': 'Tutup',
-  'window.minimize': 'Minimalkan',
-  'window.maximize': 'Maksimalkan',
-  'window.restore': 'Pulihkan jendela',
 
   // StatusBar
   'status.toggleContext': 'Alihkan panel konteks',
 
   // TeamBoard
   'team.boardTitle': 'Papan Tim',
-  'team.closeBoard': 'Tutup papan tim',
 
   // Common shared
   'common.dismiss': 'Tutup notifikasi',
@@ -650,12 +540,8 @@ const id = {
   'settings.chooseVendor': 'Pilih vendor...',
   'settings.chooseEndpoint': 'Pilih endpoint...',
   'settings.modeSupervised': 'Terawasi (konfirmasi setiap tool)',
-  'settings.modeAuto': 'Otomatis (hanya tool aman)',
-  'settings.modePlan': 'Rencana (hanya-baca)',
   'settings.modeBypass': 'Lewati (setujui otomatis tool aman)',
   'settings.modeBypassAll': 'Lewati (setujui otomatis sebagian besar tool)',
-  'settings.modeAutopilot': 'Otopilot (setujui semua)',
-  'settings.modeAutopilotHigh': 'Otopilot (otonomi tinggi)',
   'settings.saveModeHint': 'Simpan untuk mempertahankan mode default ini. Perubahan mode runtime masih mengikuti penanganan mode normal aplikasi.',
 
   // Dialogs
@@ -682,11 +568,6 @@ const id = {
   'onboarding.languageHint': 'Anda dapat mengubahnya nanti di Pengaturan',
 
   // SettingsPage mode descriptions (FeatureCard)
-  'settings.modeDescSupervised': 'Tinjau dan setujui setiap eksekusi tool',
-  'settings.modeDescAuto': 'Otomatis setujui hanya operasi aman',
-  'settings.modeDescPlan': 'Jelajahi kode tanpa membuat perubahan',
-  'settings.modeDescBypass': 'Otomatis setujui sebagian besar operasi',
-  'settings.modeDescAutopilot': 'Otonomi penuh dengan gangguan minimal',
   'settings.agentSafetyHint': 'Tinjau berapa banyak otonomi yang dimiliki agent desktop saat ini. Ini merangkum perilaku yang ada tanpa mengubah kebijakan tool lanjutan.',
   'settings.workspaceAccessHint': 'Tool file beroperasi dalam workspace saat ini dan direktori yang diizinkan dikonfigurasi. Pengeditan direktori yang diizinkan secara lanjutan sengaja tidak diekspos di sini untuk menghindari perubahan batas keamanan secara tidak sengaja.',
   'settings.appearanceHint': 'Sesuaikan tema visual. Aplikasi mengikuti preferensi sistem Anda secara default.',
@@ -745,9 +626,6 @@ const id = {
   'toast.copiedMessages': 'Menyalin {count} pesan ke clipboard',
 
   // FileBrowser
-  'files.emptyDirectory': 'Direktori kosong',
-  'files.noMatchingFiles': 'Tidak ada file yang cocok',
-  'files.selectToPreview': 'Pilih file untuk pratinjau',
 
   // ApprovalDialog risk levels
   'approval.riskHigh': 'Risiko Tinggi',
@@ -755,59 +633,12 @@ const id = {
   'approval.riskLow': 'Risiko Rendah',
 
   // DebugConsole
-  'debug.filterLogs': 'Saring log debug',
 
   // Sidebar context menu
-  'sidebar.ctxOpen': 'Buka',
-  'sidebar.ctxRename': 'Ganti Nama',
-  'sidebar.ctxCopyId': 'Salin ID',
-  'sidebar.ctxDelete': 'Hapus',
-  'sidebar.ctxPin': 'Sematkan',
-  'sidebar.ctxUnpin': 'Lepas Sematan',
-  'sidebar.startConversation': 'Mulai percakapan',
-  'sidebar.noMatching': 'Tidak ada sesi yang cocok "{search}"',
-  'sidebar.clearSearch': 'Bersihkan pencarian',
-  'sidebar.noSessionsYet': 'Belum ada sesi',
 
   // ChatView context menu & run stats
-  'chat.ctxCopy': 'Salin',
-  'chat.ctxEdit': 'Edit',
-  'chat.ctxRegenerate': 'Buat Ulang',
-  'chat.runDuration': 'Durasi',
-  'chat.runTools': 'Tool',
-  'chat.runFiles': 'File',
-  'chat.runErrors': 'Kesalahan',
-  'chat.runTokens': 'Token',
-  'chat.dropImages': 'Jatuhkan gambar untuk dilampirkan',
-  'chat.slashHelp': 'Tampilkan perintah yang tersedia',
-  'chat.slashModel': 'Ganti atau lihat model AI',
-  'chat.slashMode': 'Ubah mode izin (auto/terawasi/rencana/lewati)',
-  'chat.slashClear': 'Bersihkan riwayat obrolan',
-  'chat.slashCompact': 'Kompres jendela konteks',
-  'chat.slashContext': 'Tampilkan detail penggunaan konteks',
-  'chat.slashCost': 'Tampilkan penggunaan token dan biaya',
-  'chat.slashCopy': 'Salin percakapan ke clipboard',
-  'chat.slashExport': 'Unduh percakapan sebagai file markdown',
-  'chat.slashSessions': 'Jelajahi dan ganti sesi',
-  'chat.slashConfig': 'Lihat atau edit konfigurasi',
-  'chat.slashStatus': 'Tampilkan status runtime',
-  'chat.slashSkills': 'Jelajahi keterampilan yang tersedia',
-  'chat.slashMcp': 'Kelola server MCP',
-  'chat.slashReview': 'Tinjau perubahan kode (git diff)',
-  'chat.slashDiff': 'Tampilkan diff working tree',
-  'chat.slashReflect': 'Memicu refleksi diri',
-  'chat.slashUndo': 'Batalkan edit file terakhir',
-  'chat.slashRegenerate': 'Buat ulang respons terakhir',
-  'chat.slashTodo': 'Manajemen tugas',
-  'chat.slashInit': 'Inisialisasi file memori proyek',
-  'chat.slashLang': 'Ubah bahasa antarmuka',
-  'chat.slashBug': 'Lapork bug',
 
   // Dialogs links
-  'dialogs.linkGitHub': 'GitHub',
-  'dialogs.linkReleases': 'Rilis',
-  'dialogs.linkIssues': 'Masalah',
-  'dialogs.linkDiscord': 'Discord',
 
   // MCPServers transports
   'mcp.transportHttp': 'HTTP / SSE',
@@ -816,20 +647,14 @@ const id = {
   'mcp.descWs': 'Server jarak jauh melalui WebSocket',
 
   // IMManagement
-  'im.qrAuthHint': 'Platform ini menggunakan autentikasi kode QR. Simpan untuk memulai proses pasangan.',
-  'im.noConfigurableFields': 'Tidak ada kolom yang dapat dikonfigurasi untuk adapter ini.',
 
   // PairingCodeDialog
-  'pairing.enterCode': 'Masukkan kode ini di saluran IM Anda:',
 
   // LanChatView
-  'lanchat.noContactsOnline': 'Tidak ada kontak yang daring',
 
   // ContextPanel
-  'context.noImAdapters': 'Tidak ada adapter IM terikat',
 
   // SettingsPage
-  'settings.maxTokensHint': 'Setel ke 0 atau biarkan kosong untuk deteksi otomatis dari spesifikasi model.',
   'settings.oauthConnected': 'Terhubung',
   'settings.oauthNotConnected': 'Tidak terhubung',
   'settings.oauthLoggingIn': 'Sedang masuk...',

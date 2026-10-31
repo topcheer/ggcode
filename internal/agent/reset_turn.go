@@ -27,6 +27,7 @@ func (a *Agent) resetTurnDetectors() {
 	a.toolRedundancy.reset()
 	a.toolEquivDetect.reset()
 	a.toolSequence.reset()
+	a.obsContract.reset()
 	a.shellNativeHint.reset()
 	a.monorepoScoper.reset()
 	a.resetBgOrphan()
@@ -76,6 +77,9 @@ func (a *Agent) resetTurnDetectors() {
 	}
 	if a.irrevGate != nil {
 		a.irrevGate.reset()
+	}
+	if a.argComplexityGate != nil {
+		a.argComplexityGate.reset()
 	}
 	a.subgoalTrack.reset()
 	a.futileCycle.reset()

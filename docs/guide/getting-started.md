@@ -68,7 +68,7 @@ The input supports three modes:
 | `/help` | Show available commands |
 | `/sessions` | List and resume sessions |
 | `/model [name]` | Switch model |
-| `/mode [mode]` | Switch permission mode (supervised/plan/auto/bypass/autopilot) |
+| `/mode [mode]` | Switch permission mode (supervised/bypass; auto/autopilot accepted as legacy aliases) |
 | `/compact` | Compact conversation to save context |
 | `/exit` | Exit ggcode |
 
@@ -76,6 +76,13 @@ The agent itself can also reclaim context by calling the `compact_context`
 tool (Context-as-Tool): it runs a cheap mechanical pass immediately and, at
 or above the auto-compact threshold, schedules background summarization that
 applies at the next turn boundary.
+
+Compaction is lossy, so anything it removes (summarized-away turns and
+superseded tool results) is kept in a session-scoped archive (~1MB, oldest
+entries evicted first). The agent can retrieve the verbatim original text
+later via the read-only `recall_compacted` tool — e.g. to recover an exact
+error message or command output that predates the last summary — instead of
+re-running the work.
 
 ## 5. Next Steps
 

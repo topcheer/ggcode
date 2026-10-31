@@ -29,6 +29,11 @@ type bm25Doc struct {
 	path   string
 	tf     map[string]int // term frequency in this document
 	length int            // total number of terms
+	// mtime is the file's mtime AT THE MOMENT the content (tf) was read -
+	// #4573: persistIndex writes THIS value, never a re-Stat at persist
+	// time, so the cache pair {mtime, tf} always refers to the same
+	// instant. Ephemeral (never-persisted) indexes leave it zero.
+	mtime int64
 }
 
 // bm25Index is an ephemeral index built from a set of files.

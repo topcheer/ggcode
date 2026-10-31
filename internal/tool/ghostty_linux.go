@@ -212,19 +212,48 @@ func ghosttyLinuxCommandArgv(command, wd string) []string {
 	return []string{"sh", "-c", shellCmd}
 }
 
+// ghosttyLinuxNewWindowCommandParams builds the gdbus new-window-command
+// parameter string for an argv, applying #4636's cap-hint discipline.
+func ghosttyLinuxNewWindowCommandParams(argv []string) string {
+	q := make([]string, 0, len(argv))
+	q = append(q, "\"-e\"")
+	for _, a := range argv {
+		q = append(q, fmt.Sprintf("%q", a))
+	}
+	return "[<[" + strings.Join(q, ", ") + "]>]"
+}
+
+// ghosttyLinuxCdOnlyArgv builds the -e argv for the #4703/#2589 cd-only
+// contract: no command, but the surface must still start in wd.
+func ghosttyLinuxCdOnlyArgv(wd string) []string {
+	return []string{"sh", "-c", fmt.Sprintf("cd %s", escapeShellSingleQuoteLinux(wd))}
+}
+
+// resolveWorkingDir returns the effective working directory for a
+// new_tab/new_window call (#4703): an explicitly provided working_dir, or
+// the schema-promised fallback to the tool process's cwd (g.workingDir())
+// when empty. Both darwin paths have honored this since #1324/#3140; Linux
+// never resolved the directory at all in the empty-command branch.
+func (g *GhosttyTool) resolveWorkingDir(workingDir string) string {
+	if wd := strings.TrimSpace(workingDir); wd != "" {
+		return wd
+	}
+	return g.workingDir()
+}
+
 func (g *GhosttyTool) executeNewTab(ctx context.Context, command, workingDir string) Result {
+	// #4703: resolve the working directory up front - the schema promises
+	// "defaults to cwd" for BOTH the command and empty-command paths, and
+	// darwin has honored that since #1324/#3140. Linux previously ignored
+	// working_dir entirely when command was empty.
+	wd := g.resolveWorkingDir(workingDir)
 	// new-window-command is the only tab/window action available via DBus.
 	// There's no explicit "new-tab" DBus action — we use new-window as fallback.
 	if strings.TrimSpace(command) != "" {
 		// #3140: sh -c so argumented commands survive execvp semantics.
 		// gdbus format for new-window-command: array of string args
-		argv := ghosttyLinuxCommandArgv(command, workingDir)
-		q := make([]string, 0, len(argv)+1)
-		q = append(q, "\"-e\"")
-		for _, a := range argv {
-			q = append(q, fmt.Sprintf("%q", a))
-		}
-		params := "[<[" + strings.Join(q, ", ") + "]>]"
+		argv := ghosttyLinuxCommandArgv(command, wd)
+		params := ghosttyLinuxNewWindowCommandParams(argv)
 		_, err := gdbusCall(ctx, "new-window-command", params)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("ghostty new_tab failed: %v", err)}
@@ -232,23 +261,25 @@ func (g *GhosttyTool) executeNewTab(ctx context.Context, command, workingDir str
 		return Result{Content: "ghostty tab created with command (via new-window DBus action)"}
 	}
 
-	_, err := gdbusCall(ctx, "new-window", "")
+	// #4703/#2589 cd-only contract: command empty + working_dir set must
+	// still take effect. A bare new-window opens the surface in Ghostty's
+	// own default directory and silently drops the caller's working_dir
+	// (darwin fixed this three times: #2589/#1324/#3140). Open via a
+	// cd-only sh -c invocation so the new surface starts in wd.
+	_, err := gdbusCall(ctx, "new-window-command", ghosttyLinuxNewWindowCommandParams(ghosttyLinuxCdOnlyArgv(wd)))
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty new_tab failed: %v", err)}
 	}
-	return Result{Content: "ghostty tab created (via new-window DBus action)"}
+	return Result{Content: fmt.Sprintf("ghostty tab created (via new-window DBus action, cwd %s)", wd)}
 }
 
 func (g *GhosttyTool) executeNewWindow(ctx context.Context, command, workingDir string) Result {
+	// #4703: same resolution + cd-only contract as executeNewTab.
+	wd := g.resolveWorkingDir(workingDir)
 	if strings.TrimSpace(command) != "" {
 		// #3140: ditto (see executeNewTab).
-		argv := ghosttyLinuxCommandArgv(command, workingDir)
-		q := make([]string, 0, len(argv)+1)
-		q = append(q, "\"-e\"")
-		for _, a := range argv {
-			q = append(q, fmt.Sprintf("%q", a))
-		}
-		params := "[<[" + strings.Join(q, ", ") + "]>]"
+		argv := ghosttyLinuxCommandArgv(command, wd)
+		params := ghosttyLinuxNewWindowCommandParams(argv)
 		_, err := gdbusCall(ctx, "new-window-command", params)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("ghostty new_window failed: %v", err)}
@@ -256,11 +287,12 @@ func (g *GhosttyTool) executeNewWindow(ctx context.Context, command, workingDir 
 		return Result{Content: "ghostty window created with command"}
 	}
 
-	_, err := gdbusCall(ctx, "new-window", "")
+	// #4703/#2589 cd-only contract - see executeNewTab.
+	_, err := gdbusCall(ctx, "new-window-command", ghosttyLinuxNewWindowCommandParams(ghosttyLinuxCdOnlyArgv(wd)))
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty new_window failed: %v", err)}
 	}
-	return Result{Content: "ghostty window created"}
+	return Result{Content: fmt.Sprintf("ghostty window created (cwd %s)", wd)}
 }
 
 func (g *GhosttyTool) executeFocus(ctx context.Context, terminalID string) Result {
