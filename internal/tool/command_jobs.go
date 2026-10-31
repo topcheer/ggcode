@@ -512,7 +512,20 @@ func (m *CommandJobManager) Write(id, input string, appendNewline bool) (Command
 	if appendNewline {
 		input += "\n"
 	}
+	// #4431 bug 1: a naked io.WriteString on a full pipe (child stopped
+	// reading, e.g. a wedged dev server) blocked forever - no ctx, no
+	// deadline, and the call cannot be interrupted after cancellation.
+	// StdinPipe returns *os.File, so a write deadline bounds the write;
+	// non-file writers keep the old blocking behavior.
+	const stdinWriteTimeout = 10 * time.Second
+	if f, ok := stdin.(*os.File); ok {
+		_ = f.SetWriteDeadline(time.Now().Add(stdinWriteTimeout))
+		defer func() { _ = f.SetWriteDeadline(time.Time{}) }()
+	}
 	if _, err := io.WriteString(stdin, input); err != nil {
+		if os.IsTimeout(err) {
+			return CommandJobSnapshot{}, fmt.Errorf("write command input timed out after %s - the command is not reading stdin (pipe full?)", stdinWriteTimeout)
+		}
 		return CommandJobSnapshot{}, fmt.Errorf("write command input: %w", err)
 	}
 	return m.snapshot(job), nil
@@ -943,7 +956,14 @@ func jobSnapshotStatus(job *CommandJob) CommandJobStatus {
 func stopCommandJob(job *CommandJob) error {
 	job.mu.Lock()
 	cancel := job.cancel
+	status := job.Status
 	job.mu.Unlock()
+	// #4431 bug 2: the tool description promises "Stopping an already
+	// completed or unknown job returns an error", but a finished job fell
+	// through (cancel no-op + done already closed => silent success).
+	if status != CommandJobRunning {
+		return fmt.Errorf("command job %q already finished (status: %s)", job.ID, status)
+	}
 	if cancel == nil {
 		return nil
 	}
