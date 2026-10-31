@@ -98,7 +98,12 @@ func NewCommandGate() *CommandGate {
 	// routine build hygiene (rm -rf /tmp/build-cache) was hard-Blocked as
 	// root destruction. Keep only genuine catastrophic roots; /tmp and
 	// /var/folders style caches are deliberate non-members.
-	rmP := `(?:(~|/home|/Users|/etc|/var|/usr|/bin|/sbin|/lib|/boot)\b|/dev/)`
+	// #4430 bug 2: `~` is a non-word char, so `~\b` only ever matched
+	// `~word` - `~/` and bare `~` (EOL/space-adjacent) fell through and
+	// `rm --recursive ~ --force` was fully Allowed. Same dead-anchor family
+	// as #817. RE2 has no lookahead, so the tilde branches consume their
+	// delimiter (harmless: rmGap matches empty).
+	rmP := `(?:(~/|~(?:[ \t]|$))|(/home|/Users|/etc|/var|/usr|/bin|/sbin|/lib|/boot)\b|/dev/)`
 	// #436: newline is a shell command separator too — the gap class must
 	// not cross it, else a benign multi-line script (`# comment` + `rm -f x`
 	// + `grep -r ... /etc`) let the grep segment contribute -r and /etc to
@@ -117,7 +122,7 @@ func NewCommandGate() *CommandGate {
 		// script-writing heredocs).
 		{kind: "catastrophic", desc: "recursive force delete of root/critical directory", quotedInert: true,
 			benignPrefixes: []string{"/var/folders", "/private/var/folders", "/tmp/"},
-			pattern:        regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive\s+--force|--force\s+--recursive)\s+(/(\s|$)|~/|/home/?|/Users/?|/etc/?|/var/?|/usr/?|/bin/?|/sbin/?|/lib/?|/boot/?|System|Applications|/dev/)`)},
+			pattern:        regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive\s+--force|--force\s+--recursive)\s+(/(\s|$)|~(\s|$)|~/|/home/?|/Users/?|/etc/?|/var/?|/usr/?|/bin/?|/sbin/?|/lib/?|/boot/?|System|Applications|/dev/)`)},
 		{kind: "catastrophic", desc: "recursive force delete (alternate flag order)", quotedInert: true,
 			benignPrefixes: []string{"/var/folders", "/private/var/folders", "/tmp/"},
 			// Long-flag alternation uses literal --recursive/--force: inside a
@@ -446,7 +451,16 @@ func blankQuotedAndHeredocs(cmd string) string {
 			continue
 		}
 		out = append(out, blankQuotes(line))
-		if m := heredocOpenerRe.FindStringSubmatch(line); m != nil {
+		// #4430 bug 1: `<<<` is a here-STRING, not a heredoc opener - the
+		// regex matched from the 2nd `<` (`<< EOF`), so the following lines
+		// were blanked as heredoc body and a real `rm -rf /etc` on the next
+		// line escaped the catastrophic tier (Block downgraded to Ask).
+		// RE2 has no negative lookahead - mask `<<<` before probing.
+		probe := line
+		if strings.Contains(probe, "<<<") {
+			probe = strings.ReplaceAll(probe, "<<<", "   ")
+		}
+		if m := heredocOpenerRe.FindStringSubmatch(probe); m != nil {
 			heredoc = m[1]
 		}
 	}
