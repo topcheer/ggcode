@@ -203,7 +203,15 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 
 		// #3167: strip one marker in plain hunks, two in combined hunks.
 		var addedContent string
-		if inCombinedHunk && len(line) > 1 && line[1] == '+' {
+		// #4801: a well-formed combined hunk carries a TWO-character prefix
+		// - one column per parent ("++", "+ ", "+-") - so strip both when the
+		// second byte is a valid prefix column. The old 'only when
+		// line[1] == +' branch left the single-plus form "+ content" with a
+		// leading space, defeating the ^-anchored merge-conflict markers on
+		// cherry-pick/remerge diffs. Malformed/loose lines whose second byte
+		// is not a prefix column (e.g. the #3133 regression fixtures) keep
+		// the single-char strip.
+		if inCombinedHunk && len(line) > 2 && (line[1] == '+' || line[1] == '-' || line[1] == ' ') {
 			addedContent = line[2:]
 		} else {
 			addedContent = line[1:]

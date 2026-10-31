@@ -454,7 +454,13 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 			// select case it would only exit the select)
 			debug.Log("codeindex", "build timed out after %d files - publishing the indexed subset", indexed)
 			truncated = true
-			breakIdx = i
+			// #4801: mirror the loop-top budget break - breakIdx=i-1 makes the
+			// tail sweep collect files[breakIdx+1:] == files[i:], so the file
+			// being processed at the timeout lands in the overflow exclusion
+			// set. The previous breakIdx=i left it neither indexed nor
+			// excluded, and every scan tick re-dirtied + re-tokenized + dropped
+			// it again - the #4684 churn at single-file granularity.
+			breakIdx = i - 1
 			break
 		}
 
