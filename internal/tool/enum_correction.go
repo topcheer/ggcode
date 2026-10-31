@@ -161,7 +161,10 @@ func findBestEnumMatch(provided string, enum []json.RawMessage) string {
 		if len(lower) <= 3 {
 			// Short values: same first rune + distance 1 is the only
 			// unambiguous typo shape (e.g. "off" -> "of").
-			if dist != 1 || len(provided) == 0 || lower[0] != provided[0] {
+			// #4700: an empty-string enum member (legal JSON Schema) has
+			// len(lower)==0 - lower[0] below would panic. An empty candidate
+			// is never a typo target, skip it.
+			if len(lower) == 0 || dist != 1 || len(provided) == 0 || lower[0] != provided[0] {
 				continue
 			}
 		} else if dist > maxDist {

@@ -19,7 +19,10 @@ func TestEnvironmentLabelOutsideTmux(t *testing.T) {
 func TestShellCommandQuotesCommand(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	got := shellCommand("echo hello; printf '%s' done")
-	want := "/bin/sh -lc \"echo hello; printf '%s' done\""
+	// #4680: POSIX single-quoting (Go strconv.Quote left $/backticks
+	// expandable by the outer tmux default-shell). Embedded single quotes
+	// escape via the '"'"' idiom.
+	want := `/bin/sh -lc 'echo hello; printf '"'"'%s'"'"' done'`
 	if got != want {
 		t.Fatalf("shellCommand() = %q, want %q", got, want)
 	}
