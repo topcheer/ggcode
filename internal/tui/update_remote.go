@@ -1,12 +1,16 @@
 package tui
 
 import (
+	"encoding/base64"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/permission"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
@@ -21,6 +25,37 @@ func (m Model) remoteShellAllowed() bool {
 func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {
 	// Track the originating adapter for per-channel echo suppression.
 	m.remoteInboundAdapter = msg.Message.Envelope.Adapter
+	// #4818: TUI-attached sessions must honor the #1584-A intent (keep image
+	// blocks) like the daemon path does. BuildInboundText collapses every image
+	// block to a '[Attached image from remote IM]' placeholder string, so an
+	// image-only IM message delivered 100% of its pixel payload to daemon
+	// sessions and 0% to TUI sessions. Decode the attachments into the pending
+	// image pipeline (the same one /image and paste use) so they ride along
+	// with the text submission as real multimodal content.
+	for _, att := range msg.Message.Attachments {
+		if att.DataBase64 == "" {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(att.DataBase64)
+		if err != nil {
+			debug.Log("tui", "#4818 remote IM attachment %q: base64 decode failed: %v", att.Name, err)
+			continue
+		}
+		img, err := image.Decode(data)
+		if err != nil {
+			debug.Log("tui", "#4818 remote IM attachment %q: image decode failed: %v", att.Name, err)
+			continue
+		}
+		name := att.Name
+		if name == "" {
+			name = "remote-image.png"
+		}
+		m.pendingImages = append(m.pendingImages, imageAttachedMsg{
+			placeholder: image.Placeholder(name, img),
+			img:         img,
+			filename:    filepath.Base(name),
+		})
+	}
 	prompt := buildRemoteInboundPrompt(msg.Message)
 	route := im.RouteInboundText(prompt, m.pendingApproval != nil, m.pendingQuestionnaire != nil)
 
