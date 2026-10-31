@@ -3,7 +3,10 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -804,6 +807,55 @@ func (t LanChatTool) doBroadcastTeam(ctx context.Context, content string, asAgen
 	return t.doSendTeam(ctx, content, myTeam, asAgent)
 }
 
+// isUnknownDeliveryErr reports whether err leaves the delivery outcome
+// UNKNOWN rather than definitely-failed. #4774 (S-02): lanchat sends are
+// fire-and-forget over UDP under a hub deadline - a timeout does NOT prove
+// non-delivery (the datagram may already be on the wire), so lumping it with
+// hard failures invited re-send storms, while counting nil returns as
+// delivered hid partial loss. A timeout gets its own verdict.
+func isUnknownDeliveryErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout()
+	}
+	return false
+}
+
+// outcomeListCap bounds the per-recipient status lines so a large LAN
+// broadcast report stays readable.
+const outcomeListCap = 8
+
+// appendOutcomeLines adds one "  name: reason" line per entry, capped.
+func appendOutcomeLines(b *strings.Builder, entries []string) {
+	for i, e := range entries {
+		if i >= outcomeListCap {
+			fmt.Fprintf(b, "  ...and %d more\n", len(entries)-outcomeListCap)
+			return
+		}
+		b.WriteString("  " + e + "\n")
+	}
+}
+
+// appendUnknownAndFailed renders the #4774 three-way outcome tail: UNKNOWN
+// (timeout - neither failure nor confirmed success) and definitely-failed
+// sections, each with per-recipient status.
+func appendUnknownAndFailed(b *strings.Builder, unknown, failed []string, total int) {
+	if len(unknown) > 0 {
+		fmt.Fprintf(b, "Delivery UNKNOWN for %d/%d recipients (timeout is neither failure nor confirmed success):\n", len(unknown), total)
+		appendOutcomeLines(b, unknown)
+	}
+	if len(failed) > 0 {
+		fmt.Fprintf(b, "Definitely failed %d/%d:\n", len(failed), total)
+		appendOutcomeLines(b, failed)
+	}
+}
+
 // doBroadcastAll sends to every participant on the LAN, regardless of team.
 // Uses per-peer DM cooldowns (not a single broadcast cooldown) so that peers
 // who recently messaged us (cooldown reset) can still receive the broadcast.
@@ -851,23 +903,34 @@ func (t LanChatTool) doBroadcastAll(ctx context.Context, content string, asAgent
 		allowed = allPeers
 	}
 
-	// Send to each allowed recipient individually
-	var errors []string
-	sent := 0
+	// Send to each allowed recipient individually. #4774 (S-02): the per-peer
+	// outcome is three-way - queued (handed to transport; no delivery receipt
+	// exists yet), UNKNOWN (timeout: neither failure nor success), failed. A
+	// deadline that already hit marks every remaining recipient UNKNOWN
+	// instead of hammering sends that cannot complete.
+	var queued []string
+	var unknown, failed []string
 	for _, nodeID := range allowed {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			unknown = append(unknown, fmt.Sprintf("%s: deadline hit before send", t.displayName(nodeID)))
+			continue
+		}
 		var err error
 		if asAgent {
 			err = t.Hub.SendAsAgent(ctx, nodeID, toRole, content)
 		} else {
 			err = t.Hub.SendDirect(ctx, nodeID, toRole, content, nil)
 		}
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", t.displayName(nodeID), err))
-		} else {
-			sent++
+		switch {
+		case err == nil:
+			queued = append(queued, nodeID)
 			if asAgent && t.rateLimiter != nil {
 				t.rateLimiter.recordDM(selfID, nodeID)
 			}
+		case isUnknownDeliveryErr(err):
+			unknown = append(unknown, fmt.Sprintf("%s: %v", t.displayName(nodeID), err))
+		default:
+			failed = append(failed, fmt.Sprintf("%s: %v", t.displayName(nodeID), err))
 		}
 	}
 
@@ -875,8 +938,8 @@ func (t LanChatTool) doBroadcastAll(ctx context.Context, content string, asAgent
 	if asAgent {
 		role = "agent"
 	}
-	if sent == 0 {
-		errMsg := fmt.Sprintf("Failed to broadcast to any recipient: %s", strings.Join(errors, "; "))
+	if len(queued) == 0 && len(unknown) == 0 {
+		errMsg := fmt.Sprintf("Failed to broadcast to any recipient: %s", strings.Join(failed, "; "))
 		if len(rateLimited) > 0 {
 			errMsg += fmt.Sprintf("\nRate-limited recipients skipped:\n%s", strings.Join(rateLimited, "\n"))
 		}
@@ -886,14 +949,13 @@ func (t LanChatTool) doBroadcastAll(ctx context.Context, content string, asAgent
 		return Result{IsError: true, Content: errMsg}, nil
 	}
 
-	result := fmt.Sprintf("Broadcast sent to %d/%d participants as %s.", sent, len(allPeers), role)
+	var b strings.Builder
+	fmt.Fprintf(&b, "Broadcast queued to %d/%d participants as %s (queued = handed to transport; lanchat is fire-and-forget, no delivery receipt yet).\n", len(queued), len(allPeers), role)
+	appendUnknownAndFailed(&b, unknown, failed, len(allPeers))
 	if len(rateLimited) > 0 {
-		result += fmt.Sprintf("\nRate-limited recipients skipped:\n%s", strings.Join(rateLimited, "\n"))
+		fmt.Fprintf(&b, "Rate-limited recipients skipped:\n%s\n", strings.Join(rateLimited, "\n"))
 	}
-	if len(errors) > 0 {
-		result += fmt.Sprintf(" (errors: %s)", strings.Join(errors, "; "))
-	}
-	result += "\n"
+	result := b.String()
 	if asAgent {
 		result += t.sharedWorkspaceHint(allowed)
 	}
@@ -970,29 +1032,37 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 	if !asAgent {
 		toRole = lanchat.RoleHuman // human sender: land in the chat panel
 	}
-	var errors []string
-	sent := 0
+	// #4774 (S-02): same three-way outcome accounting as doBroadcastAll.
+	var queued []string
+	var unknown, failed []string
 	for _, nodeID := range members {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			unknown = append(unknown, fmt.Sprintf("%s: deadline hit before send", t.displayName(nodeID)))
+			continue
+		}
 		var err error
 		if asAgent {
 			err = t.Hub.SendAsAgent(ctx, nodeID, toRole, content)
 		} else {
 			err = t.Hub.SendDirect(ctx, nodeID, toRole, content, nil)
 		}
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", t.displayName(nodeID), err))
-		} else {
-			sent++
+		switch {
+		case err == nil:
+			queued = append(queued, nodeID)
 			if asAgent && t.rateLimiter != nil {
 				t.rateLimiter.recordDM(selfNodeID, nodeID)
 			}
+		case isUnknownDeliveryErr(err):
+			unknown = append(unknown, fmt.Sprintf("%s: %v", t.displayName(nodeID), err))
+		default:
+			failed = append(failed, fmt.Sprintf("%s: %v", t.displayName(nodeID), err))
 		}
 	}
 
-	if sent == 0 {
+	if len(queued) == 0 && len(unknown) == 0 {
 		errMsg := fmt.Sprintf(
 			"Failed to send to any member of team %q: %s",
-			team, strings.Join(errors, "; "),
+			team, strings.Join(failed, "; "),
 		)
 		if len(rateLimited) > 0 {
 			errMsg += fmt.Sprintf("\nRate-limited members skipped:\n%s", strings.Join(rateLimited, "\n"))
@@ -1003,17 +1073,17 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 		return Result{IsError: true, Content: errMsg}, nil
 	}
 
-	result := fmt.Sprintf("Sent to %d/%d members of team %q", sent, len(members), team)
+	var b strings.Builder
+	fmt.Fprintf(&b, "Sent (queued, no delivery receipt yet) to %d/%d members of team %q\n", len(queued), len(members), team)
+	appendUnknownAndFailed(&b, unknown, failed, len(members))
 	if len(rateLimited) > 0 {
-		result += fmt.Sprintf("\nRate-limited members skipped:\n%s", strings.Join(rateLimited, "\n"))
+		fmt.Fprintf(&b, "Rate-limited members skipped:\n%s\n", strings.Join(rateLimited, "\n"))
 	}
-	if len(errors) > 0 {
-		result += fmt.Sprintf(" (errors: %s)", strings.Join(errors, "; "))
-	}
+	result := b.String()
 	if asAgent {
 		result += t.sharedWorkspaceHint(members)
 	}
-	return Result{Content: result + ".\n"}, nil
+	return Result{Content: result}, nil
 }
 
 // summarizeContent truncates a message body to a single-line summary.
