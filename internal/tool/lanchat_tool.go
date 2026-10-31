@@ -658,9 +658,14 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 		return Result{IsError: true, Content: "recipient 'to' is required for send (use action='list' to find node_id)"}, nil
 	}
 
-	// Check for wildcard broadcast
-	if len(toNodeIDs) == 1 && toNodeIDs[0] == "*" {
-		return t.doBroadcastAll(ctx, content, asAgent)
+	// Check for wildcard broadcast (#4553-C): "*" ANYWHERE in the list means
+	// everyone - mixed lists like "*,node1" used to drop the "*" into
+	// unresolved (silently skipped) and send only to the named nodes,
+	// losing the broadcast intent entirely.
+	for _, id := range toNodeIDs {
+		if id == "*" {
+			return t.doBroadcastAll(ctx, content, asAgent)
+		}
 	}
 
 	// Resolve nicks to node IDs. The LLM naturally uses nicks (e.g.

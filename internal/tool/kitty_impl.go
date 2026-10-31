@@ -191,9 +191,15 @@ func (k *KittyTool) executeSplit(ctx context.Context, windowID int, direction st
 		args = append(args, "--match="+matchID(windowID))
 	}
 
-	// Size bias: kitty uses --bias N where N is 1-100 (the new window's share).
-	// We map our size percentage directly.
-	if size > 0 && size < 100 {
+	// Size bias: kitty uses --bias N where N is 1-99 here (the new window's
+	// share of the split; 100 would leave nothing for the original window).
+	// #4553-B: out-of-range sizes used to be silently dropped - the split ran
+	// unresized with zero disclosure while the caller believed it took
+	// effect. Reject instead (0 stays "unspecified").
+	if size != 0 {
+		if size < 1 || size > 99 {
+			return Result{IsError: true, Content: fmt.Sprintf("invalid size %d: kitty bias maps the new window's share and must be 1-99 (0 = unspecified)", size)}
+		}
 		args = append(args, fmt.Sprintf("--bias=%d", size))
 	}
 
