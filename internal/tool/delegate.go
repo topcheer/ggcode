@@ -289,6 +289,12 @@ func (t DelegateTool) executeAsync(
 		}()
 
 		runCtx, cancel := context.WithCancel(mgr.RootContext())
+		// #4692: without this defer, cancel only ran on the SetCancel-false
+		// branch and on user-initiated Cancel - the success/error completion
+		// paths leaked the cancelCtx node on RootContext's children map
+		// forever (RootContext is process-scoped). cancel is idempotent, so
+		// a later user Cancel is a harmless no-op.
+		defer cancel()
 		if !mgr.SetCancel(id, cancel) {
 			cancel()
 			return
