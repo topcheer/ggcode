@@ -86,6 +86,17 @@ func (m Model) handleShellCommandDoneMsg(msg shellCommandDoneMsg) (Model, tea.Cm
 		}
 	}
 	if msg.Status == toolpkg.CommandJobCompleted && m.pendingSubmissionCount() > 0 && !wasCanceled && !wasFailed {
+		// Only LOCAL shell-mode input may be chained into the next shell
+		// command. Remote-origin entries (lanchat DM / IM / tunnel - queued
+		// by submitLanChatAgentText and friends while this shell was
+		// running) and hidden cron injections are AGENT turns: feeding them
+		// to submitShellCommand executed a teammate's message as a shell
+		// command the moment a long-running shell finished. Route them
+		// through the agent-path drain instead (arms the #3466 remote
+		// inhibit, renders as a user turn).
+		if m.pendingHeadIsAgentOrigin() {
+			return m, m.submitPendingSubmissionCmd()
+		}
 		return m, m.submitShellCommand(m.consumePendingSubmission(), false)
 	}
 	m.chatListFollowOutput()

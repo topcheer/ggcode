@@ -111,6 +111,14 @@ func (m *Model) pendingSubmissionCount() int {
 	return m.pending.count()
 }
 
+// pendingHeadIsAgentOrigin reports whether the oldest queued submission is
+// agent-bound (remote-origin or hidden) and must be drained through the
+// agent path rather than chained into the shell command path. See the
+// shell-done drain in update_shell.go for the routing decision.
+func (m *Model) pendingHeadIsAgentOrigin() bool {
+	return m.pending.headIsAgentOrigin()
+}
+
 func (m *Model) clearPendingSubmissions() {
 	m.pending.clear()
 }
@@ -564,6 +572,21 @@ func (q *pendingQueue) consume() string {
 	return text
 }
 
+// headIsAgentOrigin reports whether the oldest queued submission is agent-
+// bound (remote-origin lanchat/IM/tunnel text or hidden cron injection)
+// rather than local shell-mode input. The shell-done drain chains queued
+// submissions into submitShellCommand; agent-bound entries must be routed
+// to the agent path there, or a teammate's message that arrived while a
+// long shell command was running gets executed as a shell command.
+func (q *pendingQueue) headIsAgentOrigin() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.items) == 0 {
+		return false
+	}
+	return q.items[0].RemoteOrigin || q.items[0].Hidden
+}
+
 // consumeVisiblePrefix drains all visible (non-hidden, non-meta) queued
 // items and returns their combined text AND images. #1411: the images
 // were silently dropped here - only popLastVisible and consumeDetailed
@@ -608,8 +631,33 @@ func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData, []i
 		q.syncItemsFromQueueLocked(queue)
 		return strings.TrimSpace(item.Text), true, cloneTunnelMessageData(item.Meta), nil, remote
 	}
+	headRemote := false
+	if len(q.items) > 0 {
+		headRemote = q.items[0].RemoteOrigin
+	}
+	// #4812: bound the visible-prefix merge to entries sharing the head's
+	// origin. Merging local input with a remote-origin entry (or vice
+	// versa) made one batch carry both, so the shell-done chain could
+	// execute a teammate's queued lanchat message as (part of) a shell
+	// command, and the agent drain could submit typed "$ ..." input fused
+	// with lanchat text. Batches are now origin-homogeneous.
+	sameOriginLimit := 0
+	for i := 1; i < len(q.items); i++ {
+		if q.items[i].Hidden || q.items[i].TunnelMessageOverride != nil {
+			break
+		}
+		if q.items[i].RemoteOrigin != headRemote {
+			break
+		}
+		sameOriginLimit++
+	}
+	n := 0
 	items := queue.ConsumePrefix(func(item agentruntime.PendingMessage[*tunnel.MessageData]) bool {
-		return !item.Hidden && item.Meta == nil
+		if n >= sameOriginLimit || item.Hidden || item.Meta != nil {
+			return false
+		}
+		n++
+		return true
 	})
 	// Collect images from ALL consumed items (not just the first).
 	// q.items still holds the pre-consume state; consumedCount tells us

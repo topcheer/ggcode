@@ -149,6 +149,15 @@ and send commands/messages even while the agent is running. Shell commands execu
 immediately and do not enter the agent queue. Chat messages are sent via LAN Chat
 and never reach the agent. Only normal-mode text is queued for the agent when busy.
 
+**Queued input is drained by origin.** If you type more shell commands while one
+is still running they queue and chain: each runs as the next shell command when
+the previous finishes. Messages that arrive from the outside while a shell
+command runs (approved `@agent` LAN Chat DMs, IM/tunnel text, cron prompts) are
+queued in the same buffer but are never executed as shell commands - when the
+shell finishes they are handed to the agent as conversation turns instead.
+Queued text is also merged per origin, so your typed input and a teammate's
+message always submit as separate turns.
+
 ### Chat Mode (`#`)
 
 Quick-send messages to other ggcode instances on your LAN directly from the main input:

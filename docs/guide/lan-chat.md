@@ -134,6 +134,10 @@ lanchat(action='approve', message_id='…')                 → approve an agent
 
 Incoming `@agent` messages require approval before they reach your agent's
 conversation. Use `lanchat(action='pending')` to review and approve/reject.
+If the agent (or an inline shell command) is busy when the approved message
+arrives, it is queued and delivered to the agent as a conversation turn as
+soon as the agent is free - it is never executed as a shell command, even
+if a shell-mode command was running when it arrived.
 
 ### Team-Based Collaboration
 
