@@ -350,6 +350,10 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 			if !res.IsError {
 				a.appendCrashSidecar(tc.Name, string(tc.Arguments))
 			}
+			// #4648: warn-mode still EXECUTES the tool - a successful write
+			// product must reach the created_by_run ledger exactly like the
+			// normal path, or the deletion guard misjudges self-created files.
+			a.recordWriteProducts(tc, res)
 			// #3859 B: ground before returning - this branch used to skip the
 			// shared grounding block entirely, so a command that BOTH hit a
 			// warn guard AND was a step's ground command left that step
@@ -377,6 +381,9 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 			if !res.IsError {
 				a.appendCrashSidecar(tc.Name, string(tc.Arguments))
 			}
+			// #4648: same as the workflow-warn branch above - warn-executed
+			// writes must register their products for created_by_run parity.
+			a.recordWriteProducts(tc, res)
 			res.Content += fmt.Sprintf("\n\n[invariant:%s] %s (target: %q) - warn-mode invariant matched; proceed carefully.", v.Inv.ID, v.Inv.Message, v.Target)
 			auditInvariantWarn(tc.Name, v.Inv.ID)
 			// #3859 B: same grounding gap as the workflow-warn branch - a
@@ -396,16 +403,34 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	// created_by_run predicate ("only delete what this run created").
 	// Operation granularity (#3254): a batch file_ops call registers every
 	// write-class target it produced, not just the first classified op.
-	if e := a.invariantEngineLazy(); e != nil && !res.IsError {
-		for _, ot := range invariantOpTargets(tc.Name, tc.Arguments) {
-			if ot.Op == "write" || ot.Op == "mkdir" || ot.Op == "move" {
-				e.recordProduct(ot.Target)
-			}
-		}
-	}
+	// #4648: extracted so the warn branches above share the exact same
+	// registration instead of silently skipping it.
+	a.recordWriteProducts(tc, res)
 	// r26: same products ground workflow-step completion (artifact_glob).
 	a.groundWorkflowAfterTool(tc, res)
 	return res
+}
+
+// recordWriteProducts registers every write-class target a successful
+// (or warn-mode-executed) tool call produced for the invariant engine's
+// created_by_run predicate. #4648: the workflow-warn and invariant-warn
+// branches execute the real tool just like the normal path, so their
+// successful writes must reach the ledger identically - previously the
+// warn branches skipped registration and the deletion guard then blocked
+// the agent from deleting files it had itself just created.
+func (a *Agent) recordWriteProducts(tc provider.ToolCallDelta, res tool.Result) {
+	if res.IsError {
+		return
+	}
+	e := a.invariantEngineLazy()
+	if e == nil {
+		return
+	}
+	for _, ot := range invariantOpTargets(tc.Name, tc.Arguments) {
+		if ot.Op == "write" || ot.Op == "mkdir" || ot.Op == "move" {
+			e.recordProduct(ot.Target)
+		}
+	}
 }
 
 // groundWorkflowAfterTool is the shared post-success grounding pass for
