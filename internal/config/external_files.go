@@ -130,16 +130,27 @@ func loadExternalSections(cfg *Config, mainConfigPath string) {
 // configDir is the resolved external-files directory (unified with the
 // vendors.yaml key migration in Save, fix #293); vendors is the vendor set to
 // persist (Save passes the instance-only-filtered set).
-func saveExternalSections(cfg *Config, configDir string, vendors map[string]VendorConfig) {
+// #4697 (defect B): returns the first write failure instead of only logging -
+// Save() must not report success while an external section silently failed.
+func saveExternalSections(cfg *Config, configDir string, vendors map[string]VendorConfig) error {
+	var firstErr error
 	if err := SaveVendors(configDir, vendors); err != nil {
 		debug.Log("config", "failed to save vendors.yaml: %v", err)
+		firstErr = err
 	}
 	if err := SaveIMConfig(configDir, &cfg.IM); err != nil {
 		debug.Log("config", "failed to save im.yaml: %v", err)
+		if firstErr == nil {
+			firstErr = err
+		}
 	}
 	if err := SaveMCPServers(configDir, cfg.MCPServers); err != nil {
 		debug.Log("config", "failed to save mcp_servers.yaml: %v", err)
+		if firstErr == nil {
+			firstErr = err
+		}
 	}
+	return firstErr
 }
 
 // SaveVendors writes vendor definitions to vendors.yaml, stripping default
