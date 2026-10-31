@@ -342,8 +342,12 @@ func tryClaimPendingTask(
 				meta := map[string]string{"permanent_error": fc.String(), "error": errMsg}
 				meta = attachAttribution(meta, buildFailureAttribution(tm, claimed.ID, taskErr)) // sa-90 step-level attribution
 				if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{
-					Status:   &completed,
-					Metadata: meta,
+					// #4672: CAS guard - an external terminal write (team review
+					// approve, manual /task, RestoreJSON) during execution must not
+					// be overwritten; mirrors rollbackClaimedTask (#2579).
+					ExpectedStatus: &inProgress,
+					Status:         &completed,
+					Metadata:       meta,
 				}); uerr != nil {
 					debug.Log("swarm", "teammate %s permanent-failure park of %s failed: %v", tm.ID, claimed.ID, uerr)
 				}
@@ -372,8 +376,9 @@ func tryClaimPendingTask(
 					}
 					meta = attachAttribution(meta, buildFailureAttribution(tm, claimed.ID, taskErr)) // sa-90 step-level attribution
 					if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{
-						Status:   &completed,
-						Metadata: meta,
+						ExpectedStatus: &inProgress, // #4672 CAS guard (see permanent park)
+						Status:         &completed,
+						Metadata:       meta,
 					}); uerr != nil {
 						debug.Log("swarm", "teammate %s max-retries park of %s failed: %v", tm.ID, claimed.ID, uerr)
 					}
@@ -383,9 +388,10 @@ func tryClaimPendingTask(
 					pending := task.StatusPending
 					owner := ""
 					if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{
-						Status:   &pending,
-						Owner:    &owner,
-						Metadata: map[string]string{"retry_attempts": strconv.Itoa(attempts)},
+						ExpectedStatus: &inProgress, // #4672 CAS guard - never stomp an external terminal write
+						Status:         &pending,
+						Owner:          &owner,
+						Metadata:       map[string]string{"retry_attempts": strconv.Itoa(attempts)},
 					}); uerr != nil {
 						debug.Log("swarm", "teammate %s transient rollback of %s failed: %v", tm.ID, claimed.ID, uerr)
 					}
@@ -393,7 +399,10 @@ func tryClaimPendingTask(
 			}
 		} else {
 			completed := task.StatusCompleted
-			if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed}); uerr != nil {
+			if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{
+				ExpectedStatus: &inProgress, // #4672 CAS guard - an external approve/completed write wins over our success write-back
+				Status:         &completed,
+			}); uerr != nil {
 				debug.Log("swarm", "teammate %s completion of %s failed: %v", tm.ID, claimed.ID, uerr)
 			}
 			// Persist the final output on the board so dependent tasks
