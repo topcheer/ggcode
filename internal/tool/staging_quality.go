@@ -118,16 +118,19 @@ var binaryExtensions = []string{
 }
 
 // osArtifactFiles matches OS-generated files that shouldn't be committed.
+// #4813: keys are lowercase; lookup goes through strings.ToLower so the
+// Windows variants (whose on-disk casing varies freely on NTFS - DESKTOP.INI,
+// EhThumbs.db, ...) match like every sibling classifier already does.
 var osArtifactFiles = map[string]string{
-	".DS_Store":       "macOS Finder metadata",
-	"Thumbs.db":       "Windows thumbnail cache",
+	".ds_store":       "macOS Finder metadata",
+	"thumbs.db":       "Windows thumbnail cache",
 	"desktop.ini":     "Windows desktop config",
 	"ehthumbs.db":     "Windows thumbnail database",
-	".LSOverride":     "macOS Launch Services override",
-	"Icon\r":          "macOS custom icon",
-	".Spotlight-V100": "macOS Spotlight index",
-	".Trashes":        "macOS trash directory",
-	".AppleDouble":    "macOS Apple Double file",
+	".lsoverride":     "macOS Launch Services override",
+	"icon\r":          "macOS custom icon",
+	".spotlight-v100": "macOS Spotlight index",
+	".trashes":        "macOS trash directory",
+	".appledouble":    "macOS Apple Double file",
 }
 
 // ideArtifactFiles matches IDE/editor-generated files.
@@ -199,7 +202,7 @@ func checkStagingFile(path string) []StagingIssue {
 	base := filepath.Base(path)
 
 	// 1. OS-generated artifacts.
-	if reason, ok := osArtifactFiles[base]; ok {
+	if reason, ok := osArtifactFiles[strings.ToLower(base)]; ok {
 		issues = append(issues, StagingIssue{
 			Path: path, Category: "os-artifact", Reason: reason,
 		})
