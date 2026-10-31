@@ -121,6 +121,11 @@ func (t *MobileDeviceTool) Parameters() json.RawMessage {
       "type": "integer",
       "description": "Max log lines to return (for logs action).",
       "default": 100
+    },
+    "headless": {
+      "type": "boolean",
+      "description": "For screenshot: skip returning the image data and return a text summary only (default false). Saves tokens when the image itself is not needed.",
+      "default": false
     }
   }
 }`)
