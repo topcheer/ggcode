@@ -708,8 +708,15 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 		return
 	}
 
-	// Strip reply fallback
-	if content.GetReplyTo() != "" {
+	// #4756: for edits (m.replace) the reply relation lives on the INNER
+	// new_content.relates_to (m.in_reply_to) - the outer relates_to is the
+	// replace marker - so the strip gate must consider both shapes, else an
+	// edited reply keeps its '> <@user>' fallback prefix into model input.
+	replyTo := content.GetReplyTo()
+	if replyTo == "" && content.NewContent != nil {
+		replyTo = content.NewContent.GetReplyTo()
+	}
+	if replyTo != "" {
 		body = stripMatrixReplyFallback(body)
 	}
 
@@ -774,7 +781,12 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 			a.publishState(false, "warning", err.Error())
 		}
 		if pairingResult.Consumed {
-			_ = a.sendText(ctx, roomID, "", pairingResult.ReplyText)
+			if err := a.sendText(ctx, roomID, "", pairingResult.ReplyText); err != nil {
+				// #4756: the binding already applied server-side - a failed ack
+				// must surface (sibling paths above publishState) or the user
+				// gets zero feedback for a pairing that actually succeeded.
+				a.publishState(false, "warning", err.Error())
+			}
 			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
 				a.publishState(false, "warning", err.Error())
 			}
