@@ -311,6 +311,11 @@ func stripLineNumberPrefix(text string) string {
 	return strings.Join(out, "\n")
 }
 
+// stripAllLineNumberPrefixes strips prefixes from EVERY line, unguarded -
+// reserved for inputs that are KNOWN reader output (the transform pipeline
+// already proved provenance). Use guardedStripAllLineNumberPrefixes for
+// whole-file content where legitimate TSV/log lines ("digits\t" bodies)
+// must not be mangled (#4442).
 func stripAllLineNumberPrefixes(text string) string {
 	lines := trimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
 	for i, l := range lines {
@@ -321,6 +326,88 @@ func stripAllLineNumberPrefixes(text string) string {
 		lines[i] = lineNumberPrefixRE.ReplaceAllString(l, "")
 	}
 	return strings.Join(lines, "\n")
+}
+
+// guardedStripAllLineNumberPrefixes decides whether a whole block is reader
+// output (#4442): majority vote alone cannot distinguish a TSV/log file whose
+// every row starts with digits+TAB, so the second discriminator is that
+// readFileRange numbers appear in STRICTLY INCREASING order (the reader emits
+// ascending line numbers; a range view may start anywhere - #1004's
+// 10,11,12/20,21,22 - but never goes backwards and never repeats). Content
+// whose "prefixes" fail either test passes through untouched.
+func guardedStripAllLineNumberPrefixes(text string) string {
+	lines := strings.Split(text, "\n")
+	matched, nonEmpty := 0, 0
+	ascending := 0
+	prev := -1
+	for _, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		nonEmpty++
+		num := -1
+		if m := paddedLineNumberPrefixRE.FindStringSubmatch(l); m != nil {
+			num = atoiSafe4442(strings.Trim(m[0], " \t"))
+		} else if m := bareLineNumberPrefixRE.FindStringSubmatch(l); m != nil {
+			num = atoiSafe4442(m[1])
+		}
+		if num < 0 {
+			continue
+		}
+		matched++
+		if num > prev {
+			ascending++
+			prev = num
+		}
+	}
+	if matched < 2 || matched < (nonEmpty/2+1) || ascending != matched {
+		return text
+	}
+	return stripAllLineNumberPrefixes(text)
+}
+
+func atoiSafe4442(s string) int {
+	n := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return -1
+		}
+		n = n*10 + int(r-'0')
+		if n > 1<<30 {
+			return -1
+		}
+	}
+	return n
+}
+
+// countLineAligned occurrences of multi in s: lines must MATCH WHOLE LINES
+// consecutively (#4442 bug 2). A bare strings.Count counts mid-line hits of
+// cross-line probes ("b\nc" matches inside "ab\ncd"), inflating uniqueness
+// counts and rejecting genuinely unique edits.
+func countLineAligned(s, multi string) int {
+	if !strings.Contains(multi, "\n") {
+		return strings.Count(s, multi)
+	}
+	hayLines := strings.Split(s, "\n")
+	needle := strings.Split(multi, "\n")
+	n := len(needle)
+	if n == 0 || len(hayLines) < n {
+		return 0
+	}
+	count := 0
+	for i := 0; i+n <= len(hayLines); i++ {
+		ok := true
+		for j := 0; j < n; j++ {
+			if hayLines[i+j] != needle[j] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			count++
+		}
+	}
+	return count
 }
 
 // paddedLineNumberPrefixRE is the readFileRange output shape with at least
@@ -734,10 +821,14 @@ func lenientRecountRaw(content, rawOld, transform string) (int, []int) {
 		return strings.Count(content, strings.ReplaceAll(probe, "\n", "\r\n")), nil
 	}
 	// line-numbers-stripped: count against a prefix-stripped copy of the
-	// file, line-aligned, mirroring the transform's own matching form.
+	// file - but GUARDED (#4442 bug 1): real TSV/log lines whose bodies start
+	// with digits+TAB were stripped by the unguarded pass, skewing the
+	// recount into "matched N times" rejections of a unique edit. Counting
+	// is line-aligned (#4442 bug 2): cross-line probes must match whole
+	// consecutive lines, not mid-line substrings.
 	if strings.Contains(transform, "line-numbers-stripped") {
-		strippedFile := stripAllLineNumberPrefixes(content)
-		return strings.Count(strippedFile, probe), nil
+		strippedFile := guardedStripAllLineNumberPrefixes(content)
+		return countLineAligned(strippedFile, probe), nil
 	}
 	trimmedOld := make([]string, 0, strings.Count(probe, "\n")+1)
 	// #821: the counting pass previously trimmed BOTH sides on every line,
