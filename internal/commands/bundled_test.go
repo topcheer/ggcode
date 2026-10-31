@@ -79,7 +79,7 @@ func TestBundledBrowserAutomationSkillRequiresMCP(t *testing.T) {
 	if skill == nil {
 		t.Fatal("missing browser-automation skill")
 	}
-	for _, needle := range []string{"browser", "navigate", "screenshot", "evaluate"} {
+	for _, needle := range []string{"browser", "navigate", "screenshot", "evaluate", "error_code"} {
 		if !strings.Contains(skill.Template, needle) {
 			t.Fatalf("browser-automation template missing %q", needle)
 		}

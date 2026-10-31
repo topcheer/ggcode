@@ -742,7 +742,9 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 	}
 
 	if err := chromedp.Do(timeoutCtx, actions...); err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("click failed: %v", err)}, nil
+		// sa-136: typed failure channel - probe distinguishes element-missing
+		// from hidden/timeout so the agent picks the right recovery move.
+		return b.browserActionFailure("click", tab.ctx, selector, err), nil
 	}
 
 	urlAfter, _ := chromedp.Run(timeoutCtx, chromedp.Location())
@@ -851,7 +853,7 @@ func (b *Browser) doType(ctx context.Context, profile, session, selector, text, 
 	}
 
 	if err := chromedp.Do(timeoutCtx, actions...); err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("type failed: %v", err)}, nil
+		return b.browserActionFailure("type", tab.ctx, selector, err), nil
 	}
 
 	return Result{Content: fmt.Sprintf("Typed into %s: %q", selector, text)}, nil
@@ -950,11 +952,11 @@ func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector s
 	var buf []byte
 	if selector != "" {
 		if err := chromedp.Do(timeoutCtx, chromedp.WaitVisible(chromedp.CSS(selector))); err != nil {
-			return Result{IsError: true, Content: fmt.Sprintf("screenshot failed: %v", err)}, nil
+			return b.browserActionFailure("screenshot", tab.ctx, selector, err), nil
 		}
 		buf, err = chromedp.Run(timeoutCtx, chromedp.Screenshot(chromedp.CSS(selector)))
 		if err != nil {
-			return Result{IsError: true, Content: fmt.Sprintf("screenshot failed: %v", err)}, nil
+			return b.browserActionFailure("screenshot", tab.ctx, selector, err), nil
 		}
 	} else {
 		buf, err = chromedp.Run(timeoutCtx, chromedp.FullScreenshot(90))
