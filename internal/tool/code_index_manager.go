@@ -38,14 +38,18 @@ type CodeIndexManager struct {
 	disabled     bool             // true when indexing is structurally inappropriate for this working dir (e.g. the user's home directory) - all build/scan paths are no-ops
 	lastActivity time.Time        // last time Search() or MarkDirty() was called; used for idle release
 	dirtyFiles   map[string]int64 // path → known mtime at last index
-	indexPath    string           // disk cache path
-	workingDir   string
-	stopCh       chan struct{}
-	stopOnce     sync.Once
-	rebuildCh    chan struct{}              // signaled by MarkDirty to trigger immediate debounced rebuild
-	lockFile     *os.File                   // cross-process flock handle
-	onReady      func(stats CodeIndexStats) // optional callback when index build completes
-	onProgress   func(done, total int)      // optional throttled build progress (doBuild goroutine)
+	// #4684: paths dropped by the term budget (path → mtime when dropped).
+	// Scan treats them as known (never re-dirty), rebuildDirty skips them
+	// before ReadFile; a full doBuild resets the set.
+	budgetExcluded map[string]int64
+	indexPath      string // disk cache path
+	workingDir     string
+	stopCh         chan struct{}
+	stopOnce       sync.Once
+	rebuildCh      chan struct{}              // signaled by MarkDirty to trigger immediate debounced rebuild
+	lockFile       *os.File                   // cross-process flock handle
+	onReady        func(stats CodeIndexStats) // optional callback when index build completes
+	onProgress     func(done, total int)      // optional throttled build progress (doBuild goroutine)
 
 	// indexStats tracks basic stats for debugging/logging.
 	stats CodeIndexStats
@@ -67,11 +71,21 @@ type persistedDoc struct {
 }
 
 // persistedIndex is the on-disk cache format.
+type persistedExcluded struct {
+	Path  string `json:"path"`
+	Mtime int64  `json:"mtime"`
+}
+
 type persistedIndex struct {
 	Version    int            `json:"version"`
 	WorkingDir string         `json:"working_dir"`
 	UpdatedAt  time.Time      `json:"updated_at"`
 	Docs       []persistedDoc `json:"docs"`
+	// #4684: files dropped by the total-terms budget. Without this set the
+	// periodic scan read every overflow file as !wasIndexed, re-dirtied it,
+	// refreshed lastActivity, and the idle release never fired - plus
+	// rebuildDirty re-ReadFile'd each one before dropping it again.
+	Excluded []persistedExcluded `json:"excluded,omitempty"`
 }
 
 const codeIndexVersion = 1
@@ -319,6 +333,13 @@ func (m *CodeIndexManager) loadDiskCache() {
 		docs: make([]bm25Doc, 0, len(pi.Docs)),
 		df:   make(map[string]int, 512),
 	}
+	// #4684: restore the budget-excluded set alongside the docs.
+	if len(pi.Excluded) > 0 {
+		m.budgetExcluded = make(map[string]int64, len(pi.Excluded))
+		for _, e := range pi.Excluded {
+			m.budgetExcluded[e.Path] = e.Mtime
+		}
+	}
 	var totalLength int
 	for _, d := range pi.Docs {
 		if len(d.TF) == 0 {
@@ -354,6 +375,7 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 	start := time.Now()
 
 	// Phase 1: Load existing disk cache.
+	overflow := make(map[string]int64) // #4684: budget-dropped paths
 	var cached []persistedDoc
 	if data, err := os.ReadFile(m.indexPath); err == nil {
 		var pi persistedIndex
@@ -440,6 +462,7 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 			if len(cached.TF) > 0 {
 				if maxTerms > 0 && totalTerms+len(cached.TF) > maxTerms {
 					truncated = true
+					overflow[relPath] = mtime // #4684
 					break
 				}
 				docs = append(docs, bm25Doc{
@@ -471,6 +494,7 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 		}
 		if maxTerms > 0 && totalTerms+len(tf) > maxTerms {
 			truncated = true
+			overflow[relPath] = mtime // #4684
 			break
 		}
 		docs = append(docs, bm25Doc{
@@ -516,6 +540,7 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 	// Phase 6: Publish.
 	m.mu.Lock()
 	m.index = idx
+	m.budgetExcluded = overflow // #4684: fresh truth from this build
 	m.ready = true
 	m.stats = CodeIndexStats{
 		TotalFiles:   len(files),
@@ -677,6 +702,16 @@ func (m *CodeIndexManager) persistIndex(ctx context.Context, docs []bm25Doc) {
 		UpdatedAt:  time.Now(),
 		Docs:       make([]persistedDoc, 0, len(docs)),
 	}
+	// #4684: persist the budget-excluded set so the next process/session's
+	// scan knows these files are intentionally absent from Docs.
+	m.mu.RLock()
+	if len(m.budgetExcluded) > 0 {
+		pi.Excluded = make([]persistedExcluded, 0, len(m.budgetExcluded))
+		for p, mt := range m.budgetExcluded {
+			pi.Excluded = append(pi.Excluded, persistedExcluded{Path: p, Mtime: mt})
+		}
+	}
+	m.mu.RUnlock()
 	// #4573: write the BUILD-TIME mtime captured when each doc's content
 	// was read (doBuild/rebuildDirty), never a re-Stat here. The old
 	// re-Stat closed a TOCTOU window the width of the whole build: a file
@@ -864,12 +899,16 @@ func (m *CodeIndexManager) scanForExternalChanges() {
 
 	// Load mtimes from disk cache for comparison.
 	var cachedMap map[string]int64
+	excludedMap := make(map[string]int64) // #4684
 	if data, err := os.ReadFile(m.indexPath); err == nil {
 		var pi persistedIndex
 		if json.Unmarshal(data, &pi) == nil && pi.Version == codeIndexVersion {
 			cachedMap = make(map[string]int64, len(pi.Docs))
 			for _, d := range pi.Docs {
 				cachedMap[d.Path] = d.Mtime
+			}
+			for _, e := range pi.Excluded {
+				excludedMap[e.Path] = e.Mtime
 			}
 		}
 	}
@@ -938,8 +977,9 @@ func (m *CodeIndexManager) scanForExternalChanges() {
 		}
 		mtime := info.ModTime().Unix()
 		cachedMtime, wasIndexed := cachedMap[relPath]
+		_, isExcluded := excludedMap[relPath] // #4684
 
-		if !wasIndexed || cachedMtime != mtime {
+		if !isExcluded && (!wasIndexed || cachedMtime != mtime) {
 			// New or modified file not tracked by MarkDirty.
 			m.mu.Lock()
 			m.dirtyFiles[relPath] = mtime
@@ -1015,6 +1055,9 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 	m.mu.Lock()
 	dirty := make(map[string]int64, len(m.dirtyFiles))
 	for k, v := range m.dirtyFiles {
+		if _, ex := m.budgetExcluded[k]; ex {
+			continue // #4684: budget-dropped file - no ReadFile churn, no retry
+		}
 		dirty[k] = v
 	}
 	m.dirtyFiles = make(map[string]int64)
