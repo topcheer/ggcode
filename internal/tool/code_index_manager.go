@@ -334,10 +334,15 @@ func (m *CodeIndexManager) loadDiskCache() {
 		df:   make(map[string]int, 512),
 	}
 	// #4684: restore the budget-excluded set alongside the docs.
+	// #4735: assemble into a local first and publish under m.mu below -
+	// writing m.budgetExcluded here raced with persistIndex (RLock read) and
+	// doBuild Phase 6 (Lock write); concurrent map read/write is a fatal
+	// throw in the Go runtime.
+	var excluded map[string]int64
 	if len(pi.Excluded) > 0 {
-		m.budgetExcluded = make(map[string]int64, len(pi.Excluded))
+		excluded = make(map[string]int64, len(pi.Excluded))
 		for _, e := range pi.Excluded {
-			m.budgetExcluded[e.Path] = e.Mtime
+			excluded[e.Path] = e.Mtime
 		}
 	}
 	var totalLength int
@@ -360,6 +365,9 @@ func (m *CodeIndexManager) loadDiskCache() {
 	m.mu.Lock()
 	m.index = idx
 	m.ready = true
+	if excluded != nil {
+		m.budgetExcluded = excluded
+	}
 	m.stats = CodeIndexStats{
 		TotalFiles:   len(idx.docs),
 		IndexedFiles: len(idx.docs),
