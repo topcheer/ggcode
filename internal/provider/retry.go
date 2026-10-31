@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -53,7 +54,7 @@ func RetryAlwaysEnabled() bool { return retryAlwaysEnabled.Load() }
 const retryAlwaysAttempts = 1 << 30
 
 // errRetryBudgetExhausted marks a failure whose inner retry loop already
-// consumed the full per-call backoff budget — the provider got a best-effort
+// consumed the full per-call backoff budget - the provider got a best-effort
 // chance. FallbackProvider treats it as sustained failure and switches
 // immediately instead of demanding failoverThreshold more full-budget calls.
 var errRetryBudgetExhausted = errors.New("retry budget exhausted")
@@ -74,7 +75,7 @@ func newRetryBudget() *retryBudget {
 
 // sleep sleeps for delay (from retryDelay) unless the budget deadline is
 // closer, in which case it truncates the sleep and returns
-// errRetryBudgetExhausted (the pending retry must not run — the budget is
+// errRetryBudgetExhausted (the pending retry must not run - the budget is
 // spent). Context cancellation propagates unchanged.
 func (b *retryBudget) sleep(ctx context.Context, delay time.Duration) error {
 	if b.unlimited {
@@ -108,10 +109,10 @@ var retrySleep = func(ctx context.Context, delay time.Duration) error {
 // isRetryable returns true for any error that is worth retrying.
 //
 // We retry aggressively: only 401 (auth), 403 (forbidden), and 404 (not found)
-// are considered permanent failures. Everything else — rate limits, server
-// errors, timeouts, network glitches, bad gateway, etc. — gets retried.
+// are considered permanent failures. Everything else - rate limits, server
+// errors, timeouts, network glitches, bad gateway, etc. - gets retried.
 // IsContextOverflowError checks whether the error indicates the input prompt
-// exceeds the model's context window. These errors are never retryable — the
+// exceeds the model's context window. These errors are never retryable - the
 // same request will always fail until the context is compacted.
 func IsContextOverflowError(err error) bool {
 	if err == nil {
@@ -182,7 +183,7 @@ func isRetryable(err error) bool {
 	// Fail fast on permanent failures: quota/billing exhaustion and auth
 	// errors will never succeed on retry. ClassifyLLMError uses keyword
 	// matching that works for ALL error types (typed SDK errors AND raw
-	// string errors), catching cases the per-type checks below miss —
+	// string errors), catching cases the per-type checks below miss -
 	// e.g. a string error like "coding plan expired" or a generic HTTP
 	// error wrapper around a 429 quota response.
 	switch ClassifyLLMError(err) {
@@ -240,7 +241,7 @@ func isRetryable(err error) bool {
 	if containsHTTPStatus(msg, "401") || containsHTTPStatus(msg, "403") || containsHTTPStatus(msg, "404") {
 		return false
 	}
-	// #306: 400 must be excluded in the string-fallback path too — Bad Request
+	// #306: 400 must be excluded in the string-fallback path too - Bad Request
 	// is always permanent (malformed request body, invalid tool_use/tool_result
 	// pairing, bad parameters). Without this, a non-typed "status code: 400"
 	// from an OpenAI-compatible relay was retried 20 times with exponential
@@ -248,7 +249,7 @@ func isRetryable(err error) bool {
 	if containsHTTPStatus(msg, "400") {
 		return false
 	}
-	// #518: 422 must be excluded too — the typed path (isRetryableHTTPStatus)
+	// #518: 422 must be excluded too - the typed path (isRetryableHTTPStatus)
 	// treats Unprocessable Entity as permanent (schema/semantic rejection;
 	// FriendlyError's own guidance is "switch model"). Without this, a
 	// non-typed go-openai stream error (plain fmt.Errorf, errors.As misses)
@@ -259,7 +260,7 @@ func isRetryable(err error) bool {
 	// #602(R1): 402 (payment required) and 413 (payload too large) complete
 	// the string-fallback exclusion list. The typed path
 	// (isRetryableHTTPStatus, #267) already treats both as permanent, but the
-	// string fallback only excluded 400/401/403/404/422 — a non-typed
+	// string fallback only excluded 400/401/403/404/422 - a non-typed
 	// "status code: 402" from an OpenAI-compatible relay fell through to the
 	// default-retryable branch and burned 20 retries (~7 min) on a billing
 	// error that can never succeed. Fourth instance of the #306/#518/#267
@@ -269,8 +270,8 @@ func isRetryable(err error) bool {
 	}
 
 	// Any other error with a recognizable HTTP status code is retryable.
-	// (400/402/413/422 are permanently excluded above — see #306/#518/#602.)
-	// #518: 422 must NOT be in this string-fallback list — the typed path
+	// (400/402/413/422 are permanently excluded above - see #306/#518/#602.)
+	// #518: 422 must NOT be in this string-fallback list - the typed path
 	// (isRetryableHTTPStatus) treats 422 as permanent (schema/semantic
 	// rejection), so a non-typed go-openai stream error (plain fmt.Errorf,
 	// errors.As misses) must not spin ~7 minutes in 20 doomed retries.
@@ -302,7 +303,7 @@ func isRetryable(err error) bool {
 // a status label, matching the formats emitted by go-openai ("status code:
 // 401, message: ..."), JSON relays (`status":401`), and plain wrappers
 // ("statusCode:401").
-// #561(F): sentence-final terminators (`.` `)` `;` `:`) are anchors too —
+// #561(F): sentence-final terminators (`.` `)` `;` `:`) are anchors too -
 // `"status 401."` (period-terminated) previously matched none of the
 // patterns, fell through to the default-retryable path, and burned 19
 // retries (~7.5 min) on a permanent auth failure.
@@ -310,7 +311,7 @@ func containsHTTPStatus(msg, code string) bool {
 	// #602(R3): digit-terminated patterns go through containsPatternAnchored
 	// (errclass.go), which requires a non-digit (or end-of-string) boundary
 	// after the code. Bare substring matching let a 5-digit coincidence like
-	// `"status":40139` count as status 401 — the same digit-piercing class the
+	// `"status":40139` count as status 401 - the same digit-piercing class the
 	// classifier closed (#303/#456/#577).
 	return containsPatternAnchored(msg, " "+code+" ") ||
 		containsPatternAnchored(msg, " "+code+",") ||
@@ -330,7 +331,7 @@ func isRetryableForContext(ctx context.Context, err error) bool {
 		return false
 	}
 	// DeadlineExceeded from the caller context means the agent turn
-	// timed out — not retryable. But DeadlineExceeded from an HTTP
+	// timed out - not retryable. But DeadlineExceeded from an HTTP
 	// client timeout (where ctx is still alive) IS retryable.
 	if ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return false
@@ -354,10 +355,10 @@ func isRetryableForContext(ctx context.Context, err error) bool {
 }
 
 // isRetryableHTTPStatus returns true unless the status code is a permanent
-// client error. 400/401/403/404 plus 402 (payment required — FriendlyError
+// client error. 400/401/403/404 plus 402 (payment required - FriendlyError
 // already treats billing exhaustion as needing user action), 413 (payload
-// too large — the request will not shrink by retrying), and 422
-// (unprocessable entity — schema/semantic rejection) are permanent (#267).
+// too large - the request will not shrink by retrying), and 422
+// (unprocessable entity - schema/semantic rejection) are permanent (#267).
 func isRetryableHTTPStatus(status int) bool {
 	switch status {
 	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden,
@@ -379,24 +380,31 @@ func isQuotaExhaustedError(err error) bool {
 
 // retryWithBackoffCtx retries fn up to maxAttempts times with exponential backoff.
 // Only retries retryable errors (429 or 5xx), and honors Retry-After where available.
-func retryWithBackoffCtx(ctx context.Context, fn func() error, maxAttempts int) error {
+//
+// #4729: timeout-class failures retry IN PLACE - the attempt cap and the
+// cumulative backoff budget lift (mirroring the stream paths), so a flaky
+// network keeps retrying instead of dying after "Retry 1/20". Only caller-
+// context cancellation ends the loop (budget.sleep and isRetryableForContext
+// both honor ctx).
+func retryWithBackoffCtx(ctx context.Context, fn func() error, maxAttempts int, timeoutRetryInPlace bool) error {
 	if maxAttempts <= 0 {
 		maxAttempts = 1
 	}
 	budget := newRetryBudget()
 	if retryAlwaysEnabled.Load() {
-		// Retry-always: no cumulative backoff cap - only context
+		// Retry-always (--llm-retry-always): no cumulative backoff cap - only context
 		// cancellation ends the loop.
 		budget.unlimited = true
 	}
-	var lastErr error
-	for i := 0; i < maxAttempts; i++ {
+	for i := 0; ; i++ {
 		err := fn()
 		if err == nil {
 			return nil
 		}
-		lastErr = err
-		if !isRetryableForContext(ctx, err) || i == maxAttempts-1 {
+		retryable := isRetryableForContext(ctx, err)
+		if retryable && timeoutRetryInPlace && isTimeoutClassError(err) {
+			budget.unlimited = true
+		} else if !retryable || i >= maxAttempts-1 {
 			return err
 		}
 		if sleepErr := budget.sleep(ctx, retryDelay(err, i)); sleepErr != nil {
@@ -409,7 +417,6 @@ func retryWithBackoffCtx(ctx context.Context, fn func() error, maxAttempts int) 
 			return sleepErr
 		}
 	}
-	return lastErr
 }
 
 func retryDelay(err error, attempt int) time.Duration {
@@ -417,7 +424,7 @@ func retryDelay(err error, attempt int) time.Duration {
 		// Cap Retry-After at providerRetryBackoffCap. Some providers return
 		// very large Retry-After values (60-300s); an interactive agent must
 		// not freeze for minutes. If the cap expires and the server is still
-		// rate-limiting, it will return 429 again and we retry — acceptable
+		// rate-limiting, it will return 429 again and we retry - acceptable
 		// for an interactive tool.
 		if delay > providerRetryBackoffCap {
 			delay = providerRetryBackoffCap
@@ -515,6 +522,74 @@ func minInt(a, b int) int {
 	return b
 }
 
+// isTimeoutClassError reports whether err is a timeout-class failure worth
+// in-place retry (#4729): a net.Error whose Timeout() is true, a
+// context.DeadlineExceeded / os.ErrDeadlineExceeded anywhere in the chain, or
+// the string forms gateways actually emit ("connection timed out",
+// "context deadline exceeded"). Non-timeout network errors (refused, DNS)
+// are deliberately NOT timeout-class: they keep the normal capped budget.
+func isTimeoutClassError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	// Guard against SDK error types whose .Error() panics on nil internals
+	// (e.g., anthropic.Error with nil Response) - same guard as
+	// IsContextOverflowError.
+	msg := func() (m string) {
+		defer func() { recover() }()
+		return err.Error()
+	}()
+	s := strings.ToLower(msg)
+	return strings.Contains(s, "connection timed out") ||
+		strings.Contains(s, "context deadline exceeded")
+}
+
+// TimeoutRetryNotice returns the periodic user notice for an in-place
+// timeout retry loop (#4729): after every 3rd consecutive timeout retry the
+// user gets a system message, so an unbounded retry loop never looks frozen.
+// Empty string when no notice is due (attempt is 0-based: notices fire on
+// attempts 2, 5, 8, ... i.e. after the 3rd, 6th, 9th retry).
+func TimeoutRetryNotice(err error, attempt int) string {
+	if !isTimeoutClassError(err) {
+		return ""
+	}
+	n := attempt + 1
+	if n < 3 || n%3 != 0 {
+		return ""
+	}
+	return fmt.Sprintf("[Timeout retry %d: provider still not responding - retrying in place until it recovers (Ctrl-C to stop)]", n)
+}
+
+// friendlyWrappedError carries the FriendlyError text while keeping the
+// original error chain unwrap-able. The agent's old
+// fmt.Errorf("%s", FriendlyError(err)) stringified the error, so every
+// errors.Is/As assertion downstream (UserFacingErrorLang's net.Error /
+// DeadlineExceeded branches) failed and the TUI reported an unrecognized
+// error on plain connection timeouts (#4729).
+type friendlyWrappedError struct {
+	text string
+	err  error
+}
+
+func (e *friendlyWrappedError) Error() string { return e.text }
+func (e *friendlyWrappedError) Unwrap() error { return e.err }
+
+// WrapFriendly returns err wrapped so Error() renders the FriendlyError text
+// while errors.Is / errors.As still reach the original typed error.
+func WrapFriendly(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &friendlyWrappedError{text: FriendlyError(err), err: err}
+}
+
 // FriendlyError translates a raw provider error into a human-readable message
 // with actionable advice. Returns the original error message if no pattern matches.
 func FriendlyError(err error) string {
@@ -544,8 +619,8 @@ func FriendlyError(err error) string {
 		}
 	}
 	if statusCode == 0 {
-		// #577(A): anchor via containsHTTPStatus — the same helper isRetryable
-		// uses — instead of bare substring matching. Digit coincidences like
+		// #577(A): anchor via containsHTTPStatus - the same helper isRetryable
+		// uses - instead of bare substring matching. Digit coincidences like
 		// "40123 tokens remaining" in a quota message were misreported as
 		// auth failure ("invalid API key, run config set api_key"), sending
 		// users down the wrong debugging path. Third occurrence of this bug
@@ -558,7 +633,7 @@ func FriendlyError(err error) string {
 		}
 	}
 
-	// Context overflow — special handling
+	// Context overflow - special handling
 	if IsContextOverflowError(err) {
 		return "The conversation has exceeded the model's context window. " +
 			"Run /compact to compress the conversation history, or start a new session with /clear."
@@ -590,7 +665,7 @@ func FriendlyError(err error) string {
 			"Check available models with: /model"
 	case 408:
 		return "Request timed out (408). The provider took too long to respond. " +
-			"This is usually temporary — try sending your message again."
+			"This is usually temporary - try sending your message again."
 	case 413:
 		return "Request too large (413). The message payload exceeds the server's limit. " +
 			"Run /compact to reduce conversation size, or simplify your request."
@@ -603,7 +678,7 @@ func FriendlyError(err error) string {
 			"Wait a few seconds and try again. Consider using a model with higher rate limits."
 	case 500, 502, 503, 504:
 		return fmt.Sprintf("Server error (%d). The provider is experiencing issues. "+
-			"This is temporary — please retry in a moment.", statusCode)
+			"This is temporary - please retry in a moment.", statusCode)
 	}
 
 	// Check for common network errors
@@ -618,7 +693,7 @@ func FriendlyError(err error) string {
 	}
 	if errors.Is(err, io.EOF) {
 		return "Connection closed unexpectedly by the provider. " +
-			"This is usually temporary — try again."
+			"This is usually temporary - try again."
 	}
 
 	// Cancellation

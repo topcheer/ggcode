@@ -259,7 +259,7 @@ func (p *OpenAIProvider) applySampling(req *openai.ChatCompletionRequest) {
 // effectiveMaxTokens returns the max output tokens to send on the next
 // request: the adaptive cap when set (learned from rejections/truncations),
 // otherwise the configured maxTokens. Mirrors anthropic.go's
-// effectiveMaxTokens (#561-A: this was previously never consumed — requests
+// effectiveMaxTokens (#561-A: this was previously never consumed - requests
 // went out without max_tokens and the backend's small default truncated
 // them into a finish_reason=length continue-loop).
 func (p *OpenAIProvider) effectiveMaxTokens() int {
@@ -433,7 +433,7 @@ func NewOpenAIProviderWithConfig(config openai.ClientConfig, apiKey, model strin
 		headers:    extraHeaders,
 		rateLimits: newRateLimitTracker(),
 	}
-	// #561(G): preserve the original client's Timeout/Jar/CheckRedirect —
+	// #561(G): preserve the original client's Timeout/Jar/CheckRedirect -
 	// replacing the whole client dropped them (a 1ns-timeout caller config was
 	// silently ignored). Shallow-copy and swap only the Transport.
 	newClient := &http.Client{
@@ -470,7 +470,7 @@ func (p *OpenAIProvider) Name() string {
 }
 
 // UpdateRuntimeHeaders updates the injected headers at runtime.
-// GGCode-SessionID is session-lifecycle state owned by SetSessionID —
+// GGCode-SessionID is session-lifecycle state owned by SetSessionID -
 // callers that replace the whole header set (e.g. the impersonation
 // panel) must not silently drop it, so it is carried over (#sa-142).
 func (p *OpenAIProvider) UpdateRuntimeHeaders(headers http.Header) {
@@ -550,7 +550,8 @@ func meanLogprob(ps []float64) *float64 {
 }
 
 func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
-	// sa-78: honor the configured per-call deadline for non-streaming calls.
+	// sa-78 + #4729: single-wrap deadline when configured (fail-fast, zz_issue2573_test.go);
+	// in-place timeout retry only on the default path.
 	ctx, cancel := p.policy.withTimeout(ctx)
 	defer cancel()
 	chatMsgs := p.convertMessages(messages)
@@ -574,7 +575,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		var callErr error
 		resp, callErr = p.createChatCompletion(ctx, req, hasReasoningEffort)
 		return callErr
-	}, p.policy.attempts())
+	}, p.policy.attempts(), p.policy.timeoutRetryInPlace())
 	if err != nil {
 		if rejected, parsed := maxTokensRejection(err); rejected && p.cap != nil {
 			p.cap.OnRejected(parsed)
@@ -588,7 +589,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	}
 
 	choice := resp.Choices[0]
-	// #455: non-streaming path must feed the adaptive cap on truncation —
+	// #455: non-streaming path must feed the adaptive cap on truncation -
 	// anthropic/gemini and this file's own streaming path all report
 	// finish_reason=length via OnTruncated; without it the cap never lowers
 	// and requests stay truncated.
@@ -710,10 +711,11 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 	safego.Go("provider.openai.streamRead", func() {
 		defer close(ch)
-		// sa-78: per-call deadline applied inside the goroutine so it covers
-		// the full stream lifetime (ChatStream returns immediately).
-		ctx, cancel := p.policy.withTimeout(ctx)
-		defer cancel()
+		// #4729: per-ATTEMPT deadline (was one withTimeout around the whole
+		// retry loop - see Chat above). Parent ctx stays live for retry checks.
+		parentCtx := ctx
+		var cancelAttempt context.CancelFunc
+		defer func() { cancelAttempt() }() // idempotent; covers mid-loop returns
 
 		var usage *TokenUsage
 		var outputChars int
@@ -724,9 +726,16 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		streamError := false       // set when a non-retryable error was sent to ch
 		budget := newRetryBudget() // #722: cap cumulative retry backoff sleep per stream call
 
-		for attempt := 0; attempt < p.policy.attempts(); attempt++ {
+		attempts := p.policy.attempts()
+		for attempt := 0; attempt < attempts; attempt++ {
 			if attempt > 0 {
+				cancelAttempt() // release the previous attempt's deadline timer
 				debug.Log("openai", "Stream retry attempt %d/%d model=%s baseURL=%s", attempt+1, p.policy.attempts(), p.model, p.baseURL)
+			}
+			// #4729: renewal is a no-op on the default path (parent stays live);
+			// with a configured deadline only attempt 0 derives one (#2573).
+			if attempt == 0 || p.policy.requestTimeout <= 0 {
+				ctx, cancelAttempt = p.policy.withTimeout(parentCtx)
 			}
 
 			// Reset per-attempt state to avoid leaking failed-attempt usage
@@ -747,7 +756,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 				if rejected, parsed := maxTokensRejection(err); rejected && p.cap != nil {
 					p.cap.OnRejected(parsed)
 				}
-				if isRetryableForContext(ctx, err) && attempt < p.policy.attempts()-1 {
+				if isRetryableForContext(ctx, err) && attempt < attempts-1 {
 					debug.Log("openai", "CONNECT FAILED model=%s baseURL=%s attempt=%d/%d delay=%v: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), retryDelay(err, attempt), err, err)
 					slept, sErr := p.sleepBeforeRetry(ctx, ch, budget, err, attempt)
 					if !slept {
@@ -759,10 +768,13 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						}
 						return
 					}
+					if isTimeoutClassError(err) && p.policy.timeoutRetryInPlace() { // #4729: keep retrying timeouts in place
+						attempts = retryAlwaysAttempts
+					}
 					// Retry the connection on the next attempt instead of
 					// falling through to the CONNECT FATAL path. Without
 					// this, the sleep above runs but the goroutine then
-					// returns a fatal error — the retry loop is dead code
+					// returns a fatal error - the retry loop is dead code
 					// and every transient 502/503/504/429 kills the run.
 					continue
 				}
@@ -802,7 +814,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					resp, recvErr := localStreamer.Recv()
 					if recvErr != nil {
 						// #302: context cancellation must surface as an error event
-						// (anthropic.go parity), NOT as a normal end — treating it as
+						// (anthropic.go parity), NOT as a normal end - treating it as
 						// "ended normally" finalized partial output as a complete
 						// assistant message and repaired+flushed unfinished tool calls.
 						if errors.Is(recvErr, context.Canceled) {
@@ -821,8 +833,11 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						}
 						debug.Log("openai", "STREAM ERROR model=%s baseURL=%s attempt=%d/%d emitted=%v reasoning=%d output=%d: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), emitted, reasoningBuf.Len(), outputChars, recvErr, recvErr)
 						// Retry if no content emitted yet and error is retryable
-						if !emitted && isRetryableForContext(ctx, recvErr) && attempt < p.policy.attempts()-1 {
+						if !emitted && isRetryableForContext(ctx, recvErr) && attempt < attempts-1 {
 							slept, sErr := p.sleepBeforeRetry(ctx, ch, budget, recvErr, attempt)
+							if isTimeoutClassError(recvErr) && p.policy.timeoutRetryInPlace() { // #4729: keep retrying timeouts in place
+								attempts = retryAlwaysAttempts
+							}
 							if !slept {
 								if sErr != nil {
 									if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sErr}) {
@@ -912,7 +927,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						} else if len(delta.ToolCalls) == 1 {
 							// #722: the official API and mainstream relays always send
 							// index, but minimal relays omit it. A single call in the
-							// delta has nothing to disambiguate — default to 0 instead
+							// delta has nothing to disambiguate - default to 0 instead
 							// of silently discarding the whole turn's tool call.
 							idx = 0
 							// #4471: those same relays may stream parallel tool calls
@@ -1417,7 +1432,7 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 				// tool blocks and silently dropped the text. Emitting the text
 				// as a separate user message BETWEEN the assistant tool_calls
 				// and the tool messages violates the ordering contract (strict
-				// backends 400) — instead prepend it to the FIRST tool
+				// backends 400) - instead prepend it to the FIRST tool
 				// message's content, which every backend accepts.
 				var guidanceText []string
 				for _, b := range m.Content {

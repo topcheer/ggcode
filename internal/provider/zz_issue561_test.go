@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -195,15 +196,29 @@ func TestIssue561G_HTTPClientTimeoutPreserved(t *testing.T) {
 	}
 	p := NewOpenAIProviderWithConfig(cfg, "test-key", "test-model", 128, "issue561-g")
 
-	// Stub retrySleep: timeouts are retryable, so 20 fast attempts instead
-	// of exponential backoff.
+	// #4729 changed the contract: timeout-class failures on the default path
+	// (no configured request_timeout) now retry IN PLACE, honoring only
+	// caller-context cancellation. The test proves BOTH properties:
+	// (a) the 1ns caller HTTPClient.Timeout is still honored — every attempt
+	//     keeps failing (>=3 backoffs observed; pre-#561G-fix a dropped
+	//     timeout made attempt 1 SUCCEED, returning nil long before 3);
+	// (b) the in-place loop terminates on caller-context cancellation (#4729).
 	origSleep := retrySleep
 	defer func() { retrySleep = origSleep }()
-	retrySleep = func(ctx context.Context, d time.Duration) error { return nil }
+	var sleeps int32
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	retrySleep = func(sctx context.Context, d time.Duration) error {
+		if atomic.AddInt32(&sleeps, 1) >= 3 {
+			cancel()          // third backoff reached: (a) proven, stop via (b)
+			return sctx.Err() // propagate cancellation immediately
+		}
+		return nil
+	}
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := p.Chat(context.Background(), []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}}, nil)
+		_, err := p.Chat(ctx, []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}}, nil)
 		done <- err
 	}()
 	select {
@@ -211,8 +226,11 @@ func TestIssue561G_HTTPClientTimeoutPreserved(t *testing.T) {
 		if err == nil {
 			t.Fatalf("BUG G: caller HTTPClient.Timeout was dropped — request succeeded despite 1ns timeout")
 		}
+		if atomic.LoadInt32(&sleeps) < 3 {
+			t.Fatalf("BUG G: loop ended after %d backoffs; expected >=3 failed attempts proving the 1ns timeout still fires", sleeps)
+		}
 	case <-time.After(15 * time.Second):
-		t.Fatalf("BUG G: Chat did not terminate")
+		t.Fatalf("BUG G/#4729: in-place retry did not honor caller-context cancellation")
 	}
 }
 

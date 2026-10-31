@@ -21,8 +21,8 @@ type GeminiProvider struct {
 	model            string
 	maxTokens        int
 	cap              *adaptiveCap
-	reasoningEffort  string                           // "", "low", "medium", "high" — maps to Gemini ThinkingConfig
-	toolChoice       string                           // "", "auto", "required", "none" — maps to Gemini FunctionCallingConfig
+	reasoningEffort  string                           // "", "low", "medium", "high" - maps to Gemini ThinkingConfig
+	toolChoice       string                           // "", "auto", "required", "none" - maps to Gemini FunctionCallingConfig
 	temperature      float64                          // 0 = provider default
 	samplingOverride atomic.Pointer[SamplingOverride] // #2248
 	serverTools      []ServerToolConfig               // Gemini built-in tools (google_search/url_context), executed in-API
@@ -238,7 +238,7 @@ func (p *GeminiProvider) SetSessionID(sessionID string) {
 }
 
 // UpdateRuntimeHeaders updates the injected headers at runtime.
-// GGCode-SessionID is session-lifecycle state owned by SetSessionID —
+// GGCode-SessionID is session-lifecycle state owned by SetSessionID -
 // callers that replace the whole header set (e.g. the impersonation
 // panel) must not silently drop it, so it is carried over (#sa-142).
 func (p *GeminiProvider) UpdateRuntimeHeaders(headers http.Header) {
@@ -271,7 +271,8 @@ func normalizeGeminiFinishReason(r genai.FinishReason) string {
 }
 
 func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
-	// sa-78: honor the configured per-call deadline for non-streaming calls.
+	// sa-78 + #4729: single-wrap deadline when configured (fail-fast, zz_issue2573_test.go);
+	// in-place timeout retry only on the default path.
 	ctx, cancel := p.policy.withTimeout(ctx)
 	defer cancel()
 	contents, systemInstruction := p.convertMessages(messages)
@@ -293,7 +294,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 		var callErr error
 		resp, callErr = p.client.Models.GenerateContent(ctx, p.model, contents, config)
 		return callErr
-	}, p.policy.attempts())
+	}, p.policy.attempts(), p.policy.timeoutRetryInPlace())
 	if err != nil {
 		if rejected, parsed := maxTokensRejection(err); rejected {
 			p.cap.OnRejected(parsed)
@@ -381,15 +382,20 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 
 	safego.Go("provider.gemini.streamRead", func() {
 		defer close(ch)
-		// sa-78: per-call deadline applied inside the goroutine so it covers
-		// the full stream lifetime (ChatStream returns immediately).
-		ctx, cancel := p.policy.withTimeout(ctx)
-		defer cancel()
-
+		// #4729: per-ATTEMPT deadline (was one withTimeout around the whole
+		// retry loop - see anthropic.go Chat's note). Parent ctx stays live.
+		parentCtx := ctx
+		var cancelAttempt context.CancelFunc
+		defer func() { cancelAttempt() }()     // idempotent; covers mid-loop returns
 		budget := newRetryBudget()             // #722: cap cumulative retry backoff sleep per stream call
 		grounding := newGeminiGroundingAccum() // built-in tool grounding sources, deduped across chunks/attempts
-		for attempt := 0; attempt < p.policy.attempts(); attempt++ {
-			var usage TokenUsage // reset per attempt to avoid leaking failed-attempt usage
+		attempts := p.policy.attempts()
+		for attempt := 0; attempt < attempts; attempt++ {
+			if attempt > 0 {
+				cancelAttempt() // release the previous attempt's deadline timer (#4729)
+			}
+			ctx, cancelAttempt = p.policy.withTimeout(parentCtx) // fresh per-attempt deadline
+			var usage TokenUsage                                 // reset per attempt to avoid leaking failed-attempt usage
 			var truncated bool
 			var policyBlocked bool
 			var avgConf *float64 // sa-74: turn-average logprob, reset per attempt
@@ -402,14 +408,23 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 					if rejected, parsed := maxTokensRejection(err); rejected {
 						p.cap.OnRejected(parsed)
 					}
-					if !emitted && isRetryableForContext(ctx, err) && attempt < p.policy.attempts()-1 {
+					if !emitted && isRetryableForContext(ctx, err) && attempt < attempts-1 {
 						// Notify user about retry
 						delay := retryDelay(err, attempt)
 						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}) {
 							return
 						}
+						if isTimeoutClassError(err) && p.policy.timeoutRetryInPlace() { // #4729: in-place retry, unbounded
+							budget.unlimited = true
+							attempts = retryAlwaysAttempts
+						}
+						if notice := TimeoutRetryNotice(err, attempt); notice != "" {
+							if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: notice}) {
+								return
+							}
+						}
 						if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
-							// #722: budget exhausted — stop retrying now; wrap with the
+							// #722: budget exhausted - stop retrying now; wrap with the
 							// sentinel so failover switches immediately.
 							if sleepErr == errRetryBudgetExhausted {
 								sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
@@ -453,13 +468,13 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 				// Check finish reason for truncation / policy errors (#232).
 				// This must run BEFORE the no-content skip below: fully blocked
 				// responses (e.g. RECITATION with no partial text) have nil
-				// Content but still carry the fatal finish reason — skipping
+				// Content but still carry the fatal finish reason - skipping
 				// first would drop the Truncated/PolicyBlocked flags (#266).
 				var finishNotice string
 				if len(resp.Candidates) > 0 {
 					fr := resp.Candidates[0].FinishReason
 					if fr == genai.FinishReasonMaxTokens {
-						// Output was truncated — NOT an error. Keep partial content.
+						// Output was truncated - NOT an error. Keep partial content.
 						p.cap.OnTruncated()
 						truncated = true
 					} else if finishErr := geminiFinishReasonError(fr); finishErr != nil {

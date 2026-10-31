@@ -100,7 +100,7 @@ func TestIssue722_RetryWithBackoffCtx_BudgetCap(t *testing.T) {
 	err := retryWithBackoffCtx(context.Background(), func() error {
 		calls.Add(1)
 		return providerErr
-	}, providerRetryAttempts)
+	}, providerRetryAttempts, false)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -137,7 +137,7 @@ func TestIssue722_RetryWithBackoffCtx_UnbudgetedStillRetries(t *testing.T) {
 			return errors.New("status code: 502 Bad Gateway") // retryable
 		}
 		return nil // 3rd attempt succeeds
-	}, providerRetryAttempts)
+	}, providerRetryAttempts, false)
 	if err != nil {
 		t.Fatalf("expected success on 3rd attempt, got: %v", err)
 	}
