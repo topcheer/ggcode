@@ -21,18 +21,15 @@ func (m Model) remoteShellAllowed() bool {
 	return m.config != nil && m.config.IM.RemoteDangerousCommands
 }
 
-// handleRemoteInbound handles the remoteInboundMsg case.
-func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {
-	// Track the originating adapter for per-channel echo suppression.
-	m.remoteInboundAdapter = msg.Message.Envelope.Adapter
-	// #4818: TUI-attached sessions must honor the #1584-A intent (keep image
-	// blocks) like the daemon path does. BuildInboundText collapses every image
-	// block to a '[Attached image from remote IM]' placeholder string, so an
-	// image-only IM message delivered 100% of its pixel payload to daemon
-	// sessions and 0% to TUI sessions. Decode the attachments into the pending
-	// image pipeline (the same one /image and paste use) so they ride along
-	// with the text submission as real multimodal content.
-	for _, att := range msg.Message.Attachments {
+// injectRemoteImageAttachments decodes the inbound message's image
+// attachments into pending-image entries (#4818). TUI-attached sessions
+// previously collapsed every image block to a '[Attached image from remote
+// IM]' placeholder via BuildInboundText while the daemon path delivered full
+// ImageBlock content - an image-only IM message gave the model 0% of its
+// pixels. Corrupt payloads are skipped with a debug log, never breaking the
+// text flow.
+func injectRemoteImageAttachments(m *Model, msg im.InboundMessage) {
+	for _, att := range msg.Attachments {
 		if att.DataBase64 == "" {
 			continue
 		}
@@ -56,6 +53,16 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 			filename:    filepath.Base(name),
 		})
 	}
+}
+
+// handleRemoteInbound handles the remoteInboundMsg case.
+func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	// Track the originating adapter for per-channel echo suppression.
+	m.remoteInboundAdapter = msg.Message.Envelope.Adapter
+	// #4818: honor the #1584-A intent (keep image blocks) like the daemon
+	// path - decode attachments into the pending-image pipeline so they ride
+	// along with the text submission as real multimodal content.
+	injectRemoteImageAttachments(&m, msg.Message)
 	prompt := buildRemoteInboundPrompt(msg.Message)
 	route := im.RouteInboundText(prompt, m.pendingApproval != nil, m.pendingQuestionnaire != nil)
 
