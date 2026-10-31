@@ -25,7 +25,8 @@ func TestIssue4684_BudgetExclusionWired(t *testing.T) {
 		{"persist writes set", "pi.Excluded = make([]persistedExcluded, 0, len(m.budgetExcluded))"},
 		{"scan treats excluded as known", "if !isExcluded && (!wasIndexed || cachedMtime != mtime)"},
 		{"rebuildDirty filters before ReadFile", "continue // #4684: budget-dropped file"},
-		{"load restores set", "m.budgetExcluded[e.Path] = e.Mtime"},
+		{"load restores set (local assembly, #4735)", "excluded[e.Path] = e.Mtime"},
+		{"load publishes under lock (#4735)", "m.budgetExcluded = excluded"},
 	}
 	for _, c := range checks {
 		if !strings.Contains(text, c.want) {
