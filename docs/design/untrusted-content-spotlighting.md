@@ -58,3 +58,18 @@ peer transcript（r406 已覆盖）同级信任，但 IM 是远程通道（#2185
 （`content := msg.ProviderContent()` 之后），mid-run 中断队列
 （pendingInterruptions）同样带头——该路径也进 LLM 上下文。纯图消息（无文本）
 不带头，图片注入面由 vision 侧既有机制处理。
+
+## 内部委派通道（delegation provenance，2026-10）
+
+第四条 LLM 输入通道：内部子 agent 委派。EMNLP 2026（Zhou et al., provenance
+erasure）实证：最小双 agent 委派即剥离 98% 格式标记与 100% 权威实体，子 agent
+从 web/peer 通道拉取的内容经 `wait_agent` 以纯文本返回父上下文，零溯源标注
+——Trust Cascade 攻击成功率 0%→33-63%。
+
+防御（零推理，与 IM 头块同构的轻量形态）：sub-agent runner 按 8 个外部源通
+道计数（`internal/subagent/provenance.go`，与 tui provenance 表对齐），委派
+边界 `wait_agent` 在结果前置确定性聚合头块
+（`internal/tool/wait_provenance.go`）：
+
+- 声明外部源调用总量与分通道计数
+- 无外部源时输出逐字节不变（常见路径零噪声）
