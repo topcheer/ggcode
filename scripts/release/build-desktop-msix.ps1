@@ -106,10 +106,12 @@ foreach ($arch in ($Archs -split ",")) {
 
   # 4. mapping file + makeappx
   $mapping = Join-Path $stageDir "mapping.txt"
+  # NOTE: AppxManifest.xml must NOT appear in the mapping when /m is passed
+  # (makeappx rejects the duplicate with "can't have AppxManifest.xml in the
+  # mapping file when you use /m").
   $lines = @(
     "[Files]"
     "`"$((Join-Path $stageDir 'GGCode-Desktop.exe'))`" `"$((Join-Path $stageDir 'GGCode-Desktop.exe'))`""
-    "`"$manifestPath`" `"AppxManifest.xml`""
     "`"$assetsDir\Square44x44Logo.png`" `"Assets\Square44x44Logo.png`""
     "`"$assetsDir\Square150x150Logo.png`" `"Assets\Square150x150Logo.png`""
     "`"$assetsDir\Wide310x150Logo.png`" `"Assets\Wide310x150Logo.png`""
