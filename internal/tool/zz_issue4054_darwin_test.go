@@ -48,14 +48,21 @@ func TestIssue4054UnknownAlphaKeyNameRejected(t *testing.T) {
 	}
 
 	// Digits and mixed strings keep the literal fallback (key_combo tails
-	// like cmd+shift+3): they must NOT be rejected here - they proceed to
-	// the keystroke branch (osascript), so only assert they are not the
-	// alpha-name rejection.
-	res, err := keyComboResult(t.Context(), "3")
-	if err != nil {
-		t.Fatalf("single digit: unexpected err: %v", err)
+	// like cmd+shift+3): they must NOT be rejected here. #4750: asserting
+	// this via keyComboResult("3") actually EXECUTES the keystroke branch -
+	// a real osascript `keystroke "3"` that types "3" into whatever app is
+	// frontmost (observed: the developer's terminal running `go test`).
+	// Assert the digit contract through the pure gate instead: the literal
+	// fallback is reached exactly when the alpha-name rejection does not
+	// fire, so unknownAlphaKeyName("3") == false IS the contract, with zero
+	// side effects.
+	if unknownAlphaKeyName("3") {
+		t.Error(`unknownAlphaKeyName("3") must be false: single digits keep the literal keystroke fallback, not the alpha-name rejection`)
 	}
-	if strings.Contains(res.Content, "unknown key name") {
-		t.Errorf("single digit must not hit the unknown-key-name rejection, got: %s", res.Content)
+	// Sanity: the gate that the first loop exercises still rejects the
+	// alpha names (guards against a regression that makes the gate inert,
+	// which would silently pass the digit assertion above).
+	if !unknownAlphaKeyName("backspac") {
+		t.Error(`unknownAlphaKeyName("backspac") must be true (alpha-name gate inert = contract untested)`)
 	}
 }
