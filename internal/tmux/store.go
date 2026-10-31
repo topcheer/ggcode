@@ -8,6 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 type LayoutPane struct {
@@ -166,6 +169,20 @@ func readPaneStore(path string) (paneStoreFile, error) {
 		return store, nil
 	}
 	if err := json.Unmarshal(data, &store); err != nil {
+		// #4681: quarantine-and-rebuild instead of wedging forever. A
+		// corrupt store (disk-full truncation, editor mishap, legacy
+		// non-atomic write) used to fail every Load/Save on the machine
+		// with no self-healing path - even a workspace that only wanted to
+		// overwrite its OWN key was blocked. Rename the file aside
+		// (preserving it for manual recovery) and rebuild from empty; the
+		// #1313 wipe concern is bounded because the quarantined copy keeps
+		// every workspace's data recoverable by hand.
+		quarantine := fmt.Sprintf("%s.corrupt-%d", path, time.Now().Unix())
+		if rerr := os.Rename(path, quarantine); rerr == nil {
+			debug.Log("tmux", "pane store unparseable (%v); quarantined to %s, rebuilding from empty (#4681)", err, quarantine)
+			store = paneStoreFile{Workspaces: make(map[string]workspacePaneStore)}
+			return store, nil
+		}
 		return store, fmt.Errorf("parse tmux pane store: %w", err)
 	}
 	if store.Workspaces == nil {

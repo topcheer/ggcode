@@ -50,7 +50,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode"
 )
@@ -749,22 +748,32 @@ func (a *Agent) recordUserRefusals(userText string) {
 // the local user ever seeing the message. Remote runs skip BOTH record and
 // release - a remote "you may X now" lifting the user's own blocks is the
 // same integrity violation in reverse.
-var remoteRefusalInhibit atomic.Bool
-
 // InhibitNextRefusalLedgerWrite marks the next agent run as remote-origin:
 // its user text is exempt from refusal-ledger record/release. Set by the
 // TUI at the remote injection boundaries (lanchat DM / IM inbound) right
 // before triggering the run; consumed by RunStreamWithContent at the
 // ledger gate.
-func (a *Agent) InhibitNextRefusalLedgerWrite() { remoteRefusalInhibit.Store(true) }
+// #4726: the flag lives on the Agent instance, not the package - a
+// process hosts several Agents (TUI main, A2A handler per task, ACP
+// delegates), and a package-level flag let a concurrent local run on ANY
+// instance consume the remote marker (losing the user's own refusal) while
+// the poisoned remote run still wrote to the ledger.
+func (a *Agent) InhibitNextRefusalLedgerWrite() { a.remoteRefusalInhibit.Store(true) }
 
 // consumeRemoteRefusalInhibit returns and clears the flag. Call once per
 // candidate ledger mutation site; the first consumer wins and later sites
 // in the same run see false (record and release sit in the same gate).
-func consumeRemoteRefusalInhibit() bool { return remoteRefusalInhibit.Swap(false) }
+func (a *Agent) consumeRemoteRefusalInhibit() bool { return a.remoteRefusalInhibit.Swap(false) }
 
 // ReleaseMatchingRefusals lifts refusals matching the user's lift text.
+// #4736: nil-ledger guard - test-constructed Agents (tunnel inbound path)
+// reach this method before any ledger is attached; a missing ledger means
+// nothing was ever recorded, so there is nothing to release. Main CI
+// panicked here (refusal_ledger.go:761) wedging the merge queue.
 func (a *Agent) ReleaseMatchingRefusals(text string) int {
+	if a.refusalLedger == nil {
+		return 0
+	}
 	return a.refusalLedger.release(text)
 }
 
