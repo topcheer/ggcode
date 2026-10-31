@@ -229,6 +229,9 @@ type JSONLStore struct {
 	indexDirty         bool // set when updateIndex fails; triggers a later reconciliation pass
 	maintenanceRunning bool
 	lastMaintenance    time.Time
+	// createdPending tracks sessions Save()d by THIS process whose first
+	// user-message batch has not landed yet (#4822 creation window).
+	createdPending map[string]time.Time
 	// lastIndexUpdate tracks per-session index flush times for debouncing.
 	// updateIndex does a full read + JSON parse + JSON marshal + fsync of the
 	// entire index file. Without debouncing, every AppendMessageToDisk call
@@ -978,6 +981,12 @@ func (s *JSONLStore) Save(ses *Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ses.UpdatedAt = time.Now()
+	// #4822: mark the creation window so the empty-session pruners keep this
+	// session until its first user-message batch lands (or the window expires).
+	if s.createdPending == nil {
+		s.createdPending = make(map[string]time.Time)
+	}
+	s.createdPending[ses.ID] = time.Now()
 
 	path := s.sessionPath(ses.ID)
 
@@ -1901,6 +1910,31 @@ func (s *JSONLStore) sessionUnlockedNow(sessionID string) bool {
 	return !sessionLockProbe(s.dir, sessionID)
 }
 
+// sessionCreationWindow bounds how long a freshly Save()d session is
+// protected from the empty-session pruners. #4822: creation legitimately
+// transits Save(touch) -> AppendMetaToDisk -> first user-message batch; in
+// that window the file has no user interaction on disk yet, and the
+// prune/repair paths deleted it (with its meta), so the batch recreated a
+// meta-less file and the title was lost ("expected Session 0, got empty").
+// The registry is in-memory: after a crash+restart it is empty and the
+// historical abandoned-session cleanup (#709/#291 semantics, pinned by
+// TestListCleansUpEmptySessions) applies again to leftovers.
+const sessionCreationWindow = 1 * time.Hour
+
+// inCreationWindow reports whether id was created recently in THIS process
+// and its first user-message batch has not landed yet. Callers hold s.mu.
+func (s *JSONLStore) inCreationWindow(id string) bool {
+	ts, ok := s.createdPending[id]
+	if !ok {
+		return false
+	}
+	if time.Since(ts) > sessionCreationWindow {
+		delete(s.createdPending, id)
+		return false
+	}
+	return true
+}
+
 func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, bool) {
 	cleaned := false
 	validIdx := make([]indexEntry, 0, len(idx))
@@ -1928,6 +1962,12 @@ func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, b
 			// pass — only a confirmed no-user-interaction session is pruned
 			// (#709 hardening).
 			debug.Log("session", "pruneInvalidIndexEntries: keeping %s despite on-disk check error: %v", e.ID, hasErr)
+			validIdx = append(validIdx, e)
+			continue
+		}
+		if !interacted && s.inCreationWindow(e.ID) {
+			// #4822: this process just created the session; the first user
+			// message batch may not have landed yet. Keep it.
 			validIdx = append(validIdx, e)
 			continue
 		}
@@ -2039,6 +2079,13 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 					debug.Log("session", "repairIndex: keeping orphan session %s — on-disk check unknown: %v", id, hasErr)
 					newIdx = append(newIdx, sessionToIndexEntry(ses))
 				} else if !interacted {
+					// #4822: inside this process's creation window the first
+					// user-message batch may not have landed yet - keep the
+					// file, un-indexed, and let the next pass decide.
+					if s.inCreationWindow(id) {
+						debug.Log("session", "repairIndex: %s is inside the creation window, keeping un-indexed for next pass", id)
+						continue
+					}
 					// #4668: same flock probe as pruneInvalidIndexEntries - a writer
 					// holding the session lock must not have its fd unlinked. Keep the
 					// orphan on disk for the next pass once the writer is gone.
@@ -2578,6 +2625,9 @@ func (s *JSONLStore) AppendMessagesBatchToDisk(ses *Session, msgs []provider.Mes
 		s.lastIndexUpdate = make(map[string]time.Time)
 	}
 	s.lastIndexUpdate[ses.ID] = time.Now()
+	// #4822: the first message batch ended the creation window - the file
+	// now carries interaction records and no longer needs prune protection.
+	delete(s.createdPending, ses.ID)
 	return s.updateIndex(ses)
 }
 
