@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/topcheer/ggcode/internal/auth"
+	"github.com/topcheer/ggcode/internal/cost"
 	"log"
 	"os"
 	"path/filepath"
@@ -3472,6 +3473,23 @@ func (b *ChatBridge) recordSessionUsage(usage provider.TokenUsage, source string
 	}
 }
 
+// desktopResolveRate mirrors internal/tui resolveRate (commands_slash_info.go):
+// explicit pricing table entry first, then coding-plan endpoint, then
+// whole-vendor subscription, else unknown (metered with no known rate).
+func desktopResolveRate(vendor, endpoint, model string) cost.ModelRate {
+	pt := cost.DefaultPricingTable()
+	if rate, ok := pt.Get(vendor, model); ok {
+		return rate
+	}
+	if cost.IsCodingPlanEndpoint(endpoint) {
+		return cost.ModelRate{Type: cost.PricingSubscription, Plan: "Coding Plan"}
+	}
+	if plan := cost.IsSubscriptionVendor(vendor); plan != "" {
+		return cost.ModelRate{Type: cost.PricingSubscription, Plan: plan}
+	}
+	return cost.ModelRate{}
+}
+
 func (b *ChatBridge) currentUsagePayload() map[string]interface{} {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -3486,6 +3504,8 @@ func (b *ChatBridge) currentUsagePayload() map[string]interface{} {
 		"contextTotal":            0,
 		"usagePercent":            0,
 		"compactRemainingPercent": 0,
+		"pricingType":             "",
+		"planLabel":               "",
 	}
 	if b.currentSes != nil {
 		usage := b.currentSes.UsageForEndpoint(b.currentSes.Vendor, b.currentSes.Endpoint)
@@ -3494,6 +3514,13 @@ func (b *ChatBridge) currentUsagePayload() map[string]interface{} {
 		payload["cacheRead"] = usage.CacheRead
 		payload["cacheWrite"] = usage.CacheWrite
 		payload["cacheHit"] = usage.CacheHitPercent()
+		// #4727: mirror the TUI's resolveRate billing-type chain
+		// (commands_slash_info.go) so the desktop frontend can render
+		// "included in {plan}" for subscription/coding-plan sessions
+		// instead of a per-token estimated cost that never applies.
+		rate := desktopResolveRate(b.currentSes.Vendor, b.currentSes.Endpoint, b.currentSes.Model)
+		payload["pricingType"] = string(rate.Type)
+		payload["planLabel"] = rate.Plan
 	}
 	if b.agent != nil {
 		cm := b.agent.ContextManager()

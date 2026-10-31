@@ -170,6 +170,7 @@ const en = {
   'context.critical': 'Kontextfenster ist zu {pct}% voll. Ältere Nachrichten könnten verworfen werden.',
   'context.estimatedCost': 'Geschätzte Kosten',
   'context.costDisclaimer': 'Basiert auf Token-Nutzung und Modellpreisen. Tatsächliche Kosten können abweichen.',
+  'context.planIncluded': "In {plan} enthalten",
 
   // SettingsPage
   'settings.title': 'Einstellungen',

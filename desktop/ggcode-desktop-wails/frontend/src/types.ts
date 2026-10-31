@@ -94,5 +94,9 @@ export interface StatusBarData {
   cacheRead: number
   cacheWrite: number
   cacheHit: number
+  // #4727: billing type from Go (mirror of TUI resolveRate) -
+  // 'subscription' renders "included in {plan}" instead of estimated cost.
+  pricingType: string
+  planLabel: string
   status: string
 }

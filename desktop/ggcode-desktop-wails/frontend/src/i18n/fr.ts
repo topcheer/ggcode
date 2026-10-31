@@ -170,6 +170,7 @@ const fr = {
   'context.critical': 'La fenêtre de contexte est pleine à {pct} %. Les anciens messages risquent d\'être perdus.',
   'context.estimatedCost': 'Coût estimé',
   'context.costDisclaimer': 'Estimation basée sur l\'utilisation des tokens et la tarification du modèle. Le coût réel peut varier.',
+  'context.planIncluded': "Inclus dans {plan}",
 
   // SettingsPage
   'settings.title': 'Paramètres',

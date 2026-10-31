@@ -170,6 +170,7 @@ const id = {
   'context.critical': 'Jendela konteks {pct}% penuh. Pesan lama mungkin dihapus.',
   'context.estimatedCost': 'Estimasi Biaya',
   'context.costDisclaimer': 'Diestimasi berdasarkan penggunaan token dan harga model. Biaya sebenarnya dapat bervariasi.',
+  'context.planIncluded': "Termasuk dalam {plan}",
 
   // SettingsPage
   'settings.title': 'Pengaturan',

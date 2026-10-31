@@ -172,8 +172,23 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
         ))}
       </div>
 
-      {/* Estimated cost */}
-      {estCost !== null && (
+      {/* Estimated cost / plan inclusion (#4727: subscription sessions show
+          "included in {plan}" instead of a per-token estimate that never
+          applies - parity with the TUI's resolveRate display) */}
+      {statusBarData?.pricingType === 'subscription' ? (
+        <div style={{
+          padding: 'var(--spacing-md)', borderRadius: 'var(--radius-lg)',
+          background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', gap: 6,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <span style={{ fontSize: 12, fontWeight: 500 }}>{t('context.estimatedCost')}</span>
+            <div style={{ flex: 1 }} />
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 14, fontWeight: 600, color: 'var(--color-success)' }}>
+              {t('context.planIncluded', { plan: statusBarData?.planLabel || 'Subscription' })}
+            </span>
+          </div>
+        </div>
+      ) : estCost !== null && (
         <div style={{
           padding: 'var(--spacing-md)', borderRadius: 'var(--radius-lg)',
           background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', gap: 6,

@@ -181,6 +181,7 @@ const zh: Record<TranslationKey, string> = {
   'context.critical': '上下文窗口已使用 {pct}%，较早的消息可能被丢弃。',
   'context.estimatedCost': '预估费用',
   'context.costDisclaimer': '基于 Token 使用量和模型定价的估算，实际费用可能不同。',
+  'context.planIncluded': "已包含在 {plan} 套餐",
 
   // SettingsPage
   'settings.title': '设置',

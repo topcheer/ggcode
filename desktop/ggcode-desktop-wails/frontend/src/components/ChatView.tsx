@@ -341,6 +341,11 @@ interface StatusBarState {
   cacheRead: number
   cacheWrite: number
   cacheHit: number
+  // #4727: billing type from the Go side (mirror of TUI resolveRate) -
+  // 'subscription' sessions render "included in {plan}" instead of a
+  // per-token estimated cost.
+  pricingType: string
+  planLabel: string
   status: string
 }
 
@@ -684,7 +689,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const [historyLoading, setHistoryLoading] = useState(false)
   const [agentElapsed, setAgentElapsed] = useState(0) // seconds since agent started working
   const [statusBar, setStatusBar] = useState<StatusBarState>({
-    vendor: '', model: '', mode: 'auto', effort: 'auto', contextUsed: 0, contextTotal: 0, usagePercent: 0, compactRemainingPercent: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, cacheHit: 0, status: 'ready',
+    vendor: '', model: '', mode: 'auto', effort: 'auto', contextUsed: 0, contextTotal: 0, usagePercent: 0, compactRemainingPercent: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, cacheHit: 0, pricingType: '', planLabel: '', status: 'ready',
   })
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [availableModels, setAvailableModels] = useState<string[]>([])
@@ -1359,6 +1364,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             contextTotal: p?.contextTotal ?? s.contextTotal,
             usagePercent: p?.usagePercent ?? s.usagePercent,
             compactRemainingPercent: p?.compactRemainingPercent ?? s.compactRemainingPercent,
+            pricingType: p?.pricingType ?? s.pricingType,
+            planLabel: p?.planLabel ?? s.planLabel,
           }))
           break
         }

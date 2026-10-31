@@ -170,6 +170,7 @@ const en = {
   'context.critical': 'コンテキストウィンドウが{pct}%埋まっています。古いメッセージが削除される可能性があります。',
   'context.estimatedCost': '概算コスト',
   'context.costDisclaimer': 'トークン使用量とモデル価格に基づく概算です。実際のコストは異なる場合があります。',
+  'context.planIncluded': "{plan} に含まれる",
 
   // SettingsPage
   'settings.title': '設定',
