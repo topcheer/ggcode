@@ -53,6 +53,10 @@ func TestIssue4697_ExternalSectionFailureSurfaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadWithInstance: %v", err)
 	}
+	// Force a non-empty vendor set so the baseline Save definitely writes
+	// vendors.yaml (an empty/fully-default set may be skipped by SaveVendors'
+	// strip logic, which made this test environment-dependent).
+	cfg.Vendors["t4697"] = VendorConfig{APIKey: "k4697"}
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("baseline Save (writable dirs) must succeed: %v", err)
 	}
