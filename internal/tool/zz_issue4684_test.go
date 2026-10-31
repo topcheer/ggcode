@@ -22,7 +22,7 @@ func TestIssue4684_BudgetExclusionWired(t *testing.T) {
 		{"persisted field", "Excluded []persistedExcluded"},
 		{"build records overflow (fresh path)", "overflow[relPath] = mtime // #4684"},
 		{"publish resets set", "m.budgetExcluded = overflow"},
-		{"persist writes set", "pi.Excluded = make([]persistedExcluded, 0, len(m.budgetExcluded))"},
+		{"persist writes set", "pi.Excluded = make([]persistedExcluded, 0, len(excluded))"},
 		{"scan treats excluded as known", "if !isExcluded && (!wasIndexed || cachedMtime != mtime)"},
 		{"rebuildDirty filters before ReadFile", "continue // #4684: budget-dropped file"},
 		{"load restores set (local assembly, #4735)", "excluded[e.Path] = e.Mtime"},
