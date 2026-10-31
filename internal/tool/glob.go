@@ -168,45 +168,56 @@ func walkGlob(baseDir, pattern string, tracked map[string]struct{}) []string {
 
 	var results []string
 
-	// Walk the tree looking for matches
-	startDir := filepath.Join(baseDir, prefix)
-	filepath.WalkDir(startDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
+	// #4705: a prefix carrying its own wildcards (*/**/*.go, pkg-*/**/x.go)
+	// used to be Joined literally into a nonexistent startDir - WalkDir then
+	// delivered one root error the callback swallowed, producing a silent
+	// zero-match with a misleading "no subdirectories" hint. Expand the
+	// prefix into concrete directories first and walk each.
+	startDirs := []string{filepath.Join(baseDir, prefix)}
+	if strings.ContainsAny(prefix, "*?[") {
+		if expanded, err := filepath.Glob(filepath.Join(baseDir, prefix)); err == nil && len(expanded) > 0 {
+			startDirs = expanded
 		}
-		if d.IsDir() {
-			if skipDirs[d.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		// Filter by gitignore if available
-		if tracked != nil {
-			rel, _ := filepath.Rel(baseDir, path)
-			if _, ok := tracked[filepath.ToSlash(rel)]; !ok {
+	}
+	for _, startDir := range startDirs {
+		filepath.WalkDir(startDir, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
 				return nil
 			}
-		}
+			if d.IsDir() {
+				if skipDirs[d.Name()] {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 
-		// Remove prefix, try matching suffix against remainder.
-		// #829: filepath.Match's * does not cross '/', so a suffix like
-		// '/*.go' never matched 'deep/two.go'. Match segment-wise, allowing
-		// '**' to absorb any number of leading segments.
-		rel, _ := filepath.Rel(startDir, path)
-		relSlash := filepath.ToSlash(rel)
-		suffixSlash := strings.TrimPrefix(filepath.ToSlash(suffix), "/")
-		matched := matchStarStarSuffix(suffixSlash, relSlash)
-		// #4549: store the walk-relative path, NOT filepath.Abs(path).
-		// The caller converts results via filepath.Rel(args.Directory, m);
-		// with a default directory of "." Rel(".", "/abs/path") always
-		// errors and the absolute path leaked through, breaking the
-		// relative-path output contract shared with filepath.Glob.
-		if matched {
-			results = append(results, path)
-		}
-		return nil
-	})
+			// Filter by gitignore if available
+			if tracked != nil {
+				rel, _ := filepath.Rel(baseDir, path)
+				if _, ok := tracked[filepath.ToSlash(rel)]; !ok {
+					return nil
+				}
+			}
+
+			// Remove prefix, try matching suffix against remainder.
+			// #829: filepath.Match's * does not cross '/', so a suffix like
+			// '/*.go' never matched 'deep/two.go'. Match segment-wise, allowing
+			// '**' to absorb any number of leading segments.
+			rel, _ := filepath.Rel(startDir, path)
+			relSlash := filepath.ToSlash(rel)
+			suffixSlash := strings.TrimPrefix(filepath.ToSlash(suffix), "/")
+			matched := matchStarStarSuffix(suffixSlash, relSlash)
+			// #4549: store the walk-relative path, NOT filepath.Abs(path).
+			// The caller converts results via filepath.Rel(args.Directory, m);
+			// with a default directory of "." Rel(".", "/abs/path") always
+			// errors and the absolute path leaked through, breaking the
+			// relative-path output contract shared with filepath.Glob.
+			if matched {
+				results = append(results, path)
+			}
+			return nil
+		})
+	}
 
 	return results
 }
