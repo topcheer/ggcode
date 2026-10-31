@@ -149,18 +149,7 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 	// otherwise RestoreKey reports success for an entry that no longer
 	// exists on disk (ghost-restore).
 	if len(digestedForgotten) > 0 {
-		// #4413: this prune is itself a sidecar RMW - run it under the same
-		// write lock as ForgetKey/RestoreKey (acquired fresh: the GC lock
-		// above was already released).
-		unlock := am.lockForgottenWrite()
-		f := am.loadForgotten()
-		for _, k := range digestedForgotten {
-			delete(f.Entries, k)
-		}
-		if err := am.saveForgotten(f); err != nil {
-			debug.Log("memory", "GC: failed to prune forget sidecar: %v", err)
-		}
-		unlock()
+		am.pruneDigestedForgotten(digestedForgotten)
 	}
 
 	removed := stats.ExpiredRemoved + stats.DedupRemoved + stats.ForgottenRemoved
@@ -170,6 +159,43 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 	}
 
 	return stats
+}
+
+// pruneDigestedForgotten drops forget marks for keys GC digested (#4413
+// sidecar RMW under the same write lock as ForgetKey/RestoreKey).
+// #4658 defect A: the digest list is a snapshot taken BEFORE unlockGC and
+// the ForgetUsage loop; by the time this prune runs (lock released, window
+// of ms..s), the user may have re-Saved the key and re-marked it forgotten.
+// Deleting the mark unconditionally would revive the entry into prompt
+// injection - the exact state the user asked to forget. Re-verify the live
+// .md is still absent under the freshly acquired sidecar lock; a mark whose
+// file is back on disk is a NEW mark that must survive.
+func (am *AutoMemory) pruneDigestedForgotten(digested []string) {
+	unlock := am.lockForgottenWrite()
+	defer unlock()
+	f := am.loadForgotten()
+	pruned := 0
+	for _, k := range digested {
+		path := filepath.Join(am.dir, k+".md")
+		if _, err := os.Stat(path); err == nil {
+			// #4658: the file is back - the mark protecting it is newer than
+			// our digest snapshot. Keep it (fail-closed against revival).
+			debug.Log("memory", "GC: skip forget-mark prune for %s: live file re-created after digest (mark kept)", k)
+			continue
+		} else if !os.IsNotExist(err) {
+			// Uncertain state (EACCES etc.) - keep the mark, fail-closed.
+			debug.Log("memory", "GC: skip forget-mark prune for %s: stat: %v", k, err)
+			continue
+		}
+		delete(f.Entries, k)
+		pruned++
+	}
+	if pruned == 0 {
+		return
+	}
+	if err := am.saveForgotten(f); err != nil {
+		debug.Log("memory", "GC: failed to prune forget sidecar: %v", err)
+	}
 }
 
 // archiveAndTombstone implements the #3880 deletion contract shared by

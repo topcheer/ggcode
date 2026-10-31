@@ -119,13 +119,20 @@ func (am *AutoMemory) ForgetKey(key string) error {
 	// resolve to the hash-suffixed file it was saved under.
 	safe := disambiguateKey(key, sanitizeKey(key))
 	path := filepath.Join(am.dir, safe+".md")
+	// #4413: the load→mark→save cycle runs under the sidecar write lock so
+	// a concurrent GC digest prune cannot replay a stale snapshot over it.
+	// #4658 defect B: the existence check must ALSO run under that lock.
+	// With the stat outside, a file digested by a concurrent GC between the
+	// stat and the mark write left a mark pointing at nothing - and since
+	// the file is gone it never appears in a later GC's digest snapshot, so
+	// the ghost mark survives forever (ListForgotten shows it, RestoreKey
+	// "succeeds" against nothing). Under the lock the stat sees the post-
+	// digest truth: file gone → "not found", no mark written.
+	unlock := am.lockForgottenWrite()
+	defer unlock()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return fmt.Errorf("memory %q not found", key)
 	}
-	// #4413: the load→mark→save cycle runs under the sidecar write lock so
-	// a concurrent GC digest prune cannot replay a stale snapshot over it.
-	unlock := am.lockForgottenWrite()
-	defer unlock()
 	f := am.loadForgotten()
 	if _, dup := f.Entries[safe]; dup {
 		return nil // idempotent: already forgotten
