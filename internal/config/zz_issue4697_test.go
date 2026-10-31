@@ -37,16 +37,15 @@ func TestIssue4697_ReadErrorAbortsSave(t *testing.T) {
 }
 
 // #4697 (defect B), unit layer: saveExternalSections must PROPAGATE the
-// first write failure (a read-only external dir fails every Save*) instead
-// of only logging it - deterministic via directory permissions, no
-// reliance on which sections a baseline Save chooses to persist.
+// first write failure instead of only logging it. Oracle: vendors.yaml as
+// a DIRECTORY - AtomicWriteFile's final rename onto a directory fails
+// deterministically on every Unix (ENOTDIR/EISDIR), no permission-model
+// dependence.
 func TestIssue4697_ExternalSectionFailurePropagates(t *testing.T) {
 	dir := t.TempDir()
-	// Read-only dir: all three Save* writes fail with EACCES.
-	if err := os.Chmod(dir, 0500); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "vendors.yaml"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(dir, 0700) //nolint:errcheck
 
 	cfg := &Config{IM: IMConfig{Enabled: true}}
 	err := saveExternalSections(cfg, dir, map[string]VendorConfig{
