@@ -652,6 +652,24 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 	msgtype := string(content.MsgType)
 	body := content.Body
 
+	// #4646: an edit (m.replace) carries the corrected text in m.new_content;
+	// Body is only the "* corrected" fallback shape. Process the edit as the
+	// new content instead of double-processing the original intent with a
+	// polluted prefix.
+	if rel := content.GetRelatesTo(); rel != nil && rel.Type == event.RelReplace {
+		if content.NewContent != nil && strings.TrimSpace(content.NewContent.Body) != "" {
+			debug.Log("matrix", "adapter=%s room=%s edit event: using m.new_content body", a.name, roomID)
+			body = content.NewContent.Body
+			if msgtype == "" {
+				msgtype = string(content.NewContent.MsgType)
+			}
+		} else {
+			// Edit without new_content (malformed): strip the fallback prefix
+			// rather than processing the "* " shape as a fresh message.
+			body = strings.TrimPrefix(strings.TrimLeft(body, " "), "* ")
+		}
+	}
+
 	if msgtype != "m.text" && msgtype != "" {
 		debug.Log("matrix", "adapter=%s skipping msgtype=%s", a.name, msgtype)
 		return
@@ -742,7 +760,9 @@ func (a *matrixAdapter) checkIsDMViaAPI(ctx context.Context, roomID string) bool
 	// #4517: snapshot under RLock (#433 sweep missed this site).
 	client := a.currentClient()
 	if client == nil {
-		return false
+		// #4645: fail-open - returning false here sends real DM traffic
+		// into the mention gate and silently drops mention-less messages.
+		return true
 	}
 	// Authoritative source: m.direct account data (same semantics as
 	// fetchDMRooms). A room marked there IS a DM regardless of membership.
@@ -757,7 +777,10 @@ func (a *matrixAdapter) checkIsDMViaAPI(ctx context.Context, roomID string) bool
 			}
 		}
 	} else {
-		debug.Log("matrix", "adapter=%s m.direct lookup room=%s error: %v", a.name, roomID, err)
+		// #4645: fail-open on account-data errors - a transient homeserver
+		// 5xx/limit must not turn a real DM into a mention-gated drop.
+		debug.Log("matrix", "adapter=%s m.direct lookup room=%s error (failing open): %v", a.name, roomID, err)
+		return true
 	}
 	// Heuristic fallback: exactly 2 joined members. Deliberately NOT cached -
 	// a 2-member room may be a small group rather than a DM, and permanently
@@ -765,8 +788,11 @@ func (a *matrixAdapter) checkIsDMViaAPI(ctx context.Context, roomID string) bool
 	// induced by anyone inviting the bot into a 2-person room (issue #961).
 	members, err := client.JoinedMembers(ctx, id.RoomID(roomID))
 	if err != nil {
-		debug.Log("matrix", "adapter=%s checkIsDMViaAPI room=%s error: %v", a.name, roomID, err)
-		return false
+		// #4645: fail-open on membership errors for the same reason - the
+		// cost of wrongly skipping the mention gate is one noisy reply; the
+		// cost of failing closed is silently dropping real DMs.
+		debug.Log("matrix", "adapter=%s checkIsDMViaAPI room=%s error (failing open): %v", a.name, roomID, err)
+		return true
 	}
 	if len(members.Joined) == 2 {
 		debug.Log("matrix", "adapter=%s room=%s looks like DM (2 members, heuristic, not cached)", a.name, roomID)
