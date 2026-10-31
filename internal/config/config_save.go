@@ -141,7 +141,16 @@ func (c *Config) Save() error {
 			data = stripDefaultsFromYAML(merged)
 		} else {
 			// Existing file is unparseable — fall back to full write.
-			data = stripDefaultsFromYAML(currentData)
+			// #4643: use currentRaw (external sections + instance-only
+			// fields already stripped in steps 1b/2), NOT the raw
+			// currentData marshal — the unstripped form wrote vendors/im/
+			// mcp_servers and instance secrets straight back into the main
+			// config file on this branch.
+			fallbackData, marshalErr := yaml.Marshal(currentRaw)
+			if marshalErr != nil {
+				return fmt.Errorf("marshaling config for fallback write: %w", marshalErr)
+			}
+			data = stripDefaultsFromYAML(fallbackData)
 		}
 	} else {
 		// File doesn't exist or is empty — full write.

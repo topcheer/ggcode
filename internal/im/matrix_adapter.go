@@ -592,8 +592,33 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 		}
 		decrypted, err := a.mach.DecryptMegolmEvent(ctx, evt)
 		if err != nil {
-			debug.Log("matrix", "adapter=%s decrypt failed room=%s: %v", a.name, roomID, err)
-			return
+			// #4644: a missing megolm session is recoverable — request the
+			// key (cryptohelper pattern: sender's devices + our own other
+			// devices) and retry briefly. Without this, E2EE DMs hit by a
+			// new-device/key-backfill gap were silently dropped forever.
+			if errors.Is(err, crypto.ErrNoSessionFound) {
+				if enc := evt.Content.AsEncrypted(); enc != nil {
+					reqErr := a.mach.SendRoomKeyRequest(ctx, id.RoomID(roomID), enc.SenderKey, enc.SessionID, "", map[id.UserID][]id.DeviceID{
+						id.UserID(sender):   {"*"},
+						id.UserID(a.userID): {"*"},
+					})
+					if reqErr != nil {
+						debug.Log("matrix", "adapter=%s key re-request failed room=%s session=%s: %v", a.name, roomID, enc.SessionID, reqErr)
+					} else {
+						debug.Log("matrix", "adapter=%s requested missing megolm key room=%s session=%s", a.name, roomID, enc.SessionID)
+					}
+					// Bounded retry: the key may already be queued in the
+					// to-device stream (ProcessSyncResponse handles shares).
+					for attempt := 0; attempt < 3 && err != nil; attempt++ {
+						time.Sleep(800 * time.Millisecond)
+						decrypted, err = a.mach.DecryptMegolmEvent(ctx, evt)
+					}
+				}
+			}
+			if err != nil {
+				debug.Log("matrix", "adapter=%s decrypt failed room=%s (key requested; later events should decrypt once it arrives): %v", a.name, roomID, err)
+				return
+			}
 		}
 		debug.Log("matrix", "adapter=%s decrypted event in room=%s -> type=%s", a.name, roomID, decrypted.Type.Type)
 		evt = decrypted
