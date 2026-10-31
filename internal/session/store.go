@@ -239,6 +239,12 @@ type JSONLStore struct {
 	// createdPending tracks sessions Save()d by THIS process whose first
 	// user-message batch has not landed yet (#4822 creation window).
 	createdPending map[string]time.Time
+	// createdPendingMu guards createdPending. It is NOT s.mu: the prune
+	// path reaches inCreationWindow via repairIndexOutsideLock (#4829 CI
+	// fatal: concurrent map read/write between a lock-free repair scan and
+	// a Save() registering the window under s.mu). Lock order is always
+	// s.mu -> createdPendingMu; no path takes s.mu while holding it.
+	createdPendingMu sync.Mutex
 	// lastIndexUpdate tracks per-session index flush times for debouncing.
 	// updateIndex does a full read + JSON parse + JSON marshal + fsync of the
 	// entire index file. Without debouncing, every AppendMessageToDisk call
@@ -990,6 +996,9 @@ func (s *JSONLStore) Save(ses *Session) error {
 	ses.UpdatedAt = time.Now()
 	// #4822: mark the creation window so the empty-session pruners keep this
 	// session until its first user-message batch lands (or the window expires).
+	// #4824/#4829: lock order s.mu -> createdPendingMu (see field doc).
+	s.createdPendingMu.Lock()
+	defer s.createdPendingMu.Unlock()
 	if s.createdPending == nil {
 		s.createdPending = make(map[string]time.Time)
 	}
@@ -1929,8 +1938,12 @@ func (s *JSONLStore) sessionUnlockedNow(sessionID string) bool {
 const sessionCreationWindow = 1 * time.Hour
 
 // inCreationWindow reports whether id was created recently in THIS process
-// and its first user-message batch has not landed yet. Callers hold s.mu.
+// and its first user-message batch has not landed yet. Safe with or without
+// s.mu held: the registry has its own lock because the prune path also runs
+// via repairIndexOutsideLock, which must NOT hold s.mu (#4829).
 func (s *JSONLStore) inCreationWindow(id string) bool {
+	s.createdPendingMu.Lock()
+	defer s.createdPendingMu.Unlock()
 	ts, ok := s.createdPending[id]
 	if !ok {
 		return false
@@ -2634,7 +2647,11 @@ func (s *JSONLStore) AppendMessagesBatchToDisk(ses *Session, msgs []provider.Mes
 	s.lastIndexUpdate[ses.ID] = time.Now()
 	// #4822: the first message batch ended the creation window - the file
 	// now carries interaction records and no longer needs prune protection.
+	// #4824/#4829: creation window ends; registry has its own lock (the
+	// batch itself holds s.mu — order s.mu -> createdPendingMu holds).
+	s.createdPendingMu.Lock()
 	delete(s.createdPending, ses.ID)
+	s.createdPendingMu.Unlock()
 	return s.updateIndex(ses)
 }
 
