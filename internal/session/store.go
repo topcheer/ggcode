@@ -1812,6 +1812,25 @@ func (s *JSONLStore) runMaintenance() {
 	// added by other processes after our initial load (in currentIdx but
 	// not in our original idx). Drop entries we pruned (in original idx
 	// but not in validIdx).
+	merged := s.mergeMaintainedIndex(idx, validIdx, currentIdx)
+	if err := s.saveIndex(merged); err != nil {
+		s.setIndexDirty(true)
+		return
+	}
+	s.setIndexDirty(false)
+}
+
+// mergeMaintainedIndex reconciles the pre-scan index (idx), its pruned
+// survivor list (validIdx), and the locked reload (currentIdx) into the
+// next index generation (#4668, extracted from runMaintenance for direct
+// testability):
+//   - from currentIdx: keep entries that survived pruning OR were added by
+//     another process after our initial load;
+//   - from validIdx: keep entries missing from the locked reload ONLY when
+//     their file verifiably still exists - another process removed them from
+//     the index (most plausibly Delete), and resurrecting them unconditionally
+//     produced ghost rows that List shows but nothing can open.
+func (s *JSONLStore) mergeMaintainedIndex(idx, validIdx, currentIdx []indexEntry) []indexEntry {
 	originalSet := make(map[string]bool, len(idx))
 	for _, e := range idx {
 		originalSet[e.ID] = true
@@ -1825,23 +1844,37 @@ func (s *JSONLStore) runMaintenance() {
 		currentSet[e.ID] = true
 	}
 	merged := make([]indexEntry, 0, len(currentIdx))
-	// From currentIdx: keep if it survived pruning OR was added by another process.
 	for _, e := range currentIdx {
 		if validSet[e.ID] || !originalSet[e.ID] {
 			merged = append(merged, e)
 		}
 	}
-	// From validIdx: add any not already in currentIdx (deleted by other process).
 	for _, e := range validIdx {
 		if !currentSet[e.ID] {
-			merged = append(merged, e)
+			if _, statErr := os.Stat(s.sessionPath(e.ID)); statErr != nil {
+				debug.Log("session", "runMaintenance: dropping %s - absent from locked index reload and file missing (deleted elsewhere)", e.ID)
+				continue
+			}
 		}
+		merged = append(merged, e)
 	}
-	if err := s.saveIndex(merged); err != nil {
-		s.setIndexDirty(true)
-		return
-	}
-	s.setIndexDirty(false)
+	return merged
+}
+
+// sessionLockProbe is the cross-process "is another process holding this
+// session's flock" probe used by maintenance paths. A package-level var so
+// tests can simulate a held lock: on macOS, flock from the SAME process via
+// a second descriptor CONVERTS the lock instead of conflicting (flock(2)),
+// so an in-process held SessionLock cannot exercise the guard directly.
+var sessionLockProbe = IsSessionLocked
+
+// sessionUnlockedNow reports whether the per-session advisory flock is free
+// right now (#4668). It is a NON-BLOCKING probe used by maintenance paths
+// before unlinking: writers (appendRecordLines) hold this lock while
+// appending, and unlinking a locked session orphans the writer's fd - the
+// append then lands in a detached inode and the data is silently lost.
+func (s *JSONLStore) sessionUnlockedNow(sessionID string) bool {
+	return !sessionLockProbe(s.dir, sessionID)
 }
 
 func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, bool) {
@@ -1875,6 +1908,17 @@ func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, b
 			continue
 		}
 		if !interacted {
+			// #4668: never unlink a session another process is actively writing.
+			// The writers hold the per-session advisory flock (appendRecordLines);
+			// unlink does not need that lock, so a writer in the pre-first-user-text
+			// window (tool_result-only turns, freshly created session) had its fd
+			// silently orphaned and the append lost. Probe the lock non-blockingly
+			// first; a held lock means keep (the next pass re-checks).
+			if !s.sessionUnlockedNow(e.ID) {
+				debug.Log("session", "pruneInvalidIndexEntries: %s is flock-held by another process, keeping", e.ID)
+				validIdx = append(validIdx, e)
+				continue
+			}
 			// #1307 E3: a failed Remove (permission, read-only mount, Windows
 			// file-in-use) must NOT evict the index entry - otherwise the
 			// on-disk file becomes an orphan that List() hides forever. Keep
@@ -1971,6 +2015,13 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 					debug.Log("session", "repairIndex: keeping orphan session %s — on-disk check unknown: %v", id, hasErr)
 					newIdx = append(newIdx, sessionToIndexEntry(ses))
 				} else if !interacted {
+					// #4668: same flock probe as pruneInvalidIndexEntries - a writer
+					// holding the session lock must not have its fd unlinked. Keep the
+					// orphan on disk for the next pass once the writer is gone.
+					if !s.sessionUnlockedNow(id) {
+						debug.Log("session", "repairIndex: orphan %s is flock-held by another process, keeping un-indexed for next pass", id)
+						continue
+					}
 					// #1307 discipline (same as pruneInvalidIndexEntries above):
 					// never swallow a failed Remove. If the unlink fails (permission,
 					// read-only mount, Windows file-in-use) the orphan stays on disk
