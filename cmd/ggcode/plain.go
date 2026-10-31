@@ -29,7 +29,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/agent"
@@ -109,22 +112,71 @@ func RunLinearREPL(ag *agent.Agent, registry *tool.Registry, cfg *config.Config,
 			return 0
 		}
 		line := strings.TrimSpace(sc.Text())
-		switch {
-		case line == "":
+		if line == "" {
 			continue
-		case strings.HasPrefix(line, "/"):
+		}
+		// Command-family routing only: slash commands and the ! shell
+		// passthrough both live in the command layer. Input is read solely
+		// when the agent is idle (turns run synchronously in this loop), so
+		// !cmd executes directly, without an agent round-trip.
+		if strings.HasPrefix(line, "/") || strings.HasPrefix(line, "!") {
 			if exit := handlePlainCommand(line, ag, cfg); exit {
 				return 0
 			}
-		default:
-			runLinearTurn(ctx, ag, line)
+			continue
 		}
+		runLinearTurn(ctx, ag, line)
 	}
 }
 
-// handlePlainCommand executes the linear command subset. It returns true
-// when the REPL should exit.
+// runPlainBang executes a !-prefixed line directly in the user's shell,
+// streaming output to w - a zero-agent-round-trip escape hatch for quick
+// file inspection, git status, and build/test commands on dumb terminals
+// where suspending the REPL (Ctrl-Z) is not an option either.
+func runPlainBang(w io.Writer, cmdLine string) {
+	cmdLine = strings.TrimSpace(cmdLine)
+	if cmdLine == "" {
+		fmt.Fprintln(w, plainTr(plainLang, "bang.empty"))
+		return
+	}
+	c := bangShellCmd(cmdLine)
+	c.Stdout = w
+	c.Stderr = w
+	if err := c.Run(); err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			fmt.Fprintln(w, plainTr(plainLang, "bang.exit")+strconv.Itoa(ee.ExitCode()))
+			return
+		}
+		fmt.Fprintln(w, plainTr(plainLang, "bang.failed"), err)
+	}
+}
+
+// bangShellCmd wraps the command line for the platform shell: $SHELL (or
+// /bin/sh) on unix, %COMSPEC% (or cmd.exe) on Windows.
+func bangShellCmd(cmdLine string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		sh := os.Getenv("COMSPEC")
+		if sh == "" {
+			sh = "cmd.exe"
+		}
+		return exec.Command(sh, "/C", cmdLine)
+	}
+	sh := os.Getenv("SHELL")
+	if sh == "" {
+		sh = "/bin/sh"
+	}
+	return exec.Command(sh, "-c", cmdLine)
+}
+
+// handlePlainCommand executes the linear command subset (slash commands
+// plus the ! shell passthrough). It returns true when the REPL should exit.
 func handlePlainCommand(line string, ag *agent.Agent, cfg *config.Config) bool {
+	// ! passthrough: when the agent is idle, input starting with ! runs
+	// directly in the user's shell and never reaches the agent.
+	if strings.HasPrefix(line, "!") {
+		runPlainBang(os.Stdout, strings.TrimPrefix(line, "!"))
+		return false
+	}
 	fields := strings.Fields(line)
 	cmd := strings.ToLower(fields[0])
 	args := fields[1:]
@@ -133,7 +185,7 @@ func handlePlainCommand(line string, ag *agent.Agent, cfg *config.Config) bool {
 		return true
 	case "/help", "/?":
 		fmt.Println(plainTr(plainLang, "help.title"))
-		for _, k := range []string{"help.status", "help.model", "help.provider", "help.plist", "help.padd", "help.endpoint", "help.emodels", "help.erefresh", "help.eadd", "help.ekey", "help.lang", "help.exit"} {
+		for _, k := range []string{"help.status", "help.model", "help.provider", "help.plist", "help.padd", "help.endpoint", "help.emodels", "help.erefresh", "help.eadd", "help.ekey", "help.lang", "help.bang", "help.exit"} {
 			fmt.Println(plainTr(plainLang, k))
 		}
 		fmt.Println(plainTr(plainLang, "help.tail"))
