@@ -303,6 +303,10 @@ func (a *Agent) executeToolWithTimeout(ctx context.Context, tc provider.ToolCall
 // of a recently-successful mutating call replays the prior result instead of
 // re-executing the side effect (Agent Mesh S2 seam, arXiv:2608.26225).
 func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
+	// MAST I1: inherit the parent's established user constraints into the
+	// delegation task before anything else (deterministic append, so the
+	// duplicate-suppression ledger below still sees a stable signature).
+	tc = a.inheritDelegationConstraints(tc)
 	// sa-85: every executed command feeds the workflow step-attempt ledger
 	// (attribution for future violations). Blocked calls never reach here -
 	// they did not run, so they are not attempts.
