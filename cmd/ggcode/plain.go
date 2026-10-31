@@ -256,7 +256,7 @@ func switchPlainSelection(ag *agent.Agent, cfg *config.Config, vendor, endpoint,
 		fmt.Println(plainTr(plainLang, "switch.nopersist"), err)
 		return
 	}
-	fmt.Printf("[plain] now on vendor=%s endpoint=%s model=%s\n", resolved.VendorID, resolved.EndpointID, resolved.Model)
+	fmt.Printf(plainTr(plainLang, "switch.ok")+"\n", resolved.VendorID, resolved.EndpointID, resolved.Model)
 }
 
 // plainListMaxModels caps the per-endpoint model listing in /provider --list.
@@ -298,7 +298,7 @@ func handlePlainProvider(args []string, ag *agent.Agent, cfg *config.Config) {
 		fs := newPlainFlagSet("provider-list")
 		all := fs.Bool("all", false, "include endpoints without api key or models")
 		if err := fs.Parse(rest); err != nil {
-			fmt.Println("[plain] bad --list flags:", err)
+			fmt.Println(plainTr(plainLang, "flags.bad"), "--list:", err)
 			return
 		}
 		plainListEndpoints(cfg, *all)
@@ -312,7 +312,7 @@ func handlePlainProvider(args []string, ag *agent.Agent, cfg *config.Config) {
 		maxOut := fs.Int("max-output", 0, "max output tokens")
 		apikey := fs.String("endpoint-apikey", "", "API key for the endpoint")
 		if err := fs.Parse(rest); err != nil {
-			fmt.Println("[plain] bad --add-endpoint flags:", err)
+			fmt.Println(plainTr(plainLang, "flags.bad"), "--add-endpoint:", err)
 			return
 		}
 		plainAddEndpoint(cfg, *name, *proto, *url, *model, *ctxWin, *maxOut, *apikey)
@@ -380,7 +380,7 @@ func plainListEndpoints(cfg *config.Config, all bool) {
 					fmt.Printf("%s%s\n", prefix, m)
 				}
 				if extra > 0 {
-					fmt.Printf("    (+%d more - use /endpoint --show-models)\n", extra)
+					fmt.Printf(plainTr(plainLang, "list.more")+"\n", extra)
 				}
 			}
 		}
@@ -398,17 +398,17 @@ func plainAddEndpoint(cfg *config.Config, name, proto, baseURL, model string, ct
 		return
 	}
 	if name == "" || proto == "" || baseURL == "" {
-		fmt.Println("[plain] --endpoint-name/--endpoint-type/--endpoint-url are required")
+		fmt.Println(plainTr(plainLang, "add.req"))
 		return
 	}
 	switch proto {
 	case "openai", "openai-responses", "anthropic", "gemini", "copilot":
 	default:
-		fmt.Printf("[plain] unsupported endpoint-type %q (want openai|openai-responses|anthropic|gemini|copilot)\n", proto)
+		fmt.Printf(plainTr(plainLang, "add.proto")+"\n", proto)
 		return
 	}
 	if cfg.Vendor == "" {
-		fmt.Println("[plain] no active vendor to add the endpoint to")
+		fmt.Println(plainTr(plainLang, "add.novendor"))
 		return
 	}
 	v := cfg.Vendors[cfg.Vendor]
@@ -417,7 +417,7 @@ func plainAddEndpoint(cfg *config.Config, name, proto, baseURL, model string, ct
 		v.Endpoints = make(map[string]config.EndpointConfig)
 	}
 	if _, exists := v.Endpoints[name]; exists {
-		fmt.Printf("[plain] endpoint %q already exists on vendor %q\n", name, cfg.Vendor)
+		fmt.Printf(plainTr(plainLang, "add.duplicate")+"\n", name, cfg.Vendor)
 		return
 	}
 	ep := config.EndpointConfig{
@@ -435,15 +435,20 @@ func plainAddEndpoint(cfg *config.Config, name, proto, baseURL, model string, ct
 	v.Endpoints[name] = ep
 	cfg.Vendors[cfg.Vendor] = v
 	if err := cfg.Save(); err != nil {
-		fmt.Println("[plain] endpoint added but not persisted:", err)
+		fmt.Println(plainTr(plainLang, "add.savefail"), err)
 		return
 	}
-	fmt.Printf("[plain] endpoint %q added to vendor %q%s\n", name, cfg.Vendor, switchHint(model))
+	fmt.Printf(plainTr(plainLang, "add.ok")+"\n", name, cfg.Vendor, switchHint(name))
 }
 
-func switchHint(model string) string {
-	if model != "" {
-		return " - switch with: /endpoint " + model
+// switchHint returns the activation hint shown after adding an endpoint.
+// #4752: the argument is the ENDPOINT name (the just-added endpoint is not
+// active yet); the old signature took the default model id, printing a
+// switch command that targeted a nonexistent endpoint named after the model
+// - and no hint at all when no model was given.
+func switchHint(name string) string {
+	if name != "" {
+		return plainTr(plainLang, "add.switchhint") + name
 	}
 	return ""
 }
@@ -471,7 +476,7 @@ func handlePlainEndpoint(args []string, ag *agent.Agent, cfg *config.Config) {
 		model := fs.String("model", "", "model id to add")
 		apikey := fs.String("apikey", "", "optional: update the endpoint API key too")
 		if err := fs.Parse(rest); err != nil {
-			fmt.Println("[plain] bad --add-model flags:", err)
+			fmt.Println(plainTr(plainLang, "flags.bad"), "--add-model:", err)
 			return
 		}
 		plainAddModel(cfg, *model, *apikey)
@@ -479,7 +484,7 @@ func handlePlainEndpoint(args []string, ag *agent.Agent, cfg *config.Config) {
 		fs := newPlainFlagSet("endpoint-set-apikey")
 		apikey := fs.String("apikey", "", "new API key for the active endpoint")
 		if err := fs.Parse(rest); err != nil {
-			fmt.Println("[plain] bad --set-apikey flags:", err)
+			fmt.Println(plainTr(plainLang, "flags.bad"), "--set-apikey:", err)
 			return
 		}
 		plainSetEndpointAPIKey(cfg, *apikey)
@@ -497,7 +502,7 @@ func plainShowModels(cfg *config.Config, force bool) {
 	}
 	resolved, _, err := agentruntime.ResolveCurrentSelection(cfg)
 	if err != nil {
-		fmt.Println("[plain] resolve failed:", err)
+		fmt.Println(plainTr(plainLang, "resolve.failed"), err)
 		return
 	}
 	var discovered []string
@@ -507,7 +512,7 @@ func plainShowModels(cfg *config.Config, force bool) {
 		discovered, err = provider.DiscoverModels(context.Background(), resolved)
 	}
 	if err != nil {
-		fmt.Println("[plain] model discovery unavailable (showing configured list):", err)
+		fmt.Println(plainTr(plainLang, "models.nodiscovery"), err)
 	}
 	// Merge: static config first (user intent), then discovery-only entries.
 	seen := make(map[string]bool)
@@ -527,11 +532,11 @@ func plainShowModels(cfg *config.Config, force bool) {
 	for _, m := range discovered {
 		if !seen[m] {
 			seen[m] = true
-			fmt.Println("  -", m, "(discovered)")
+			fmt.Println("  -", m, plainTr(plainLang, "models.discovered"))
 		}
 	}
 	if len(seen) == 0 {
-		fmt.Println("  (none - use /endpoint --add-model --model <id>)")
+		fmt.Println(plainTr(plainLang, "models.none"))
 	}
 }
 
@@ -544,27 +549,27 @@ func plainSetEndpointAPIKey(cfg *config.Config, apikey string) {
 		return
 	}
 	if apikey == "" {
-		fmt.Println("[plain] --apikey is required")
+		fmt.Println(plainTr(plainLang, "setkey.req"))
 		return
 	}
 	if cfg.Vendor == "" || cfg.Endpoint == "" {
-		fmt.Println("[plain] no active endpoint to set the key on")
+		fmt.Println(plainTr(plainLang, "setkey.noactive"))
 		return
 	}
 	v := cfg.Vendors[cfg.Vendor]
 	ep, ok := v.Endpoints[cfg.Endpoint]
 	if !ok {
-		fmt.Printf("[plain] active endpoint %q not found on vendor %q\n", cfg.Endpoint, cfg.Vendor)
+		fmt.Printf(plainTr(plainLang, "setkey.nofound")+"\n", cfg.Endpoint, cfg.Vendor)
 		return
 	}
 	ep.APIKey = apikey
 	v.Endpoints[cfg.Endpoint] = ep
 	cfg.Vendors[cfg.Vendor] = v
 	if err := cfg.Save(); err != nil {
-		fmt.Println("[plain] api key set but not persisted:", err)
+		fmt.Println(plainTr(plainLang, "setkey.savefail"), err)
 		return
 	}
-	fmt.Printf("[plain] api key set on endpoint %q\n", cfg.Endpoint)
+	fmt.Printf(plainTr(plainLang, "setkey.ok")+"\n", cfg.Endpoint)
 }
 
 // plainAddModel appends a model to the ACTIVE endpoint's static list and
@@ -577,22 +582,22 @@ func plainAddModel(cfg *config.Config, model, apikey string) {
 		return
 	}
 	if model == "" {
-		fmt.Println("[plain] --model is required")
+		fmt.Println(plainTr(plainLang, "addmodel.req"))
 		return
 	}
 	if cfg.Vendor == "" || cfg.Endpoint == "" {
-		fmt.Println("[plain] no active endpoint to add the model to")
+		fmt.Println(plainTr(plainLang, "addmodel.noactive"))
 		return
 	}
 	v := cfg.Vendors[cfg.Vendor]
 	ep, ok := v.Endpoints[cfg.Endpoint]
 	if !ok {
-		fmt.Printf("[plain] active endpoint %q not found on vendor %q\n", cfg.Endpoint, cfg.Vendor)
+		fmt.Printf(plainTr(plainLang, "addmodel.nofound")+"\n", cfg.Endpoint, cfg.Vendor)
 		return
 	}
 	for _, m := range ep.Models {
 		if m == model {
-			fmt.Printf("[plain] model %q already on endpoint %q\n", model, cfg.Endpoint)
+			fmt.Printf(plainTr(plainLang, "addmodel.duplicate")+"\n", model, cfg.Endpoint)
 			return
 		}
 	}
@@ -606,10 +611,10 @@ func plainAddModel(cfg *config.Config, model, apikey string) {
 	v.Endpoints[cfg.Endpoint] = ep
 	cfg.Vendors[cfg.Vendor] = v
 	if err := cfg.Save(); err != nil {
-		fmt.Println("[plain] model added but not persisted:", err)
+		fmt.Println(plainTr(plainLang, "addmodel.savefail"), err)
 		return
 	}
-	fmt.Printf("[plain] model %q added to endpoint %q - switch with: /model %s\n", model, cfg.Endpoint, model)
+	fmt.Printf(plainTr(plainLang, "addmodel.ok")+"\n", model, cfg.Endpoint, model)
 }
 
 // wirePlainPersist attaches a per-message persistence handler to the plain
