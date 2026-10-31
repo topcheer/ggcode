@@ -49,6 +49,28 @@ func TestInjectDescriptionFallback_MissingUILabel(t *testing.T) {
 	}
 }
 
+// #4693: weak models send literal `null` for omitted arguments. Unmarshal
+// of "null" into a map is a no-op (err==nil, nil map) - the write below
+// panicked on nil-map assignment and the safego recover surfaced a
+// meaningless "panicked" error instead of the fallback firing.
+func TestInjectDescriptionFallback_NullArguments(t *testing.T) {
+	out := InjectDescriptionFallback(
+		json.RawMessage(uiLabelSchema),
+		json.RawMessage(`null`),
+		"grep",
+	)
+	var m map[string]string
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("output not valid JSON: %v", err)
+	}
+	if m["description"] == "" {
+		t.Fatal("null arguments must get the fallback injected, not a panic")
+	}
+	if !strings.HasPrefix(m["description"], "grep") {
+		t.Errorf("fallback should start with tool name, got %q", m["description"])
+	}
+}
+
 func TestInjectDescriptionFallback_EmptyStringLabel(t *testing.T) {
 	out := InjectDescriptionFallback(
 		json.RawMessage(uiLabelSchema),

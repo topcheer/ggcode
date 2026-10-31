@@ -61,6 +61,15 @@ func InjectDescriptionFallback(schema, args json.RawMessage, toolName string) js
 	if err := json.Unmarshal(args, &argMap); err != nil {
 		return args
 	}
+	// #4693: weak models send literal `null` for omitted arguments (not
+	// `{}`) - exactly the shape this fallback exists for. Unmarshalling
+	// "null" into a map is a no-op (err==nil, map stays nil), so the
+	// argMap["description"] write below panicked ("assignment to entry in
+	// nil map"); the safego recover turned that into a meaningless error
+	// for the model and the fallback never fired.
+	if argMap == nil {
+		argMap = map[string]json.RawMessage{}
+	}
 	if v, ok := argMap["description"]; ok {
 		var s string
 		if err := json.Unmarshal(v, &s); err == nil && strings.TrimSpace(s) != "" {
