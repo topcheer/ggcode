@@ -410,13 +410,12 @@ func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
 		case StatusCompleted:
 			return result, nil
 		case StatusFailed, StatusCancelled:
-			// #4358: post-signal grace. The entry-pre-created 500ms timer had
-			// always fired (buffered in timer.C) — or lost the first-come race
-			// against an already-closed done — by the time a real agent reached
-			// this branch, so the grace was effectively 0ms and the
-			// Cancel-then-Complete backfill window stayed open. Wait for the
-			// done signal first, then start a FRESH short grace timer, then
-			// re-read Result and Error.
+			// #4358: the entry timer previously created before the loop had
+			// long since fired for any real run (>500ms), so the old
+			// done/timer race returned immediately and the #713 post-signal
+			// grace was effectively zero. Block on done first (terminal
+			// transitions close it), THEN run a fresh short grace timer for
+			// the runner's Complete backfill, then re-read Result and Error.
 			if done != nil {
 				select {
 				case <-done:
@@ -424,10 +423,10 @@ func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
 					return "", ctx.Err()
 				}
 				grace := time.NewTimer(200 * time.Millisecond)
-				defer grace.Stop()
 				select {
 				case <-grace.C:
 				case <-ctx.Done():
+					grace.Stop()
 					return "", ctx.Err()
 				}
 			}

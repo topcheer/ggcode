@@ -272,10 +272,20 @@ func (a *slackAdapter) connectAndServe(ctx context.Context) error {
 				event, _ := payload["event"].(map[string]any)
 				if event != nil {
 					eventType, _ := event["type"].(string)
-					if eventType == "message" {
-						a.handleMessage(ctx, event)
-					} else if eventType == "app_mention" {
-						a.handleMessage(ctx, event)
+					if eventType == "message" || eventType == "app_mention" {
+						// #4528: handleMessage ran synchronously INSIDE the
+						// read loop (ffmpeg STT, attachment downloads,
+						// HandleInbound) - while it ran, ReadMessage never
+						// returned, the pong handler could not renew the read
+						// deadline, and past slackWSReadTimeout the next read
+						// errored into a reconnect. Worse, the envelope was
+						// already acked, so Slack never redelivered: messages
+						// arriving in the blocked window were lost for real.
+						// Dedup already happened above (before this point), so
+						// processing asynchronously is idempotent-safe; the ack
+						// stays here on the read loop.
+						ev := event
+						safego.Go("im.slack.envelope", func() { a.handleMessage(ctx, ev) })
 					}
 				}
 			}
@@ -339,8 +349,11 @@ func (a *slackAdapter) authTest(ctx context.Context) error {
 	a.mu.Lock()
 	a.botUserID, _ = result["user_id"].(string)
 	a.botID, _ = result["bot_id"].(string)
+	// #4529: read the logged value from the local we just wrote - logging
+	// a.botUserID after the Unlock re-read the field unsynchronized.
+	botUserID := a.botUserID
 	a.mu.Unlock()
-	debug.Log("slack", "adapter=%s auth OK botUserID=%s", a.name, a.botUserID)
+	debug.Log("slack", "adapter=%s auth OK botUserID=%s", a.name, botUserID)
 	return nil
 }
 
@@ -412,10 +425,14 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 		return
 	}
 
-	// Dedup by (channel, ts) (#968): Socket Mode delivery is at-least-once -
-	// unacked envelopes are redelivered and reconnect windows can replay
-	// events. Without this the same message produced duplicate agent replies.
-	if !a.markSeenDedup(channel, ts) {
+	// Dedup check (read-only) by (channel, ts) (#968): Socket Mode delivery
+	// is at-least-once - unacked envelopes are redelivered and reconnect
+	// windows can replay events. #4655 (mirrors mattermost #4465): the seen
+	// write is DEFERRED until attachment parsing and the empty-text filter
+	// have passed - writing it here would (a) swallow the message when Slack
+	// redelivers the same ts after a transient attachment-parse failure, and
+	// (b) burn dedup capacity on filtered empties, evicting live keys.
+	if !a.checkSeenDedup(channel, ts) {
 		debug.Log("slack", "adapter=%s dedup drop channel=%s ts=%s", a.name, channel, ts)
 		return
 	}
@@ -439,6 +456,11 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 	text = a.stripBotMention(text)
 	text = strings.TrimSpace(text)
 	if text == "" && len(attachments) == 0 {
+		return // filtered: dedup key must NOT be latched (#4655)
+	}
+	// All filters passed - latch the dedup key now (#4655).
+	if !a.markSeenDedup(channel, ts) {
+		debug.Log("slack", "adapter=%s dedup drop (late latch) channel=%s ts=%s", a.name, channel, ts)
 		return
 	}
 
@@ -501,6 +523,18 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 // markSeenDedup records an inbound "channel:ts" and reports whether this is
 // the first delivery (#968). Mirrors the signal adapter's seen[ts] dedup:
 // mutex-guarded, TTL-evicted, size-capped.
+// checkSeenDedup is the read-only half of the dedup pair (#4655).
+func (a *slackAdapter) checkSeenDedup(channel, ts string) bool {
+	if channel == "" || ts == "" {
+		return true
+	}
+	a.mu.Lock()
+	_, dup := a.seen[channel+":"+ts]
+	a.mu.Unlock()
+	return !dup
+}
+
+// markSeenDedup latches the seen key; returns false when already present.
 func (a *slackAdapter) markSeenDedup(channel, ts string) bool {
 	if channel == "" || ts == "" {
 		return true
@@ -705,16 +739,25 @@ func (a *slackAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 
 	// Extract images from text and upload them first
 	images, remainingText := ExtractImagesFromText(content)
+	sentImages := 0
 	for _, img := range images {
 		if err := a.sendExtractedImage(ctx, channelID, binding.ThreadID, img); err != nil {
 			debug.Log("slack", "adapter=%s image upload failed: %v", a.name, err)
+			continue
 		}
+		sentImages++
 	}
 
 	// Send remaining text (converted to mrkdwn)
 	remainingText = strings.TrimSpace(remainingText)
 	if remainingText == "" {
-		return nil
+		if len(images) > 0 && sentImages == 0 {
+			// #4464: an image-only message whose uploads all failed must not
+			// be silently dropped - fall back to the original markdown text.
+			remainingText = content
+		} else {
+			return nil
+		}
 	}
 	remainingText = markdownToMrkdwn(remainingText)
 	chunks := splitSlackMessage(remainingText, slackMaxTextLen)
@@ -906,9 +949,16 @@ func (a *slackAdapter) publishState(healthy bool, status, lastErr string) {
 	if a.manager == nil {
 		return
 	}
+	// #4529: snapshot botUserID under the adapter lock - publishState runs
+	// on the RTM read-loop goroutine while authTest (connect/reconnect
+	// goroutine) writes it under a.mu; the bare read was a data race whose
+	// visible symptom was an empty/stale ContactURI during reconnect.
+	a.mu.RLock()
+	botUserID := a.botUserID
+	a.mu.RUnlock()
 	contactURI := ""
-	if a.botUserID != "" {
-		contactURI = "https://slack.com/app_redirect?channel=" + a.botUserID
+	if botUserID != "" {
+		contactURI = "https://slack.com/app_redirect?channel=" + botUserID
 	}
 	a.manager.PublishAdapterState(AdapterState{
 		Name:       a.name,
@@ -1354,6 +1404,18 @@ func (a *slackAdapter) SendInteractive(ctx context.Context, binding ChannelBindi
 func (a *slackAdapter) handleInteractive(ctx context.Context, payload map[string]any) {
 	actionType, _ := payload["type"].(string)
 	if actionType != "block_actions" {
+		return
+	}
+
+	// #4654: Socket Mode redelivers unacked envelopes, and trigger_id is
+	// stable across redeliveries of the SAME interaction - dedup on it so a
+	// replayed envelope cannot re-fire a button action (side effects like
+	// approvals would run twice). Empty trigger_id (unexpected) passes
+	// through rather than being dropped: matching the events-path contract
+	// where a missing key never blocks delivery.
+	triggerID, _ := payload["trigger_id"].(string)
+	if triggerID != "" && !a.markSeenDedup("interactive", triggerID) {
+		debug.Log("slack", "adapter=%s interactive dedup drop trigger_id=%s", a.name, triggerID)
 		return
 	}
 

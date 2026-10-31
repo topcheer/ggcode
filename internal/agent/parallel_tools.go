@@ -215,6 +215,8 @@ func (a *Agent) usePreExecutedWithPermission(ctx context.Context, tc provider.To
 		}
 		switch decision {
 		case permission.Deny:
+			a.auditToolResult(tc.Name, tc.Arguments, audit.StatusPolicyDenied,
+				"denied by permission policy (mode-independent rule, parallel)", 0, "")
 			return tool.Result{
 				Content: a.permissionDeniedMessage(tc.Name),
 				IsError: true,

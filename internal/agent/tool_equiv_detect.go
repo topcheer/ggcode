@@ -75,7 +75,12 @@ type toolEquivDetectState struct {
 	// tool_redundancy detector, which this detector yields to.
 	rawSeen  map[string]bool
 	rawCount map[string]int
-	warnings int
+	// escalated latches the stronger 3x-threshold message per fingerprint
+	// (#4640: the old count==9 branch was made unreachable by #4520's >=).
+	escalated map[string]bool
+	// softFired latches the threshold warning per fingerprint (#4640).
+	softFired map[string]bool
+	warnings  int
 }
 
 func newToolEquivDetectState() *toolEquivDetectState {
@@ -84,6 +89,8 @@ func newToolEquivDetectState() *toolEquivDetectState {
 		toolNames:        make(map[string]string),
 		rawSeen:          make(map[string]bool),
 		rawCount:         make(map[string]int),
+		escalated:        make(map[string]bool),
+		softFired:        make(map[string]bool),
 	}
 }
 
@@ -92,13 +99,9 @@ func (s *toolEquivDetectState) reset() {
 	s.toolNames = make(map[string]string)
 	s.rawSeen = make(map[string]bool)
 	s.rawCount = make(map[string]int)
+	s.escalated = make(map[string]bool)
+	s.softFired = make(map[string]bool)
 	s.warnings = 0
-}
-
-// markExactMatch is retained as a no-op shim: raw-vs-normalized
-// cross-referencing now happens per-call inside recordCall (#494).
-func (s *toolEquivDetectState) markExactMatch(rawFp string) {
-	_ = rawFp
 }
 
 // mcpToolNamePrefix mirrors internal/tool's MCP adapter naming
@@ -193,7 +196,17 @@ func (s *toolEquivDetectState) recordCall(toolName string, args []byte, rawFp st
 
 	count := s.normalizedCounts[normFp]
 
-	if count == equivWarnThreshold && !s.rawSeen[normFp] {
+	// #4520: >= not == — rawSeen flips only when an occurrence diverges,
+	// which can happen AFTER count has passed the threshold (first N
+	// byte-identical, N+1 reorders keys). With == that divergence could
+	// never warn: the one chance to fire was already consumed by the
+	// identical prefix (or a later compact/reset shifted the counter).
+	// Soft warning: fire ONCE per fingerprint at the threshold. #4640: with
+	// #4520's >= this branch returned the soft wording on EVERY call past 3,
+	// draining the run's equivMaxWarnings budget (2) before the escalation
+	// tier could ever fire. Latch per fingerprint instead.
+	if count >= equivWarnThreshold && !s.rawSeen[normFp] && !s.softFired[normFp] {
+		s.softFired[normFp] = true
 		s.warnings++
 		// #3631: uncertain wording — normalization can miss semantics
 		// (e.g. volatile fields that DO carry meaning), so never assert
@@ -209,7 +222,14 @@ func (s *toolEquivDetectState) recordCall(toolName string, args []byte, rawFp st
 		)
 	}
 
-	if count == equivWarnThreshold*3 && !s.rawSeen[normFp] {
+	// Escalation tier: once past 3x the threshold, fire a stronger message
+	// ONCE. #4640: this used count == threshold*3, which #4520's >= on the
+	// first branch made unreachable for count==9 (>=3 swallowed it) - the
+	// "wastes significant iteration budget" wording was dead code whenever
+	// the soft warning had fired at its exact count. Gate on >= with its own
+	// per-fingerprint escalation latch instead.
+	if count >= equivWarnThreshold*3 && !s.rawSeen[normFp] && !s.escalated[normFp] {
+		s.escalated[normFp] = true
 		s.warnings++
 		return fmt.Sprintf(
 			"Warning: %s called %d times with semantically equivalent arguments. "+

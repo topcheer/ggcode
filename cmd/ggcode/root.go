@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/checkpoint"
+	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
@@ -45,6 +47,10 @@ import (
 	"github.com/topcheer/ggcode/internal/version"
 	"github.com/topcheer/ggcode/internal/webui"
 )
+
+// persistSessionFlag gates --persist-session: plain sessions append every
+// message to the session store (write-only; no auto-resume on startup).
+var persistSessionFlag bool
 
 func NewRootCmd() *cobra.Command {
 	var cfgFile string
@@ -156,7 +162,17 @@ func NewRootCmd() *cobra.Command {
 					if cfg.Language != "" {
 						lang = tui.NormalizeLanguage(cfg.Language)
 					}
-					if !tui.ConfirmHomeDir(lang) {
+					// #4604: pick the variant by mode FIRST - the linear
+					// frontend cannot host the full-screen Bubble Tea dialog
+					// (garbled on dumb terminals); it gets the line-oriented
+					// y/N twin with the same i18n copy instead.
+					var confirmed bool
+					if plainFlag || isDumbTerminal() {
+						confirmed = tui.ConfirmHomeDirPlain(lang)
+					} else {
+						confirmed = tui.ConfirmHomeDir(lang)
+					}
+					if !confirmed {
 						fmt.Fprintln(os.Stderr, "Please cd into a project directory and run ggcode again.")
 						return nil
 					}
@@ -188,14 +204,14 @@ func NewRootCmd() *cobra.Command {
 				}
 				if selectedID == "" {
 					// User cancelled — start fresh (no auto-load)
-					return run(cfg, cfgFile, "__new__", bypassFlag)
+					return run(cfg, cfgFile, "__new__", bypassFlag, plainFlag)
 				}
-				return run(cfg, cfgFile, selectedID, bypassFlag)
+				return run(cfg, cfgFile, selectedID, bypassFlag, plainFlag)
 			}
 			if newSession {
-				return run(cfg, cfgFile, "__new__", bypassFlag)
+				return run(cfg, cfgFile, "__new__", bypassFlag, plainFlag)
 			}
-			return run(cfg, cfgFile, resumeID, bypassFlag)
+			return run(cfg, cfgFile, resumeID, bypassFlag, plainFlag)
 		},
 	}
 
@@ -215,7 +231,8 @@ func NewRootCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&readOnlyAllowedDirs, "readOnlyAllowedDir", nil, "extra read-only sandbox directory for pipe mode (can be repeated)")
 	_ = cmd.Flags().MarkHidden("readOnlyAllowedDir")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
-	cmd.Flags().BoolVar(&plainFlag, "plain", false, "disable ANSI colors and decorative rendering (dumb terminals, screen readers, piped output; sets NO_COLOR)")
+	cmd.Flags().BoolVar(&plainFlag, "plain", false, "linear frontend: no TUI frames, line-oriented IO for dumb terminals/screen readers (sets NO_COLOR; TERM=dumb auto-selects)")
+	cmd.Flags().BoolVar(&persistSessionFlag, "persist-session", false, "persist each message of a --plain session to the session store (write-only; no auto-resume)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
 	cmd.Flags().StringVar(&outputSchemaPath, "output-schema", "", "path to a JSON Schema the final response must conform to (structured outputs; supported endpoints constrain decoding, others fall back to prompt guidance)")
 	// r415: per-run budget overrides (this invocation only, not persisted).
@@ -469,7 +486,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
+func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error {
 	trace := newStartupTrace("root.run")
 	defer trace.Mark("return")
 
@@ -602,10 +619,6 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	trace.Mark("register acp client delegate tool")
 
-	// Detect git status
-	gitStatus := detectGitStatus(workingDir)
-	trace.Mark("detect git status")
-
 	// Collect tool names
 	tools := registry.List()
 	toolNames := make([]string, len(tools))
@@ -652,7 +665,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	buildCurrentSystemPrompt := func() (string, []string) {
 		// Remote agents info is injected dynamically via systemPromptInjector
 		// (lanchat peers), not baked into the static prompt.
-		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, "")
+		// #4502: detect git status LAZILY at every prompt build - the old
+		// closure captured the startup-time snapshot, so refreshAgentSystemPrompt
+		// (save_memory, knight reload, skills ticker) kept injecting a stale
+		// branch/dirty-count after mid-session commits and checkouts, while the
+		// sub-agent builder below detects live. Same freshness on both paths.
+		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, detectGitStatus(workingDir), "")
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
 	trace.Mark(fmt.Sprintf("build initial system prompt skills=%d bytes=%d", len(promptSkillRefs), len(systemPrompt)))
@@ -862,9 +880,24 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		}
 		if len(sessions) > 0 {
 			storeDir, _ := session.DefaultDir()
+			ioFailures := 0
 			for _, ses := range sessions {
 				lock, lockErr := session.TryAcquireSessionLock(storeDir, ses.ID)
-				if lockErr == nil && lock != nil && lock.Acquired() {
+				if lockErr != nil {
+					// #4396: an IO/permission failure is NOT a competing
+					// instance - the #1487-D twin branch (fixed for --resume in
+					// 9860c360b but missed here). Name the real cause per
+					// session; the summary line below must not blame phantom
+					// instances either when every check failed on I/O.
+					shortID := ses.ID
+					if len(shortID) > 8 {
+						shortID = shortID[:8]
+					}
+					fmt.Fprintf(os.Stderr, "  Warning: session lock check for %s failed (%v).\n", shortID, lockErr)
+					ioFailures++
+					continue
+				}
+				if lock != nil && lock.Acquired() {
 					replPendingSessionLock = lock
 					resumeID = ses.ID
 					trace.Mark("auto-load session")
@@ -872,7 +905,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 				}
 			}
 			if resumeID == "" {
-				fmt.Fprintf(os.Stderr, "\n  All %d workspace session(s) are in use by other instances. Starting a new session.\n", len(sessions))
+				if ioFailures == len(sessions) {
+					fmt.Fprintf(os.Stderr, "\n  %d workspace session(s) failed lock checks (I/O errors). Starting a new session.\n", ioFailures)
+				} else if ioFailures > 0 {
+					fmt.Fprintf(os.Stderr, "\n  All %d workspace session(s) unavailable (%d in use by other instances, %d lock-check failures). Starting a new session.\n", len(sessions), len(sessions)-ioFailures, ioFailures)
+				} else {
+					fmt.Fprintf(os.Stderr, "\n  All %d workspace session(s) are in use by other instances. Starting a new session.\n", len(sessions))
+				}
 			}
 		}
 	}
@@ -905,6 +944,22 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	mcpInfos := toTuiMCPInfos(mcpMgr.Snapshot())
 	trace.Mark("build tui mcp info")
 
+	// #4604 Track 1: --plain or TERM=dumb (blank) degrade to the linear
+	// frontend BEFORE any TUI-shaped service (A2A server, lanchat hub,
+	// Bubble Tea program) starts - raw-mode frame refresh is precisely what
+	// dumb terminals cannot carry. The linear REPL rides the same agent and
+	// registry built above, so config hot-swap, tools, and sessions all
+	// keep working; only the visual panels are absent.
+	if plain || isDumbTerminal() {
+		trace.Mark("linear frontend fork")
+		code := RunLinearREPL(ag, registry, cfg, cfgFile, startupNotices)
+		if code != 0 {
+			debug.Close()
+			os.Exit(code)
+		}
+		return nil
+	}
+
 	// Start A2A server if enabled.
 	var a2aServer *a2a.Server
 	// a2aRegistry already declared above for system prompt access
@@ -928,6 +983,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			a2aServer = a2aSrv
 			a2aRegistry = a2aReg
 			a2aTaskHandler = a2aHandler
+			// Advertise this instance's real local skills alongside the generic
+			// baseline so A2A peers can discover them (previously every node
+			// broadcast the same hardcoded 6-skill card).
+			a2aSrv.SetSkills(append(a2a.DefaultSkills(), localA2ASkills(commandMgr)...))
 			// Start async background refresh so CachedInstances() returns
 			// useful data without ever blocking the UI thread.
 			a2aBgCtx, a2aBgCancel := context.WithCancel(context.Background())
@@ -1078,13 +1137,17 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			}
 		}
 		return agentruntime.BuildSubAgentSystemPrompt(agentruntime.SubAgentPromptContext{
-			Cfg:              cfg,
-			WorkingDir:       workingDir,
-			Registry:         registry,
-			CommandMgr:       commandMgr,
-			GlobalAutoMem:    autoMem,
-			ProjectAutoMem:   projectAutoMem,
-			GitStatus:        func() string { return gitStatus },
+			Cfg:            cfg,
+			WorkingDir:     workingDir,
+			Registry:       registry,
+			CommandMgr:     commandMgr,
+			GlobalAutoMem:  autoMem,
+			ProjectAutoMem: projectAutoMem,
+			// #4570: lazy per-build detection, identical to the skillTool
+			// sub-agent builder (#4502) - the old closure returned the startup
+			// snapshot, so repl-created sub-agents carried a stale branch name
+			// and dirty count after any mid-session commit/checkout/worktree.
+			GitStatus:        func() string { return detectGitStatus(workingDir) },
 			RemoteAgentsInfo: func() string { return remoteAgentsInfo },
 		}, task, agentType)
 	})
@@ -1292,11 +1355,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		case "rollback":
 			return knightAgent.RollbackSkill(skillName)
 		case "record_effectiveness":
-			score := 3
-			if v, ok := params["score"]; ok {
-				if f, ok := v.(float64); ok {
-					score = int(f)
-				}
+			score, err := knightScoreFromParams(params)
+			if err != nil {
+				return err
 			}
 			knightAgent.RecordSkillEffectiveness(skillName, score)
 			return nil
@@ -1480,14 +1541,81 @@ func a2aExtensionsFromConfig(exts []config.A2AExtensionConfig) []a2a.AgentExtens
 	return out
 }
 
+// localA2ASkills converts this instance's locally installed skills (user +
+// project sources) into A2A card skills so peers on the mesh can discover the
+// instance's real capabilities. Bundled skills are skipped - the generic set
+// from a2a.DefaultSkills already represents them; the gap this closes is that
+// user-built skill assets were previously invisible to A2A peers (every node
+// broadcast the same hardcoded 6-skill card).
+func localA2ASkills(m *commands.Manager) []a2a.Skill {
+	if m == nil {
+		return nil
+	}
+	var out []a2a.Skill
+	for _, cmd := range m.List() {
+		if cmd.Source == commands.SourceBundled || cmd.Description == "" {
+			continue
+		}
+		name := cmd.DisplayName
+		if name == "" {
+			name = cmd.Name
+		}
+		out = append(out, a2a.Skill{
+			ID:          "skill:" + cmd.Name,
+			Name:        name,
+			Description: cmd.Description,
+			Tags:        []string{"skill", string(cmd.Source)},
+			Source:      string(cmd.Source),
+		})
+	}
+	return out
+}
+
+// knightScoreFromParams validates the score param of the knight skill
+// action record_effectiveness. #4463: usage_tracker defines the scale as
+// 1-5; an unbounded score would be persisted into the rolling
+// Effectiveness array and silently poison avgScore-driven scheduling.
+func knightScoreFromParams(params map[string]any) (int, error) {
+	score := 3
+	if v, ok := params["score"]; ok {
+		if f, ok := v.(float64); ok {
+			score = int(math.Round(f))
+		}
+	}
+	if score < 1 || score > 5 {
+		return 0, fmt.Errorf("invalid score %d: must be within 1-5", score)
+	}
+	return score, nil
+}
+
 // startA2AServer starts the A2A HTTP server, registers this instance in the local
 // registry, discovers other running instances, and registers cross-instance MCP tools.
+// a2aTimeoutWarnf emits the invalid-a2a.task_timeout warning. It is a
+// package-level variable so tests can capture the warning without swapping
+// the global os.Stderr, which races with concurrent stderr writers under CI
+// parallelism (main flake on 10b3dabf0, reported by reviewer seat).
+var a2aTimeoutWarnf = func(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, format, args...)
+}
+
 func parseA2ATimeout(s string) time.Duration {
 	if s == "" {
 		return 5 * time.Minute
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
+		// #4397: silent fallback is undiagnosable - a typo'd config value
+		// ("90sec", "5") quietly shifted every remote task to 5m with no
+		// trace of the user's intent. Same "silent fallbacks must be
+		// diagnosable" principle as #4393's adhocInt.
+		a2aTimeoutWarnf("warning: invalid a2a.task_timeout %q (%v), using default %v\n", s, err, 5*time.Minute)
+		return 5 * time.Minute
+	}
+	// #4462: a successfully parsed non-positive duration (e.g. "-5m" from a
+	// typo) would flow straight into time.NewTimer and expire instantly,
+	// failing every A2A task with no diagnostic. Normalize like
+	// parseA2AMaxTasks does for the task cap (#1422-A).
+	if d <= 0 {
 		return 5 * time.Minute
 	}
 	return d

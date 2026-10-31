@@ -149,7 +149,10 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 	for _, line := range lines {
 		// Track current file from "+++ b/file" headers.
 		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
-			currentFile = m[1]
+			// #4436: git quotes space-containing paths as `+++ b/"my file.go"`;
+			// strip the quotes and octal escapes or issues get attributed to a
+			// path with literal quote debris.
+			currentFile = normalizeGitDiffPath(m[1])
 			isTestFile = testFilePattern.MatchString(currentFile)
 			continue
 		}

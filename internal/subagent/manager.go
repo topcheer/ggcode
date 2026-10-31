@@ -221,9 +221,24 @@ func (s *SubAgent) appendEvent(ev AgentEvent) {
 				}
 			}
 			remaining := s.events[dropIdx:]
-			if savedText.Len() > 0 && len(remaining) > 0 && remaining[0].Type == AgentEventText {
-				// Merge dropped text into the first remaining text event.
-				remaining[0].Text = savedText.String() + remaining[0].Text
+			if savedText.Len() > 0 && len(remaining) > 0 {
+				if remaining[0].Type == AgentEventText {
+					// Merge dropped text into the first remaining text event.
+					remaining[0].Text = savedText.String() + remaining[0].Text
+				} else {
+					// #4359: the first remaining event is not text (e.g.
+					// Reasoning in an interleaved text/reasoning stream with
+					// no tool calls - isTurnBoundary never fires). Merging
+					// was skipped and the rescued text silently dropped,
+					// defeating the PRESERVE promise above. Insert a
+					// standalone text event carrying it instead.
+					anchor := remaining[0].Time
+					rescue := AgentEvent{Type: AgentEventText, Text: savedText.String(), Time: anchor}
+					kept := make([]AgentEvent, 0, len(remaining)+1)
+					kept = append(kept, rescue)
+					kept = append(kept, remaining...)
+					remaining = kept
+				}
 			}
 			s.events = remaining
 		} else {

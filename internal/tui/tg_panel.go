@@ -319,21 +319,23 @@ func (m *Model) createTGAdapterCmd(spec string) tea.Cmd {
 		}
 		// #1367 family batch 3 final sweep: config write moved onto
 		// the Update loop via configMutationMsg (see config_mutation.go).
+		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
 		return configMutationMsg{
 			apply: func(m *Model) error {
+				imEnabledBefore = m.config.IM.Enabled
 				m.config.IM.Enabled = true
 				return m.config.AddIMAdapter(name, adapter)
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
 					if err := m.ensureTGRuntime(false); err != nil {
-						return m.rollbackTGCreate(name, err)
+						return m.rollbackTGCreate(name, err, imEnabledBefore)
 					}
 					if err := m.startTGAdapterIfNeeded(name); err != nil {
 						// #2215: a failed start left the dirty adapter
 						// persisted forever (slack got rollback in
 						// #1392-B(1); tg never followed).
-						return m.rollbackTGCreate(name, err)
+						return m.rollbackTGCreate(name, err, imEnabledBefore)
 					}
 					return tgBindResultMsg{message: m.t("panel.tg.message.added_bot", name)}
 				}
@@ -582,12 +584,13 @@ func (m Model) waitForTGAdapterHealthy(mgr *im.Manager, adapter string, timeout 
 // the yaml forever, retrying and failing on every restart (the slack
 // path got this in #1392-B(1)). Map REMOVE rides configMutationMsg
 // (#1370 pattern).
-func (m *Model) rollbackTGCreate(name string, origErr error) tea.Msg {
+func (m *Model) rollbackTGCreate(name string, origErr error, imEnabledBefore bool) tea.Msg {
 	return configMutationMsg{
 		apply: func(m *Model) error {
 			if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 				return rerr
 			}
+			m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
 			return m.saveConfig()
 		},
 		next: func(m *Model) tea.Cmd {

@@ -150,6 +150,12 @@ func TestDiscoverModelsReusesSameHostCacheForNonGatewayVendor(t *testing.T) {
 	}))
 	defer server.Close()
 
+	// #4665: the same-host sharing semantics now require the same base PATH
+	// too (oneapi/litellm real deployments serve both protocols under the
+	// same /v1 registry root). Same host:port + same path across protocols
+	// still shares one cached model list; same host with a DIFFERENT path is
+	// a different upstream (reverse-proxy split) and must not share - pinned
+	// in zz_issue4665_test.go.
 	first, err := DiscoverModels(context.Background(), &config.ResolvedEndpoint{
 		VendorID:   "custom",
 		EndpointID: "openai",
@@ -164,7 +170,7 @@ func TestDiscoverModelsReusesSameHostCacheForNonGatewayVendor(t *testing.T) {
 		VendorID:   "custom",
 		EndpointID: "anthropic",
 		Protocol:   "anthropic",
-		BaseURL:    server.URL + "/anthropic",
+		BaseURL:    server.URL + "/v1",
 		APIKey:     "test-key",
 	})
 	if err != nil {
@@ -259,6 +265,67 @@ func TestDiscoverModelsUsesPersistentCacheWithinTTL(t *testing.T) {
 	}
 	if len(models) != 1 || models[0] != "cached-model" {
 		t.Fatalf("unexpected cached models: %v", models)
+	}
+}
+
+// TestForceDiscoverModelsBypassesLiveCache verifies the force path evicts a
+// still-fresh (within-TTL) cache entry and refetches from the remote API -
+// the semantics the linear frontend's --refresh-models depends on. The fresh
+// list is then served from cache like a normal discovery.
+func TestForceDiscoverModelsBypassesLiveCache(t *testing.T) {
+	resetModelDiscoveryCacheForTests(t)
+	var hits atomic.Int32
+	var current atomic.Pointer[string]
+	first := "stale-model"
+	current.Store(&first)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		m := *current.Load()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"` + m + `"}]}`))
+	}))
+	defer server.Close()
+
+	resolved := &config.ResolvedEndpoint{
+		VendorID:   "custom",
+		EndpointID: "primary",
+		Protocol:   "openai",
+		BaseURL:    server.URL + "/v1",
+		APIKey:     "test-key",
+	}
+	models, err := DiscoverModels(context.Background(), resolved)
+	if err != nil {
+		t.Fatalf("initial DiscoverModels: %v", err)
+	}
+	if len(models) != 1 || models[0] != "stale-model" {
+		t.Fatalf("unexpected initial models: %v", models)
+	}
+
+	// Server-side registry changed; the cache is still fresh within TTL.
+	fresh := "fresh-model"
+	current.Store(&fresh)
+	models, err = ForceDiscoverModels(context.Background(), resolved)
+	if err != nil {
+		t.Fatalf("ForceDiscoverModels: %v", err)
+	}
+	if len(models) != 1 || models[0] != "fresh-model" {
+		t.Fatalf("force path must serve the refetched list, got: %v", models)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("force path must hit the remote API again (2 hits total), got %d", hits.Load())
+	}
+
+	// The refreshed list is now cached: a normal discovery serves it with no
+	// further network traffic.
+	models, err = DiscoverModels(context.Background(), resolved)
+	if err != nil {
+		t.Fatalf("post-force cached DiscoverModels: %v", err)
+	}
+	if len(models) != 1 || models[0] != "fresh-model" {
+		t.Fatalf("post-force cache must serve the fresh list, got: %v", models)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("post-force discovery must reuse the cache (still 2 hits), got %d", hits.Load())
 	}
 }
 

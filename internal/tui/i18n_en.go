@@ -10,12 +10,8 @@ func enCatalog(key string) string {
 		return "ephemeral"
 	case "agents.idle":
 		return "idle"
-	case "agents.running":
-		return "%d running"
 	case "cron.firing":
 		return "⏰ Cron job triggered"
-	case "activity.idle":
-		return "idle"
 	case "panel.conversation":
 		return "Conversation"
 	case "panel.composer":
@@ -26,16 +22,8 @@ func enCatalog(key string) string {
 		return "Commands:"
 	case "panel.files":
 		return "Files:"
-	case "panel.agent_status":
-		return "Agent status"
-	case "panel.mode_policy":
-		return "Mode policy"
 	case "panel.session_usage":
 		return "Session usage"
-	case "panel.metrics":
-		return "Metrics"
-	case "panel.context":
-		return "Context"
 	case "panel.im":
 		return "IM"
 	case "panel.usage":
@@ -80,8 +68,6 @@ func enCatalog(key string) string {
 		return "Tools unchanged for %s (%d tools)."
 	case "panel.mcp.refreshed":
 		return "Refreshed %s: %d tools."
-	case "panel.startup":
-		return "Initializing"
 	case "panel.approval_required":
 		return "Approval required"
 	case "panel.bypass_approval":
@@ -100,32 +86,16 @@ func enCatalog(key string) string {
 		return "session"
 	case "label.agents":
 		return "agents"
-	case "label.cwd":
-		return "cwd"
 	case "label.branch":
 		return "branch"
 	case "label.context":
 		return "context"
 	case "label.skills":
 		return "skills"
-	case "label.activity":
-		return "activity"
-	case "label.window":
-		return "window"
-	case "label.usage":
-		return "usage"
-	case "label.compact":
-		return "compact"
 	case "label.total":
 		return "total"
 	case "label.cost":
 		return "est. cost"
-	case "label.approval_policy":
-		return "approval"
-	case "label.tool_policy":
-		return "tools"
-	case "label.agent_policy":
-		return "agent"
 	case "label.tool":
 		return "tool"
 	case "label.input":
@@ -138,36 +108,10 @@ func enCatalog(key string) string {
 		return "cache write"
 	case "label.cache_hit":
 		return "cache hit"
-	case "label.turns":
-		return "turns"
-	case "label.avg_ttft":
-		return "avg ttft"
-	case "label.p95_ttft":
-		return "p95 ttft"
-	case "label.avg_duration":
-		return "avg dur"
-	case "label.p95_duration":
-		return "p95 dur"
-	case "label.avg_think":
-		return "avg think"
-	case "label.avg_tps":
-		return "avg tps"
-	case "label.p95_tps":
-		return "p95 tps"
-	case "label.fail_rate":
-		return "fail rate"
-	case "label.slow_tools":
-		return "slow tools"
-	case "label.recent_turns":
-		return "recent turns"
 	case "label.file":
 		return "file"
 	case "label.directory":
 		return "directory"
-	case "context.unavailable":
-		return "No context data yet"
-	case "metrics.empty":
-		return "No metrics yet"
 	case "im.none":
 		return "No adapters configured"
 	case "im.summary":
@@ -182,38 +126,16 @@ func enCatalog(key string) string {
 		return "enabled • restart to initialize"
 	case "im.status.not_started":
 		return "not started"
-	case "context.until_compact":
-		return "left"
 	case "empty.ask":
 		return "Ask for a refactor, bug fix, explanation, or tests."
 	case "empty.tips":
 		return "Tips: use @path to include files, /? for help, and Shift+Tab to change mode."
-	case "startup.banner":
-		return "Preparing the terminal UI and filtering startup terminal noise. You can type right away; this banner disappears once startup settles."
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab cycle • Enter apply • Esc close"
 	case "hint.mention":
 		return "@ attaches files/folders • Tab/Shift+Tab cycle • Enter apply"
 	case "hint.mode":
 		return "mode"
-	case "mode.approval.ask":
-		return "ask as needed"
-	case "mode.approval.none":
-		return "no approval stops"
-	case "mode.approval.critical":
-		return "critical only"
-	case "mode.tools.rules":
-		return "follow tool rules"
-	case "mode.tools.readonly":
-		return "read-only only"
-	case "mode.tools.safe":
-		return "safe ops only"
-	case "mode.tools.open":
-		return "almost all tools"
-	case "mode.agent.waits":
-		return "waits for you"
-	case "mode.agent.autocontinue":
-		return "keeps going"
 	case "hint.enter_send":
 		return "Enter send"
 	case "hint.ctrlv_image":
@@ -222,18 +144,12 @@ func enCatalog(key string) string {
 		return "Ctrl+R sidebar"
 	case "hint.help":
 		return "/? help"
-	case "hint.add_context":
-		return "@ add context"
-	case "hint.scroll":
-		return "PgUp/PgDn scroll"
 	case "hint.shift_tab_mode":
 		return "Shift+Tab mode"
 	case "hint.ctrlc_cancel":
 		return "Ctrl+C cancel"
 	case "hint.ctrlc_exit":
 		return "Ctrl+C clear/exit"
-	case "hint.image_attached":
-		return "image attached"
 	case "hint.image_attached_count":
 		return "%d image(s) attached"
 	case "hint.follow_panel":
@@ -242,8 +158,6 @@ func enCatalog(key string) string {
 		return "Ctrl+N unfollow"
 	case "queued.count":
 		return "%d queued"
-	case "queued.output":
-		return "[queued %d pending]\n\n"
 	case "interrupt.delivered":
 		return "[delivered to active run; revising plan]\n"
 	case "status.thinking":
@@ -292,24 +206,6 @@ func enCatalog(key string) string {
 		return "  ↑↓←→ switch  Esc close"
 	case "status.tools_used":
 		return "%d tools used"
-	case "tool.done":
-		return "done"
-	case "tool.failed":
-		return "failed"
-	case "tool.no_output":
-		return "no output"
-	case "tool.output":
-		return "output"
-	case "tool.content":
-		return "content"
-	case "tool.match":
-		return "match"
-	case "tool.matches":
-		return "matches"
-	case "tool.entry":
-		return "entry"
-	case "tool.result":
-		return "result"
 	case "approval.rejected":
 		return "  Rejected.\n"
 	case "approval.allow":
@@ -381,8 +277,6 @@ func enCatalog(key string) string {
 		return "Auth"
 	case "panel.provider.env_var":
 		return "Env var"
-	case "panel.provider.api_key":
-		return "API key"
 	case "panel.provider.api_key.missing":
 		return "missing"
 	case "panel.provider.api_key.configured":
@@ -573,10 +467,6 @@ func enCatalog(key string) string {
 		return "Type /help for available commands\n\n"
 	case "command.usage.allow":
 		return "Usage: /allow <tool-name>\n\n"
-	case "command.usage.resume":
-		return "Usage: /resume <session-id>\n\n"
-	case "command.usage.export":
-		return "Usage: /export <session-id>\n\n"
 	case "init.resolve_failed":
 		return "Failed to resolve init target: %v\n\n"
 	case "init.generate_failed":
@@ -611,22 +501,10 @@ func enCatalog(key string) string {
 		return "✓ %s is now always allowed\n\n"
 	case "command.custom":
 		return "Custom command /%s:\n"
-	case "command.mention_error":
-		return "Mention expansion error: %v"
-	case "session.list_failed":
-		return "Error listing sessions: %v\n\n"
 	case "session.untitled":
 		return "untitled"
 	case "session.store_missing":
 		return "Session store not configured.\n\n"
-	case "session.none":
-		return "No sessions found.\n\n"
-	case "session.list.title":
-		return "Sessions:\n\n"
-	case "session.list.item":
-		return "  %d. %s  %s  (%s)\n"
-	case "session.list.hint":
-		return "\nUse /resume <id> to continue a session\n\n"
 	case "session.new":
 		return "New session: %s\n\n"
 	case "session.resume":
@@ -667,8 +545,6 @@ func enCatalog(key string) string {
 		return "Redo failed: %v\n\n"
 	case "checkpoint.redid":
 		return "Redid %s on %s (checkpoint %s)\n"
-	case "checkpoint.none":
-		return "No checkpoints.\n\n"
 	case "files.disabled":
 		return "Checkpointing not enabled.\n\n"
 	case "files.none":
@@ -679,12 +555,6 @@ func enCatalog(key string) string {
 		return "  %s  %d edits  last: %s%s\n"
 	case "files.hint":
 		return "\nUse /undo to revert the most recent edit, /redo to re-apply, /checkpoints for details.\n\n"
-	case "checkpoint.list.title":
-		return "Checkpoints (%d):\n\n"
-	case "checkpoint.list.item":
-		return "  %d. %s  %s  %s  %s\n"
-	case "checkpoint.list.hint":
-		return "\nUse /undo to revert the most recent, /redo to re-apply.\n\n"
 	case "memory.auto_unavailable":
 		return "Auto memory not initialized.\n\n"
 	case "traj.no_workspace":
@@ -733,12 +603,6 @@ func enCatalog(key string) string {
 		return "Exported %d learnings to %s"
 	case "traj.imported":
 		return "Imported %d new learnings (duplicates skipped)"
-	case "memory.list_failed":
-		return "Error listing memories: %v\n\n"
-	case "memory.none":
-		return "No auto memories saved.\n\n"
-	case "memory.auto_title":
-		return "Auto Memories:\n"
 	case "memory.clear_failed":
 		return "Error clearing memories: %v\n\n"
 	case "memory.cleared":
@@ -757,38 +621,16 @@ func enCatalog(key string) string {
 		return "Memory %q restored to prompt injection.\n\n"
 	case "memory.restore_failed":
 		return "Error restoring memory: %v\n\n"
-	case "memory.title":
-		return "Memory:\n"
-	case "memory.project":
-		return "Project Memory:\n"
-	case "memory.project_none":
-		return "  No project memory files loaded.\n"
-	case "memory.auto":
-		return "Auto Memory:\n"
-	case "memory.auto_none":
-		return "  No auto memories loaded.\n"
-	case "memory.usage":
-		return "\nUsage: /memory [list|clear]\n\n"
 	case "compact.unavailable":
 		return "Context manager not available.\n\n"
 	case "compact.failed":
 		return "Compact failed: %v\n\n"
-	case "compact.done":
-		return "Conversation history compacted.\n\n"
 	case "compact.done_with_stats":
 		return "Conversation history compacted (%d → %d tokens).\n\n"
 	case "todo.cleared":
 		return "Todo list cleared.\n\n"
 	case "todo.clear_failed":
 		return "Error clearing todos: %v\n\n"
-	case "todo.none":
-		return "No todo list found. Use the todo_write tool to create one.\n\n"
-	case "todo.read_failed":
-		return "Error reading todos: %v\n\n"
-	case "todo.parse_failed":
-		return "Error parsing todos: %v\n\n"
-	case "todo.title":
-		return "Todo list:\n%s\n\n"
 	case "bug.title":
 		return "=== Bug Report Diagnostics ===\n\n"
 	case "bug.version":
@@ -817,14 +659,8 @@ func enCatalog(key string) string {
 		return "Config: model = %s\n\n"
 	case "config.provider_set":
 		return "Config: provider = %s\n\n"
-	case "config.language_set":
-		return "Config: language = %s\n\n"
 	case "config.unknown_key":
 		return "Unknown config key: %s\nSupported: model, provider, language\n\n"
-	case "config.title":
-		return "Current Configuration:\n"
-	case "status.title":
-		return "Status:\n"
 	case "panel.update":
 		return "Update"
 	case "label.version":
@@ -843,8 +679,6 @@ func enCatalog(key string) string {
 		return "not checked yet"
 	case "update.restarting":
 		return "Restarting to apply the update..."
-	case "label.tools":
-		return "Tools"
 	case "label.active":
 		return "Active"
 	case "label.tasks":
@@ -857,8 +691,6 @@ func enCatalog(key string) string {
 		return "Preparing update"
 	case "update.failed":
 		return "Update failed: %v\n\n"
-	case "update.restart_failed":
-		return "Update prepared, but restart failed: %v\n\n"
 	case "update.pm_hint.brew":
 		return "Update installed. Note: ggcode was installed via Homebrew.\nRun `brew upgrade ggcode` to keep Homebrew in sync.\n\n"
 	case "update.pm_hint.scoop":
@@ -871,16 +703,8 @@ func enCatalog(key string) string {
 		return "Other ggcode installations detected on this system:\n%s\nIf a different ggcode appears first in PATH, consider updating it too or adjusting PATH order.\n\n"
 	case "update.dual_scope":
 		return "Warning: Both user and system-wide ggcode installations found:\n  User: %s\n  System: %s\nThis may cause PATH conflicts. Consider uninstalling one from Settings > Apps.\n\n"
-	case "plugins.unavailable":
-		return "Plugin manager not available.\n\n"
-	case "plugins.none":
-		return "No plugins loaded.\n\n"
-	case "plugins.title":
-		return "Plugins:\n"
 	case "mcp.none":
 		return "No MCP servers configured.\n\n"
-	case "mcp.title":
-		return "MCP Servers:\n"
 	case "mcp.active_tools":
 		return "Active tools"
 	case "mcp.more":
@@ -889,38 +713,10 @@ func enCatalog(key string) string {
 		return "Usage: /image <path/to/file.png> or /image paste\n"
 	case "image.formats":
 		return "Supported formats: PNG, JPEG, GIF, WebP (max 20MB)\n\n"
-	case "image.attached":
-		return "Image attached: %s\n"
-	case "image.attached_hint":
-		return "Send a message to include the image, or /image to attach another.\n\n"
 	case "image.clipboard_failed":
 		return "Could not paste an image from the clipboard: %v"
 	case "image.clipboard_no_image_windows":
 		return "No image found in clipboard. On Windows, Ctrl+V is often intercepted by the terminal. Try Ctrl+Shift+V or /image paste instead."
-	case "agents.unavailable":
-		return "Sub-agent manager not configured.\n\n"
-	case "agents.none":
-		return "No sub-agents spawned yet.\nUsage: LLM can use spawn_agent tool to create sub-agents.\n\n"
-	case "agents.title":
-		return "%d sub-agent(s):\n"
-	case "agents.item":
-		return "  %s [%s]%s - %s\n"
-	case "agents.hint":
-		return "\nUse /agent <id> for details, /agent cancel <id> to cancel.\n\n"
-	case "agent.usage":
-		return "Usage: /agent <id> or /agent cancel <id>\n\n"
-	case "agent.cancelled":
-		return "Cancelled sub-agent %s\n\n"
-	case "agent.cancel_failed":
-		return "Could not cancel %s (not found or not running)\n\n"
-	case "agent.not_found":
-		return "Sub-agent %s not found\n\n"
-	case "agent.title":
-		return "Agent: %s\nStatus: %s\nTask: %s\n"
-	case "agent.result":
-		return "Result: %s\n"
-	case "agent.error":
-		return "Error: %v\n"
 	case "slash.help":
 		return "Show help message"
 	case "slash.sessions":
@@ -1015,24 +811,10 @@ func enCatalog(key string) string {
 		return "Stage changes and generate an AI commit message from the diff"
 	case "slash.hooks":
 		return "Open hooks configuration panel"
-	case "hooks.title":
-		return "Hooks Configuration"
 	case "hooks.events":
 		return "Events"
-	case "hooks.hooks":
-		return "Hooks"
 	case "hooks.noHooks":
 		return "(no hooks configured for this event)"
-	case "hooks.add":
-		return "+ Add Hook"
-	case "hooks.delete":
-		return "Delete"
-	case "hooks.edit":
-		return "Edit"
-	case "hooks.toggleInject":
-		return "Toggle Inject"
-	case "hooks.close":
-		return "Esc: Close"
 	case "hooks.event.onUserMessage":
 		return "On User Message"
 	case "hooks.event.preToolUse":
@@ -1069,8 +851,6 @@ func enCatalog(key string) string {
 		return "hook updated"
 	case "hooks.msg.toggled":
 		return "inject_output toggled"
-	case "hooks.msg.saved":
-		return "hooks saved to config"
 	case "hooks.addTitle":
 		return " Add Hook "
 	case "hooks.editTitle":
@@ -1093,8 +873,6 @@ func enCatalog(key string) string {
 		return "Open unified IM channels panel"
 	case "panel.qq.directory":
 		return "Directory"
-	case "panel.qq.runtime":
-		return "Runtime"
 	case "panel.qq.bots":
 		return "QQ Bots"
 	case "panel.qq.created":
@@ -1103,26 +881,16 @@ func enCatalog(key string) string {
 		return "Bound: %d"
 	case "panel.qq.available":
 		return "Available: %d"
-	case "panel.qq.current_binding":
-		return "Current Binding"
 	case "panel.qq.none":
 		return "(none)"
-	case "panel.qq.default":
-		return "(default)"
 	case "panel.qq.adapter":
 		return "Adapter: %s"
-	case "panel.qq.target":
-		return "Target: %s"
-	case "panel.qq.channel":
-		return "Channel: %s"
 	case "panel.qq.bot_list":
 		return "QQ Bot List"
 	case "panel.qq.no_bots":
 		return "No QQ bots configured."
 	case "panel.qq.entry.available":
 		return "Available"
-	case "panel.qq.entry.bound":
-		return "Bound"
 	case "panel.qq.entry.active":
 		return "Active"
 	case "panel.qq.entry.bound_other":
@@ -1159,14 +927,6 @@ func enCatalog(key string) string {
 		return "Enter create bot • Esc cancel"
 	case "panel.qq.actions_hint":
 		return "j/k move • d disable/enable • Enter or b bind bot • c bind channel • x unbind channel • u unbind bot • i create bot • e edit config • q show QR • Esc close"
-	case "panel.qq.bind_channel":
-		return "Bind Channel"
-	case "panel.qq.scan_hint":
-		return "Scan the QR code, add the bot, then send a message to start pairing."
-	case "panel.qq.qr_code":
-		return "QR Code:"
-	case "panel.qq.share_link":
-		return "Share Link:"
 	case "panel.qq.message.no_bot":
 		return "No QQ bot available."
 	case "panel.qq.message.bound_success":
@@ -1187,8 +947,6 @@ func enCatalog(key string) string {
 		return "QQ adapter name is required"
 	case "panel.qq.error.not_configured":
 		return "QQ bot %q is not configured"
-	case "panel.qq.error.disabled":
-		return "QQ bot %q is disabled"
 	case "panel.qq.error.not_qq_adapter":
 		return "adapter %q is not a QQ bot"
 	case "panel.qq.error.not_online":

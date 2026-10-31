@@ -83,7 +83,17 @@ func CoerceEnumValues(schema json.RawMessage, args json.RawMessage) json.RawMess
 		}
 
 		// Extract the provided string value.
-		provided := strings.TrimSpace(strings.Trim(string(val), `"`))
+		// #4443: parse as JSON first - the raw-message Trim used to leave
+		// escape debris ("a\"b" kept the backslash) and fed non-string
+		// values (true/numbers) into string matching, letting the
+		// Levenshtein<=2 tolerance silently rewrite a polluted provided
+		// value to the WRONG enum. Unparseable/non-string values skip
+		// correction (the original schema error stands).
+		var provided string
+		if err := json.Unmarshal(val, &provided); err != nil {
+			continue
+		}
+		provided = strings.TrimSpace(provided)
 		if provided == "" {
 			continue
 		}
@@ -151,7 +161,10 @@ func findBestEnumMatch(provided string, enum []json.RawMessage) string {
 		if len(lower) <= 3 {
 			// Short values: same first rune + distance 1 is the only
 			// unambiguous typo shape (e.g. "off" -> "of").
-			if dist != 1 || len(provided) == 0 || lower[0] != provided[0] {
+			// #4700: an empty-string enum member (legal JSON Schema) has
+			// len(lower)==0 - lower[0] below would panic. An empty candidate
+			// is never a typo target, skip it.
+			if len(lower) == 0 || dist != 1 || len(provided) == 0 || lower[0] != provided[0] {
 				continue
 			}
 		} else if dist > maxDist {

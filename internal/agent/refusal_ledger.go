@@ -50,8 +50,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
+	"unicode"
 )
 
 const (
@@ -140,15 +140,29 @@ func (l *refusalLedger) saveLocked() {
 // refusalNegatePattern matches negation-form refusals only (the advisory
 // layer also extracts "only use X"-style constraints; those are directives,
 // not refusals, and do not belong in an enforcement ledger).
-// #4340: the "leave X alone" arm is `[^\n]{0,40}` - the old
-// `[^n]{0,5}` gap only ever admitted ≤3-char n-free objects ("leave it
-// alone"), silently dropping every real target ("leave config.yaml alone",
-// "leave them alone") so the 30-day block never engaged for this phrasing.
-// The gap must allow `.` (filenames are dotted) - only `\n` caps it at a
-// line boundary and the 40-char cap keeps it tight; the trailing
-// `[^\n.]{4,120}` still bounds the excerpt tail at sentence punctuation.
+// #4340: the leave-alone gap is [^\n]{0,40} (line-bounded only, matching
+// the reaffirm pattern's leave-gap arm, widened in lockstep to
+// `leave\s+[^\n]{0,40}alone` so a strong-lift release carrying the
+// long-object phrasing is still vetoed). The old [^n]{0,5} made the branch
+// functionally dead - the gap holds two spaces plus the object, so {0,5}
+// capped objects at 3 chars, and [^n] excluded every object containing "n"
+// (main, config, nginx...). A [^.\n] gap would have repeated the same trap
+// for dotted filenames (config.yaml, main.go) - the most common real
+// objects - so the period is allowed inside the gap like the reaffirm side.
+// Pronoun-object entries ("leave them alone") record but anchor nothing:
+// refusalPathPattern needs a path separator or dotted extension, so the
+// widened gap adds no false-block surface.
+// #4510: the trailing OBJECT arm had the same dot trap the gap above
+// documents - "don't touch config.yaml" truncated to "...config" and the
+// dotted filename never became an anchor (fail-open for the most common
+// refusal shape). The arm now ends with an OPTIONAL dotted-extension
+// segment (`(?:\.[A-Za-z0-9]{1,8}\b)?`) so exactly one trailing extension
+// rides along: sentence periods still terminate the match (multi-sentence
+// lines keep yielding one candidate per sentence, as the negation test
+// expects) while config.yaml/main.go survive intact - and the dedup keys
+// of quoted-discussion vs real-directive forms stay identical (#4398).
 var refusalNegatePattern = regexp.MustCompile(
-	`(?i)(?:don'?t|do not|never|no new|avoid|must not|should not|stop using|leave\b[^\n]{0,40}alone|don'?t touch)\b[^\n.]{4,120}`)
+	`(?i)(?:don'?t|do not|never|no new|avoid|must not|should not|stop using|leave\b[^\n]{0,40}alone|don'?t touch)\b[^\n.]{4,120}(?:\.[A-Za-z0-9]{1,8}\b)?`)
 
 // releasePattern matches conversational lift phrases.
 // #3712: CJK lift words must live OUTSIDE the \b group - Go regexp \b is
@@ -164,8 +178,12 @@ var refusalReleasePattern = regexp.MustCompile(
 // English terms are \b-bounded; CJK terms are NOT (Go regexp \b is an
 // ASCII word boundary and never matches beside CJK runes, so 别/保持 etc.
 // must live outside the \b group or they silently fail to veto).
+// #4399-A: the negation group after `still` is REQUIRED, not optional -
+// the old `(?:...)?` let bare "still" match (empty group + \b between the
+// space and the next word) and veto legitimate releases like "ok, you can
+// still modify config.yaml now". Intent (above) is "still don't/still not".
 var refusalReaffirmPattern = regexp.MustCompile(
-	`(?i)\b(?:don'?t|do not|never|no\s+new|avoid|must not|should not|stop using|still\s+(?:do(?:n'?t)?|not)?\b|stays?\b|keep\s+(?:avoiding|out|away|it\s+that\s+way)|leave\s+[^\n]{0,40}alone|untouched|off[- ]limits|forbidden|not\s+allowed|prohibited)\b|不许|别碰|不要|禁止|继续(?:别|不|不要|禁止|远离?|保持)|保持(?:现状|不动|原样|别动)`)
+	`(?i)\b(?:don'?t|do not|never|no\s+new|avoid|must not|should not|stop using|still\s+(?:do(?:n'?t)?|not)\b|stays?\b|keep\s+(?:avoiding|out|away|it\s+that\s+way)|leave\s+[^\n]{0,40}alone|untouched|off[- ]limits|forbidden|not\s+allowed|prohibited)\b|不许|别碰|不要|禁止|继续(?:别|不|不要|禁止|远离?|保持)|保持(?:现状|不动|原样|别动)`)
 
 // #3469 weak/strong lift split: bare "ok/fine/alright" prefixes are too
 // weak to release on their own (reaffirmations routinely start with
@@ -176,8 +194,14 @@ var refusalStrongLiftPattern = regexp.MustCompile(
 	`(?i)\b(?:go ahead|you (?:may|can) now|you(?:'re| are) (?:allowed|free) to|lift(?:ed)?)\b|解除|允许|可以了`)
 
 // #3712: CJK words outside the \b group (see refusalReleasePattern note).
+// #4399-B: `now`/`again`/`can` are removed - they are time fillers and
+// question-form modals with no authorization semantics, yet they satisfied
+// the authorize gate of the weak-lift path, letting read-only chatter like
+// "ok, now take a look at config.yaml" silently delete a 30-day block.
+// Real modal authorization ("you may/can now ...") already lives in
+// refusalStrongLiftPattern and stands alone without this gate.
 var refusalAuthorizePattern = regexp.MustCompile(
-	`(?i)\b(?:can|may|now|go ahead|allowed|free to|resume|again|touch|modify|edit|write|use)\b|可以|动了?|改了?|碰`)
+	`(?i)\b(?:may|go ahead|allowed|free to|resume|touch|modify|edit|write|use)\b|可以|动了?|改了?|碰`)
 
 // #3469 (note): provably read-only command shapes are not write-class
 // actions; blocking "grep foo build/" on a "build/" refusal target would
@@ -201,10 +225,10 @@ var refusalReadOnlyCmdPattern = regexp.MustCompile(
 //     newline as a separator (multi-line `echo hi\nrm x`), interpreter /
 //     remote sinks after a separator (`| sh`, `| bash`, `| python -c`,
 //     `| ssh host 'rm f'` with no redirect for the `>` arm to catch), and
-//     xargs feeding a path-qualified or env-wrapped writer
-//     (`xargs /bin/rm`, `xargs env rm`, `xargs sh -c`). Any of these
-//     disqualifies the exemption; over-flagging only costs falling through
-//     to normal anchor matching.
+//     xargs feeding a path-qualified or env/sudo-wrapped writer
+//     (`xargs /bin/rm`, `xargs env rm`, `xargs sudo rm`, `xargs sh -c`).
+//     Any of these disqualifies the exemption; over-flagging only costs
+//     falling through to normal anchor matching.
 //
 // `>>` and fd-prefixed forms are subsumed by the bare `>` alternative.
 // Heredoc `<<` contains no `>` and is input-side only - not matched.
@@ -292,19 +316,63 @@ func stripNonDirectiveText(text string) string {
 	return strings.Join(lines, "\n")
 }
 
+// inlineQuotedContext reports whether the negate-pattern match at
+// text[start:end] is wrapped in inline quotes in the surrounding
+// sentence (#4398). Two shapes:
+//   - an opening quote directly before the match (`"don't touch ...`)
+//   - the match truncated at a period inside a dotted filename, with the
+//     closing quote just past the truncation point
+//     (`"don't touch config.yaml"` matched only `don't touch config`)
+const inlineQuoteTailWindow = 8
+
+func inlineQuotedContext(text string, start, end int) bool {
+	if start > 0 {
+		if prev := text[start-1]; prev == '"' || prev == '`' {
+			return true
+		}
+	}
+	if end < len(text) && text[end] == '.' {
+		tail := text[end:]
+		if len(tail) > inlineQuoteTailWindow {
+			tail = tail[:inlineQuoteTailWindow]
+		}
+		if strings.ContainsAny(tail, "\"`") {
+			return true
+		}
+	}
+	return false
+}
+
 // extractRefusals returns negation-form refusal excerpts from user text.
 // #4284: only DIRECT user instructions are extracted - quoted text, pasted
 // logs, and code comments are stripped first (see stripNonDirectiveText).
 func extractRefusals(text string) []string {
+	out := extractRefusalCandidates(text)
+	excerpts := make([]string, 0, len(out))
+	for _, c := range out {
+		excerpts = append(excerpts, c.Excerpt)
+	}
+	return excerpts
+}
+
+// refusalCandidate pairs an extracted excerpt with the #4398 discussion
+// verdict (inline-quote escape: quoted/CJK-discussed negation text must
+// not enter the ledger as a user-direct hard block).
+type refusalCandidate struct {
+	Excerpt   string
+	Discussed bool
+}
+
+func extractRefusalCandidates(text string) []refusalCandidate {
 	if len(text) == 0 {
 		return nil
 	}
 	text = stripNonDirectiveText(text)
-	matches := refusalNegatePattern.FindAllString(text, -1)
-	out := make([]string, 0, len(matches))
+	locs := refusalNegatePattern.FindAllStringIndex(text, -1)
+	out := make([]refusalCandidate, 0, len(locs))
 	seen := map[string]bool{}
-	for _, m := range matches {
-		e := strings.TrimSpace(m)
+	for _, loc := range locs {
+		e := strings.TrimSpace(text[loc[0]:loc[1]])
 		if len(e) > refusalExcerptLen {
 			r := []rune(e)
 			cut := refusalExcerptLen
@@ -313,15 +381,15 @@ func extractRefusals(text string) []string {
 			}
 			e = string(r[:cut]) + "..."
 		}
-		key := strings.ToLower(e)
-		if len(key) > 40 {
-			key = key[:40]
-		}
+		key := refusalKey(e)
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		out = append(out, e)
+		out = append(out, refusalCandidate{
+			Excerpt:   e,
+			Discussed: excerptLooksDiscussed(e) || inlineQuotedContext(text, loc[0], loc[1]),
+		})
 	}
 	return out
 }
@@ -334,8 +402,17 @@ func (l *refusalLedger) record(excerpt, source, kind string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	key := refusalKey(excerpt)
-	for _, e := range l.data.Entries {
+	for i, e := range l.data.Entries {
 		if refusalKey(e.Excerpt) == key {
+			// #4398: first-come-wins let an inline-quoted DISCUSSION entry
+			// (fragment) swallow the user's later REAL directive that dedupes
+			// to the same key. A direct record upgrades a stored fragment;
+			// the reverse never downgrades.
+			if kind == refusalKindDirect && e.Kind != refusalKindDirect {
+				l.data.Entries[i].Kind = refusalKindDirect
+				l.data.Entries[i].Ts = time.Now().Unix()
+				l.saveLocked()
+			}
 			return // already persisted
 		}
 	}
@@ -386,7 +463,11 @@ func (l *refusalLedger) release(text string) int {
 		hit := false
 		if strong || refusalReleasePattern.MatchString(lower) {
 			for _, t := range refusalTargets(e.Excerpt) {
-				if strings.Contains(lower, t) {
+				// #4679: whole-token anchor match, symmetric with checkBlocked
+				// (#4632). A bare Contains prefix-released the original refusal
+				// when the user approved only the SAFER variant whose name
+				// contains the anchor (strong-lift gate passed on its own).
+				if refusalAnchorHit(lower, t) {
 					hit = true
 					break
 				}
@@ -430,6 +511,41 @@ func refusalTargets(excerpt string) []string {
 	return out
 }
 
+// refusalAnchorHit reports whether anchor hits text with flag-token
+// boundaries. #4632: flag-shaped anchors must match as a WHOLE token - the
+// old bare strings.Contains had no right boundary, so a refusal against
+// the plain force-push flag ("never use --force when pushing") also
+// blocked its safer lease variant, which merely CONTAINS the anchor as a
+// prefix. Non-flag anchors (paths, words) keep plain Contains semantics.
+// A boundary position is a byte not in the flag-body class [A-Za-z0-9-]
+// (or the string edge) on BOTH sides of the hit.
+func refusalAnchorHit(text, anchor string) bool {
+	if anchor == "" {
+		return false
+	}
+	if anchor[0] != '-' {
+		return strings.Contains(text, anchor)
+	}
+	for start := 0; ; {
+		i := strings.Index(text[start:], anchor)
+		if i < 0 {
+			return false
+		}
+		i += start
+		end := i + len(anchor)
+		leftOK := i == 0 || !isRefusalFlagBodyByte(text[i-1])
+		rightOK := end == len(text) || !isRefusalFlagBodyByte(text[end])
+		if leftOK && rightOK {
+			return true
+		}
+		start = i + 1
+	}
+}
+
+func isRefusalFlagBodyByte(b byte) bool {
+	return b == '-' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
+}
+
 // checkBlocked returns a hard-block message when a persisted refusal
 // deterministically matches this write-class tool call. Empty = allow.
 func (l *refusalLedger) checkBlocked(tool string, args string) string {
@@ -444,7 +560,10 @@ func (l *refusalLedger) checkBlocked(tool string, args string) string {
 	// (`echo x > f`, `cat a > b`, `find . -name f -delete`, `git log --output=f`).
 	// Any write evidence in the command disqualifies the exemption and the
 	// call falls through to normal entry matching (fail-closed).
-	if tool == "run_command" {
+	// #4400: start_command shares the command match domain (and the
+	// write-tools registration) with run_command, so the read-only exemption
+	// must cover it too - `tail -f` never mutates the refusal target.
+	if tool == "run_command" || tool == "start_command" {
 		var rc struct {
 			Command string `json:"command"`
 		}
@@ -465,7 +584,7 @@ func (l *refusalLedger) checkBlocked(tool string, args string) string {
 			continue // expired; pruned lazily
 		}
 		for _, t := range refusalTargets(e.Excerpt) {
-			if strings.Contains(lower, t) {
+			if refusalAnchorHit(lower, t) { // #4632: whole-token flag match, no prefix pollution
 				age := refusalAgeWords(now - e.Ts)
 				return fmt.Sprintf(
 					"blocked by persisted user refusal (%s): \"%s\". "+
@@ -566,14 +685,57 @@ func (l *refusalLedger) clear() {
 	l.saveLocked()
 }
 
+// excerptLooksDiscussed reports whether a negate-pattern excerpt carries
+// discussion/quote markers rather than being the user's own directive
+// (#4398). The #4284 line-shape strip only catches line-LEADING quote
+// shapes; INLINE quoting ("行内说 \"don't touch config\" 这类拒绝...",
+// backtick regex source like `don'?t`, negation keywords inside CJK
+// analysis prose) escaped it entirely and entered the ledger as
+// user-direct - production data showed 13/15 entries polluted. Such
+// excerpts are downgraded to the advisory-only fragment kind: still
+// visible in /refusals, never hard-blocking.
+//
+// Signals (any one suffices; all are near-certain discussion markers for
+// ENGLISH negation keywords):
+//   - a backtick: code/regex/test material quoting the pattern itself
+//   - a straight double quote inside the excerpt: the phrase was wrapped
+//     in quotes mid-sentence
+//   - CJK runes: the English negate pattern matched inside Chinese
+//     discussion prose. NOTE (#4415 V2): there is NO CJK extraction
+//     branch - refusalNegatePattern is English-only and the CJK words
+//     (不许/别碰/不要) only exist on the reaffirm/release side - so pure
+//     Chinese directives ("不要修改 config.yaml") are never EXTRACTED
+//     into the ledger at all. That is a pre-existing coverage gap, not a
+//     regression of this filter; the Han signal therefore cannot lose a
+//     real CJK refusal it never saw. Adding a CJK negate branch is a
+//     separate work item.
+func excerptLooksDiscussed(ex string) bool {
+	if strings.Contains(ex, "`") || strings.Contains(ex, "\"") {
+		return true
+	}
+	for _, r := range ex {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
+}
+
 // recordUserRefusals extracts and persists NL refusals from user text.
 // Called on every user message, right after the advisory constraint layer.
 func (a *Agent) recordUserRefusals(userText string) {
 	// #4284: extraction itself is source-filtered (quoted text / pasted
 	// logs / code comments never produce entries); whatever survives IS a
 	// direct user instruction.
-	for _, ex := range extractRefusals(userText) {
-		a.refusalLedger.record(ex, "nl", refusalKindDirect)
+	// #4398: ...except inline-quoted discussion, which the line-shape
+	// strip cannot see - those survive extraction but are downgraded to
+	// the advisory-only fragment kind here.
+	for _, c := range extractRefusalCandidates(userText) {
+		kind := refusalKindDirect
+		if c.Discussed {
+			kind = refusalKindFragment
+		}
+		a.refusalLedger.record(c.Excerpt, "nl", kind)
 	}
 }
 
@@ -586,22 +748,32 @@ func (a *Agent) recordUserRefusals(userText string) {
 // the local user ever seeing the message. Remote runs skip BOTH record and
 // release - a remote "you may X now" lifting the user's own blocks is the
 // same integrity violation in reverse.
-var remoteRefusalInhibit atomic.Bool
-
 // InhibitNextRefusalLedgerWrite marks the next agent run as remote-origin:
 // its user text is exempt from refusal-ledger record/release. Set by the
 // TUI at the remote injection boundaries (lanchat DM / IM inbound) right
 // before triggering the run; consumed by RunStreamWithContent at the
 // ledger gate.
-func (a *Agent) InhibitNextRefusalLedgerWrite() { remoteRefusalInhibit.Store(true) }
+// #4726: the flag lives on the Agent instance, not the package - a
+// process hosts several Agents (TUI main, A2A handler per task, ACP
+// delegates), and a package-level flag let a concurrent local run on ANY
+// instance consume the remote marker (losing the user's own refusal) while
+// the poisoned remote run still wrote to the ledger.
+func (a *Agent) InhibitNextRefusalLedgerWrite() { a.remoteRefusalInhibit.Store(true) }
 
 // consumeRemoteRefusalInhibit returns and clears the flag. Call once per
 // candidate ledger mutation site; the first consumer wins and later sites
 // in the same run see false (record and release sit in the same gate).
-func consumeRemoteRefusalInhibit() bool { return remoteRefusalInhibit.Swap(false) }
+func (a *Agent) consumeRemoteRefusalInhibit() bool { return a.remoteRefusalInhibit.Swap(false) }
 
 // ReleaseMatchingRefusals lifts refusals matching the user's lift text.
+// #4736: nil-ledger guard - test-constructed Agents (tunnel inbound path)
+// reach this method before any ledger is attached; a missing ledger means
+// nothing was ever recorded, so there is nothing to release. Main CI
+// panicked here (refusal_ledger.go:761) wedging the merge queue.
 func (a *Agent) ReleaseMatchingRefusals(text string) int {
+	if a.refusalLedger == nil {
+		return 0
+	}
 	return a.refusalLedger.release(text)
 }
 

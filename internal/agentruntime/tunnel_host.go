@@ -31,6 +31,16 @@ type TunnelHost struct {
 	// Stream state
 	currentMsgID  string
 	needsFinalize bool
+	// #4564: pushMu serializes the (message-ID resolution + broker push)
+	// units against rollover's (finalize mark + PushTextDone). It is a
+	// SEPARATE lock from mu because broker pushes synchronously re-enter
+	// the host via the event recorder (recordEvent takes mu) - holding mu
+	// across a broker push would deadlock. finalized records message IDs
+	// whose Done has been (or is being) issued, so a late publisher that
+	// resolved an ID before the rollover rebinds to a fresh message
+	// instead of appending to a finalized one.
+	pushMu    sync.Mutex
+	finalized map[string]bool
 
 	// Session reference for recording
 	session      *session.Session
@@ -87,11 +97,20 @@ func (h *TunnelHost) handleRTCSignal(cmd tunnel.GatewayMessage) {
 // Call this when the session changes or is first created.
 // Returns the projection broker state with replay events and authority epoch.
 func (h *TunnelHost) BindSession(ses *session.Session, store session.Store) ProjectionBrokerState {
+	// #4635: the stream-state reset below must serialize against
+	// pushTextEvent/rollover per the #4564 contract (publisher ID resolution
+	// and rollover finalize are pushMu-serialized; a reset that only takes
+	// mu races a concurrent push between the mu sections). pushMu is the
+	// OUTER lock to match pushTextEvent's pushMu→mu order.
+	h.pushMu.Lock()
+	defer h.pushMu.Unlock()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.session = ses
 	h.sessionStore = store
 	h.currentMsgID = ""
+	// #4564: drop finalize marks with the stream state.
+	h.finalized = nil
 	h.needsFinalize = false
 
 	if ses == nil || strings.TrimSpace(ses.ID) == "" {
@@ -302,7 +321,10 @@ func (h *TunnelHost) StartShare(cfg ShareConfig) (*ShareResult, error) {
 	}, nil
 }
 
-// StopShare tears down the active share session and broker.
+// StopShare tears down the active share session and broker WITHOUT emitting
+// the "sharing_stopped" event. It has no production callers (#4303); the
+// reachable teardown paths all use the graceful variant. Kept only as
+// exported-API compat; dead code pending cleanup-pool removal.
 func (h *TunnelHost) StopShare() {
 	h.mu.Lock()
 	ref := h.activeShare
@@ -480,6 +502,11 @@ func (h *TunnelHost) Close() {
 	h.mu.Lock()
 	online := h.onlineBroker
 	ref := h.activeShare
+	// #4565: capture the offline projection broker (NewBroker(nil)) before
+	// nilling the field - Close only stopped the online/ref brokers (#4503)
+	// and leaked projBroker's senderLoop/textFlushLoop goroutines and its
+	// 300ms ticker for the life of the process on every runtime teardown.
+	proj := h.projBroker
 	// #1501: mirror StopShare's upgrade-manager teardown. Broker.Stop never
 	// touches the P2P transport, so StopSharingGracefully cannot compensate -
 	// without this, a session switch via repl.SetCore with an active
@@ -499,13 +526,34 @@ func (h *TunnelHost) Close() {
 		mgr.Stop()
 	}
 
-	// Stop the active share's tunnel session first (relay connection).
+	// #4412: order matters - the graceful-stop event (sharing_stopped) is
+	// DELIVERED over the relay websocket (the broker's session IS the relay
+	// connection). The old order tore the session down first, so the event
+	// could never be sent: the waiter hung and every Close blocked for the
+	// full 2s timeout while mobile clients stayed uninformed. Stop the
+	// share BEFORE the session; StopSharingGracefully itself waits for
+	// delivery, then stops the broker and destroys the session gracefully.
+	if online != nil {
+		online.StopSharingGracefully(2 * time.Second)
+	}
+	// Belt-and-suspenders: Stop is idempotent for an already-destroyed
+	// session and covers the path where no graceful stop ran.
 	if ref != nil && ref.session != nil {
 		ref.session.Stop()
 	}
-	// Gracefully stop any active share so relay and mobile clients are notified
-	if online != nil {
-		online.StopSharingGracefully(2 * time.Second)
+	// #4503: after DetachOnlineBroker, onlineBroker is nil but the active
+	// share's broker is still alive - the old Close only stopped
+	// ref.session (the relay client) and never ref.broker, leaking its
+	// outLoop goroutine, textTick timer and textDone channel until process
+	// exit. Broker.Stop is idempotent, so this is safe on every path (the
+	// graceful stop above already destroyed the online broker).
+	if ref != nil && ref.broker != nil {
+		ref.broker.Stop()
+	}
+	// #4565: same leak shape for the offline projection broker - Stop is
+	// idempotent (sync.Once), safe even if a caller already stopped it.
+	if proj != nil {
+		proj.Stop()
 	}
 }
 
@@ -532,9 +580,14 @@ func (h *TunnelHost) ProjectionStore() *tunnel.ProjectionStore {
 
 // ResetStreamState resets the stream state for a new chat turn.
 func (h *TunnelHost) ResetStreamState() {
+	// #4635: same pushMu serialization as BindSession (#4564 contract).
+	h.pushMu.Lock()
+	defer h.pushMu.Unlock()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.currentMsgID = ""
+	// #4564: drop finalize marks with the stream state.
+	h.finalized = nil
 	h.needsFinalize = false
 }
 
@@ -590,16 +643,13 @@ func (h *TunnelHost) PushStreamEvent(ev provider.StreamEvent) {
 
 	switch ev.Type {
 	case provider.StreamEventText:
-		msgID := h.ensureMsgID(broker)
 		h.markActive()
-		broker.PushReasoningDone(TunnelReasoningMsgID(msgID))
-		broker.PushText(msgID, ev.Text)
+		h.pushTextEvent(broker, ev.Text)
 
 	case provider.StreamEventReasoning:
 		if chunk := tunnel.NormalizeReasoningChunk(ev.Text); chunk != "" {
-			msgID := h.ensureMsgID(broker)
 			h.markActive()
-			broker.PushReasoning(TunnelReasoningMsgID(msgID), chunk)
+			h.pushReasoningEvent(broker, chunk)
 		}
 
 	case provider.StreamEventToolCallDone:
@@ -687,13 +737,37 @@ func (h *TunnelHost) PushActivity(activity string) {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-func (h *TunnelHost) ensureMsgID(broker *tunnel.Broker) string {
+// pushTextEvent resolves the target message ID and pushes one text chunk
+// as a single unit serialized against rollover (#4564). An ID resolved
+// before a concurrent rollover used to be pushed AFTER that rollover's
+// PushTextDone - the append landed on a finalized message (projection
+// reorder). Under pushMu, a finalized ID rebinds to a fresh message instead.
+func (h *TunnelHost) pushTextEvent(broker *tunnel.Broker, text string) {
+	h.pushMu.Lock()
+	defer h.pushMu.Unlock()
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.currentMsgID == "" {
-		h.currentMsgID = broker.NextMessageID()
+	id := h.currentMsgID
+	if id == "" || h.finalized[id] {
+		id = broker.NextMessageID()
+		h.currentMsgID = id
 	}
-	return h.currentMsgID
+	h.mu.Unlock()
+	broker.PushReasoningDone(TunnelReasoningMsgID(id))
+	broker.PushText(id, text)
+}
+
+// pushReasoningEvent is pushTextEvent's reasoning counterpart.
+func (h *TunnelHost) pushReasoningEvent(broker *tunnel.Broker, chunk string) {
+	h.pushMu.Lock()
+	defer h.pushMu.Unlock()
+	h.mu.Lock()
+	id := h.currentMsgID
+	if id == "" || h.finalized[id] {
+		id = broker.NextMessageID()
+		h.currentMsgID = id
+	}
+	h.mu.Unlock()
+	broker.PushReasoning(TunnelReasoningMsgID(id), chunk)
 }
 
 func (h *TunnelHost) markActive() {
@@ -703,25 +777,41 @@ func (h *TunnelHost) markActive() {
 }
 
 func (h *TunnelHost) rollover(broker *tunnel.Broker, startNew bool) {
+	// #4412: claim the finalize flag ATOMICALLY with the read. The old
+	// check-act spanned two lock windows: two concurrent publishers (agent
+	// stream callback vs tunnel/IM inbound) could both read
+	// needsFinalize=true and each fire PushTextDone - a duplicate finalize
+	// event. Claim-and-clear in one window makes the push exactly-once.
+	//
+	// #4564: the whole claim → finalize mark → Done sequence now runs under
+	// pushMu, serialized against pushTextEvent/pushReasoningEvent. The mark
+	// is set under mu BEFORE PushTextDone leaves, so any later publisher
+	// observing the mark rebinds to a fresh ID; a publisher that already
+	// passed the check finished its broker pushes before we acquired
+	// pushMu, i.e. strictly before the Done event - correct order.
+	// PushTextDone itself stays outside mu (the broker's recorder callback
+	// re-enters recordEvent, which takes mu).
+	h.pushMu.Lock()
+	defer h.pushMu.Unlock()
 	h.mu.Lock()
 	msgID := h.currentMsgID
 	finalize := h.needsFinalize
+	h.needsFinalize = false
+	if broker != nil && msgID != "" && finalize {
+		if h.finalized == nil {
+			h.finalized = make(map[string]bool)
+		}
+		h.finalized[msgID] = true
+	}
+	if startNew && broker != nil {
+		h.currentMsgID = broker.NextMessageID()
+	}
 	h.mu.Unlock()
 	if broker == nil || msgID == "" {
 		return
 	}
 	if finalize {
 		broker.PushTextDone(msgID)
-	}
-	if startNew {
-		h.mu.Lock()
-		h.currentMsgID = broker.NextMessageID()
-		h.needsFinalize = false
-		h.mu.Unlock()
-	} else {
-		h.mu.Lock()
-		h.needsFinalize = false
-		h.mu.Unlock()
 	}
 }
 

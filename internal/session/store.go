@@ -1322,9 +1322,18 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	}
 
 	// Backfill timestamps for historical sessions (created before timestamp feature).
-	// If the first message has no timestamp, all messages get set to 6 hours ago.
-	// If the first message already has a timestamp, the session is skipped.
-	if len(allMessages) > 0 && allMessages[0].Timestamp.IsZero() {
+	// #4670: backfill whenever ANY message lacks a timestamp - the old
+	// first-message gate skipped mixed sessions wholesale (ts-less records
+	// never repaired). backfillTimestamps itself only rewrites zero-ts
+	// records, so fully-timestamped sessions still short-circuit (changed=false).
+	anyMissing := false
+	for _, m := range allMessages {
+		if m.Timestamp.IsZero() {
+			anyMissing = true
+			break
+		}
+	}
+	if len(allMessages) > 0 && anyMissing {
 		s.backfillTimestamps(id)
 	}
 
@@ -1803,6 +1812,25 @@ func (s *JSONLStore) runMaintenance() {
 	// added by other processes after our initial load (in currentIdx but
 	// not in our original idx). Drop entries we pruned (in original idx
 	// but not in validIdx).
+	merged := s.mergeMaintainedIndex(idx, validIdx, currentIdx)
+	if err := s.saveIndex(merged); err != nil {
+		s.setIndexDirty(true)
+		return
+	}
+	s.setIndexDirty(false)
+}
+
+// mergeMaintainedIndex reconciles the pre-scan index (idx), its pruned
+// survivor list (validIdx), and the locked reload (currentIdx) into the
+// next index generation (#4668, extracted from runMaintenance for direct
+// testability):
+//   - from currentIdx: keep entries that survived pruning OR were added by
+//     another process after our initial load;
+//   - from validIdx: keep entries missing from the locked reload ONLY when
+//     their file verifiably still exists - another process removed them from
+//     the index (most plausibly Delete), and resurrecting them unconditionally
+//     produced ghost rows that List shows but nothing can open.
+func (s *JSONLStore) mergeMaintainedIndex(idx, validIdx, currentIdx []indexEntry) []indexEntry {
 	originalSet := make(map[string]bool, len(idx))
 	for _, e := range idx {
 		originalSet[e.ID] = true
@@ -1815,24 +1843,51 @@ func (s *JSONLStore) runMaintenance() {
 	for _, e := range currentIdx {
 		currentSet[e.ID] = true
 	}
+	// #4668 hardening: the two append loops union two snapshots that may
+	// BOTH carry a row for the same ID (e.g. the locked reload already
+	// contains an entry that is also a prune survivor). Emit each ID at most
+	// once - a duplicate row would make List show the same session twice
+	// forever (every later merge preserves both copies).
+	seen := make(map[string]bool, len(currentIdx)+len(validIdx))
 	merged := make([]indexEntry, 0, len(currentIdx))
-	// From currentIdx: keep if it survived pruning OR was added by another process.
+	emit := func(e indexEntry) {
+		if seen[e.ID] {
+			return
+		}
+		seen[e.ID] = true
+		merged = append(merged, e)
+	}
 	for _, e := range currentIdx {
 		if validSet[e.ID] || !originalSet[e.ID] {
-			merged = append(merged, e)
+			emit(e)
 		}
 	}
-	// From validIdx: add any not already in currentIdx (deleted by other process).
 	for _, e := range validIdx {
 		if !currentSet[e.ID] {
-			merged = append(merged, e)
+			if _, statErr := os.Stat(s.sessionPath(e.ID)); statErr != nil {
+				debug.Log("session", "runMaintenance: dropping %s - absent from locked index reload and file missing (deleted elsewhere)", e.ID)
+				continue
+			}
 		}
+		emit(e)
 	}
-	if err := s.saveIndex(merged); err != nil {
-		s.setIndexDirty(true)
-		return
-	}
-	s.setIndexDirty(false)
+	return merged
+}
+
+// sessionLockProbe is the cross-process "is another process holding this
+// session's flock" probe used by maintenance paths. A package-level var so
+// tests can simulate a held lock: on macOS, flock from the SAME process via
+// a second descriptor CONVERTS the lock instead of conflicting (flock(2)),
+// so an in-process held SessionLock cannot exercise the guard directly.
+var sessionLockProbe = IsSessionLocked
+
+// sessionUnlockedNow reports whether the per-session advisory flock is free
+// right now (#4668). It is a NON-BLOCKING probe used by maintenance paths
+// before unlinking: writers (appendRecordLines) hold this lock while
+// appending, and unlinking a locked session orphans the writer's fd - the
+// append then lands in a detached inode and the data is silently lost.
+func (s *JSONLStore) sessionUnlockedNow(sessionID string) bool {
+	return !sessionLockProbe(s.dir, sessionID)
 }
 
 func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, bool) {
@@ -1866,6 +1921,17 @@ func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, b
 			continue
 		}
 		if !interacted {
+			// #4668: never unlink a session another process is actively writing.
+			// The writers hold the per-session advisory flock (appendRecordLines);
+			// unlink does not need that lock, so a writer in the pre-first-user-text
+			// window (tool_result-only turns, freshly created session) had its fd
+			// silently orphaned and the append lost. Probe the lock non-blockingly
+			// first; a held lock means keep (the next pass re-checks).
+			if !s.sessionUnlockedNow(e.ID) {
+				debug.Log("session", "pruneInvalidIndexEntries: %s is flock-held by another process, keeping", e.ID)
+				validIdx = append(validIdx, e)
+				continue
+			}
 			// #1307 E3: a failed Remove (permission, read-only mount, Windows
 			// file-in-use) must NOT evict the index entry - otherwise the
 			// on-disk file becomes an orphan that List() hides forever. Keep
@@ -1881,16 +1947,6 @@ func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, b
 		validIdx = append(validIdx, e)
 	}
 	return validIdx, cleaned
-}
-
-// loadSessionFull loads a session with fullLoad=true, bypassing time-windowed
-// message loading. This is used for validation before deletion (e.g., in
-// pruneInvalidIndexEntries) to ensure we don't delete sessions that have user
-// interaction merely because their tail messages don't include a user message.
-// Uses a lightweight clone to avoid racing on s.fullLoad.
-func (s *JSONLStore) loadSessionFull(id string) (*Session, error) {
-	clone := &JSONLStore{dir: s.dir, fullLoad: true}
-	return clone.loadSession(id)
 }
 
 // RepairIndex scans the sessions directory and reconciles with the index.
@@ -1972,7 +2028,23 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 					debug.Log("session", "repairIndex: keeping orphan session %s — on-disk check unknown: %v", id, hasErr)
 					newIdx = append(newIdx, sessionToIndexEntry(ses))
 				} else if !interacted {
-					_ = os.Remove(s.sessionPath(id))
+					// #4668: same flock probe as pruneInvalidIndexEntries - a writer
+					// holding the session lock must not have its fd unlinked. Keep the
+					// orphan on disk for the next pass once the writer is gone.
+					if !s.sessionUnlockedNow(id) {
+						debug.Log("session", "repairIndex: orphan %s is flock-held by another process, keeping un-indexed for next pass", id)
+						continue
+					}
+					// #1307 discipline (same as pruneInvalidIndexEntries above):
+					// never swallow a failed Remove. If the unlink fails (permission,
+					// read-only mount, Windows file-in-use) the orphan stays on disk
+					// and is retried on the next repair pass; skipping the changed
+					// flag keeps a stuck file from forcing an index rewrite every
+					// round (#4357). A vanished file (IsNotExist race) is success.
+					if rmErr := os.Remove(s.sessionPath(id)); rmErr != nil && !os.IsNotExist(rmErr) {
+						debug.Log("session", "repairIndex: remove failed for orphan %s, keeping it un-indexed for the next pass: %v", id, rmErr)
+						continue
+					}
 				} else {
 					newIdx = append(newIdx, sessionToIndexEntry(ses))
 				}
@@ -2118,6 +2190,28 @@ func (s *JSONLStore) WillCleanupIfEmpty(ses *Session) bool {
 		return false
 	}
 	return !interacted
+}
+
+// persistEligible reports whether meta/usage/metric records may be persisted
+// for ses. It mirrors the two-stage decision of WillCleanupIfEmpty (#254): the
+// cheap in-memory HasUserInteraction check first, then a full-file
+// HasUserInteractionOnDisk fallback when that is false — time-windowed loading
+// (loadSession with fullLoad=false) drops user messages older than
+// RecentMessageWindow from ses.Messages, which made the old single-stage gates
+// silently return nil and lose pin/tag/model changes after a restart (#4356).
+// Read errors count as eligible — the persistence-side fail-safe of #291's
+// rule: an unknown answer must never drop data. Callers hold s.mu;
+// HasUserInteractionOnDisk takes no locks and only reads the file.
+func (s *JSONLStore) persistEligible(ses *Session) bool {
+	if ses.HasUserInteraction() {
+		return true
+	}
+	interacted, err := s.HasUserInteractionOnDisk(ses.ID)
+	if err != nil {
+		debug.Log("session", "persistEligible: on-disk check unknown for %s, persisting — %v", ses.ID, err)
+		return true
+	}
+	return interacted
 }
 
 // LatestForWorkspace returns the most recently updated session for the
@@ -2500,7 +2594,7 @@ func (s *JSONLStore) AppendMetaToDisk(ses *Session) error {
 
 // appendMetaLocked is AppendMetaToDisk without locking; callers hold s.mu.
 func (s *JSONLStore) appendMetaLocked(ses *Session) error {
-	if !ses.HasUserInteraction() {
+	if !s.persistEligible(ses) {
 		return nil
 	}
 	// Meta writes always update the index — reset the debounce timer.
@@ -2599,10 +2693,12 @@ func normalizeTags(tags []string) []string {
 func (s *JSONLStore) AppendUsageEntry(ses *Session, entry UsageEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !ses.HasUserInteraction() {
+	// #4356: persistEligible subsumes the old bare HasUserInteraction gate
+	// (which silently dropped usage for window-loaded interacted sessions).
+	path := s.sessionPath(ses.ID)
+	if !s.persistEligible(ses) {
 		return nil
 	}
-	path := s.sessionPath(ses.ID)
 	rec := jsonlRecord{
 		Type:       "usage",
 		SessionID:  ses.ID,
@@ -2616,10 +2712,11 @@ func (s *JSONLStore) AppendUsageEntry(ses *Session, entry UsageEntry) error {
 func (s *JSONLStore) AppendMetric(ses *Session, m metrics.MetricEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !ses.HasUserInteraction() {
+	// #4356: persistEligible subsumes the old bare HasUserInteraction gate.
+	path := s.sessionPath(ses.ID)
+	if !s.persistEligible(ses) {
 		return nil
 	}
-	path := s.sessionPath(ses.ID)
 	rec := jsonlRecord{
 		Type:        "metric",
 		SessionID:   ses.ID,
@@ -2635,9 +2732,20 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 	defer s.mu.Unlock()
 	path := s.sessionPath(ses.ID)
 
-	// Don't create a meta file for sessions with no user interaction.
+	// Don't create a meta file for sessions with no user interaction. The
+	// on-disk fallback only applies when the session file already exists —
+	// time-windowed loads may have emptied ses.Messages while the file still
+	// holds user messages (#4356). When the file is absent the fallback can
+	// never prove interaction, and treating an unknown scan error as
+	// eligible must not CREATE a meta-only file for a session that never
+	// interacted.
 	if !ses.HasUserInteraction() {
-		return nil
+		if _, statErr := os.Stat(path); statErr != nil {
+			return nil
+		}
+		if !s.persistEligible(ses) {
+			return nil
+		}
 	}
 
 	// O_EXCL guards against a cross-process TOCTOU (#531): the sessions
@@ -2659,9 +2767,14 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 	meta := jsonlRecord{
-		Type:                 "meta",
-		SessionID:            ses.ID,
-		Title:                ses.Title,
+		Type:      "meta",
+		SessionID: ses.ID,
+		Title:     ses.Title,
+		// #4669: Preview/TasksEnvJSON were missing here while appendMetaLocked
+		// persists both — a fresh session whose only on-disk meta record came
+		// from EnsureMeta reloaded with an empty VCS fingerprint, so the
+		// workspace-change check misfired and rebuilt the task environment.
+		Preview:              ses.Preview,
 		Workspace:            ses.Workspace,
 		Vendor:               ses.Vendor,
 		Endpoint:             ses.Endpoint,
@@ -2677,6 +2790,7 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 		ContextWindow:        ses.ContextWindow,
 		MaxTokens:            ses.MaxTokens,
 		TasksJSON:            ses.TasksJSON,
+		TasksEnvJSON:         ses.TasksEnvJSON,
 		ParentSessionID:      ses.ParentSessionID,
 		ForkPoint:            ses.ForkPoint,
 	}
@@ -3471,13 +3585,11 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 		}
 	}()
 
-	// Fast path: stream-scan only until the first message record.
-	// If it already has a timestamp, the entire session is skipped without
-	// reading the rest of the file. This avoids full-file I/O + memory
-	// allocation for sessions that don't need backfilling (the common case).
-	if firstMessageHasTimestamp(path) {
-		return
-	}
+	// #4670: the old fast path skipped the WHOLE session whenever the first
+	// message had a timestamp - mixed sessions (ts-less records after a
+	// timestamped one) never got repaired. The full scan below is required
+	// to find them; fully-timestamped sessions still short-circuit via
+	// changed=false, so the common case pays one extra read, no rewrite.
 
 	f, err := os.Open(path)
 	if err != nil {
@@ -3510,36 +3622,51 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 		}
 	}
 
-	// Check first message record — if it already has a timestamp, skip entirely.
-	firstMsgHasTimestamp := !firstRealTimestamp.IsZero()
-	if firstMsgHasTimestamp {
-		return
-	}
+	// #4670: no early return when any message has a timestamp - mixed
+	// sessions (ts-less records + real-timestamped records) must still
+	// backfill the missing ones; the assignment loop only touches zero-ts
+	// records.
 
 	// Assign strictly increasing timestamps (+1ms per backfilled line) so
 	// mixed sessions (backfilled prefix + real-timestamped suffix) stay
 	// monotonic: a single shared timestamp broke findMessageCutoff's
 	// binary search, which assumes file order == chronological order (#198).
-	// Use min(firstRealTimestamp, now-6h) to ensure monotonicity:
-	// - If first real timestamp is older than 6h, use it as base.
+	// Base is min(firstRealTimestamp, now-6h):
+	// - If the first real timestamp is older than 6h, use it as base.
 	// - Otherwise use now-6h to avoid polluting recent sessions.
+	// The cursor never falls below a real timestamp seen earlier in the
+	// file, so a ts-less SUFFIX also lands after its predecessor (#4670).
 	backfillBase := time.Now().Add(-6 * time.Hour)
 	if !firstRealTimestamp.IsZero() && firstRealTimestamp.Before(backfillBase) {
 		backfillBase = firstRealTimestamp
 	}
-	backfillTime := backfillBase
+	cursor := backfillBase
 	changed := false
-	n := 0
 	for i, line := range lines {
 		var rec jsonlRecord
 		if json.Unmarshal([]byte(line), &rec) != nil {
 			continue
 		}
-		if rec.Type != "message" || !rec.Timestamp.IsZero() {
+		if rec.Type != "message" {
 			continue
 		}
-		rec.Timestamp = backfillTime.Add(time.Duration(n) * time.Millisecond)
-		n++
+		// #4670/#558 reconciliation: migration-inserted summary notes are
+		// synthetic-NOW records, not legacy-old ones - findMessageCutoff's
+		// binary search never excludes zero-ts records, so stamping a
+		// summary with a cursor anchored at an old predecessor would drop
+		// it out of the rendering window (the #558 invariant). Summaries
+		// keep zero ts (always in-window).
+		if isSummaryNoteMessage(rec.Message) {
+			continue
+		}
+		if !rec.Timestamp.IsZero() {
+			if rec.Timestamp.After(cursor) {
+				cursor = rec.Timestamp
+			}
+			continue
+		}
+		cursor = cursor.Add(time.Millisecond)
+		rec.Timestamp = cursor
 		if data, err := json.Marshal(rec); err == nil {
 			lines[i] = string(data)
 			changed = true

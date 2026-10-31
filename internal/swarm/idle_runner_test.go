@@ -794,3 +794,9 @@ func TestRollbackClaimedTask(t *testing.T) {
 // task under either harness (its internal state machine/ticker dependencies
 // need investigation beyond this companion). The rollback itself is pinned
 // unit-level above; wiring an honest e2e is left as follow-up.
+//
+// FOLLOW-UP LANDED (#4367): zz_issue4367_test.go now drives the real claim
+// path e2e - a pending board task claimed, an onEvent callback panicking on
+// the first post-claim event, and the post-rollback re-panic observed through
+// an outer recovery wrapper. The earlier failures are avoided by panicking
+// in onEvent (before prompt/agent work) rather than inside the agent stream.

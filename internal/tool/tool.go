@@ -249,7 +249,10 @@ func (r *Registry) ToDefinitions() []provider.ToolDefinition {
 		defs = append(defs, provider.ToolDefinition{
 			Name:        t.Name(),
 			Description: desc,
-			Parameters:  t.Parameters(),
+			// Write-class tools gain the optional arg_rationale property so
+			// schema-strict models can send the justification the agent-side
+			// argument-complexity gate asks for (defect A fix).
+			Parameters: injectArgRationaleSchema(t.Name(), t.Parameters()),
 		})
 	}
 	return defs

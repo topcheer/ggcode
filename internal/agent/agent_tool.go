@@ -74,6 +74,12 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 
 		switch decision {
 		case permission.Deny:
+			// #4692-lineage audit gap: policy-rule denials were the ONLY
+			// silent permission outcome - user denials were recorded but
+			// the configured rule firing left zero trace. Governance/audit
+			// consumers need the policy's effect too.
+			a.auditToolResult(tc.Name, tc.Arguments, audit.StatusPolicyDenied,
+				"denied by permission policy (mode-independent rule)", 0, "")
 			return tool.Result{
 				Content: a.permissionDeniedMessage(tc.Name),
 				IsError: true,
@@ -350,6 +356,10 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 			if !res.IsError {
 				a.appendCrashSidecar(tc.Name, string(tc.Arguments))
 			}
+			// #4648: warn-mode still EXECUTES the tool - a successful write
+			// product must reach the created_by_run ledger exactly like the
+			// normal path, or the deletion guard misjudges self-created files.
+			a.recordWriteProducts(tc, res)
 			// #3859 B: ground before returning - this branch used to skip the
 			// shared grounding block entirely, so a command that BOTH hit a
 			// warn guard AND was a step's ground command left that step
@@ -377,6 +387,9 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 			if !res.IsError {
 				a.appendCrashSidecar(tc.Name, string(tc.Arguments))
 			}
+			// #4648: same as the workflow-warn branch above - warn-executed
+			// writes must register their products for created_by_run parity.
+			a.recordWriteProducts(tc, res)
 			res.Content += fmt.Sprintf("\n\n[invariant:%s] %s (target: %q) - warn-mode invariant matched; proceed carefully.", v.Inv.ID, v.Inv.Message, v.Target)
 			auditInvariantWarn(tc.Name, v.Inv.ID)
 			// #3859 B: same grounding gap as the workflow-warn branch - a
@@ -396,16 +409,34 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	// created_by_run predicate ("only delete what this run created").
 	// Operation granularity (#3254): a batch file_ops call registers every
 	// write-class target it produced, not just the first classified op.
-	if e := a.invariantEngineLazy(); e != nil && !res.IsError {
-		for _, ot := range invariantOpTargets(tc.Name, tc.Arguments) {
-			if ot.Op == "write" || ot.Op == "mkdir" || ot.Op == "move" {
-				e.recordProduct(ot.Target)
-			}
-		}
-	}
+	// #4648: extracted so the warn branches above share the exact same
+	// registration instead of silently skipping it.
+	a.recordWriteProducts(tc, res)
 	// r26: same products ground workflow-step completion (artifact_glob).
 	a.groundWorkflowAfterTool(tc, res)
 	return res
+}
+
+// recordWriteProducts registers every write-class target a successful
+// (or warn-mode-executed) tool call produced for the invariant engine's
+// created_by_run predicate. #4648: the workflow-warn and invariant-warn
+// branches execute the real tool just like the normal path, so their
+// successful writes must reach the ledger identically - previously the
+// warn branches skipped registration and the deletion guard then blocked
+// the agent from deleting files it had itself just created.
+func (a *Agent) recordWriteProducts(tc provider.ToolCallDelta, res tool.Result) {
+	if res.IsError {
+		return
+	}
+	e := a.invariantEngineLazy()
+	if e == nil {
+		return
+	}
+	for _, ot := range invariantOpTargets(tc.Name, tc.Arguments) {
+		if ot.Op == "write" || ot.Op == "mkdir" || ot.Op == "move" {
+			e.recordProduct(ot.Target)
+		}
+	}
 }
 
 // groundWorkflowAfterTool is the shared post-success grounding pass for
@@ -737,7 +768,7 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 	// result (by contract, grep.go), and the hint path was gated on
 	// IsError alone. Successful results of the search/LSP tools now also
 	// go through toolFallbackHint; the hint itself decides via
-	// isEmptyToolResult / lspFallbackHint (non-empty successes return ""
+	// lspFallbackHint (non-empty successes return ""
 	// unchanged, so no other tool or success path is affected).
 	// #3673: this is now the SINGLE engine for zero-match success hints
 	// (agent.go's toolFallbackCheck is IsError-gated again) and the
@@ -1015,6 +1046,17 @@ func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessa
 		a.auditToolResult(t.Name(), args, audit.StatusInvalid, r.Content, time.Since(startTime))
 		return *r, nil
 	}
+	// Pre-flight argument-complexity gate (sa-131, arXiv:2601.18282):
+	// high-complexity WRITE calls must first justify their heavy parameters;
+	// the same-intent resend always passes (normalized intent memo, defect B
+	// fix) and the per-run fire budget fails the gate open.
+	if r := preflightArgComplexityCheck(a.argComplexityGate, t, args); r != nil {
+		a.auditToolResult(t.Name(), args, audit.StatusInvalid, r.Content, time.Since(startTime))
+		return *r, nil
+	}
+	// Strip the gate-only justification field before dispatch: tools never
+	// see arg_rationale (it is consumed by the gate above).
+	args = stripArgRationale(args)
 	// Deterministic replay (GGCODE_TOOL_TAPE=replay:<path>): serve recorded
 	// results without ever invoking the real tool. See tool_tape.go. A tape
 	// miss returns an explicit error result - never a silent live fallback.
@@ -1635,18 +1677,6 @@ func simStripPaddedLineNumberPrefixes(text, content string) string {
 				lines[i] = simBareLineNumberPrefixRE.ReplaceAllString(l, "")
 			}
 		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func simStripAllLineNumberPrefixes(text string) string {
-	lines := simTrimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
-	for i, l := range lines {
-		if simReadFileLineNumberOnlyRE.MatchString(l) {
-			lines[i] = ""
-			continue
-		}
-		lines[i] = simLineNumberPrefixRE.ReplaceAllString(l, "")
 	}
 	return strings.Join(lines, "\n")
 }

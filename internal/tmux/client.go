@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -234,7 +233,12 @@ func (c *Client) KillPane(ctx context.Context, paneID string) error {
 }
 
 func (c *Client) ListPaneIDs(ctx context.Context) (map[string]struct{}, error) {
-	out, err := c.output(ctx, "list-panes", "-F", "#{pane_id}")
+	// #4372: -a enumerates ALL panes on the server. Without it list-panes
+	// only covers the target (current) window, so Refresh marked every
+	// managed pane living in another window as stale - CaptureAll skipped
+	// them and Restore re-created duplicates. Pane ids (%N) are globally
+	// unique, so widening the scope introduces no ambiguity.
+	out, err := c.output(ctx, "list-panes", "-a", "-F", "#{pane_id}")
 	if err != nil {
 		return nil, err
 	}
@@ -287,8 +291,25 @@ func (c *Client) output(ctx context.Context, args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
+// shellCommand renders cmd as a tmux trailing shell-command that is
+// evaluated exactly ONCE by the user's login shell. #4680: the old
+// `$SHELL -lc strconv.Quote(cmd)` wrapped cmd in Go-syntax double quotes -
+// strconv.Quote escapes Go string syntax, not shell, so the OUTER tmux
+// default-shell expanded $var/$(...)/backticks inside the double quotes
+// in the wrong environment (tmux server, non-login, server locale), broke
+// single-quote literal semantics, and created a second-order injection
+// surface when outer expansion output contained shell syntax. POSIX single
+// quoting hides cmd from the outer shell entirely; only the inner -lc
+// login shell evaluates it.
 func shellCommand(cmd string) string {
-	return shellPath() + " -lc " + strconv.Quote(cmd)
+	return shellPath() + " -lc " + shSingleQuote(cmd)
+}
+
+// shSingleQuote wraps s in POSIX single quotes, escaping embedded single
+// quotes with the '"'"' idiom - the result undergoes NO expansion by the
+// reading shell until the quotes are deliberately consumed.
+func shSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
 func shellPath() string {

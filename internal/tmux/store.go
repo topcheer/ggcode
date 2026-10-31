@@ -8,6 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 type LayoutPane struct {
@@ -69,6 +72,14 @@ func loadWorkspaceState(path, workspace string) ([]Pane, map[string][]LayoutPane
 }
 
 func saveWorkspaceState(path, workspace string, panes []Pane, layouts map[string][]LayoutPane) error {
+	// #4373: the store directory must exist BEFORE the lock file is opened —
+	// FileLock's O_CREATE on path+".flock" needs the parent dir and returns
+	// ENOENT otherwise, making every Save fail permanently (the MkdirAll that
+	// used to live below the lock was unreachable on the first Save with a
+	// custom store path or a fresh environment).
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create tmux pane store directory: %w", err)
+	}
 	// Acquire cross-process lock — multiple workspaces share the same store file.
 	unlock, err := lockTmuxStore(path)
 	if err != nil {
@@ -158,6 +169,20 @@ func readPaneStore(path string) (paneStoreFile, error) {
 		return store, nil
 	}
 	if err := json.Unmarshal(data, &store); err != nil {
+		// #4681: quarantine-and-rebuild instead of wedging forever. A
+		// corrupt store (disk-full truncation, editor mishap, legacy
+		// non-atomic write) used to fail every Load/Save on the machine
+		// with no self-healing path - even a workspace that only wanted to
+		// overwrite its OWN key was blocked. Rename the file aside
+		// (preserving it for manual recovery) and rebuild from empty; the
+		// #1313 wipe concern is bounded because the quarantined copy keeps
+		// every workspace's data recoverable by hand.
+		quarantine := fmt.Sprintf("%s.corrupt-%d", path, time.Now().Unix())
+		if rerr := os.Rename(path, quarantine); rerr == nil {
+			debug.Log("tmux", "pane store unparseable (%v); quarantined to %s, rebuilding from empty (#4681)", err, quarantine)
+			store = paneStoreFile{Workspaces: make(map[string]workspacePaneStore)}
+			return store, nil
+		}
 		return store, fmt.Errorf("parse tmux pane store: %w", err)
 	}
 	if store.Workspaces == nil {

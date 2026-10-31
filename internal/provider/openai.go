@@ -58,7 +58,7 @@ func (p *OpenAIProvider) ModelName() string { return p.model }
 // CloneWithModel returns a shallow copy of this provider with a different model.
 // Used by named subagents to run with a model override.
 func (p *OpenAIProvider) CloneWithModel(model string) Provider {
-	return &OpenAIProvider{
+	clone := &OpenAIProvider{
 		client:    p.client,
 		model:     model,
 		maxTokens: p.maxTokens,
@@ -77,7 +77,16 @@ func (p *OpenAIProvider) CloneWithModel(model string) Provider {
 		baseURL:         p.baseURL,
 		transport:       p.transport,
 		logprobs:        p.logprobs,
+		// #4419: same trap as #3066 (anthropic) - a struct literal silently
+		// dropped these two. responseSchema zero-value = structured-output
+		// constraint silently lost on model-override subagents; the
+		// atomic.Pointer literal copy carries only zero state.
+		responseSchema: append(json.RawMessage(nil), p.responseSchema...),
 	}
+	if ov := p.samplingOverride.Load(); ov != nil {
+		clone.samplingOverride.Store(ov)
+	}
+	return clone
 }
 
 // SetAdaptiveCap installs (or replaces) the adaptive max-output-tokens cap.
@@ -596,6 +605,13 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	// silently understates cost/budget. Mirror the streaming path's
 	// CountTokens + chars-based estimate fallback (ChatStream tail).
 	usage := openAIUsage(resp.Usage)
+	// #4664: estimation base mirrors the streaming path (which accumulates
+	// tool-call Name+Arguments into outputChars, openai.go:959) - content-only
+	// would undercount tool-call-heavy responses.
+	outputChars := len(choice.Message.Content)
+	for _, tc := range choice.Message.ToolCalls {
+		outputChars += len(tc.Function.Name) + len(tc.Function.Arguments)
+	}
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
 		inputTokens, err := p.CountTokens(ctx, messages)
 		if err != nil {
@@ -603,8 +619,25 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		}
 		usage = TokenUsage{
 			InputTokens:       inputTokens,
-			OutputTokens:      estimateTokensFromChars(len(choice.Message.Content)),
+			OutputTokens:      estimateTokensFromChars(outputChars),
 			PromptTokensTotal: inputTokens,
+		}
+	} else if usage.OutputTokens == 0 && outputChars > 0 {
+		// #4563: prompt-only usage (PromptTokens>0, CompletionTokens==0) from
+		// relays that report usage before generating - the non-streaming
+		// counterpart of the streaming #4472 backfill. Without this the
+		// compaction summarizer's cost/budget accounting understates output.
+		usage.OutputTokens = estimateTokensFromChars(outputChars)
+	} else if usage.InputTokens == 0 {
+		// #4664: completion-only usage (CompletionTokens>0, PromptTokens==0,
+		// common with vLLM/gateway relays) - the mirror gap of the streaming
+		// #4563 backfill (openai.go:1008-1018). Neither earlier branch fires:
+		// not double-zero, not zero-output - so InputTokens stayed
+		// permanently 0 and the compaction summarizer (the only caller)
+		// understated the prompt side of cost/budget accounting.
+		if it, err := p.CountTokens(ctx, messages); err == nil {
+			usage.InputTokens = it
+			usage.PromptTokensTotal = it
 		}
 	}
 
@@ -634,6 +667,15 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 // no-fallback production path. Every send in the ChatStream producer
 // goroutine must go through here.
 func (p *OpenAIProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
+	// #4295 family: same fix as openai_responses (#4293) / gemini - see
+	// the GeminiProvider.sendEvent comment. Non-blocking fast path keeps
+	// the terminal error deterministic; full-buffer falls through to the
+	// racing select (#3071 leak guard preserved).
+	select {
+	case ch <- ev:
+		return true
+	default:
+	}
 	select {
 	case ch <- ev:
 		return true
@@ -873,8 +915,21 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							// delta has nothing to disambiguate — default to 0 instead
 							// of silently discarding the whole turn's tool call.
 							idx = 0
+							// #4471: those same relays may stream parallel tool calls
+							// one chunk each; collapsing every chunk into slot 0 silently
+							// merges distinct calls (ID last-write-wins, arguments
+							// byte-concatenated into invalid JSON). When the delta
+							// carries an ID, keep distinct IDs in distinct slots.
+							idx = resolveNoIndexToolCallSlot(toolCalls, tc.ID)
+						} else if tc.ID != "" {
+							// #4535: relays that batch several parallel tool calls
+							// into one delta while omitting index previously lost
+							// every one of them. A delta carrying an ID can still
+							// be located - resolve it to a slot the same way the
+							// single-delta path does (#4471).
+							idx = resolveNoIndexToolCallSlot(toolCalls, tc.ID)
 						} else {
-							// Multiple calls without index cannot be located safely.
+							// Multiple calls without index or ID cannot be located safely.
 							debug.Log("openai", "dropping tool-call delta without index (multi-call delta, id=%s name=%s)", tc.ID, tc.Function.Name)
 							continue
 						}
@@ -959,6 +1014,26 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						OutputTokens:      estimateTokensFromChars(outputChars),
 						PromptTokensTotal: inputTokens,
 					}
+				} else {
+					if usage.OutputTokens == 0 && outputChars > 0 {
+						// #4472: the #1286 zero guard only rejects chunks where every
+						// field is zero, so a prompt-only usage chunk (two-phase relays)
+						// materializes usage with OutputTokens==0 and suppresses this
+						// estimation fallback - silently zeroing cost/budget/compaction
+						// accounting while real output streamed. Backfill the estimate.
+						usage.OutputTokens = estimateTokensFromChars(outputChars)
+					}
+					if usage.InputTokens == 0 {
+						// #4563: the mirror gap - a completion-only usage chunk
+						// (Output>0, Input==0) materializes usage, which skips the
+						// usage==nil estimation fallback above and leaves
+						// InputTokens permanently 0. Backfill via CountTokens so
+						// cost/budget accounting does not understate the prompt side.
+						if it, err := p.CountTokens(ctx, messages); err == nil {
+							usage.InputTokens = it
+							usage.PromptTokensTotal = it
+						}
+					}
 				}
 				var confidence *float64 // sa-74
 				if logprobN > 0 {
@@ -978,6 +1053,41 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	})
 
 	return ch, nil
+}
+
+// resolveNoIndexToolCallSlot locates the accumulator slot for a
+// single-element tool-call delta that omits index (#722 minimal relays).
+// #4471: those relays may stream parallel calls one chunk each - when the
+// delta carries an ID, reuse the slot with the same ID, or open a fresh
+// slot when slot 0 already belongs to a different ID; never merge two
+// distinct calls into one accumulator (corrupts arguments JSON).
+func resolveNoIndexToolCallSlot(toolCalls map[int]*ToolCallDelta, id string) int {
+	idx := 0
+	if id == "" {
+		return idx
+	}
+	for i, ex := range toolCalls {
+		if ex != nil && ex.ID == id {
+			return i
+		}
+	}
+	if ex0 := toolCalls[0]; ex0 != nil && ex0.ID != "" && ex0.ID != id {
+		return nextToolCallSlot(toolCalls)
+	}
+	return idx
+}
+
+// nextToolCallSlot returns the next free slot index for a tool-call delta
+// whose ID matches no existing slot (#4471: relays omitting index may
+// stream parallel calls one chunk each; distinct IDs must not share a slot).
+func nextToolCallSlot(toolCalls map[int]*ToolCallDelta) int {
+	max := -1
+	for k := range toolCalls {
+		if k > max {
+			max = k
+		}
+	}
+	return max + 1
 }
 
 func openAIUsage(usage openai.Usage) TokenUsage {

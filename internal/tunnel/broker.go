@@ -955,6 +955,12 @@ func (b *Broker) resetProjectionAndEnqueue(clearActive bool) {
 	b.enqueueControl(EventSnapshotReset, nil)
 }
 
+// PushSharingStopped is superseded by StopSharingGracefully, which emits the
+// "sharing_stopped" event via enqueueWithBytes and waits for delivery before
+// stopping the broker (#4303: migration, not deletion - all four production
+// emission sites route through the graceful path, so the flutter handlers
+// stay reachable). Kept only as exported-API compat; dead code pending
+// cleanup-pool removal.
 func (b *Broker) PushSharingStopped() {
 	b.enqueue("sharing_stopped", nil)
 }

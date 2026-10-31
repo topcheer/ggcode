@@ -12,13 +12,18 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 // iosBackend implements mobileBackend using xcrun simctl on macOS.
 // Only compiled on darwin platforms.
 type iosBackend struct {
-	xcrunPath  string
+	xcrunPath string
+	// #4482: cachedUDID is read/written from defaultDevice(), which
+	// parallel tool-execution batches can call concurrently - guard it
+	// (Go memory model / -race CI).
+	mu         sync.Mutex
 	cachedUDID string
 }
 
@@ -31,9 +36,12 @@ func newIOSBackend() *iosBackend {
 }
 
 func (b *iosBackend) defaultDevice() string {
+	b.mu.Lock()
 	if b.cachedUDID != "" {
+		defer b.mu.Unlock()
 		return b.cachedUDID
 	}
+	b.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	out, _, err := runCommand(ctx, 10*time.Second, b.xcrunPath, "simctl", "list", "devices", "available", "--json")
@@ -54,7 +62,9 @@ func (b *iosBackend) defaultDevice() string {
 	for _, devs := range list.Devices {
 		for _, d := range devs {
 			if d.State == "Booted" {
+				b.mu.Lock()
 				b.cachedUDID = d.UDID
+				b.mu.Unlock()
 				return d.UDID
 			}
 		}
@@ -348,13 +358,27 @@ end tell`, escapedText)
 	return Result{Content: fmt.Sprintf("Typed: %q", text)}, nil
 }
 
-func (b *iosBackend) swipe(ctx context.Context, device, ref string, x, y, endX, endY int) (Result, error) {
+func (b *iosBackend) swipe(ctx context.Context, device, ref string, x, y int, endX, endY *int) (Result, error) {
+	// #4457: mirror the tap guard (#843) and the Android swipe fix
+	// (#1694 case 2) - this signature receives ref but never used it, so a
+	// ref-only swipe ran (0,0)->(0,0) and reported success.
+	if ref != "" {
+		return Result{IsError: true, Content: "element reference requires a prior snapshot - swipe with explicit start/end coordinates"}, nil
+	}
+	// #4576: absent ends must be an error, not a silent swipe to (0,0).
+	if endX == nil || endY == nil {
+		return Result{IsError: true, Content: "swipe requires end_x and end_y (the swipe destination); provide both explicitly"}, nil
+	}
+	ex, ey := *endX, *endY
+	if x == 0 && y == 0 && ex == 0 && ey == 0 {
+		return Result{IsError: true, Content: "swipe requires explicit start/end coordinates (got all zeros)"}, nil
+	}
 	// #841: discrete clicks are full press+release cycles - iOS never
 	// recognizes them as a pan. Build a sustained mouse down -> move ->
 	// mouse up drag via System Events.
 	sx, sy := b.scaleForDevice(device)
 	if sx > 1 || sy > 1 {
-		x, y, endX, endY = x/sx, y/sy, endX/sx, endY/sy
+		x, y, ex, ey = x/sx, y/sy, ex/sx, ey/sy
 	}
 	steps := 8
 	var sb strings.Builder
@@ -363,8 +387,8 @@ func (b *iosBackend) swipe(ctx context.Context, device, ref string, x, y, endX, 
 	sb.WriteString(fmt.Sprintf("  mouse move to {%d, %d}\n", x, y))
 	sb.WriteString("  mouse down\n")
 	for i := 1; i <= steps; i++ {
-		interX := x + (endX-x)*i/steps
-		interY := y + (endY-y)*i/steps
+		interX := x + (ex-x)*i/steps
+		interY := y + (ey-y)*i/steps
 		sb.WriteString(fmt.Sprintf("  mouse move to {%d, %d}\n", interX, interY))
 	}
 	sb.WriteString("  mouse up\n")
@@ -373,7 +397,7 @@ func (b *iosBackend) swipe(ctx context.Context, device, ref string, x, y, endX, 
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("swipe failed: %v\n%s", err, stderr)}, nil
 	}
-	return Result{Content: fmt.Sprintf("Swiped from (%d,%d) to (%d,%d).", x, y, endX, endY)}, nil
+	return Result{Content: fmt.Sprintf("Swiped from (%d,%d) to (%d,%d).", x, y, ex, ey)}, nil
 }
 
 func (b *iosBackend) press(ctx context.Context, device, key string) (Result, error) {

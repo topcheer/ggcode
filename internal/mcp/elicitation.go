@@ -70,26 +70,6 @@ const (
 	ElicitationModeURL  = "url"
 )
 
-// ErrCodeURLElicitationRequired is the JSON-RPC error code (-32042) a server
-// returns when a tool call cannot proceed until a URL mode elicitation is
-// completed (MCP 2025-11-25). The error data carries the required
-// elicitations; see URLElicitationRequiredData.
-const ErrCodeURLElicitationRequired = -32042
-
-// URLElicitationRequiredInfo is one required URL mode elicitation entry from
-// a -32042 URLElicitationRequiredError's data payload.
-type URLElicitationRequiredInfo struct {
-	Mode          string `json:"mode"`
-	ElicitationID string `json:"elicitationId"`
-	URL           string `json:"url"`
-	Message       string `json:"message"`
-}
-
-// URLElicitationRequiredData is the data payload of -32042 errors.
-type URLElicitationRequiredData struct {
-	Elicitations []URLElicitationRequiredInfo `json:"elicitations"`
-}
-
 // ElicitationParams is the parameters for an elicitation/create request.
 type ElicitationParams struct {
 	// Mode selects the elicitation mode: "form" (default) or "url" per

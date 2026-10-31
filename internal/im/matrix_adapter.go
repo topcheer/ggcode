@@ -177,7 +177,29 @@ func (a *matrixAdapter) Close() error {
 	if a.cancelFn != nil {
 		a.cancelFn()
 	}
+	// #4518: the crypto db handle was only closed on the NEXT
+	// openPersistentCryptoStore re-entry; after MuteBinding → stopAdapter →
+	// Close the run loop never re-enters, so the SQLite handle (DSN
+	// _txlock=immediate - the file lock rides the connection) stayed open
+	// until process exit, and an unmute with a fresh adapter instance left
+	// the old closer with no owner at all. db.Close does not re-enter a.mu,
+	// so closing under the held lock is safe; nil'ing keeps re-entry
+	// idempotent.
+	if a.cryptoDBCloser != nil {
+		_ = a.cryptoDBCloser.Close()
+		a.cryptoDBCloser = nil
+	}
 	return nil
+}
+
+// currentClient snapshots the mautrix client under the adapter lock (#4517:
+// the #433 sweep missed these sites - syncer callbacks, DM heuristics and
+// the cryptoStateStore run on sync/crypto goroutines that race Close/reconnect
+// writes to a.client; Send/sendImage/TriggerTyping already RLock, these did not).
+func (a *matrixAdapter) currentClient() *mautrix.Client {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.client
 }
 
 func (a *matrixAdapter) run(ctx context.Context) {
@@ -277,10 +299,16 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 
 	// Auto-join when invited
 	syncer.OnEventType(event.StateMember, func(ctx context.Context, evt *event.Event) {
+		// #4517: this callback runs on the sync goroutine and races
+		// Close/reconnect writes to a.client - snapshot under RLock.
+		client := a.currentClient()
+		if client == nil {
+			return
+		}
 		membership, _ := evt.Content.Raw["membership"].(string)
-		if membership == "invite" && evt.GetStateKey() == string(a.client.UserID) {
+		if membership == "invite" && evt.GetStateKey() == string(client.UserID) {
 			debug.Log("matrix", "adapter=%s invited to room=%s, joining", a.name, evt.RoomID)
-			_, err := a.client.JoinRoom(ctx, evt.RoomID.String(), nil)
+			_, err := client.JoinRoom(ctx, evt.RoomID.String(), nil)
 			if err != nil {
 				debug.Log("matrix", "adapter=%s failed to join room=%s: %v", a.name, evt.RoomID, err)
 			} else {
@@ -519,17 +547,22 @@ func (a *matrixAdapter) setupCrypto(ctx context.Context) error {
 		// Non-fatal: keys may already be uploaded
 	}
 
+	// #4517: snapshot the client - Close/reconnect can nil it concurrently.
+	a.mu.Lock()
 	a.mach = mach
+	a.mu.Unlock()
 	debug.Log("matrix", "adapter=%s E2EE crypto loaded (device=%s)", a.name, a.client.DeviceID)
 	return nil
 }
 
 func (a *matrixAdapter) fetchDMRooms(ctx context.Context) {
-	if a.client == nil {
+	// #4517: snapshot under RLock; Close/reconnect races the raw read.
+	client := a.currentClient()
+	if client == nil {
 		return
 	}
 	var dmMap map[string][]string
-	err := a.client.GetAccountData(ctx, "m.direct", &dmMap)
+	err := client.GetAccountData(ctx, "m.direct", &dmMap)
 	if err != nil {
 		debug.Log("matrix", "adapter=%s fetchDMRooms error: %v", a.name, err)
 		return
@@ -559,8 +592,41 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 		}
 		decrypted, err := a.mach.DecryptMegolmEvent(ctx, evt)
 		if err != nil {
-			debug.Log("matrix", "adapter=%s decrypt failed room=%s: %v", a.name, roomID, err)
-			return
+			// #4644: a missing megolm session is recoverable — request the
+			// key (cryptohelper pattern: sender's devices + our own other
+			// devices) and retry briefly. Without this, E2EE DMs hit by a
+			// new-device/key-backfill gap were silently dropped forever.
+			if errors.Is(err, crypto.ErrNoSessionFound) {
+				if enc := evt.Content.AsEncrypted(); enc != nil {
+					reqErr := a.mach.SendRoomKeyRequest(ctx, id.RoomID(roomID), enc.SenderKey, enc.SessionID, "", map[id.UserID][]id.DeviceID{
+						id.UserID(sender):   {"*"},
+						id.UserID(a.userID): {"*"},
+					})
+					if reqErr != nil {
+						debug.Log("matrix", "adapter=%s key re-request failed room=%s session=%s: %v", a.name, roomID, enc.SessionID, reqErr)
+					} else {
+						debug.Log("matrix", "adapter=%s requested missing megolm key room=%s session=%s", a.name, roomID, enc.SessionID)
+					}
+					// Bounded retry: the key may already be queued in the
+					// to-device stream (ProcessSyncResponse handles shares).
+					// #4698: the wait is ctx-aware - a raw Sleep held the
+					// serial syncer pipeline for up to 2.4s per bad event even
+					// after cancellation, stalling every room behind it.
+					for attempt := 0; attempt < 3 && err != nil; attempt++ {
+						select {
+						case <-ctx.Done():
+							debug.Log("matrix", "adapter=%s key-retry aborted by ctx cancellation room=%s (#4698)", a.name, roomID)
+							return
+						case <-time.After(800 * time.Millisecond):
+						}
+						decrypted, err = a.mach.DecryptMegolmEvent(ctx, evt)
+					}
+				}
+			}
+			if err != nil {
+				debug.Log("matrix", "adapter=%s decrypt failed room=%s (key requested; later events should decrypt once it arrives): %v", a.name, roomID, err)
+				return
+			}
 		}
 		debug.Log("matrix", "adapter=%s decrypted event in room=%s -> type=%s", a.name, roomID, decrypted.Type.Type)
 		evt = decrypted
@@ -618,6 +684,24 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 
 	msgtype := string(content.MsgType)
 	body := content.Body
+
+	// #4646: an edit (m.replace) carries the corrected text in m.new_content;
+	// Body is only the "* corrected" fallback shape. Process the edit as the
+	// new content instead of double-processing the original intent with a
+	// polluted prefix.
+	if rel := content.GetRelatesTo(); rel != nil && rel.Type == event.RelReplace {
+		if content.NewContent != nil && strings.TrimSpace(content.NewContent.Body) != "" {
+			debug.Log("matrix", "adapter=%s room=%s edit event: using m.new_content body", a.name, roomID)
+			body = content.NewContent.Body
+			if msgtype == "" {
+				msgtype = string(content.NewContent.MsgType)
+			}
+		} else {
+			// Edit without new_content (malformed): strip the fallback prefix
+			// rather than processing the "* " shape as a fresh message.
+			body = strings.TrimPrefix(strings.TrimLeft(body, " "), "* ")
+		}
+	}
 
 	if msgtype != "m.text" && msgtype != "" {
 		debug.Log("matrix", "adapter=%s skipping msgtype=%s", a.name, msgtype)
@@ -706,13 +790,17 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 // --- DM detection ---
 
 func (a *matrixAdapter) checkIsDMViaAPI(ctx context.Context, roomID string) bool {
-	if a.client == nil {
-		return false
+	// #4517: snapshot under RLock (#433 sweep missed this site).
+	client := a.currentClient()
+	if client == nil {
+		// #4645: fail-open - returning false here sends real DM traffic
+		// into the mention gate and silently drops mention-less messages.
+		return true
 	}
 	// Authoritative source: m.direct account data (same semantics as
 	// fetchDMRooms). A room marked there IS a DM regardless of membership.
 	var dmMap map[string][]string
-	if err := a.client.GetAccountData(ctx, "m.direct", &dmMap); err == nil {
+	if err := client.GetAccountData(ctx, "m.direct", &dmMap); err == nil {
 		for _, rooms := range dmMap {
 			for _, rid := range rooms {
 				if rid == roomID {
@@ -722,16 +810,22 @@ func (a *matrixAdapter) checkIsDMViaAPI(ctx context.Context, roomID string) bool
 			}
 		}
 	} else {
-		debug.Log("matrix", "adapter=%s m.direct lookup room=%s error: %v", a.name, roomID, err)
+		// #4645: fail-open on account-data errors - a transient homeserver
+		// 5xx/limit must not turn a real DM into a mention-gated drop.
+		debug.Log("matrix", "adapter=%s m.direct lookup room=%s error (failing open): %v", a.name, roomID, err)
+		return true
 	}
 	// Heuristic fallback: exactly 2 joined members. Deliberately NOT cached -
 	// a 2-member room may be a small group rather than a DM, and permanently
 	// caching it as DM would bypass the mention gate irrevocably and could be
 	// induced by anyone inviting the bot into a 2-person room (issue #961).
-	members, err := a.client.JoinedMembers(ctx, id.RoomID(roomID))
+	members, err := client.JoinedMembers(ctx, id.RoomID(roomID))
 	if err != nil {
-		debug.Log("matrix", "adapter=%s checkIsDMViaAPI room=%s error: %v", a.name, roomID, err)
-		return false
+		// #4645: fail-open on membership errors for the same reason - the
+		// cost of wrongly skipping the mention gate is one noisy reply; the
+		// cost of failing closed is silently dropping real DMs.
+		debug.Log("matrix", "adapter=%s checkIsDMViaAPI room=%s error (failing open): %v", a.name, roomID, err)
+		return true
 	}
 	if len(members.Joined) == 2 {
 		debug.Log("matrix", "adapter=%s room=%s looks like DM (2 members, heuristic, not cached)", a.name, roomID)
@@ -744,10 +838,12 @@ func (a *matrixAdapter) checkIsDMViaAPI(ctx context.Context, roomID string) bool
 // --- Display names ---
 
 func (a *matrixAdapter) getDisplayName(ctx context.Context, userID string) string {
-	if a.client == nil {
+	// #4517: snapshot under RLock (runs from the syncer OnEvent callback).
+	client := a.currentClient()
+	if client == nil {
 		return userID
 	}
-	resp, err := a.client.GetProfile(ctx, id.UserID(userID))
+	resp, err := client.GetProfile(ctx, id.UserID(userID))
 	if err != nil {
 		return userID
 	}
@@ -929,6 +1025,7 @@ func (a *matrixAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 
 	// Extract images from markdown text and send them as m.image events.
 	images, remainingText := ExtractImagesFromText(text)
+	sentImages := 0
 	for i, img := range images {
 		data, mimeType, err := a.resolveImageToBytes(ctx, img)
 		if err != nil {
@@ -938,6 +1035,7 @@ func (a *matrixAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		if err := a.sendImage(ctx, chatID, binding.ThreadID, data, mimeType); err != nil {
 			debug.Log("matrix", "adapter=%s image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
 		} else {
+			sentImages++
 			debug.Log("matrix", "adapter=%s image sent [%d/%d] mime=%s size=%d", a.name, i+1, len(images), mimeType, len(data))
 		}
 		// Rate limit between image sends
@@ -949,7 +1047,13 @@ func (a *matrixAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	}
 
 	if remainingText == "" {
-		return nil
+		if len(images) > 0 && sentImages == 0 {
+			// #4464: an image-only message whose sends all failed must not
+			// be silently dropped - fall back to the original markdown text.
+			remainingText = text
+		} else {
+			return nil
+		}
 	}
 
 	debug.Log("matrix", "adapter=%s send room=%s kind=%s len=%d images=%d", a.name, chatID, event.Kind, len(remainingText), len(images))
@@ -1292,11 +1396,14 @@ type cryptoStateStore struct {
 // rooms fall back to Matrix's default ("shared"), matching mautrix's own
 // DefaultHistoryVisibility handling.
 func (s *cryptoStateStore) GetHistoryVisibility(ctx context.Context, roomID id.RoomID) (*event.HistoryVisibilityEventContent, error) {
-	if s.adapter.client == nil {
+	// #4517: the OlmMachine calls these during sync; snapshot the client
+	// under the adapter lock (#433 sweep missed this family).
+	client := s.adapter.currentClient()
+	if client == nil {
 		return &event.HistoryVisibilityEventContent{HistoryVisibility: event.HistoryVisibilityShared}, nil
 	}
 	var hv event.HistoryVisibilityEventContent
-	if err := s.adapter.client.StateEvent(ctx, roomID, event.StateHistoryVisibility, "", &hv); err != nil {
+	if err := client.StateEvent(ctx, roomID, event.StateHistoryVisibility, "", &hv); err != nil {
 		// #1355: fail CLOSED, aligned with mautrix's own crypto store
 		// (encryptmegolm.go returns the error on state fetch failure).
 		// Returning "shared" on a transient error marked joined/invited
@@ -1317,10 +1424,11 @@ func (s *cryptoStateStore) GetHistoryVisibility(ctx context.Context, roomID id.R
 }
 
 func (s *cryptoStateStore) IsEncrypted(ctx context.Context, roomID id.RoomID) (bool, error) {
-	if s.adapter.client == nil {
+	client := s.adapter.currentClient() // #4517
+	if client == nil {
 		return false, nil
 	}
-	stateEvts, err := s.adapter.client.FullStateEvent(ctx, roomID, event.StateEncryption, "")
+	stateEvts, err := client.FullStateEvent(ctx, roomID, event.StateEncryption, "")
 	if err != nil {
 		return false, err
 	}
@@ -1328,10 +1436,11 @@ func (s *cryptoStateStore) IsEncrypted(ctx context.Context, roomID id.RoomID) (b
 }
 
 func (s *cryptoStateStore) GetEncryptionEvent(ctx context.Context, roomID id.RoomID) (*event.EncryptionEventContent, error) {
-	if s.adapter.client == nil {
+	client := s.adapter.currentClient() // #4517
+	if client == nil {
 		return nil, nil
 	}
-	evt, err := s.adapter.client.FullStateEvent(ctx, roomID, event.StateEncryption, "")
+	evt, err := client.FullStateEvent(ctx, roomID, event.StateEncryption, "")
 	if err != nil {
 		return nil, err
 	}
@@ -1355,10 +1464,11 @@ func (s *cryptoStateStore) FindSharedRooms(ctx context.Context, userID id.UserID
 }
 
 func (s *cryptoStateStore) GetRoomJoinedOrInvitedMembers(ctx context.Context, roomID id.RoomID) ([]id.UserID, error) {
-	if s.adapter.client == nil {
+	client := s.adapter.currentClient() // #4517
+	if client == nil {
 		return nil, nil
 	}
-	members, err := s.adapter.client.JoinedMembers(ctx, roomID)
+	members, err := client.JoinedMembers(ctx, roomID)
 	if err != nil {
 		return nil, err
 	}

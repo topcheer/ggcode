@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -156,10 +154,12 @@ func NewAgentLoop(
 		if mode == "bypass" || mode == "autopilot" {
 			return true
 		}
-		if mode == "auto" {
-			// Auto-approve file writes in auto mode
-			return true
-		}
+		// #4634: legacy "auto" is normalized to supervised everywhere else
+		// (approval handler, permission layer) - only an explicit bypass or
+		// autopilot session auto-approves workspace writes. A default session
+		// (client never called session/set_mode) must still get the diff
+		// confirmation request; the old auto branch silently wrote files
+		// with no Client confirmation at all.
 		approved, err := al.RequestPermission(ctx, "fs_write",
 			ToolCallUpdate{
 				Title:     fmt.Sprintf("Write file: %s", filePath),
@@ -248,14 +248,6 @@ func (al *AgentLoop) SetMode(mode string) {
 	al.modeMu.Lock()
 	al.mode = mode
 	al.modeLocked = true
-	al.modeMu.Unlock()
-	al.applyModePolicy(mode)
-}
-
-// SetModeDefault installs the initial mode without marking it as user-chosen.
-func (al *AgentLoop) SetModeDefault(mode string) {
-	al.modeMu.Lock()
-	al.mode = mode
 	al.modeMu.Unlock()
 	al.applyModePolicy(mode)
 }
@@ -569,38 +561,6 @@ func providerToACPMessage(msgs []provider.Message) []Message {
 	return out
 }
 
-// ReadFile reads a file, using the Client's FS capability if available.
-func (al *AgentLoop) ReadFile(ctx context.Context, path string) (string, error) {
-	if al.clientCaps.FS != nil && al.clientCaps.FS.ReadTextFile {
-		return al.requestClientReadFile(ctx, path)
-	}
-	absPath := path
-	if !filepath.IsAbs(absPath) {
-		absPath = filepath.Join(al.session.CWD, path)
-	}
-	data, err := os.ReadFile(absPath)
-	if err != nil {
-		return "", fmt.Errorf("reading file %s: %w", path, err)
-	}
-	return string(data), nil
-}
-
-// WriteFile writes a file, using the Client's FS capability if available.
-func (al *AgentLoop) WriteFile(ctx context.Context, path, content string) error {
-	if al.clientCaps.FS != nil && al.clientCaps.FS.WriteTextFile {
-		return al.requestClientWriteFile(ctx, path, content)
-	}
-	absPath := path
-	if !filepath.IsAbs(absPath) {
-		absPath = filepath.Join(al.session.CWD, path)
-	}
-	dir := filepath.Dir(absPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("creating directory %s: %w", dir, err)
-	}
-	return os.WriteFile(absPath, []byte(content), 0o644)
-}
-
 // RequestPermission sends a permission request to the Client and waits for response.
 func (al *AgentLoop) RequestPermission(ctx context.Context, permType string, toolCall ToolCallUpdate) (bool, error) {
 	options := []PermissionOption{
@@ -628,41 +588,6 @@ func (al *AgentLoop) RequestPermission(ctx context.Context, permType string, too
 	}
 
 	return response.Outcome.Outcome == "selected" && response.Outcome.SelectedOption != nil && response.Outcome.SelectedOption.OptionID == "allow", nil
-}
-
-// requestClientReadFile requests the Client to read a file via fs/read_text_file.
-func (al *AgentLoop) requestClientReadFile(ctx context.Context, path string) (string, error) {
-	result, err := al.transport.SendRequest(
-		ctx,
-		"fs/read_text_file",
-		FSReadTextFileParams{Path: path},
-		30*time.Second,
-	)
-	if err != nil {
-		return "", fmt.Errorf("requesting client read file: %w", err)
-	}
-
-	var response FSReadTextFileResult
-	if err := json.Unmarshal(result, &response); err != nil {
-		return "", fmt.Errorf("parsing read file response: %w", err)
-	}
-	return response.Content, nil
-}
-
-// requestClientWriteFile requests the Client to write a file via fs/write_text_file.
-func (al *AgentLoop) requestClientWriteFile(ctx context.Context, path, content string) error {
-	result, err := al.transport.SendRequest(
-		ctx,
-		"fs/write_text_file",
-		FSWriteTextFileParams{Path: path, Content: content},
-		30*time.Second,
-	)
-	if err != nil {
-		return fmt.Errorf("requesting client write file: %w", err)
-	}
-
-	_ = result
-	return nil
 }
 
 // acpAskUserSessionKey is the context key that tags a prompt run with its ACP

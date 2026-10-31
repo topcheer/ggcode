@@ -247,8 +247,11 @@ func parseDiffStats(diffOutput string) diffStats {
 		prevWasOldHeader = false
 		// Track the b/ path from "diff --git a/x b/x" headers - the only
 		// source for pure mode-change hunks.
-		if m := diffGitHeader.FindStringSubmatch(line); m != nil && len(m) > 1 {
-			lastGitPath = m[1]
+		if m := diffGitHeader.FindStringSubmatch(line); m != nil && (m[1] != "" || (len(m) > 2 && m[2] != "")) {
+			lastGitPath = normalizeGitDiffPath(m[1])
+			if m[1] == "" {
+				lastGitPath = normalizeGitDiffPath(m[2])
+			}
 		}
 		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
 			lastOldFile = ""

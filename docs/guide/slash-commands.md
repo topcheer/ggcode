@@ -12,7 +12,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/resume` | Resume a specific session |
 | `/compact` | Compact conversation to save context |
 | `/clear` | Clear conversation |
-| `/context` | Show context window usage and details |
+| `/context` | Show context window usage, breakdown, and provenance (external-source/injection-flagged) summary |
 | `/copy` | Copy conversation to clipboard |
 | `/export [path]` | Export session to file |
 | `/stats` | Open session statistics panel |
@@ -102,7 +102,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/tmux` | Manage tmux session |
 | `/bug` | Report a bug |
 | `/reflect` | Trigger agent self-reflection on recent runs |
-| `/export-trace` | Export session execution trace as structured JSON (TTFT, tool latency, token usage) |
+| `/export-trace` | Export session execution trace as structured JSON (TTFT, tool latency, token usage); `--otel` emits OTLP/GenAI semconv spans ingestible by Jaeger/Grafana/Langfuse |
 | `/doctor` | Run health diagnostics (provider, config, MCP, LSP, permissions) |
 | `/style` | Cycle output style (default → concise → detailed → socratic) |
 | `/branch [N]` / `/fork [N]` | Branch/fork current session; N drops the last N user turns to fork from an earlier point |
