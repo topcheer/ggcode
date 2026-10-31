@@ -12,6 +12,8 @@ func enCatalog(key string) string {
 		return "idle"
 	case "cron.firing":
 		return "⏰ Cron job triggered"
+	case "cron.skipped_busy":
+		return "⏭ Cron firing skipped (agent busy, queue_if_busy=false)"
 	case "panel.conversation":
 		return "Conversation"
 	case "panel.composer":
