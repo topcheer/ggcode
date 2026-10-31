@@ -697,7 +697,10 @@ func plainStreamPrinter(pendingToolCalls map[string]bool) (func(provider.StreamE
 				closeThink()
 				fmt.Print(event.Text)
 			case provider.StreamEventReasoning:
-				if event.Text == "" {
+				// #4756: __redacted_thinking__ is an echo-back placeholder for
+				// server-redacted thinking blocks, not reasoning content - skip
+				// it the same way tui/submit.go and subagent/runner.go do.
+				if event.Text == "" || event.Text == "__redacted_thinking__" {
 					return
 				}
 				if !thinkOpen {
