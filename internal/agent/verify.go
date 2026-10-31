@@ -584,7 +584,7 @@ func (a *Agent) executeVerifyCommand(ctx context.Context, command string) *Verif
 			// result.Output) so both errorSummary consumers inject the real
 			// failure text.
 			fallback := fmt.Sprintf("command failed: %v", err)
-			if tail := truncStr(strings.TrimSpace(outputStr), 2000); tail != "" {
+			if tail := truncTail(strings.TrimSpace(outputStr), 2000); tail != "" { // #4690: keep the END - unmarked-failure signals live there
 				fallback += "\noutput tail:\n" + tail
 			}
 			result.Errors = []string{fallback}
