@@ -2759,6 +2759,19 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 		}
 	}
 
+	// Hold the cross-process session lock (same .flock sidecar the appenders
+	// use) for the whole create->encode->cleanup window (#4538): without it,
+	// a concurrent appendRecordLines in another process could open this
+	// just-created file and append a record BETWEEN our failed Encode and the
+	// os.Remove below - the Remove then deletes that append too and the
+	// appending process believes its record was persisted. s.mu only
+	// serializes this process, so the sidecar lock is required.
+	unlock, lockErr := lockWithBackoff(func() (func(), error) { return lockSessionFile(path) }, "EnsureMeta", "session")
+	if lockErr != nil {
+		return lockErr
+	}
+	defer unlock()
+
 	// O_EXCL guards against a cross-process TOCTOU (#531): the sessions
 	// directory is shared by multiple ggcode processes (CLI + desktop), and
 	// s.mu only serializes within this process. With Stat-then-Create(O_TRUNC)
@@ -2806,6 +2819,8 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 		ForkPoint:            ses.ForkPoint,
 	}
 	if err := enc.Encode(meta); err != nil {
+		// Safe under the sidecar lock held above: no other process can be
+		// appending to this path concurrently (#4538).
 		os.Remove(path)
 		return err
 	}
