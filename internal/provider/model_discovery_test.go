@@ -150,6 +150,12 @@ func TestDiscoverModelsReusesSameHostCacheForNonGatewayVendor(t *testing.T) {
 	}))
 	defer server.Close()
 
+	// #4665: the same-host sharing semantics now require the same base PATH
+	// too (oneapi/litellm real deployments serve both protocols under the
+	// same /v1 registry root). Same host:port + same path across protocols
+	// still shares one cached model list; same host with a DIFFERENT path is
+	// a different upstream (reverse-proxy split) and must not share - pinned
+	// in zz_issue4665_test.go.
 	first, err := DiscoverModels(context.Background(), &config.ResolvedEndpoint{
 		VendorID:   "custom",
 		EndpointID: "openai",
@@ -164,7 +170,7 @@ func TestDiscoverModelsReusesSameHostCacheForNonGatewayVendor(t *testing.T) {
 		VendorID:   "custom",
 		EndpointID: "anthropic",
 		Protocol:   "anthropic",
-		BaseURL:    server.URL + "/anthropic",
+		BaseURL:    server.URL + "/v1",
 		APIKey:     "test-key",
 	})
 	if err != nil {
