@@ -129,25 +129,29 @@ func hashEntry(e Entry) string {
 	writeField(e.InputHash)
 	writeField(fmt.Sprintf("%d", e.DurationMS))
 	writeField(e.Err)
-	// #3240: InvariantID is sealed into the chain hash too - it is the
-	// sole attribution field for invariant rejections, so a post-hoc edit
-	// (rewriting which rule fired, erasing the fact, or framing a normal
-	// action) must trip Verify. Conditional append: an empty InvariantID
-	// writes zero bytes, so pre-r454 entries hash identically under old
-	// and new code (chain compatibility - old chains still Verify).
-	if e.InvariantID != "" {
-		writeField(e.InvariantID)
-	}
-	// r33: A2A handoff attribution is sealed into the chain hash too - a
-	// governance ledger must not allow post-hoc anonymous-izing a remote
-	// submission. Same conditional-append pattern as InvariantID: empty
-	// fields write zero bytes, so pre-r33 entries hash identically under
-	// old and new code (chain compatibility).
-	if e.Peer != "" {
-		writeField(e.Peer)
-	}
-	if e.TaskID != "" {
-		writeField(e.TaskID)
+	// #4707: the three attribution fields are written with unconditional
+	// 1-byte field tags whenever ANY of them is set, so values cannot slide
+	// between slots. The old conditional append (non-empty -> len+value,
+	// empty -> nothing) lost field-boundary information: E1{Inv:"X", Peer:"",
+	// Task:"Y"} and E2{Inv:"X", Peer:"Y", Task:""} hashed byte-identically,
+	// so a tamperer with ledger write access (inside Verify's threat model)
+	// could move an invariant attribution into the Peer slot - or erase a
+	// remote submission's attribution - without tripping the chain, exactly
+	// what the #3240/r33 sealing comments promise to prevent.
+	//
+	// Compatibility fold: when ALL THREE are empty (the only shape pre-r33/
+	// pre-r454 chains ever wrote) nothing is emitted - byte-identical to
+	// the old encoder, so old chains still Verify (#3240 compat test).
+	// Any non-empty attribution switches to the fully-tagged form, where
+	// every slot (including empty ones) is unambiguous.
+	if e.InvariantID != "" || e.Peer != "" || e.TaskID != "" {
+		writeTagged := func(tag byte, s string) {
+			b.WriteByte(tag)
+			writeField(s)
+		}
+		writeTagged(1, e.InvariantID)
+		writeTagged(2, e.Peer)
+		writeTagged(3, e.TaskID)
 	}
 	writeField(e.PrevHash)
 	sum := sha256.Sum256([]byte(b.String()))
