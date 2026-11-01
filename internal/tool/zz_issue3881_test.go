@@ -36,14 +36,22 @@ func TestIssue3881X11DragArgsChainedWithSync(t *testing.T) {
 func TestIssue3881AtspiClickHonorsButtonParam(t *testing.T) {
 	// X11: x11ButtonCode must map right/middle (the schema enum) distinctly
 	// from the left default the old hardcoded "1" produced.
-	if got := x11ButtonCode("right"); got != "3" {
-		t.Fatalf("x11ButtonCode(right) = %q, want 3", got)
+	if got, err := x11ButtonCode("right"); err != nil || got != "3" {
+		t.Fatalf("x11ButtonCode(right) = %q err=%v, want 3", got, err)
 	}
-	if got := x11ButtonCode("middle"); got != "2" {
-		t.Fatalf("x11ButtonCode(middle) = %q, want 2", got)
+	if got, err := x11ButtonCode("middle"); err != nil || got != "2" {
+		t.Fatalf("x11ButtonCode(middle) = %q err=%v, want 2", got, err)
 	}
-	if got := x11ButtonCode(""); got != "1" {
-		t.Fatalf("x11ButtonCode(default) = %q, want 1", got)
+	if got, err := x11ButtonCode(""); err != nil || got != "1" {
+		t.Fatalf("x11ButtonCode(default) = %q err=%v, want 1", got, err)
+	}
+	// #4896: case variants normalize; unknown values are rejected, never
+	// silently downcased to LEFT.
+	if got, err := x11ButtonCode("Right"); err != nil || got != "3" {
+		t.Fatalf("x11ButtonCode(Right) = %q err=%v, want 3 (normalized)", got, err)
+	}
+	if _, err := x11ButtonCode("rgiht"); err == nil {
+		t.Fatal("x11ButtonCode(typo) must be rejected, not defaulted to left")
 	}
 
 	// Wayland: ydoClickArgs must produce the matching BTN_* code, not the

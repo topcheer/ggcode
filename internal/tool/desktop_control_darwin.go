@@ -816,17 +816,31 @@ func findAndClick(ctx context.Context, searchText string, maxDepth int) (Result,
 		return Result{Content: fmt.Sprintf("No UI element found matching %q", searchText)}, nil
 	}
 
-	for _, m := range matches {
+	// #4897: preorder DFS puts PARENTS before descendants, so a window/
+	// container whose title contains the search term (on macOS the AXWindow
+	// name IS the window title - "Save Changes?" shadows the Save button)
+	// matched first and got clicked. Pick the SMALLEST-frame match instead:
+	// the actual control is always smaller than the window containing it.
+	best := -1
+	var bestArea float64
+	for i, m := range matches {
 		if m.Frame != nil && m.Frame.W > 0 && m.Frame.H > 0 {
-			cx := int(m.Frame.X + m.Frame.W/2)
-			cy := int(m.Frame.Y + m.Frame.H/2)
-			_, err := mouseClick(ctx, cx, cy, "left", 1)
-			if err != nil {
-				return Result{}, fmt.Errorf("click at (%d,%d) failed: %w", cx, cy, err)
+			area := m.Frame.W * m.Frame.H
+			if best == -1 || area < bestArea {
+				best, bestArea = i, area
 			}
-			return Result{Content: fmt.Sprintf("Found %q at (%d,%d) size %.0fx%.0f, clicked center (%d,%d)",
-				m.Label, int(m.Frame.X), int(m.Frame.Y), m.Frame.W, m.Frame.H, cx, cy)}, nil
 		}
+	}
+	if best >= 0 {
+		m := matches[best]
+		cx := int(m.Frame.X + m.Frame.W/2)
+		cy := int(m.Frame.Y + m.Frame.H/2)
+		_, err := mouseClick(ctx, cx, cy, "left", 1)
+		if err != nil {
+			return Result{}, fmt.Errorf("click at (%d,%d) failed: %w", cx, cy, err)
+		}
+		return Result{Content: fmt.Sprintf("Found %q at (%d,%d) size %.0fx%.0f, clicked center (%d,%d)",
+			m.Label, int(m.Frame.X), int(m.Frame.Y), m.Frame.W, m.Frame.H, cx, cy)}, nil
 	}
 	return Result{Content: fmt.Sprintf("Found %d matches for %q but none had clickable coordinates", len(matches), searchText)}, nil
 }
