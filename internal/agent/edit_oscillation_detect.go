@@ -127,6 +127,50 @@ func (o *oscillationState) recordEdit(toolName string, args json.RawMessage, ite
 			allNew.WriteString(e.newText)
 		}
 		o.addSignature(path, allOld.String(), allNew.String(), iteration)
+
+	case "multi_file_edit":
+		// Per-file aggregation: each file's edits form one signature so a
+		// reversal that only touches one file is still caught.
+		type fileEdit struct {
+			Path  string `json:"path"`
+			Edits []struct {
+				OldText string `json:"old_text"`
+				NewText string `json:"new_text"`
+			} `json:"edits"`
+		}
+		var files []fileEdit
+		if raw, ok := parsed["files"]; ok {
+			b, _ := json.Marshal(raw)
+			if json.Unmarshal(b, &files) != nil {
+				return
+			}
+		}
+		for _, f := range files {
+			var allOld, allNew strings.Builder
+			for _, e := range f.Edits {
+				allOld.WriteString(e.OldText)
+				allNew.WriteString(e.NewText)
+			}
+			if f.Path != "" && allOld.Len()+allNew.Len() > 0 {
+				o.addSignature(f.Path, allOld.String(), allNew.String(), iteration)
+			}
+		}
+
+	case "batch_replace":
+		// One signature per target file: same pattern/replacement applied
+		// across files, reversal (A->B then B->A) must count per file.
+		pattern, _ := parsed["pattern"].(string)
+		replacement, _ := parsed["replacement"].(string)
+		if pattern == "" {
+			return
+		}
+		if rawList, ok := parsed["files"].([]any); ok {
+			for _, item := range rawList {
+				if p, ok := item.(string); ok && p != "" {
+					o.addSignature(p, pattern, replacement, iteration)
+				}
+			}
+		}
 	}
 }
 
