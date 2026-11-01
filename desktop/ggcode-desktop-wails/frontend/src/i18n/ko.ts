@@ -194,6 +194,10 @@ const en = {
   // Onboarding
   'onboarding.next': '다음',
   'onboarding.back': '뒤로',
+  'onboarding.skip': 'Skip',
+  'onboarding.imStepTitle': 'Connect a messaging channel',
+  'onboarding.imStepHint': 'Optional - walk one platform end-to-end now, or set it up later in Settings - IM.',
+  'onboarding.imChoosePlatform': 'Choose a platform...',
   'onboarding.getStarted': '시작하기',
   'onboarding.vendorHint': '사용하려는 AI 제공자를 선택하세요',
   'onboarding.configHint': '설정을 조정하거나 기본값을 그대로 사용하세요',
@@ -242,6 +246,7 @@ const en = {
   // IMManagement
   'im.title': 'IM 어댑터',
   'im.addAdapter': '어댑터 추가',
+  'im.notConfigured': 'Not configured yet - guided setup',
   'im.noAdapters': '설정된 IM 어댑터가 없습니다. "어댑터 추가"를 클릭하여 시작하세요.',
   'im.currentWorkspace': '현재 작업공간',
   'im.otherWorkspaces': '다른 작업공간',
