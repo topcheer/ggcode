@@ -2,9 +2,12 @@ package mcp
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -21,7 +24,10 @@ func TestIssue4858_PackageParsing(t *testing.T) {
 		{"npx scoped", "npx", []string{"-y", "@scope/server@1.2.3"}, "npm", "@scope/server", "1.2.3"},
 		{"npx bare", "npx", []string{"some-server"}, "npm", "some-server", ""},
 		{"uvx", "uvx", []string{"mcp-server-git"}, "PyPI", "mcp-server-git", ""},
-		{"uv with flags", "uv", []string{"run", "--with", "pkg@2.0.0"}, "PyPI", "run", ""},
+		{"uv run is project-scoped", "uv", []string{"run", "--with", "pkg@2.0.0"}, "", "", ""},
+		{"pnpm dlx (#4860 review)", "pnpm", []string{"dlx", "@scope/pkg@1.0.0"}, "npm", "@scope/pkg", "1.0.0"},
+		{"pnpm install is local", "pnpm", []string{"install", "some-pkg"}, "", "", ""},
+		{"uv tool run (#4860 review)", "uv", []string{"tool", "run", "mcp-pkg@2.1.0"}, "PyPI", "mcp-pkg", "2.1.0"},
 		{"full path", "/usr/local/bin/npx", []string{"pkg"}, "npm", "pkg", ""},
 		{"windows shim", `C:\tools\npx.exe`, []string{"pkg"}, "npm", "pkg", ""},
 		{"non-runner", "docker", []string{"run", "img"}, "", "", ""},
@@ -72,6 +78,37 @@ func TestIssue4858_FailOpenOnNetworkError(t *testing.T) {
 	// Skip flag must bypass entirely - even with a MAL-hit server behind it.
 	if err := osvGate(context.Background(), "srv", "npx", []string{"-y", "any-pkg"}, true); err != nil {
 		t.Fatalf("skip_osv_check must bypass the gate, got: %v", err)
+	}
+}
+
+// #4860 review: the fail-open warning must be VISIBLE (stderr, not just
+// debug.Log) and fire exactly ONCE per process even across multiple
+// failed queries.
+func TestIssue4858_FailOpenWarnOnce(t *testing.T) {
+	orig := osvQueryEndpoint
+	osvQueryEndpoint = "http://127.0.0.1:1"
+	defer func() { osvQueryEndpoint = orig }()
+	clearOSVCacheForTest()
+	osvFailOpenWarnOnce = *new(sync.Once) // reset for the test
+
+	// Capture stderr.
+	oldStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+	for i := 0; i < 3; i++ {
+		if ids := osvQueryMAL(context.Background(), "npm", "warn-pkg"+string(rune('a'+i)), ""); ids != nil {
+			t.Fatalf("fail-open must return nil, got %v", ids)
+		}
+	}
+	w.Close()
+	os.Stderr = oldStderr
+	buf, _ := io.ReadAll(r)
+	out := string(buf)
+	if n := strings.Count(out, "Warning: OSV malware check unavailable"); n != 1 {
+		t.Fatalf("fail-open warning must fire exactly once across 3 failures, got %d:\n%s", n, out)
+	}
+	if !strings.Contains(out, "skip_osv_check") {
+		t.Fatalf("warning must name the escape hatch:\n%s", out)
 	}
 }
 

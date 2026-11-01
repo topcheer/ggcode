@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -36,29 +37,56 @@ type osvVerdict struct {
 var (
 	osvCacheMu sync.Mutex
 	osvCache   = map[string]osvVerdict{}
+
+	// osvFailOpenWarnOnce makes the fail-open warning user-visible EXACTLY
+	// once per process (#4860 review: debug.Log is invisible to users; the
+	// issue requires a one-time visible warning so an offline OSV check is
+	// never a silent skip).
+	osvFailOpenWarnOnce sync.Once
 )
 
 // osvPackageFromCommand infers (ecosystem, package, version) from a
 // package-runner command line. Only runner executables are considered;
-// anything else returns empty strings and the gate is a no-op. The first
-// non-flag argument is the package reference; a trailing @version is
-// split off while a leading @scope is preserved.
+// anything else returns empty strings and the gate is a no-op.
+// Subcommand-aware (#4860 review follow-up): "pnpm dlx <pkg>" and
+// "uv tool run <pkg>" resolve the package AFTER the subcommand words -
+// taking the first positional would query the subcommand itself ("dlx",
+// "run") and miss the real package. "uv run"/"pnpm install" operate on
+// the local project environment, not remote package installs - no gate.
 func osvPackageFromCommand(command string, args []string) (ecosystem, pkg, version string) {
-	switch baseCommandName(command) {
-	case "npx", "bunx", "pnpm":
-		ecosystem = "npm"
-	case "uvx", "uv":
-		ecosystem = "PyPI"
-	default:
-		return "", "", ""
-	}
+	var positional []string
 	for _, arg := range args {
 		trimmed := strings.TrimSpace(arg)
 		if trimmed == "" || strings.HasPrefix(trimmed, "-") {
 			continue
 		}
-		pkg, version = splitPackageVersion(trimmed)
-		return ecosystem, pkg, version
+		positional = append(positional, trimmed)
+	}
+	switch baseCommandName(command) {
+	case "npx", "bunx":
+		if len(positional) > 0 {
+			pkg, version = splitPackageVersion(positional[0])
+			return "npm", pkg, version
+		}
+	case "pnpm":
+		for i, p := range positional {
+			if p == "dlx" && i+1 < len(positional) {
+				pkg, version = splitPackageVersion(positional[i+1])
+				return "npm", pkg, version
+			}
+		}
+	case "uvx":
+		if len(positional) > 0 {
+			pkg, version = splitPackageVersion(positional[0])
+			return "PyPI", pkg, version
+		}
+	case "uv":
+		for i, p := range positional {
+			if p == "tool" && i+2 < len(positional) && positional[i+1] == "run" {
+				pkg, version = splitPackageVersion(positional[i+2])
+				return "PyPI", pkg, version
+			}
+		}
 	}
 	return "", "", ""
 }
@@ -116,7 +144,12 @@ func osvQueryMAL(ctx context.Context, ecosystem, pkg, version string) []string {
 	ids, err := osvFetchMAL(ctx, ecosystem, pkg, version)
 	if err != nil {
 		// Fail open: offline or a degraded OSV must never brick MCP startup.
-		debug.Log("mcp-osv", "OSV query for %s failed (allowing launch, fail-open): %v", cacheKey, err)
+		// One process-wide VISIBLE warning (not just debug.Log) so the user
+		// knows launches are unscreened this session; then stay quiet.
+		osvFailOpenWarnOnce.Do(func() {
+			fmt.Fprintf(os.Stderr, "Warning: OSV malware check unavailable (%v); MCP package launches run WITHOUT malware screening until connectivity returns. Set mcp_servers.<name>.skip_osv_check: true to silence this permanently.\n", err)
+		})
+		debug.Log("mcp-osv", "OSV query for %s failed (allowing launch, fail-open): %v", ecosystem+"|"+pkg+"@"+version, err)
 		return nil
 	}
 	osvCacheMu.Lock()
