@@ -1010,7 +1010,10 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 	}
 
 	// Budget remains — inject errors into context and signal continue.
-	a.verifyProgress(fmt.Sprintf("Verification failed — auto-repairing (attempt %d/%d)…", retryCount+1, maxSyncVerifyRetries))
+	// #4524: denominator must match the other attempt surfaces (maxSyncVerifyRetries+1
+	// - :961's re-run copy and :1008's exhaustion count): 4 attempts actually
+	// execute, and "3/3" here followed by a 4th run contradicted the UI.
+	a.verifyProgress(fmt.Sprintf("Verification failed — auto-repairing (attempt %d/%d)…", retryCount+1, maxSyncVerifyRetries+1))
 
 	errorSummary := fmt.Sprintf("Verification failed with the following command:\n```\n%s\n```\n\nErrors:\n", cmd)
 	for _, e := range result.Errors {
