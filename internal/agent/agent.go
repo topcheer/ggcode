@@ -258,6 +258,7 @@ type Agent struct {
 	commitHint                   *commitHintState            // post-completion commit reminder for uncommitted changes
 	docDrift                     *docDriftState              // r465: documentation drift advisory (code-heavy run, zero doc edits)
 	draftPRHint                  *draftPRHintState           // post-completion draft-PR reminder for unpushed feature branches (sa-223)
+	staleReview                  *staleReviewState           // post-push review-staleness warning (#4779 / S-07)
 	verifyRegression             *verifyRegressionState      // cross-run error diff: detects correction-induced regressions
 	selfCorrectionGate           *selfCorrectionGateState    // EIR/ECR stability gate: detects net-negative self-correction loops
 	lastGoodCheckpoint           *lastGoodCheckpoint         // last-known-good file snapshot: actionable revert targets for failed self-correction
@@ -527,6 +528,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		guidanceHints:          map[string]guidanceHintRec{}, // r15: also reset per-run in runPrompt
 		commitHint:             newCommitHintState(),
 		draftPRHint:            newDraftPRHintState(),
+		staleReview:            newStaleReviewState(),
 		verifyRegression:       newVerifyRegressionState(),
 		selfCorrectionGate:     newSelfCorrectionGateState(),
 		lastGoodCheckpoint:     newLastGoodCheckpoint(),
@@ -2165,6 +2167,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.commitHint.reset()
 	a.docDrift.reset()
 	a.draftPRHint.reset()
+	a.staleReview.reset()
 	if workingDir := a.WorkingDir(); workingDir != "" {
 		a.changeReconcile.capturePreRunState(workingDir)
 		// Inject awareness if the tree is dirty - the agent should know about
@@ -5845,6 +5848,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// tool calls (edit_file, write_file, run_command, etc.).
 			// Research: Microsoft IFC (arXiv:2505.23643), OWASP ATR-2026-00032.
 			a.taintInfluence.recordIfTainted(tc.Name, result.Content)
+			// #4779 (S-07): after a successful git push to a review-gated
+			// branch, warn inline when the earlier APPROVED review went stale
+			// (dismissed / behind the new head) instead of letting the merge
+			// refusal be the first signal.
+			if staleMsg := a.checkPushReviewStaleness(tc.Name, tc.Arguments, result.Content); staleMsg != "" {
+				result.Content += "\n\n" + staleMsg
+			}
 			// Exfiltration chain source recording moved UP to the pre-redaction
 			// chokepoint (#3539); see the secret-redaction block above.
 			// Spiral-of-hallucination: an execution-type tool call with
