@@ -273,6 +273,52 @@ func (t MultiFileEdit) Parameters() json.RawMessage {
 }`)
 }
 
+// snapshotDriftLines re-reads every planned file and reports which ones no
+// longer match the content the plan was resolved against (#4798 / S-29).
+// Only CHANGED files are listed (unchanged files contribute nothing - the
+// retry can reuse its anchors for them); a deleted file is reported as such.
+func snapshotDriftLines(plans []PlannedFileEdit) []string {
+	var drift []string
+	for _, plan := range plans {
+		if plan.Path == "" || plan.OldContent == "" && !plan.Existed {
+			continue
+		}
+		disk, err := os.ReadFile(plan.Path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				drift = append(drift, fmt.Sprintf("%s: deleted on disk since the batch was planned", plan.Path))
+			}
+			continue // transient read error: no verdict either way
+		}
+		if string(disk) == plan.OldContent {
+			continue
+		}
+		oldLines := strings.Split(plan.OldContent, "\n")
+		newLines := strings.Split(string(disk), "\n")
+		firstDiff := 0
+		max := len(oldLines)
+		if len(newLines) < max {
+			max = len(newLines)
+		}
+		for firstDiff < max && oldLines[firstDiff] == newLines[firstDiff] {
+			firstDiff++
+		}
+		// Content-line counts (a trailing newline does not add a line), not
+		// strings.Split element counts.
+		oldCount, newCount := len(oldLines), len(newLines)
+		if strings.HasSuffix(plan.OldContent, "\n") {
+			oldCount--
+		}
+		if strings.HasSuffix(string(disk), "\n") {
+			newCount--
+		}
+		drift = append(drift, fmt.Sprintf(
+			"%s: changed on disk since the batch was planned (snapshot %d lines, disk %d lines, first difference at line %d) - re-read before retrying",
+			plan.Path, oldCount, newCount, firstDiff+1))
+	}
+	return drift
+}
+
 func (t MultiFileEdit) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit, error) {
 	mode, entries, errRes := t.parseInput(input)
 	if errRes != nil {
@@ -313,6 +359,9 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 		out.SkippedFiles = len(out.SkippedPaths)
 		out.FailedPaths = collectMultiFileEditPaths(out.Results, "error")
 		out.Summary = fmt.Sprintf("Requested %d files: 0 written, %d failed, %d skipped by atomic mode", len(entries), out.FailedFiles, out.SkippedFiles)
+		// #4798 (S-29): attach which planned files drifted on disk since the
+		// batch was planned, so the retry re-anchors in one step.
+		out.SnapshotDrift = snapshotDriftLines(plans)
 		content, err := json.Marshal(out)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("error marshaling result: %v", err)}, nil
@@ -347,6 +396,9 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 			out.FailedFiles = len(out.FailedPaths)
 			out.SkippedFiles = len(out.SkippedPaths)
 			out.Summary = fmt.Sprintf("Requested %d files: 0 written, %d failed, %d skipped by atomic mode", len(entries), out.FailedFiles, out.SkippedFiles)
+			// #4798 (S-29): writes were rolled back - the disk state is what the
+			// next round must re-anchor against; report drift vs the snapshot.
+			out.SnapshotDrift = snapshotDriftLines(plans)
 			content, err := json.Marshal(out)
 			if err != nil {
 				return Result{IsError: true, Content: fmt.Sprintf("error marshaling result: %v", err)}, nil
