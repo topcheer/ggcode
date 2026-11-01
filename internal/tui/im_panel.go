@@ -15,6 +15,11 @@ import (
 type imPanelState struct {
 	selected int
 	message  string
+	// xConfirm arms the 'x' clear-record key (#4862 review follow-up):
+	// clearing the cross-session onboarding record on a stray keypress is
+	// unacceptable, so the first 'x' only arms; a second 'x' within the
+	// same panel session clears. Any other key disarms.
+	xConfirm bool
 }
 
 type imChannelEntry struct {
@@ -57,6 +62,12 @@ func (m Model) renderIMPanel() string {
 		fmt.Sprintf("  %s", util.FirstNonEmpty(m.currentWorkspacePath(), m.t("panel.im.none"))),
 		"",
 	}
+
+	// #4861 (final range correction): the onboarding cockpit IS the panel's
+	// default view - full-state registry + progress + due, and selecting a
+	// channel + 'o' opens that platform's vendor onboard panel. No /im
+	// onboard|status subcommands exist.
+	body = append(body, m.renderIMOnboardCockpitBlock(entries), "")
 
 	// Runtime status
 	body = append(body,
@@ -211,7 +222,15 @@ func (m *Model) handleIMPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	entries := m.imChannelEntries()
 
-	switch msg.String() {
+	// #4862 micro-gap: the xConfirm comment promises "any other key
+	// disarms" - implement it uniformly at the switch entry instead of
+	// per-case, then the 'x' case re-arms/clears below.
+	key := msg.String()
+	if key != "x" && panel.xConfirm {
+		panel.xConfirm = false
+	}
+
+	switch key {
 	case "up", "k":
 		if len(entries) > 0 {
 			panel.selected = (panel.selected - 1 + len(entries)) % len(entries)
@@ -258,6 +277,31 @@ func (m *Model) handleIMPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, m.setIMOutputMode("summary")
 	case "M":
 		return *m, m.muteAllIMChannels()
+	case "o":
+		// #4861: open the selected channel's vendor onboard panel (the
+		// cockpit routes; the vendor panel carries the guidance).
+		if len(entries) == 0 {
+			panel.message = m.t("panel.im.message.no_channel")
+			return *m, nil
+		}
+		platform := strings.ToLower(string(entries[clampIMSelection(panel.selected, len(entries))].Platform))
+		if entry, ok := imOnboardWizard()[platform]; ok {
+			m.closeIMPanel()
+			return *m, m.handleCommand(entry.Panel)
+		}
+		panel.message = fmt.Sprintf("platform %q has no vendor panel yet", platform)
+	case "x":
+		// #4861 + #4862 review follow-up: the record carries cross-session
+		// resume progress, so a stray 'x' must not destroy it - first press
+		// arms (message channel), second consecutive press clears.
+		if panel.xConfirm {
+			clearIMOnboardRecord(m.workspaceDirForIMOnboard())
+			panel.xConfirm = false
+			panel.message = "onboarding record cleared"
+		} else {
+			panel.xConfirm = true
+			panel.message = "press 'x' again to clear the onboarding record"
+		}
 	case "U":
 		return *m, m.unmuteAllIMChannels()
 	case "esc", "ctrl+c":

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
 )
@@ -313,79 +312,19 @@ func renderIMStatusRegistry(cfg *config.Config) string {
 	return sb.String()
 }
 
-// handleIMOnboardCommand implements the /im onboard wizard subcommand:
-// bare form shows the platform picker (+ resume/due notice from the
-// persisted run-record), "/im onboard <platform>" renders the numbered
-// steps + probe tail and records progress, "/im onboard done" clears the
-// record (#4861 checklist items 2-4).
-func (m *Model) handleIMOnboardCommand(args []string) {
-	if len(args) == 0 {
-		text := renderIMOnboardIntro()
-		if rec := loadIMOnboardRecord(m.workspaceDirForIMOnboard()); rec != nil {
-			text += fmt.Sprintf("\n\n[resume] an interrupted %s onboarding is on record (step %d) - continue with: /im onboard %s",
-				rec.Platform, rec.Step, rec.Platform)
-		}
-		m.chatWriteSystem(nextSystemID(), text)
-		m.chatListScrollToBottom()
-		return
-	}
-	platform := strings.ToLower(strings.TrimSpace(args[0]))
-	if platform == "done" {
-		clearIMOnboardRecord(m.workspaceDirForIMOnboard())
-		m.chatWriteSystem(nextSystemID(), "IM onboarding record cleared.")
-		m.chatListScrollToBottom()
-		return
-	}
-	text, ok := renderIMOnboardSteps(platform)
-	if !ok {
-		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("unknown platform %q - run /im onboard to list platforms", platform))
-		m.chatListScrollToBottom()
-		return
-	}
-	text += "\n" + imOnboardProbeTail
-	// #4861 checklist 5: auto-open the step deep-links in the browser
-	// (mcp_panel urlOpener seam, best-effort).
-	for _, u := range imOnboardStepURLs(platform) {
-		if m.urlOpener != nil {
-			_ = m.urlOpener(u)
-		}
-	}
-	entry := imOnboardWizard()[platform]
-	if err := saveIMOnboardRecord(m.workspaceDirForIMOnboard(), imOnboardRecord{
-		Platform:  platform,
-		Step:      len(entry.Steps),
-		UpdatedAt: time.Now(),
-	}); err != nil {
-		text += fmt.Sprintf("\n\n(warning: could not persist onboarding progress: %v)", err)
-	}
-	m.chatWriteSystem(nextSystemID(), text)
-	m.chatListScrollToBottom()
-}
-
-// handleIMStatusCommand renders the full-state platform registry (#4861
-// checklist item 1): runtime adapter states (connected/failed/expired +
-// last error) cross-referenced with never-configured platforms.
-func (m *Model) handleIMStatusCommand() {
+// renderIMOnboardCockpitBlock is the PANEL-facing cockpit view (#4861 final
+// range correction): the unified /im panel's DEFAULT top block - full-state
+// registry, onboarding progress + due, and the 'o'/'x' key legend. The
+// chat-oriented renderIMOnboardCockpit is retired along with the
+// /im onboard|status subcommands.
+func (m Model) renderIMOnboardCockpitBlock(entries []imChannelEntry) string {
 	configured := map[string]string{}
-	if m.config != nil {
-		for name, adapterCfg := range m.config.IMSnapshot().Adapters {
-			if !adapterCfg.Enabled {
-				continue
-			}
-			platform := strings.ToLower(strings.TrimSpace(adapterCfg.Platform))
-			if platform == "" {
-				platform = name
-			}
-			configured[platform] = name
-		}
+	for _, e := range entries {
+		configured[strings.ToLower(string(e.Platform))] = e.Adapter
 	}
 	var states []IMAdapterStateInfo
 	if m.imManager != nil {
 		snap := m.imManager.Snapshot()
-		bindings := map[string]bool{}
-		for _, b := range snap.CurrentBindings {
-			bindings[b.Adapter] = true
-		}
 		for _, a := range snap.Adapters {
 			states = append(states, IMAdapterStateInfo{
 				Adapter:   a.Name,
@@ -393,13 +332,65 @@ func (m *Model) handleIMStatusCommand() {
 				Healthy:   a.Healthy,
 				Status:    a.Status,
 				LastError: a.LastError,
-				Muted:     bindings[a.Name] && false, // muted detail via tool status; table shows core states
-				Disabled:  false,
 			})
 		}
 	}
-	m.chatWriteSystem(nextSystemID(), renderIMFullStatusTable(states, configured))
-	m.chatListScrollToBottom()
+	var sb strings.Builder
+	sb.WriteString(renderIMFullStatusTable(states, configured))
+	if rec := loadIMOnboardRecord(m.workspaceDirForIMOnboard()); rec != nil {
+		panelCmd := "-"
+		if entry, ok := imOnboardWizard()[rec.Platform]; ok {
+			panelCmd = entry.Panel
+		}
+		sb.WriteString(fmt.Sprintf("\nOnboarding in progress: %s (step %d) - resume in %s; 'x' clears the record\n", rec.Platform, rec.Step, panelCmd))
+	}
+	sb.WriteString("Keys: select a channel + 'o' opens that platform's onboard panel; 'x' clears the onboarding record.")
+	return sb.String()
+}
+
+// renderIMOnboardCockpit renders the /im onboard dashboard: per-platform
+// routing to the vendor panels, persisted progress rows, and due notices.
+func renderIMOnboardCockpit(workspaceDir string) string {
+	var sb strings.Builder
+	sb.WriteString("IM Onboarding Cockpit\n")
+	sb.WriteString("=====================\n")
+	rec := loadIMOnboardRecord(workspaceDir)
+	if rec != nil {
+		sb.WriteString(fmt.Sprintf("In progress: %s (step %d)\n", rec.Platform, rec.Step))
+		panel := "-"
+		if entry, ok := imOnboardWizard()[rec.Platform]; ok {
+			panel = entry.Panel
+		}
+		sb.WriteString(fmt.Sprintf("  Resume by running the panel: %s ; clear with: /im onboard done\n\n", panel))
+	}
+	sb.WriteString("Every platform onboards in its OWN existing panel (no parallel flow):\n")
+	wiz := imOnboardWizard()
+	names := make([]string, 0, len(wiz))
+	for name := range wiz {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		marker := ""
+		if rec != nil && rec.Platform == name {
+			marker = "  <- in progress"
+		}
+		sb.WriteString(fmt.Sprintf("  %-11s run %s%s\n", name, wiz[name].Panel, marker))
+	}
+	sb.WriteString("\nProgress + resumability live here (/im onboard); live state: /im status.")
+	return sb.String()
+}
+
+// imVendorOnboardGuidance renders one platform's numbered setup steps WITH
+// deep-links and QR notes - called from the vendor panels' own onboard
+// views (post range-correction: guidance lives in the vendor panel, not
+// the unified /im surface). Pure renderer; the panel decides placement.
+func imVendorOnboardGuidance(platform string) string {
+	out, ok := renderIMOnboardSteps(platform)
+	if !ok {
+		return ""
+	}
+	return out
 }
 
 // workspaceDirForIMOnboard resolves the record location root.
