@@ -20,6 +20,10 @@ type imOnboardStep struct {
 	Text string
 	// Note is the anti-confusion warning ("this ID is NOT that ID" traps).
 	Note string
+	// URL, when set, is the step's entry deep-link: rendered as a copyable
+	// line and auto-opened in the browser (#4861 checklist 5, mcp_panel
+	// urlOpener precedent).
+	URL string
 }
 
 // imOnboardEntry is one platform's wizard definition.
@@ -29,6 +33,11 @@ type imOnboardEntry struct {
 	// Panel names the command that opens the existing config panel where the
 	// credentials are entered (the masked-secret entry seam).
 	Panel string
+	// QR marks pairing-QR platforms (#4861 checklist 5): when the adapter
+	// emits its pairing QR, the panel renders it as a large terminal QR
+	// (qrcode_terminal path, whatsapp_panel precedent) with a URL fallback
+	// line - Hermes print_ascii parity without touching the pairing flow.
+	QR bool
 }
 
 // imOnboardWizard returns the full wizard definition. Platforms without a
@@ -44,11 +53,12 @@ func imOnboardWizard() map[string]imOnboardEntry {
 				{Text: "Enter the credentials in the QQ panel (masked input); the pairing state saves automatically."},
 			},
 			Panel: "/qq",
+			QR:    true,
 		},
 		"telegram": {
 			Platform: "telegram",
 			Steps: []imOnboardStep{
-				{Text: "Open a chat with @BotFather in Telegram and send /newbot."},
+				{Text: "Open a chat with @BotFather in Telegram and send /newbot.", URL: "https://t.me/BotFather"},
 				{Text: "Follow the prompts (bot name, then a username ending in 'bot')."},
 				{Text: "Copy the token BotFather prints (format 123456789:AA...).", Note: "The token is a long colon-separated string from BotFather - NOT your Telegram @username and NOT your phone number."},
 				{Text: "Enter the token in the Telegram panel (masked input)."},
@@ -58,7 +68,7 @@ func imOnboardWizard() map[string]imOnboardEntry {
 		"discord": {
 			Platform: "discord",
 			Steps: []imOnboardStep{
-				{Text: "Create an application at discord.com/developers/applications, then add a Bot to it."},
+				{Text: "Create an application at discord.com/developers/applications, then add a Bot to it.", URL: "https://discord.com/developers/applications"},
 				{Text: "Copy the bot token from the Bot tab.", Note: "Use the Bot TOKEN, not the client ID / application ID - the token is ~70 chars, the IDs are 17-20 digit numbers."},
 				{Text: "Enable the Message Content intent on the Bot tab (required to read commands)."},
 				{Text: "Generate an OAuth2 URL with the 'bot' scope + 'Send Messages'/'Read Message History' permissions and invite it to your server."},
@@ -69,7 +79,7 @@ func imOnboardWizard() map[string]imOnboardEntry {
 		"feishu": {
 			Platform: "feishu",
 			Steps: []imOnboardStep{
-				{Text: "Create an app at open.feishu.cn (Enterprise Self-built App)."},
+				{Text: "Create an app at open.feishu.cn (Enterprise Self-built App).", URL: "https://open.feishu.cn/app"},
 				{Text: "Copy the App ID and App Secret from Credentials & Basic Info."},
 				{Text: "Enable the Bot capability, then subscribe the events (im.message.receive_v1) under Event Subscriptions.", Note: "Three credentials exist (App ID, App Secret, Verification Token/Encrypt Key) - the adapter needs App ID + App Secret; the verification tokens are for Feishu's callback validation, do not confuse them."},
 				{Text: "Publish the app version and grant it im:message scopes, then enter the trio in the Feishu panel (masked input)."},
@@ -80,7 +90,7 @@ func imOnboardWizard() map[string]imOnboardEntry {
 			Platform: "slack",
 			Steps: []imOnboardStep{
 				{Text: "Pick a lane: Incoming-Webhook (post-only, one URL) OR full Bot (Socket Mode, reads commands)."},
-				{Text: "Webhook lane: api.slack.com/messaging/webhooks -> create one for a channel, copy the https://hooks.slack.com/services/... URL.", Note: "The webhook URL is per-channel and post-ONLY - commands sent over it are not received; pick the bot lane if you want two-way."},
+				{Text: "Webhook lane: api.slack.com/messaging/webhooks -> create one for a channel, copy the https://hooks.slack.com/services/... URL.", Note: "The webhook URL is per-channel and post-ONLY - commands sent over it are not received; pick the bot lane if you want two-way.", URL: "https://api.slack.com/messaging/webhooks"},
 				{Text: "Bot lane: create an app, enable Socket Mode, copy the Bot token (xoxb-...), the app-level token (xapp-...), and subscribe message events."},
 				{Text: "Enter the credentials in the Slack panel (masked input)."},
 			},
@@ -165,6 +175,7 @@ func imOnboardWizard() map[string]imOnboardEntry {
 				{Text: "Enter the credentials in the WhatsApp panel (masked input)."},
 			},
 			Panel: "/wa",
+			QR:    true,
 		},
 		"synology": {
 			Platform: "synology",
@@ -205,7 +216,8 @@ func renderIMOnboardIntro() string {
 }
 
 // renderIMOnboardSteps renders one platform's wizard: numbered steps,
-// anti-confusion notes, the panel seam, and the shared settings tail.
+// anti-confusion notes, copyable URL deep-links, the panel seam, and the
+// shared settings tail.
 func renderIMOnboardSteps(platform string) (string, bool) {
 	entry, ok := imOnboardWizard()[strings.ToLower(strings.TrimSpace(platform))]
 	if !ok {
@@ -216,13 +228,37 @@ func renderIMOnboardSteps(platform string) (string, bool) {
 	sb.WriteString(strings.Repeat("=", len(entry.Platform)+16) + "\n")
 	for i, s := range entry.Steps {
 		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, s.Text))
+		if s.URL != "" {
+			sb.WriteString(fmt.Sprintf("   Open (copyable): %s\n", s.URL))
+		}
 		if s.Note != "" {
 			sb.WriteString(fmt.Sprintf("   NOTE: %s\n", s.Note))
 		}
 	}
+	if entry.QR {
+		sb.WriteString("\n[QR pairing] when the adapter emits its pairing QR, the panel renders it\n")
+		sb.WriteString("as a large terminal QR (scan with the phone app); a URL fallback line is\n")
+		sb.WriteString("shown alongside for terminals that cannot render blocks.\n")
+	}
 	sb.WriteString(fmt.Sprintf("\nThen open the config panel with: %s (secrets are masked on input)\n", entry.Panel))
 	sb.WriteString("\n" + imOnboardGenericTail)
 	return sb.String(), true
+}
+
+// imOnboardStepURLs returns the platform's step deep-links in order (the
+// caller auto-opens them via the urlOpener seam, best-effort).
+func imOnboardStepURLs(platform string) []string {
+	entry, ok := imOnboardWizard()[strings.ToLower(strings.TrimSpace(platform))]
+	if !ok {
+		return nil
+	}
+	var urls []string
+	for _, s := range entry.Steps {
+		if s.URL != "" {
+			urls = append(urls, s.URL)
+		}
+	}
+	return urls
 }
 
 // renderIMStatusRegistry renders the full-platform registry table:
@@ -303,6 +339,13 @@ func (m *Model) handleIMOnboardCommand(args []string) {
 		return
 	}
 	text += "\n" + imOnboardProbeTail
+	// #4861 checklist 5: auto-open the step deep-links in the browser
+	// (mcp_panel urlOpener seam, best-effort).
+	for _, u := range imOnboardStepURLs(platform) {
+		if m.urlOpener != nil {
+			_ = m.urlOpener(u)
+		}
+	}
 	entry := imOnboardWizard()[platform]
 	if err := saveIMOnboardRecord(m.workspaceDirForIMOnboard(), imOnboardRecord{
 		Platform:  platform,

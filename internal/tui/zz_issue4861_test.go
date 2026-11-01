@@ -58,6 +58,19 @@ func TestIssue4861_RenderOnboardStepsAndProbeTail(t *testing.T) {
 	if _, ok := renderIMOnboardSteps("no-such-platform"); ok {
 		t.Fatal("unknown platform must not render")
 	}
+	// Checklist 5: URL deep-links render as copyable lines; QR platforms
+	// carry the large-QR + URL-fallback guidance; step URLs collectable.
+	tgURLs := imOnboardStepURLs("telegram")
+	if len(tgURLs) == 0 || !strings.Contains(tgURLs[0], "t.me/BotFather") {
+		t.Fatalf("telegram step URLs = %v", tgURLs)
+	}
+	if !strings.Contains(out, "Open (copyable): https://t.me/BotFather") {
+		t.Fatalf("telegram render missing copyable URL line:\n%s", out)
+	}
+	qqOut, _ := renderIMOnboardSteps("qq")
+	if !strings.Contains(qqOut, "[QR pairing]") || !strings.Contains(qqOut, "URL fallback") {
+		t.Fatalf("qq (QR platform) missing large-QR + fallback guidance:\n%s", qqOut)
+	}
 	// Checklist 3+4: setup-time probe + first-use bridge in the tail.
 	for _, want := range []string{"verification + first use", "/im status", "welcome self-test"} {
 		if !strings.Contains(imOnboardProbeTail, want) {
