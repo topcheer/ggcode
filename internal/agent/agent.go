@@ -4293,6 +4293,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// external state instead of trusting an outcome that may duplicate
 				// side effects. Runs after storeCommandResult: only raw results are
 				// cached (annotation text must never be cached).
+				// #4805 (S-38): switching the SHARED main tree to a non-main branch
+				// shifts every seat's baseline - advise at switch time (the #4803
+				// guard covers validation runs; this covers the checkout itself).
+				if adv := a.checkoutAdvisory(tc.Name, tc.Arguments); adv != "" {
+					result.Content += adv
+				}
 				if hint := a.recordEffectAttempt(tc.Name, tc.Arguments, result); hint != "" {
 					result.Content += hint
 				}
