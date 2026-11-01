@@ -348,6 +348,16 @@ func (es *ExperienceStore) FormatIndexTracked(query string, max int) (string, []
 	}
 	ids := make([]string, 0, len(scored))
 	for _, s := range scored {
+		// #3072 contract (CI-caught on the Spread PR): the tracked set that
+		// decision-time recall EXCLUDES must hold only DIRECT hits. A spread
+		// admit at run-start (zero lexical overlap, associative tie only) is
+		// background insight - letting it consume the case's novelty slot
+		// emptied the decision-time recall exactly when the error text would
+		// have matched the case directly. The spread-injected content still
+		// renders above; only its exclusion claim is waived.
+		if s.Via != "" {
+			continue
+		}
 		ids = append(ids, s.ID)
 	}
 	return formatScoredExperiences(scored), ids
