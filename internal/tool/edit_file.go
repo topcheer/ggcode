@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -218,12 +219,64 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	msg += syntaxCheck(args.FilePath, writeData)
 	msg += postEditDiagnostics(t.WorkingDir, args.FilePath)
 	msg += CheckContentForConflicts(newContent)
+	msg += swallowedDeclarationWarning(oldText, newText)
 
 	// Record the file's new mtime so subsequent write_file calls don't see
 	// a false stale-read from this edit.
 	defaultFileTracker.RecordWrite(args.FilePath)
 
 	return Result{Content: msg}, nil
+}
+
+// declarationLineRe matches high-precision declaration-OPENING lines across
+// the languages this repo edits (Go / Python / Rust / TS-Java family). Only
+// unit-level declarations (function / type / class / interface / enum / trait
+// heads) qualify; member or statement lines are deliberately excluded to keep
+// the #4796 heuristic warning false-positive-free.
+var declarationLineRe = regexp.MustCompile(`^\s*(?:` +
+	`func\s|` +
+	`type\s+\w+\s+(?:struct|interface)\b|` +
+	`(?:async\s+)?def\s+\w+|class\s+\w+|` +
+	`(?:pub(?:\([^)]*\))?\s+)?(?:fn|impl|struct|enum|trait)\s|` +
+	`export\s+(?:default\s+)?(?:abstract\s+)?(?:class|interface|enum)\s|` +
+	`(?:public|private|protected)\s+(?:static\s+)?(?:final\s+)?(?:class|interface|enum)\s` +
+	`)`)
+
+// swallowedDeclarationWarning (#4796 / S-27): a generously-copied multi-line
+// old_text can include lines beyond the intended semantic unit (e.g. the next
+// function's declaration). The replacement then deletes those adjacent lines
+// silently - a declaration vanishes and the build breaks with no hint that
+// out-of-unit lines were consumed (#4717 fix needed 2 re-layouts from this).
+// Heuristic per the issue's suggested direction: when a declaration-like line
+// is deleted by the replacement (present in the matched old_text region but
+// absent from new_text), name it in the result so the caller can restore it.
+// Non-blocking advisory appended to the success summary.
+func swallowedDeclarationWarning(oldText, newText string) string {
+	matches := declarationLineRe.FindAllString(strings.ReplaceAll(oldText, "\r\n", "\n"), -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	kept := make(map[string]bool)
+	for _, line := range strings.Split(strings.ReplaceAll(newText, "\r\n", "\n"), "\n") {
+		kept[strings.TrimSpace(line)] = true
+	}
+	var vanished []string
+	for _, line := range matches {
+		t := strings.TrimSpace(line)
+		if !kept[t] {
+			vanished = append(vanished, t)
+		}
+	}
+	if len(vanished) == 0 {
+		return ""
+	}
+	const maxShow = 3
+	list := vanished
+	if len(list) > maxShow {
+		list = list[:maxShow]
+	}
+	return fmt.Sprintf("\n\nWarning (#4796): this edit DELETED %d declaration-like line(s) that do not reappear in new_text - a multi-line old_text copied generously may have swallowed adjacent lines beyond the intended semantic unit (a vanished declaration breaks the build with no other hint). Verify this was intended and restore any missing declarations. Deleted: %s",
+		len(vanished), strings.Join(list, " | "))
 }
 
 // normalizeIndentation converts the indentation of text to match the file's style.
