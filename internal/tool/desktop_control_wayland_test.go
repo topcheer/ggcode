@@ -64,27 +64,27 @@ func TestYdoMoveArgs(t *testing.T) {
 
 func TestYdoClickArgs(t *testing.T) {
 	// Left, single click.
-	got := ydoClickArgs("left", 1)
-	if len(got) != 1 || strings.Join(got[0], " ") != "ydotool click 0xC0" {
-		t.Fatalf("left single = %v", got)
+	got, err := ydoClickArgs("left", 1)
+	if err != nil || len(got) != 1 || strings.Join(got[0], " ") != "ydotool click 0xC0" {
+		t.Fatalf("left single = %v (err %v)", got, err)
 	}
 	// Right button uses BTN_RIGHT.
-	got = ydoClickArgs("right", 1)
-	if len(got) != 1 || strings.Join(got[0], " ") != "ydotool click 0xC1" {
-		t.Fatalf("right single = %v", got)
+	got, err = ydoClickArgs("right", 1)
+	if err != nil || len(got) != 1 || strings.Join(got[0], " ") != "ydotool click 0xC1" {
+		t.Fatalf("right single = %v (err %v)", got, err)
 	}
 	// Middle button uses BTN_MIDDLE.
-	if got := ydoClickArgs("middle", 1); strings.Join(got[0], " ") != "ydotool click 0xC2" {
-		t.Fatalf("middle single = %v", got)
+	if got, err := ydoClickArgs("middle", 1); err != nil || strings.Join(got[0], " ") != "ydotool click 0xC2" {
+		t.Fatalf("middle single = %v (err %v)", got, err)
 	}
 	// Triple click repeats three times.
-	got = ydoClickArgs("left", 3)
-	if len(got) != 3 {
-		t.Fatalf("triple should produce 3 commands, got %d", len(got))
+	got, err = ydoClickArgs("left", 3)
+	if err != nil || len(got) != 3 {
+		t.Fatalf("triple should produce 3 commands, got %d (err %v)", len(got), err)
 	}
 	// Degenerate clicks<=0 clamps to 1.
-	if got := ydoClickArgs("left", 0); len(got) != 1 {
-		t.Fatalf("zero clicks should clamp to 1, got %d", len(got))
+	if got, err := ydoClickArgs("left", 0); err != nil || len(got) != 1 {
+		t.Fatalf("zero clicks should clamp to 1, got %d (err %v)", len(got), err)
 	}
 }
 

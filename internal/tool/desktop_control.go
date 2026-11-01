@@ -79,7 +79,7 @@ func (DesktopControlTool) Parameters() json.RawMessage {
     "y": {"type": "integer", "description": "Y coordinate (logical pixels from top). Required for mouse position actions."},
     "text": {"type": "string", "description": "Text to type (for 'type') or key combo string (for 'key_combo'/'key_press') or app name (for 'launch_app'/'quit_app'/'focus_window') or menu path like 'File > Save' (for 'menu_select') or modifiers like 'cmd+shift' (for 'modifier_click') or URL/file path (for 'open') or window title substring (for 'set_window_bounds' on Linux/Windows). Key names: 'delete' is backspace on macOS but forward delete on Windows/Linux; use 'backspace' or 'forward-delete' (macOS only) for unambiguous behavior."},
     "app": {"type": "string", "description": "Application name: to open the target with (for 'open'), or the app whose menu bar to use (for 'menu_select', default frontmost). Not yet honored for 'set_window_bounds': target that action's window via 'text' (title substring) on Linux/Windows, or the frontmost window on macOS."},
-    "button": {"type": "string", "enum": ["left", "right"], "default": "left", "description": "Mouse button for click actions."},
+    "button": {"type": "string", "enum": ["left", "right", "middle"], "default": "left", "description": "Mouse button for click actions."},
     "direction": {"type": "string", "enum": ["up", "down"], "default": "down", "description": "Scroll direction."},
     "amount": {"type": "integer", "default": 1, "minimum": 1, "description": "Scroll amount (number of steps)."},
     "to_x": {"type": "integer", "description": "Destination X for drag."},
@@ -242,7 +242,13 @@ func ydoMoveArgs(x, y int) []string {
 
 // ydoClickArgs returns the argv to click `clicks` times. ydotool click takes
 // a single event code, so multiple clicks need repeated invocations.
-func ydoClickArgs(button string, clicks int) [][]string {
+func ydoClickArgs(button string, clicks int) ([][]string, error) {
+	// #4691: same normalization+rejection as the darwin mouseClick path -
+	// bare lowercase comparisons silently clicked LEFT for "Right"/typos.
+	button = strings.ToLower(strings.TrimSpace(button))
+	if button != "left" && button != "right" && button != "middle" {
+		return nil, fmt.Errorf("unknown button %q (left, right, middle)", button)
+	}
 	code := "0xC0" // BTN_LEFT
 	if button == "right" {
 		code = "0xC1" // BTN_RIGHT
@@ -257,7 +263,7 @@ func ydoClickArgs(button string, clicks int) [][]string {
 	for i := range cmds {
 		cmds[i] = []string{"ydotool", "click", code}
 	}
-	return cmds
+	return cmds, nil
 }
 
 // ydoKeyArgs converts a modifier token to ydotool press/release argv pairs

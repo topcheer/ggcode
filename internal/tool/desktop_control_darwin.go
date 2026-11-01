@@ -130,6 +130,15 @@ end tell`)
 // mouseClick moves to (x,y) then performs N clicks via Swift CGEvent.
 // Zero external dependencies — uses system swift + CoreGraphics.
 func mouseClick(ctx context.Context, x, y int, button string, count int) (Result, error) {
+	// #4691: bare lowercase comparisons let "Right"/"RIGHT"/typos silently
+	// fall through to the LEFT branch - a right-click request clicking left
+	// is a dangerous misdirection (opens context-menu expectations aside,
+	// it acts on the wrong target). Normalize, then REJECT unknown buttons
+	// like mouseButtonEvent/:171 already does.
+	button = strings.ToLower(strings.TrimSpace(button))
+	if button != "left" && button != "right" && button != "middle" {
+		return Result{IsError: true, Content: fmt.Sprintf("unknown button %q (left, right, middle)", button)}, nil
+	}
 	downType := ".leftMouseDown"
 	upType := ".leftMouseUp"
 	if button == "right" {

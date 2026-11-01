@@ -403,8 +403,13 @@ func atspiLocate(ctx context.Context, p desktopParams) (Result, error) {
 			var clickErr error
 			if isWaylandSession() {
 				// #3881: honor p.Button instead of hardcoding BTN_LEFT.
-				cmds := append([][]string{ydoMoveArgs(cx, cy)}, ydoClickArgs(p.Button, 1)...)
-				clickErr = runArgvSeq(ctx, cmds)
+				clickCmds, cerr := ydoClickArgs(p.Button, 1)
+				if cerr != nil {
+					clickErr = cerr
+				} else {
+					cmds := append([][]string{ydoMoveArgs(cx, cy)}, clickCmds...)
+					clickErr = runArgvSeq(ctx, cmds)
+				}
 			} else {
 				_, clickErr = exec.CommandContext(ctx, "xdotool", "mousemove", "--sync",
 					fmt.Sprintf("%d", cx), fmt.Sprintf("%d", cy), "click", x11ButtonCode(p.Button)).Output()
@@ -494,7 +499,11 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 			button = "middle"
 		}
 		cmds := [][]string{ydoMoveArgs(p.X, p.Y)}
-		cmds = append(cmds, ydoClickArgs(button, clicks)...)
+		clickCmds, cerr := ydoClickArgs(button, clicks)
+		if cerr != nil {
+			return Result{IsError: true, Content: cerr.Error()}, nil
+		}
+		cmds = append(cmds, clickCmds...)
 		if err := runArgvSeq(ctx, cmds); err != nil {
 			return Result{}, err
 		}
