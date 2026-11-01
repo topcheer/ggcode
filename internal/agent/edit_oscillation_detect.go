@@ -127,6 +127,67 @@ func (o *oscillationState) recordEdit(toolName string, args json.RawMessage, ite
 			allNew.WriteString(e.newText)
 		}
 		o.addSignature(path, allOld.String(), allNew.String(), iteration)
+
+	case "multi_file_edit":
+		// Per-file aggregation: each file's edits form one signature so a
+		// reversal that only touches one file is still caught.
+		o.recordMultiFileEditSignatures(parsed, iteration)
+
+	case "batch_replace":
+		// One signature per target file: same pattern/replacement applied
+		// across files, reversal (A->B then B->A) must count per file.
+		o.recordBatchReplaceSignatures(parsed, iteration)
+	}
+}
+
+// recordMultiFileEditSignatures aggregates each file's edits in a
+// multi_file_edit call into one per-file signature.
+func (o *oscillationState) recordMultiFileEditSignatures(parsed map[string]any, iteration int) {
+	type fileEdit struct {
+		Path  string `json:"path"`
+		Edits []struct {
+			OldText string `json:"old_text"`
+			NewText string `json:"new_text"`
+		} `json:"edits"`
+	}
+	var files []fileEdit
+	raw, ok := parsed["files"]
+	if !ok {
+		return
+	}
+	b, _ := json.Marshal(raw)
+	if json.Unmarshal(b, &files) != nil {
+		return
+	}
+	for _, f := range files {
+		var allOld, allNew strings.Builder
+		for _, e := range f.Edits {
+			allOld.WriteString(e.OldText)
+			allNew.WriteString(e.NewText)
+		}
+		if f.Path != "" && allOld.Len()+allNew.Len() > 0 {
+			o.addSignature(f.Path, allOld.String(), allNew.String(), iteration)
+		}
+	}
+}
+
+// recordBatchReplaceSignatures records one signature per target file:
+// the same pattern/replacement applied across files - a reversal must
+// count per file, exactly as if each file had been edited separately.
+func (o *oscillationState) recordBatchReplaceSignatures(parsed map[string]any, iteration int) {
+	pattern, _ := parsed["pattern"].(string)
+	if pattern == "" {
+		return
+	}
+	replacement, _ := parsed["replacement"].(string)
+	rawList, ok := parsed["files"].([]any)
+	if !ok {
+		return
+	}
+	for _, item := range rawList {
+		if p, ok := item.(string); ok && p != "" {
+			o.addSignature(p, pattern, replacement, iteration)
+		}
 	}
 }
 
