@@ -27,33 +27,32 @@ import (
 // a missing git or a bare repo must never block validation itself.
 
 var (
-	sharedTreeBranchOnce sync.Once
-	sharedTreeBranchCur  string // cached branch for the run
-	sharedTreeBranchMu   sync.Mutex
+	// #4908: the latch is per-BRANCH, consumed only when a warning is
+	// actually emitted - the old sync.Once consumed on the FIRST validation
+	// regardless of branch, so a first run while the tree sat on main spent
+	// the latch with no warning and silenced the guard for the rest of the
+	// run, exactly the mid-run branch-switch case it was built for.
+	sharedTreeWarnedBranch string // branch this run's warning already fired for
+	sharedTreeBranchMu     sync.Mutex
 )
 
-// sharedTreeCurrentBranch resolves (and caches for the run) the current git
-// branch of the tree at dir. Empty string on any failure.
+// sharedTreeCurrentBranch resolves the CURRENT git branch of the tree at
+// dir. Empty string on any failure. #4908: no run-scoped caching - a
+// cached "main" froze mid-run and made the branch switch invisible.
 func sharedTreeCurrentBranch(dir string) string {
-	sharedTreeBranchMu.Lock()
-	defer sharedTreeBranchMu.Unlock()
-	if sharedTreeBranchCur == "" {
-		out, err := exec.Command("git", "-C", dir, "branch", "--show-current").Output()
-		if err != nil {
-			return ""
-		}
-		sharedTreeBranchCur = strings.TrimSpace(string(out))
+	out, err := exec.Command("git", "-C", dir, "branch", "--show-current").Output()
+	if err != nil {
+		return ""
 	}
-	return sharedTreeBranchCur
+	return strings.TrimSpace(string(out))
 }
 
-// resetSharedTreeBranchGuard clears the run-scoped cache + once-state
+// resetSharedTreeBranchGuard clears the run-scoped warn latch
 // (wired in reset_turn.go with the other detectors).
 func resetSharedTreeBranchGuard() {
 	sharedTreeBranchMu.Lock()
-	sharedTreeBranchCur = ""
+	sharedTreeWarnedBranch = ""
 	sharedTreeBranchMu.Unlock()
-	sharedTreeBranchOnce = sync.Once{}
 }
 
 // isSharedMainTree reports whether dir is the shared main checkout rather
@@ -87,13 +86,20 @@ func (a *Agent) checkSharedTreeBranchGuard(toolName string, args json.RawMessage
 	if !isSharedMainTree(cwd) {
 		return ""
 	}
-	warned := false
-	sharedTreeBranchOnce.Do(func() { warned = true })
-	if !warned {
-		return "" // already warned this run
-	}
 	branch := sharedTreeCurrentBranch(cwd)
 	if branch == "" || branch == "main" || branch == "master" {
+		return "" // on main (or unresolvable): nothing to warn about, latch untouched (#4908)
+	}
+	// #4908: consume the warn-once latch ONLY now that a warning is
+	// actually warranted - per branch, so a mid-run switch to a NEW branch
+	// warns again while re-validating the same branch stays quiet.
+	sharedTreeBranchMu.Lock()
+	already := sharedTreeWarnedBranch == branch
+	if !already {
+		sharedTreeWarnedBranch = branch
+	}
+	sharedTreeBranchMu.Unlock()
+	if already {
 		return ""
 	}
 	debug.Log("agent", "shared-tree branch guard: validation ran on %s (not main) in the shared tree (#4803)", branch)
