@@ -2874,18 +2874,31 @@ func truncateGroupsForPTLRetry(msgs []provider.Message) ([]provider.Message, boo
 		return nil, false
 	}
 	start := 0
-	var prefix []provider.Message
 	if msgs[0].Role == "system" {
 		start = 1
-		prefix = append(prefix, msgs[0])
 	}
 	groups := buildMessageGroups(msgs, start)
-	if len(groups) < 2 {
-		return nil, false
+	// research-loop 112 Attention ④ (intra-group granularity, redesigned
+	// after the 115-round group-granularity falsification): eviction works
+	// on TAIL SEGMENTS, never whole groups. A group's real user-prompt head
+	// is pinned; its assistant/tool tail (and any carrier-only group) is
+	// evicted one message at a time, oldest first, so repeated PTL retries
+	// converge gradually. Every group's non-prompt tail is eligible,
+	// including the last group's (its prompt head is still pinned - and a
+	// single-group history with a long tail must converge too, which the
+	// exclude-last-group shape silently refused).
+	for _, g := range groups {
+		head := g.start
+		if startsNewInteractionGroup(msgs[g.start]) {
+			head++ // real prompt head is pinned
+		}
+		if head < g.end {
+			out := append([]provider.Message(nil), msgs[:head]...)
+			return append(out, msgs[head+1:]...), true
+		}
+		// group exhausted (only its pinned prompt head remains) -> next group
 	}
-	truncated := append([]provider.Message(nil), prefix...)
-	truncated = append(truncated, msgs[groups[1].start:]...)
-	return truncated, true
+	return nil, false // everything pinned/exhausted -> stop (termination)
 }
 
 func isPromptTooLongError(err error) bool {
