@@ -37,9 +37,16 @@ import (
 
 const (
 	// staleTodoThreshold: minimum iterations since last todo_write update
-	// before the first staleness reminder fires. Tuned so agents that update todos
-	// every 2-4 iterations never trigger, while truly abandoned plans do.
+	// before the first staleness reminder fires, when only lower-urgency
+	// (pending) items remain. Tuned so agents that update todos every 2-4
+	// iterations never trigger, while truly abandoned plans do.
 	staleTodoThreshold = 8
+
+	// activeStaleTodoThreshold: importance-scaled threshold (Attention A
+	// card, research-loop 112) - an in_progress item is an ACTIVE goal the
+	// agent is claiming to work on; abandoning it un-noticed for 8 turns
+	// is twice as bad. in_progress presence halves the wait.
+	activeStaleTodoThreshold = 5
 
 	// maxStaleTodoReminders: cap the total number of staleness reminders per
 	// run to prevent flooding the context if the agent repeatedly ignores them.
@@ -76,6 +83,11 @@ type todoStalenessState struct {
 	// reminderGraceIters iterations so an ignored reminder does not suppress
 	// all subsequent ones (#4855).
 	reminderActive bool
+
+	// activeGoal records whether an in_progress todo existed at the last
+	// lazy check (Attention A card, research-loop 112) - drives the
+	// importance-scaled threshold staleThresholdFor.
+	activeGoal bool
 }
 
 func newTodoStalenessState() *todoStalenessState {
@@ -88,6 +100,7 @@ func (s *todoStalenessState) reset() {
 	s.remindedCount = 0
 	s.lastRemindedIter = -1
 	s.reminderActive = false
+	s.activeGoal = false
 }
 
 // recordUpdate is called whenever todo_write succeeds. It records the iteration,
@@ -120,7 +133,18 @@ func (s *todoStalenessState) shouldRemind(iteration int, hasIncomplete bool) boo
 	if s.lastUpdateIter < 0 {
 		return false
 	}
-	return iteration-s.lastUpdateIter >= staleTodoThreshold
+	return iteration-s.lastUpdateIter >= staleThresholdFor(s.activeGoal)
+}
+
+// staleThresholdFor picks the staleness threshold by highest-urgency
+// incomplete item (Attention A card, research-loop 112): an in_progress
+// todo is an active goal - 5 turns of silence around it merits a nudge;
+// pending-only lists keep the conservative 8.
+func staleThresholdFor(activeGoal bool) int {
+	if activeGoal {
+		return activeStaleTodoThreshold
+	}
+	return staleTodoThreshold
 }
 
 func (s *todoStalenessState) markReminded(iteration int) {
@@ -149,7 +173,12 @@ func (a *Agent) maybeRemindStaleTodo(iteration int) string {
 	if a.todoStaleness.lastUpdateIter < 0 || !a.todoStaleness.hasTodos {
 		return ""
 	}
-	// Quick check: not enough iterations have passed yet.
+	// Quick check: not enough iterations have passed yet. The exact
+	// threshold depends on the highest-urgency incomplete item (in_progress
+	// halves the wait, Attention A card) - that is only knowable from the
+	// lazy disk read, so gate on the CONSERVATIVE (longer) threshold here
+	// and let the post-read path re-check with the real one. This keeps
+	// the zero-disk-read fast path for young stagnation.
 	if iteration-a.todoStaleness.lastUpdateIter < staleTodoThreshold {
 		return ""
 	}
@@ -169,12 +198,45 @@ func (a *Agent) maybeRemindStaleTodo(iteration int) string {
 		return ""
 	}
 
+	// Importance-scaled re-check (Attention A card, research-loop 112):
+	// the fast path above gated on the conservative threshold; now that the
+	// real list is in hand, an in_progress (active-goal) list reminds after
+	// 5 turns of silence instead of 8.
+	a.todoStaleness.activeGoal = a.checkActiveGoalTodos()
+	if itersSince := iteration - a.todoStaleness.lastUpdateIter; itersSince < staleThresholdFor(a.todoStaleness.activeGoal) {
+		return ""
+	}
+
 	a.todoStaleness.markReminded(iteration)
 	itersSince := iteration - a.todoStaleness.lastUpdateIter
 	debug.Log("todo_staleness", "stale todos detected: %d incomplete of %d, %d iterations since last update (threshold %d), injecting reminder (%d/%d)",
 		incompleteCount, totalCount, itersSince, staleTodoThreshold, a.todoStaleness.remindedCount, maxStaleTodoReminders)
 
 	return staleTodoReminderText(incompleteCount, totalCount, itersSince, items)
+}
+
+// checkActiveGoalTodos reports whether any todo is currently in_progress
+// (Attention A card, research-loop 112) - an active goal merits an earlier
+// staleness nudge than a pending-only list.
+func (a *Agent) checkActiveGoalTodos() bool {
+	t, ok := a.tools.Get("todo_write")
+	if !ok {
+		return false
+	}
+	tw, ok := t.(*tool.TodoWrite)
+	if !ok {
+		return false
+	}
+	todos, err := tw.ListTodos()
+	if err != nil {
+		return false
+	}
+	for _, td := range todos {
+		if td.Status == "in_progress" {
+			return true
+		}
+	}
+	return false
 }
 
 // checkHasIncompleteTodos reads the current session's todos and returns whether
