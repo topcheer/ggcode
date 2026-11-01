@@ -440,10 +440,21 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 			out.FailedPaths = append(out.FailedPaths, plan.Path)
 			continue
 		}
+		// #4903: same stale-read guard as the atomic path/#2327 - per-file
+		// failure marks only this file error; the rest of the batch proceeds.
+		unlockW, staleErr := guardStaleWrite(plan.Path)
+		if staleErr != nil {
+			idx := byPath[plan.Path]
+			out.Results[idx].Status = "error"
+			out.Results[idx].Error = staleErr.Error()
+			out.FailedPaths = append(out.FailedPaths, plan.Path)
+			continue
+		}
 		writeData, _ := formatGoBytes(plan.Path, []byte(plan.NewContent))
 
 		// No-op guard: skip files whose content is already identical.
 		if string(writeData) == plan.OldContent {
+			unlockW()
 			idx := byPath[plan.Path]
 			out.Results[idx].Status = "skipped"
 			out.Results[idx].Error = "no change: content identical"
@@ -454,12 +465,14 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 
 		CaptureDiagnosticBaseline(t.WorkingDir, plan.Path)
 		if err := atomicWriteFile(plan.Path, writeData, 0644); err != nil {
+			unlockW()
 			idx := byPath[plan.Path]
 			out.Results[idx].Status = "error"
 			out.Results[idx].Error = fmt.Sprintf("error writing file: %v", err)
 			out.FailedPaths = append(out.FailedPaths, plan.Path)
 			continue
 		}
+		unlockW()
 		idx := byPath[plan.Path]
 		out.Results[idx].Status = "success"
 		out.Results[idx].AppliedEditCount = plan.AppliedEditCount
@@ -654,6 +667,22 @@ func (t MultiFileEdit) planEntries(entries []multiFileEditEntry) ([]PlannedFileE
 	return plans, results, hasFailures
 }
 
+// guardStaleWrite takes the per-path write lock and rejects the write
+// when the file changed on disk since the agent's last read/write - the
+// #2327/#2315 discipline multi_file_write already follows. Returns the
+// unlock func and a nil error when the write may proceed; on staleness the
+// lock is already released and staleErr is non-nil (#4903).
+func guardStaleWrite(path string) (func(), error) {
+	unlock := LockWritePath(path)
+	if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+		if stale, since := defaultFileTracker.CheckStale(path); stale {
+			unlock()
+			return nil, fmt.Errorf("file modified externally since last read (changed after %s) — re-read before writing", since.Format("2006-01-02 15:04:05"))
+		}
+	}
+	return unlock, nil
+}
+
 func applyAtomicPlans(ctx context.Context, plans []PlannedFileEdit) (string, error) {
 	written := make([]PlannedFileEdit, 0, len(plans))
 	for _, plan := range plans {
@@ -664,13 +693,25 @@ func applyAtomicPlans(ctx context.Context, plans []PlannedFileEdit) (string, err
 			}
 			return plan.Path, fmt.Errorf("cancelled")
 		}
+		// #4903: same stale-read guard as multi_file_write/#2327 - the plan
+		// was built from a read that may predate an external/other-seat
+		// write; blind overwriting silently lost those changes.
+		unlockW, staleErr := guardStaleWrite(plan.Path)
+		if staleErr != nil {
+			if rerr := rollbackPlans(written); rerr != nil {
+				return plan.Path, fmt.Errorf("%v (rollback incomplete: %v)", staleErr, rerr)
+			}
+			return plan.Path, staleErr
+		}
 		writeData, _ := formatGoBytes(plan.Path, []byte(plan.NewContent))
 		if err := atomicWriteFile(plan.Path, writeData, 0644); err != nil {
+			unlockW()
 			if rerr := rollbackPlans(written); rerr != nil {
 				return plan.Path, fmt.Errorf("error writing file: %v (rollback incomplete: %v)", err, rerr)
 			}
 			return plan.Path, fmt.Errorf("error writing file: %v", err)
 		}
+		unlockW()
 		written = append(written, plan)
 	}
 	return "", nil
