@@ -106,6 +106,13 @@ func (m Model) renderDingtalkPanel() string {
 	}
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.dingtalk.create")))
 	if panel.createMode {
+		// #4873: numbered where-to-get-credentials guide rendered IN the
+		// panel at create time. Verified entry: dev.dingtalk.com is the
+		// developer console the adapter itself links to (it builds
+		// dev.dingtalk.com/app/detail URLs for app details).
+		for _, line := range strings.Split(m.t("panel.dingtalk.create_guide"), "\n") {
+			body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+line))
+		}
 		body = append(body,
 			" "+m.t("panel.dingtalk.bot_input", maskPositionalCreateEcho(panel.createInput, 1)+"█"),
 			" "+m.t("panel.dingtalk.create_format"),
