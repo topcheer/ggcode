@@ -47,6 +47,7 @@ func (c *Client) ListResourceTemplates(ctx context.Context) ([]ResourceTemplate,
 	if v, ok := c.listingCache.get(cacheResourceTemplates, ""); ok {
 		return cloneCachedSlice(v.([]ResourceTemplate)), nil
 	}
+	fetchEpoch := c.listingCache.epoch(cacheResourceTemplates) // #4882 CAS store guard
 	var all []ResourceTemplate
 	var pages []CacheableResult
 	cursor := ""
@@ -65,7 +66,7 @@ func (c *Client) ListResourceTemplates(ctx context.Context) ([]ResourceTemplate,
 		all = append(all, result.Templates...)
 		pages = append(pages, result.CacheableResult)
 		if result.NextCursor == "" {
-			c.storeListingsCache(cacheResourceTemplates, "", all, pages)
+			c.storeListingsCache(cacheResourceTemplates, "", all, pages, fetchEpoch)
 			return all, nil
 		}
 		cursor = result.NextCursor

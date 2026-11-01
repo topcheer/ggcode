@@ -544,6 +544,11 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
 	if v, ok := c.listingCache.get(cacheTools, ""); ok {
 		return cloneCachedSlice(v.([]ToolDefinition)), nil
 	}
+	// #4882: capture the generation BEFORE the multi-page fetch; a
+	// tools/list_changed invalidation that lands mid-fetch bumps the epoch
+	// and putIfFresh drops this store, so stale pre-notification data can no
+	// longer overwrite the hot refresh.
+	fetchEpoch := c.listingCache.epoch(cacheTools)
 	var all []ToolDefinition
 	var pages []CacheableResult
 	cursor := ""
@@ -561,7 +566,7 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
 		all = append(all, result.Tools...)
 		pages = append(pages, result.CacheableResult)
 		if result.NextCursor == "" {
-			c.storeListingsCache(cacheTools, "", all, pages)
+			c.storeListingsCache(cacheTools, "", all, pages, fetchEpoch)
 			return c.finalizeListedTools(all), nil
 		}
 		cursor = result.NextCursor
@@ -607,6 +612,7 @@ func (c *Client) ListPrompts(ctx context.Context) ([]PromptDefinition, error) {
 	if v, ok := c.listingCache.get(cachePrompts, ""); ok {
 		return cloneCachedSlice(v.([]PromptDefinition)), nil
 	}
+	fetchEpoch := c.listingCache.epoch(cachePrompts) // #4882 CAS store guard
 	var all []PromptDefinition
 	var pages []CacheableResult
 	cursor := ""
@@ -625,7 +631,7 @@ func (c *Client) ListPrompts(ctx context.Context) ([]PromptDefinition, error) {
 		all = append(all, result.Prompts...)
 		pages = append(pages, result.CacheableResult)
 		if result.NextCursor == "" {
-			c.storeListingsCache(cachePrompts, "", all, pages)
+			c.storeListingsCache(cachePrompts, "", all, pages, fetchEpoch)
 			return all, nil
 		}
 		cursor = result.NextCursor
@@ -639,6 +645,7 @@ func (c *Client) ListResources(ctx context.Context) ([]ResourceDefinition, error
 	if v, ok := c.listingCache.get(cacheResources, ""); ok {
 		return cloneCachedSlice(v.([]ResourceDefinition)), nil
 	}
+	fetchEpoch := c.listingCache.epoch(cacheResources) // #4882 CAS store guard
 	var all []ResourceDefinition
 	var pages []CacheableResult
 	cursor := ""
@@ -657,7 +664,7 @@ func (c *Client) ListResources(ctx context.Context) ([]ResourceDefinition, error
 		all = append(all, result.Resources...)
 		pages = append(pages, result.CacheableResult)
 		if result.NextCursor == "" {
-			c.storeListingsCache(cacheResources, "", all, pages)
+			c.storeListingsCache(cacheResources, "", all, pages, fetchEpoch)
 			return all, nil
 		}
 		cursor = result.NextCursor
@@ -688,6 +695,11 @@ func (c *Client) ReadResource(ctx context.Context, uri string) (*ReadResourceRes
 		res.Contents = cloneCachedSlice(res.Contents)
 		return &res, nil
 	}
+	// #4882 CAS store guard: capture the epoch BEFORE the request; a
+	// resources/updated invalidation that lands mid-read bumps the per-kind
+	// generation and putIfFresh drops this store rather than resurrecting the
+	// pre-update contents until TTL.
+	fetchEpoch := c.listingCache.epoch(cacheResourceRead)
 	params := ReadResourceParams{URI: uri}
 	var result ReadResourceResult
 	if err := c.callWithMRTR(ctx, "resources/read", &params, &result); err != nil {
@@ -705,7 +717,7 @@ func (c *Client) ReadResource(ctx context.Context, uri string) (*ReadResourceRes
 	// gets a separate copy while the caller keeps the decoded original.
 	cached := result
 	cached.Contents = cloneCachedSlice(result.Contents)
-	c.storeListingsCache(cacheResourceRead, uri, cached, []CacheableResult{result.CacheableResult})
+	c.storeListingsCache(cacheResourceRead, uri, cached, []CacheableResult{result.CacheableResult}, fetchEpoch)
 	return &result, nil
 }
 

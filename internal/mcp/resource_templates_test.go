@@ -123,7 +123,8 @@ func TestListResourceTemplatesGatedOnResourcesCapability(t *testing.T) {
 
 func TestResourceTemplatesCacheInvalidatedByListChanged(t *testing.T) {
 	client := &Client{name: "cachetpl"}
-	client.storeListingsCache(cacheResourceTemplates, "", []ResourceTemplate{{URITemplate: "db://x/{y}"}}, []CacheableResult{{TTLms: 60000}})
+	epoch := client.listingCache.epoch(cacheResourceTemplates)
+	client.storeListingsCache(cacheResourceTemplates, "", []ResourceTemplate{{URITemplate: "db://x/{y}"}}, []CacheableResult{{TTLms: 60000}}, epoch)
 	if _, ok := client.listingCache.get(cacheResourceTemplates, ""); !ok {
 		t.Fatal("cache entry must exist before invalidation")
 	}
