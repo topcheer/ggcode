@@ -26,7 +26,15 @@ var (
 	stashOwnerOnce sync.Once
 	stashOwnerID   string
 	// stashOwnerTagRe extracts the tag payload from a `git stash list` line.
-	stashOwnerTagRe = regexp.MustCompile(regexp.QuoteMeta(stashOwnerTagPrefix) + `([^\]]+)\]`)
+	// #4841: the push path appends the tool's own tag LAST, so extraction is
+	// anchored to the END of the subject. The previous first-match regex let a
+	// user message like "work [ggcode-seat:other-seat-999]" (or any injected
+	// content flowing into the message param) forge an earlier tag that the
+	// extractor trusted - enabling self-DoS (owner mismatch on your own entry)
+	// and victim worktree injection (attacker-tagged content passing the
+	// victim's pop ownership check). Tail-anchoring makes forged earlier tags
+	// inert; the only trusted tag is the one the tool itself appended.
+	stashOwnerTagRe = regexp.MustCompile(regexp.QuoteMeta(stashOwnerTagPrefix) + `([^\]]+)\]$`)
 )
 
 // stashOwner returns a per-process owner identity (hostname-pid). Stable for
