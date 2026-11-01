@@ -132,6 +132,7 @@ func (m Model) renderQQPanel() string {
 			" "+m.t("panel.qq.bot_input", maskPositionalCreateEcho(panel.createInput, 2)+"█"),
 			" "+m.t("panel.qq.create_format"),
 			" "+m.t("panel.qq.create_example"),
+			" "+qqCreateLink(m.t("panel.qq.create_link")),
 			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.qq.create_hint")),
 		)
@@ -373,6 +374,13 @@ func (m *Model) createQQAdapter(spec string) tea.Cmd {
 		name := strings.TrimSpace(fields[0])
 		appID := strings.TrimSpace(fields[1])
 		appSecret := strings.TrimSpace(fields[2])
+		// #4869 follow-up: create = verify. Probe the QQ token endpoint NOW,
+		// inside this cmd goroutine - an invalid appid/secret returns a red
+		// error and NOTHING persists (no config write, no binding); a valid
+		// pair proceeds to the mutation.
+		if verr := validateQQCreateSpec(name, appID, appSecret); verr != nil {
+			return qqBindResultMsg{err: fmt.Errorf("%s (%v)", m.t("panel.qq.error.verify_failed"), verr)}
+		}
 		adapter := config.IMAdapterConfig{
 			Enabled:  true,
 			Platform: string(im.PlatformQQ),

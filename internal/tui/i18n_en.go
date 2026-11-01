@@ -925,6 +925,10 @@ func enCatalog(key string) string {
 		return "Format: <bot-id> <appid> <appsecret>"
 	case "panel.qq.create_example":
 		return "Example: qq-main 123456 secret-value"
+	case "panel.qq.create_link":
+		return "Create a bot app on bots.qq.com →"
+	case "panel.qq.error.verify_failed":
+		return "credential check failed - nothing was saved"
 	case "panel.qq.create_hint":
 		return "Enter create bot • Esc cancel"
 	case "panel.qq.actions_hint":

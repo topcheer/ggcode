@@ -278,8 +278,10 @@ func (m *Model) handleIMPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "M":
 		return *m, m.muteAllIMChannels()
 	case "o":
-		// #4861: open the selected channel's vendor onboard panel (the
-		// cockpit routes; the vendor panel carries the guidance).
+		// #4861 + #4869 follow-up: 'o' opens the selected platform's panel -
+		// semantics are NEUTRAL (the panel decides whether to show onboarding
+		// guidance for an unconfigured platform or the management view for a
+		// configured one). Not an "onboard" action.
 		if len(entries) == 0 {
 			panel.message = m.t("panel.im.message.no_channel")
 			return *m, nil
@@ -287,7 +289,20 @@ func (m *Model) handleIMPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		platform := strings.ToLower(string(entries[clampIMSelection(panel.selected, len(entries))].Platform))
 		if entry, ok := imOnboardWizard()[platform]; ok {
 			m.closeIMPanel()
-			return *m, m.handleCommand(entry.Panel)
+			cmd := m.handleCommand(entry.Panel)
+			// #4869 follow-up: 'o' lands DIRECTLY in create mode - the user
+			// pressed it to add, not to browse the management view.
+			switch platform {
+			case "qq":
+				if m.qqPanel != nil {
+					m.qqPanel.createMode = true
+				}
+			case "dingtalk":
+				if m.dingtalkPanel != nil {
+					m.dingtalkPanel.createMode = true
+				}
+			}
+			return *m, cmd
 		}
 		panel.message = fmt.Sprintf("platform %q has no vendor panel yet", platform)
 	case "x":

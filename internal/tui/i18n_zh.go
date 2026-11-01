@@ -938,6 +938,10 @@ func zhCatalog(key string) string {
 		return "格式：<bot-id> <appid> <appsecret>"
 	case "panel.qq.create_example":
 		return "示例：qq-main 123456 secret-value"
+	case "panel.qq.create_link":
+		return "在 bots.qq.com 创建机器人应用 →"
+	case "panel.qq.error.verify_failed":
+		return "凭据校验失败，未保存任何配置"
 	case "panel.qq.create_hint":
 		return "Enter 创建机器人 • Esc 取消"
 	case "panel.qq.actions_hint":
