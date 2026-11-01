@@ -36,6 +36,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -105,6 +106,11 @@ const (
 	// weaknessAge is the staleness horizon: a fingerprint unseen for this
 	// long stops counting (the weakness was presumably fixed).
 	weaknessAge = 30 * 24 * time.Hour
+	// weaknessDecayHalfLife is the routing-weight half-scale for memory
+	// decay: a record last confirmed one half-life ago routes at ~0.37
+	// strength. Routing-only concern - Count accumulation and the 30d load
+	// eviction (#3863 D: a surviving rec is never stale) are untouched.
+	weaknessDecayHalfLife = 15 * 24 * time.Hour
 )
 
 // runSignal is one weakness observation collected at run end.
@@ -422,6 +428,27 @@ func routeMatureSignals(workingDir string, store weaknessSignalStore) {
 // Existing lines are deduped by fingerprint prefix so re-routing after a
 // manual memory edit still cannot duplicate a line. Caller holds the store
 // flock (#3925).
+// weaknessDecayFactor returns the recency weight in [0,1] for a record
+// last confirmed at lastTS: exp(-age/half-life). Zero/future LastTS
+// (test-built records) weigh 1; age >= weaknessAge weighs 0. Sub-hour
+// ages are treated as fully fresh - the decay measures DAY-scale
+// staleness, and a same-tick sighting would otherwise lose microsecond
+// epsilon off Count and fall below the integer threshold.
+// Memory-decay card, research-loop 109.
+func weaknessDecayFactor(lastTS, now time.Time) float64 {
+	if lastTS.IsZero() || !lastTS.Before(now) {
+		return 1
+	}
+	age := now.Sub(lastTS)
+	if age < time.Hour {
+		return 1
+	}
+	if age >= weaknessAge {
+		return 0
+	}
+	return math.Exp(-float64(age) / float64(weaknessDecayHalfLife))
+}
+
 func routeMatureSignalsLocked(workingDir string, store weaknessSignalStore) {
 	// #3837 B heritage note: the lock used to live HERE, covering only the
 	// memory-routing tail while the caller's load/Count++/save ran unlocked.
@@ -430,8 +457,14 @@ func routeMatureSignalsLocked(workingDir string, store weaknessSignalStore) {
 		return
 	}
 	var lines []string
+	now := time.Now()
 	for fp, rec := range store {
-		if rec.Count < weaknessRouteThreshold || rec.Routed || rec.Class == WeakRare {
+		// Memory-decay gate (research-loop 109): Count is discounted by
+		// recency so "seen twice yesterday" routes while "seen twice 29
+		// days ago and never since" waits for reinforcement. Production
+		// flow routes right after Count++/LastTS=now, so fresh sightings
+		// are unaffected; eviction semantics stay binary (#3863 D).
+		if float64(rec.Count)*weaknessDecayFactor(rec.LastTS, now) < weaknessRouteThreshold || rec.Routed || rec.Class == WeakRare {
 			continue
 		}
 		switch rec.Class {
