@@ -378,12 +378,21 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: "worktree has uncommitted changes. Set discard_changes=true to remove anyway, or commit/stash your changes first."}, nil
 	}
 
-	// Get branch name before removing
+	// Get the branch currently checked out (may differ from the creation
+	// branch if the agent switched mid-worktree).
 	branchCmd := exec.CommandContext(ctx, "git", "branch", "--show-current")
 	branchCmd.Dir = gitRoot
 	branchCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
 	branchOut, _ := branchCmd.Output()
-	branchName := strings.TrimSpace(string(branchOut))
+	currentBranch := strings.TrimSpace(string(branchOut))
+	// #4905: the deletion TARGET is the creation-time branch, derived from
+	// the worktree directory name (enter_worktree creates the branch with the
+	// same name as the directory - a creation-time invariant). The old code
+	// deleted whatever branch was checked out NOW: an agent that switched
+	// branches inside the worktree had the WRONG branch deleted while the
+	// creation-time branch became a silent orphan, and a detached HEAD
+	// (empty --show-current) skipped branch cleanup entirely.
+	branchName := filepath.Base(worktreePath)
 
 	// Remove the worktree. #1356: --force only when the caller explicitly
 	// authorized discarding. Passing it unconditionally disabled git's own
@@ -409,6 +418,7 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 	}
 
 	// Optionally delete the branch
+	deletedBranch := ""
 	if branchName != "" && branchName != "main" && branchName != "master" {
 		// #1710 case 1: gate the force-delete on unmerged/unpushed commits.
 		// The old code ran `git branch -D` unconditionally and swallowed the
@@ -439,12 +449,28 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 			delCmd := exec.CommandContext(ctx, "git", "branch", "-D", branchName)
 			delCmd.Dir = mainRepoRoot
 			delCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
-			_ = delCmd.Run() // best effort
+			if err := delCmd.Run(); err == nil { // best effort
+				deletedBranch = branchName
+			}
 		}
 	}
 
+	result := fmt.Sprintf("Removed worktree %s", worktreePath)
+	if deletedBranch != "" {
+		// #4905: the reflog recovery hint belongs on the ACTUAL -D execution
+		// path (the old hint existed only on the branch-kept path above).
+		result += fmt.Sprintf(" and deleted branch %s (recoverable via reflog for ~30 days)", deletedBranch)
+	}
+	// #4905: if the agent switched to a different branch mid-worktree, that
+	// branch is left behind on purpose (deleting an unknown branch the caller
+	// never named is a wrong-target deletion) - surface it instead of orphaning
+	// it silently.
+	if currentBranch != "" && currentBranch != branchName && currentBranch != "main" && currentBranch != "master" {
+		result += fmt.Sprintf(". Note: branch %s was checked out in the worktree (not created by enter_worktree); it was kept - delete it manually if unwanted", currentBranch)
+	}
+
 	return Result{
-		Content:             fmt.Sprintf("Removed worktree %s", worktreePath),
+		Content:             result,
 		SuggestedWorkingDir: mainRepoRoot,
 	}, nil
 }
