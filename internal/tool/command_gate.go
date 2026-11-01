@@ -292,7 +292,10 @@ func NewCommandGate() *CommandGate {
 	// ================================================================
 	g.cleanRules = []cleanRule{
 		{desc: "remove dangerous GIT_PAGER override",
-			pattern: regexp.MustCompile(`(?i)GIT_PAGER=\S+`)},
+			// #4430 bug 4: consume the QUOTED form fully. `GIT_PAGER="less -R"`
+			// made \\S+ stop at the space, leaving ` -R"` behind - the cleaned
+			// command then had unbalanced quotes (invalid shell downstream).
+			pattern: regexp.MustCompile(`(?i)GIT_PAGER=(?:'[^']*'|"[^"]*"|\S+)`)},
 	}
 
 	return g
