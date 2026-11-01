@@ -194,10 +194,6 @@ const en = {
   // Onboarding
   'onboarding.next': '次へ',
   'onboarding.back': '戻る',
-  'onboarding.skip': 'Skip',
-  'onboarding.imStepTitle': 'Connect a messaging channel',
-  'onboarding.imStepHint': 'Optional - walk one platform end-to-end now, or set it up later in Settings - IM.',
-  'onboarding.imChoosePlatform': 'Choose a platform...',
   'onboarding.getStarted': '始める',
   'onboarding.vendorHint': '使用するAIプロバイダーを選択してください',
   'onboarding.configHint': 'これらの設定を調整するか、デフォルトのままにしてください',
@@ -246,7 +242,6 @@ const en = {
   // IMManagement
   'im.title': 'IMアダプター',
   'im.addAdapter': 'アダプターを追加',
-  'im.notConfigured': 'Not configured yet - guided setup',
   'im.noAdapters': 'IMアダプターが設定されていません。「アダプターを追加」をクリックして始めましょう。',
   'im.currentWorkspace': '現在のワークスペース',
   'im.otherWorkspaces': 'その他のワークスペース',

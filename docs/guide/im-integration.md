@@ -2,10 +2,6 @@
 
 Connect ggcode to instant messaging platforms so you can send prompts and receive responses directly from your chat client.
 
-## Guided Onboarding
-
-The `/im` panel (TUI cockpit) includes a guided per-platform wizard: numbered setup steps with anti-confusion notes ("this ID is NOT that ID" traps - numeric Telegram IDs, Slack C-prefix channel IDs, the Feishu credential trio) and entry deep-links. The desktop app mirrors the same wizard: an optional step in first-run onboarding ("connect a messaging channel") and a not-configured registry section in Settings → IM, both rendered from the same content source, so the two surfaces never drift. Pairing flows (QQ/WeChat/WhatsApp QR) are unchanged - the wizard guides, the existing panels pair.
-
 ## Supported Platforms
 
 | Platform | Key | Required Credentials |

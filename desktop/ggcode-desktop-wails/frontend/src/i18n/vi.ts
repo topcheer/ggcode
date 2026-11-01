@@ -194,10 +194,6 @@ const en = {
   // Onboarding
   'onboarding.next': 'Tiếp theo',
   'onboarding.back': 'Quay lại',
-  'onboarding.skip': 'Skip',
-  'onboarding.imStepTitle': 'Connect a messaging channel',
-  'onboarding.imStepHint': 'Optional - walk one platform end-to-end now, or set it up later in Settings - IM.',
-  'onboarding.imChoosePlatform': 'Choose a platform...',
   'onboarding.getStarted': 'Bắt đầu',
   'onboarding.vendorHint': 'Chọn nhà cung cấp AI bạn muốn sử dụng',
   'onboarding.configHint': 'Điều chỉnh các cài đặt này hoặc giữ nguyên mặc định',
@@ -246,7 +242,6 @@ const en = {
   // IMManagement
   'im.title': 'Bộ chuyển đổi IM',
   'im.addAdapter': 'Thêm bộ chuyển đổi',
-  'im.notConfigured': 'Not configured yet - guided setup',
   'im.noAdapters': 'Chưa cấu hình bộ chuyển đổi IM nào. Nhấp "Thêm bộ chuyển đổi" để bắt đầu.',
   'im.currentWorkspace': 'Không gian làm việc hiện tại',
   'im.otherWorkspaces': 'Không gian làm việc khác',

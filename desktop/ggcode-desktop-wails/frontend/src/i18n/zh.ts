@@ -205,10 +205,6 @@ const zh: Record<TranslationKey, string> = {
   // Onboarding
   'onboarding.next': '下一步',
   'onboarding.back': '上一步',
-  'onboarding.skip': '跳过',
-  'onboarding.imStepTitle': '连接一个消息平台',
-  'onboarding.imStepHint': '可选 - 现在走完一个平台的配置，或稍后在设置 → IM 中完成。',
-  'onboarding.imChoosePlatform': '选择平台…',
   'onboarding.getStarted': '开始使用',
   'onboarding.vendorHint': '选择你要使用的 AI 服务商',
   'onboarding.configHint': '调整这些设置，或保持默认值',
@@ -257,7 +253,6 @@ const zh: Record<TranslationKey, string> = {
   // IMManagement
   'im.title': 'IM 适配器',
   'im.addAdapter': '添加适配器',
-  'im.notConfigured': '尚未配置 - 引导式设置',
   'im.noAdapters': '未配置 IM 适配器。点击"添加适配器"开始。',
   'im.currentWorkspace': '当前工作区',
   'im.otherWorkspaces': '其他工作区',
