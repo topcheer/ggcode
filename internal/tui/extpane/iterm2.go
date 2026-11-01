@@ -13,21 +13,51 @@ import (
 // iterm2Backend implements Backend using iTerm2 AppleScript.
 // Each agent gets its own tab, never disturbing the main TUI layout.
 type iterm2Backend struct {
-	selfSessionID string // ID of the session where ggcode itself runs — never close this
+	selfSessionID string // ID of the session where ggcode itself runs - never close this
+}
+
+// osascriptCommand is the command runOsa executes. Var so tests can stub
+// the probe without ever spawning a real osascript (which on macOS would
+// launch iTerm2 as a side effect of `tell application` - #4850).
+var osascriptCommand = func(ctx context.Context, script string) (string, error) {
+	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// iterm2Running reports whether the iTerm2 process is actually running,
+// WITHOUT launching it. `tell application "iTerm2"` launches a non-running
+// app (LaunchServices "starting stopped process") - that is how background
+// daemon probes resurrected a terminal the user had deliberately quit
+// (#4850). System Events' `exists process` never launches the target.
+func iterm2Running(ctx context.Context) bool {
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	out, err := osascriptCommand(probeCtx, `tell application "System Events" to (exists process "iTerm2")`)
+	return err == nil && strings.TrimSpace(out) == "true"
 }
 
 func newITerm2Backend() *iterm2Backend {
+	// #4850: probing a non-running iTerm2 with `tell application` would
+	// relaunch it. Guard: if the process is not alive, this backend is
+	// simply unavailable - a probe must never launch a GUI app.
+	if !iterm2Running(context.Background()) {
+		return nil
+	}
 	b := &iterm2Backend{}
 	// Capture our own session ID at init so we never accidentally close ggcode's tab.
 	// Best-effort: if this fails, selfSessionID stays empty and CloseTab won't have
 	// the self-guard, but the Manager-level failed/maxPanes guards still apply.
-	// #1369/#894: 3s timeout like the tmux sibling — this runs on the TUI
+	// #1369/#894: 3s timeout like the tmux sibling - this runs on the TUI
 	// startup synchronous path (NewManager→newModel); a busy/restarting
 	// iTerm2 or a pending Automation-permission dialog would otherwise
 	// block model construction forever.
 	probeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	out, err := runOsa(probeCtx, `tell application "iTerm2" to return id of current session of current window`)
+	out, err := osascriptCommand(probeCtx, `tell application "iTerm2" to return id of current session of current window`)
 	if err == nil {
 		b.selfSessionID = strings.TrimSpace(out)
 	}
@@ -38,6 +68,14 @@ func (i *iterm2Backend) Name() string { return "iterm2" }
 
 // CreateTab creates a new iTerm2 tab running `tail -f`.
 func (i *iterm2Backend) CreateTab(ctx context.Context, title, logfile string) (string, error) {
+	// #4850: the create script starts with `activate` - if the user quit
+	// iTerm2 after this backend was constructed, running the script would
+	// relaunch it. Guard at the boundary: pane creation requires a live
+	// terminal; a quit terminal means the pane permanently fails (Manager
+	// failed-map handles no-retry), never a resurrection.
+	if !iterm2Running(ctx) {
+		return "", fmt.Errorf("iterm2: not running - refusing to relaunch a quit terminal (#4850)")
+	}
 	safeTitle := sanitizeAS(title)
 	// #1369 side-fix: a log path containing ' (apostrophed parent dir or
 	// teammate name) breaks the AppleScript literal and the panel dies,
@@ -82,7 +120,7 @@ end tell
 	}
 	// Sanity: if the returned ID is our own session, something is very wrong.
 	if sessionID == i.selfSessionID {
-		return "", fmt.Errorf("iterm2: created tab returned self session ID — refusing")
+		return "", fmt.Errorf("iterm2: created tab returned self session ID - refusing")
 	}
 	return sessionID, nil
 }
@@ -146,12 +184,7 @@ end tell
 }
 
 func runOsa(ctx context.Context, script string) (string, error) {
-	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
+	return osascriptCommand(ctx, script)
 }
 
 // sanitizeAS escapes a string for safe use inside AppleScript double-quoted strings.
