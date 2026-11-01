@@ -331,7 +331,11 @@ func shellLooksPowerShell(cmd string) bool {
 var shellHardTokens = []string{
 	"rm -rf",
 	"git reset --hard",
-	"git push --force",
+	// "git push --force" moved to pushForceScore (#4877): substring matching
+	// (a) missed the -f / +refspec equivalents entirely, and (b) scored the
+	// safer --force-with-lease prefix-superset at the same +8 hard weight as
+	// bare force - contradicting git_destructive_detect's own warning-level
+	// tiering for the lease variant.
 	"Remove-Item -Recurse -Force", // PS rm -rf equivalent
 	"Format-Volume",               // PS disk wipe
 	"reg delete",
@@ -441,6 +445,46 @@ func scoreShellComplexityChained(cmd string) int {
 	return max
 }
 
+// pushForceScore returns (hard, mid) tier weights for the force forms of a
+// git push inside cmd (#4877), token-matched the way
+// git_destructive_detect.isForcePushCommand does it rather than by
+// substring, so the three spellings of the same hazard tier equally and the
+// safe lease variant gets its own mid weight:
+//   - bare --force, short-flag clusters (-f, -fv), and +refspec force
+//     ("git push origin +main")  -> hard 8
+//   - --force-with-lease[=expect] -> mid 4 (the safer form; scoring it hard
+//     nudged agents away from the variant the destructive guard recommends)
+//
+// Non-force pushes and unrelated commands score 0/0. Scanning stops at the
+// first shell sequencing boundary so a later segment's tokens never
+// misattribute to this push.
+func pushForceScore(cmd string) (hard, mid int) {
+	fields := strings.Fields(cmd)
+	for i := 1; i < len(fields); i++ {
+		if fields[i] != "push" || fields[i-1] != "git" {
+			continue
+		}
+		for _, t := range fields[i+1:] {
+			if t == "&&" || t == "||" || t == ";" {
+				break
+			}
+			if t == "--force" {
+				return 8, 0
+			}
+			if t == "--force-with-lease" || strings.HasPrefix(t, "--force-with-lease=") {
+				return 0, 4
+			}
+			if strings.HasPrefix(t, "+") {
+				return 8, 0 // +refspec force form
+			}
+			if strings.HasPrefix(t, "-") && !strings.HasPrefix(t, "--") && strings.Contains(t, "f") {
+				return 8, 0 // -f / -fv / -fn flag clusters
+			}
+		}
+	}
+	return 0, 0
+}
+
 // scoreShellComplexity scores a shell command: length, pipelines (capped:
 // build/test plumbing legitimately chains 5-8 stages), command substitution
 // (dialect-aware for backticks), and destructive-token tiers.
@@ -474,6 +518,15 @@ func scoreShellComplexity(cmd string) int {
 		if hard < 16 && strings.Contains(cmd, tok) {
 			hard += 8
 		}
+	}
+	// #4877: token-level git push force tiers (see pushForceScore) - the
+	// lease mid weight mirrors the bare Remove-Item +5 precedent (below the
+	// threshold-8 gate alone, but visible in the score).
+	if pfHard, pfMid := pushForceScore(cmd); pfHard > 0 || pfMid > 0 {
+		if hard < 16 {
+			hard += pfHard
+		}
+		hard += pfMid
 	}
 	// Bare Remove-Item (no -Force suffix pair) still warrants a mid weight.
 	if ps && hard == 0 && strings.Contains(cmd, "Remove-Item") {
