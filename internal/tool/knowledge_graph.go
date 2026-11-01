@@ -685,6 +685,21 @@ func (t *KnowledgeGraphTool) save(s *kgStore) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	// #4479: the cache and loaded flag are per-INSTANCE, and Registry.Clone
+	// hands every teammate/sub-agent its own tool instance on the same store
+	// file. Two instances writing concurrently each held a stale snapshot,
+	// and this whole-file rename silently dropped the other seat's nodes and
+	// edges (lost update). Re-read the disk state fresh (bypassing this
+	// instance's cache) and merge: union of nodes by id and edges by
+	// (from,to,type), with OUR version winning on collisions - ours was built
+	// on the last state we saw, so the other seat's same-id write is the
+	// stale one. Known limit: a node another seat DELETED reappears here;
+	// that resurrection is visible (queryable) rather than the silent loss
+	// this fixes, and matches the union semantics the issue prescribes.
+	if disk := t.readDiskFresh(); disk != nil {
+		s = mergeKGStores(disk, s)
+		t.cache = s
+	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
@@ -695,6 +710,51 @@ func (t *KnowledgeGraphTool) save(s *kgStore) error {
 	}
 	t.cache = s
 	return os.Rename(tmp, t.kgPath())
+}
+
+// readDiskFresh loads the store from disk WITHOUT touching or consulting
+// this instance's cache (#4479 merge-on-save source). nil when the file is
+// absent or corrupt (merge simply no-ops; load's error path still owns
+// surfacing corruption on first use).
+func (t *KnowledgeGraphTool) readDiskFresh() *kgStore {
+	data, err := os.ReadFile(t.kgPath())
+	if err != nil {
+		return nil
+	}
+	var s kgStore
+	if err := json.Unmarshal(data, &s); err != nil {
+		return nil
+	}
+	if s.Nodes == nil {
+		s.Nodes = make(map[string]*kgNode)
+	}
+	if s.Edges == nil {
+		s.Edges = []kgEdge{}
+	}
+	return &s
+}
+
+// mergeKGStores unions two store snapshots (#4479): disk nodes absent from
+// mem are added (another seat's write this instance never saw), mem edges
+// win on the (from,to,type) composite key, disk-only edges are appended.
+func mergeKGStores(disk, mem *kgStore) *kgStore {
+	for id, n := range disk.Nodes {
+		if _, ok := mem.Nodes[id]; !ok {
+			mem.Nodes[id] = n
+		}
+	}
+	have := make(map[string]bool, len(mem.Edges))
+	for _, e := range mem.Edges {
+		have[e.From+"\x00"+e.To+"\x00"+e.Type] = true
+	}
+	for _, e := range disk.Edges {
+		k := e.From + "\x00" + e.To + "\x00" + e.Type
+		if !have[k] {
+			mem.Edges = append(mem.Edges, e)
+			have[k] = true
+		}
+	}
+	return mem
 }
 
 // --- Helpers ---
