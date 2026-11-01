@@ -103,6 +103,26 @@ mcp_servers:
 
 With `allow_tool_drift: true` changes are logged (debug log, `mcp-drift` category) but never raise the alert; the baseline still moves forward with each observed change, so each drift reports at most once.
 
+## OSV Malware Gate for Package-Runner Launches
+
+Before launching a package-runner MCP server command (`npx`/`bunx`/`pnpm dlx` for npm, `uvx`/`uv tool run` for PyPI), ggcode queries [OSV](https://api.osv.dev) for `MAL-*` malware advisories on the resolved package and version. A typo-squatted or compromised MCP package is a real supply-chain vector — MCP tools run with your credentials.
+
+- **Block on hit**: the launch is refused with the advisory IDs (e.g. `MAL-2026-0001`) in the error.
+- **Fail open**: if OSV is unreachable, the server still starts — offline must never brick your MCP stack. A one-time visible warning is printed to stderr (naming the `skip_osv_check` escape hatch); repeated failures stay silent until connectivity returns.
+- **24h verdict cache**: results (clean or flagged) are cached per package+version, so restarts do not re-query.
+- Project-scoped commands (`uv run`, `pnpm install`) that operate on your local environment are not gated.
+
+Escape hatch for air-gapped hosts and enterprise package mirrors whose packages OSV does not index:
+
+```yaml
+mcp_servers:
+  mirror-server:
+    name: mirror-server
+    command: npx
+    args: ["-y", "@internal/mirror-mcp"]
+    skip_osv_check: true
+```
+
 ## Stateless Protocol Mode (MCP 2026-07-28)
 
 The MCP 2026-07-28 revision (SEP-2575) removes the protocol-level session and the initialize handshake: every request carries its protocol version, client info and client capabilities as per-request `_meta` members, and servers advertise themselves via a new `server/discover` method. ggcode supports this as an opt-in per server:
