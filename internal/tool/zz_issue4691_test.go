@@ -7,10 +7,11 @@ import (
 
 // #4691: ydoClickArgs must normalize button case and REJECT unknown buttons
 // instead of silently clicking LEFT. "Right"/"RIGHT" normalize to "right"
-// and stay VALID (see the normalize test); only genuinely unknown values
-// are rejected - "lef"/typos/empty previously fell through to BTN_LEFT.
+// and stay VALID (see the normalize test); empty means the schema default
+// (left); only genuinely unknown non-empty values are rejected - "lef"/typos
+// previously fell through to BTN_LEFT.
 func TestIssue4691_YdoClickArgsRejectsUnknownButton(t *testing.T) {
-	for _, bad := range []string{"lef", "back", "sideways", ""} {
+	for _, bad := range []string{"lef", "back", "sideways"} {
 		if _, err := ydoClickArgs(bad, 1); err == nil {
 			t.Fatalf("button %q must be rejected, got argv", bad)
 		} else if !strings.Contains(err.Error(), "unknown button") {

@@ -246,6 +246,9 @@ func ydoClickArgs(button string, clicks int) ([][]string, error) {
 	// #4691: same normalization+rejection as the darwin mouseClick path -
 	// bare lowercase comparisons silently clicked LEFT for "Right"/typos.
 	button = strings.ToLower(strings.TrimSpace(button))
+	if button == "" {
+		button = "left" // schema default: absent/empty button means left click
+	}
 	if button != "left" && button != "right" && button != "middle" {
 		return nil, fmt.Errorf("unknown button %q (left, right, middle)", button)
 	}
