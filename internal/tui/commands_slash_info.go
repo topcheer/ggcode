@@ -203,7 +203,11 @@ func (m *Model) exportSession(id string) tea.Cmd {
 		if err != nil {
 			return streamMsg(tr("session.export_failed", err))
 		}
-		ses, err := store.Load(resolved)
+		// #4893: exports must bypass the recent-message window (silent
+		// truncation for sessions over 24h/500 records) - same fix desktop
+		// took in #564; the window is a list-performance tool misapplied to
+		// a data-fidelity path.
+		ses, err := store.LoadWithOptions(resolved, true)
 		if err != nil {
 			return streamMsg(tr("session.export_failed", err))
 		}
@@ -266,7 +270,7 @@ func (m *Model) exportTraceSession(id string, otelFormat bool) tea.Cmd {
 			if err != nil {
 				return streamMsg(tr("trace.export_failed", err))
 			}
-			ses, err := store.Load(resolved)
+			ses, err := store.LoadWithOptions(resolved, true)
 			if err != nil {
 				return streamMsg(tr("trace.export_failed", err))
 			}
