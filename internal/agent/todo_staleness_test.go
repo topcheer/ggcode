@@ -9,11 +9,11 @@ import (
 func TestTodoStaleness_Reset(t *testing.T) {
 	s := newTodoStalenessState()
 	s.recordUpdate(5, 3)
-	s.markReminded()
+	s.markReminded(10)
 
 	s.reset()
 
-	if s.lastUpdateIter != -1 || s.hasTodos || s.remindedCount != 0 || s.reminderActive {
+	if s.lastUpdateIter != -1 || s.hasTodos || s.remindedCount != 0 || s.reminderActive || s.lastRemindedIter != -1 {
 		t.Error("state not fully reset")
 	}
 }
@@ -51,11 +51,11 @@ func TestTodoStaleness_ShouldRemind(t *testing.T) {
 		t.Error("should remind at threshold with incomplete todos")
 	}
 
-	s.markReminded()
+	s.markReminded(2 + staleTodoThreshold)
 
-	// After marking reminded, should not remind again
+	// After marking reminded, should not remind again within the grace window
 	if s.shouldRemind(2+staleTodoThreshold+1, true) {
-		t.Error("should not remind again after markReminded")
+		t.Error("should not remind again after markReminded (within grace)")
 	}
 
 	// After a new update, reminderActive clears, and staleness can fire again
@@ -94,27 +94,61 @@ func TestTodoStaleness_MaxReminders(t *testing.T) {
 	if !s.shouldRemind(1+staleTodoThreshold, true) {
 		t.Fatal("should remind (1st)")
 	}
-	s.markReminded()
+	s.markReminded(1 + staleTodoThreshold)
 
-	// Agent doesn't update — but reminderActive prevents re-firing
-	// Simulate clearing reminderActive (which would happen if agent updated)
-	s.reminderActive = false
-
-	// Second reminder allowed
-	if !s.shouldRemind(1+staleTodoThreshold+5, true) {
-		t.Fatal("should remind (2nd)")
+	// Within grace: suppressed
+	if s.shouldRemind(1+staleTodoThreshold+reminderGraceIters-1, true) {
+		t.Error("should not remind within grace window")
 	}
-	s.markReminded()
 
-	// Now remindedCount = 2 = max, no more reminders even after clearing active
-	s.reminderActive = false
-	if s.shouldRemind(1+staleTodoThreshold+10, true) {
+	// Grace expired without any todo_write: second reminder fires (#4855)
+	if !s.shouldRemind(1+staleTodoThreshold+reminderGraceIters, true) {
+		t.Fatal("should remind (2nd) after grace expiry")
+	}
+	s.markReminded(1 + staleTodoThreshold + reminderGraceIters)
+
+	// Keep firing past the old cap of 2 until the new budget (#4855)
+	for n := 3; n <= maxStaleTodoReminders; n++ {
+		at := 1 + staleTodoThreshold + (n-1)*reminderGraceIters
+		if !s.shouldRemind(at, true) {
+			t.Fatalf("should remind (%dth) after grace expiry", n)
+		}
+		s.markReminded(at)
+	}
+
+	// Budget exhausted: no more even after grace expiry
+	if s.shouldRemind(1+staleTodoThreshold+(maxStaleTodoReminders+2)*reminderGraceIters, true) {
 		t.Error("should not exceed maxStaleTodoReminders")
+	}
+	if maxStaleTodoReminders < 5 {
+		t.Errorf("#4855: budget should be >= 5, got %d", maxStaleTodoReminders)
+	}
+}
+
+// TestTodoStaleness_LongRunCoverage pins the #4855 report: a long task (20+
+// iterations, agent never touches todo_write again) must not go silent after
+// the first couple of reminders. Old behavior: budget 2 + reminderActive
+// waiting forever = 20+ bare iterations. New: grace expiry re-arms firing up
+// to the budget, spreading coverage across the run.
+func TestTodoStaleness_LongRunCoverage(t *testing.T) {
+	s := newTodoStalenessState()
+	s.recordUpdate(2, 4)
+
+	fired := 0
+	for iter := 3; iter <= 3+40; iter++ {
+		if s.shouldRemind(iter, true) {
+			s.markReminded(iter)
+			fired++
+		}
+	}
+	if fired != maxStaleTodoReminders {
+		t.Errorf("long bare run fired %d reminders, want %d (budget fully used)", fired, maxStaleTodoReminders)
 	}
 }
 
 func TestStaleTodoReminderText(t *testing.T) {
-	text := staleTodoReminderText(3, 5, 10)
+	items := []string{"[in_progress] wire reminder text", "[pending] add grace expiry", "[pending] raise budget"}
+	text := staleTodoReminderText(3, 5, 10, items)
 	if text == "" {
 		t.Fatal("reminder text should not be empty")
 	}
@@ -127,6 +161,17 @@ func TestStaleTodoReminderText(t *testing.T) {
 	}
 	if !strings.Contains(text, "todo_write") {
 		t.Error("reminder should mention todo_write tool")
+	}
+	// #4855: embed the item contents — a count-only reminder leaves the model
+	// acting on a list it can no longer see.
+	for _, want := range items {
+		if !strings.Contains(text, want) {
+			t.Errorf("reminder should embed item %q", want)
+		}
+	}
+	// Empty items (defensive): text still builds
+	if staleTodoReminderText(2, 2, 9, nil) == "" {
+		t.Error("reminder text should build with nil items")
 	}
 }
 
