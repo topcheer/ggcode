@@ -399,6 +399,23 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			m.openTwitchPanel()
 			return nil
 		case "/im":
+			// #4861: /im opens the panel; /im onboard [platform] is the
+			// guided wizard (overview or per-platform steps); /im status is
+			// the full registry incl. not-configured platforms.
+			if len(parts) > 1 {
+				switch parts[1] {
+				case "onboard":
+					if len(parts) > 2 {
+						m.chatWriteSystem(nextSystemID(), renderIMOnboardSteps(m.config, parts[2]))
+					} else {
+						m.chatWriteSystem(nextSystemID(), renderIMOnboardOverview(m.config))
+					}
+					return nil
+				case "status":
+					m.chatWriteSystem(nextSystemID(), renderIMStatusRegistry(m.config))
+					return nil
+				}
+			}
 			m.openIMPanel()
 			return nil
 		case "/allow":
