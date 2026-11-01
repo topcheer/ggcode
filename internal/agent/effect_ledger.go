@@ -234,6 +234,13 @@ func (a *Agent) recordEffectAttempt(name string, args []byte, res tool.Result) s
 	if executed {
 		hint = ledger.priorHint(parsed.Command, parsed.WorkingDir)
 		ledger.record(parsed.Command, parsed.WorkingDir, outcome)
+		// #4788 (S-18): a cleanly failed run_command may have been a build/test
+		// invocation recorded as lastBuildCmd at call time - clear it so the
+		// retry is not misjudged "redundant / guaranteed identical" about a
+		// run that never succeeded.
+		if outcome == effectFailed {
+			a.buildIdempot.markBuildFailed(parsed.Command)
+		}
 	}
 	return hint
 }
