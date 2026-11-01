@@ -194,6 +194,10 @@ const en = {
   // Onboarding
   'onboarding.next': 'Weiter',
   'onboarding.back': 'Zurück',
+  'onboarding.skip': 'Skip',
+  'onboarding.imStepTitle': 'Connect a messaging channel',
+  'onboarding.imStepHint': 'Optional - walk one platform end-to-end now, or set it up later in Settings - IM.',
+  'onboarding.imChoosePlatform': 'Choose a platform...',
   'onboarding.getStarted': 'Loslegen',
   'onboarding.vendorHint': 'Wählen Sie den KI-Anbieter, den Sie verwenden möchten',
   'onboarding.configHint': 'Passen Sie diese Einstellungen an oder behalten Sie die Standardwerte',
@@ -242,6 +246,7 @@ const en = {
   // IMManagement
   'im.title': 'IM-Adapter',
   'im.addAdapter': 'Adapter hinzufügen',
+  'im.notConfigured': 'Not configured yet - guided setup',
   'im.noAdapters': 'Keine IM-Adapter konfiguriert. Klicken Sie auf "Adapter hinzufügen", um zu beginnen.',
   'im.currentWorkspace': 'Aktueller Workspace',
   'im.otherWorkspaces': 'Andere Workspaces',

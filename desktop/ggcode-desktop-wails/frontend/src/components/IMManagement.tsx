@@ -103,6 +103,10 @@ export function IMManagement() {
   const { t } = useTranslation()
   const [adapters, setAdapters] = useState<IMAdapterInfo[]>([])
   const [platforms, setPlatforms] = useState<IMPlatformMeta[]>([])
+  // #4864: onboarding guide (single source: TUI registry via wailskit) and
+  // the not-configured registry section built from its difference set.
+  const [guide, setGuide] = useState<{ key: string; title: string; steps: string[]; notes: string[]; qrAuth: boolean }[]>([])
+  const [openGuide, setOpenGuide] = useState<string | null>(null)
   const [showAdd, setShowAdd] = useState(false)
   const [editAdapter, setEditAdapter] = useState<string | null>(null)
   const [editFields, setEditFields] = useState<Record<string, string>>({})
@@ -118,14 +122,17 @@ export function IMManagement() {
   async function loadData() {
     try {
       console.log('[IM] Calling ListIMAdapters + GetIMPlatformRegistry...')
-      const [adaptersResult, platformsResult] = await Promise.all([
+      const [adaptersResult, platformsResult, guideResult] = await Promise.all([
         App.ListIMAdapters() as Promise<IMAdapterInfo[]>,
         App.GetIMPlatformRegistry() as Promise<IMPlatformMeta[]>,
+        // Generated bindings refresh on the next wails build; cast for now.
+        (App as any).GetIMOnboardGuide() as Promise<{ key: string; title: string; steps: string[]; notes: string[]; qrAuth: boolean }[]>,
       ])
       console.log('[IM] Adapters:', adaptersResult)
       console.log('[IM] Platforms:', platformsResult)
       setAdapters(adaptersResult || [])
       setPlatforms(platformsResult || [])
+      setGuide(guideResult || [])
     } catch (e: any) {
       console.error('[IM] Error:', e)
       setError(e?.message || 'Failed to load IM config')
@@ -230,6 +237,46 @@ export function IMManagement() {
                 </div>
               </div>
             )}
+          </div>
+        )
+      })()}
+
+      {/* #4864: full registry - platforms with NO configured adapter get a
+          guided-onboarding row (steps + anti-confusion notes, TUI-sourced). */}
+      {guide.length > 0 && (() => {
+        const configuredIds = new Set(adapters.map(a => (a.platform || a.name).toLowerCase()))
+        const notConfigured = guide.filter(g => !configuredIds.has(g.key))
+        if (notConfigured.length === 0) return null
+        return (
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
+              {t('im.notConfigured')} ({notConfigured.length})
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {notConfigured.map(g => (
+                <div key={g.key} style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', background: 'var(--color-card)' }}>
+                  <button onClick={() => setOpenGuide(openGuide === g.key ? null : g.key)} style={{
+                    width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '8px 12px', background: 'none', border: 'none',
+                    color: 'var(--text-secondary)', fontSize: 13, cursor: 'pointer', textAlign: 'left',
+                  }}>
+                    <span style={{ color: 'var(--text-tertiary)' }}>–</span> {g.title}
+                    <span style={{ flex: 1 }} />
+                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{openGuide === g.key ? '▾' : '▸'}</span>
+                  </button>
+                  {openGuide === g.key && (
+                    <div style={{ padding: '4px 16px 12px', fontSize: 12, color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {g.steps.map((s, i) => <div key={i}>{i + 1}. {s}</div>)}
+                      {g.notes.map((n, i) => <div key={'n' + i} style={{ color: 'var(--color-warning, #b8860b)' }}>! {n}</div>)}
+                      <button onClick={() => { setShowAdd(true); setError('') }} style={{
+                        marginTop: 4, alignSelf: 'flex-start', padding: '5px 12px', borderRadius: 'var(--radius-md)',
+                        background: 'var(--color-primary)', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 12,
+                      }}>{t('im.addAdapter')}</button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )
       })()}
