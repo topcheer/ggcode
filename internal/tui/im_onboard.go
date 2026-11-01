@@ -61,7 +61,6 @@ func imOnboardWizard() map[string]imOnboardEntry {
 				{Text: "Open a chat with @BotFather in Telegram and send /newbot.", URL: "https://t.me/BotFather"},
 				{Text: "Follow the prompts (bot name, then a username ending in 'bot')."},
 				{Text: "Copy the token BotFather prints (format 123456789:AA...).", Note: "The token is a long colon-separated string from BotFather - NOT your Telegram @username and NOT your phone number."},
-				{Text: "For the allowlist, find your NUMERIC user ID by messaging @userinfobot.", Note: "Allow-from entries are numeric user IDs (123456789) - NOT @usernames and NOT display names."},
 				{Text: "Enter the token in the Telegram panel (masked input)."},
 			},
 			Panel: "/telegram",
@@ -92,7 +91,7 @@ func imOnboardWizard() map[string]imOnboardEntry {
 			Steps: []imOnboardStep{
 				{Text: "Pick a lane: Incoming-Webhook (post-only, one URL) OR full Bot (Socket Mode, reads commands)."},
 				{Text: "Webhook lane: api.slack.com/messaging/webhooks -> create one for a channel, copy the https://hooks.slack.com/services/... URL.", Note: "The webhook URL is per-channel and post-ONLY - commands sent over it are not received; pick the bot lane if you want two-way.", URL: "https://api.slack.com/messaging/webhooks"},
-				{Text: "Bot lane: create an app, enable Socket Mode, copy the Bot token (xoxb-...), the app-level token (xapp-...), and subscribe message events.", Note: "The bot token starts xoxb- and the app-level token xapp- - they are different credentials; targets use the channel ID starting with C (C0123ABC) - NOT the #channel-name."},
+				{Text: "Bot lane: create an app, enable Socket Mode, copy the Bot token (xoxb-...), the app-level token (xapp-...), and subscribe message events."},
 				{Text: "Enter the credentials in the Slack panel (masked input)."},
 			},
 			Panel: "/slack",
@@ -121,7 +120,6 @@ func imOnboardWizard() map[string]imOnboardEntry {
 			Steps: []imOnboardStep{
 				{Text: "Create a bot account (Integrations -> Bot Accounts) or use a Personal Access Token."},
 				{Text: "Copy the token; note the server URL and the team name.", Note: "The token is the Account Settings -> Security -> Personal Access Token value - NOT your login password and NOT the bot's username."},
-				{Text: "For the allowlist, find your Mattermost user ID via Account Settings -> Security.", Note: "The Mattermost user ID is a 26-character alphanumeric ID (no @) - NOT the @username."},
 				{Text: "Enter server URL + token in the Mattermost panel (masked input)."},
 			},
 			Panel: "/mm",
@@ -131,7 +129,6 @@ func imOnboardWizard() map[string]imOnboardEntry {
 			Steps: []imOnboardStep{
 				{Text: "Register a dedicated account (or create one on your homeserver)."},
 				{Text: "Create an access token (Element: Settings -> Help & About -> Access Token, or the login API).", Note: "The access token starts with 'syt_' or 'MDA...' - NOT your Matrix @user:domain ID and NOT the password."},
-				{Text: "Enter the homeserver URL exactly as the server advertises it.", Note: "The homeserver URL is the full https://... endpoint - it can differ from the server name in your @user:server ID; allow-from entries are full @user:server IDs - NOT bare usernames."},
 				{Text: "Enter homeserver URL + access token in the Matrix panel (masked input)."},
 			},
 			Panel: "/matrix",
@@ -166,7 +163,6 @@ func imOnboardWizard() map[string]imOnboardEntry {
 			Steps: []imOnboardStep{
 				{Text: "Register the bot as a Twitch application (dev console) and take an OAuth token with chat permissions."},
 				{Text: "Note the bot login name and the channel it joins.", Note: "The OAuth token is the oauth:... string - NOT your Twitch login password."},
-				{Text: "For the allowlist, use sender login names (lowercase Twitch usernames)."},
 				{Text: "Enter the credentials in the unified IM panel (/im)."},
 			},
 			Panel: "/im",
