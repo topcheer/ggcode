@@ -307,7 +307,7 @@ type Cloner interface {
 func (r *Registry) Clone() *Registry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	newReg := &Registry{tools: make(map[string]Tool, len(r.tools)), codeIndex: r.codeIndex} // #661: codeIndex is shared read-only; keep it so clones don't silently return nil
+	newReg := &Registry{tools: make(map[string]Tool, len(r.tools)), codeIndex: r.codeIndex, descAugment: r.descAugment} // #661: codeIndex is shared read-only; keep it so clones don't silently return nil. #4718: descAugment is a read-only func value - propagate it so teammate/sub-agent tool definitions keep the learned-hint overlay (r35: MCP descriptions pass through the same path).
 	for name, t := range r.tools {
 		if c, ok := t.(Cloner); ok {
 			newReg.tools[name] = c.Clone()
