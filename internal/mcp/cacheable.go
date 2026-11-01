@@ -39,6 +39,13 @@ type listingCacheEntry struct {
 type listingCache struct {
 	mu    sync.Mutex
 	items map[listingCacheKind]map[string]listingCacheEntry
+	// #4882: per-kind generation counter, bumped on every invalidation of
+	// that kind (invalidateKind/clear). A fetch captures the epoch before its
+	// network roundtrips and stores via putIfFresh only when the epoch is
+	// unchanged — an in-flight fetch that started BEFORE an invalidation can
+	// no longer overwrite the hot-refresh data the invalidation enabled
+	// (previously the stale refill lived until the server TTL expired).
+	epochs [cacheResourceTemplates + 1]uint64
 }
 
 func (lc *listingCache) get(kind listingCacheKind, key string) (any, bool) {
@@ -70,10 +77,17 @@ func (lc *listingCache) put(kind listingCacheKind, key string, value any, ttl ti
 	lc.items[kind][key] = listingCacheEntry{value: value, expiresAt: time.Now().Add(ttl)}
 }
 
+func (lc *listingCache) epoch(kind listingCacheKind) uint64 {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	return lc.epochs[kind]
+}
+
 func (lc *listingCache) invalidateKind(kind listingCacheKind) {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
 	delete(lc.items, kind)
+	lc.epochs[kind]++
 }
 
 // invalidateResource drops one cached resources/read entry — the
@@ -88,6 +102,9 @@ func (lc *listingCache) clear() {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
 	lc.items = nil
+	for i := range lc.epochs {
+		lc.epochs[i]++
+	}
 }
 
 // listingCacheTTL resolves the freshness window across the pages of one
@@ -112,17 +129,41 @@ func listingCacheTTL(pages []CacheableResult) (ttl time.Duration, scope string, 
 	return ttl, scope, ttl > 0
 }
 
+// putIfFresh stores value only when the kind's generation still equals
+// fetchEpoch (CAS semantics, #4882). An invalidation that landed while the
+// fetch was in flight bumped the epoch, so the stale refill is dropped and
+// the cache stays coherent with the server's change notification.
+func (lc *listingCache) putIfFresh(kind listingCacheKind, key string, value any, ttl time.Duration, fetchEpoch uint64) {
+	if ttl <= 0 {
+		return
+	}
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	if lc.epochs[kind] != fetchEpoch {
+		return
+	}
+	if lc.items == nil {
+		lc.items = make(map[listingCacheKind]map[string]listingCacheEntry)
+	}
+	if lc.items[kind] == nil {
+		lc.items[kind] = make(map[string]listingCacheEntry)
+	}
+	lc.items[kind][key] = listingCacheEntry{value: value, expiresAt: time.Now().Add(ttl)}
+}
+
 // storeListingsCache stores a fully fetched listing/read result under
 // (kind, key) with the freshness window resolved from its result pages.
 // Partial pagination failures never reach this (their early returns skip the
-// store call), so only complete result sets are cached. Returns true when the
-// result was cacheable (every page carried ttlMs).
-func (c *Client) storeListingsCache(kind listingCacheKind, key string, value any, pages []CacheableResult) bool {
+// store call), so only complete result sets are cached. fetchEpoch must be
+// the kind's epoch captured BEFORE the fetch began; an invalidation that
+// raced the fetch drops the store (#4882). Returns true when the result was
+// cacheable (every page carried ttlMs).
+func (c *Client) storeListingsCache(kind listingCacheKind, key string, value any, pages []CacheableResult, fetchEpoch uint64) bool {
 	ttl, _, ok := listingCacheTTL(pages)
 	if !ok {
 		return false
 	}
-	c.listingCache.put(kind, key, value, ttl)
+	c.listingCache.putIfFresh(kind, key, value, ttl, fetchEpoch)
 	return true
 }
 

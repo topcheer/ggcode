@@ -15,7 +15,7 @@ func TestReadResourceCacheHitClonesContents(t *testing.T) {
 	original := ReadResourceResult{
 		Contents: []ResourceContent{{URI: "file:///a.txt", Text: "original"}},
 	}
-	client.storeListingsCache(cacheResourceRead, "file:///a.txt", original, []CacheableResult{{TTLms: 60000}})
+	client.storeListingsCache(cacheResourceRead, "file:///a.txt", original, []CacheableResult{{TTLms: 60000}}, client.listingCache.epoch(cacheResourceRead))
 
 	// Cache-hit path: no server needed, the get() must succeed before any RPC.
 	first, err := client.ReadResource(context.Background(), "file:///a.txt")
