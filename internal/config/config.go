@@ -1464,6 +1464,14 @@ func Load(path string) (*Config, error) {
 		if err := yaml.Unmarshal(data, &raw); err != nil {
 			return nil, fmt.Errorf("parsing migrated config %s: %w", path, err)
 		}
+		// #4881: the reload above reads the DISK file, which still holds the
+		// legacy a2a.api_key (MigratePlaintextAPIKeys only scans
+		// vendors/im/mcp_env/mcp_headers), so the in-memory migration from
+		// migrateLegacyA2AAPIKey earlier in Load was silently discarded and the
+		// A2A server ran without auth for the whole session. Re-apply the
+		// legacy migration to the reloaded raw map to restore the invariant
+		// "raw has been legacy-migrated before expansion/parse".
+		migrateLegacyA2AAPIKey(raw)
 	}
 
 	// #610: record the raw (pre-expansion) string values present on disk so a
