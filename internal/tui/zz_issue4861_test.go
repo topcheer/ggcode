@@ -71,6 +71,18 @@ func TestIssue4861_RenderOnboardStepsAndProbeTail(t *testing.T) {
 	if !strings.Contains(qqOut, "[QR pairing]") || !strings.Contains(qqOut, "URL fallback") {
 		t.Fatalf("qq (QR platform) missing large-QR + fallback guidance:\n%s", qqOut)
 	}
+	// Post range-correction: the guidance is served to the vendor panels via
+	// the seam, and the /im cockpit is a ROUTER (no parallel wizard).
+	if got := imVendorOnboardGuidance("dingtalk"); !strings.Contains(got, "1.") {
+		t.Fatalf("vendor seam must serve the numbered steps, got:\n%s", got)
+	}
+	if imVendorOnboardGuidance("no-such") != "" {
+		t.Fatal("vendor seam: unknown platform renders empty")
+	}
+	cockpit := renderIMOnboardCockpit(t.TempDir()) // no record: plain routing table
+	if !strings.Contains(cockpit, "IM Onboarding Cockpit") || !strings.Contains(cockpit, "run /qq") {
+		t.Fatalf("cockpit must route to the vendor panels:\n%s", cockpit)
+	}
 	// Checklist 3+4: setup-time probe + first-use bridge in the tail.
 	for _, want := range []string{"verification + first use", "/im status", "welcome self-test"} {
 		if !strings.Contains(imOnboardProbeTail, want) {
