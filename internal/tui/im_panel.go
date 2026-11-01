@@ -15,6 +15,11 @@ import (
 type imPanelState struct {
 	selected int
 	message  string
+	// xConfirm arms the 'x' clear-record key (#4862 review follow-up):
+	// clearing the cross-session onboarding record on a stray keypress is
+	// unacceptable, so the first 'x' only arms; a second 'x' within the
+	// same panel session clears. Any other key disarms.
+	xConfirm bool
 }
 
 type imChannelEntry struct {
@@ -278,10 +283,17 @@ func (m *Model) handleIMPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		panel.message = fmt.Sprintf("platform %q has no vendor panel yet", platform)
 	case "x":
-		// #4861: clear the onboarding run-record from the panel (the
-		// record's resume/due row re-renders on the next view).
-		clearIMOnboardRecord(m.workspaceDirForIMOnboard())
-		panel.message = "onboarding record cleared"
+		// #4861 + #4862 review follow-up: the record carries cross-session
+		// resume progress, so a stray 'x' must not destroy it - first press
+		// arms (message channel), second consecutive press clears.
+		if panel.xConfirm {
+			clearIMOnboardRecord(m.workspaceDirForIMOnboard())
+			panel.xConfirm = false
+			panel.message = "onboarding record cleared"
+		} else {
+			panel.xConfirm = true
+			panel.message = "press 'x' again to clear the onboarding record"
+		}
 	case "U":
 		return *m, m.unmuteAllIMChannels()
 	case "esc", "ctrl+c":

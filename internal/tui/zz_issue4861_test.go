@@ -176,12 +176,18 @@ func TestIssue4861_PanelKeysORoutesAndXClears(t *testing.T) {
 	if updated.imPanel == nil {
 		t.Fatal("'o' with no entries keeps the panel open")
 	}
-	// 'x' clears the record (none present: still a no-op message, panel open).
+	// 'x' is a TWO-STEP clear (#4862 review follow-up): first press arms
+	// (cross-session progress must survive a stray keypress), second
+	// consecutive press clears.
 	updated, _ = m.handleIMPanelKey(tea.KeyPressMsg{Text: "x"})
 	if updated.imPanel == nil {
 		t.Fatal("'x' keeps the panel open")
 	}
-	if loadIMOnboardRecord(t.TempDir()) != nil {
-		t.Fatal("no record side effect expected")
+	if !strings.Contains(updated.imPanel.message, "press 'x' again") {
+		t.Fatalf("first 'x' must arm, got %q", updated.imPanel.message)
+	}
+	updated, _ = updated.handleIMPanelKey(tea.KeyPressMsg{Text: "x"})
+	if !strings.Contains(updated.imPanel.message, "cleared") {
+		t.Fatalf("second 'x' must clear, got %q", updated.imPanel.message)
 	}
 }
