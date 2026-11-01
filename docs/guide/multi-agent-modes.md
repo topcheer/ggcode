@@ -256,7 +256,7 @@ run.go ExecuteTask():
 
 ### Shared-workspace collision alert
 
-When several lanchat instances work in the **same directory** at once, every instance's system prompt automatically gains a salient iron-rules section (#4915): on git/svn trees the rules mandate worktree isolation + PR landing and forbid `stash`/`checkout`/`reset` and whole-tree staging on the shared tree; on non-versioned directories (nothing can be reverted) they mandate coordinate-first editing — prefer new files over rewrites, announce bulk changes in lanchat, DM the owning agent before touching foreign-modified files. Single-agent workspaces get no injection (zero prompt cost). The rules name the currently online peers in that workspace so agents know who is beside them.
+When several lanchat instances work in the **same directory** at once, every instance's system prompt automatically gains a salient iron-rules section (#4915, #4917): on git/svn trees the rules mandate worktree isolation + PR landing and forbid `stash`/`checkout`/`reset` and whole-tree staging on the shared tree; on non-versioned directories (nothing can be reverted) they mandate coordinate-first editing — prefer new files over rewrites, announce bulk changes in lanchat, DM the owning agent before touching foreign-modified files. The section is re-evaluated before every run (#4917): after a restart/resume the alert appears on the first message once LAN presence converges, and it refreshes as same-workspace peers join or leave. Single-agent workspaces get no injection (zero prompt cost). The rules name the currently online peers in that workspace so agents know who is beside them.
 
 ---
 
