@@ -336,6 +336,20 @@ var irrevReadOnlyGoSubcommands = map[string]bool{
 	"env": true, "list": true, "doc": true,
 }
 
+// irrevReadOnlyGhSubcommands maps gh resource subcommands to their read
+// verbs (#4794 / S-24). Deliberately narrow: `gh api` (method-ambiguous),
+// auth, repo create/delete, and every write verb are excluded so a
+// whitelisted segment can only ever read.
+var irrevReadOnlyGhSubcommands = map[string]map[string]bool{
+	"issue":   {"view": true, "list": true},
+	"pr":      {"view": true, "list": true, "diff": true, "checks": true},
+	"run":     {"view": true, "list": true, "watch": true},
+	"release": {"view": true, "list": true},
+	"search":  {"issues": true, "prs": true, "repos": true, "code": true, "commits": true},
+	"label":   {"list": true, "view": true},
+	"org":     {"list": true},
+}
+
 // irrevIsReadOnlyCommand reports whether a shell command consists only of
 // known read-only / verification steps (sa-28). Conservative by design:
 // unknown binaries, file redirects, command substitution, env-var prefixes
@@ -419,6 +433,26 @@ func irrevSegmentIsReadOnly(seg string) bool {
 			return true
 		}
 		return irrevReadOnlyGoSubcommands[rest[0]]
+	case "gh":
+		// #4794 (S-24): gh issue/pr triage loops are pure reads, but the
+		// binary sat outside the whitelist, so every `gh issue list` kept the
+		// Medium tier and the grounding advisory interrupted read-only
+		// patrol rounds whose recent calls happened to be non-grounding
+		// tools. Conservative: only the read verbs of the resource
+		// subcommands; `gh api` is deliberately excluded (defaults to GET
+		// but -X POST/PATCH/DELETE mutates), as are create/close/edit/
+		// merge/comment/delete/reopen/pin/transfer.
+		if len(rest) == 0 {
+			return true // bare `gh` prints help
+		}
+		resource, ok := irrevReadOnlyGhSubcommands[rest[0]]
+		if !ok {
+			return false
+		}
+		if len(rest) == 1 {
+			return false // `gh issue` alone prompts interactively
+		}
+		return resource[rest[1]]
 	case "sed":
 		// sed without -i edits the stream only.
 		for _, a := range rest {
