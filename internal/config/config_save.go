@@ -706,6 +706,14 @@ func (c *Config) AddIMAdapter(name string, adapter IMAdapterConfig) error {
 		return fmt.Errorf("IM adapter %q already exists", name)
 	}
 	c.IM.Adapters[name] = adapter
+	// #4913: creating a bot MEANS the user wants IM to work - every panel's
+	// apply sets IM.Enabled=true in memory, but neither patch branch below
+	// persisted the global switch, so the bot silently failed to start on
+	// the next session (daemon/root gate on the DISK config). Persist
+	// im.enabled=true alongside the adapter in both scopes; idempotent when
+	// IM was already enabled. RemoveIMAdapter deliberately does NOT reset
+	// it - other adapters may still be live.
+	c.IM.Enabled = true
 	// Instance scope: write to instance ggcode.yaml; Global: write to im.yaml
 	adapterData, _ := yaml.Marshal(adapter)
 	adapterMap := map[string]interface{}{}
@@ -722,6 +730,7 @@ func (c *Config) AddIMAdapter(name string, adapter IMAdapterConfig) error {
 			}
 			adaptersRaw[name] = adapterMap
 			imRaw["adapters"] = adaptersRaw
+			imRaw["enabled"] = true // #4913
 			raw["im"] = imRaw
 		})
 	}
@@ -732,6 +741,7 @@ func (c *Config) AddIMAdapter(name string, adapter IMAdapterConfig) error {
 		}
 		adaptersRaw[name] = adapterMap
 		raw["adapters"] = adaptersRaw
+		raw["enabled"] = true // #4913
 	})
 }
 
