@@ -282,6 +282,22 @@ func (s *buildIdempotencyState) recordToolCall(toolName string, args json.RawMes
 	return warning
 }
 
+// markBuildFailed clears the recorded last-build command when that exact
+// command just FAILED execution (#4788 / S-18). recordToolCall runs at
+// tool-CALL time (args only, no exit status), so a failed build still became
+// lastBuildCmd - and the retry, with 0 edits in between, was then misjudged
+// "redundant / guaranteed identical" about a run that never succeeded,
+// nudging the model to skip re-verification. The retry re-records itself on
+// its own call, so clearing only suppresses the false redundancy match.
+func (s *buildIdempotencyState) markBuildFailed(cmd string) {
+	if s == nil || cmd == "" {
+		return
+	}
+	if isBuild, _, cmdKey := detectBuildTestCommand(cmd); isBuild && cmdKey == s.lastBuildCmd {
+		s.lastBuildCmd = ""
+	}
+}
+
 // shellMutatesSources reports whether a shell command plausibly rewrites
 // source files (or module files) in place (#749). Substring match on the
 // lowercased command is deliberately broad: the cost of a false positive is
