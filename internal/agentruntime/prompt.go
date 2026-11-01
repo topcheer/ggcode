@@ -59,11 +59,10 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		}
 	}
 	prompt := config.BuildSystemPrompt(cfg.ExtraPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames, availableModels)
-	if alert := sharedWorkspaceAlertText(); alert != "" {
-		// Shared-workspace iron rules: injected high in the prompt so
-		// concurrent-agent collisions stay salient for the whole session.
-		prompt += "\n\n" + alert
-	}
+	// NOTE: shared-workspace alert is NOT statically appended for the main
+	// agent — the daemon registers it via Agent.SetSystemPromptInjector so it
+	// is re-evaluated every iteration (restart/resume + late presence). The
+	// sub-agent builder below keeps the static form (sub-agents are one-shot).
 	if styleGuidance := config.OutputStyleGuidance(cfg.OutputStyle); styleGuidance != "" {
 		prompt += "\n\n" + styleGuidance
 	}

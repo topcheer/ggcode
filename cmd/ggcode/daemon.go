@@ -1116,6 +1116,20 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			// lanchat agent works in the SAME directory, every system
 			// prompt built for this instance carries the iron rules
 			// (worktree+PR on VCS trees; coordinate-first elsewhere).
+			// agentruntime.SetSharedWorkspaceProbe stays (sub-agent prompts are
+			// built once with it); the MAIN agent consumes the same closure via
+			// SetSystemPromptInjector, re-evaluated every run-loop iteration so
+			// resumed sessions and late-converging lanchat presence get the
+			// shared-workspace alert as soon as peers actually appear.
+			ag.SetSystemPromptInjector(func() string {
+				return lanchat.SharedWorkspaceAlert(
+					lanchatHub,
+					lanchatHub.NodeID(),
+					workingDir,
+					dirHasVCS(workingDir),
+					cfg.Language,
+				)
+			})
 			agentruntime.SetSharedWorkspaceProbe(func() string {
 				return lanchat.SharedWorkspaceAlert(
 					lanchatHub,
