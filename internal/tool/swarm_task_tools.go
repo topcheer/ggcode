@@ -352,17 +352,14 @@ func (t SwarmTaskClaimTool) Execute(_ context.Context, input json.RawMessage) (R
 				args.TaskID, unmet)}, nil
 		}
 	}
-	// #861: without ExpectedStatus the claim is an unconditional overwrite:
-	// claiming a completed task regresses it, and two racing claims both
-	// succeed (silent ownership steal). Conditional-update is exactly what
-	// Manager.Update's ExpectedStatus exists for.
-	pending := task.TaskStatus(task.StatusPending)
-	inProgress := task.TaskStatus(task.StatusInProgress)
-	updated, err := tm.Update(args.TaskID, task.UpdateOptions{
-		Status:         &inProgress,
-		Owner:          &args.Owner,
-		ExpectedStatus: &pending,
-	})
+	// #861/#4781: the claim goes through the board's cross-process
+	// single-winner path - advisory file lock + durable-board loser check +
+	// ExpectedStatus CAS + synchronous persist. In-process races are caught
+	// by the CAS; cross-seat races (two ggcode instances, each with its own
+	// in-memory board and an async snapshot) are caught by the loser check,
+	// which names the winning owner instead of letting the last async write
+	// silently steal ownership.
+	updated, err := t.Manager.ClaimTaskSingleWinner(args.TeamID, args.TaskID, args.Owner)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
