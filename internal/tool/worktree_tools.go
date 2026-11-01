@@ -15,6 +15,48 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
+// resolveWorktreeBase (#4778 / S-06): worktree branches must base on the
+// canonical main tip, not the local HEAD - on a shared multi-branch tree
+// whose HEAD sits on a feature branch, HEAD-basing silently carried
+// unmerged commits into every 'fresh' worktree (sa-1/sa-2/sa-3 all hit
+// it). Fetch-first: prefer origin/main; when the remote is unreachable,
+// fall back to the local main tip; only when neither resolves use HEAD.
+// Returns the pinned commit hash (never a ref name, so the base cannot
+// drift between resolution and `git worktree add`) plus a user-facing
+// note naming the base commit, with an explicit warning on fallback.
+func resolveWorktreeBase(ctx context.Context, gitRoot string) (base string, note string) {
+	warn := func(ref string) string {
+		return fmt.Sprintf("Warning: worktree is based on %s (%.7s), NOT origin/main - the remote was unreachable or has no main branch; it may carry unmerged commits (#4778).", ref, base)
+	}
+	// Fetch first; a failed fetch (offline, no remote) must not block work.
+	fetch := exec.CommandContext(ctx, "git", "fetch", "origin", "main", "--quiet")
+	fetch.Dir = gitRoot
+	fetch.Env = append(os.Environ(), "GIT_PAGER=cat")
+	_ = fetch.Run()
+	for _, ref := range []string{"origin/main", "main", "master"} {
+		c := exec.CommandContext(ctx, "git", "rev-parse", "--verify", ref+"^{commit}")
+		c.Dir = gitRoot
+		c.Env = append(os.Environ(), "GIT_PAGER=cat")
+		out, err := c.Output()
+		if err == nil {
+			base = strings.TrimSpace(string(out))
+			if ref == "origin/main" {
+				return base, fmt.Sprintf("Base: origin/main @ %.7s.", base)
+			}
+			return base, warn(ref)
+		}
+	}
+	// Last resort: HEAD itself (single-branch repo, no main at all).
+	c := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
+	c.Dir = gitRoot
+	c.Env = append(os.Environ(), "GIT_PAGER=cat")
+	if out, err := c.Output(); err == nil {
+		base = strings.TrimSpace(string(out))
+		return base, warn("HEAD")
+	}
+	return "HEAD", "Warning: could not resolve a base commit; using HEAD as-is."
+}
+
 // EnterWorktree creates a new git worktree for isolated work.
 type EnterWorktree struct {
 	WorkingDir string
@@ -87,8 +129,11 @@ func (t EnterWorktree) Execute(ctx context.Context, input json.RawMessage) (Resu
 	worktreePath := filepath.Join(worktreesDir, name)
 	branchName := name
 
-	// Create worktree with new branch from HEAD
-	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "-b", branchName, worktreePath, "HEAD")
+	// #4778 (S-06): base on the fetched origin/main tip (fallback local
+	// main) instead of local HEAD, so a shared tree checked out on a
+	// feature branch does not leak unmerged commits into fresh worktrees.
+	base, baseNote := resolveWorktreeBase(ctx, gitRoot)
+	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "-b", branchName, worktreePath, base)
 	cmd.Dir = gitRoot
 	cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
 	out, err := cmd.CombinedOutput()
@@ -103,7 +148,7 @@ func (t EnterWorktree) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 
 	return Result{
-		Content:             fmt.Sprintf("Created worktree at %s (branch: %s). SuggestedWorkingDir is set to this path; use the returned path for subsequent file and command operations inside the worktree.", worktreePath, branchName),
+		Content:             fmt.Sprintf("Created worktree at %s (branch: %s). %s SuggestedWorkingDir is set to this path; use the returned path for subsequent file and command operations inside the worktree.", worktreePath, branchName, baseNote+" "),
 		SuggestedWorkingDir: worktreePath,
 	}, nil
 }
@@ -214,14 +259,17 @@ func createAgentWorktree(ctx context.Context, workingDir, agentID string) (strin
 	worktreePath := filepath.Join(worktreesDir, name)
 	branchName := name
 
-	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "-b", branchName, worktreePath, "HEAD")
+	// #4778 (S-06): same base policy as enter_worktree - fetched
+	// origin/main tip first, local main fallback with warning, HEAD last.
+	base, baseNote := resolveWorktreeBase(ctx, gitRoot)
+	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "-b", branchName, worktreePath, base)
 	cmd.Dir = gitRoot
 	cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", "", fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
 	}
-	debug.Log("tool", "created isolation worktree %s (branch %s) for %s", worktreePath, branchName, agentID)
+	debug.Log("tool", "created isolation worktree %s (branch %s, base %s) for %s [%s]", worktreePath, branchName, base[:7], agentID, baseNote)
 	return worktreePath, branchName, nil
 }
 
