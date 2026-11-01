@@ -193,7 +193,11 @@ files, commands), and the outcome — stored under
 
 At the start of every run, the agent retrieves the up-to-3 most relevant
 cases for the new task (lexical IDF scoring, no embeddings) and injects them
-once as a `## Relevant Experience` system block:
+once as a `## Relevant Experience` system block. Retrieval is one-hop
+spreading activation: a case with zero lexical overlap with the query but a
+strong associative tie to a direct hit (shared file paths, shared rare
+tokens) can be recalled at a decayed score — at most 2 such admits, ranked
+below direct hits, marked with a `spread:` audit field.
 
 ```
 Past experience with similar tasks in this project (case-based memory):
