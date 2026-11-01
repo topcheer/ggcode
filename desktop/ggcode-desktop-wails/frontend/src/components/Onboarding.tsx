@@ -32,16 +32,7 @@ const CUSTOM_PROTOCOLS = ['openai', 'anthropic', 'ollama']
 
 export function Onboarding({ onComplete }: Props) {
   const { t, locale, setLocale } = useTranslation()
-  const [step, setStep] = useState<'language' | 'workspace' | 'setup' | 'im' | 'mode'>('language')
-  // #4864: optional IM onboarding step - platform picker + guided steps
-  // (TUI-sourced content via wailskit; single source of truth).
-  const [imGuide, setImGuide] = useState<{ key: string; title: string; steps: string[]; notes: string[]; qrAuth: boolean }[]>([])
-  const [imPick, setImPick] = useState('')
-
-  useEffect(() => {
-    // Generated bindings refresh on the next wails build; cast for now.
-    (App as any).GetIMOnboardGuide().then((g: typeof imGuide) => setImGuide(g || [])).catch(() => {})
-  }, [])
+  const [step, setStep] = useState<'language' | 'workspace' | 'setup' | 'mode'>('language')
   const [workDir, setWorkDir] = useState('')
 
   // Onboard form state
@@ -254,49 +245,6 @@ export function Onboarding({ onComplete }: Props) {
   }
 
   // ─── Step 2: API Setup ───
-  // ─── Step 3: Optional IM channel (#4864) ───
-  // Pairing flows are untouched (scope guard): this step GUIDES - platform
-  // steps + anti-confusion notes + pointer into Settings IM management.
-  if (step === 'im') {
-    const pick = imGuide.find(g => g.key === imPick)
-    return (
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-          {t('onboarding.imStepTitle')}
-        </h2>
-        <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: 0, maxWidth: 400, textAlign: 'center' }}>
-          {t('onboarding.imStepHint')}
-        </p>
-        <select value={imPick} onChange={e => setImPick(e.target.value)} style={{ ...selectStyle, width: 300 }}>
-          <option value="">{t('onboarding.imChoosePlatform')}</option>
-          {imGuide.map(g => <option key={g.key} value={g.key}>{g.title}</option>)}
-        </select>
-        {pick && (
-          <div style={{ maxWidth: 460, width: '100%', display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, color: 'var(--text-secondary)', background: 'var(--color-card)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md)', padding: 16 }}>
-            {pick.steps.map((s, i) => <div key={i}>{i + 1}. {s}</div>)}
-            {pick.notes.map((n, i) => <div key={'n' + i} style={{ color: 'var(--color-warning, #b8860b)' }}>! {n}</div>)}
-          </div>
-        )}
-        <div style={{ display: 'flex', gap: 12, width: 420 }}>
-          <button onClick={() => setStep('setup')} style={{
-            flex: 1, height: 40, borderRadius: 'var(--radius-md)',
-            background: 'var(--color-surface)', border: '1px solid var(--color-border)',
-            color: 'var(--text-secondary)', fontSize: 14, cursor: 'pointer',
-          }}>{t('onboarding.back')}</button>
-          <button onClick={() => setStep('mode')} style={{
-            flex: 1, height: 40, borderRadius: 'var(--radius-md)',
-            background: 'var(--color-surface)', border: '1px solid var(--color-border)',
-            color: 'var(--text-secondary)', fontSize: 14, cursor: 'pointer',
-          }}>{t('onboarding.skip')}</button>
-          <button onClick={() => setStep('mode')} style={{
-            flex: 1, height: 40, borderRadius: 'var(--radius-md)',
-            background: 'var(--color-primary)', color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer',
-          }}>{t('onboarding.next')}</button>
-        </div>
-      </div>
-    )
-  }
-
   // ─── Step 2.5: Permission Mode ───
   if (step === 'mode') {
     return (
@@ -353,7 +301,7 @@ export function Onboarding({ onComplete }: Props) {
         </label>
 
         <div style={{ display: 'flex', gap: 12, width: 420 }}>
-          <button onClick={() => setStep('im')} style={{
+          <button onClick={() => setStep('setup')} style={{
             flex: 1, height: 40, borderRadius: 'var(--radius-md)',
             background: 'var(--color-surface)', border: '1px solid var(--color-border)',
             color: 'var(--text-secondary)', fontSize: 14, cursor: 'pointer',
@@ -533,7 +481,7 @@ export function Onboarding({ onComplete }: Props) {
         )}
 
         <button
-          onClick={() => setStep('im')}
+          onClick={() => setStep('mode')}
           disabled={saving || !canProceed}
           style={{
             width: '100%', padding: '10px 0', borderRadius: 'var(--radius-md)',

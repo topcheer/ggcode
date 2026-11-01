@@ -194,10 +194,6 @@ const en = {
   // Onboarding
   'onboarding.next': 'Далее',
   'onboarding.back': 'Назад',
-  'onboarding.skip': 'Skip',
-  'onboarding.imStepTitle': 'Connect a messaging channel',
-  'onboarding.imStepHint': 'Optional - walk one platform end-to-end now, or set it up later in Settings - IM.',
-  'onboarding.imChoosePlatform': 'Choose a platform...',
   'onboarding.getStarted': 'Начать',
   'onboarding.vendorHint': 'Выберите AI-провайдера, которого хотите использовать',
   'onboarding.configHint': 'Настройте параметры или оставьте значения по умолчанию',
@@ -246,7 +242,6 @@ const en = {
   // IMManagement
   'im.title': 'IM-адаптеры',
   'im.addAdapter': 'Добавить адаптер',
-  'im.notConfigured': 'Not configured yet - guided setup',
   'im.noAdapters': 'IM-адаптеры не настроены. Нажмите "Добавить адаптер", чтобы начать.',
   'im.currentWorkspace': 'Текущая рабочая область',
   'im.otherWorkspaces': 'Другие рабочие области',

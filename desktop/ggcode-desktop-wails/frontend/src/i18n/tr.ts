@@ -193,10 +193,6 @@ const tr = {
   // Onboarding
   'onboarding.next': 'İleri',
   'onboarding.back': 'Geri',
-  'onboarding.skip': 'Skip',
-  'onboarding.imStepTitle': 'Connect a messaging channel',
-  'onboarding.imStepHint': 'Optional - walk one platform end-to-end now, or set it up later in Settings - IM.',
-  'onboarding.imChoosePlatform': 'Choose a platform...',
   'onboarding.getStarted': 'Başla',
   'onboarding.vendorHint': 'Kullanmak istediğiniz AI sağlayıcısını seçin',
   'onboarding.configHint': 'Bu ayarları düzenleyin veya varsayılanları koruyun',
@@ -245,7 +241,6 @@ const tr = {
   // IMManagement
   'im.title': 'IM Adaptrleri',
   'im.addAdapter': 'Adaptör Ekle',
-  'im.notConfigured': 'Not configured yet - guided setup',
   'im.noAdapters': 'IM adaptörü yapılandırılmadı. Başlamak için "Adaptör Ekle"yi tıklayın.',
   'im.currentWorkspace': 'Geçerli Çalışma Alanı',
   'im.otherWorkspaces': 'Diğer Çalışma Alanları',
