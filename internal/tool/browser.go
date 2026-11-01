@@ -67,6 +67,9 @@ type Browser struct {
 	// (and a pinned Browser) per browser-using session.
 	gcStop  chan struct{}
 	gcClose sync.Once
+	// refs holds per-tab element-ref snapshots (#4854): snapshot assigns
+	// @eN refs; selector-taking actions resolve them; navigation invalidates.
+	refs *browserRefRegistry
 }
 
 // NewBrowser creates a new CDP-based browser tool.
@@ -74,6 +77,7 @@ func NewBrowser() *Browser {
 	return &Browser{
 		profiles: make(map[string]*browserProfile),
 		gcStop:   make(chan struct{}),
+		refs:     newBrowserRefRegistry(),
 	}
 }
 
@@ -106,7 +110,7 @@ func (b *Browser) Close() error {
 }
 
 func (b *Browser) Description() string {
-	return "Go-native browser automation via Chrome DevTools Protocol. Full SPA/JS support without Node.js or Playwright. Supports multiple Chrome profiles and tabs. Requires Chrome/Chromium. For simple non-JS page fetching, use web_fetch."
+	return "Go-native browser automation via Chrome DevTools Protocol. Full SPA/JS support without Node.js or Playwright. Supports multiple Chrome profiles and tabs. Requires Chrome/Chromium. Chrome-for-Testing is not auto-downloaded - if you use CfT, expose its binary as your system Chrome (e.g. symlink) and the probe picks it up. For simple non-JS page fetching, use web_fetch."
 }
 
 func (b *Browser) Parameters() json.RawMessage {
@@ -116,7 +120,7 @@ func (b *Browser) Parameters() json.RawMessage {
 		"action": {
 			"type": "string",
 			"description": "Browser action to perform.",
-			"enum": ["navigate", "click", "type", "extract", "screenshot", "evaluate", "wait", "links", "scroll", "back", "content", "close", "status", "select", "hover", "press", "upload", "cookies", "resize", "wait_not", "drag"]
+			"enum": ["navigate", "click", "type", "extract", "screenshot", "evaluate", "wait", "links", "scroll", "back", "content", "close", "status", "select", "hover", "press", "upload", "cookies", "resize", "wait_not", "drag", "snapshot", "open_tab"]
 		},
 		"url": {
 			"type": "string",
@@ -132,7 +136,7 @@ func (b *Browser) Parameters() json.RawMessage {
 		},
 		"selector": {
 			"type": "string",
-			"description": "CSS selector for click, type, extract, wait, scroll actions. Examples: 'button.submit', '#login-form', 'a[href*=\"github\"]', 'input[name=email]'."
+			"description": "CSS selector for click, type, extract, wait, scroll actions, OR an @eN element ref from the 'snapshot' action (e.g. '@e3'). Refs stay valid until the tab navigates; on failure re-run 'snapshot'. Examples: 'button.submit', '#login-form', 'a[href*=\"github\"]', 'input[name=email]', '@e3'."
 		},
 		"output_path": {
 			"type": "string",
@@ -236,16 +240,28 @@ var browserActions = map[string]func(*Browser, context.Context, *browserActionAr
 		if a.Selector == "" {
 			return errResult("selector is required for click action")
 		}
-		return b.doClick(ctx, a.Profile, a.Session, a.Selector, a.WaitFor, a.WaitTimeout, a.Headless)
+		sel, ok := b.resolveSelectorArg(a.Profile, a.Session, a.Selector)
+		if !ok {
+			return errResult(fmt.Sprintf("unresolved element ref %q: run the 'snapshot' action first (refs die on navigation)", a.Selector))
+		}
+		return b.doClick(ctx, a.Profile, a.Session, sel, a.WaitFor, a.WaitTimeout, a.Headless)
 	},
 	"type": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
 		if a.Selector == "" {
 			return errResult("selector is required for type action")
 		}
-		return b.doType(ctx, a.Profile, a.Session, a.Selector, a.Text, a.WaitFor, a.WaitTimeout, a.Headless)
+		sel, ok := b.resolveSelectorArg(a.Profile, a.Session, a.Selector)
+		if !ok {
+			return errResult(fmt.Sprintf("unresolved element ref %q: run the 'snapshot' action first (refs die on navigation)", a.Selector))
+		}
+		return b.doType(ctx, a.Profile, a.Session, sel, a.Text, a.WaitFor, a.WaitTimeout, a.Headless)
 	},
 	"extract": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
-		return b.doExtract(ctx, a.Profile, a.Session, a.Selector, a.Headless)
+		sel, ok := b.resolveSelectorArg(a.Profile, a.Session, a.Selector)
+		if !ok {
+			return errResult(fmt.Sprintf("unresolved element ref %q: run the 'snapshot' action first (refs die on navigation)", a.Selector))
+		}
+		return b.doExtract(ctx, a.Profile, a.Session, sel, a.Headless)
 	},
 	"screenshot": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
 		return b.doScreenshot(ctx, a.Profile, a.Session, a.Selector, a.Headless, a.OutputPath)
@@ -269,13 +285,21 @@ var browserActions = map[string]func(*Browser, context.Context, *browserActionAr
 		if a.Selector == "" {
 			return errResult("selector is required for select action")
 		}
-		return b.doSelect(ctx, a.Profile, a.Session, a.Selector, a.Value, a.WaitFor, a.WaitTimeout, a.Headless)
+		sel, ok := b.resolveSelectorArg(a.Profile, a.Session, a.Selector)
+		if !ok {
+			return errResult(fmt.Sprintf("unresolved element ref %q: run the 'snapshot' action first (refs die on navigation)", a.Selector))
+		}
+		return b.doSelect(ctx, a.Profile, a.Session, sel, a.Value, a.WaitFor, a.WaitTimeout, a.Headless)
 	},
 	"hover": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
 		if a.Selector == "" {
 			return errResult("selector is required for hover action")
 		}
-		return b.doHover(ctx, a.Profile, a.Session, a.Selector, a.Headless)
+		sel, ok := b.resolveSelectorArg(a.Profile, a.Session, a.Selector)
+		if !ok {
+			return errResult(fmt.Sprintf("unresolved element ref %q: run the 'snapshot' action first (refs die on navigation)", a.Selector))
+		}
+		return b.doHover(ctx, a.Profile, a.Session, sel, a.Headless)
 	},
 	"press": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
 		if a.Key == "" {
@@ -284,7 +308,11 @@ var browserActions = map[string]func(*Browser, context.Context, *browserActionAr
 		return b.doPress(ctx, a.Profile, a.Session, a.Key, a.Headless)
 	},
 	"scroll": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
-		return b.doScroll(ctx, a.Profile, a.Session, a.Selector, a.Headless)
+		sel, ok := b.resolveSelectorArg(a.Profile, a.Session, a.Selector)
+		if !ok {
+			return errResult(fmt.Sprintf("unresolved element ref %q: run the 'snapshot' action first (refs die on navigation)", a.Selector))
+		}
+		return b.doScroll(ctx, a.Profile, a.Session, sel, a.Headless)
 	},
 	"back": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
 		return b.doBack(ctx, a.Profile, a.Session, a.Headless)
@@ -330,6 +358,28 @@ var browserActions = map[string]func(*Browser, context.Context, *browserActionAr
 			return errResult("value (target CSS selector) is required for drag action")
 		}
 		return b.doDrag(ctx, a.Profile, a.Session, a.Selector, a.Value, a.Headless)
+	},
+	// #4854 (P1-1): snapshot returns the @eN ref tree for this tab.
+	"snapshot": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		tab, err := b.getSession(a.Profile, a.Session, a.Headless)
+		if err != nil {
+			return Result{IsError: true, Content: err.Error()}, nil
+		}
+		timeoutCtx, cancel := context.WithTimeout(tab.ctx, 30*time.Second)
+		defer cancel()
+		entries, err := b.collectBrowserRefs(timeoutCtx, a.Profile, a.Session)
+		if err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("snapshot failed: %v", err)}, nil
+		}
+		return Result{Content: renderRefTree(entries) + "\n\nUse a ref (e.g. '@e3') in the selector parameter of click/type/extract/select/hover/upload/scroll. Refs stay valid until this tab navigates."}, nil
+	},
+	// #4854 (P2): open_tab navigates a URL directly — the link-target
+	// equivalent of --new-tab, bypassing click pre-checks entirely.
+	"open_tab": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		if a.URL == "" {
+			return errResult("url is required for open_tab action")
+		}
+		return b.doNavigate(ctx, a.Profile, a.Session, a.URL, a.WaitFor, a.WaitTimeout, a.Headless)
 	},
 }
 
@@ -711,6 +761,8 @@ func (b *Browser) doNavigate(ctx context.Context, profile, session, rawURL, wait
 
 	title, _ := chromedp.Run(timeoutCtx, chromedp.Title())
 	finalURL, _ := chromedp.Run(timeoutCtx, chromedp.Location())
+	// #4854: navigation invalidates this tab's @eN ref snapshot.
+	b.refs.invalidate(browserRefKey(profile, session))
 
 	return Result{Content: fmt.Sprintf("Navigated to: %s\nTitle: %s\nURL: %s\nProfile: %s\nSession: %s\n\nUse action 'content' for page text, 'extract' with selector, or 'screenshot' for visual capture.", rawURL, title, finalURL, profile, session)}, nil
 }
@@ -724,6 +776,16 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(waitTimeout+5)*time.Second)
 	defer cancel()
+
+	// #4854 (P1-2): click validity pre-check — fail EARLY when the click
+	// point is covered by another element (consent banner/modal), or the
+	// target is hidden/disabled/out-of-viewport, naming the covering
+	// element so the agent can dismiss it instead of looping on "clicked,
+	// nothing happened". A CDP-level probe error is not a block (the flow
+	// below surfaces real failures); only a decoded verdict blocks.
+	if res := b.runClickPrecheck(timeoutCtx, selector); res != nil && !res.OK {
+		return Result{IsError: true, Content: formatClickBlocked(selector, res)}, nil
+	}
 
 	// r34 post-action effect verification: CDP click "success" only means
 	// the event dispatched — overlays, JS interception, or stale nodes all
@@ -949,6 +1011,23 @@ func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector s
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 30*time.Second)
 	defer cancel()
 
+	// #4854 (P2): hide native scrollbars for the capture so headless
+	// screenshots are visually consistent; restored right after (best-effort).
+	_, _ = chromedp.Run(timeoutCtx, chromedp.Evaluate[string](`(() => {
+		const s = document.createElement('style');
+		s.id = 'ggcode-hide-scrollbars';
+		s.textContent = '::-webkit-scrollbar{display:none}';
+		document.head.appendChild(s);
+		return '1';
+	})()`))
+	defer func() {
+		_, _ = chromedp.Run(timeoutCtx, chromedp.Evaluate[string](`(() => {
+			const s = document.getElementById('ggcode-hide-scrollbars');
+			if (s) s.remove();
+			return '1';
+		})()`))
+	}()
+
 	var buf []byte
 	if selector != "" {
 		if err := chromedp.Do(timeoutCtx, chromedp.WaitVisible(chromedp.CSS(selector))); err != nil {
@@ -1135,6 +1214,8 @@ func (b *Browser) doBack(ctx context.Context, profile, session string, headless 
 	}
 
 	urlAfter, _ := chromedp.Run(timeoutCtx, chromedp.Location())
+	// #4854: back is navigation - refs from the previous page are dead.
+	b.refs.invalidate(browserRefKey(profile, session))
 	return Result{Content: fmt.Sprintf("Navigated back. Current URL: %s", urlAfter)}, nil
 }
 
