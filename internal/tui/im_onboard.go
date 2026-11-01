@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
 )
@@ -313,52 +312,40 @@ func renderIMStatusRegistry(cfg *config.Config) string {
 	return sb.String()
 }
 
-// handleIMOnboardCommand implements the /im onboard cockpit subcommand
-// (#4861, post range-correction): the unified /im surface is a ROUTER, not
-// a parallel wizard - it shows the full-state registry, the persisted
-// onboarding progress, due notices, and routes each platform to its
-// EXISTING vendor onboard panel (/qq, /dingtalk, ...). The step-by-step
-// guidance (deep-links + QR notes) lives inside the vendor panels via
-// imVendorOnboardGuidance; /im onboard <platform> only records progress
-// and points at the panel.
-func (m *Model) handleIMOnboardCommand(args []string) {
-	if len(args) == 0 {
-		text := renderIMOnboardCockpit(m.workspaceDirForIMOnboard())
-		m.chatWriteSystem(nextSystemID(), text)
-		m.chatListScrollToBottom()
-		return
+// renderIMOnboardCockpitBlock is the PANEL-facing cockpit view (#4861 final
+// range correction): the unified /im panel's DEFAULT top block - full-state
+// registry, onboarding progress + due, and the 'o'/'x' key legend. The
+// chat-oriented renderIMOnboardCockpit is retired along with the
+// /im onboard|status subcommands.
+func (m Model) renderIMOnboardCockpitBlock(entries []imChannelEntry) string {
+	configured := map[string]string{}
+	for _, e := range entries {
+		configured[strings.ToLower(string(e.Platform))] = e.Adapter
 	}
-	platform := strings.ToLower(strings.TrimSpace(args[0]))
-	if platform == "done" {
-		clearIMOnboardRecord(m.workspaceDirForIMOnboard())
-		m.chatWriteSystem(nextSystemID(), "IM onboarding record cleared.")
-		m.chatListScrollToBottom()
-		return
-	}
-	entry, ok := imOnboardWizard()[platform]
-	if !ok {
-		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("unknown platform %q - run /im onboard for the platform registry", platform))
-		m.chatListScrollToBottom()
-		return
-	}
-	if err := saveIMOnboardRecord(m.workspaceDirForIMOnboard(), imOnboardRecord{
-		Platform:  platform,
-		Step:      len(entry.Steps),
-		UpdatedAt: time.Now(),
-	}); err != nil {
-		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("could not persist onboarding progress: %v", err))
-		m.chatListScrollToBottom()
-		return
+	var states []IMAdapterStateInfo
+	if m.imManager != nil {
+		snap := m.imManager.Snapshot()
+		for _, a := range snap.Adapters {
+			states = append(states, IMAdapterStateInfo{
+				Adapter:   a.Name,
+				Platform:  string(a.Platform),
+				Healthy:   a.Healthy,
+				Status:    a.Status,
+				LastError: a.LastError,
+			})
+		}
 	}
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Routing %s onboarding to its existing panel.\n\n", platform))
-	sb.WriteString(fmt.Sprintf("  -> Run %s - the panel carries the numbered setup guidance\n", entry.Panel))
-	sb.WriteString("     (entry deep-links open automatically; QR-pairing platforms render the\n")
-	sb.WriteString("     pairing code as a large terminal QR in-panel), and the masked-secret\n")
-	sb.WriteString("     entry + save happen there, as before.\n\n")
-	sb.WriteString(imOnboardProbeTail)
-	m.chatWriteSystem(nextSystemID(), sb.String())
-	m.chatListScrollToBottom()
+	sb.WriteString(renderIMFullStatusTable(states, configured))
+	if rec := loadIMOnboardRecord(m.workspaceDirForIMOnboard()); rec != nil {
+		panelCmd := "-"
+		if entry, ok := imOnboardWizard()[rec.Platform]; ok {
+			panelCmd = entry.Panel
+		}
+		sb.WriteString(fmt.Sprintf("\nOnboarding in progress: %s (step %d) - resume in %s; 'x' clears the record\n", rec.Platform, rec.Step, panelCmd))
+	}
+	sb.WriteString("Keys: select a channel + 'o' opens that platform's onboard panel; 'x' clears the onboarding record.")
+	return sb.String()
 }
 
 // renderIMOnboardCockpit renders the /im onboard dashboard: per-platform
@@ -404,46 +391,6 @@ func imVendorOnboardGuidance(platform string) string {
 		return ""
 	}
 	return out
-}
-
-// handleIMStatusCommand renders the full-state platform registry (#4861
-// checklist item 1): runtime adapter states (connected/failed/expired +
-// last error) cross-referenced with never-configured platforms.
-func (m *Model) handleIMStatusCommand() {
-	configured := map[string]string{}
-	if m.config != nil {
-		for name, adapterCfg := range m.config.IMSnapshot().Adapters {
-			if !adapterCfg.Enabled {
-				continue
-			}
-			platform := strings.ToLower(strings.TrimSpace(adapterCfg.Platform))
-			if platform == "" {
-				platform = name
-			}
-			configured[platform] = name
-		}
-	}
-	var states []IMAdapterStateInfo
-	if m.imManager != nil {
-		snap := m.imManager.Snapshot()
-		bindings := map[string]bool{}
-		for _, b := range snap.CurrentBindings {
-			bindings[b.Adapter] = true
-		}
-		for _, a := range snap.Adapters {
-			states = append(states, IMAdapterStateInfo{
-				Adapter:   a.Name,
-				Platform:  string(a.Platform),
-				Healthy:   a.Healthy,
-				Status:    a.Status,
-				LastError: a.LastError,
-				Muted:     bindings[a.Name] && false, // muted detail via tool status; table shows core states
-				Disabled:  false,
-			})
-		}
-	}
-	m.chatWriteSystem(nextSystemID(), renderIMFullStatusTable(states, configured))
-	m.chatListScrollToBottom()
 }
 
 // workspaceDirForIMOnboard resolves the record location root.
