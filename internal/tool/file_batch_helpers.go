@@ -64,6 +64,11 @@ type MultiFileEditContent struct {
 	Results            []MultiFileEditFileResult `json:"results"`
 	SecretWarnings     string                    `json:"secret_warnings,omitempty"`
 	DiagnosticWarnings string                    `json:"diagnostic_warnings,omitempty"`
+	// SnapshotDrift (#4798 / S-29): on an atomic-batch failure, per-file
+	// summary of files whose on-disk content no longer matches the snapshot
+	// the plan was resolved against (concurrent formatter / editor). Lets
+	// the next round re-anchor in one step instead of whack-a-mole.
+	SnapshotDrift []string `json:"snapshot_drift,omitempty"`
 }
 
 func cleanAbsolutePath(path string) (string, error) {
