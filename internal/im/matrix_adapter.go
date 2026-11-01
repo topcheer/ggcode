@@ -1302,7 +1302,12 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 	// Each chunk gets proper ``` open/close markers, producing valid HTML when
 	// goldmark renders it. Plain rune-based splitting (chunkText) would break
 	// code blocks, causing goldmark to emit malformed/incomplete HTML.
-	chunks := SplitMarkdown(text, matrixMaxMessageLen)
+	// #4769 (defect 1): SplitMarkdown counts runes, but the Synapse event
+	// ceiling is BYTES and the event carries Body AND FormattedBody - a
+	// CJK-heavy 60K-rune chunk is ~180KB UTF-8 before the HTML copy doubles
+	// it. matrixChunkMarkdown re-splits at a proportionally smaller cap until
+	// every chunk fits the byte budget.
+	chunks := matrixChunkMarkdown(text)
 	for i, chunk := range chunks {
 		// Rate limit: most homeservers limit ~1 msg/sec/user.
 		if i > 0 {
@@ -1376,6 +1381,47 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 
 func chunkText(text string, maxLen int) []string {
 	return splitMessageRunes(text, maxLen, false, false, true)
+}
+
+// matrixMaxEventByteBudget is the byte ceiling matrixChunkMarkdown budgets
+// chunks against: the Synapse default max_event_size is 100KB; the event
+// carries Body plus the goldmark-rendered FormattedBody (worst case ~2x the
+// raw chunk plus render tags), so 95KB minus a tag allowance is the safe
+// per-chunk budget for the pair.
+const matrixMaxEventByteBudget = 95000
+
+// matrixChunkMarkdown (#4769 defect 1): split markdown-aware, then shrink
+// the rune cap proportionally until every chunk's Body+FormattedBody pair
+// fits matrixMaxEventByteBudget. ASCII text never shrinks (60K runes ~60KB,
+// well under budget); CJK-heavy text (3 bytes/rune) converges in one or two
+// rounds. The floor keeps pathological input from looping forever - a
+// single oversized chunk is then returned as-is and the server's
+// M_TOO_LARGE error surfaces (visible) instead of a silent mis-split.
+func matrixChunkMarkdown(text string) []string {
+	cap := matrixMaxMessageLen
+	for round := 0; round < 8; round++ {
+		chunks := SplitMarkdown(text, cap)
+		worst := 0
+		for _, c := range chunks {
+			if n := len(c); n > worst {
+				worst = n
+			}
+		}
+		if worst*2+2048 <= matrixMaxEventByteBudget {
+			return chunks
+		}
+		// Proportional shrink toward the budget, with a floor of 1000 runes
+		// (below that, markdown structure cannot survive splitting anyway).
+		newCap := cap * (matrixMaxEventByteBudget - 2048) / (worst * 2)
+		if newCap >= cap || newCap < 1 {
+			newCap = cap / 2
+		}
+		if newCap < 1000 {
+			return chunks // floor reached: best effort, let M_TOO_LARGE speak
+		}
+		cap = newCap
+	}
+	return SplitMarkdown(text, cap)
 }
 
 func (a *matrixAdapter) publishState(healthy bool, status, lastErr string) {
