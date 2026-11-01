@@ -276,6 +276,19 @@ func (p *prematureSuccessState) psJobIsVerify(jobID string) bool {
 	return ok && rec.isVerify
 }
 
+// psJobCommand returns the command a background job was launched with
+// (#4889): build-idempotency's clearing side needs the ORIGINAL command
+// to key markBuildFailed when the failure surfaces asynchronously through
+// wait_command/read_command_output - the start_command launch itself
+// records the anchor, but the exit status only arrives later on these
+// polling channels.
+func (p *prematureSuccessState) psJobCommand(jobID string) (string, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	rec, ok := p.backgroundJobs[jobID]
+	return rec.cmd, ok
+}
+
 // psRegisterJobLocked adds a freshly started background job to the registry
 // keyed by job_id so later waits/reads can be attributed (#1153). Registry
 // size is capped at psMaxTrackedJobs.
