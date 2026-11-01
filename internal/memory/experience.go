@@ -38,6 +38,17 @@ type ExperienceStore struct {
 // a codebase's current reality validates.
 const MaxExperienceCases = 50
 
+// spreadDecay is the one-hop spreading-activation attenuation (Collins &
+// Loftus 1975): a case linked to a direct hit inherits at most 45% of the
+// linker's activation. spreadMaxAdmits caps lateral inhibition - spread
+// admits never crowd out direct hits; spreadMinScore mirrors the direct
+// admission bar. Research-loop Spread Activation card.
+const (
+	spreadDecay     = 0.45
+	spreadMaxAdmits = 2
+	spreadMinScore  = 0.5
+)
+
 // Experience is a single distilled case.
 type Experience struct {
 	ID       string
@@ -53,6 +64,10 @@ type Experience struct {
 type ScoredExperience struct {
 	Experience
 	Score float64
+	// Via records how the case was retrieved: "" (empty) for direct
+	// lexical hits, "spread:<linkerID>" for one-hop spreading-activation
+	// admits (research-loop Spread Activation card).
+	Via string
 }
 
 // outcomeRankWeight (sa-139, MemGuard) scales retrieval scores by the
@@ -180,6 +195,10 @@ func (es *ExperienceStore) RetrieveExcluding(query string, max int, excludeIDs m
 	}
 
 	n := float64(len(cases))
+	idxByID := make(map[string]int, len(cases))
+	for i, c := range cases {
+		idxByID[c.ID] = i
+	}
 	minDistinct := 2
 	if len(qSet) < 2 {
 		minDistinct = 1
@@ -209,6 +228,52 @@ func (es *ExperienceStore) RetrieveExcluding(query string, max int, excludeIDs m
 			scored = append(scored, ScoredExperience{Experience: c, Score: score})
 		}
 	}
+	// One-hop spreading activation (Collins & Loftus 1975; research-loop
+	// Spread card): cases with no direct lexical hit but a strong
+	// associative tie to an admitted hit (shared file-path tokens, shared
+	// rare tokens) inherit a decayed share of its activation. Never fires
+	// without at least one direct hit (no source, no spread); admission is
+	// capped and bar-checked so spread cases rank below direct hits.
+	if len(scored) > 0 {
+		admitted := make(map[string]bool, len(scored))
+		for _, se := range scored {
+			admitted[se.ID] = true
+		}
+		best := map[string]float64{} // candID -> best spread score
+		via := map[string]string{}   // candID -> linkerID
+		for i, c := range cases {
+			if excludeIDs[c.ID] || admitted[c.ID] {
+				continue
+			}
+			for _, se := range scored {
+				ls := expLinkStrength(caseTokens[i], caseTokens[idxByID[se.ID]], df, n)
+				if ls <= 0 {
+					continue
+				}
+				sc := spreadDecay * se.Score * ls
+				if sc >= spreadMinScore && sc > best[c.ID] {
+					best[c.ID] = sc
+					via[c.ID] = se.ID
+				}
+			}
+		}
+		type spreadCand struct {
+			id string
+			sc float64
+		}
+		var cs []spreadCand
+		for id, sc := range best {
+			cs = append(cs, spreadCand{id, sc})
+		}
+		sort.Slice(cs, func(i, j int) bool { return cs[i].sc > cs[j].sc })
+		for k := 0; k < len(cs) && k < spreadMaxAdmits; k++ {
+			for _, c := range cases {
+				if c.ID == cs[k].id {
+					scored = append(scored, ScoredExperience{Experience: c, Score: cs[k].sc, Via: "spread:" + via[c.ID]})
+				}
+			}
+		}
+	}
 	sort.Slice(scored, func(i, j int) bool {
 		if scored[i].Score != scored[j].Score {
 			return scored[i].Score > scored[j].Score
@@ -219,6 +284,26 @@ func (es *ExperienceStore) RetrieveExcluding(query string, max int, excludeIDs m
 		scored = scored[:max]
 	}
 	return scored, nil
+}
+
+// expLinkStrength scores the associative tie between two cases: shared
+// file-path tokens (strong structural signal, 2x) plus shared rare tokens
+// (IDF-weighted), clamped to [0,1] so a spread admit always scores below
+// its linker. Research-loop Spread Activation card.
+func expLinkStrength(cand, linker map[string]int, df map[string]int, n float64) float64 {
+	var s float64
+	for t := range cand {
+		if linker[t] == 0 {
+			continue
+		}
+		idf := math.Log(1 + n/float64(df[t]))
+		if strings.Contains(t, "/") {
+			s += 2 * idf
+		} else {
+			s += idf
+		}
+	}
+	return math.Min(s, 1.0)
 }
 
 // List returns all cases, oldest first.
