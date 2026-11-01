@@ -123,6 +123,38 @@ func argComplexityThresholdFor(name string) int {
 // scoreArgComplexity returns a deterministic complexity score for the call
 // plus the parameter names that carried the weight (for the error message).
 // Unknown tools score 0.
+// editPair is one old/new edit from either multi-tool shape.
+type editPair struct {
+	OldText string `json:"old_text"`
+	NewText string `json:"new_text"`
+}
+
+// parseMultiEditsForComplexity aggregates the edit pairs from BOTH
+// multi-tool shapes (#4875): multi_edit_file's top-level "edits" array and
+// multi_file_edit's per-file "files"[].edits nesting. Returns nil when the
+// args match neither shape (unknown tools/unparseable input).
+func parseMultiEditsForComplexity(args map[string]json.RawMessage) []editPair {
+	if raw, ok := args["edits"]; ok {
+		var edits []editPair
+		if json.Unmarshal(raw, &edits) == nil {
+			return edits
+		}
+	}
+	if raw, ok := args["files"]; ok {
+		var files []struct {
+			Edits []editPair `json:"edits"`
+		}
+		if json.Unmarshal(raw, &files) == nil {
+			var all []editPair
+			for _, f := range files {
+				all = append(all, f.Edits...)
+			}
+			return all
+		}
+	}
+	return nil
+}
+
 func scoreArgComplexity(toolName string, args map[string]json.RawMessage) (int, []string) {
 	score := 0
 	var heavy []string
@@ -170,17 +202,13 @@ func scoreArgComplexity(toolName string, args map[string]json.RawMessage) (int, 
 			}
 		}
 	case "multi_edit_file", "multi_file_edit":
-		raw, ok := args["edits"]
-		if !ok {
-			break
-		}
-		var edits []struct {
-			OldText string `json:"old_text"`
-			NewText string `json:"new_text"`
-		}
-		if json.Unmarshal(raw, &edits) != nil {
-			break
-		}
+		// #4875: the two tools have DIFFERENT edits shapes - multi_edit_file
+		// carries a top-level "edits" array, multi_file_edit nests per-file
+		// edits under "files"[].edits. Reading args["edits"] for both meant
+		// every legal multi_file_edit call deterministically missed (!ok ->
+		// break): score always 0, delete semantics unreachable - the largest
+		// blast-radius write tool was invisible to the complexity gate.
+		edits := parseMultiEditsForComplexity(args)
 		switch {
 		case len(edits) >= 15:
 			add(3, "edits")
@@ -517,11 +545,10 @@ func argComplexityIntentKey(toolName string, call map[string]json.RawMessage) st
 		proj["replace_all"] = replaceAll
 		proj["file_path"] = strings.TrimSpace(str("file_path"))
 	case "multi_edit_file", "multi_file_edit":
-		var edits []struct {
-			OldText string `json:"old_text"`
-			NewText string `json:"new_text"`
-		}
-		_ = json.Unmarshal(call["edits"], &edits)
+		// #4875: shape-aware aggregation (see parseMultiEditsForComplexity)
+		// - the old top-level-only read made every multi_file_edit call share
+		// one constant intent key (0 edits, 0 deletes).
+		edits := parseMultiEditsForComplexity(call)
 		deletes := 0
 		for _, e := range edits {
 			if strings.TrimSpace(e.NewText) == "" && strings.TrimSpace(e.OldText) != "" {

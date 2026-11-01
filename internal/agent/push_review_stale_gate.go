@@ -32,8 +32,12 @@ import (
 )
 
 // pushShapeRe recognizes the ref-update receipt line git prints on a
-// successful push ("  1a2b3c4..5d6e7f8  branch -> origin/branch").
-var pushShapeRe = regexp.MustCompile(`(?m)^\s*[0-9a-f]+\.\.[0-9a-f]+\s+\S+\s+->\s+\S+`)
+// successful push. Fast-forward uses "  1a2b3c4..5d6e7f8  br -> origin/br";
+// force-update (#4876) uses " + 1a2b3c4...5d6e7f8  br -> origin/br (forced
+// update)" - leading '+', THREE dots, optional trailing annotation. The old
+// two-dot-only pattern missed the force form entirely: the staleness gate
+// stayed silent exactly where stale-review risk is highest.
+var pushShapeRe = regexp.MustCompile(`(?m)^\s*\+?\s*[0-9a-f]+\.{2,3}[0-9a-f]+\s+\S+\s+->\s+\S+`)
 
 // staleReviewState caps the warning at once per push target per run - a
 // conflict-resolution loop may push several times; nagging after each adds
