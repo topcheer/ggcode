@@ -5614,6 +5614,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						a.correctionSpiral.recordVerifyResult(tc.Name, result.Content, result.IsError, i+1)
 					}
 				}
+				// #4889: the same terminal observation must also clear the
+				// build-idempotency anchor when the background build FAILED.
+				// #4887 fixed the foreground path (run_command marks failure
+				// via recordEffectAttempt) but start_command records the
+				// anchor at launch and the failure only surfaces HERE - without
+				// this hook the retry hit "0 edits + same anchor" and was
+				// mislabeled redundant about a run that never succeeded.
+				if jobID != "" {
+					if cmd, ok := a.prematureSuccess.psJobCommand(jobID); ok && cmd != "" {
+						if terminal, passed := psTerminalVerifyOutcome(psParseJobStatus(result.Content)); terminal && !passed {
+							a.buildIdempot.markBuildFailed(cmd)
+						}
+					}
+				}
 			}
 			// Unverified mutation streak: track consecutive edits without verification.
 			a.bareEditStreak.recordToolCall(tc.Name, string(tc.Arguments))
