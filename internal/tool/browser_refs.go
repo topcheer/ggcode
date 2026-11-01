@@ -218,7 +218,14 @@ func renderRefTree(entries []browserRefEntry) string {
 	for _, e := range entries {
 		line := fmt.Sprintf("%s %s %q", e.Ref, e.Role, e.Name)
 		if len(line) > 160 {
-			line = line[:160] + "…"
+			// #4880: byte-slicing could split a multi-byte rune (the
+			// ellipsis below is itself 3 bytes) - truncate on a rune
+			// boundary so the rendered line never ends in mojibake.
+			trunc := []rune(line)
+			for len(string(trunc))+len("…") > 161 {
+				trunc = trunc[:len(trunc)-1]
+			}
+			line = string(trunc) + "…"
 		}
 		sb.WriteString(line + "\n")
 	}
