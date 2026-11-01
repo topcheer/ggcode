@@ -190,4 +190,19 @@ func TestIssue4861_PanelKeysORoutesAndXClears(t *testing.T) {
 	if !strings.Contains(updated.imPanel.message, "cleared") {
 		t.Fatalf("second 'x' must clear, got %q", updated.imPanel.message)
 	}
+	// Micro-gap pin: ANY other key disarms the armed state - x, j, x arms
+	// again instead of clearing (no accidental double-fire across a
+	// navigation in between).
+	updated2, _ := m.handleIMPanelKey(tea.KeyPressMsg{Text: "x"}) // arm
+	if !strings.Contains(updated2.imPanel.message, "press 'x' again") {
+		t.Fatalf("arm failed: %q", updated2.imPanel.message)
+	}
+	updated2, _ = updated2.handleIMPanelKey(tea.KeyPressMsg{Text: "j"}) // disarm
+	if updated2.imPanel.xConfirm {
+		t.Fatal("'j' must disarm xConfirm")
+	}
+	updated2, _ = updated2.handleIMPanelKey(tea.KeyPressMsg{Text: "x"}) // re-arm, NOT clear
+	if !strings.Contains(updated2.imPanel.message, "press 'x' again") {
+		t.Fatalf("post-disarm 'x' must re-arm, got %q", updated2.imPanel.message)
+	}
 }

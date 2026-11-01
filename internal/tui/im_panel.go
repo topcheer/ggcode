@@ -222,7 +222,15 @@ func (m *Model) handleIMPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	entries := m.imChannelEntries()
 
-	switch msg.String() {
+	// #4862 micro-gap: the xConfirm comment promises "any other key
+	// disarms" - implement it uniformly at the switch entry instead of
+	// per-case, then the 'x' case re-arms/clears below.
+	key := msg.String()
+	if key != "x" && panel.xConfirm {
+		panel.xConfirm = false
+	}
+
+	switch key {
 	case "up", "k":
 		if len(entries) > 0 {
 			panel.selected = (panel.selected - 1 + len(entries)) % len(entries)
