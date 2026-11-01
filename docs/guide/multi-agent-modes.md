@@ -254,6 +254,10 @@ run.go ExecuteTask():
 | Fire-and-forget code editing in another workspace | **A2A Remote** (`a2a_remote` tool) |
 | Delegate to external CLI agent (Claude, Codex, Copilot, etc.) | **Delegate** (`delegate` tool) |
 
+### Shared-workspace collision alert
+
+When several lanchat instances work in the **same directory** at once, every instance's system prompt automatically gains a salient iron-rules section (#4915): on git/svn trees the rules mandate worktree isolation + PR landing and forbid `stash`/`checkout`/`reset` and whole-tree staging on the shared tree; on non-versioned directories (nothing can be reverted) they mandate coordinate-first editing — prefer new files over rewrites, announce bulk changes in lanchat, DM the owning agent before touching foreign-modified files. Single-agent workspaces get no injection (zero prompt cost). The rules name the currently online peers in that workspace so agents know who is beside them.
+
 ---
 
 ## Delegation Orchestration Intelligence
