@@ -52,9 +52,9 @@ func TestIssue3881AtspiClickHonorsButtonParam(t *testing.T) {
 		"":      "0xC0", // BTN_LEFT
 		"right": "0xC1", // BTN_RIGHT
 	} {
-		cmds := ydoClickArgs(button, 1)
-		if len(cmds) != 1 || len(cmds[0]) != 3 {
-			t.Fatalf("ydoClickArgs(%q,1) = %v, want a single ydotool click argv", button, cmds)
+		cmds, err := ydoClickArgs(button, 1)
+		if err != nil || len(cmds) != 1 || len(cmds[0]) != 3 {
+			t.Fatalf("ydoClickArgs(%q,1) = %v (err %v), want a single ydotool click argv", button, cmds, err)
 		}
 		if cmds[0][2] != wantCode {
 			t.Fatalf("ydoClickArgs(%q,1) code = %q, want %q", button, cmds[0][2], wantCode)
