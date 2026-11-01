@@ -329,6 +329,16 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 	switch {
 	case toolName == "run_command":
 		cmd, _ := args["command"].(string)
+		// Shell commands can rewrite sources without any edit tool
+		// (sed -i, gofmt -w, go generate, redirections). Four sibling
+		// consumers already count that via shellMutatesSources
+		// (build_idempotency, command cache/speculator/memo, reverify,
+		// user_edit_ratchet); without it here, a mutating command left
+		// editsSinceVerify at 0 and the premature-success check short-
+		// circuited - "sed -i ... ; done" passed silently.
+		if shellMutatesSources(cmd) {
+			p.editsSinceVerify++
+		}
 		if !psIsVerifyCommand(cmd) {
 			return
 		}
