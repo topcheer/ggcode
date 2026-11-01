@@ -118,6 +118,13 @@ func (m Model) renderQQPanel() string {
 	}
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.qq.create")))
 	if panel.createMode {
+		// #4873: numbered where-to-get-credentials guide rendered IN the
+		// panel at create time (Hermes-style setup instructions). Verified
+		// entry point: q.qq.com is the QQ Open Platform console (official
+		// wiki names it as the registration site; bots.qq.com is API-only).
+		for _, line := range strings.Split(m.t("panel.qq.create_guide"), "\n") {
+			body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+line))
+		}
 		body = append(body,
 			// #2178 family: spec is `name appid appsecret` (parser
 			// createQQAdapter: fields[2]=appsecret -> Extra["appsecret"]).
