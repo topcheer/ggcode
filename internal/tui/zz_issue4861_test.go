@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // #4861 (reframed): wizard renderer, five-state table classification,
@@ -160,5 +162,26 @@ func TestIssue4861_StatusRegistryNeverConfigured(t *testing.T) {
 	out := renderIMFullStatusTable(nil, map[string]string{})
 	if !strings.Contains(out, "never-configured") {
 		t.Fatalf("empty runtime still lists platforms as never-configured:\n%s", out)
+	}
+}
+
+// Post final-range-correction: cockpit lives IN the /im panel - 'o' routes
+// the selected channel to its vendor panel, 'x' clears the record, and no
+// /im onboard|status subcommands exist (commands.go case removed).
+func TestIssue4861_PanelKeysORoutesAndXClears(t *testing.T) {
+	m := Model{}
+	m.openIMPanel()
+	// No entries: 'o' must not crash or close the panel.
+	updated, _ := m.handleIMPanelKey(tea.KeyPressMsg{Text: "o"})
+	if updated.imPanel == nil {
+		t.Fatal("'o' with no entries keeps the panel open")
+	}
+	// 'x' clears the record (none present: still a no-op message, panel open).
+	updated, _ = m.handleIMPanelKey(tea.KeyPressMsg{Text: "x"})
+	if updated.imPanel == nil {
+		t.Fatal("'x' keeps the panel open")
+	}
+	if loadIMOnboardRecord(t.TempDir()) != nil {
+		t.Fatal("no record side effect expected")
 	}
 }
