@@ -62,21 +62,6 @@ func (lc *listingCache) get(kind listingCacheKind, key string) (any, bool) {
 	return entry.value, true
 }
 
-func (lc *listingCache) put(kind listingCacheKind, key string, value any, ttl time.Duration) {
-	if ttl <= 0 {
-		return
-	}
-	lc.mu.Lock()
-	defer lc.mu.Unlock()
-	if lc.items == nil {
-		lc.items = make(map[listingCacheKind]map[string]listingCacheEntry)
-	}
-	if lc.items[kind] == nil {
-		lc.items[kind] = make(map[string]listingCacheEntry)
-	}
-	lc.items[kind][key] = listingCacheEntry{value: value, expiresAt: time.Now().Add(ttl)}
-}
-
 func (lc *listingCache) epoch(kind listingCacheKind) uint64 {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
