@@ -1126,7 +1126,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 					lanchatHub,
 					lanchatHub.NodeID(),
 					workingDir,
-					dirHasVCS(workingDir),
+					lanchat.DirHasVCS(workingDir),
 					cfg.Language,
 				)
 			})
@@ -1135,7 +1135,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 					lanchatHub,
 					lanchatHub.NodeID(),
 					workingDir,
-					dirHasVCS(workingDir),
+					lanchat.DirHasVCS(workingDir),
 					cfg.Language,
 				)
 			})
@@ -1890,23 +1890,4 @@ loop:
 
 	fmt.Fprintln(os.Stderr, daemon.Tr(lang, "daemon.stopped"))
 	return nil
-}
-
-// dirHasVCS reports whether dir (or its nearest ancestor up to the volume
-// root) is under git or svn version control — selecting which shared-
-// workspace iron-rule set applies.
-func dirHasVCS(dir string) bool {
-	for d := dir; ; {
-		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-			return true
-		}
-		if _, err := os.Stat(filepath.Join(d, ".svn")); err == nil {
-			return true
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			return false
-		}
-		d = parent
-	}
 }

@@ -289,10 +289,29 @@ func (r *REPL) SetLanChatHub(hub *lanchat.Hub) {
 		// Inject dynamic lanchat peers info into the system prompt before
 		// each run. Shows all online peers (busy + idle), with same-workspace
 		// peers specially marked.
+		// Inject dynamic lanchat info into the system prompt before each
+		// run: the shared-workspace iron-rules alert (collision with other
+		// online agents in THIS directory) first, then the full peers list
+		// (same-workspace peers specially marked). Alert comes first so the
+		// rules stay salient. Both are re-evaluated every run, so restarts,
+		// resumed sessions and late-converging presence all converge.
 		hubCopy := hub
 		wd := r.workingDir
+		lang := ""
+		if r.cfg != nil {
+			lang = r.cfg.Language
+		}
 		r.agent.SetSystemPromptInjector(func() string {
-			return lanchat.FormatPeersInfo(hubCopy, wd)
+			alert := lanchat.SharedWorkspaceAlert(hubCopy, hubCopy.NodeID(), wd, lanchat.DirHasVCS(wd), lang)
+			peers := lanchat.FormatPeersInfo(hubCopy, wd)
+			switch {
+			case alert == "":
+				return peers
+			case peers == "":
+				return alert
+			default:
+				return alert + "\n\n" + peers
+			}
 		})
 	}
 	// Register auto-approve callback: inject the message into the TUI event
