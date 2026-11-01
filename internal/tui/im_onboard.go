@@ -309,18 +309,17 @@ func renderIMStatusRegistry(cfg *config.Config) string {
 	return sb.String()
 }
 
-// handleIMOnboardCommand implements the /im onboard wizard subcommand:
-// bare form shows the platform picker (+ resume/due notice from the
-// persisted run-record), "/im onboard <platform>" renders the numbered
-// steps + probe tail and records progress, "/im onboard done" clears the
-// record (#4861 checklist items 2-4).
+// handleIMOnboardCommand implements the /im onboard cockpit subcommand
+// (#4861, post range-correction): the unified /im surface is a ROUTER, not
+// a parallel wizard - it shows the full-state registry, the persisted
+// onboarding progress, due notices, and routes each platform to its
+// EXISTING vendor onboard panel (/qq, /dingtalk, ...). The step-by-step
+// guidance (deep-links + QR notes) lives inside the vendor panels via
+// imVendorOnboardGuidance; /im onboard <platform> only records progress
+// and points at the panel.
 func (m *Model) handleIMOnboardCommand(args []string) {
 	if len(args) == 0 {
-		text := renderIMOnboardIntro()
-		if rec := loadIMOnboardRecord(m.workspaceDirForIMOnboard()); rec != nil {
-			text += fmt.Sprintf("\n\n[resume] an interrupted %s onboarding is on record (step %d) - continue with: /im onboard %s",
-				rec.Platform, rec.Step, rec.Platform)
-		}
+		text := renderIMOnboardCockpit(m.workspaceDirForIMOnboard())
 		m.chatWriteSystem(nextSystemID(), text)
 		m.chatListScrollToBottom()
 		return
@@ -332,30 +331,75 @@ func (m *Model) handleIMOnboardCommand(args []string) {
 		m.chatListScrollToBottom()
 		return
 	}
-	text, ok := renderIMOnboardSteps(platform)
+	entry, ok := imOnboardWizard()[platform]
 	if !ok {
-		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("unknown platform %q - run /im onboard to list platforms", platform))
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("unknown platform %q - run /im onboard for the platform registry", platform))
 		m.chatListScrollToBottom()
 		return
 	}
-	text += "\n" + imOnboardProbeTail
-	// #4861 checklist 5: auto-open the step deep-links in the browser
-	// (mcp_panel urlOpener seam, best-effort).
-	for _, u := range imOnboardStepURLs(platform) {
-		if m.urlOpener != nil {
-			_ = m.urlOpener(u)
-		}
-	}
-	entry := imOnboardWizard()[platform]
 	if err := saveIMOnboardRecord(m.workspaceDirForIMOnboard(), imOnboardRecord{
 		Platform:  platform,
 		Step:      len(entry.Steps),
 		UpdatedAt: time.Now(),
 	}); err != nil {
-		text += fmt.Sprintf("\n\n(warning: could not persist onboarding progress: %v)", err)
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("could not persist onboarding progress: %v", err))
+		m.chatListScrollToBottom()
+		return
 	}
-	m.chatWriteSystem(nextSystemID(), text)
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Routing %s onboarding to its existing panel.\n\n", platform))
+	sb.WriteString(fmt.Sprintf("  -> Run %s - the panel carries the numbered setup guidance\n", entry.Panel))
+	sb.WriteString("     (entry deep-links open automatically; QR-pairing platforms render the\n")
+	sb.WriteString("     pairing code as a large terminal QR in-panel), and the masked-secret\n")
+	sb.WriteString("     entry + save happen there, as before.\n\n")
+	sb.WriteString(imOnboardProbeTail)
+	m.chatWriteSystem(nextSystemID(), sb.String())
 	m.chatListScrollToBottom()
+}
+
+// renderIMOnboardCockpit renders the /im onboard dashboard: per-platform
+// routing to the vendor panels, persisted progress rows, and due notices.
+func renderIMOnboardCockpit(workspaceDir string) string {
+	var sb strings.Builder
+	sb.WriteString("IM Onboarding Cockpit\n")
+	sb.WriteString("=====================\n")
+	rec := loadIMOnboardRecord(workspaceDir)
+	if rec != nil {
+		sb.WriteString(fmt.Sprintf("In progress: %s (step %d)\n", rec.Platform, rec.Step))
+		panel := "-"
+		if entry, ok := imOnboardWizard()[rec.Platform]; ok {
+			panel = entry.Panel
+		}
+		sb.WriteString(fmt.Sprintf("  Resume by running the panel: %s ; clear with: /im onboard done\n\n", panel))
+	}
+	sb.WriteString("Every platform onboards in its OWN existing panel (no parallel flow):\n")
+	wiz := imOnboardWizard()
+	names := make([]string, 0, len(wiz))
+	for name := range wiz {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		marker := ""
+		if rec != nil && rec.Platform == name {
+			marker = "  <- in progress"
+		}
+		sb.WriteString(fmt.Sprintf("  %-11s run %s%s\n", name, wiz[name].Panel, marker))
+	}
+	sb.WriteString("\nProgress + resumability live here (/im onboard); live state: /im status.")
+	return sb.String()
+}
+
+// imVendorOnboardGuidance renders one platform's numbered setup steps WITH
+// deep-links and QR notes - called from the vendor panels' own onboard
+// views (post range-correction: guidance lives in the vendor panel, not
+// the unified /im surface). Pure renderer; the panel decides placement.
+func imVendorOnboardGuidance(platform string) string {
+	out, ok := renderIMOnboardSteps(platform)
+	if !ok {
+		return ""
+	}
+	return out
 }
 
 // handleIMStatusCommand renders the full-state platform registry (#4861
