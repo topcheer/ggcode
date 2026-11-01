@@ -93,13 +93,91 @@ func (t EnterWorktree) Execute(ctx context.Context, input json.RawMessage) (Resu
 	cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("error creating worktree: %s", strings.TrimSpace(string(out)))}, nil
+		// #4802 (S-34): a name collision used to surface git's bare
+		// "fatal: a branch named '<name>' already exists" with no guidance.
+		// The dead end pushed agents toward main-tree checkout operations
+		// (the friction layer of the 2026-10-31 shared-tree violations).
+		// Enrich the two collision classes with the existing branch's head,
+		// whether a worktree already holds it, and the concrete next moves.
+		return Result{IsError: true, Content: t.collisionGuidance(ctx, gitRoot, branchName, worktreePath, out)}, nil
 	}
 
 	return Result{
 		Content:             fmt.Sprintf("Created worktree at %s (branch: %s). SuggestedWorkingDir is set to this path; use the returned path for subsequent file and command operations inside the worktree.", worktreePath, branchName),
 		SuggestedWorkingDir: worktreePath,
 	}, nil
+}
+
+// collisionGuidance turns a failed `git worktree add` into an actionable
+// error message (#4802 / S-34). Two collision classes are enriched:
+//
+//  1. Branch collision - "a branch named '<name>' already exists": reports
+//     the existing branch's head SHA and whether a worktree already holds
+//     it, then gives the three safe next moves (reuse via
+//     `git worktree add <path> <branch>` when free, pick another name, or
+//     recreate from HEAD with `git worktree add -B <name> <path> HEAD`
+//     after confirming the old branch is disposable). Never touches the
+//     main tree's checkout.
+//  2. Any other failure - the raw git output, unchanged.
+func (t EnterWorktree) collisionGuidance(ctx context.Context, gitRoot, branchName, worktreePath string, out []byte) string {
+	raw := strings.TrimSpace(string(out))
+	if !strings.Contains(raw, "already exists") {
+		return fmt.Sprintf("error creating worktree: %s", raw)
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("error creating worktree %q: %s\n", branchName, raw))
+	// git quotes branch names with SINGLE quotes ("a branch named 'x'") -
+	// %q would emit double quotes and never match.
+	branchCollision := strings.Contains(raw, "a branch named '"+branchName+"'") || strings.Contains(raw, fmt.Sprintf("branch '%s' already exists", branchName))
+	if !branchCollision {
+		// Path/directory collision (e.g. the worktrees dir entry exists).
+		sb.WriteString(fmt.Sprintf("Next: remove or rename the existing entry at %s, or pick a different worktree name.", worktreePath))
+		return sb.String()
+	}
+	// Branch collision: enrich with the existing head + holder status.
+	headCmd := exec.CommandContext(ctx, "git", "rev-parse", "--short", branchName)
+	headCmd.Dir = gitRoot
+	headCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
+	headOut, headErr := headCmd.Output()
+	sb.WriteString(fmt.Sprintf("\nBranch %q already exists", branchName))
+	if headErr == nil {
+		sb.WriteString(fmt.Sprintf(" (head: %s)", strings.TrimSpace(string(headOut))))
+	}
+	if wtPath := worktreeHoldingBranch(ctx, gitRoot, branchName); wtPath != "" {
+		sb.WriteString(fmt.Sprintf(" and is already checked out in worktree %s - reuse that worktree instead of creating a new one", wtPath))
+		return sb.String()
+	}
+	sb.WriteString(fmt.Sprintf(". Next (all safe, no main-tree checkout needed):\n"+
+		"  1. Reuse the existing branch: git worktree add %s %s\n"+
+		"  2. Pick a different worktree name and retry enter_worktree\n"+
+		"  3. Recreate the branch from current HEAD (discards the old branch's unique commits - verify first): git worktree add -B %s %s HEAD",
+		worktreePath, branchName, branchName, worktreePath))
+	return sb.String()
+}
+
+// worktreeHoldingBranch returns the path of the worktree that has branchName
+// checked out, or "" when the branch is free. Reads `git worktree list
+// --porcelain` block by block: each block starts with a "worktree <path>"
+// line and may carry a "branch refs/heads/<name>" line.
+func worktreeHoldingBranch(ctx context.Context, gitRoot, branchName string) string {
+	listCmd := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
+	listCmd.Dir = gitRoot
+	listCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
+	listOut, err := listCmd.Output()
+	if err != nil {
+		return ""
+	}
+	want := "refs/heads/" + branchName
+	wtPath := ""
+	for _, line := range strings.Split(string(listOut), "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			wtPath = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+		case strings.HasPrefix(line, "branch ") && strings.TrimSpace(strings.TrimPrefix(line, "branch ")) == want && wtPath != "":
+			return wtPath
+		}
+	}
+	return ""
 }
 
 // createAgentWorktree creates an isolated git worktree for a spawned
