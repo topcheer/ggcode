@@ -7,6 +7,7 @@ package agent
 func (a *Agent) resetTurnDetectors() {
 	a.resetLoopDetector()
 	a.errorClassifier.reset()
+	resetSharedTreeBranchGuard()
 	a.resetPostEditVerify()
 	a.resetRepetitionTracker()
 	a.fulfillmentGate.reset()

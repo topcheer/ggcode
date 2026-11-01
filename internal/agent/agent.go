@@ -5869,6 +5869,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if staleMsg := a.checkPushReviewStaleness(tc.Name, tc.Arguments, result.Content); staleMsg != "" {
 				result.Content += "\n\n" + staleMsg
 			}
+			// #4803 (S-35): validation commands that just ran in the SHARED main
+			// tree while it sits on a non-main branch computed against the wrong
+			// baseline - warn inline (once per run) naming the branch.
+			if branchMsg := a.checkSharedTreeBranchGuard(tc.Name, tc.Arguments, result.Content); branchMsg != "" {
+				result.Content += "\n\n" + branchMsg
+			}
 			// Exfiltration chain source recording moved UP to the pre-redaction
 			// chokepoint (#3539); see the secret-redaction block above.
 			// Spiral-of-hallucination: an execution-type tool call with
