@@ -143,34 +143,9 @@ func (t EnterWorktree) collisionGuidance(ctx context.Context, gitRoot, branchNam
 	if headErr == nil {
 		sb.WriteString(fmt.Sprintf(" (head: %s)", strings.TrimSpace(string(headOut))))
 	}
-	listCmd := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
-	listCmd.Dir = gitRoot
-	listCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
-	if listOut, listErr := listCmd.Output(); listErr == nil {
-		for _, line := range strings.Split(string(listOut), "\n") {
-			if !strings.HasPrefix(line, "branch ") {
-				continue
-			}
-			ref := strings.TrimSpace(strings.TrimPrefix(line, "branch "))
-			ref = strings.TrimPrefix(ref, "refs/heads/")
-			if ref == branchName {
-				// The porcelain block's preceding "worktree" line holds the path.
-				lines := strings.Split(string(listOut), "\n")
-				for i, l := range lines {
-					if strings.HasPrefix(l, "branch ") && strings.TrimSpace(strings.TrimPrefix(l, "branch ")) == "refs/heads/"+branchName && i > 0 {
-						wtPath := ""
-						for j := i - 1; j >= 0; j-- {
-							if strings.HasPrefix(lines[j], "worktree ") {
-								wtPath = strings.TrimSpace(strings.TrimPrefix(lines[j], "worktree "))
-								break
-							}
-						}
-						sb.WriteString(fmt.Sprintf(" and is already checked out in worktree %s - reuse that worktree instead of creating a new one", wtPath))
-						return sb.String()
-					}
-				}
-			}
-		}
+	if wtPath := worktreeHoldingBranch(ctx, gitRoot, branchName); wtPath != "" {
+		sb.WriteString(fmt.Sprintf(" and is already checked out in worktree %s - reuse that worktree instead of creating a new one", wtPath))
+		return sb.String()
 	}
 	sb.WriteString(fmt.Sprintf(". Next (all safe, no main-tree checkout needed):\n"+
 		"  1. Reuse the existing branch: git worktree add %s %s\n"+
@@ -178,6 +153,31 @@ func (t EnterWorktree) collisionGuidance(ctx context.Context, gitRoot, branchNam
 		"  3. Recreate the branch from current HEAD (discards the old branch's unique commits - verify first): git worktree add -B %s %s HEAD",
 		worktreePath, branchName, branchName, worktreePath))
 	return sb.String()
+}
+
+// worktreeHoldingBranch returns the path of the worktree that has branchName
+// checked out, or "" when the branch is free. Reads `git worktree list
+// --porcelain` block by block: each block starts with a "worktree <path>"
+// line and may carry a "branch refs/heads/<name>" line.
+func worktreeHoldingBranch(ctx context.Context, gitRoot, branchName string) string {
+	listCmd := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
+	listCmd.Dir = gitRoot
+	listCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
+	listOut, err := listCmd.Output()
+	if err != nil {
+		return ""
+	}
+	want := "refs/heads/" + branchName
+	wtPath := ""
+	for _, line := range strings.Split(string(listOut), "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			wtPath = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+		case strings.HasPrefix(line, "branch ") && strings.TrimSpace(strings.TrimPrefix(line, "branch ")) == want && wtPath != "":
+			return wtPath
+		}
+	}
+	return ""
 }
 
 // createAgentWorktree creates an isolated git worktree for a spawned
