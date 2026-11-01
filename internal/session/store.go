@@ -148,6 +148,12 @@ type Store interface {
 	// Load retrieves a session by ID.
 	Load(id string) (*Session, error)
 
+	// LoadWithOptions loads a session, optionally bypassing the recent-message
+	// window (fullLoad=true returns every record on disk). Export/archive
+	// paths are data-fidelity surfaces and must always take fullLoad=true
+	// (#4893): the window exists for TUI list performance, not for exports.
+	LoadWithOptions(id string, fullLoad bool) (*Session, error)
+
 	// List returns all sessions, sorted by UpdatedAt descending.
 	List() ([]*Session, error)
 
@@ -2417,7 +2423,10 @@ func (s *JSONLStore) ListForWorkspace(workspace string) ([]*Session, error) {
 
 // ExportMarkdown renders a session as a markdown document.
 func (s *JSONLStore) ExportMarkdown(id string) (string, error) {
-	ses, err := s.Load(id)
+	// #4893: exports are data-fidelity surfaces - load the full session,
+	// never the recent-message window (zero production callers today, but
+	// the same defect class as the TUI /export path this issue fixes).
+	ses, err := s.LoadWithOptions(id, true)
 	if err != nil {
 		return "", err
 	}
