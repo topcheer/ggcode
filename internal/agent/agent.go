@@ -169,7 +169,8 @@ type Agent struct {
 	sessionStartFired            bool // on_session_start fired once per Agent lifetime
 	sessionEndFired              bool // on_session_end fired once (idempotent Close)
 	workingDir                   string
-	sessionID                    string // current session ID; determines todo file path
+	baselineGuard                *mainTreeBaselineGuard // #4803: branch-baseline advisory for main-tree validation runs
+	sessionID                    string                 // current session ID; determines todo file path
 	checkpoints                  *checkpoint.Manager
 	codeIndex                    *tool.CodeIndexManager // optional: background BM25 index for code_search
 	diffConfirm                  DiffConfirmFunc
@@ -560,6 +561,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		exploreFrag:            newExploreFragState(),
 		batchCoupling:          newBatchCouplingState(),
 		buildIdempot:           newBuildIdempotencyState(),
+		baselineGuard:          &mainTreeBaselineGuard{},
 		orphanFile:             newOrphanFileState(),
 		cfDep:                  newCFDepState(),
 		serialRead:             newSerialReadState(),
@@ -4295,6 +4297,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// cached (annotation text must never be cached).
 				if hint := a.recordEffectAttempt(tc.Name, tc.Arguments, result); hint != "" {
 					result.Content += hint
+				}
+				// #4803 (S-35): main-tree validation on a non-trunk branch computes
+				// against the wrong baseline - annotate build/test results with a
+				// branch-baseline advisory so they are not mistaken for main-line
+				// verification (advisory-only; caching untouched, same slot).
+				if adv := a.advisoryFor(tc.Name, tc.Arguments, a.workingDir); adv != "" && !strings.Contains(result.Content, "[baseline]") {
+					result.Content += adv
 				}
 			}
 			// Secret redaction (#1195): mask secret values in external-content
