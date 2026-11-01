@@ -78,12 +78,6 @@ func (m Model) renderQQPanel() string {
 		fmt.Sprintf(" %s", m.t("panel.qq.bound", boundCount)),
 		fmt.Sprintf(" %s", m.t("panel.qq.available", maxQQ(len(entries)-boundCount, 0))),
 	}
-	// #4861: per-platform onboard guidance lives IN the vendor panel -
-	// numbered steps + entry deep-links + QR-pairing notes (the unified
-	// /im surface only routes here).
-	if guide := imVendorOnboardGuidance("qq"); guide != "" {
-		body = append(body, "", guide)
-	}
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.qq.bot_list")))
 	if len(entries) == 0 {
 		body = append(body, fmt.Sprintf(" %s", m.t("panel.qq.no_bots")))

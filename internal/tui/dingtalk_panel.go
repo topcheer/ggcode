@@ -71,13 +71,6 @@ func (m Model) renderDingtalkPanel() string {
 		fmt.Sprintf(" %s", m.t("panel.dingtalk.bound", boundCount)),
 		fmt.Sprintf(" %s", m.t("panel.dingtalk.available", maxDingtalk(len(entries)-boundCount, 0))),
 	}
-	// #4861: vendor-panel onboard guidance (numbered steps + entry
-	// deep-links); the unified /im surface routes here instead of carrying
-	// its own wizard. DingTalk has no pairing QR - webhook/stream lanes are
-	// credential-entry flows, so the guidance is deep-link only.
-	if guide := imVendorOnboardGuidance("dingtalk"); guide != "" {
-		body = append(body, "", guide)
-	}
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.dingtalk.bot_list")))
 	if len(entries) == 0 {
 		body = append(body, fmt.Sprintf(" %s", m.t("panel.dingtalk.no_bots")))
