@@ -90,12 +90,18 @@ func (s *todoStalenessState) reset() {
 	s.reminderActive = false
 }
 
-// recordUpdate is called whenever todo_write succeeds. It records the iteration
-// and clears the active-reminder flag so a new stagnation period can be detected.
+// recordUpdate is called whenever todo_write succeeds. It records the iteration,
+// clears the active-reminder flag so a new stagnation period can be detected,
+// and resets the reminder budget (#4855 follow-up): maxStaleTodoReminders bounds
+// one continuous ignore-window (flood control), NOT the whole run. Without the
+// reset the old "long runs unguarded" bug just returned with a bigger number:
+// once the agent heeds a reminder or updates todos on its own, protection must
+// re-arm for the next stagnation period.
 func (s *todoStalenessState) recordUpdate(iteration int, todoCount int) {
 	s.lastUpdateIter = iteration
 	s.hasTodos = todoCount > 0
 	s.reminderActive = false
+	s.remindedCount = 0
 }
 
 // shouldRemind returns true if todos are stale and a reminder should be injected.
