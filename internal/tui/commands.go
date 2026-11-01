@@ -399,17 +399,6 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			m.openTwitchPanel()
 			return nil
 		case "/im":
-			// #4861: subcommands onboard/status extend the bare panel form.
-			if len(parts) > 1 {
-				switch parts[1] {
-				case "onboard":
-					m.handleIMOnboardCommand(parts[2:])
-					return nil
-				case "status":
-					m.handleIMStatusCommand()
-					return nil
-				}
-			}
 			m.openIMPanel()
 			return nil
 		case "/allow":
