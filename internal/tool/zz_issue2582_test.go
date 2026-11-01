@@ -21,10 +21,13 @@ func TestIssue2582_SemicolonPathMatchesSingleCommandVerdicts(t *testing.T) {
 		want GateBehavior
 	}{
 		// #814 alignment: quoted destructive phrase is inert on the main
-		// path (Ask via fallback, not Block); the compound part must not
-		// Block either.
-		{"quoted rm phrase", `grep 'rm -rf /etc/hosts' README.md`, Ask},
-		{"quoted rm phrase in compound", `echo hi; grep 'rm -rf /etc/hosts' README.md`, Ask},
+		// path; the compound part must not Block either.
+		// #4923 Bug B: the phrase is quoted argument TEXT - the ask-layer
+		// rm rule now evaluates the inert-unwrapped view, so the single and
+		// compound paths BOTH yield Allow (the old Ask was the documented
+		// false-positive class).
+		{"quoted rm phrase", `grep 'rm -rf /etc/hosts' README.md`, Allow},
+		{"quoted rm phrase in compound", `echo hi; grep 'rm -rf /etc/hosts' README.md`, Allow},
 		// #813 alignment: benign temp-dir prefix is Ask on the main path.
 		{"benign tmp path", "rm -rf /var/folders/ab/c/T/cache", Ask},
 		{"benign tmp path in compound", "echo hi; rm -rf /var/folders/ab/c/T/cache", Ask},

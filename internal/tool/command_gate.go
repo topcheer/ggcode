@@ -227,9 +227,9 @@ func NewCommandGate() *CommandGate {
 			pattern: regexp.MustCompile(`(?i)\b(base64|openssl\s+enc\s+-d|xxd\s+-r\s+-p)\b.*\|\s*(ba)?sh\b`)},
 
 		// --- Dangerous file operations ---
-		{kind: "destructive", desc: "recursive force delete",
+		{kind: "destructive", desc: "recursive force delete", quotedInert: true,
 			pattern: regexp.MustCompile(`(?i)\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?-[a-zA-Z]*r[a-zA-Z]*\s+`)},
-		{kind: "destructive", desc: "force delete without confirmation",
+		{kind: "destructive", desc: "force delete without confirmation", quotedInert: true,
 			pattern: regexp.MustCompile(`(?i)\brm\s+-[a-zA-Z]*f[a-zA-Z]*\s+`)},
 		// Windows recursive delete — #816: the old /[a-z]{0,3}s[a-z]{0,2}
 		// token shape matched plain Unix dirs (/srv, /src, /sys). Real
@@ -247,7 +247,7 @@ func NewCommandGate() *CommandGate {
 			pattern: regexp.MustCompile(`(?i)>\s*~/\.ssh/(config|known_hosts)\b`)},
 
 		// --- Privilege escalation ---
-		{kind: "security", desc: "sudo command requires elevated privileges",
+		{kind: "security", desc: "sudo command requires elevated privileges", quotedInert: true,
 			pattern: regexp.MustCompile(`(?i)\bsudo\s+`)},
 
 		// --- Network-based risks ---
@@ -265,9 +265,9 @@ func NewCommandGate() *CommandGate {
 			pattern: regexp.MustCompile(`(?i)\bgit\s+push\b[^;&|\n]*\s(--force|-f)\b`)},
 		{kind: "destructive", desc: "git clean -f may permanently delete untracked files",
 			pattern: regexp.MustCompile(`(?i)\bgit\s+clean\b[^;&|\n]*-[a-zA-Z]*f`)},
-		{kind: "destructive", desc: "database DROP/TRUNCATE operation",
+		{kind: "destructive", desc: "database DROP/TRUNCATE operation", quotedInert: true,
 			pattern: regexp.MustCompile(`(?i)\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b`)},
-		{kind: "destructive", desc: "DELETE without WHERE clause",
+		{kind: "destructive", desc: "DELETE without WHERE clause", quotedInert: true,
 			pattern: regexp.MustCompile(`(?i)\bDELETE\s+FROM\s+\w+[\s;"']*($|[;\n])`)},
 		{kind: "destructive", desc: "kubectl delete may remove Kubernetes resources",
 			pattern: regexp.MustCompile(`(?i)\bkubectl\s+delete\b`)},
@@ -369,14 +369,23 @@ func (g *CommandGate) Check(cmd string) GateResult {
 	}
 
 	// ---- Layer 2: Ask rules (destructive/suspicious, needs confirmation) ----
+	// #4923 Bug B: quotedInert ask rules (rm/DROP/sudo/DELETE families) match
+	// the INERT-UNWRAPPED view: simple quoted tokens are unwrapped FIRST
+	// (#3125 defense — `rm "-rf" x` still fires), then remaining quoted TEXT
+	// (space-containing payloads like `echo "rm -rf demo"`) and heredoc
+	// bodies are blanked (#814 semantics — argument text the shell never
+	// executes must not fire an Ask). Plain inertCmd was unusable here: it
+	// blanks "-rf" itself, which is exactly how the first fix attempt broke
+	// the quoted-flag defense tests.
+	inertUnwrapped := blankQuotedAndHeredocs(unwrapSimpleQuotedTokens(cmd))
 	var askReasons []string
 	for _, rule := range g.askRules {
 		// #3125: ask rules previously matched ONLY the raw cmd - the same
 		// quote-wrapped-flag bypass as the Block layer (`rm "-rf" x` was
 		// Allow). Match the same normalized views; quotedInert rules keep
-		// their inert view (quoted argument TEXT must not fire them).
+		// their inert-unwrapped view (quoted argument TEXT must not fire them).
 		if rule.quotedInert {
-			if rule.pattern.MatchString(inertCmd) {
+			if rule.pattern.MatchString(inertUnwrapped) {
 				askReasons = append(askReasons, rule.desc)
 			}
 			continue
@@ -517,8 +526,9 @@ func blankQuotes(line string) string {
 // every flag-shape regex), which made quote-wrapped flags a universal
 // Block+Ask bypass left open by #436's separator-only normalization.
 // Quotes around tokens CONTAINING spaces stay (`echo "rm -rf demo"` keeps
-// its quotes - the payload is argument TEXT, not a flag), so the echo
-// false-positive class cannot fire. Heredoc bodies are skipped verbatim
+// its quotes - the payload is argument TEXT, not a flag); the ask layer
+// pairs this view with blankQuotedAndHeredocs (#4923 Bug B) so quoted TEXT
+// cannot fire an Ask either. Heredoc bodies are skipped verbatim
 // (literal data, mirrors blankQuotedAndHeredocs's heredoc handling).
 func unwrapSimpleQuotedTokens(cmd string) string {
 	lines := strings.Split(cmd, "\n")
