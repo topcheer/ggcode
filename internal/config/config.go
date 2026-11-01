@@ -226,6 +226,12 @@ type MCPServerConfig struct {
 	// OnToolDrift callback. For servers under active development whose
 	// tool definitions legitimately churn.
 	AllowToolDrift bool `yaml:"allow_tool_drift,omitempty" json:"allow_tool_drift,omitempty"`
+	// SkipOSVCheck bypasses the pre-launch OSV malware gate (#4858) for
+	// this server: npx/uvx launches are normally gated on api.osv.dev
+	// MAL-* advisories (block on hit, fail-open on network errors,
+	// 24h verdict cache). Escape hatch for air-gapped hosts and
+	// enterprise package mirrors whose packages OSV does not index.
+	SkipOSVCheck bool `yaml:"skip_osv_check,omitempty" json:"skip_osv_check,omitempty"`
 	// #4386 form clear sentinels: Command/URL are strings, so the patch
 	// layer's "empty = not provided" semantics leave the form no way to
 	// clear them - an emptied field saved "successfully" while the old
