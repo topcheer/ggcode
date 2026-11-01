@@ -1116,12 +1116,26 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			// lanchat agent works in the SAME directory, every system
 			// prompt built for this instance carries the iron rules
 			// (worktree+PR on VCS trees; coordinate-first elsewhere).
+			// agentruntime.SetSharedWorkspaceProbe stays (sub-agent prompts are
+			// built once with it); the MAIN agent consumes the same closure via
+			// SetSystemPromptInjector, re-evaluated every run-loop iteration so
+			// resumed sessions and late-converging lanchat presence get the
+			// shared-workspace alert as soon as peers actually appear.
+			ag.SetSystemPromptInjector(func() string {
+				return lanchat.SharedWorkspaceAlert(
+					lanchatHub,
+					lanchatHub.NodeID(),
+					workingDir,
+					lanchat.DirHasVCS(workingDir),
+					cfg.Language,
+				)
+			})
 			agentruntime.SetSharedWorkspaceProbe(func() string {
 				return lanchat.SharedWorkspaceAlert(
 					lanchatHub,
 					lanchatHub.NodeID(),
 					workingDir,
-					dirHasVCS(workingDir),
+					lanchat.DirHasVCS(workingDir),
 					cfg.Language,
 				)
 			})
@@ -1876,23 +1890,4 @@ loop:
 
 	fmt.Fprintln(os.Stderr, daemon.Tr(lang, "daemon.stopped"))
 	return nil
-}
-
-// dirHasVCS reports whether dir (or its nearest ancestor up to the volume
-// root) is under git or svn version control — selecting which shared-
-// workspace iron-rule set applies.
-func dirHasVCS(dir string) bool {
-	for d := dir; ; {
-		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-			return true
-		}
-		if _, err := os.Stat(filepath.Join(d, ".svn")); err == nil {
-			return true
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			return false
-		}
-		d = parent
-	}
 }

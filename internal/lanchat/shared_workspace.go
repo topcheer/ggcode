@@ -2,6 +2,7 @@ package lanchat
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -69,6 +70,25 @@ func SharedWorkspaceAlert(h *Hub, selfNodeID, workspace string, hasVCS bool, lan
 		b.WriteString("- Re-read files before editing; when you see recent foreign changes, DM the owning agent instead of overwriting.\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// DirHasVCS reports whether dir (or its nearest ancestor up to the volume
+// root) is under git or svn version control — used by shared-workspace
+// alerting to pick the iron-rule set (worktree+PR vs coordinate-first).
+func DirHasVCS(dir string) bool {
+	for d := dir; ; {
+		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
+			return true
+		}
+		if _, err := os.Stat(filepath.Join(d, ".svn")); err == nil {
+			return true
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return false
+		}
+		d = parent
+	}
 }
 
 // sharedWorkspacePeers returns online participants whose workspace path
