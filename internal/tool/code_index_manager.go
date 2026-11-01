@@ -1161,7 +1161,14 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 		absPath := filepath.Join(m.workingDir, relPath)
 		info, err := os.Stat(absPath)
 		if err != nil {
-			// File deleted or inaccessible: remove from index.
+			// #4435 bug 2: only a confirmed disappearance removes the doc -
+			// EACCES/transient IO used to delete REAL files from the index
+			// ("removed" masked the loss). Other errors: skip this cycle.
+			if !os.IsNotExist(err) {
+				debug.Log("codeindex", "incremental stat error (keeping doc): %s: %v", relPath, err)
+				continue
+			}
+			// File deleted: remove from index.
 			if di, ok := docIdx[relPath]; ok {
 				m.removeDocFromIndex(idx, di)
 				delete(docIdx, relPath)
@@ -1181,6 +1188,14 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 		if info.IsDir() || info.Size() > codeIndexMaxFileSize {
 			continue
 		}
+		// #4435 bug 1: the dirty channel only had the #4428 extension
+		// filter - vendor/node_modules/dist/... files written via
+		// write_file sailed into the corpus while the full scan (isSkipDir)
+		// and cache load (isInSkipDir) exclude those directories. Same
+		// directory standard here: skip-dir files are dropped, not indexed.
+		if isInSkipDir(relPath) {
+			continue
+		}
 		// #4428: the dirty channel (MarkDirty passes through write_file /
 		// edit_file paths verbatim) previously appended ANY file below the
 		// size cap - .png/.lock/.bin written via write_file got tokenized
@@ -1196,6 +1211,23 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 			continue
 		}
 		terms := tokenizeForIndex(string(data))
+		// #4435 bug 3: doBuild skips empty-TERM docs (L456 family) but the
+		// dirty channel appended them - overwriting a file with
+		// untokenizable content left an empty-TF doc persisted in the
+		// corpus, a shape loadDiskCache then rejected on restart.
+		if len(terms) == 0 {
+			// If a previously indexed doc became untokenizable, remove it
+			// rather than leaving a stale full-TF corpse.
+			if di, ok := docIdx[relPath]; ok {
+				m.removeDocFromIndex(idx, di)
+				delete(docIdx, relPath)
+				if di < len(idx.docs) {
+					docIdx[idx.docs[di].path] = di
+				}
+				removed++
+			}
+			continue
+		}
 		newTF := make(map[string]int, len(terms))
 		for _, t := range terms {
 			newTF[t]++
