@@ -333,7 +333,15 @@ var browserActions = map[string]func(*Browser, context.Context, *browserActionAr
 		if a.Path == "" {
 			return errResult("path is required for upload action")
 		}
-		return b.doUpload(ctx, a.Profile, a.Session, a.Selector, a.Path, a.Headless)
+		// #4880: upload is a selector-taking action like its six siblings -
+		// the snapshot contract promises @eN support. Passing the raw arg
+		// straight to chromedp meant every @eN upload stalled the full
+		// 15s timeout (selector never matches) instead of resolving.
+		sel, ok := b.resolveSelectorArg(a.Profile, a.Session, a.Selector)
+		if !ok {
+			return errResult(fmt.Sprintf("unresolved element ref %q: run the 'snapshot' action first (refs die on navigation)", a.Selector))
+		}
+		return b.doUpload(ctx, a.Profile, a.Session, sel, a.Path, a.Headless)
 	},
 	"cookies": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
 		return b.doCookies(ctx, a.Profile, a.Session, a.Value, a.Name, a.URL, a.Headless)
@@ -811,6 +819,14 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 
 	urlAfter, _ := chromedp.Run(timeoutCtx, chromedp.Location())
 	stateAfter := b.evaluateClickState(timeoutCtx, selector)
+	// #4879: a click that NAVIGATES must invalidate this tab's @eN ref
+	// snapshot - same as doNavigate/doBack. The stale-refs check below used
+	// to detect navigation (note even said "confirmed (navigation)") and
+	// return anyway, leaving a next-page @eN lookup free to silently target
+	// the wrong element.
+	if urlAfter != urlBefore {
+		b.refs.invalidate(browserRefKey(profile, session))
+	}
 	note := clickEffectNote(urlBefore, urlAfter, stateBefore, stateAfter)
 	return Result{Content: fmt.Sprintf("Clicked: %s\nCurrent URL: %s%s", selector, urlAfter, note)}, nil
 }
