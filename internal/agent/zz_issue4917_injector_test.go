@@ -11,6 +11,14 @@ import (
 // still lands: the injector is re-evaluated on every injection pass, so an
 // initially-empty probe that later reports peers must update the system
 // message instead of being frozen out by the first empty evaluation.
+//
+// KNOWN BOUNDARY (documented, intentionally not fixed here): when the base
+// system prompt is EMPTY and the first pass produces no dynamic text, no
+// system message exists for UpdateFirstSystemMessage to update, so a text
+// arriving on a later pass has nothing to land in. Production main agents
+// always carry DefaultSystemPrompt (non-empty base), so this cannot fire in
+// practice; empty-base agents (some tests) never get dynamic layers. The
+// test below therefore uses a non-empty base, mirroring production.
 func TestSystemPromptInjectorLateTextStillLands(t *testing.T) {
 	a := newAutopilotTestAgent()
 	// Production agents always carry a non-empty base prompt; the empty-
