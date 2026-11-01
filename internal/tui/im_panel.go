@@ -58,6 +58,12 @@ func (m Model) renderIMPanel() string {
 		"",
 	}
 
+	// #4861 (final range correction): the onboarding cockpit IS the panel's
+	// default view - full-state registry + progress + due, and selecting a
+	// channel + 'o' opens that platform's vendor onboard panel. No /im
+	// onboard|status subcommands exist.
+	body = append(body, m.renderIMOnboardCockpitBlock(entries), "")
+
 	// Runtime status
 	body = append(body,
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.im.runtime")),
@@ -258,6 +264,24 @@ func (m *Model) handleIMPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, m.setIMOutputMode("summary")
 	case "M":
 		return *m, m.muteAllIMChannels()
+	case "o":
+		// #4861: open the selected channel's vendor onboard panel (the
+		// cockpit routes; the vendor panel carries the guidance).
+		if len(entries) == 0 {
+			panel.message = m.t("panel.im.message.no_channel")
+			return *m, nil
+		}
+		platform := strings.ToLower(string(entries[clampIMSelection(panel.selected, len(entries))].Platform))
+		if entry, ok := imOnboardWizard()[platform]; ok {
+			m.closeIMPanel()
+			return *m, m.handleCommand(entry.Panel)
+		}
+		panel.message = fmt.Sprintf("platform %q has no vendor panel yet", platform)
+	case "x":
+		// #4861: clear the onboarding run-record from the panel (the
+		// record's resume/due row re-renders on the next view).
+		clearIMOnboardRecord(m.workspaceDirForIMOnboard())
+		panel.message = "onboarding record cleared"
 	case "U":
 		return *m, m.unmuteAllIMChannels()
 	case "esc", "ctrl+c":
