@@ -541,7 +541,12 @@ func (t *KnowledgeGraphTool) doTrace(s *kgStore, p *kgParams) (Result, error) {
 			at = asOf
 		}
 		for _, e := range s.Edges {
-			vkey := e.To + "\x00" + e.Type
+			// #4904: include the SOURCE node in the dedupe key. The old
+			// (to, type) key silently dropped different-source same-type
+			// fan-in edges (A--relates-to-->C and B--relates-to-->C) - the
+			// exact residue of #4708 defect B: the B→C edge line vanished
+			// from the trace output without counting as hidden.
+			vkey := e.From + "\x00" + e.To + "\x00" + e.Type
 			if e.From != item.id || visited[vkey] {
 				continue
 			}
