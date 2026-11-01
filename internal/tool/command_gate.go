@@ -82,6 +82,10 @@ type gateRule struct {
 type cleanRule struct {
 	desc    string
 	pattern *regexp.Regexp
+	// replace defaults to "" (delete the match); a rule may carry a
+	// template like "$1" to keep captured groups (#4923: leading env
+	// assignments other than the override survive the clean).
+	replace string
 }
 
 // NewCommandGate creates the command safety gate with all rules.
@@ -295,7 +299,17 @@ func NewCommandGate() *CommandGate {
 			// #4430 bug 4: consume the QUOTED form fully. `GIT_PAGER="less -R"`
 			// made \\S+ stop at the space, leaving ` -R"` behind - the cleaned
 			// command then had unbalanced quotes (invalid shell downstream).
-			pattern: regexp.MustCompile(`(?i)GIT_PAGER=(?:'[^']*'|"[^"]*"|\S+)`)},
+			// #4923: POSITION-LOCKED to the leading env-assignment segment
+			// (optionally after `env`) - a shell env override only takes effect
+			// there. The old global replace rewrote CleanedCmd (the command that
+			// EXECUTES) at any token position: `git -c GIT_PAGER=cat log` became
+			// `git -c  log` (git fatal), `grep GIT_PAGER=x Makefile` lost its
+			// pattern, and quoted echo text was silently edited.
+			pattern: regexp.MustCompile(`(?i)^((?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\S+)\s+)*)(?:env\s+)?GIT_PAGER=(?:'[^']*'|"[^"]*"|\S+)\s*`),
+			// keep the OTHER leading env assignments ($1) - only the
+			// GIT_PAGER override is removed from the leading segment.
+			replace: "$1",
+		},
 	}
 
 	return g
@@ -394,7 +408,7 @@ func (g *CommandGate) Check(cmd string) GateResult {
 	// ---- Apply cleaning rules ----
 	cleaned := cmd
 	for _, rule := range g.cleanRules {
-		cleaned = rule.pattern.ReplaceAllString(cleaned, "")
+		cleaned = rule.pattern.ReplaceAllString(cleaned, rule.replace)
 	}
 	result.CleanedCmd = strings.TrimSpace(cleaned)
 
