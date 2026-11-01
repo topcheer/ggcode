@@ -61,11 +61,23 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	case "click":
 		// Move to coordinates first, then click - matching macOS behavior.
 		// #1665: honor p.Button (xdotool button codes: 1=left 2=middle 3=right).
-		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", x11ButtonCode(p.Button))
+		code, err := x11ButtonCode(p.Button)
+		if err != nil {
+			return Result{IsError: true, Content: err.Error()}, nil
+		}
+		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", code)
 	case "double_click":
-		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "--repeat", "2", x11ButtonCode(p.Button))
+		code, err := x11ButtonCode(p.Button)
+		if err != nil {
+			return Result{IsError: true, Content: err.Error()}, nil
+		}
+		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "--repeat", "2", code)
 	case "triple_click":
-		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "--repeat", "3", x11ButtonCode(p.Button))
+		code, err := x11ButtonCode(p.Button)
+		if err != nil {
+			return Result{IsError: true, Content: err.Error()}, nil
+		}
+		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "--repeat", "3", code)
 	case "right_click":
 		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "3")
 	case "middle_click":
@@ -411,8 +423,12 @@ func atspiLocate(ctx context.Context, p desktopParams) (Result, error) {
 					clickErr = runArgvSeq(ctx, cmds)
 				}
 			} else {
+				code, cerr := x11ButtonCode(p.Button)
+				if cerr != nil {
+					return Result{IsError: true, Content: cerr.Error()}, nil
+				}
 				_, clickErr = exec.CommandContext(ctx, "xdotool", "mousemove", "--sync",
-					fmt.Sprintf("%d", cx), fmt.Sprintf("%d", cy), "click", x11ButtonCode(p.Button)).Output()
+					fmt.Sprintf("%d", cx), fmt.Sprintf("%d", cy), "click", code).Output()
 			}
 			if clickErr != nil {
 				return Result{}, fmt.Errorf("found element at (%d,%d) but click failed: %w", cx, cy, clickErr)
@@ -639,16 +655,25 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 }
 
 // x11ButtonCode maps the schema's button enum to X11/xdotool button codes
-// (1=left, 2=middle, 3=right). Unknown values default to left, mirroring
-// the schema's "default": "left".
-func x11ButtonCode(button string) string {
+// (1=left, 2=middle, 3=right).
+// #4896/#4691: normalize case/whitespace, then REJECT unknown values -
+// the old default-to-left silently turned "Right"/typos into a LEFT
+// click (dangerous misdirection); every sibling path (darwin mouseClick,
+// Wayland ydoClickArgs, mouseButtonEvent) already rejects.
+func x11ButtonCode(button string) (string, error) {
+	button = strings.ToLower(strings.TrimSpace(button))
+	if button == "" {
+		button = "left" // schema default: absent/empty button means left click
+	}
 	switch button {
-	case "right":
-		return "3"
+	case "left":
+		return "1", nil
 	case "middle":
-		return "2"
+		return "2", nil
+	case "right":
+		return "3", nil
 	default:
-		return "1"
+		return "", fmt.Errorf("unknown button %q (left, right, middle)", button)
 	}
 }
 
