@@ -146,7 +146,7 @@ func scoreArgComplexity(toolName string, args map[string]json.RawMessage) (int, 
 	switch toolName {
 	case "run_command":
 		cmd := str("command")
-		if n := scoreShellComplexity(cmd); n > 0 {
+		if n := scoreShellComplexityChained(cmd); n > 0 {
 			add(n, "command")
 		}
 	case "edit_file":
@@ -319,6 +319,98 @@ var shellSoftTokens = []string{
 	"Invoke-WebRequest", // PS curl equivalent
 	"iwr",
 	"Set-ExecutionPolicy Bypass",
+}
+
+// splitShellSubcommands splits a compound command into its individual
+// subcommands on the shell sequencing operators (&& || ; and newlines).
+// Sequences inside $() / backticks are left intact within their segment -
+// a substitution belongs to the one subcommand that expands it.
+func splitShellSubcommands(cmd string) []string {
+	if !strings.ContainsAny(cmd, "&;\n") {
+		return []string{cmd}
+	}
+	var parts []string
+	var cur strings.Builder
+	depth := 0 // inside $(...) nesting
+	inBacktick := false
+	inSingle, inDouble := false, false
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		switch {
+		case c == '\'' && !inDouble:
+			inSingle = !inSingle
+		case c == '"' && !inSingle:
+			inDouble = !inDouble
+		case (inSingle || inDouble):
+			// quoted content: no operator handling
+		case c == '`':
+			inBacktick = !inBacktick
+		case c == '$' && i+1 < len(cmd) && cmd[i+1] == '(' && !inBacktick:
+			depth++
+			cur.WriteByte(c)
+			cur.WriteByte(cmd[i+1])
+			i++
+			continue
+		case c == ')' && depth > 0 && !inBacktick:
+			depth--
+		case depth > 0 || inBacktick:
+			// inside substitution: separators are inert
+		case c == '&' && i+1 < len(cmd) && cmd[i+1] == '&', c == ';':
+			parts = append(parts, cur.String())
+			cur.Reset()
+			if c == '&' {
+				i++ // consume the second '&'
+			}
+			continue
+		case c == '|' && i+1 < len(cmd) && cmd[i+1] == '|':
+			parts = append(parts, cur.String())
+			cur.Reset()
+			i++
+			continue
+		case c == '\n':
+			parts = append(parts, cur.String())
+			cur.Reset()
+			continue
+		}
+		cur.WriteByte(c)
+	}
+	parts = append(parts, cur.String())
+	// Drop empties (trailing separators, blank lines).
+	out := parts[:0]
+	for _, p := range parts {
+		if strings.TrimSpace(p) != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return []string{cmd}
+	}
+	return out
+}
+
+// scoreShellComplexityChained (#4780 / S-09): score a compound command
+// PER SUBCOMMAND and take the maximum, instead of scoring the whole string.
+// The whole-string aggregation rejected entire multi-action commands
+// (merge + comment + patrol) whose combined argv crossed the threshold even
+// though every step was individually safe - forcing costly step-splitting.
+// Per-sub max keeps the gate's promise (a genuinely heavy subcommand still
+// fires: hard tokens, substitution density, and pipeline depth are all
+// counted within their own segment) while safe read-only verbs chained
+// together no longer aggregate. The destructive-pattern layer
+// (reversibility_check) is separate and still matches anywhere in the
+// string.
+func scoreShellComplexityChained(cmd string) int {
+	subs := splitShellSubcommands(cmd)
+	if len(subs) <= 1 {
+		return scoreShellComplexity(cmd)
+	}
+	max := 0
+	for _, sub := range subs {
+		if n := scoreShellComplexity(sub); n > max {
+			max = n
+		}
+	}
+	return max
 }
 
 // scoreShellComplexity scores a shell command: length, pipelines (capped:
