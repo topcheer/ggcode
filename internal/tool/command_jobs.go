@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"sort"
@@ -272,6 +273,29 @@ func (m *CommandJobManager) SetSandboxPolicy(p *SandboxPolicy) {
 	m.sandbox = p
 }
 
+// NearestLiveDir returns dir unchanged when it still exists. When it has
+// been removed (deleted worktree, unmounted volume), it walks up to the
+// nearest still-existing ancestor directory. "" is returned only when even
+// the filesystem root is unreachable - callers treat "" as "inherit the
+// process working dir". #4791 (S-21): dead-cwd command sessions must
+// recover, not fail every spawn forever.
+func NearestLiveDir(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if st, err := os.Stat(dir); err == nil && st.IsDir() {
+		return dir
+	}
+	for d := filepath.Dir(dir); ; d = filepath.Dir(d) {
+		if st, err := os.Stat(d); err == nil && st.IsDir() {
+			return d
+		}
+		if d == filepath.Dir(d) {
+			return "" // reached "/" without a live dir
+		}
+	}
+}
+
 func (m *CommandJobManager) Start(ctx context.Context, command string, detach bool, timeout time.Duration) (*CommandJobSnapshot, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
@@ -315,7 +339,15 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, detach bo
 	}
 	configureCommandCancellation(cmd)
 	if m.workingDir != "" {
-		cmd.Dir = m.workingDir
+		// #4791 (S-21): a persistent command session whose workingDir was a
+		// git worktree (or any directory) that has since been REMOVED fails
+		// every subsequent fork/exec with ENOENT-class errors - and a `cd`
+		// prefix cannot save a session that cannot even spawn. Validate cwd
+		// liveness before each spawn; a dead cwd re-resolves to the nearest
+		// still-existing ancestor (falling back to the process cwd) so the
+		// session recovers instead of dying permanently.
+		live := NearestLiveDir(m.workingDir)
+		cmd.Dir = live
 	}
 	// #2350: this is the one path that builds its own exec.Cmd (via
 	// util.NewShellCommandContext), and a nil cmd.Env inherits the FULL

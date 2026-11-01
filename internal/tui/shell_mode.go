@@ -180,7 +180,11 @@ func (m *Model) startShellCommand(command string) tea.Cmd {
 		safego.Go("tui.shell.runCommand", func() {
 			defer cancel()
 			workDir, _ := os.Getwd()
-			manager := toolpkg.NewCommandJobManager(workDir)
+			// #4791 (S-21): when the TUI's own cwd was a worktree that has
+			// since been removed, os.Getwd fails (stale cwd) - clamp to the
+			// nearest live ancestor so `!command` sessions recover instead
+			// of failing every spawn with ENOENT-class errors.
+			manager := toolpkg.NewCommandJobManager(toolpkg.NearestLiveDir(workDir))
 			snapshot, err := manager.Start(ctx, command, false, 0)
 			if err != nil {
 				if m.program != nil {
