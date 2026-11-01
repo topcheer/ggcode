@@ -59,6 +59,11 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		}
 	}
 	prompt := config.BuildSystemPrompt(cfg.ExtraPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames, availableModels)
+	if alert := sharedWorkspaceAlertText(); alert != "" {
+		// Shared-workspace iron rules: injected high in the prompt so
+		// concurrent-agent collisions stay salient for the whole session.
+		prompt += "\n\n" + alert
+	}
 	if styleGuidance := config.OutputStyleGuidance(cfg.OutputStyle); styleGuidance != "" {
 		prompt += "\n\n" + styleGuidance
 	}
@@ -265,6 +270,9 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext, task string) string {
 		}
 	}
 	prompt := config.BuildSystemPrompt(extraPrompt, workingDir, language, toolNames, gitStatus, nil, availableModels)
+	if alert := sharedWorkspaceAlertText(); alert != "" {
+		prompt += "\n\n" + alert
+	}
 	if ctx.Cfg != nil {
 		if styleGuidance := config.OutputStyleGuidance(ctx.Cfg.OutputStyle); styleGuidance != "" {
 			prompt += "\n\n" + styleGuidance
