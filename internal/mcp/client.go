@@ -29,13 +29,16 @@ import (
 
 // Client connects to an MCP server via stdio transport.
 type Client struct {
-	name      string
-	transport string
-	command   string
-	args      []string
-	env       map[string]string
-	url       string
-	headers   map[string]string
+	// skipOSVCheck bypasses the pre-launch OSV malware gate (#4858):
+	// mcp_servers.<name>.skip_osv_check for air-gapped/enterprise mirrors.
+	skipOSVCheck bool
+	name         string
+	transport    string
+	command      string
+	args         []string
+	env          map[string]string
+	url          string
+	headers      map[string]string
 	// toolSchemas caches the most recently listed inputSchema per tool name
 	// (HTTP transport only) so tools/call can resolve x-mcp-header
 	// annotations into Mcp-Param-* headers (SEP-2243). Read/written under c.mu.
@@ -243,6 +246,7 @@ func NewClientFromConfig(cfg config.MCPServerConfig) *Client {
 	client := &Client{
 		name:             cfg.Name,
 		transport:        transport,
+		skipOSVCheck:     cfg.SkipOSVCheck,
 		command:          cfg.Command,
 		args:             append([]string(nil), cfg.Args...),
 		env:              cloneStringMap(cfg.Env),
@@ -292,6 +296,14 @@ func (c *Client) Start(ctx context.Context) error {
 	case "", "stdio":
 	default:
 		return fmt.Errorf("mcp[%s]: unsupported transport %q", c.name, c.transport)
+	}
+
+	// #4858: pre-launch OSV malware gate for package-runner commands.
+	// Blocking errors surface with the advisory IDs and the escape hatch;
+	// infrastructure failures fail open inside the gate (never brick
+	// startup).
+	if err := osvGate(ctx, c.name, c.command, c.args, c.skipOSVCheck); err != nil {
+		return err
 	}
 
 	procCtx, cancelProc := context.WithCancel(context.Background())
