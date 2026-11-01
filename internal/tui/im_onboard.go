@@ -121,6 +121,7 @@ func imOnboardWizard() map[string]imOnboardEntry {
 			Steps: []imOnboardStep{
 				{Text: "Create a bot account (Integrations -> Bot Accounts) or use a Personal Access Token."},
 				{Text: "Copy the token; note the server URL and the team name.", Note: "The token is the Account Settings -> Security -> Personal Access Token value - NOT your login password and NOT the bot's username."},
+				{Text: "For the allowlist, find your Mattermost user ID via Account Settings -> Security.", Note: "The Mattermost user ID is a 26-character alphanumeric ID (no @) - NOT the @username."},
 				{Text: "Enter server URL + token in the Mattermost panel (masked input)."},
 			},
 			Panel: "/mm",
@@ -165,7 +166,7 @@ func imOnboardWizard() map[string]imOnboardEntry {
 			Steps: []imOnboardStep{
 				{Text: "Register the bot as a Twitch application (dev console) and take an OAuth token with chat permissions."},
 				{Text: "Note the bot login name and the channel it joins.", Note: "The OAuth token is the oauth:... string - NOT your Twitch login password."},
-				{Text: "For the allowlist, find your Mattermost user ID via Account Settings > Security.", Note: "The Mattermost user ID is a 26-character alphanumeric ID (no @) - NOT the @username."},
+				{Text: "For the allowlist, use sender login names (lowercase Twitch usernames)."},
 				{Text: "Enter the credentials in the unified IM panel (/im)."},
 			},
 			Panel: "/im",
