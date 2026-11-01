@@ -96,8 +96,25 @@ func DirHasVCS(dir string) bool {
 // equality on the local filesystem implies the same machine (a remote node
 // cannot mount the identical absolute path in practice; the alert is
 // advisory anyway).
+// canonicalWorkspaceComparable returns a filesystem-canonical spelling of
+// dir for workspace-identity comparison (#4918): Abs + EvalSymlinks + Clean,
+// falling back to lexical Clean when the path cannot be resolved (deleted
+// tree, permissions). filepath.Clean alone left /var/... vs
+// /private/var/... (or any user symlink) spelling the SAME directory
+// unequal, so the shared-workspace collision alert silently missed peers.
+func canonicalWorkspaceComparable(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return filepath.Clean(dir)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(abs)
+}
+
 func sharedWorkspacePeers(h *Hub, selfNodeID, workspace string) []Participant {
-	want := filepath.Clean(workspace)
+	want := canonicalWorkspaceComparable(workspace)
 	var peers []Participant
 	for _, p := range h.Participants() {
 		if !p.Online || p.NodeID == selfNodeID || p.NodeID == "" {
@@ -106,7 +123,7 @@ func sharedWorkspacePeers(h *Hub, selfNodeID, workspace string) []Participant {
 		if p.Workspace == "" {
 			continue
 		}
-		if filepath.Clean(p.Workspace) == want {
+		if canonicalWorkspaceComparable(p.Workspace) == want {
 			peers = append(peers, p)
 		}
 	}
