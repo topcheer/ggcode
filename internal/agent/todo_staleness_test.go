@@ -200,3 +200,33 @@ func TestParseTodoCount(t *testing.T) {
 		t.Errorf("expected 0 for missing field, got %d", count)
 	}
 }
+
+// #4855 follow-up: the reminder budget must bound ONE continuous ignore-window,
+// not the whole run. Once todo_write lands (the agent heeded the reminder, or
+// updated on its own), the budget re-arms so later stagnation is still guarded.
+func TestTodoStaleness_BudgetResetsOnUpdate(t *testing.T) {
+	s := newTodoStalenessState()
+	s.recordUpdate(0, 3)
+	// Drain the full budget in one stagnation window (agent ignores every
+	// reminder; grace is 4 iters, so space reminders 5 apart).
+	for i := 1; i <= maxStaleTodoReminders; i++ {
+		iter := 8 + (i-1)*5
+		if !s.shouldRemind(iter, true) {
+			t.Fatalf("reminder %d/%d should fire at iter %d", i, maxStaleTodoReminders, iter)
+		}
+		s.markReminded(iter)
+	}
+	exhausted := 8 + maxStaleTodoReminders*5
+	if s.shouldRemind(exhausted, true) {
+		t.Fatal("budget exhausted within one ignore-window: no more reminders expected")
+	}
+	// The agent finally updates the list -> budget must reset.
+	s.recordUpdate(60, 3)
+	if s.remindedCount != 0 {
+		t.Fatalf("budget must reset on todo_write, got remindedCount=%d", s.remindedCount)
+	}
+	// A fresh stagnation period after the update must be guarded again.
+	if !s.shouldRemind(60+staleTodoThreshold+1, true) {
+		t.Fatal("post-update stagnation must trigger reminders again (long-run guard re-armed)")
+	}
+}
