@@ -23,6 +23,18 @@ type imOnboardPlatform struct {
 	Notes    []string // anti-confusion traps
 }
 
+// IMOnboardPlatformInfo is the exported view of imOnboardPlatform for
+// cross-package consumers (desktop wailskit binding #4864 reads the SAME
+// registry the TUI renders - single source of truth).
+type IMOnboardPlatformInfo = imOnboardPlatform
+
+// IMOnboardPlatformsExported exposes the onboarding registry so the
+// desktop binding derives its guide content from the TUI's data instead
+// of duplicating steps/notes.
+func IMOnboardPlatformsExported() []IMOnboardPlatformInfo {
+	return imOnboardPlatforms()
+}
+
 func imOnboardPlatforms() []imOnboardPlatform {
 	return []imOnboardPlatform{
 		{

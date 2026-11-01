@@ -194,6 +194,10 @@ const id = {
   // Onboarding
   'onboarding.next': 'Berikutnya',
   'onboarding.back': 'Kembali',
+  'onboarding.skip': 'Skip',
+  'onboarding.imStepTitle': 'Connect a messaging channel',
+  'onboarding.imStepHint': 'Optional - walk one platform end-to-end now, or set it up later in Settings - IM.',
+  'onboarding.imChoosePlatform': 'Choose a platform...',
   'onboarding.getStarted': 'Mulai',
   'onboarding.vendorHint': 'Pilih penyedia AI yang ingin Anda gunakan',
   'onboarding.configHint': 'Sesuaikan pengaturan ini atau biarkan default',
@@ -242,6 +246,7 @@ const id = {
   // IMManagement
   'im.title': 'Adapter IM',
   'im.addAdapter': 'Tambah Adapter',
+  'im.notConfigured': 'Not configured yet - guided setup',
   'im.noAdapters': 'Tidak ada adapter IM dikonfigurasi. Klik "Tambah Adapter" untuk memulai.',
   'im.currentWorkspace': 'Workspace Saat Ini',
   'im.otherWorkspaces': 'Workspace Lain',

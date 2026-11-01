@@ -8,6 +8,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/session"
+	"github.com/topcheer/ggcode/internal/tui"
 )
 
 // IMAdapterInfo is a frontend-friendly representation of an IM adapter config.
@@ -45,6 +46,41 @@ type IMPlatformField struct {
 	Placeholder string `json:"placeholder"`
 	Secret      bool   `json:"secret,omitempty"`
 	Required    bool   `json:"required,omitempty"`
+}
+
+// IMOnboardGuideEntry is the desktop view of one platform's onboarding
+// guide, derived from the TUI registry (single source of truth, #4864).
+type IMOnboardGuideEntry struct {
+	Key      string   `json:"key"`
+	Title    string   `json:"title"`
+	PanelCmd string   `json:"panelCmd"` // TUI panel; desktop routes to Settings IM card
+	Steps    []string `json:"steps"`
+	Notes    []string `json:"notes"` // anti-confusion traps ("this ID is NOT that ID")
+	QRAuth   bool     `json:"qrAuth"`
+}
+
+// GetIMOnboardGuide returns the per-platform onboarding guide for the
+// desktop onboarding step and Settings IM card. Content is the SAME
+// registry the TUI /im onboard command renders (internal/tui), so TUI and
+// desktop never drift apart (#4864: single source of truth).
+func GetIMOnboardGuide() []IMOnboardGuideEntry {
+	registry := GetIMPlatformRegistry()
+	qrByID := make(map[string]bool, len(registry))
+	for _, m := range registry {
+		qrByID[strings.ToLower(m.ID)] = m.QRAuth
+	}
+	entries := make([]IMOnboardGuideEntry, 0, 12)
+	for _, p := range tui.IMOnboardPlatformsExported() {
+		entries = append(entries, IMOnboardGuideEntry{
+			Key:      p.Key,
+			Title:    p.Title,
+			PanelCmd: p.PanelCmd,
+			Steps:    p.Steps,
+			Notes:    p.Notes,
+			QRAuth:   qrByID[p.Key],
+		})
+	}
+	return entries
 }
 
 // GetIMPlatformRegistry returns the list of supported IM platforms.

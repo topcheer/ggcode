@@ -194,6 +194,10 @@ const en = {
   // Onboarding
   'onboarding.next': 'Siguiente',
   'onboarding.back': 'Atrás',
+  'onboarding.skip': 'Skip',
+  'onboarding.imStepTitle': 'Connect a messaging channel',
+  'onboarding.imStepHint': 'Optional - walk one platform end-to-end now, or set it up later in Settings - IM.',
+  'onboarding.imChoosePlatform': 'Choose a platform...',
   'onboarding.getStarted': 'Comenzar',
   'onboarding.vendorHint': 'Selecciona el proveedor de IA que deseas usar',
   'onboarding.configHint': 'Ajusta estas configuraciones o mantén los valores predeterminados',
@@ -242,6 +246,7 @@ const en = {
   // IMManagement
   'im.title': 'Adaptadores IM',
   'im.addAdapter': 'Agregar adaptador',
+  'im.notConfigured': 'Not configured yet - guided setup',
   'im.noAdapters': 'No hay adaptadores IM configurados. Haz clic en "Agregar adaptador" para comenzar.',
   'im.currentWorkspace': 'Espacio de trabajo actual',
   'im.otherWorkspaces': 'Otros espacios de trabajo',
