@@ -155,6 +155,12 @@ func detectMissedSkills(workingDir string, stats agent.RunStats) {
 		}
 	}
 	if len(hits) == 0 {
+		// #4597: the routing-health sentinel is derived state, but its ONLY
+		// update path was this function - a run with no new misses returned
+		// here and never re-evaluated it. A library later trimmed below the
+		// threshold left the stale sentinel injecting forever. When the
+		// sentinel no longer applies (library shrank), strip it now.
+		maybeStripStaleRoutingHealth(workingDir, len(names))
 		return
 	}
 	autoMem := memory.NewProjectAutoMemory(workingDir)
@@ -179,6 +185,43 @@ func detectMissedSkills(workingDir string, stats agent.RunStats) {
 		return
 	}
 	debug.Log("tui", "missed-skill: recorded %d missed-skill notice(s): %v", len(hits), hits)
+}
+
+// maybeStripStaleRoutingHealth removes the routing-health sentinel from the
+// missed-skills key when the library no longer meets the size threshold
+// (#4597). Called on the no-hits exit path so the sentinel - derived state
+// recomputed only on new-notice writes - cannot linger forever after the
+// library shrinks. Best-effort: failures just leave the old sentinel.
+func maybeStripStaleRoutingHealth(workingDir string, librarySize int) {
+	if librarySize >= skillLibrarySizeWarn {
+		return // threshold still met - sentinel stays valid
+	}
+	autoMem := memory.NewProjectAutoMemory(workingDir)
+	if autoMem == nil {
+		return
+	}
+	existing, err := autoMem.LoadKey(missedSkillMemoryKey)
+	if err != nil {
+		return
+	}
+	var kept []string
+	changed := false
+	for _, l := range strings.Split(existing, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "# routing-health:") {
+			changed = true
+			continue
+		}
+		kept = append(kept, l)
+	}
+	if !changed {
+		return
+	}
+	merged := strings.TrimSpace(strings.Join(kept, "\n"))
+	if err := autoMem.SaveMemoryWithSource(missedSkillMemoryKey, merged, "missed-skill"); err != nil {
+		debug.Log("tui", "missed-skill: stale routing-health strip failed: %v", err)
+		return
+	}
+	debug.Log("tui", "missed-skill: stripped stale routing-health sentinel (library now %d)", librarySize)
 }
 
 // mergeMissedSkills appends hits not already present, deduping by
