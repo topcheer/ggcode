@@ -188,6 +188,16 @@ func (t *MobileDeviceTool) Execute(ctx context.Context, input json.RawMessage) (
 		device = backend.defaultDevice()
 	}
 
+	// #4901: defaultDevice() collapses three distinct failures (query error,
+	// parse error, no booted device) into an empty string, and an empty UDID
+	// has NO optional semantics on iOS (unlike adb's -s): every simctl action
+	// below would exec `simctl launch "" bundle.id` and fail with a misleading
+	// "Invalid device" that sends the agent retrying the wrong parameters.
+	// Guard uniformly at dispatch for every device-requiring action instead.
+	if device == "" && p.Action != "devices" {
+		return Result{IsError: true, Content: "no connected/booted device found: pass 'device' explicitly, or boot one first (iOS: use action=devices to list UDIDs, then action=boot; Android: start an emulator and check action=devices)"}, nil
+	}
+
 	switch p.Action {
 	case "devices":
 		return backend.devices(ctx)
