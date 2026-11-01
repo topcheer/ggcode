@@ -860,7 +860,15 @@ func (s *JSONLStore) removeFromIndex(id string) error {
 			filtered = append(filtered, e)
 		}
 	}
-	return s.saveIndex(filtered)
+	// #4769 (defect 3): match updateIndex - a failed save must mark the
+	// index dirty so runMaintenance's early reconciliation rebuilds it;
+	// otherwise the on-disk index keeps the deleted session forever (the
+	// self-healing loop never fires).
+	if err := s.saveIndex(filtered); err != nil {
+		s.setIndexDirty(true)
+		return err
+	}
+	return nil
 }
 
 func sessionToIndexEntry(s *Session) indexEntry {
