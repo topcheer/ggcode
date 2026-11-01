@@ -4,11 +4,67 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"regexp"
 	"strings"
+	"sync"
 )
 
 // GitStash implements the git_stash tool for push/pop/apply/drop operations.
 type GitStash struct{ WorkingDir string }
+
+// Stash seat isolation (#4777 / S-05): the workspace-wide git stash stack is
+// shared by every seat and sub-agent in a shared checkout, and a sub-agent's
+// cleanup once deleted another seat's live entry (e7746bd, 2026-09-20). The
+// tool now (a) stamps every push it creates with an owner tag and (b) refuses
+// pop/apply/drop on entries it did not create - foreign-tagged (another seat)
+// or untagged (CLI-created / pre-existing). Listing stays open via
+// git_stash_list; manual entries are managed from the CLI as before.
+const stashOwnerTagPrefix = "[ggcode-seat:"
+
+var (
+	stashOwnerOnce sync.Once
+	stashOwnerID   string
+	// stashOwnerTagRe extracts the tag payload from a `git stash list` line.
+	stashOwnerTagRe = regexp.MustCompile(regexp.QuoteMeta(stashOwnerTagPrefix) + `([^\]]+)\]`)
+)
+
+// stashOwner returns a per-process owner identity (hostname-pid). Stable for
+// this session, distinct across seats and sub-agents.
+func stashOwner() string {
+	stashOwnerOnce.Do(func() {
+		host, err := os.Hostname()
+		if err != nil || host == "" {
+			host = "unknown-host"
+		}
+		stashOwnerID = fmt.Sprintf("%s-%d", host, os.Getpid())
+	})
+	return stashOwnerID
+}
+
+// stashEntryOwner inspects `git stash list` and returns the owner tag of the
+// entry at the given index ("" when the entry or its tag is absent).
+func stashEntryOwner(ctx context.Context, dir string, index int) (string, bool) {
+	cmd := gitCommand(ctx, "stash", "list")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(string(out))
+	if trimmed == "" {
+		return "", false // empty stack: no entry at any index
+	}
+	lines := strings.Split(trimmed, "\n")
+	if index < 0 || index >= len(lines) {
+		return "", false
+	}
+	m := stashOwnerTagRe.FindStringSubmatch(lines[index])
+	if m == nil {
+		return "", true // entry exists, no tag
+	}
+	return m[1], true
+}
 
 func (t GitStash) Name() string { return "git_stash" }
 
@@ -73,9 +129,11 @@ func (t GitStash) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	switch action {
 	case "push":
 		gitArgs = []string{"stash", "push"}
-		if args.Message != "" {
-			gitArgs = append(gitArgs, "-m", args.Message)
-		}
+		// #4777: stamp ownership so later pop/drop from this tooling can tell
+		// its own entries from other seats'. The user's message stays first.
+		msg := strings.TrimSpace(args.Message)
+		msg = strings.TrimSpace(strings.Join([]string{msg, stashOwnerTagPrefix + stashOwner() + "]"}, " "))
+		gitArgs = append(gitArgs, "-m", msg)
 	case "pop":
 		gitArgs = []string{"stash", "pop"}
 		if args.Index > 0 {
@@ -109,6 +167,31 @@ func (t GitStash) Execute(ctx context.Context, input json.RawMessage) (Result, e
 
 	cmd := gitCommand(ctx, gitArgs...)
 	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
+
+	// #4777 (S-05): pop/apply/drop mutate the SHARED stash stack - refuse
+	// entries this process did not create (foreign seat's tag, or no tag at
+	// all: CLI-created / pre-existing). The incident class is a sub-agent
+	// cleanup deleting another seat's live entry; the stash stack has no
+	// per-seat namespace, so the message tag is the isolation boundary.
+	if action == "pop" || action == "apply" || action == "drop" {
+		owner, exists := stashEntryOwner(ctx, cmd.Dir, args.Index)
+		if !exists {
+			return Result{IsError: true, Content: fmt.Sprintf(
+				"git stash %s refused: no stash entry at index %d. Inspect git_stash_list first.", action, args.Index)}, nil
+		}
+		if owner != stashOwner() {
+			kind := "untagged (created outside this session's tooling - CLI or another process)"
+			if owner != "" {
+				kind = fmt.Sprintf("owned by another seat/process (%s)", owner)
+			}
+			return Result{IsError: true, Content: fmt.Sprintf(
+				"git stash %s refused on entry stash@{%d}: it is %s, not this session. "+
+					"The stash stack is shared across all seats in this workspace (#4777) - "+
+					"manage foreign entries from the CLI after coordinating with their owner, "+
+					"or use git_stash_list to pick an entry this session created.",
+				action, args.Index, kind)}, nil
+		}
+	}
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
