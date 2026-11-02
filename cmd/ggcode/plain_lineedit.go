@@ -113,6 +113,8 @@ func plainReadLine(tty *os.File, prompt string) (string, error) {
 
 	e := &lineEditor{}
 	var pending []byte
+	var assembling []byte // partial multi-byte rune (see feedAssembler)
+	var ok bool
 	for {
 		// Drain any bytes the terminal handed us; refill in 1-byte-passes
 		// through a small buffer when empty.
@@ -157,57 +159,69 @@ func plainReadLine(tty *os.File, prompt string) (string, error) {
 		default:
 			// Control chars other than TAB are swallowed (raw mode exposes
 			// them all); TAB and everything printable-decodable go through
-			// the UTF-8 assembler.
+			// the UTF-8 assembler state machine.
 			if b < 0x20 && b != '\t' {
 				continue
 			}
-			// Assemble one rune. Fast path: single-byte ASCII/UTF-8 leader
-			// with no continuation expected.
+			// Fast path: single-byte ASCII.
 			if b < 0x80 {
 				e.insert(rune(b))
 				tty.Write([]byte{b})
 				continue
 			}
-			r, size, consumed := assembleRune(pending, b)
-			if size == 0 {
-				continue // waiting for more continuation bytes
+			// Multi-byte assembly. The partial rune lives in `assembling`
+			// (loop-local), NOT in pending: pending is always fully drained
+			// each iteration, so the refill guard (len(pending)==0 -> tty
+			// .Read) stays reachable and control bytes keep flowing through
+			// the main switch - Ctrl-C can interrupt mid-rune. The #4939
+			// pushback variant parked the leader back on pending, making
+			// the guard permanently false and spinning at 100% CPU (#4942).
+			var r rune
+			assembling, r, ok = feedAssembler(assembling, b)
+			if ok {
+				tty.Write(e.insert(r))
 			}
-			pending = pending[consumed:]
-			if r == utf8.RuneError && size == 1 {
-				// Invalid UTF-8 from the tty: drop the byte silently rather
-				// than corrupting the buffer mid-composition.
-				continue
-			}
-			tty.Write(e.insert(r))
 		}
 	}
 }
 
-// assembleRune decodes one rune given the leading byte b and the remaining
-// continuation bytes avail. Returns (rune, utf8Size, bytesConsumedFromAvail).
-// size==0 means "need more bytes".
-func assembleRune(avail []byte, b byte) (r rune, size int, consumed int) {
-	need := 0
+// feedAssembler is the byte-at-a-time UTF-8 rune assembler: acc holds the
+// partial rune seen so far (nil when idle). Each call consumes exactly one
+// byte b and returns the next accumulator, the completed rune (when emit is
+// true), and whether a rune was emitted. Malformed sequences (stray
+// continuation with no leader, bad continuation mid-rune, overlong input)
+// are dropped, restarting assembly at the offending byte when it is itself a
+// valid leader. This is the real control-flow function the read loop calls -
+// tests drive it directly, byte by byte, so assembly cannot regress behind a
+// mirror test (the #4939 lesson).
+func feedAssembler(acc []byte, b byte) (next []byte, r rune, emit bool) {
+	if len(acc) == 0 {
+		switch {
+		case b&0xE0 == 0xC0, b&0xF0 == 0xE0, b&0xF8 == 0xF0:
+			return []byte{b}, 0, false // leader buffered, await continuations
+		default:
+			return nil, 0, false // stray continuation / invalid leader: drop
+		}
+	}
+	// Mid-assembly.
+	if b&0xC0 != 0x80 {
+		// Not a continuation byte: sequence truncated. Drop it and re-seed
+		// with this byte if it is itself a leader.
+		if b&0xE0 == 0xC0 || b&0xF0 == 0xE0 || b&0xF8 == 0xF0 {
+			return []byte{b}, 0, false
+		}
+		return nil, 0, false
+	}
+	acc = append(acc, b)
+	r, size := utf8.DecodeRune(acc)
 	switch {
-	case b&0xE0 == 0xC0:
-		need = 1
-	case b&0xF0 == 0xE0:
-		need = 2
-	case b&0xF8 == 0xF0:
-		need = 3
+	case r != utf8.RuneError && size == len(acc):
+		return nil, r, true // complete rune
+	case len(acc) >= 4:
+		return nil, 0, false // overlong/invalid: drop
 	default:
-		return utf8.RuneError, 1, 0 // stray continuation byte: drop it
+		return acc, 0, false // still assembling
 	}
-	if len(avail) < need {
-		return 0, 0, 0 // incomplete: wait
-	}
-	full := append([]byte{b}, avail[:need]...)
-	r, size = utf8.DecodeRune(full)
-	if size != need+1 {
-		// Malformed sequence: drop just the leader.
-		return utf8.RuneError, 1, 0
-	}
-	return r, size, need
 }
 
 // readLineScanner is the fallback when MakeRaw fails: cooked-mode line read
