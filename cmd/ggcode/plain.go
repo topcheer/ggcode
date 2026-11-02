@@ -44,6 +44,7 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tui"
+	"golang.org/x/term"
 )
 
 // isDumbTerminal reports whether the environment cannot host the full TUI:
@@ -102,16 +103,32 @@ func RunLinearREPL(ag *agent.Agent, registry *tool.Registry, cfg *config.Config,
 		fmt.Println(plainTr(plainLang, "notice"), n)
 	}
 
+	// #plain-cjk: cooked-mode line editors erase one BYTE per backspace,
+	// leaving screen residue for CJK runes (3 bytes / 2 columns). When stdin
+	// is an interactive tty, own the line in raw mode with a rune-aware
+	// editor; pipes/files keep the Scanner path unchanged.
+	interactiveTTY := term.IsTerminal(int(os.Stdin.Fd()))
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	ctx := context.Background()
 	for {
-		fmt.Print(plainTr(plainLang, "prompt"))
-		if !sc.Scan() {
-			fmt.Println()
-			return 0
+		var line string
+		if interactiveTTY {
+			s, err := plainReadLine(os.Stdin, plainTr(plainLang, "prompt"))
+			if err != nil {
+				fmt.Println()
+				return 0
+			}
+			line = s
+		} else {
+			fmt.Print(plainTr(plainLang, "prompt"))
+			if !sc.Scan() {
+				fmt.Println()
+				return 0
+			}
+			line = sc.Text()
 		}
-		line := strings.TrimSpace(sc.Text())
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
