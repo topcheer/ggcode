@@ -151,6 +151,18 @@ func classifyFailureMode(toolName, errorContent string) FailureMode {
 					strings.Contains(c, "exec:") { // Go exec: binary lookup failure
 					return FailureModeSystemic
 				}
+				// #4787 (S-16): "fork/exec /bin/sh: no such file or directory"
+				// is the Go runtime's exec-error form (note: "fork/exec <bin>"
+				// with a SPACE, not "exec:"). It means the SHELL CHANNEL itself
+				// could not spawn — an environment-level outage that self-heals in
+				// minutes, not a wrong-argument path. Misclassifying it as
+				// structural fed "the approach is fundamentally wrong / do NOT
+				// retry" guidance into agents that were correctly retrying during
+				// the outage window. classify systemic so recordResult's systemic
+				// guidance (verify environment, report if persistent) applies.
+				if strings.Contains(c, "fork/exec") {
+					return FailureModeSystemic
+				}
 				// For read_file/edit_file and run_command argument paths, this is
 				// structural (wrong path — agent can fix it).
 				continue

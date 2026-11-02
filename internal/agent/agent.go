@@ -5053,7 +5053,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Strategy stagnation detector: tracks same-tool+target retries
 			// after failure. When 2+ consecutive failures with identical
 			// approach occur, inject guidance to pivot strategy.
-			if a.strategyStagnation.recordAttempt(tc.Name, string(tc.Arguments), !result.IsError) {
+			// #4787 (S-16): pass result.Content so shell-outage (fork/exec
+			// ENOENT) failures are exempted from stagnation gating.
+			if a.strategyStagnation.recordAttemptDetail(tc.Name, string(tc.Arguments), !result.IsError, result.Content) {
 				debug.Log("agent", "Iteration %d: strategy stagnation detected (tool=%s)", i+1, tc.Name)
 				a.contextManager.Add(provider.Message{
 					Role: "user",

@@ -3,6 +3,8 @@ package agent
 import (
 	"strconv"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Strategy Stagnation Detector
@@ -57,7 +59,25 @@ const (
 
 	// stagnationMaxWarnings: max warnings per run.
 	stagnationMaxWarnings = 2
+
+	// shellHealthProbeMarker aliases util.ShellHealthProbeCommand: the
+	// literal command the run_command degraded gate directs the agent to
+	// use for shell-channel health checks (#4787 / S-16). Single source in
+	// util so the gate text and this exemption can never drift apart.
+	shellHealthProbeMarker = util.ShellHealthProbeCommand
 )
+
+// isShellOutageFailure reports whether error content carries the Go runtime
+// spawn-failure signature seen during S-16 shell-outage windows: every
+// fork/exec fails with "no such file or directory" for minutes and then
+// self-heals. Environmental, not a strategy problem (#4787).
+func isShellOutageFailure(errContent string) bool {
+	if errContent == "" {
+		return false
+	}
+	c := strings.ToLower(errContent)
+	return strings.Contains(c, "fork/exec") && strings.Contains(c, "no such file or directory")
+}
 
 // stagnationAttempt records one tool call attempt.
 type stagnationAttempt struct {
@@ -149,6 +169,21 @@ func extractJSONStringFieldStag(jsonStr string, keys ...string) string {
 // recordAttempt records a tool call result and returns true if a
 // strategy stagnation warning should fire.
 func (s *strategyStagnationState) recordAttempt(toolName, argsJSON string, success bool) bool {
+	return s.recordAttemptDetail(toolName, argsJSON, success, "")
+}
+
+// isShellHealthProbe reports whether argsJSON is the run_command shell-health
+// probe the tool layer emits when the shell channel fails to spawn (#4787 /
+// S-16: during transient fork/exec-ENOENT outage windows, honest shell
+// liveness probes must not be branded "local minimum / STOP retrying" by
+// the stagnation gate - the retries ARE the recovery strategy).
+func isShellHealthProbe(argsJSON string) bool {
+	return strings.Contains(argsJSON, shellHealthProbeMarker)
+}
+
+// recordAttemptDetail is recordAttempt with the failure content available.
+// errContent (when non-empty) enables the #4787 shell-outage exemption.
+func (s *strategyStagnationState) recordAttemptDetail(toolName, argsJSON string, success bool, errContent string) bool {
 	target := extractStagnationTarget(toolName, argsJSON)
 	// #3409: tools OUTSIDE extractStagnationTarget's switch can never yield
 	// a target, and the tail-match (toolName && target) degenerates when
@@ -165,6 +200,26 @@ func (s *strategyStagnationState) recordAttempt(toolName, argsJSON string, succe
 		toolName: toolName,
 		target:   target,
 		success:  success,
+	}
+
+	// #4787 (S-16) exemption A: shell-health PROBES are the recovery
+	// strategy for a degraded shell channel - never stagnation. Skip
+	// recording them entirely so a probe chain can't later combine with
+	// unrelated run_command failures into a false trajectory.
+	// Exempt FAILED probes only; successful probes must still be recorded
+	// (a recorded success breaks failure chains, cannot fire the gate).
+	if !success && toolName == "run_command" && isShellHealthProbe(argsJSON) {
+		return false
+	}
+	// #4787 (S-16) exemption B: during a shell-outage window (every spawn
+	// fails fork/exec-ENOENT), even legitimate commands look like a
+	// same-target retry rut. The failure is environmental and self-heals;
+	// gate guidance would demand strategy pivots mid-outage. Exempt the
+	// bare fork/exec-ENOENT signature from stagnation chaining.
+	// Exempt the FAILURE signature only; a SUCCESS whose output merely
+	// quotes the signature (logs, this repo's own tests) must be recorded.
+	if !success && toolName == "run_command" && isShellOutageFailure(errContent) {
+		return false
 	}
 
 	s.recent = append(s.recent, attempt)

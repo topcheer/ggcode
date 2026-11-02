@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 type ShellSpec struct {
@@ -90,6 +91,41 @@ func DetectShell() (ShellSpec, error) {
 		}
 	})
 	return shellCache, shellCacheErr
+}
+
+// ResetShellCache drops the memoized shell spec so the next DetectShell
+// re-probes the environment (#4787 / S-16: the sync.Once cache meant a
+// shell that became unavailable mid-session stayed "resolved" forever).
+func ResetShellCache() {
+	shellCacheOnce = sync.Once{}
+	shellCache = ShellSpec{}
+	shellCacheErr = nil
+}
+
+// ShellHealthProbeCommand is the marker command the run_command degraded
+// gate tells the agent to use for shell-channel health checks (#4787 /
+// S-16). The strategy-stagnation detector exempts retries of this exact
+// command from stagnation gating: probing IS the recovery strategy during
+// a self-healing shell outage.
+const ShellHealthProbeCommand = "echo ggcode-shell-health-probe-ok"
+
+// ShellAvailable reports whether the shell channel can currently be
+// spawned, by actually exec'ing a no-op through the resolved shell
+// (#4787 / S-16: during resource-saturation windows fork/exec of /bin/sh
+// fails with ENOENT wholesale for 1-8 minutes and then self-heals - a
+// stat-based check passes while the channel is unspawnable, so only a
+// real spawn answers the question). Bounded by a 5s timeout.
+func ShellAvailable() bool {
+	if _, err := DetectShell(); err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	probe, _, err := NewShellCommandContext(ctx, "true")
+	if err != nil {
+		return false
+	}
+	return probe.Run() == nil
 }
 
 type lookPathFunc func(string) (string, error)

@@ -314,9 +314,14 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		return Result{IsError: true, Content: fmt.Sprintf("failed to resolve shell: %v", err)}, nil
 	}
 	configureCommandCancellation(cmd)
-	// Use the fixed WorkingDir from agent, ignore LLM-provided working_dir
+	// Use the fixed WorkingDir from agent, ignore LLM-provided working_dir.
+	// #4787 (S-16): validate liveness and re-resolve to the nearest live
+	// ancestor — a dead WorkingDir makes EVERY spawn fail fork/exec-ENOENT
+	// wholesale, which previously surfaced as an unexplained 1-8min outage.
+	// The background-job path already does this (#4791); the main path now
+	// matches it instead of setting a possibly-dead cmd.Dir.
 	if t.WorkingDir != "" {
-		cmd.Dir = t.WorkingDir
+		cmd.Dir = NearestLiveDir(t.WorkingDir)
 	}
 
 	// Normalize the terminal environment for all commands so that CLI tools
@@ -346,7 +351,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		cmd = newCmd
 		configureCommandCancellation(cmd)
 		if t.WorkingDir != "" {
-			cmd.Dir = t.WorkingDir
+			cmd.Dir = NearestLiveDir(t.WorkingDir) // #4787: liveness-checked, see above
 		}
 		cmd.Env = normalizedCommandEnv()
 		if isGitCommand(args.Command) {
@@ -425,6 +430,24 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 
 	err = cmd.Run()
 
+	// #4787 (S-16): a spawn-level shell failure ("fork/exec /bin/sh: no
+	// such file or directory") is an environmental outage that typically
+	// self-heals within minutes — NOT a strategy problem with this command.
+	// Give the channel one probe-with-backoff: if it already recovered,
+	// transparently re-run the exact same command (no gate re-run, no
+	// second approval); otherwise the degraded-mode hint is appended below
+	// so the agent retries the health probe instead of pivoting strategy.
+	if isSpawnEnoentFailure(err) {
+		time.Sleep(shellOutageBackoff)
+		if util.ShellAvailable() {
+			debug.Log("run_command", "S-16: shell channel self-healed; retrying command after spawn ENOENT")
+			if cmd2, pw2o, pw2e, buildErr := t.rebuildShellCommand(cmdCtx, retryCommandFromCmd(cmd, args.Command), cmd, stdout, stderr, progressFn, sandboxed); buildErr == nil {
+				cmd, pwOut, pwErr = cmd2, pw2o, pw2e
+				err = cmd2.Run()
+			}
+		}
+	}
+
 	// Flush any output that landed inside the last 300ms throttle window:
 	// Write() only buffers lines while throttled, so a command finishing
 	// mid-window would never emit its final tail (the streaming view would
@@ -462,6 +485,11 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		if esc := t.SecLedger.Escalation(); esc != "" {
 			result.Content += "\n" + esc
 		}
+	}
+	// #4787 (S-16): still failing after the probe-retry above (or the probe
+	// itself failed) — surface the shell-degraded signal.
+	if isSpawnEnoentFailure(err) {
+		result.Content += "\n\n" + shellDegradedHint()
 	}
 	return result, nil
 }
@@ -593,7 +621,13 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel contex
 	}
 	if snapshot != nil && snapshot.Status == CommandJobFailed {
 		t.JobManager.forget(snapshot.ID)
-		return Result{IsError: true, Content: snapshot.ErrText}, nil
+		// #4787 (S-16): spawn-level shell failure on the managed-job path —
+		// same degraded-mode signal as the synchronous path.
+		content := snapshot.ErrText
+		if isSpawnEnoentFailureText(content) {
+			content += "\n\n" + shellDegradedHint()
+		}
+		return Result{IsError: true, Content: content}, nil
 	}
 	if job == nil || snapshot == nil {
 		cancel()
@@ -675,6 +709,86 @@ func (t RunCommand) Clone() Tool {
 		// r28: same survival requirement for the allowed-risk dual.
 		RiskLedger: t.RiskLedger,
 	}
+}
+
+// retryCommandFromCmd returns the command string the first spawn actually
+// ran. Prefer the exec.Cmd's own args (the git-commit trailer branch and
+// any future command rewrites are captured there verbatim); fall back to
+// args.Command from the original request.
+func retryCommandFromCmd(failed *exec.Cmd, fallback string) string {
+	if len(failed.Args) >= 3 {
+		return failed.Args[len(failed.Args)-1]
+	}
+	return fallback
+}
+
+// shellOutageBackoff is the pause before the #4787 (S-16) health probe:
+// long enough to ride out a brief scheduler hiccup, short enough that the
+// retry still lands inside the same tool call.
+const shellOutageBackoff = 2 * time.Second
+
+// isSpawnEnoentFailure reports whether err is a SHELL-CHANNEL spawn failure
+// ("fork/exec <shell>: no such file or directory" on the shell binary
+// itself, returned by exec's Start path) as seen in #4787 / S-16 windows.
+// It deliberately does NOT match:
+//   - inner-command "command not found" (that's the command's own problem)
+//   - chdir ENOENT ("chdir <dir>: no such file or directory") — dead cwd,
+//     which NearestLiveDir already fixes before spawn
+func isSpawnEnoentFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	return isSpawnEnoentFailureText(err.Error())
+}
+
+// isSpawnEnoentFailureText is isSpawnEnoentFailure for already-rendered
+// error text (job snapshots carry ErrText, not error values).
+func isSpawnEnoentFailureText(s string) bool {
+	if s == "" {
+		return false
+	}
+	c := strings.ToLower(s)
+	fork := strings.Contains(c, "fork/exec")
+	if !fork {
+		return false
+	}
+	return strings.Contains(c, "no such file or directory")
+}
+
+// shellDegradedHint is the #4787 (S-16) degraded-mode signal appended to
+// spawn-failure results. The health-probe command doubles as the marker the
+// strategy-stagnation detector exempts from gating: probing IS the recovery
+// strategy during a shell outage.
+func shellDegradedHint() string {
+	return "[SHELL-DEGRADED] The shell channel failed to spawn (fork/exec ENOENT on the shell itself). " +
+		"This is a transient host-level outage observed to self-heal in 1-8 minutes (#4787). " +
+		"Do NOT change strategy, rewrite the command, or abandon the task. " +
+		"Instead, periodically run the health probe: " + util.ShellHealthProbeCommand + ". " +
+		"When it succeeds, re-run the original command unchanged."
+}
+
+// rebuildShellCommand rebuilds the exec.Cmd for the #4787 (S-16) retry after
+// a shell channel self-heals: same command, same liveness-checked cwd, the
+// FIRST attempt's already-normalized env, and a fresh OS-sandbox wrap when
+// one was applied to the first attempt. Output writers are reused (a
+// spawn-level failure wrote nothing).
+func (t RunCommand) rebuildShellCommand(ctx context.Context, command string, failed *exec.Cmd, stdout, stderr *boundedOutputWriter, progressFn ToolProgressFunc, sandboxed bool) (*exec.Cmd, *streamingProgressWriter, *streamingProgressWriter, error) {
+	cmd2, _, err := util.NewShellCommandContext(ctx, command)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	configureCommandCancellation(cmd2)
+	if t.WorkingDir != "" {
+		cmd2.Dir = NearestLiveDir(t.WorkingDir)
+	}
+	cmd2.Env = failed.Env
+	if sandboxed {
+		if _, wrapErr := wrapShellCommandOS(cmd2, t.WorkingDir, t.Sandbox); wrapErr != nil {
+			return nil, nil, nil, wrapErr
+		}
+	}
+	pw2o, pw2e := t.wireCommandOutput(cmd2, stdout, stderr, progressFn)
+	return cmd2, pw2o, pw2e, nil
 }
 
 // diagnoseCommandFailure analyzes command output for common error patterns
