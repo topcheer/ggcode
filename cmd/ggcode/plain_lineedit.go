@@ -161,41 +161,80 @@ func plainReadLine(tty *os.File, prompt string) (string, error) {
 			if b < 0x20 && b != '\t' {
 				continue
 			}
-			// Assemble one rune. Fast path: single-byte ASCII/UTF-8 leader
-			// with no continuation expected.
+			// Assemble one rune. Fast path: single-byte ASCII.
 			if b < 0x80 {
 				e.insert(rune(b))
 				tty.Write([]byte{b})
 				continue
 			}
-			r, size, consumed := assembleRune(pending, b)
-			if size == 0 {
-				continue // waiting for more continuation bytes
+			// Multi-byte rune: the 1-byte refill above means pending is empty
+			// once b is consumed, so continuation bytes must be accumulated
+			// explicitly or the leader is lost (#4940).
+			r, ok, err := readFullRune(tty, b, &pending)
+			if err != nil {
+				return "", err
 			}
-			pending = pending[consumed:]
-			if r == utf8.RuneError && size == 1 {
-				// Invalid UTF-8 from the tty: drop the byte silently rather
-				// than corrupting the buffer mid-composition.
-				continue
+			if !ok {
+				continue // stray continuation or malformed sequence: drop silently
 			}
 			tty.Write(e.insert(r))
 		}
 	}
 }
 
+// utf8Need returns how many continuation bytes the UTF-8 leader b expects
+// (0 for a stray continuation byte).
+func utf8Need(b byte) int {
+	switch {
+	case b&0xE0 == 0xC0:
+		return 1
+	case b&0xF0 == 0xE0:
+		return 2
+	case b&0xF8 == 0xF0:
+		return 3
+	}
+	return 0
+}
+
+// readFullRune accumulates the continuation bytes for leader b through the
+// same 1-byte refill semantics as the caller (draining *pending first), then
+// decodes the full sequence. ok=false means the sequence was invalid and
+// must be dropped silently.
+func readFullRune(rd io.Reader, b byte, pending *[]byte) (r rune, ok bool, err error) {
+	need := utf8Need(b)
+	if need == 0 {
+		return 0, false, nil // stray continuation byte
+	}
+	full := make([]byte, 0, need+1)
+	full = append(full, b)
+	for len(full) < need+1 {
+		if len(*pending) == 0 {
+			var one [1]byte
+			n, rerr := rd.Read(one[:])
+			if rerr != nil {
+				return 0, false, rerr
+			}
+			if n == 0 {
+				continue
+			}
+			*pending = one[:]
+		}
+		full = append(full, (*pending)[0])
+		*pending = (*pending)[1:]
+	}
+	r, size := utf8.DecodeRune(full)
+	if r == utf8.RuneError && size <= 1 {
+		return 0, false, nil // malformed sequence
+	}
+	return r, true, nil
+}
+
 // assembleRune decodes one rune given the leading byte b and the remaining
 // continuation bytes avail. Returns (rune, utf8Size, bytesConsumedFromAvail).
 // size==0 means "need more bytes".
 func assembleRune(avail []byte, b byte) (r rune, size int, consumed int) {
-	need := 0
-	switch {
-	case b&0xE0 == 0xC0:
-		need = 1
-	case b&0xF0 == 0xE0:
-		need = 2
-	case b&0xF8 == 0xF0:
-		need = 3
-	default:
+	need := utf8Need(b)
+	if need == 0 {
 		return utf8.RuneError, 1, 0 // stray continuation byte: drop it
 	}
 	if len(avail) < need {
