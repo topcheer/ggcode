@@ -1065,13 +1065,6 @@ func (b *ChatBridge) MarkSessionDeleted(id string) {
 	b.mu.Unlock()
 }
 
-// clearSessionDeletedLocked removes id from the tombstone set; the session is
-// being (re)created or loaded, so future persists are legitimate again.
-// Callers must hold b.mu.
-func (b *ChatBridge) clearSessionDeletedLocked(id string) {
-	delete(b.deletedSessions, id)
-}
-
 // appendPersistMessage appends msg to ses's JSONL under the session-lock
 // guard (#269): when the bridge holds a lock for a different session, ses is
 // no longer ours to write (e.g. its lock was released after a failed load) —
