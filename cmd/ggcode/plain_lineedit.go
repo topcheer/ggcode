@@ -170,7 +170,26 @@ func plainReadLine(tty *os.File, prompt string) (string, error) {
 			}
 			r, size, consumed := assembleRune(pending, b)
 			if size == 0 {
-				continue // waiting for more continuation bytes
+				// Incomplete UTF-8 sequence: BLOCKING-READ the continuation
+				// bytes the leader announced. drainContinuation fixes both
+				// halves of the raw-mode CJK seam:
+				//   - #4940 (the bug #4939 tried to fix): dropping the
+				//     leader silently discarded every CJK char whole.
+				//   - #4942 (the regression #4939 introduced, then
+				//     reverted): pushing the leader back and `continue`-ing
+				//     made the outer refill (`len(pending)==0`) permanently
+				//     false - a 100% CPU spin on the first CJK byte.
+				var rerr error
+				r, size, consumed, pending, rerr = drainContinuation(ttyByteSource{tty}, pending, b)
+				if rerr != nil {
+					return "", rerr
+				}
+				if size == 0 {
+					// Still incomplete past the garbage guard: drop the
+					// leader, keep the rest for the next round.
+					pending = pending[1:]
+					continue
+				}
 			}
 			pending = pending[consumed:]
 			if r == utf8.RuneError && size == 1 {
@@ -186,6 +205,57 @@ func plainReadLine(tty *os.File, prompt string) (string, error) {
 // assembleRune decodes one rune given the leading byte b and the remaining
 // continuation bytes avail. Returns (rune, utf8Size, bytesConsumedFromAvail).
 // size==0 means "need more bytes".
+// byteSource abstracts "read one byte, blocking" so the continuation
+// drain below is unit-testable without a tty.
+type byteSource interface {
+	readOne() (byte, error)
+}
+
+type ttyByteSource struct{ r io.Reader }
+
+func (s ttyByteSource) readOne() (byte, error) {
+	var one [1]byte
+	n, err := s.r.Read(one[:])
+	if err != nil {
+		return 0, err
+	}
+	if n == 0 {
+		return 0, nil // spurious wake: caller retries
+	}
+	return one[0], nil
+}
+
+// drainContinuation completes an incomplete UTF-8 sequence whose leader is
+// b, blocking on src for the announced continuation bytes. It returns the
+// assembled rune state plus the mutated pending tail. On the garbage guard
+// (leader claims more bytes than any valid rune needs) it returns size 0
+// WITHOUT spinning - the caller drops the leader.
+// #4940: the leader is never silently dropped (CJK input stays whole).
+// #4942: the drain reads its bytes here instead of pushing the leader back
+// into the outer loop (whose len(pending)==0 refill would never fire).
+func drainContinuation(src byteSource, pending []byte, b byte) (r rune, size int, consumed int, rest []byte, err error) {
+	for size == 0 {
+		c, rerr := src.readOne()
+		if rerr != nil {
+			return 0, 0, 0, pending, rerr
+		}
+		if c == 0 && rerr == nil {
+			// Distinguish spurious (n==0) from a real NUL byte via a tiny
+			// wrapper signal: NUL is a control byte raw mode already
+			// filters upstream, so treat any 0 return as retry.
+			continue
+		}
+		pending = append(pending, c)
+		if len(pending) > 3 {
+			// No UTF-8 leader needs more than 3 continuation bytes -
+			// overlong/garbage: stop draining, let the caller drop.
+			return 0, 0, 0, pending, nil
+		}
+		r, size, consumed = assembleRune(pending, b)
+	}
+	return r, size, consumed, pending, nil
+}
+
 func assembleRune(avail []byte, b byte) (r rune, size int, consumed int) {
 	need := 0
 	switch {
