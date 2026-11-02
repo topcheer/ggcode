@@ -170,15 +170,6 @@ func plainReadLine(tty *os.File, prompt string) (string, error) {
 			}
 			r, size, consumed := assembleRune(pending, b)
 			if size == 0 {
-				// Incomplete sequence: PUSH THE LEADER BACK so the next
-				// continuation bytes arrive with it still buffered. The
-				// pre-seam-fix bug consumed the leader here ("continue"
-				// after popping b), which orphaned every following
-				// continuation byte - they then hit assembleRune as
-				// leader-less strays and were dropped one by one, so a
-				// CJK rune typed on a tty (bytes arrive one per Read)
-				// vanished entirely: no echo, nothing in the buffer.
-				pending = append([]byte{b}, pending...)
 				continue // waiting for more continuation bytes
 			}
 			pending = pending[consumed:]
