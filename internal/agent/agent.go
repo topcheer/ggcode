@@ -1012,6 +1012,15 @@ func (a *Agent) SetProvider(p provider.Provider) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.provider = p
+	// #4948: serverToolSearch is cross-run Agent state set when a run finds
+	// ServerToolSearchActive on the then-current provider. A provider
+	// hot-swap (desktop settings) that lands on an endpoint WITHOUT
+	// server-side tool search must reset it, or markServerDeferred keeps
+	// flagging every MCP schema defer_loading against a consumer that no
+	// longer exists - the schemas ride requests deferred forever. Clearing
+	// unconditionally is safe: the run-setup block re-derives and re-sets
+	// the flag when the new provider does support it.
+	a.serverToolSearch = false
 	a.syncContextManagerProviderLocked()
 }
 func (a *Agent) Provider() provider.Provider {
