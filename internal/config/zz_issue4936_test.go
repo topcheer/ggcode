@@ -40,3 +40,41 @@ func TestDeepSeekV4NoEntryExceedsOfficialCap(t *testing.T) {
 		}
 	}
 }
+
+// #4946: the router-alias layer (~ prefix, e.g. OpenRouter vendor routes) was
+// skipped by both the #4931 and #4937 calibration rounds because they matched
+// concrete version keys. Router aliases must mirror their target model's
+// official caps; before the fix they carried the pre-#4931 stale values
+// (943718/1310720) that the concrete-key fixes were supposed to have cleared.
+// Guard: any ~-prefixed alias naming deepseek (any generation) must not exceed
+// the official 393216 output cap; GLM aliases must not exceed 131072.
+func TestRouterAliasCapsMirrorOfficial(t *testing.T) {
+	pins := map[string][2]int{ // model -> {ContextWindow, MaxOutputTokens}
+		"~z-ai/glm-latest":       {1048576, 131072},
+		"~z-ai/glm-flash-latest": {1048576, 131072},
+		// Kimi K3 official: 1M window, max_completion_tokens up to 1048576
+		// (platform.kimi.ai quickstart, "Important limits").
+		"~moonshotai/kimi-latest":         {1048576, 1048576},
+		"~deepseek/deepseek-flash-latest": {1048576, 393216},
+		"~deepseek/deepseek-pro-latest":   {1048576, 393216},
+	}
+	for model, want := range pins {
+		cap, ok := lookupModelCapability(model)
+		if !ok {
+			t.Errorf("lookupModelCapability(%q): no table entry", model)
+			continue
+		}
+		if cap.ContextWindow != want[0] || cap.MaxOutputTokens != want[1] {
+			t.Errorf("knownModelCapabilities[%q] = {win %d, out %d}, want {win %d, out %d} (#4946: router alias must mirror official caps)", model, cap.ContextWindow, cap.MaxOutputTokens, want[0], want[1])
+		}
+	}
+	// Sweep: no router alias for deepseek (any spelling) above the 384K cap.
+	for model, cap := range knownModelCapabilities {
+		if strings.HasPrefix(model, "~") && strings.Contains(model, "deepseek") && cap.MaxOutputTokens > 393216 {
+			t.Errorf("router alias %q MaxOutputTokens=%d exceeds deepseek official cap (#4946)", model, cap.MaxOutputTokens)
+		}
+		if strings.HasPrefix(model, "~") && strings.Contains(model, "glm") && cap.MaxOutputTokens > 131072 {
+			t.Errorf("router alias %q MaxOutputTokens=%d exceeds GLM official cap (#4946)", model, cap.MaxOutputTokens)
+		}
+	}
+}
