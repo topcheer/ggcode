@@ -33,6 +33,36 @@ func TestIssue4787_ClassifierWrongPathStillStructural(t *testing.T) {
 	if got != FailureModeStructural {
 		t.Fatalf("read_file ENOENT must stay STRUCTURAL, got %v", got)
 	}
+	// PR #4934 cross-review boundary guard: a DIRECT spawn of a wrong
+	// binary path ("fork/exec /missing/binary: ...") is an agent-fixable
+	// wrong path — STRUCTURAL — unlike a SHELL-channel spawn failure. The
+	// classifier must distinguish the two by the failing binary's name.
+	got = classifyFailureMode("run_command", "fork/exec /missing/binary: no such file or directory")
+	if got != FailureModeStructural {
+		t.Fatalf("direct wrong-binary spawn must stay STRUCTURAL, got %v", got)
+	}
+	got = classifyFailureMode("run_command", "fork/exec ./build/tool: no such file or directory")
+	if got != FailureModeStructural {
+		t.Fatalf("relative wrong-binary spawn must stay STRUCTURAL, got %v", got)
+	}
+}
+
+func TestIssue4787_ClassifierShellVariantsSystemic(t *testing.T) {
+	// The S-16 outage signature across the shell families util.DetectShell
+	// can resolve to: all are SHELL-channel failures → SYSTEMIC.
+	for _, sig := range []string{
+		"fork/exec /bin/sh: no such file or directory",
+		"fork/exec /bin/bash: no such file or directory",
+		"fork/exec /usr/bin/zsh: no such file or directory",
+		"fork/exec /bin/dash: no such file or directory",
+		"fork/exec pwsh: no such file or directory",
+		"fork/exec C:/Program Files/PowerShell/7/pwsh.exe: no such file or directory",
+		"fork/exec /powershell.exe: no such file or directory",
+	} {
+		if got := classifyFailureMode("run_command", sig); got != FailureModeSystemic {
+			t.Fatalf("shell spawn failure %q must classify SYSTEMIC, got %v", sig, got)
+		}
+	}
 }
 
 func TestIssue4787_StagnationExemptsShellHealthProbe(t *testing.T) {
