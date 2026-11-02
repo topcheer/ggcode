@@ -115,8 +115,17 @@ func plainReadLine(tty *os.File, prompt string) (string, error) {
 	var pending []byte
 	for {
 		// Drain any bytes the terminal handed us; refill in 1-byte-passes
-		// through a small buffer when empty.
-		if len(pending) == 0 {
+		// through a small buffer when empty OR when pending holds only an
+		// incomplete rune prefix.
+		// #4942: the gate used to be `len(pending) == 0` alone. After the
+		// #4939 leader push-back, pending holds the leader (len 1) while its
+		// continuation bytes are still unread - the len==0 gate never fired,
+		// so the loop popped the same leader forever: 100% CPU spin, REPL
+		// hung on the first CJK byte. Refilling while !FullRune(pending)
+		// (append, not replace) lets the continuations join the pushed-back
+		// leader; utf8.FullRune treats an invalid start byte as complete, so
+		// stray continuations cannot wedge the gate either.
+		if len(pending) == 0 || !utf8.FullRune(pending) {
 			var one [1]byte
 			n, err := tty.Read(one[:])
 			if err != nil {
@@ -125,7 +134,7 @@ func plainReadLine(tty *os.File, prompt string) (string, error) {
 			if n == 0 {
 				continue
 			}
-			pending = one[:]
+			pending = append(pending, one[0])
 		}
 
 		b := pending[0]

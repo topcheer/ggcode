@@ -58,3 +58,64 @@ func TestPlainLineEditByteByByteAssembly(t *testing.T) {
 		})
 	}
 }
+
+// TestPlainLineEditRefillGateNoSpin pins the #4942 regression: the read
+// loop's refill gate must keep reading while pending holds an incomplete
+// rune prefix (the #4939 leader push-back leaves exactly that shape).
+// The pre-#4942 gate (`len(pending) == 0` only) never refilled after the
+// push-back, so the loop popped the same leader forever - 100% CPU spin on
+// the first CJK byte. This test mirrors the ACTUAL loop (refill gate
+// included) against a one-byte-per-Read source and fails if any rune needs
+// more pops than its byte length (the spin signature).
+func TestPlainLineEditRefillGateNoSpin(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"CJK", "你好"},
+		{"CJK+ascii", "中a文"},
+		{"4-byte emoji", "\U0001F600"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := []byte(tc.input)
+			pos := 0
+			e := &lineEditor{}
+			var pending []byte
+			pops := 0
+			const maxPops = 64 // input is <= 9 bytes; spin blows past this instantly
+			for {
+				// Mirror of the read-loop refill gate (#4942 fix shape).
+				if len(pending) == 0 || !utf8.FullRune(pending) {
+					if pos >= len(src) {
+						break // input exhausted; line must be complete
+					}
+					pending = append(pending, src[pos])
+					pos++
+					continue
+				}
+				pops++
+				if pops > maxPops {
+					t.Fatalf("refill gate spin: %d pops for %d input bytes", pops, len(src))
+				}
+				b := pending[0]
+				pending = pending[1:]
+				if b < 0x80 {
+					e.insert(rune(b))
+					continue
+				}
+				r, size, consumed := assembleRune(pending, b)
+				if size == 0 {
+					// Leader push-back (incomplete): gate must refill next pass.
+					pending = append([]byte{b}, pending...)
+					continue
+				}
+				pending = pending[consumed:]
+				e.insert(r)
+			}
+			if got := e.line(); got != tc.input {
+				t.Fatalf("assembled line = %q, want %q", got, tc.input)
+			}
+		})
+	}
+}
