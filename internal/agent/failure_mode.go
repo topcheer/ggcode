@@ -151,6 +151,26 @@ func classifyFailureMode(toolName, errorContent string) FailureMode {
 					strings.Contains(c, "exec:") { // Go exec: binary lookup failure
 					return FailureModeSystemic
 				}
+				// #4787 (S-16): "fork/exec /bin/sh: no such file or directory"
+				// is the Go runtime's exec-error form (note: "fork/exec <bin>"
+				// with a SPACE, not "exec:"). It means the SHELL CHANNEL itself
+				// could not spawn — an environment-level outage that self-heals in
+				// minutes, not a wrong-argument path. Misclassifying it as
+				// structural fed "the approach is fundamentally wrong / do NOT
+				// retry" guidance into agents that were correctly retrying during
+				// the outage window. classify systemic so recordResult's systemic
+				// guidance (verify environment, report if persistent) applies.
+				//
+				// Cross-review boundary guard (PR #4934): bare "fork/exec" would
+				// also match a DIRECT spawn of a wrong binary path (e.g. running
+				// "/missing/binary" reports "fork/exec /missing/binary: ...") —
+				// that is STRUCTURAL (agent-fixable wrong path). run_command
+				// always spawns through the resolved shell, so the S-16 outage
+				// signature is "fork/exec <SHELL>: ..."; anchor the systemic
+				// classification to the failing binary being a shell binary.
+				if isShellSpawnEnoentContent(c) {
+					return FailureModeSystemic
+				}
 				// For read_file/edit_file and run_command argument paths, this is
 				// structural (wrong path — agent can fix it).
 				continue
@@ -200,6 +220,45 @@ func classifyFailureMode(toolName, errorContent string) FailureMode {
 	// STRUCTURAL: default. The approach is wrong — wrong params, wrong path,
 	// type mismatch, missing import, syntax error in input, etc.
 	return FailureModeStructural
+}
+
+// shellBinaryNames are the binaries the tool layer spawns commands through
+// (util.DetectShell resolves to exactly these families). Kept local to the
+// classifier so util needs no import here; util's specs are the source of
+// truth for the PATHS (sh / pwsh.exe / powershell.exe / git-bash), and this
+// set covers the name dimension of those specs.
+var shellBinaryNames = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true,
+	"pwsh": true, "powershell": true,
+}
+
+// isShellSpawnEnoentContent reports whether lowercased error content carries
+// the #4787 (S-16) shell-channel spawn failure: "fork/exec <SHELL>: no such
+// file or directory" where the failing binary is a SHELL binary. Anchoring
+// to the shell name keeps direct wrong-binary spawns ("fork/exec
+// /missing/binary: ...") STRUCTURAL — those are agent-fixable wrong paths,
+// not environment outages (cross-review boundary guard, PR #4934).
+func isShellSpawnEnoentContent(lowercased string) bool {
+	const prefix = "fork/exec "
+	idx := strings.Index(lowercased, prefix)
+	if idx < 0 {
+		return false
+	}
+	rest := lowercased[idx+len(prefix):]
+	// os.PathError renders as "fork/exec <path>: <errno text>"; the ": "
+	// boundary (not a bare space — Windows shell paths contain spaces,
+	// e.g. "C:/Program Files/PowerShell/7/pwsh.exe") separates the failing
+	// binary path from the errno text.
+	end := strings.Index(rest, ": ")
+	if end < 0 {
+		return false
+	}
+	bin := rest[:end]
+	if i := strings.LastIndexAny(bin, `/\`); i >= 0 {
+		bin = bin[i+1:]
+	}
+	bin = strings.TrimSuffix(bin, ".exe")
+	return shellBinaryNames[bin]
 }
 
 // recordResult tracks a tool call result for failure mode analysis.

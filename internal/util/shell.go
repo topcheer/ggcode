@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 type ShellSpec struct {
@@ -20,10 +21,17 @@ type ShellSpec struct {
 // shellCache caches the detected shell to avoid repeated filesystem probes
 // (exec.LookPath / os.Stat) on every command execution. On Windows with a
 // long PATH (WSL + Git Bash + tools), each LookPath call can take 100-500ms.
+//
+// #4787 review follow-up: the cache trio (spec/err/detected-flag) is guarded
+// by a single mutex instead of a sync.Once because ResetShellCache needs to
+// clear it mid-session (shell-health recovery). A naked Once-reset wrote the
+// three fields non-atomically while a concurrent DetectShell could be inside
+// once.Do reading them — a data race by construction.
 var (
-	shellCache     ShellSpec
-	shellCacheErr  error
-	shellCacheOnce sync.Once
+	shellMu       sync.Mutex
+	shellCache    ShellSpec
+	shellCacheErr error
+	shellDetected bool
 )
 
 func NewShellCommand(command string) (*exec.Cmd, ShellSpec, error) {
@@ -79,8 +87,11 @@ func SetDebugLogFn(fn func(category, format string, args ...interface{})) {
 }
 
 func DetectShell() (ShellSpec, error) {
-	shellCacheOnce.Do(func() {
+	shellMu.Lock()
+	defer shellMu.Unlock()
+	if !shellDetected {
 		shellCache, shellCacheErr = detectShell(runtime.GOOS, exec.LookPath, os.Stat, os.Getenv)
+		shellDetected = true
 		if debugLogFn != nil {
 			if shellCacheErr == nil {
 				debugLogFn("shell", "detected shell: %s path=%s args=%v", shellCache.Name, shellCache.Path, shellCache.Args)
@@ -88,8 +99,47 @@ func DetectShell() (ShellSpec, error) {
 				debugLogFn("shell", "shell detection failed: %v", shellCacheErr)
 			}
 		}
-	})
+	}
 	return shellCache, shellCacheErr
+}
+
+// ResetShellCache drops the memoized shell spec so the next DetectShell
+// re-probes the environment (#4787 / S-16: a once-cached detection meant a
+// shell that became unavailable mid-session stayed "resolved" forever).
+// Mutex-guarded: safe to call concurrently with DetectShell (e.g. a
+// supervisor resetting the cache after an outage window).
+func ResetShellCache() {
+	shellMu.Lock()
+	defer shellMu.Unlock()
+	shellDetected = false
+	shellCache = ShellSpec{}
+	shellCacheErr = nil
+}
+
+// ShellHealthProbeCommand is the marker command the run_command degraded
+// gate tells the agent to use for shell-channel health checks (#4787 /
+// S-16). The strategy-stagnation detector exempts retries of this exact
+// command from stagnation gating: probing IS the recovery strategy during
+// a self-healing shell outage.
+const ShellHealthProbeCommand = "echo ggcode-shell-health-probe-ok"
+
+// ShellAvailable reports whether the shell channel can currently be
+// spawned, by actually exec'ing a no-op through the resolved shell
+// (#4787 / S-16: during resource-saturation windows fork/exec of /bin/sh
+// fails with ENOENT wholesale for 1-8 minutes and then self-heals - a
+// stat-based check passes while the channel is unspawnable, so only a
+// real spawn answers the question). Bounded by a 5s timeout.
+func ShellAvailable() bool {
+	if _, err := DetectShell(); err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	probe, _, err := NewShellCommandContext(ctx, "true")
+	if err != nil {
+		return false
+	}
+	return probe.Run() == nil
 }
 
 type lookPathFunc func(string) (string, error)
