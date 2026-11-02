@@ -13,7 +13,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/chromedp/cdproto v0.159.0
-	github.com/chromedp/chromedp v0.21.0
+	github.com/chromedp/chromedp v0.21.1
 	github.com/creack/pty/v2 v2.0.1
 	github.com/dop251/goja v0.0.0-20261031103838-cf2ff0ec0b31
 	github.com/eekstunt/telegramify-markdown-go v0.2.0
@@ -41,7 +41,7 @@ require (
 	github.com/young2j/oxmltotext v1.0.3
 	github.com/yuin/goldmark v1.8.7
 	go.mau.fi/util v0.11.0
-	go.mau.fi/whatsmeow v0.0.0-20261030195514-56e5ad0581ce
+	go.mau.fi/whatsmeow v0.0.0-20261031222104-5d4657a5c29e
 	golang.org/x/crypto v0.58.0
 	golang.org/x/image v0.47.0
 	golang.org/x/mod v0.42.0

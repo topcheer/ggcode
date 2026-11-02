@@ -5,7 +5,7 @@ go 1.26.10
 require (
 	github.com/energye/systray v1.0.3
 	github.com/topcheer/ggcode v0.0.0
-	github.com/wailsapp/wails/v2 v2.17.0
+	github.com/wailsapp/wails/v2 v2.17.1
 )
 
 replace github.com/topcheer/ggcode => ../../
@@ -42,7 +42,7 @@ require (
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/chromedp/cdproto v0.159.0 // indirect
-	github.com/chromedp/chromedp v0.21.0 // indirect
+	github.com/chromedp/chromedp v0.21.1 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/cloudwego/base64x v0.1.7 // indirect
@@ -84,7 +84,7 @@ require (
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.20.3 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.1 // indirect
-	github.com/labstack/echo/v4 v4.15.4 // indirect
+	github.com/labstack/echo/v4 v4.16.1 // indirect
 	github.com/labstack/gommon v0.5.0 // indirect
 	github.com/larksuite/oapi-sdk-go/v3 v3.12.2 // indirect
 	github.com/leaanthony/go-ansi-parser v1.6.1 // indirect
@@ -157,7 +157,7 @@ require (
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
 	go.mau.fi/libsignal v0.2.2 // indirect
 	go.mau.fi/util v0.11.0 // indirect
-	go.mau.fi/whatsmeow v0.0.0-20261030195514-56e5ad0581ce // indirect
+	go.mau.fi/whatsmeow v0.0.0-20261031222104-5d4657a5c29e // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0 // indirect
 	go.opentelemetry.io/otel v1.47.0 // indirect
