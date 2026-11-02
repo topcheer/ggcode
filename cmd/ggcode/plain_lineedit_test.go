@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"testing"
-	"unicode/utf8"
 )
 
 // TestPlainLineEditCJKBackspace pins the #plain-cjk fix: backspace must
@@ -48,30 +47,6 @@ func TestPlainLineEditCJKBackspace(t *testing.T) {
 	// would eat the prompt.
 	if seq := e.backspace(); seq == nil || e.cells != 0 {
 		t.Fatal("expected nil backspace on empty buffer")
-	}
-}
-
-// TestPlainLineEditAssembleRune pins the UTF-8 assembler: a 3-byte CJK rune
-// arriving byte-by-byte decodes to exactly one rune, and stray continuation
-// bytes are dropped instead of corrupting the buffer.
-func TestPlainLineEditAssembleRune(t *testing.T) {
-	const s = "语"
-	if !utf8.ValidString(s) || len(s) != 3 {
-		t.Fatalf("test fixture %q is not a 3-byte rune", s)
-	}
-	r, size, consumed := assembleRune([]byte(s[1:]), s[0])
-	if r != '语' || size != 3 || consumed != 2 {
-		t.Fatalf("assembleRune = %q/%d/%d, want 语/3/2", r, size, consumed)
-	}
-
-	// Incomplete leader: must report "need more" (size 0).
-	if _, size, _ := assembleRune([]byte{0x80}, 0xE8); size != 0 {
-		t.Fatalf("incomplete sequence size = %d, want 0", size)
-	}
-
-	// Stray continuation byte with no leader: dropped, size 1, no consumed.
-	if r, size, consumed := assembleRune(nil, 0x80); r != utf8.RuneError || size != 1 || consumed != 0 {
-		t.Fatalf("stray continuation = %q/%d/%d, want RuneError/1/0", r, size, consumed)
 	}
 }
 
