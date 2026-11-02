@@ -37,18 +37,6 @@ type MCPServerInfo struct {
 	OAuthRequired bool              `json:"oauthRequired,omitempty"`
 }
 
-// loadSessionScopedConfig loads the config matching the active chat session's
-// scope (#248). When a session is bound to a workspace that has its own
-// ggcode.yaml, MCP servers live in that workspace's mcp_servers.yaml - the
-// same file the session's mcpManager reads. Otherwise the global config is
-// used. Without this, Add/Remove/List would touch the global file while the
-// session runs workspace servers, so changes never took effect (and removals
-// resurrected on reload).
-func loadSessionScopedConfig() (*config.Config, error) {
-	chat := GetChatBridge()
-	return loadSessionScopedConfigFor(chat)
-}
-
 // loadSessionScopedConfigFor is loadSessionScopedConfig with a pre-snapped
 // bridge (#458), so config load and status lookup share one bridge view.
 func loadSessionScopedConfigFor(chat *ChatBridge) (*config.Config, error) {
