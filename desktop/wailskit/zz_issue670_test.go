@@ -10,8 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/auth"
 )
 
-// resetOAuthState clears both OAuth globals after each test so a leaked
-// in-flight flow or completion slot cannot poison later tests.
 func resetOAuthState(t *testing.T) {
 	t.Cleanup(func() {
 		oauthMu.Lock()
@@ -29,17 +27,10 @@ func resetOAuthState(t *testing.T) {
 	})
 }
 
-// isolateAuthStore points the auth store at a temp HOME so Save/Delete
-// never touch the developer's real provider_auth.json.
 func isolateAuthStore(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 }
 
-// TestIssue670_CompleteSingleFlight_LoserInheritsSuccess verifies the core
-// of defect 2: when a concurrent completion already saved the token
-// successfully, a second caller (double-click / event replay) must return
-// nil — NOT a misleading "waiting for auth code" failure that would send
-// the user through a pointless re-auth even though login worked.
 func TestIssue670_CompleteSingleFlight_LoserInheritsSuccess(t *testing.T) {
 	resetOAuthState(t)
 	isolateAuthStore(t)
@@ -69,9 +60,6 @@ func TestIssue670_CompleteSingleFlight_LoserInheritsSuccess(t *testing.T) {
 	}
 }
 
-// TestIssue670_CompleteSingleFlight_LoserInheritsFailure: when the in-flight
-// winner failed, the loser receives the shared outcome wrapped with the
-// "concurrent call" semantics instead of inventing its own error.
 func TestIssue670_CompleteSingleFlight_LoserInheritsFailure(t *testing.T) {
 	resetOAuthState(t)
 	isolateAuthStore(t)
@@ -107,13 +95,6 @@ func TestIssue670_CompleteSingleFlight_LoserInheritsFailure(t *testing.T) {
 	}
 }
 
-// TestIssue670_CompleteSingleFlight_BothCallersUnblockPromptly reproduces the
-// pre-fix hang: two waiters raced the flow's capacity-1 callback channel, so
-// after the flow closed only ONE received the cancellation — the other
-// blocked for its full 5-minute context timeout. With single-flight exactly
-// one caller waits on the flow and the other joins it, so both must return
-// promptly once the flow is torn down (via Logout, which also covers #670's
-// in-flight-flow cleanup).
 func TestIssue670_CompleteSingleFlight_BothCallersUnblockPromptly(t *testing.T) {
 	resetOAuthState(t)
 	isolateAuthStore(t)
@@ -171,11 +152,6 @@ func TestIssue670_CompleteSingleFlight_BothCallersUnblockPromptly(t *testing.T) 
 	}
 }
 
-// TestIssue670_LogoutClearsTokenFlowAndStatus verifies defect 1's end state:
-// after logout the disk token is gone, no in-flight flow remains, and the
-// status probe reports disconnected — the UI/memory split (UI shows logged
-// out while chats keep using the deleted token) required the symmetric
-// provider refresh added in LogoutAnthropicOAuth.
 func TestIssue670_LogoutClearsTokenFlowAndStatus(t *testing.T) {
 	resetOAuthState(t)
 	isolateAuthStore(t)

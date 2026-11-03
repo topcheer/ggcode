@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// E1: ClearCurrentSession must refuse while a run is active instead of
-// silently installing a zombie run against the next session.
 func TestIssue550_ClearCurrentSessionRefusedWhileBusy(t *testing.T) {
 	b, err := NewChatBridge()
 	if err != nil {
@@ -35,8 +33,6 @@ func TestIssue550_ClearCurrentSessionRefusedWhileBusy(t *testing.T) {
 	}
 }
 
-// E1: a superseded run's late error must not leak into the new session's
-// live history (previously bypassed the emitIfCurrent generation guard).
 func TestIssue550_AppendLiveErrorGatedByGeneration(t *testing.T) {
 	b, err := NewChatBridge()
 	if err != nil {
@@ -60,8 +56,6 @@ func TestIssue550_AppendLiveErrorGatedByGeneration(t *testing.T) {
 	}
 }
 
-// E1: finishRun from a SUPERSEDED run must not emit run_done (it would
-// clear the new run's frontend busy state), while a current run still does.
 func TestIssue550_FinishRunRunDoneSuppressedWhenSuperseded(t *testing.T) {
 	b, err := NewChatBridge()
 	if err != nil {
@@ -105,8 +99,6 @@ func TestIssue550_FinishRunRunDoneSuppressedWhenSuperseded(t *testing.T) {
 	}
 }
 
-// E1: StartNewSession must cancel an active run before clearing — the
-// mid-run "New Session" zombie entry point.
 func TestIssue550_StartNewSessionCancelsActiveRun(t *testing.T) {
 	b, err := NewChatBridge()
 	if err != nil {

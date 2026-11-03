@@ -138,9 +138,6 @@ func TestItoa(t *testing.T) {
 	}
 }
 
-// #289: escapeAppleScriptText must strip/replace control characters that are
-// invalid inside AppleScript string literals (bare \n/\r/\t make osascript
-// fail to compile), while keeping backslash/quote escaping intact.
 func TestEscapeAppleScriptText(t *testing.T) {
 	tests := []struct {
 		name, in, want string
@@ -161,7 +158,6 @@ func TestEscapeAppleScriptText(t *testing.T) {
 	}
 }
 
-// #289: no raw control characters may survive escaping.
 func TestEscapeAppleScriptText_NoControlChars(t *testing.T) {
 	got := escapeAppleScriptText("a\nb\rc\td\x00e")
 	for _, r := range got {
@@ -171,9 +167,6 @@ func TestEscapeAppleScriptText_NoControlChars(t *testing.T) {
 	}
 }
 
-// #289: end-to-end check that a script embedding escaped multiline text
-// compiles. Uses osacompile (compile to .scpt, never executes), so no real
-// notification is posted. Runs only on macOS where osascript exists.
 func TestNotifyMacOS_MultilineBodyCompiles(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("osascript only exists on macOS")
@@ -197,12 +190,6 @@ func TestNotifyMacOS_MultilineBodyCompiles(t *testing.T) {
 	}
 }
 
-// TestNotifyUnixQueuedNotForked pins #1431-A: macOS/Linux notifications
-// go through the bounded unixQueue instead of forking a goroutine per
-// notification - enqueue never blocks or spawns (the worker is the only
-// process forker). A storm of 64 enqueues against the 32-slot queue must
-// not deadlock the callers when no worker drains (non-blocking
-// hand-off means drop-on-full, matching #399's Windows semantics).
 func TestNotifyUnixQueuedNotForked(t *testing.T) {
 	nm := NewNotificationManager()
 

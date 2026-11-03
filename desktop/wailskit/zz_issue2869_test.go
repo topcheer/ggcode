@@ -6,8 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// Legacy non-canonical existing platform + canonical update: must count as
-// same platform so transport-family fields and old Extra survive the edit.
 func TestIssue2869_NonCanonicalExistingPlatformIsNotASwitch(t *testing.T) {
 	existing := config.IMAdapterConfig{
 		Enabled:   true,
@@ -55,9 +53,6 @@ func TestIssue2869_NonCanonicalExistingPlatformIsNotASwitch(t *testing.T) {
 	}
 }
 
-// Surrounding whitespace on the existing value must not flip the verdict
-// either (AddIMAdapter only TrimSpaces on insert; older writers could persist
-// padded values).
 func TestIssue2869_PaddedExistingPlatformIsNotASwitch(t *testing.T) {
 	existing := config.IMAdapterConfig{
 		Enabled:   true,
@@ -76,8 +71,6 @@ func TestIssue2869_PaddedExistingPlatformIsNotASwitch(t *testing.T) {
 	}
 }
 
-// The genuine platform-switch guard (#585/#690) must keep working: a real
-// different platform still resets the transport family and old Extra.
 func TestIssue2869_RealPlatformSwitchStillResets(t *testing.T) {
 	existing := config.IMAdapterConfig{
 		Enabled:   true,

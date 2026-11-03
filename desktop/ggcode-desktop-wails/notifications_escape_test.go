@@ -2,9 +2,6 @@ package main
 
 import "testing"
 
-// #409: apostrophes in title/body must be doubled for PowerShell
-// single-quoted literals; the previous raw concatenation broke toast syntax
-// and opened a PS code-injection vector.
 func TestWindowsToastScriptEscapesQuotes(t *testing.T) {
 	script := windowsToastScript("can't find file", "it's broken")
 	if !containsStr(script, "'can''t find file'") {

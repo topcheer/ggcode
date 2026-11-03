@@ -7,11 +7,6 @@ import (
 	"testing"
 )
 
-// Issue #636: hitting the 10k entry cap used to return an error from the
-// WalkDir callback, aborting the walk AND making walkDirectoryEntries discard
-// every collected entry ("return nil, err"). Recursive browsing of a large
-// repo returned NOTHING. The cap must truncate via filepath.SkipAll and
-// return the ~10k already-collected entries.
 func TestIssue636_CapTruncatesInsteadOfFailing(t *testing.T) {
 	tmpDir := t.TempDir()
 

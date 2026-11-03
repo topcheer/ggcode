@@ -9,9 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// #1847 case 1/3: an EXTERNAL change to the config file must reach
-// globalCfg via the sync poller, and a subsequent in-process save must
-// not roll it back (stale non-zero snapshot deep-merge).
 func TestConfigFileSyncPollerPicksUpExternalChange1847(t *testing.T) {
 	cfgPath, _ := setupConfigTestEnv(t, "")
 	cfg := GetGlobalConfig()

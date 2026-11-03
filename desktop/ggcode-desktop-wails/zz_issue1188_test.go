@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// TestGlobalHotkeyReRegistrationComment is a documentation test that verifies
-// the fix's code comment is correct. The actual implementation is in app.go's
-// SetGlobalHotkeyEnabled function.
 func TestGlobalHotkeyReRegistrationComment(t *testing.T) {
 
 	t.Log("Fix verified in code review:")
@@ -20,8 +17,6 @@ func TestGlobalHotkeyReRegistrationComment(t *testing.T) {
 	t.Log("  - maintains symmetry with enable branch's removeGlobalHotkey() rollback")
 }
 
-// TestGlobalHotkeyHook verifies the test hook mechanism works correctly.
-// This infrastructure is used by manual testing and future integration tests.
 func TestGlobalHotkeyHook(t *testing.T) {
 	hook := func() error {
 		return nil
@@ -37,9 +32,6 @@ func TestGlobalHotkeyHook(t *testing.T) {
 	_ = a.hotkeyRegisterHook
 }
 
-// TestGlobalHotkeyReRegistrationFailureHandling verifies that if
-// re-registration fails during rollback, the error is logged but
-// the original Save error is still returned.
 func TestGlobalHotkeyReRegistrationFailureHandling(t *testing.T) {
 
 	t.Log("Re-registration failure is logged but not returned to user")
@@ -47,7 +39,6 @@ func TestGlobalHotkeyReRegistrationFailureHandling(t *testing.T) {
 	t.Log("This ensures user sees the actual failure (save error)")
 }
 
-// mockConfig is a minimal DesktopConfig mock for testing.
 type mockConfig struct {
 	enabled        bool
 	saveShouldFail bool
@@ -70,7 +61,6 @@ func (m *mockConfig) Save() error {
 	return nil
 }
 
-// mockHotkeyRegistry tracks whether hotkey registration methods were called.
 type mockHotkeyRegistry struct {
 	initCalled   bool
 	removeCalled bool
@@ -85,9 +75,6 @@ func (m *mockHotkeyRegistry) removeGlobalHotkey() {
 	m.removeCalled = true
 }
 
-// TestGlobalHotkeyDisableRollbackOrder is a structural test that verifies
-// the disable branch rollback restores the flag BEFORE calling initGlobalHotkey.
-// This is critical for #1200: initGlobalHotkey checks the flag and no-ops if false.
 func TestGlobalHotkeyDisableRollbackOrder(t *testing.T) {
 
 	t.Log("Verifying rollback order in SetGlobalHotkeyEnabled disable branch:")
@@ -99,8 +86,6 @@ func TestGlobalHotkeyDisableRollbackOrder(t *testing.T) {
 	t.Logf("Structural assertion: SetGlobalHotkey(oldEnabled) precedes initGlobalHotkey() in rollback path")
 }
 
-// TestGlobalHotkeyConcurrentSafety documents that hotkey operations are
-// safe under concurrent Save() failures.
 func TestGlobalHotkeyConcurrentSafety(t *testing.T) {
 
 	t.Log("Hotkey rollback is safe under concurrent operations:")
@@ -109,8 +94,6 @@ func TestGlobalHotkeyConcurrentSafety(t *testing.T) {
 	t.Log("  - Rollback restores OS state to match in-memory state")
 }
 
-// TestGlobalHotkeyReRegistrationIntegration simulates the rollback scenario
-// using mocks to verify the behavior without requiring actual OS registration.
 func TestGlobalHotkeyReRegistrationIntegration(t *testing.T) {
 
 	cfg := &mockConfig{enabled: true, saveShouldFail: true}

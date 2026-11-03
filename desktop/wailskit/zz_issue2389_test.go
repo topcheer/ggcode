@@ -8,13 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/plugin"
 )
 
-// TestSetMCPServerEnabledDisablePathPersistWins verifies #2389: when a
-// manager is present but the name is not in its live plugin set (migration
-// file, stale scope after a workspace switch), the disable-path return value
-// must still reflect the PERSIST result - the same semantics the no-manager
-// branch already has (#408: UI matches disk). The old form forwarded
-// Disconnect()'s false: the UI reported "failed" for a disable that had
-// already hit disk.
 func TestSetMCPServerEnabledDisablePathPersistWins(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

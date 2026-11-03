@@ -33,10 +33,6 @@ func TestIssue2715ReflectionUsesLoadKeyNotLoadAll(t *testing.T) {
 	}
 }
 
-// Behavioral pin: the reflection callback (buildReflectionFunc, extracted in
-// chat_reflection.go) must merge ONLY the run-insights key - unrelated memory
-// keys must never be folded back in, and a failed load must abort the save
-// instead of overwriting accumulated insights (TUI #1388 side-fix parity).
 func issue2715Stats() agent.RunStats {
 	return agent.RunStats{
 		Success:    true,

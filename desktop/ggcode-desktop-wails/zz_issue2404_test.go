@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// TestTunnelStartStaleSemantics verifies the #2404 read side: a start that
-// crossed a stop mid-flight reports stale; a fresh start (snapshot taken
-// after the stop) does not.
 func TestTunnelStartStaleSemantics(t *testing.T) {
 	a := &App{tunnelMu: sync.RWMutex{}}
 
@@ -29,11 +26,6 @@ func TestTunnelStartStaleSemantics(t *testing.T) {
 	}
 }
 
-// TestStartShareStaleTearDownOrdering pins the #2404 fix shape in source:
-// the stale check (with graceful teardown + error return) must appear
-// AFTER th.StartShare returns and BEFORE BindShareCommands, so a stale
-// result is torn down and errors out instead of binding a half-wired
-// broker and returning a ConnectURL nothing tracks.
 func TestStartShareStaleTearDownOrdering(t *testing.T) {
 	src, err := os.ReadFile("app.go")
 	if err != nil {

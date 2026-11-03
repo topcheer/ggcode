@@ -80,30 +80,6 @@ func TestIssue599_AnthropicOAuthStatusRefreshable(t *testing.T) {
 	}
 }
 
-// TestIssue599_EmptyWorkingDirRejected tests the L1 fix:
-// InstallLSPServer should reject empty workingDir.
-//
-// PROPOSED CHANGE in lsp.go L106-115:
-// Add validation after unlocking mu:
-//
-//   func (b *ChatBridge) InstallLSPServer(languageID, optionID string) LSPInstallResult {
-//       b.mu.Lock()
-//       wd := b.workingDir
-//       b.mu.Unlock()
-//
-//       // Reject empty workingDir to avoid installing to process CWD (#599).
-//       // Only reachable if NewChatBridge constructor's os.Getwd() fails (extremely rare).
-//       if wd == "" {
-//           return LSPInstallResult{
-//               Success: false,
-//               Output:  "Workspace directory is empty; cannot install language server",
-//           }
-//       }
-//
-//       opts := lsp.GetInstallOptions(languageID, wd)
-//       ...
-//   }
-
 func TestIssue599_EmptyWorkingDirRejected(t *testing.T) {
 	t.Skip("fix documented; requires editing lsp.go L106-115")
 }

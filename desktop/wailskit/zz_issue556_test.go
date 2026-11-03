@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// bindStub556 records calls; never returns an error so any error observed by
-// the wrapper must come from the #556 config validation.
 type bindStub556 struct {
 	calls []string
 }
@@ -18,9 +16,6 @@ func (b *bindStub556) BindAdapterToWorkspace(name, ws string) error {
 	return nil
 }
 
-// withTestConfig556 redirects the config loader to a temp HOME for the
-// duration of the test (config.ConfigPath() = $HOME/.ggcode/ggcode.yaml;
-// there is no dedicated env override for the file path itself).
 func withTestConfig556(t *testing.T, yaml string) {
 	t.Helper()
 	dir := t.TempDir()

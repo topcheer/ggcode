@@ -9,13 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/auth"
 )
 
-// TestIssue674_NewFlowCompleteDoesNotInheritStaleFlight: when a completion
-// from an OLD flow generation is still parked (the user re-clicked login and
-// StartAnthropicOAuth installed a new flow), a fresh Complete must NOT
-// inherit the stale flight's failure — the pre-#674 hijack surfaced the old
-// flow's error to the fresh login while the new flow ended up with no waiter
-// at all (its callback listener leaked, its auth code dropped). The fresh
-// caller must wait for the stale slot, then run its own completion.
 func TestIssue674_NewFlowCompleteDoesNotInheritStaleFlight(t *testing.T) {
 	resetOAuthState(t)
 	isolateAuthStore(t)
@@ -62,9 +55,6 @@ func TestIssue674_NewFlowCompleteDoesNotInheritStaleFlight(t *testing.T) {
 	}
 }
 
-// TestIssue674_StartBumpsFlowGeneration: every install must advance the flow
-// generation — the single-flight keys on it, so a stale generation counter
-// would let old flights hijack fresh logins.
 func TestIssue674_StartBumpsFlowGeneration(t *testing.T) {
 	resetOAuthState(t)
 
@@ -84,9 +74,6 @@ func TestIssue674_StartBumpsFlowGeneration(t *testing.T) {
 	}
 }
 
-// TestIssue674_LogoutBumpsGenerations: logout must bump BOTH counters — the
-// logout generation gates the post-exchange token Save (no token revival),
-// and the flow generation detaches any parked same-generation joiners.
 func TestIssue674_LogoutBumpsGenerations(t *testing.T) {
 	resetOAuthState(t)
 
@@ -106,11 +93,6 @@ func TestIssue674_LogoutBumpsGenerations(t *testing.T) {
 	}
 }
 
-// TestIssue674_LogoutDuringExchangeDoesNotReviveToken: a completion whose
-// (uncancellable) token exchange straddles a logout must discard the token
-// instead of saving it — the pre-#674 bug "revived" the deleted token.
-// The exchange itself is network-bound, so the gate is verified at its
-// decision point (supersededByLogout) plus end-to-end through the store.
 func TestIssue674_LogoutDuringExchangeDoesNotReviveToken(t *testing.T) {
 	resetOAuthState(t)
 	isolateAuthStore(t)
@@ -143,9 +125,6 @@ func TestIssue674_LogoutDuringExchangeDoesNotReviveToken(t *testing.T) {
 	}
 }
 
-// TestIssue674_JoinerDoesNotTrustSuccessAfterLogout: a joiner parked on a
-// same-generation flight whose success was invalidated by a logout must not
-// report the stale success — the token backing it was deleted.
 func TestIssue674_JoinerDoesNotTrustSuccessAfterLogout(t *testing.T) {
 	resetOAuthState(t)
 	isolateAuthStore(t)

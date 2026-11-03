@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// TestRunEndDefersDrainSymmetry verifies that all three run-starter functions
-// drain the pending queue in their run-end defer. This is the core invariant
-// for #4150: any future run-starter that forgets the drain re-introduces the
-// stranded-queue bug.
 func TestRunEndDefersDrainSymmetry(t *testing.T) {
 	fset := token.NewFileSet()
 	node, err := parser.ParseFile(fset, "chat.go", nil, parser.ParseComments)
@@ -33,8 +29,6 @@ func TestRunEndDefersDrainSymmetry(t *testing.T) {
 	}
 }
 
-// hasDeferredDrain reports whether funcName's body contains a defer statement
-// (typically `defer func() { ... }()`) whose body calls b.drainPending().
 func hasDeferredDrain(t *testing.T, node *ast.File, funcName string) bool {
 	for _, decl := range node.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -47,7 +41,7 @@ func hasDeferredDrain(t *testing.T, node *ast.File, funcName string) bool {
 			if !ok {
 				return true
 			}
-			// Handle `defer func() { ... }()` and `defer b.cleanup()` forms.
+
 			var scope ast.Node = d.Call
 			if fl, ok := d.Call.Fun.(*ast.FuncLit); ok {
 				scope = fl.Body
@@ -67,11 +61,6 @@ func hasDeferredDrain(t *testing.T, node *ast.File, funcName string) bool {
 	return false
 }
 
-// TestHiddenThenVisibleQueueInterleave documents the #4150 trigger ordering at
-// the queue level: while a run is busy, a hidden (LAN peer) message and a
-// visible (desktop user) message queue up FIFO — hidden first. Every run-end
-// drain must pop exactly one entry in that order; a hidden-head break of the
-// pump chain is exactly this sequence failing to reach the visible entry.
 func TestHiddenThenVisibleQueueInterleave(t *testing.T) {
 	b, err := NewChatBridge()
 	if err != nil {

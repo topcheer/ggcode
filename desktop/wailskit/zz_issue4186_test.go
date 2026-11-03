@@ -7,17 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
-// TestRunStartSetsElapsedOrigin (#4186): every run entry - sendMessageData
-// (plain-text main path) and SendHiddenText (hidden path) - must set
-// b.startTime in the run-start critical section, not just SendContent.
-// Previously startTime was SendContent-only, so Elapsed() returned durations
-// measured from the zero time (~63.8 billion seconds) on text/hidden runs, or
-// a stale origin from an earlier image-paste run.
-//
-// The probe observes the run-start critical section only (same pattern as
-// zz_issue522_test.go): the call runs in a goroutine, startTime freshness is
-// asserted as soon as the run is observable via Elapsed()/IsRunning(), then
-// Cancel() unwinds the run so the test stays bounded.
 func TestRunStartSetsElapsedOrigin(t *testing.T) {
 	b, err := NewChatBridge()
 	if err != nil {

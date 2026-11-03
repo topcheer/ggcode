@@ -58,10 +58,6 @@ func snapshotHas(bridge *ChatBridge, name string) bool {
 	return false
 }
 
-// TestAddMCPServerReloadKeepsMigratedServers: with a workspace .mcp.json
-// providing server X (absent from yaml), adding an unrelated yaml server Y
-// must NOT disconnect X from the running session. Presence in the manager
-// snapshot is the invariant (connect status depends on spawning).
 func TestAddMCPServerReloadKeepsMigratedServers(t *testing.T) {
 	_, ws, bridge := setup979Workspace(t)
 	writeProjectMCPJSON(t, ws)
@@ -82,9 +78,6 @@ func TestAddMCPServerReloadKeepsMigratedServers(t *testing.T) {
 	}
 }
 
-// TestRemoveMCPServerReloadKeepsOtherMigratedServers: removing a yaml server
-// while .mcp.json provides a different server must leave the migrated server
-// connected (and the removed one gone).
 func TestRemoveMCPServerReloadKeepsOtherMigratedServers(t *testing.T) {
 	_, ws, bridge := setup979Workspace(t)
 	writeProjectMCPJSON(t, ws)
@@ -112,8 +105,6 @@ func TestRemoveMCPServerReloadKeepsOtherMigratedServers(t *testing.T) {
 	}
 }
 
-// TestAddMCPServerRemoveMigratedServerFromOriginOnly: removing a server that
-// lives ONLY in .mcp.json must delete it from the origin file and the session.
 func TestAddMCPServerRemoveMigratedServerFromOriginOnly(t *testing.T) {
 	_, ws, bridge := setup979Workspace(t)
 	writeProjectMCPJSON(t, ws)
@@ -144,10 +135,6 @@ func TestAddMCPServerRemoveMigratedServerFromOriginOnly(t *testing.T) {
 	}
 }
 
-// TestAddMCPServerExplicitClearEnvHeaders: editing a server with env_clear=1
-// and headers_clear=1 must empty the stored env/headers (stale credentials
-// must not resurrect), while an edit providing neither env_ keys nor the
-// clear sentinel must preserve the old values.
 func TestAddMCPServerExplicitClearEnvHeaders(t *testing.T) {
 	_, ws, _ := setup979Workspace(t)
 

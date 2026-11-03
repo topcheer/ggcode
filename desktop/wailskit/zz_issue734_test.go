@@ -9,14 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// TestIssue734AddCustomEndpointNoInstanceVendorsSection is the write-back
-// layer regression test for #734: an instance config WITHOUT a vendors
-// section (the common instance.yaml carrying just language/mode) left
-// instanceFields["vendors"] unset, so saveWithInstanceWriteback's old gate
-// (InstanceFields() contains "vendors") never opened. AddCustomEndpoint's
-// new vendor was then dropped by Save()'s globalOnlyVendors filter and
-// silently lost on restart. The gate now checks runtime provenance
-// (Config.VendorNotInGlobalSnapshot) and covers every #368-family shape.
 func TestIssue734AddCustomEndpointNoInstanceVendorsSection(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")

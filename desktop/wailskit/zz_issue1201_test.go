@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// TestPersistedRunCountReset verifies that all three send paths
-// reset the critical persistedRunCount field. This is the core requirement
-// for #1201: without this reset, hidden runs inherit stale watermarks
-// from previous runs, causing silent message loss.
 func TestPersistedRunCountReset(t *testing.T) {
 	fset := token.NewFileSet()
 
@@ -40,12 +36,9 @@ func TestPersistedRunCountReset(t *testing.T) {
 	}
 }
 
-// extractFieldResets analyzes a function's AST to find field assignments
-// in the critical section (after cancel creation, before lock release).
 func extractFieldResets(t *testing.T, fset *token.FileSet, node *ast.File, funcName string) map[string]bool {
 	resets := make(map[string]bool)
 
-	// Find the function
 	var targetFunc *ast.FuncDecl
 	for _, decl := range node.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -86,7 +79,6 @@ func extractFieldResets(t *testing.T, fset *token.FileSet, node *ast.File, funcN
 	return resets
 }
 
-// getResetFieldNames converts a reset map to a string slice.
 func getResetFieldNames(resets map[string]bool) []string {
 	var names []string
 	for name := range resets {
@@ -95,8 +87,6 @@ func getResetFieldNames(resets map[string]bool) []string {
 	return names
 }
 
-// TestRunMessagesToPersistBehavior documents how runMessagesToPersist
-// works and why persistedRunCount reset is critical.
 func TestRunMessagesToPersistBehavior(t *testing.T) {
 
 	t.Log("runMessagesToPersist behavior documented:")
@@ -106,7 +96,6 @@ func TestRunMessagesToPersistBehavior(t *testing.T) {
 	t.Log("  - #1201 fix ensures skip starts at 0 for each new run")
 }
 
-// TestPersistedRunCountWatermark documents the watermark lifecycle.
 func TestPersistedRunCountWatermark(t *testing.T) {
 
 	t.Log("persistedRunCount watermark lifecycle documented:")
@@ -118,7 +107,6 @@ func TestPersistedRunCountWatermark(t *testing.T) {
 	t.Log("  - New run start: reset to 0 (prevents stale watermark)")
 }
 
-// TestSendHiddenTextUseCases documents when SendHiddenText is used.
 func TestSendHiddenTextUseCases(t *testing.T) {
 
 	t.Log("SendHiddenText use cases documented:")

@@ -8,7 +8,6 @@ import (
 	"testing"
 )
 
-// writeFixture writes content to name inside a fresh temp dir.
 func writeFixture(t *testing.T, name string, content []byte) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)
@@ -18,11 +17,6 @@ func writeFixture(t *testing.T, name string, content []byte) string {
 	return path
 }
 
-// TestIssue675_SVGKeepsExtensionMime: a pasted .svg is UTF-8 text (it fails
-// imgpkg.ReadFile's binary sniff), so it takes the text branch — but its
-// extension mime (image/svg+xml) must be preserved. #671's text/-only
-// whitelist degraded it to the sniffed text/plain, contradicting the
-// comment's "richer text type" intent (#675).
 func TestIssue675_SVGKeepsExtensionMime(t *testing.T) {
 	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="red"/></svg>`)
 	path := writeFixture(t, "icon.svg", svg)
@@ -43,11 +37,6 @@ func TestIssue675_SVGKeepsExtensionMime(t *testing.T) {
 	}
 }
 
-// TestIssue675_XMLFamilyExtensionMimesPreserved: textual extension mimes
-// outside text/ (XML family + textual application/*) must be kept in the
-// text branch whenever isTextualExtensionMime(extMime) is true — i.e. the
-// kept/kept-not decision must match the helper exactly — while content that
-// is not text still goes to the binary rejection path.
 func TestIssue675_XMLFamilyExtensionMimesPreserved(t *testing.T) {
 	cases := []struct {
 		ext     string
@@ -87,9 +76,6 @@ func TestIssue675_XMLFamilyExtensionMimesPreserved(t *testing.T) {
 	}
 }
 
-// TestIssue675_IsTextualExtensionMime pins the whitelist semantics: text/*,
-// any RFC 7303 …+xml suffix (image/svg+xml being the #675 case), and the
-// common textual application/* types; everything else is not textual.
 func TestIssue675_IsTextualExtensionMime(t *testing.T) {
 	for _, m := range []string{
 		"text/plain", "text/csv", "text/html; charset=utf-8",

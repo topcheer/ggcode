@@ -7,11 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/security"
 )
 
-// #2381: the Markdown export must give user/assistant message bodies the
-// SAME protection the JSON export and the MD tool branch already apply -
-// RedactForDisplay + 2000-rune truncation. Before the fix, a pasted
-// sk-ant-... key landed verbatim in shared .md files while the JSON
-// export masked it.
 func TestMarkdownExportRedactsUserAssistantBodies(t *testing.T) {
 	msgs := []SessionMessage{
 		{Role: "user", Content: "my key is sk-ant-abcdefghijklmnopqrstuvwxyz1234567890 please check"},
@@ -31,8 +26,6 @@ func TestMarkdownExportRedactsUserAssistantBodies(t *testing.T) {
 	_ = security.RedactForDisplay
 }
 
-// Truncation parity: bodies longer than 2000 runes are clamped with the
-// same marker as the tool branch (rune-boundary safe, #301).
 func TestMarkdownExportTruncatesLongBodies(t *testing.T) {
 	long := strings.Repeat("a", 5000)
 	msgs := []SessionMessage{{Role: "user", Content: long}}

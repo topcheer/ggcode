@@ -1,4 +1,3 @@
-// Package wailskit provides a public facade for the Wails desktop app.
 package wailskit
 
 import (
@@ -67,8 +66,6 @@ type MCPOAuthStartResult struct {
 	OpenError      string `json:"openError,omitempty"`
 }
 
-// ChatBridge manages the full agent chat loop for the Wails frontend,
-// mirroring the Fyne desktop's AgentBridge tool registration and session management.
 type ChatBridge struct {
 	cfg            *config.Config
 	resolved       *config.ResolvedEndpoint
@@ -85,24 +82,16 @@ type ChatBridge struct {
 	cancelled bool
 	startTime time.Time
 
-	// Pending messages (mirrors Fyne pendingMsgs)
 	pendingMsgs *agentruntime.PendingQueue[*tunnel.MessageData]
-	// pendingSource/pendingExclude carry the ORIGIN source and echo-exclusion
-	// adapter PER QUEUED MESSAGE (#461/#475) — restored in order when the
-	// queue drains. The old single pendingExclude field mispaired adapters
-	// under a multi-message backlog, and the drain path's hardcoded
-	// src="mobile" made the exclude value dead code anyway (the consumer
-	// requires source=="im").
+
 	pendingSource  []string
 	pendingExclude []string
 
-	// Subsystems
 	cronScheduler *cron.Scheduler
 	subAgentMgr   *subagent.Manager
 	acpClientMgr  *acpclient.ClientManager
 	swarmMgr      *swarm.Manager
 
-	// Metrics
 	metricCancel         context.CancelFunc
 	metricCollector      *metrics.Collector
 	metricEvents         []metrics.MetricEvent
@@ -113,39 +102,24 @@ type ChatBridge struct {
 	desktopAssistantID   string
 	desktopTextSeq       int
 
-	// UI event emitter — set by app.go via SetEmitEvent
 	EmitEvent func(name string, payload ...interface{})
 
-	// Sub-agent tunnel tracking
 	spawnedSet map[string]bool
 
-	// IM outbound push — same as Fyne agentBridge.Emitter
 	Emitter *im.IMEmitter
 
-	// Idempotency guard for finishRun
 	finished bool
 
-	// #1181: watermark of how many of this run's AddedSinceRunStart messages
-	// have already been appended to ses.Messages by an earlier
-	// persistRunMessages call. A duplicate finisher (interleaved Cancel
-	// race) persists only the tail produced after the winner's persist
-	// instead of dropping it or duplicating messages.
 	persistedRunCount int
 
-	// #1181: serializes persistRunMessages against concurrent finishers.
 	persistMu sync.Mutex
 
-	// #1182: tunnel push seam (defaults to TunnelHost.PushStreamEvent). Tests
-	// inject a blocking push to prove emit no longer holds b.mu across it.
 	tunnelPush func(provider.StreamEvent)
 
-	// IM round accumulator for emitter (mirrors Fyne agentBridge.imRound)
 	imRound agentruntime.IMRoundState
 
-	// Unified tunnel event management (from InteractiveRuntimeCore.Tunnel)
 	tunnelHost *agentruntime.TunnelHost
 
-	// A2A server for agent-to-agent communication on LAN
 	a2aServer        *a2a.Server
 	a2aRegistry      *a2a.Registry
 	a2aRemoteTool    *a2a.RemoteTool
@@ -153,56 +127,31 @@ type ChatBridge struct {
 	oauthRenewCancel context.CancelFunc
 	lanchatHub       *lanchat.Hub
 
-	// Pending approval/ask_user requests from agent
 	interactions *agentruntime.InteractionBroker
 
-	// #4151: local generator for approval/ask_user request IDs when no tunnel
-	// broker is connected. Distinct prefix from the broker's "msg-N" IDs so
-	// the two namespaces never collide.
 	localReqSeq atomic.Uint64
 
-	// Callback for emitting events to frontend.
 	OnStreamEvent func(eventType string, data json.RawMessage)
 
-	// Callback fired after current session changes so the host can bind IM/runtime state.
 	OnSessionChanged func()
 
 	liveHistory []SessionMessage
 
-	// Session lock for preventing concurrent access to the same session.
 	sessionLock      *session.SessionLock
-	sessionEphemeral bool // true if this session should be deleted when empty
-	// deletedSessions is a tombstone set (#305): session IDs deleted via
-	// DeleteSession while a run goroutine may still be draining. Late
-	// persists targeting a tombstoned ID are refused instead of
-	// O_CREATE-resurrecting the deleted JSONL on disk.
+	sessionEphemeral bool
+
 	deletedSessions map[string]struct{}
 
-	// runSes is the session snapshot taken at run start, inside the same
-	// b.mu critical section that installs b.cancel (#270). Persist paths
-	// (persist handler, checkpoint handler, persistRunMessages) must target
-	// this snapshot rather than the write-time b.currentSes — a session
-	// switch between run start and a late persist would otherwise append
-	// the old run's messages to the new session's JSONL (cross-session
-	// pollution via SendHiddenText's LAN channel included).
 	runSes *session.Session
-	// runGeneration increments on every session switch/clear and run
-	// start/end (#489): late events from a superseded run compare their
-	// captured generation and self-drop instead of leaking into the new
-	// session — persist tails via the persist snapshot below, stream
-	// events via the per-callback emitIfCurrent guard (#504).
+
 	runGeneration uint64
-	// activeRunGen is the generation of the run that most recently started
-	// (#550 E1): finishRun compares it against runGeneration and suppresses
-	// a superseded (zombie) run's outward run_done / busy-state emissions.
+
 	activeRunGen uint64
-	// persistSession/persistGeneration are the closure-effective persist
-	// target captured at run start (#489); see setRunPersistSnapshot.
+
 	persistSession    *session.Session
 	persistGeneration uint64
 }
 
-// NewChatBridge creates a new chat bridge using the global config.
 func NewChatBridge() (*ChatBridge, error) {
 	cfg := GetGlobalConfig()
 	if cfg == nil {
@@ -246,19 +195,16 @@ func shouldEmitSwarmBoardUpdate(eventType string) bool {
 	}
 }
 
-// SetTunnelHost sets the unified tunnel host from InteractiveRuntimeCore.Tunnel.
 func (b *ChatBridge) SetTunnelHost(th *agentruntime.TunnelHost) {
 	b.mu.Lock()
 	b.tunnelHost = th
 	b.mu.Unlock()
 }
 
-// WorkingDir returns the current workspace directory.
 func (b *ChatBridge) WorkingDir() string {
 	return b.workingDir
 }
 
-// GetTunnelHost returns the tunnel host (for StartShare).
 func (b *ChatBridge) GetTunnelHost() *agentruntime.TunnelHost {
 	b.mu.Lock()
 	th := b.tunnelHost
@@ -286,13 +232,10 @@ func (b *ChatBridge) desktopTurnSnapshot() (turnID, assistantID string, seq int)
 	return b.desktopTurnID, b.desktopAssistantID, b.desktopTextSeq
 }
 
-// SendMessage sends a user message and streams events to the frontend.
-// If agent is already running, queues the message for processing after the current turn.
 func (b *ChatBridge) SendMessage(userMsg string) error {
 	return b.sendMessageData(tunnel.MessageData{Text: userMsg}, "desktop", "")
 }
 
-// LanChatParticipants returns all known LAN chat participants.
 func (b *ChatBridge) LanChatParticipants() ([]lanchat.Participant, error) {
 	if b.lanchatHub == nil {
 		return nil, fmt.Errorf("LAN chat not available")
@@ -300,7 +243,6 @@ func (b *ChatBridge) LanChatParticipants() ([]lanchat.Participant, error) {
 	return b.lanchatHub.Participants(), nil
 }
 
-// LanChatMessages returns recent messages.
 func (b *ChatBridge) LanChatMessages() ([]lanchat.Message, error) {
 	if b.lanchatHub == nil {
 		return nil, fmt.Errorf("LAN chat not available")
@@ -308,9 +250,6 @@ func (b *ChatBridge) LanChatMessages() ([]lanchat.Message, error) {
 	return b.lanchatHub.Messages(), nil
 }
 
-// LanChatSend broadcasts or sends a direct message.
-// If toNodeID is empty, broadcasts to all peers. If toRole is "agent", sends to agent.
-// If asAgent is true, sends from the agent role instead of human.
 func (b *ChatBridge) LanChatSend(content, toNodeID, toRole string, asAgent bool) error {
 	if b.lanchatHub == nil {
 		return fmt.Errorf("LAN chat not available")
@@ -328,8 +267,6 @@ func (b *ChatBridge) LanChatSend(content, toNodeID, toRole string, asAgent bool)
 	return b.lanchatHub.SendDirect(ctx, toNodeID, toRole, content, nil)
 }
 
-// LanChatSetNick changes the user's nickname and role.
-// The nick string may include a role suffix: "name@role".
 func (b *ChatBridge) LanChatSetNick(nick string) error {
 	if b.lanchatHub == nil {
 		return fmt.Errorf("LAN chat not available")
@@ -338,7 +275,6 @@ func (b *ChatBridge) LanChatSetNick(nick string) error {
 	return b.lanchatHub.SetNickRoleTeam(n, r, t)
 }
 
-// LanChatPendingApprovals returns messages awaiting host approval.
 func (b *ChatBridge) LanChatPendingApprovals() ([]lanchat.PendingAgentMsg, error) {
 	if b.lanchatHub == nil {
 		return nil, fmt.Errorf("LAN chat not available")
@@ -346,7 +282,6 @@ func (b *ChatBridge) LanChatPendingApprovals() ([]lanchat.PendingAgentMsg, error
 	return b.lanchatHub.PendingApprovals(), nil
 }
 
-// LanChatApprove approves a pending @agent message.
 func (b *ChatBridge) LanChatApprove(messageID string) error {
 	if b.lanchatHub == nil {
 		return fmt.Errorf("LAN chat not available")
@@ -367,7 +302,6 @@ func (b *ChatBridge) LanChatApprove(messageID string) error {
 	return nil
 }
 
-// LanChatReject rejects a pending @agent message.
 func (b *ChatBridge) LanChatReject(messageID, reason string) error {
 	if b.lanchatHub == nil {
 		return fmt.Errorf("LAN chat not available")
@@ -375,8 +309,6 @@ func (b *ChatBridge) LanChatReject(messageID, reason string) error {
 	return b.lanchatHub.RejectMessage(messageID, reason)
 }
 
-// LanChatSetApprovalPolicy sets the approval policy for a peer (by nick).
-// policy: "always" (auto-approve), "never" (auto-reject), "" (ask).
 func (b *ChatBridge) LanChatSetApprovalPolicy(peerNick string, policy string) error {
 	if b.lanchatHub == nil {
 		return fmt.Errorf("LAN chat not available")
@@ -385,7 +317,6 @@ func (b *ChatBridge) LanChatSetApprovalPolicy(peerNick string, policy string) er
 	return nil
 }
 
-// LanChatApprovalPolicies returns all persisted approval policies.
 func (b *ChatBridge) LanChatApprovalPolicies() (map[string]string, error) {
 	if b.lanchatHub == nil {
 		return nil, fmt.Errorf("LAN chat not available")
@@ -393,7 +324,6 @@ func (b *ChatBridge) LanChatApprovalPolicies() (map[string]string, error) {
 	return b.lanchatHub.GetApprovalPolicies(), nil
 }
 
-// LanChatSelf returns this node's own participant info.
 func (b *ChatBridge) LanChatSelf() (lanchat.Participant, error) {
 	if b.lanchatHub == nil {
 		return lanchat.Participant{}, fmt.Errorf("LAN chat not available")
@@ -401,10 +331,6 @@ func (b *ChatBridge) LanChatSelf() (lanchat.Participant, error) {
 	return b.lanchatHub.SelfParticipant(), nil
 }
 
-// SendNonUIMessage sends a user message originating from a non-desktop source (IM/mobile).
-// It pushes a user_message event to the frontend so the message appears in the chat,
-// but avoids duplicate display on the originating surface.
-// excludeAdapter is the IM adapter name to exclude from echo (prevents IM self-echo).
 func (b *ChatBridge) SendNonUIMessage(userMsg string, source string, excludeAdapter string) error {
 	return b.sendMessageData(tunnel.MessageData{Text: userMsg}, source, excludeAdapter)
 }
@@ -605,8 +531,6 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	return err
 }
 
-// Cancel stops the current agent run.
-// Mirrors Fyne AgentBridge.Cancel exactly.
 func (b *ChatBridge) Cancel() {
 	b.mu.Lock()
 	if b.cancel != nil {
@@ -639,9 +563,6 @@ func (b *ChatBridge) Cancel() {
 	b.finishRun(context.Canceled)
 }
 
-// finishRun performs all post-run cleanup: flush tunnel text, push idle
-// status to mobile, emit run_done to frontend, and notify LAN Chat peers.
-// err is the agent run result (may be nil for success or context.Canceled).
 func (b *ChatBridge) finishRun(err error) {
 
 	b.mu.Lock()
@@ -702,13 +623,6 @@ func (b *ChatBridge) finishRun(err error) {
 	}
 }
 
-// ClearCurrentSession resets the current session so next chat creates a fresh one.
-// refreshPersistTargetIfOwner re-binds the per-run persist target while this
-// run is still the generation owner (#4277). It never bumps runGeneration:
-// the entry bump claimed ownership, and a superseded (Cancel-blind) run
-// re-bumping here would push the generation past a newer run's captured
-// runGen, silencing all of its stream events via the emitIfCurrent stale
-// drop. Mirrors the #1181 owner guard in SendContent.
 func (b *ChatBridge) refreshPersistTargetIfOwner(runGen uint64) {
 	b.mu.Lock()
 	if b.activeRunGen == runGen {
@@ -717,9 +631,6 @@ func (b *ChatBridge) refreshPersistTargetIfOwner(runGen uint64) {
 	b.mu.Unlock()
 }
 
-// setRunPersistSnapshot installs the per-run persist target for THIS run
-// only: a captured session + generation (#489). Replaces read-at-trigger
-// semantics for run-scoped persists; called after runSes is established.
 func (b *ChatBridge) setRunPersistSnapshot() {
 	b.mu.Lock()
 	b.runGeneration++
@@ -728,19 +639,12 @@ func (b *ChatBridge) setRunPersistSnapshot() {
 	b.mu.Unlock()
 }
 
-// currentRunGeneration returns the run generation under the lock.
 func (b *ChatBridge) currentRunGeneration() uint64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.runGeneration
 }
 
-// emitIfCurrent forwards ev to emit() only when the calling run's captured
-// generation is still current (#504): a superseded run (session cleared via
-// ClearCurrentSession, or a newer run started) drops its late stream events
-// instead of leaking them into the new session's live history and frontend
-// stream. This is the wired form of the guard #489's message claimed —
-// emitGeneration was declared but never compared, leaving emit() unguarded.
 func (b *ChatBridge) emitIfCurrent(gen uint64, ev provider.StreamEvent) {
 	b.mu.Lock()
 	stale := gen != b.runGeneration
@@ -795,9 +699,6 @@ func (b *ChatBridge) ClearCurrentSession() error {
 	return nil
 }
 
-// cleanupEphemeralSession deletes the current session if it was marked
-// ephemeral (auto-created because the latest session was locked) and
-// has no user messages. Also releases the session lock.
 func (b *ChatBridge) cleanupEphemeralSession() {
 	b.mu.Lock()
 	ses := b.currentSes
@@ -821,11 +722,6 @@ func (b *ChatBridge) cleanupEphemeralSession() {
 	b.cleanupEphemeralFinalize(ses, lock)
 }
 
-// cleanupEphemeralFinalize is the post-release critical section of
-// cleanupEphemeralSession, split out so its ownership re-checks are directly
-// testable. Both re-checks are required: while lock.Release() was blocked
-// outside b.mu, a concurrent EnsureSession may have installed a new session
-// and/or lock — clearing unconditionally would clobber that new state (#279).
 func (b *ChatBridge) cleanupEphemeralFinalize(ses *session.Session, lock *session.SessionLock) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -838,21 +734,15 @@ func (b *ChatBridge) cleanupEphemeralFinalize(ses *session.Session, lock *sessio
 	}
 }
 
-// prevSessionState is a snapshot of the bridge's session fields taken before
-// a LoadSession switch attempt, used to roll back if the switch fails (#269).
 type prevSessionState struct {
 	ses              *session.Session
 	ephemeral        bool
 	usageTurnIndex   int
 	lastMetricDigest int
-	// deletedByCleanup is true when cleanupEphemeralSession removed ses from
-	// the store (ephemeral + no messages) before the switch attempt — such a
-	// session cannot be rolled back to.
+
 	deletedByCleanup bool
 }
 
-// snapshotSessionState captures the current session state for a possible
-// rollback in LoadSession (#269). Must be called before cleanupEphemeralSession.
 func (b *ChatBridge) snapshotSessionState() prevSessionState {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -869,15 +759,6 @@ func (b *ChatBridge) snapshotSessionState() prevSessionState {
 	}
 }
 
-// rollbackSessionLoad restores the bridge to the session state captured by
-// snapshotSessionState after a failed LoadSession switch (#269). Without the
-// rollback, b.currentSes keeps pointing at the failed session whose lock was
-// just released, so CurrentSessionID() lies and the SendContent auto-rebuild
-// path would cross-append to a JSONL another instance may now own.
-//
-// If the previous session no longer exists on disk (ephemeral cleanup) or its
-// lock cannot be re-acquired, the current session is cleared instead — b.currentSes
-// must never point at a session whose lock we do not hold.
 func (b *ChatBridge) rollbackSessionLoad(from *session.Session, prev prevSessionState) {
 
 	b.mu.Lock()
@@ -920,11 +801,6 @@ func (b *ChatBridge) rollbackSessionLoad(from *session.Session, prev prevSession
 	b.setSessionState(agentruntime.ClearSession())
 }
 
-// sessionLockMismatchLocked reports whether the held session lock (if any)
-// belongs to a session other than ses — positive evidence that ses is no
-// longer ours to write (#269). Callers must hold b.mu. A nil lock is NOT a
-// mismatch: lock acquisition is best-effort on some session creation paths
-// (lowercase ensureSession), and absence of a lock is not evidence of one.
 func (b *ChatBridge) sessionLockMismatchLocked(ses *session.Session) bool {
 	if ses == nil || b.sessionLock == nil {
 		return false
@@ -932,9 +808,6 @@ func (b *ChatBridge) sessionLockMismatchLocked(ses *session.Session) bool {
 	return b.sessionLock.SessionID() != ses.ID
 }
 
-// MarkSessionDeleted records id in the bridge's tombstone set so that late
-// persist attempts from a draining run goroutine are refused instead of
-// O_CREATE-resurrecting the just-deleted session on disk (#305).
 func (b *ChatBridge) MarkSessionDeleted(id string) {
 	if id == "" {
 		return
@@ -947,12 +820,6 @@ func (b *ChatBridge) MarkSessionDeleted(id string) {
 	b.mu.Unlock()
 }
 
-// appendPersistMessage appends msg to ses's JSONL under the session-lock
-// guard (#269): when the bridge holds a lock for a different session, ses is
-// no longer ours to write (e.g. its lock was released after a failed load) —
-// refuse the append rather than risk cross-process double-writes to the
-// same JSONL. Deleted sessions (tombstoned via MarkSessionDeleted) are also
-// refused so a draining run goroutine cannot resurrect them (#305).
 func (b *ChatBridge) appendPersistMessage(store *session.JSONLStore, ses *session.Session, msg provider.Message) {
 	if ses == nil {
 		return
@@ -978,22 +845,11 @@ func (b *ChatBridge) appendPersistMessage(store *session.JSONLStore, ses *sessio
 	}
 }
 
-// persistUserMessageRemoval appends a message_remove tombstone to the run's
-// JSONL (#4200). It is the journal-side compensation for
-// Manager.RemoveLastUserMessage in the vision-fallback retry path: the first
-// RunStreamWithContent persisted the ORIGINAL image content via the persist
-// handler, so dropping it from live context alone left the journal replaying
-// both the original and the text-only projection on resume. Guard discipline
-// mirrors appendPersistMessage (run-scoped persistSession snapshot, #269 lock
-// mismatch, #305 deleted-session tombstone).
 func (b *ChatBridge) persistUserMessageRemoval() {
 	b.mu.Lock()
 	ses := b.persistSession
 	mismatch := b.sessionLockMismatchLocked(ses)
-	// #4251: nil check BEFORE the deletedSessions lookup - ses.ID dereferences
-	// the snapshot, and ClearCurrentSession can leave persistSession nil while
-	// a draining vision-fallback run still reaches this point (stop + new
-	// session sequence). Mirrors the persist handler's ordering.
+
 	var deleted bool
 	if ses != nil {
 		_, deleted = b.deletedSessions[ses.ID]
@@ -1229,9 +1085,6 @@ func (b *ChatBridge) LoadSession(id string) error {
 	return nil
 }
 
-// ensureSession creates a new session if none exists (mirrors Fyne bridge).
-// EnsureSession creates a new session if one doesn't already exist.
-// Called on startup and before sending messages.
 func (b *ChatBridge) ensureSession() error {
 
 	b.mu.Lock()
@@ -1265,9 +1118,6 @@ func (b *ChatBridge) ensureSession() error {
 	return nil
 }
 
-// persistRunMessages updates in-memory session state after an agent run.
-// With per-message persistence (SetPersistHandler), each message is already
-// written to JSONL at Add() time. This only updates ses.Messages for rendering.
 func (b *ChatBridge) persistRunMessages() {
 
 	b.persistMu.Lock()
@@ -1301,10 +1151,6 @@ func (b *ChatBridge) persistRunMessages() {
 	b.mu.Unlock()
 }
 
-// runMessagesToPersist returns the messages still to be appended for this
-// run. First persist (skip == 0) drops the seed user message (written at
-// run start); subsequent persists (#1181 watermark) return only the tail
-// after what an earlier finisher already appended.
 func runMessagesToPersist(runAdded []provider.Message, skip int) []provider.Message {
 	if skip > 0 {
 		if skip > len(runAdded) {
@@ -1347,7 +1193,6 @@ func (b *ChatBridge) StartNewSession() (string, error) {
 	return b.currentSes.ID, nil
 }
 
-// CurrentSessionID returns the current session ID.
 func (b *ChatBridge) CurrentSessionID() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1357,11 +1202,6 @@ func (b *ChatBridge) CurrentSessionID() string {
 	return b.currentSes.ID
 }
 
-// syncRenamedTitle mirrors an on-disk rename (RenameSession) into the
-// in-memory current session (#628). Meta write-backs such as usage persists,
-// SetSessionLimits, and SetPermissionMode serialize b.currentSes via
-// AppendMetaToDisk; without this sync the stale pre-rename title gets written
-// back and silently rolls back the rename on disk.
 func (b *ChatBridge) syncRenamedTitle(id, title string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1370,10 +1210,6 @@ func (b *ChatBridge) syncRenamedTitle(id, title string) {
 	}
 }
 
-// EnsureSession creates a default session if none exists (mirrors Fyne's ensureSession).
-// On first call with no current session, tries to auto-load the most recent
-// workspace session. If that session is locked by another instance, creates
-// a new ephemeral session (auto-deleted if empty on close/switch).
 func (b *ChatBridge) EnsureSession() {
 
 	b.mu.Lock()
@@ -1476,8 +1312,6 @@ func (b *ChatBridge) EnsureSession() {
 	}
 }
 
-// InitAgent sets up provider, tools, and agent — full parity with Fyne bridge.
-// Called on startup or before the first message if not yet initialized.
 func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 
 	agentruntime.InitGlobalSectionCollector(b.workingDir)
@@ -1907,8 +1741,6 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	return nil
 }
 
-// SetIMManager injects the IM runtime manager into the im tool so the LLM
-// can manage adapters (status, mute/unmute, disable/enable, send).
 func (b *ChatBridge) SetIMManager(mgr tool.IMManager) {
 	if mgr == nil {
 		return
@@ -1922,8 +1754,6 @@ func (b *ChatBridge) SetIMManager(mgr tool.IMManager) {
 	}
 }
 
-// SetRuntimeStatusProvider injects the runtime status provider into the
-// runtime tool so the LLM can query session ID, IM adapters, mobile status.
 func (b *ChatBridge) SetRuntimeStatusProvider() {
 	if rt, ok := b.registry.Get("runtime"); ok {
 		if rTool, ok := rt.(tool.RuntimeTool); ok {
@@ -1934,7 +1764,6 @@ func (b *ChatBridge) SetRuntimeStatusProvider() {
 	}
 }
 
-// desktopRuntimeProvider implements tool.RuntimeStatusProvider for desktop.
 type desktopRuntimeProvider struct {
 	bridge *ChatBridge
 }
@@ -2297,16 +2126,6 @@ func (b *ChatBridge) CurrentSessionHistory() []SessionMessage {
 	return msgs
 }
 
-// mergeTunnelUserMessages appends tunnel-recorded user messages that are not
-// already present in the rendered history. Tunnel events record messages sent
-// from mobile/tunnel; without merging they are invisible when a saved session
-// is reloaded (#242). Dedup: when a tunnel event carries a message_id, it is
-// deduplicated by ID only — multiple distinct tunnel events with the same text
-// (e.g. the user sending "yes" twice) are each kept (#268). Exact
-// (whitespace-trimmed) text matching is only a fallback for events without an
-// ID, guarding against the same tunnel message being replayed after it has
-// already been persisted as a session message — conservative: prefer a rare
-// duplicate over losing a message.
 func mergeTunnelUserMessages(msgs []SessionMessage, tunnelEvents []session.TunnelEvent) []SessionMessage {
 	seenIDs := make(map[string]struct{}, len(msgs))
 	seenText := make(map[string]struct{}, len(msgs))
@@ -2395,10 +2214,6 @@ func (b *ChatBridge) appendLiveError(text string) {
 	})
 }
 
-// appendLiveErrorIfCurrent appends an error entry to the live history only
-// when gen is still the current run generation (#550 E1): a superseded
-// run's late error used to bypass the emitIfCurrent guard and leak into the
-// newly selected session's history.
 func (b *ChatBridge) appendLiveErrorIfCurrent(gen uint64, text string) {
 	if strings.TrimSpace(text) == "" {
 		return
@@ -2516,12 +2331,6 @@ func (b *ChatBridge) finalizeStreamingAssistantLocked() {
 	}
 }
 
-// finalizeStreamingToolsLocked clears the Streaming flag of ALL tool-role
-// entries (#3771). The only other clear point is ToolResult matching by
-// ToolID; when a run is cancelled/preempted/superseded mid-tool-execution,
-// ToolResult never arrives and the tool entry spins forever in the frontend
-// until the session is rebuilt. Walk the whole history - parallel tools put
-// entries at non-tail positions.
 func (b *ChatBridge) finalizeStreamingToolsLocked() {
 	for i := range b.liveHistory {
 		if b.liveHistory[i].Role == "tool" && b.liveHistory[i].Streaming {
@@ -2530,7 +2339,6 @@ func (b *ChatBridge) finalizeStreamingToolsLocked() {
 	}
 }
 
-// GetModelInfo returns the current model info for the status bar.
 func (b *ChatBridge) GetModelInfo() map[string]interface{} {
 	if b.cfg == nil {
 		return nil
@@ -2559,9 +2367,6 @@ func (b *ChatBridge) GetModelInfo() map[string]interface{} {
 	return payload
 }
 
-// AttachTunnelBroker connects the broker for outbound event push to mobile.
-// All negotiation (session_info, replay, status, announce) is handled by
-// TunnelHost.PrepareOnlineShare — the canonical share bootstrap.
 func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 	var (
 		currentSes *session.Session
@@ -2599,12 +2404,7 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 		}
 		b.mu.Lock()
 		if th := b.tunnelHost; th != nil {
-			// #4495: currentSes is a raw snapshot - it is nil until the first
-			// session is created. A phone connecting to the share tunnel on a
-			// cold start (no message sent yet) panicked here on the bare
-			// .Title deref while holding b.mu. Zero-value the session-derived
-			// fields instead; cf. the cur != nil gate before BindSession below
-			// and pushTunnelSessionInfo.
+
 			var title string
 			if currentSes != nil {
 				title = currentSes.Title
@@ -2786,11 +2586,6 @@ func (b *ChatBridge) CurrentTunnelHistory() []tunnel.HistoryEntry {
 	return nil
 }
 
-// nextInteractionRequestID returns a unique request ID for approval/ask_user
-// round-trips. When a tunnel broker is connected its NextMessageID namespace
-// is used (mobile replies resolve against it); otherwise a bridge-local
-// "req-N" sequence is generated so concurrent desktop-only approvals never
-// share the empty-string key (#4151).
 func (b *ChatBridge) nextInteractionRequestID() string {
 	if broker := b.currentTunnelBroker(); broker != nil {
 		return broker.NextMessageID()
@@ -2798,10 +2593,6 @@ func (b *ChatBridge) nextInteractionRequestID() string {
 	return fmt.Sprintf("req-%d", b.localReqSeq.Add(1))
 }
 
-// RequestApproval blocks until the user (desktop or mobile) responds to an
-// approval request.  It stores a pending channel, pushes the request to a
-// connected tunnel broker, and emits an event so the Wails frontend can show
-// an approval dialog.
 func (b *ChatBridge) RequestApproval(ctx context.Context, requestID, toolName, input string) permission.Decision {
 	req := agentruntime.ApprovalRequest{ID: requestID, ToolName: toolName, Input: input}
 
@@ -2838,8 +2629,6 @@ func (b *ChatBridge) RequestApproval(ctx context.Context, requestID, toolName, i
 	return decision
 }
 
-// RequestAskUser blocks until the user (desktop or mobile) responds to a
-// structured questionnaire.  It mirrors the Fyne handleAskUser flow.
 func (b *ChatBridge) RequestAskUser(ctx context.Context, requestID string, req tool.AskUserRequest) (tool.AskUserResponse, error) {
 	if len(req.Questions) == 0 {
 		return tool.AskUserResponse{Status: tool.AskUserStatusSubmitted}, nil
@@ -2880,8 +2669,6 @@ func (b *ChatBridge) RequestAskUser(ctx context.Context, requestID string, req t
 	return resp, err
 }
 
-// RespondApproval delivers a desktop-originated approval decision to the
-// waiting channel.  decision is "allow", "deny", or "always_allow".
 func (b *ChatBridge) RespondApproval(requestID, decision string) {
 	d := agentruntime.ApprovalDecisionFromTunnel(decision)
 	req, ok := b.interactions.ResolveApproval(requestID, d)
@@ -2922,9 +2709,6 @@ func (b *ChatBridge) RespondApproval(requestID, decision string) {
 
 }
 
-// PendingApprovalIDs returns the pending approval request IDs in
-// registration order (#1657 case 2) - the text bridge uses this to detect
-// ambiguous bare "y" replies when several approvals are pending.
 func (b *ChatBridge) PendingApprovalIDs() []string {
 	reqs := b.interactions.PendingApprovals()
 	ids := make([]string, 0, len(reqs))
@@ -2942,8 +2726,6 @@ func (b *ChatBridge) PendingApprovalRequest() (string, string, bool) {
 	return req.ID, req.ToolName, true
 }
 
-// RespondAskUser delivers a desktop-originated ask_user response to the
-// waiting channel.
 func (b *ChatBridge) RespondAskUser(requestID string, response tool.AskUserResponse) {
 	if _, ok := b.interactions.ResolveAskUser(requestID, response); !ok {
 
@@ -2973,8 +2755,6 @@ func (b *ChatBridge) PendingAskUserRequest() (string, tool.AskUserRequest, bool)
 	return req.ID, req.Request, true
 }
 
-// HandleMobileApprovalResponse processes an approval response received from
-// the mobile client via the tunnel.
 func (b *ChatBridge) HandleMobileApprovalResponse(data tunnel.ApprovalResponseData) {
 	decision := agentruntime.ResolveTunnelApproval(data.Decision, "", nil)
 	req, ok := b.interactions.ResolveApproval(data.ID, decision)
@@ -3015,8 +2795,6 @@ func (b *ChatBridge) HandleMobileApprovalResponse(data tunnel.ApprovalResponseDa
 	})
 }
 
-// HandleMobileAskUserResponse processes an ask_user response received from
-// the mobile client via the tunnel.
 func (b *ChatBridge) HandleMobileAskUserResponse(data tunnel.AskUserResponseData, _ tool.AskUserRequest) {
 
 	req, found := b.interactions.PendingAskUser(data.ID)
@@ -3039,17 +2817,11 @@ func (b *ChatBridge) HandleMobileAskUserResponse(data tunnel.AskUserResponseData
 	})
 }
 
-// CurrentAskUserRequest returns the pending ask_user request for the given ID,
-// or nil if none exists.  Used by HandleMobileAskUserResponse to reconstruct
-// the full response with completion metadata.
 func (b *ChatBridge) CurrentAskUserRequest(requestID string) tool.AskUserRequest {
 
 	return tool.AskUserRequest{}
 }
 
-// Messages returns the current conversation messages for snapshot/tunnel use.
-// When agent is nil (e.g. after loading a historical session but before
-// sending any message), falls back to the session's persisted messages.
 func (b *ChatBridge) Messages() []provider.Message {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -3062,7 +2834,6 @@ func (b *ChatBridge) Messages() []provider.Message {
 	return nil
 }
 
-// SetApprovalOverride persists a tool-level permission override.
 func (b *ChatBridge) SetApprovalOverride(toolName string) {
 	if b.agent != nil {
 		if p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy); ok {
@@ -3071,10 +2842,6 @@ func (b *ChatBridge) SetApprovalOverride(toolName string) {
 	}
 }
 
-// buildWailsSystemPrompt builds the system prompt for the agent.
-// Mirrors Fyne buildSystemPrompt exactly.
-// buildWailsSystemPrompt builds the system prompt for the agent.
-// Mirrors Fyne buildSystemPrompt exactly — includes auto-memory content.
 func buildWailsSystemPrompt(cfg *config.Config, workingDir string, mode permission.PermissionMode, globalAutoMem, projectAutoMem *memory.AutoMemory, commandMgr *commands.Manager) string {
 	if cfg == nil {
 		cfg = config.DefaultConfig()
@@ -3082,8 +2849,6 @@ func buildWailsSystemPrompt(cfg *config.Config, workingDir string, mode permissi
 	return agentruntime.BuildInteractiveSystemPrompt(cfg, workingDir, mode, nil, commandMgr, globalAutoMem, projectAutoMem, "", "")
 }
 
-// recordSessionUsage accumulates token usage into the session.
-// Mirrors Fyne AgentBridge.recordSessionUsage and TUI Model.recordSessionUsage exactly.
 func (b *ChatBridge) recordSessionUsage(usage provider.TokenUsage, source string) {
 	b.mu.Lock()
 	if b.currentSes == nil || b.sessionStore == nil {
@@ -3120,9 +2885,6 @@ func (b *ChatBridge) recordSessionUsage(usage provider.TokenUsage, source string
 	}
 }
 
-// desktopResolveRate mirrors internal/tui resolveRate (commands_slash_info.go):
-// explicit pricing table entry first, then coding-plan endpoint, then
-// whole-vendor subscription, else unknown (metered with no known rate).
 func desktopResolveRate(vendor, endpoint, model string) cost.ModelRate {
 	pt := cost.DefaultPricingTable()
 	if rate, ok := pt.Get(vendor, model); ok {
@@ -3180,9 +2942,6 @@ func (b *ChatBridge) currentUsagePayload() map[string]interface{} {
 	return payload
 }
 
-// recordMetric stores a metric event for turn digest generation.
-// skillOnMetric forwards skill sub-agent telemetry to the shared collector
-// (#3296); events arrive pre-stamped with the sub-agent's own model.
 func (b *ChatBridge) skillOnMetric(ev metrics.MetricEvent) {
 	if b.metricCollector != nil {
 		b.metricCollector.Emit(ev)
@@ -3270,15 +3029,12 @@ func (b *ChatBridge) pushTunnelSubagentEvent(sa *subagent.SubAgent) {
 	agentruntime.PushTunnelSubagentEvent(b.currentTunnelBroker, b.markTunnelSubagentSpawned, sa)
 }
 
-// GetPermissionMode returns the current permission mode string.
 func (b *ChatBridge) GetPermissionMode() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.permissionMode.String()
 }
 
-// SetPermissionMode updates the agent permission mode at runtime.
-// Mirrors Fyne AgentBridge.SetPermissionMode exactly.
 func (b *ChatBridge) SetPermissionMode(modeStr string) {
 	mode := permission.ParsePermissionMode(modeStr)
 	b.mu.Lock()
@@ -3310,9 +3066,6 @@ func (b *ChatBridge) SetPermissionMode(modeStr string) {
 	}
 }
 
-// desktopModeSwitcher implements tool.ModeSwitcher for the Wails desktop app.
-// It bridges LLM-initiated mode changes (via switch_mode tool) to the
-// ChatBridge's SetPermissionMode, which updates the agent policy and UI.
 type desktopModeSwitcher struct {
 	bridge *ChatBridge
 }
@@ -3334,7 +3087,6 @@ func (d *desktopModeSwitcher) RestoreMode(fallback permission.PermissionMode) pe
 	return fallback
 }
 
-// QueueMessage stores a user message to be sent after the current agent turn.
 func (b *ChatBridge) QueueMessage(msg string) {
 	b.pendingMsgs.Enqueue(msg, false, nil)
 
@@ -3344,7 +3096,6 @@ func (b *ChatBridge) QueueMessage(msg string) {
 	b.mu.Unlock()
 }
 
-// QueueHiddenMessage stores a hidden message (mirrors Fyne).
 func (b *ChatBridge) QueueHiddenMessage(msg string) {
 	b.pendingMsgs.Enqueue(msg, true, nil)
 }
@@ -3379,10 +3130,6 @@ func (b *ChatBridge) drainPendingInterrupt() []provider.ContentBlock {
 	return []provider.ContentBlock{{Type: "text", Text: strings.TrimSpace(pending.Text)}}
 }
 
-// SendHiddenText sends a hidden message to the agent without UI display.
-// SendHiddenText injects text into the agent loop without rendering it as a
-// visible user message in the chat. Used for LAN Chat agent-to-agent messages
-// where the incoming text is redundant (the agent's response is what matters).
 func (b *ChatBridge) SendHiddenText(text string) error {
 	b.mu.Lock()
 	if b.cancel != nil {
@@ -3482,9 +3229,6 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	return err
 }
 
-// Close cleans up all resources (mirrors Fyne AgentBridge.Close).
-// startA2A starts the A2A server, registers this instance, and wires the
-// remote tool so the agent can discover and delegate to other ggcode instances.
 func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Registry) {
 
 	b.stopA2A()
@@ -3678,13 +3422,6 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 	}
 }
 
-// startOAuthRenewalWatcher silently renews an expired Anthropic OAuth token
-// (#1805 case 2): the running provider froze the access token at build time,
-// so a session that outlives expires_in 401'd on every message until restart
-// or a config change - despite a perfectly good refresh token. Once a minute,
-// when the stored token is OAuth+expired+refreshable, nudge
-// OnConfigProviderChanged: its resolve path performs the refresh (and the
-// #1805 case-1 cleanup when the refresh token is permanently dead).
 func (b *ChatBridge) startOAuthRenewalWatcher() {
 	if b.oauthRenewCancel != nil {
 		return
@@ -3710,9 +3447,6 @@ func (b *ChatBridge) startOAuthRenewalWatcher() {
 	})
 }
 
-// anthropicOAuthNeedsRenewal reports whether the stored Anthropic credential
-// is an OAuth token that is expired but refreshable (disk check only - the
-// actual refresh happens in the resolve path).
 func anthropicOAuthNeedsRenewal() bool {
 	info, err := auth.DefaultStore().Load(auth.ProviderAnthropic)
 	if err != nil || info == nil {
@@ -3723,7 +3457,6 @@ func anthropicOAuthNeedsRenewal() bool {
 		strings.TrimSpace(info.RefreshToken) != ""
 }
 
-// stopA2A shuts down the A2A server and cleans up.
 func (b *ChatBridge) stopA2A() {
 	if b.oauthRenewCancel != nil {
 		b.oauthRenewCancel()
@@ -3756,7 +3489,6 @@ func (b *ChatBridge) stopA2A() {
 	}
 }
 
-// syncLanChatPeers pulls A2A registry instances and pushes them to the lanchat hub.
 func (b *ChatBridge) syncLanChatPeers() {
 	if b.a2aRegistry == nil || b.lanchatHub == nil {
 		return
@@ -3847,14 +3579,12 @@ func (b *ChatBridge) Close() {
 	b.mu.Unlock()
 }
 
-// IsWorking returns true if the agent is currently running.
 func (b *ChatBridge) IsWorking() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.cancel != nil
 }
 
-// Elapsed returns time since the current agent run started.
 func (b *ChatBridge) Elapsed() time.Duration {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -3864,7 +3594,6 @@ func (b *ChatBridge) Elapsed() time.Duration {
 	return time.Since(b.startTime)
 }
 
-// ContextWindow returns the current context window size.
 func (b *ChatBridge) ContextWindow() int {
 	b.mu.Lock()
 	agent := b.agent
@@ -3879,7 +3608,6 @@ func (b *ChatBridge) ContextWindow() int {
 	return 0
 }
 
-// TokenCount returns the current token usage.
 func (b *ChatBridge) TokenCount() int {
 	b.mu.Lock()
 	agent := b.agent
@@ -3890,7 +3618,6 @@ func (b *ChatBridge) TokenCount() int {
 	return agent.ContextManager().TokenCount()
 }
 
-// CurrentSession returns the current session.
 func (b *ChatBridge) CurrentSession() *session.Session {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -3918,21 +3645,18 @@ func (b *ChatBridge) PrepareShareBroker(broker *tunnel.Broker, snapshotProvider 
 	}
 }
 
-// SessionStore returns the session store.
 func (b *ChatBridge) SessionStore() session.Store {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.sessionStore
 }
 
-// Resolved returns the resolved endpoint.
 func (b *ChatBridge) Resolved() *config.ResolvedEndpoint {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.resolved
 }
 
-// ResetAgent destroys the current agent, forcing a rebuild on next message.
 func (b *ChatBridge) ResetAgent() {
 	b.mu.Lock()
 	b.agent = nil
@@ -3969,7 +3693,6 @@ func (b *ChatBridge) CycleReasoningEffort() (string, bool) {
 	return displayReasoningEffort(next), true
 }
 
-// SwitchModel hot-swaps the model at runtime (mirrors Fyne SwitchModel).
 func (b *ChatBridge) SwitchModel(model string) error {
 	if model == "" || b.cfg == nil {
 		return fmt.Errorf("model is empty or config is nil")
@@ -4019,10 +3742,6 @@ func (b *ChatBridge) SwitchModel(model string) error {
 	return nil
 }
 
-// OnConfigProviderChanged syncs Wails bridge state after the config tool
-// changes vendor/endpoint/model/api_key. Updates b.resolved and b.currentSes
-// so the frontend model picker and status bar reflect the new selection.
-// Also recreates the provider so the running agent uses the new LLM backend.
 func (b *ChatBridge) OnConfigProviderChanged() {
 	if b.cfg == nil {
 		return
@@ -4069,11 +3788,6 @@ func (b *ChatBridge) OnConfigProviderChanged() {
 	}
 }
 
-// RefreshEndpointLimits re-resolves the active endpoint and updates the
-// running agent's ContextManager so that context_window / max_tokens
-// changes take effect immediately without requiring a session restart.
-// Session-level overrides (from SetSessionLimits) take priority over
-// endpoint/per-model config.
 func (b *ChatBridge) RefreshEndpointLimits() {
 	if b.cfg == nil {
 		return
@@ -4115,7 +3829,6 @@ func (b *ChatBridge) RefreshEndpointLimits() {
 	}
 }
 
-// GetModelLimits returns all per-model limit overrides for the active endpoint.
 func (b *ChatBridge) GetModelLimits() []ModelLimitInfo {
 	if b.cfg == nil {
 		return nil
@@ -4127,14 +3840,11 @@ func (b *ChatBridge) GetModelLimits() []ModelLimitInfo {
 	return GetModelLimits(resolved.VendorID, resolved.EndpointName)
 }
 
-// SessionLimitInfo represents the current session's context_window and max_tokens.
 type SessionLimitInfo struct {
 	ContextWindow int `json:"contextWindow"`
 	MaxTokens     int `json:"maxTokens"`
 }
 
-// GetSessionLimits returns the current session's context_window and max_tokens.
-// Returns zeros if no session is active or no session-level overrides are set.
 func (b *ChatBridge) GetSessionLimits() SessionLimitInfo {
 	b.mu.Lock()
 	ses := b.currentSes
@@ -4148,10 +3858,6 @@ func (b *ChatBridge) GetSessionLimits() SessionLimitInfo {
 	}
 }
 
-// SetSessionLimits updates the current session's context_window and max_tokens.
-// These take priority over endpoint/per-model config.
-// A value of 0 means "auto" (falls back to endpoint/per-model config).
-// Changes are persisted to the session JSONL and applied to the running agent immediately.
 func (b *ChatBridge) SetSessionLimits(contextWindow, maxTokens int) error {
 	b.mu.Lock()
 	ses := b.currentSes
@@ -4203,28 +3909,24 @@ func (b *ChatBridge) SetSessionLimits(contextWindow, maxTokens int) error {
 	return nil
 }
 
-// PushErrorToMobile pushes an error message to mobile via tunnel.
 func (b *ChatBridge) PushErrorToMobile(msg string) {
 	if broker := b.currentTunnelBroker(); broker != nil {
 		broker.PushError(msg)
 	}
 }
 
-// PushSystemMessageToMobile pushes a system message to mobile via tunnel.
 func (b *ChatBridge) PushSystemMessageToMobile(msg string) {
 	if broker := b.currentTunnelBroker(); broker != nil {
 		broker.PushSystemMessage(msg)
 	}
 }
 
-// PushUserMessageToMobile pushes a user message to mobile via tunnel.
 func (b *ChatBridge) PushUserMessageToMobile(msg string) {
 	if broker := b.currentTunnelBroker(); broker != nil {
 		broker.PushUserMessage(msg)
 	}
 }
 
-// ResumeSession loads a session and re-initializes the agent for it.
 func (b *ChatBridge) ResumeSession(id string) error {
 	if err := b.InitAgent(context.Background()); err != nil {
 		return err
@@ -4235,7 +3937,6 @@ func (b *ChatBridge) ResumeSession(id string) error {
 	return nil
 }
 
-// SendContent sends multimodal content to the agent.
 func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 
 	restoreVision := b.beginVisionTurnIfNeeded(content)
@@ -4381,18 +4082,6 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	return err
 }
 
-// sessionSelectionMatches reports whether the provider InitAgent resolved is
-// already the session's saved selection, so LoadSession can skip the
-// re-activation (#4123). The comparison is the full (vendor, endpoint, model)
-// triple, not the bare model name: model names are free-form strings, and
-// identical names across vendors (a gateway re-exporting an official model is
-// common) made the old model-name-only short-circuit silently keep the global
-// provider while currentSes.Vendor still pointed at the session's vendor —
-// divergent state plus usage billed to the wrong endpoint bucket
-// (AddUsageForEndpoint bills by ses.Vendor). Sessions saved before
-// vendor/endpoint were recorded (both empty) keep the legacy model-name-only
-// comparison: ActivateCurrentSelection treats an empty pair as "inherit the
-// current selection", so a name match there is a true no-op.
 func sessionSelectionMatches(resolved *config.ResolvedEndpoint, sesVendor, sesEndpoint, sesModel string) bool {
 	if resolved == nil || resolved.Model != sesModel {
 		return false
@@ -4404,7 +4093,6 @@ func sessionSelectionMatches(resolved *config.ResolvedEndpoint, sesVendor, sesEn
 	return resolved.VendorID == sesVendor && resolved.EndpointID == sesEndpoint
 }
 
-// contentHasImageBlocks reports whether any block is an image.
 func contentHasImageBlocks(content []provider.ContentBlock) bool {
 	for _, c := range content {
 		if c.Type == "image" {
@@ -4414,10 +4102,6 @@ func contentHasImageBlocks(content []provider.ContentBlock) bool {
 	return false
 }
 
-// sendContentUserSummary flattens pasted content blocks into the short user
-// turn summary used for liveHistory and the mobile tunnel push (#4124).
-// Image-only paste yields "[image]" so the round still shows a user bubble;
-// text plus images appends the marker so the bubble reflects the attachment.
 func sendContentUserSummary(blocks []provider.ContentBlock) string {
 	var text strings.Builder
 	for _, blk := range blocks {
@@ -4438,7 +4122,6 @@ func sendContentUserSummary(blocks []provider.ContentBlock) string {
 	return summary
 }
 
-// stripImageBlocks removes image blocks, keeping text and other blocks.
 func stripImageBlocks(content []provider.ContentBlock) []provider.ContentBlock {
 	out := make([]provider.ContentBlock, 0, len(content))
 	for _, c := range content {
@@ -4449,9 +4132,6 @@ func stripImageBlocks(content []provider.ContentBlock) []provider.ContentBlock {
 	return out
 }
 
-// beginVisionTurnIfNeeded performs the turn-scoped vision switch for a
-// content-carrying run. Returns a restore func (idempotent; no-op when no
-// switch happened).
 func (b *ChatBridge) beginVisionTurnIfNeeded(content []provider.ContentBlock) func() {
 	if !contentHasImageBlocks(content) {
 		return func() {}
@@ -4511,7 +4191,6 @@ func (b *ChatBridge) beginVisionTurnIfNeeded(content []provider.ContentBlock) fu
 	}
 }
 
-// GetAvailableModels returns the list of models available for the current endpoint.
 func (b *ChatBridge) GetAvailableModels() []string {
 	b.mu.Lock()
 	resolved := b.resolved
@@ -4538,7 +4217,6 @@ func (b *ChatBridge) GetAvailableModels() []string {
 	return nil
 }
 
-// refreshSystemPrompt rebuilds and updates the agent's system prompt.
 func (b *ChatBridge) refreshSystemPrompt() {
 	var autoMem, projectAutoMem *memory.AutoMemory
 	if am := memory.NewAutoMemory(); am != nil {

@@ -9,13 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
-// TestSetTunnelStateWireRefusalSemantics pins the wire-refusal contract the
-// StartShare narrow-window fix relies on: setTunnelState reports whether it
-// wired - refusing (and leaving state untouched) when a stop crossed the
-// in-flight start, wiring when the start's snapshot is current. The bool was
-// added so the caller can tear a refused result down instead of binding
-// commands to a broker nothing tracks (the #2404 half-alive leak recurring
-// between the #2404 stale check and the wire).
 func TestSetTunnelStateWireRefusalSemantics(t *testing.T) {
 	a := &App{tunnelMu: sync.RWMutex{}}
 
@@ -44,11 +37,6 @@ func TestSetTunnelStateWireRefusalSemantics(t *testing.T) {
 	}
 }
 
-// TestStartShareWireBeforeBindOrdering pins the source shape of the fix: the
-// guarded wire (with its teardown + error return) must sit AFTER the wide
-// #2404 stale check and BEFORE BindShareCommands, so a stop racing the
-// narrow window between the two checks tears the result down instead of
-// leaving a half-bound broker plus a leaked session behind.
 func TestStartShareWireBeforeBindOrdering(t *testing.T) {
 	src, err := os.ReadFile("app.go")
 	if err != nil {

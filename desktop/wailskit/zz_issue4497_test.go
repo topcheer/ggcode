@@ -9,13 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// #4497 pin: SetConfig switching workspaces must re-baseline the #1847 sync
-// watcher on the new workspace's config file. The sync.Once in
-// startConfigFileSync only ever stats the FIRST workspace's file; before the
-// fix the poller compared the new path's mtime against the OLD file's
-// baseline, so an external edit whose mtime did not exceed the old baseline
-// never triggered a reload - and the next desktop save clobbered it with the
-// stale in-memory snapshot.
 func TestIssue4497_SetConfigRebaselinesOnWorkspaceSwitch(t *testing.T) {
 	dir := t.TempDir()
 	pathA := filepath.Join(dir, "a-ggcode.yaml")

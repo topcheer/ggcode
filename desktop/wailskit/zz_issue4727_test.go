@@ -2,10 +2,6 @@ package wailskit
 
 import "testing"
 
-// #4727: desktopResolveRate must mirror the TUI's resolveRate billing-type
-// chain (internal/tui commands_slash_info.go) so the desktop frontend can
-// render "included in {plan}" for subscription sessions instead of a
-// per-token estimated cost.
 func TestDesktopResolveRateMirrorsTUIChain(t *testing.T) {
 
 	if r := desktopResolveRate("openai", "https://api.example.com/cn-coding-openi/v1", "gpt-x"); r.Type != "subscription" || r.Plan != "Coding Plan" {
@@ -25,8 +21,6 @@ func TestDesktopResolveRateMirrorsTUIChain(t *testing.T) {
 	}
 }
 
-// The usage payload must always carry the two #4727 keys (empty when no
-// session), so the frontend contract is stable across session transitions.
 func TestUsagePayloadCarriesPlanKeys(t *testing.T) {
 	b := &ChatBridge{}
 	p := b.currentUsagePayload()

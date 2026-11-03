@@ -53,8 +53,6 @@ func TestNotifyApprovalBodyCarriesIdentity(t *testing.T) {
 	}
 }
 
-// N1 probe: two distinct approvals must produce distinct bodies (and hence
-// distinct dedup keys) within the 5s window.
 func TestDistinctApprovalsProduceDistinctDedupKeys(t *testing.T) {
 	nm := NewNotificationManager()
 	nm.SetFocused(false)
@@ -78,8 +76,6 @@ func TestDistinctApprovalsProduceDistinctDedupKeys(t *testing.T) {
 	}
 }
 
-// N2 probe: the dedup branch of NotifyApprovalNeeded must still bump the
-// unread counter (mirror of Notify's #427 fix).
 func TestApprovalDedupBranchBumpsUnread(t *testing.T) {
 	nm := NewNotificationManager()
 	nm.SetFocused(false)
@@ -101,9 +97,6 @@ func TestApprovalDedupBranchBumpsUnread(t *testing.T) {
 	}
 }
 
-// N4 probe: Windows toast queue-full must roll back the committed
-// lastShown entry and unread count. We simulate a full queue directly since
-// notifyWindows only enqueues on GOOS=windows.
 func TestEnqueueWinToastFullQueueRollsBack(t *testing.T) {
 	nm := NewNotificationManager()
 	nm.SetFocused(false)
@@ -152,8 +145,6 @@ func TestEnqueueWinToastFullQueueRollsBack(t *testing.T) {
 	}
 }
 
-// N4: enqueueWinToast on a non-full queue must succeed (non-Windows hosts
-// return true unconditionally; the queue mechanics are identical).
 func TestEnqueueWinToastAcceptsWhenCapacity(t *testing.T) {
 	nm := NewNotificationManager()
 	if !nm.enqueueWinToast("title", "body") {
@@ -203,7 +194,6 @@ func TestNotifyCompleteAndErrorBodiesCarrySessionDimension(t *testing.T) {
 	}
 }
 
-// N1 companion: ask_user body identity.
 func TestNotifyAskUserBodyCarriesIdentity(t *testing.T) {
 	if got := notifyAskUserBody(json.RawMessage(`{"requestID":"req-999999999","title":"Choose DB"}`)); got != "Question from agent: Choose DB (#req-9999)" {
 		t.Fatalf("notifyAskUserBody = %q", got)

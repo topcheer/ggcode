@@ -6,10 +6,6 @@ import (
 	"time"
 )
 
-// #700: lastCloseAttempt is touched from four goroutines (OnBeforeClose,
-// SetWindowFocused, hotkey poller, tray CGO callbacks). It is now an
-// atomic.Pointer[time.Time]; concurrent Load/Store must be race-free.
-// Run with -race to make the data race detection meaningful.
 func TestIssue700LastCloseAttemptConcurrentAccess(t *testing.T) {
 	a := NewApp()
 
@@ -35,8 +31,6 @@ func TestIssue700LastCloseAttemptConcurrentAccess(t *testing.T) {
 	wg.Wait()
 }
 
-// #700: the toggle-direction semantics survive the atomic conversion — a
-// stored timestamp is visible to a later Load, and Store(nil) clears it.
 func TestIssue700LastCloseAttemptSemantics(t *testing.T) {
 	a := NewApp()
 	if a.lastCloseAttempt.Load() != nil {

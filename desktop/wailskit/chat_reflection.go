@@ -7,10 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 )
 
-// buildReflectionFunc returns the post-run reflection callback - save insights
-// to project memory so knowledge compounds across sessions. Same logic as TUI
-// (internal/tui/reflection.go, #1388) and daemon (cmd/ggcode/daemon_reflection.go,
-// #1752 case 3). Extracted from ChatBridge.InitAgent for testability (#2715).
 func buildReflectionFunc(wd string) func(agent.RunStats) {
 	return func(stats agent.RunStats) {
 		if !agent.ShouldReflect(stats) {

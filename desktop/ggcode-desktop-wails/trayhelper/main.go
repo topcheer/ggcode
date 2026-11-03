@@ -1,17 +1,3 @@
-// Command trayhelper is the out-of-process system tray for GGCode Desktop.
-//
-// WHY A SEPARATE PROCESS: every in-process approach failed - hand-rolled
-// CGO NSStatusItem never rendered on macOS 26 (five variations), and
-// energye/systray in both Run() and RunWithExternalLoop() modes races
-// Wails' ownership of the NSApplication main loop and the app dies within
-// seconds. Running the tray in its own tiny process sidesteps the runtime
-// entirely: this binary owns its main thread, so the library runs in its
-// native mode (this is the pattern real Wails v2 tray apps converge on).
-//
-// Protocol: helper connects to the socket path in argv[1] and writes one
-// line per tray action: "show", "new-session", "quit". It exits when the
-// main app closes the socket (process teardown), which also removes the
-// status item.
 package main
 
 import (

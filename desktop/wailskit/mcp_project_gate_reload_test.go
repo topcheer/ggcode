@@ -12,11 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/mcp"
 )
 
-// #3438 follow-up: the desktop panel reload channel (Add/Update/Remove all
-// funnel into reloadSessionMCPServers) must apply the same workspace trust
-// gate as CLI startup and hot-reload. Without it, any panel write re-merges
-// every source and resurrects an ungated .mcp.json server as a connected
-// child process. The mcp:gate event lets the frontend surface the block.
 func TestReloadSessionMCPServersGatesProjectServers(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -66,8 +61,6 @@ func TestReloadSessionMCPServersGatesProjectServers(t *testing.T) {
 		t.Fatalf("mcp:gate payload must name the blocked server, got %s", payloads[0])
 	}
 
-	// Approval round-trip: grant the project server, reload again, and it
-	// must come back - the gate must not permanently swallow entries.
 	var servers []config.MCPServerConfig
 	merged, _ := mcp.MergeStartupServersWithDeleted(ws, nil, nil)
 	servers = merged

@@ -10,13 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// #489: a late persist from a cancelled run must NEVER land in the NEW
-// session's JSONL. Previously the persist handler read bridge fields at
-// trigger time (runSes==nil after ClearCurrentSession → fell back to
-// currentSes == the NEW session).
-//
-// This exercises the real handler path indirectly: we reproduce the state
-// transitions the handler observes and assert the snapshot semantics.
 func TestPersistSnapshot_SupersededRunDropsIntoVoid(t *testing.T) {
 	b := &ChatBridge{}
 
@@ -50,8 +43,6 @@ func TestPersistSnapshot_SupersededRunDropsIntoVoid(t *testing.T) {
 	}
 }
 
-// The generation must advance on session clear so emit() guard also drops
-// stale-run stream events.
 func TestRunGeneration_AdvancesOnClear(t *testing.T) {
 	b := &ChatBridge{}
 	b.mu.Lock()
@@ -72,10 +63,6 @@ func TestRunGeneration_AdvancesOnClear(t *testing.T) {
 	}
 }
 
-// #504: a superseded run's late stream events must not reach emit() after
-// the generation moved (ClearCurrentSession / newer run). emitIfCurrent is
-// the wired form of the guard #489's commit message claimed — emitGeneration
-// was declared but never compared, leaving the emit path unguarded.
 func TestEmitIfCurrent_DropsStaleRunEvents(t *testing.T) {
 	b := &ChatBridge{}
 	b.mu.Lock()
@@ -102,8 +89,6 @@ func TestEmitIfCurrent_DropsStaleRunEvents(t *testing.T) {
 	}
 }
 
-// appendPersistMessage against the captured session writes to THAT
-// session's JSONL (sanity: snapshot path preserves #270 semantics).
 func TestAppendPersistMessage_TargetsCapturedSession(t *testing.T) {
 	dir := t.TempDir()
 	store, err := session.NewJSONLStore(dir)

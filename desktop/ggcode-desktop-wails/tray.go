@@ -17,19 +17,14 @@ import (
 
 var (
 	traySockOnce sync.Once
-	// trayMu guards traySockPath / trayHelperCmd / trayShuttingDown.
-	// The reaper goroutine reads them while removeSystemTray (called from
-	// the shutdown path) writes them - unlocked access was a data race that
-	// let the reaper respawn a helper mid-shutdown (#1351).
+
 	trayMu           sync.Mutex
 	traySockPath     string
 	trayHelperCmd    *exec.Cmd
 	trayShuttingDown bool
-	// #1403-B: consecutive short-lived helper runs - drives the respawn
-	// backoff ladder (reset after a healthy run).
+
 	trayRespawnFailures int
-	// #1403-B2: retained so removeSystemTray can close the listener and
-	// unblock the accept loop instead of leaking it to process exit.
+
 	trayListener net.Listener
 )
 
@@ -51,9 +46,6 @@ func (a *App) runSystemTray() {
 	})
 }
 
-// setupTrayListenerLocked creates the tray socket dir and listener. It
-// must be called with trayMu held; it returns false when setup failed
-// (logged, state rolled back) and the caller must not spawn the helper.
 func (a *App) setupTrayListenerLocked() bool {
 	dir, err := os.MkdirTemp("", "ggcode-tray-*")
 	if err != nil {
@@ -90,17 +82,6 @@ func (a *App) setupTrayListenerLocked() bool {
 	return true
 }
 
-// trayHelperCandidates returns where the helper binary may live: next to
-// the current executable (bundled), or in the module build dir (dev).
-//
-// #1350: no PATH fallback by design - exec'ing whatever "trayhelper"
-// happens to be on PATH would run an unknown binary with the app's socket
-// path as argv[1]. Bundled-next-to-exe is the only supported production
-// layout (the release script builds the helper into Contents/MacOS/);
-// when it is absent the tray stays disabled with a debug log rather than
-// guessing. The third candidate previously joined to
-// <exe-dir>/Contents/MacOS/trayhelper - inside a bundle the exe already
-// lives in Contents/MacOS, so that resolved to a dead nested path.
 func trayHelperCandidates() []string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -120,17 +101,10 @@ func trayHelperCandidates() []string {
 	return found
 }
 
-// trayRespawnBackoff sequences the wait before each respawn attempt
-// (#1403-B): a crash-looping helper (corrupted binary, Gatekeeper denial,
-// missing dylib) respawned every few milliseconds - fork/exec storm for
-// the rest of the app's life. Steps up to a 30s ceiling; resets on any
-// run that lived long enough to be healthy.
 var trayRespawnBackoff = []time.Duration{
 	0, time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second,
 }
 
-// minHealthyHelperUptime marks a helper run that lasted long enough to
-// reset the backoff ladder (a helper that ran a minute did not crash-loop).
 const minHealthyHelperUptime = 30 * time.Second
 
 func (a *App) spawnTrayHelper() {
@@ -207,10 +181,6 @@ func (a *App) serveTrayConn(conn net.Conn) {
 	}
 }
 
-// Tray action handlers. Pure Wails runtime calls - no platform coupling.
-// They used to live in tray_darwin.go, which made the Windows and Linux
-// builds fail on the serveTrayConn dispatch (undefined methods) - the
-// release matrix caught what host-platform CI could not.
 func (a *App) handleTrayShow() {
 	debug.Log("desktop", "tray: show window")
 	a.lastCloseAttempt.Store(nil)
@@ -239,7 +209,6 @@ func (a *App) handleTrayQuit() {
 	os.Exit(0)
 }
 
-// removeSystemTray tears the tray down during shutdown (both platforms).
 func (a *App) removeSystemTray() {
 
 	trayMu.Lock()

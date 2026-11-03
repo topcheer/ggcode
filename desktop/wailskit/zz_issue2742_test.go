@@ -39,8 +39,6 @@ func issue2742LLMEvent(turn int) metrics.MetricEvent {
 	}
 }
 
-// Digest must still reach liveHistory (CurrentSessionHistory source) and the
-// frontend system event after the staging channel is gone.
 func TestIssue2742_DigestStillReachesLiveHistoryAndFrontend(t *testing.T) {
 	b, emitted := issue2742Bridge([]metrics.MetricEvent{issue2742LLMEvent(1)})
 	b.emitTurnDigest()
@@ -59,8 +57,6 @@ func TestIssue2742_DigestStillReachesLiveHistoryAndFrontend(t *testing.T) {
 	}
 }
 
-// Repeated emitTurnDigest for the same turn must stay deduped by
-// lastMetricDigestTurn (the guard is independent of the removed channel).
 func TestIssue2742_SameTurnDigestDeduped(t *testing.T) {
 	b, emitted := issue2742Bridge([]metrics.MetricEvent{issue2742LLMEvent(1)})
 	b.emitTurnDigest()
@@ -74,9 +70,6 @@ func TestIssue2742_SameTurnDigestDeduped(t *testing.T) {
 	}
 }
 
-// The removed staging channel was the only thing that touched session
-// messages for digests; emitTurnDigest must not mutate currentSes.Messages —
-// per-message JSONL persistence stays the single source of truth.
 func TestIssue2742_DigestDoesNotTouchSessionMessages(t *testing.T) {
 	b, _ := issue2742Bridge([]metrics.MetricEvent{issue2742LLMEvent(1)})
 	b.currentSes = &session.Session{Messages: []provider.Message{
@@ -89,10 +82,6 @@ func TestIssue2742_DigestDoesNotTouchSessionMessages(t *testing.T) {
 	}
 }
 
-// Dead-channel removal: the deleted saveSession() staging meant staged digests
-// were structurally unreachable after restart. With the channel gone, a fresh
-// bridge loading state (lastMetricDigestTurn restored) must not re-emit the
-// already-digested turn.
 func TestIssue2742_RestoredStateSuppressesReEmit(t *testing.T) {
 	b, emitted := issue2742Bridge([]metrics.MetricEvent{issue2742LLMEvent(1)})
 	b.lastMetricDigestTurn = 1

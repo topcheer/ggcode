@@ -12,9 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// newSessionLifecycleTestBridge builds a ChatBridge with a JSONL store in a
-// temp HOME so session lifecycle helpers can be exercised without touching
-// the user's real ~/.ggcode.
 func newSessionLifecycleTestBridge(t *testing.T) (*ChatBridge, *session.JSONLStore) {
 	t.Helper()
 	home := t.TempDir()
@@ -37,9 +34,6 @@ func mustSession(t *testing.T, store session.Store) *session.Session {
 	return ses
 }
 
-// TestPersistHandlerRefusesWriteUnderForeignLock verifies that the persist
-// path refuses to append to a session whose ID differs from the held
-// session lock (#269 guard ②).
 func TestPersistHandlerRefusesWriteUnderForeignLock(t *testing.T) {
 	b, jsonl := newSessionLifecycleTestBridge(t)
 
@@ -70,9 +64,6 @@ func TestPersistHandlerRefusesWriteUnderForeignLock(t *testing.T) {
 	}
 }
 
-// TestPersistHandlerAllowsWriteWithoutLock verifies the guard does not
-// over-block: with no lock held (creation paths acquire locks best-effort),
-// appends proceed.
 func TestPersistHandlerAllowsWriteWithoutLock(t *testing.T) {
 	b, jsonl := newSessionLifecycleTestBridge(t)
 	ses := mustSession(t, b.sessionStore)
@@ -88,8 +79,6 @@ func TestPersistHandlerAllowsWriteWithoutLock(t *testing.T) {
 	}
 }
 
-// TestSessionLockMismatchGuard verifies sessionLockMismatchLocked semantics:
-// nil lock or matching lock is not a mismatch; a different session's lock is.
 func TestSessionLockMismatchGuard(t *testing.T) {
 	b, _ := newSessionLifecycleTestBridge(t)
 	sesA := &session.Session{ID: "ses-a"}
@@ -122,9 +111,6 @@ func TestSessionLockMismatchGuard(t *testing.T) {
 	b.mu.Unlock()
 }
 
-// TestRollbackSessionLoadRestoresPreviousSession verifies that after a failed
-// switch, the bridge rolls back to the previous (persisted, non-ephemeral)
-// session and re-acquires its lock (#269 guard ①).
 func TestRollbackSessionLoadRestoresPreviousSession(t *testing.T) {
 	b, _ := newSessionLifecycleTestBridge(t)
 
@@ -163,9 +149,6 @@ func TestRollbackSessionLoadRestoresPreviousSession(t *testing.T) {
 	}
 }
 
-// TestRollbackSessionLoadClearsWhenPreviousDeleted verifies the ephemeral
-// previous-session case: rollback cannot resurrect a deleted session, so the
-// current session must be cleared instead (#269).
 func TestRollbackSessionLoadClearsWhenPreviousDeleted(t *testing.T) {
 	b, _ := newSessionLifecycleTestBridge(t)
 
@@ -189,8 +172,6 @@ func TestRollbackSessionLoadClearsWhenPreviousDeleted(t *testing.T) {
 	}
 }
 
-// TestRollbackSessionLoadNoopWhenCurrentChanged verifies rollback is a no-op
-// if another path already switched the session (double-switch protection).
 func TestRollbackSessionLoadNoopWhenCurrentChanged(t *testing.T) {
 	b, _ := newSessionLifecycleTestBridge(t)
 	oldSes := mustSession(t, b.sessionStore)
@@ -206,8 +187,6 @@ func TestRollbackSessionLoadNoopWhenCurrentChanged(t *testing.T) {
 	}
 }
 
-// TestPersistRunMessagesUsesRunSnapshot verifies persistRunMessages appends
-// to the run-start snapshot, not the write-time current session (#270).
 func TestPersistRunMessagesUsesRunSnapshot(t *testing.T) {
 	b, _ := newSessionLifecycleTestBridge(t)
 
@@ -240,10 +219,6 @@ func TestPersistRunMessagesUsesRunSnapshot(t *testing.T) {
 	}
 }
 
-// TestCleanupEphemeralFinalizeKeepsConcurrentEphemeral verifies the #279
-// race: while lock.Release() was blocked outside b.mu, a concurrent
-// EnsureSession created a new ephemeral session (installed a new lock and
-// set sessionEphemeral=true). The waking cleanup must not wipe that flag.
 func TestCleanupEphemeralFinalizeKeepsConcurrentEphemeral(t *testing.T) {
 	b, _ := newSessionLifecycleTestBridge(t)
 
@@ -285,8 +260,6 @@ func TestCleanupEphemeralFinalizeKeepsConcurrentEphemeral(t *testing.T) {
 	}
 }
 
-// TestCleanupEphemeralFinalizeClearsOwnState verifies the normal path: the
-// lock is still ours, so both the lock and the ephemeral flag are cleared.
 func TestCleanupEphemeralFinalizeClearsOwnState(t *testing.T) {
 	b, _ := newSessionLifecycleTestBridge(t)
 	ses := mustSession(t, b.sessionStore)
@@ -313,8 +286,6 @@ func TestCleanupEphemeralFinalizeClearsOwnState(t *testing.T) {
 	}
 }
 
-// TestSnapshotSessionStatePredictsEphemeralDeletion verifies the snapshot's
-// deletedByCleanup prediction matches DeleteSessionIfEmpty's predicate.
 func TestSnapshotSessionStatePredictsEphemeralDeletion(t *testing.T) {
 	b, _ := newSessionLifecycleTestBridge(t)
 
@@ -349,8 +320,6 @@ func sessionStoreDir(t *testing.T) string {
 	return dir
 }
 
-// TestCleanupEphemeralSessionEndToEnd verifies the full cleanup path
-// deletes the empty ephemeral session's JSONL from disk (#279 orphan fix).
 func TestCleanupEphemeralSessionEndToEnd(t *testing.T) {
 	b, _ := newSessionLifecycleTestBridge(t)
 	ses := mustSession(t, b.sessionStore)

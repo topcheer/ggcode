@@ -7,13 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// #3770: impersonatePreset validation must run in the #740 pre-validation
-// block -- BEFORE any field write. The pre-fix shape validated the preset
-// after nine fields were already written in place, so
-// UpdateConfig({"model":"x","impersonatePreset":"bogus"}) returned an error
-// while cfg.Model had silently changed (and the next successful save would
-// persist it). Contract: a failed UpdateConfig leaves the config exactly as
-// it was.
 func TestIssue3770_BogusPresetLeavesConfigUntouched(t *testing.T) {
 	_, _ = setupConfigTestEnv(t, "")
 
@@ -40,9 +33,6 @@ func TestIssue3770_BogusPresetLeavesConfigUntouched(t *testing.T) {
 	}
 }
 
-// Positive control: a valid preset id still applies, and the same map's
-// model write lands -- proving the moved validation gates only the bogus
-// case, not the whole feature.
 func TestIssue3770_ValidPresetStillApplies(t *testing.T) {
 	_, _ = setupConfigTestEnv(t, "")
 

@@ -11,11 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// Issue #628: RenameSession persisted the new title to disk but never synced
-// ChatBridge.currentSes.Title. The next meta write-back (usage persist,
-// SetSessionLimits, SetPermissionMode — all serialize b.currentSes via
-// AppendMetaToDisk) re-wrote the stale pre-rename title, silently rolling
-// back the rename on disk.
 func TestIssue628_RenameSyncsLiveBridgeTitle(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
@@ -90,10 +85,6 @@ func TestIssue628_RenameSyncsLiveBridgeTitle(t *testing.T) {
 	}
 }
 
-// Renaming a session that is NOT the bridge's current session must leave the
-// current title untouched (sync only targets the matching ID). Pure unit test:
-// no NewChatBridge lifecycle (Close on a bridge that never loaded a session
-// panics in stopA2A on a nil tool registry).
 func TestIssue628_RenameOtherSessionLeavesCurrentAlone(t *testing.T) {
 	bridge := &ChatBridge{currentSes: &session.Session{ID: "current-id", Title: "Original"}}
 

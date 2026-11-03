@@ -1,6 +1,3 @@
-// Package wailskit provides a public facade for the Wails desktop app
-// to access internal config and other services without violating Go's
-// internal package rules.
 package wailskit
 
 import (
@@ -27,7 +24,6 @@ var (
 	globalMu  sync.RWMutex
 )
 
-// SetConfig sets the global config (called after workspace init).
 func SetConfig(cfg *config.Config) {
 	globalMu.Lock()
 	defer globalMu.Unlock()
@@ -41,31 +37,18 @@ func SetConfig(cfg *config.Config) {
 	startConfigFileSync()
 }
 
-// GetGlobalConfig returns the current global config.
 func GetGlobalConfig() *config.Config {
 	globalMu.RLock()
 	defer globalMu.RUnlock()
 	return globalCfg
 }
 
-// configFileState tracks the config file for external changes (#1847).
 var (
 	cfgFileSyncOnce    sync.Once
 	cfgFileLastMod     time.Time
 	cfgFileLastModOnce bool
 )
 
-// startConfigFileSync refreshes globalCfg when the config file changes
-// underneath the desktop process (#1847 case 1/3).
-//
-// The desktop keeps a startup snapshot; a TUI/CLI session (or any other
-// OS process) can patch the file at any time. Saving the stale snapshot
-// deep-merged STALE NON-ZERO values over the newer disk state - silently
-// rolling back the other session's changes (UI display included). The
-// same 2s polling pattern as agentruntime's config hot-reload (project
-// convention: no fsnotify dependency). Our own saves update the tracked
-// mtime first, so self-writes do not trigger a redundant reload; a
-// reload racing a writer is serialized by globalMu.
 func startConfigFileSync() {
 	cfgFileSyncOnce.Do(func() {
 		if st, err := os.Stat(trackedConfigPathLocked()); err == nil {
@@ -83,8 +66,6 @@ func startConfigFileSync() {
 	})
 }
 
-// trackedConfigPathLocked returns the file globalCfg was loaded from
-// (falls back to the default path). Callers hold globalMu.
 func trackedConfigPathLocked() string {
 	if globalCfg != nil && globalCfg.FilePath != "" {
 		return globalCfg.FilePath
@@ -92,8 +73,6 @@ func trackedConfigPathLocked() string {
 	return config.ConfigPath()
 }
 
-// syncCfgFileLocked reloads globalCfg from disk when the file is newer
-// than the last observed mtime. Callers must hold globalMu for writing.
 func syncCfgFileLocked() {
 	path := trackedConfigPathLocked()
 	st, err := os.Stat(path)
@@ -115,9 +94,6 @@ func syncCfgFileLocked() {
 	}
 }
 
-// loadCfgMergedWithInstance mirrors startup initialization: LoadWithInstance
-// when the runtime config has an instance workspace attached, plain Load
-// otherwise (#3769).
 func loadCfgMergedWithInstance(path string, runtime *config.Config) (*config.Config, error) {
 	if runtime != nil && runtime.HasInstanceConfigAttached() {
 		return config.LoadWithInstance(path, runtime.InstanceWorkspace())
@@ -125,16 +101,12 @@ func loadCfgMergedWithInstance(path string, runtime *config.Config) (*config.Con
 	return config.Load(path)
 }
 
-// noteConfigFileSaved records the mtime right after OUR OWN save, so the
-// poller does not treat our write as an external change (callers hold
-// globalMu).
 func noteConfigFileSaved() {
 	if st, err := os.Stat(trackedConfigPathLocked()); err == nil {
 		cfgFileLastMod, cfgFileLastModOnce = st.ModTime(), true
 	}
 }
 
-// ResolveConfigFilePath finds the config file for a workspace directory.
 func ResolveConfigFilePath(workDir string) string {
 	for _, p := range []string{
 		filepath.Join(workDir, "ggcode.yaml"),
@@ -147,13 +119,11 @@ func ResolveConfigFilePath(workDir string) string {
 	return config.ConfigPath()
 }
 
-// LoadConfigForWorkspace loads config for the given workspace.
 func LoadConfigForWorkspace(workDir string) (*config.Config, error) {
 	cfgPath := ResolveConfigFilePath(workDir)
 	return config.LoadWithInstance(cfgPath, workDir)
 }
 
-// NeedsOnboard returns true if the config needs first-time setup.
 func NeedsOnboard() bool {
 	globalMu.RLock()
 	cfg := globalCfg
@@ -164,58 +134,46 @@ func NeedsOnboard() bool {
 	return cfg.NeedsOnboard()
 }
 
-// FullConfig is a complete read-only snapshot for the frontend settings page.
 type FullConfig struct {
-	// LLM
 	Vendor      string `json:"vendor"`
 	Endpoint    string `json:"endpoint"`
 	Model       string `json:"model"`
-	APIKeySet   bool   `json:"apiKeySet"` // true if key exists (never send key to frontend)
+	APIKeySet   bool   `json:"apiKeySet"`
 	Language    string `json:"language"`
 	ExtraPrompt string `json:"extraPrompt"`
-	DefaultMode string `json:"defaultMode"` // auto, allow, confirm
+	DefaultMode string `json:"defaultMode"`
 	MaxIter     int    `json:"maxIterations"`
 	ProbeCtx    bool   `json:"probeContext"`
 
-	// Impersonation
 	ImpersonatePreset        string            `json:"impersonatePreset"`
 	ImpersonateCustomVersion string            `json:"impersonateCustomVersion"`
 	ImpersonateCustomHeaders map[string]string `json:"impersonateCustomHeaders"`
 
-	// SubAgents
 	SubAgentMaxConcurrent int    `json:"subAgentMaxConcurrent"`
 	SubAgentTimeout       string `json:"subAgentTimeout"`
 	SubAgentShowOutput    bool   `json:"subAgentShowOutput"`
 
-	// Swarm
 	SwarmMaxTeammates int    `json:"swarmMaxTeammates"`
 	SwarmTimeout      string `json:"swarmTimeout"`
 	SwarmInboxSize    int    `json:"swarmInboxSize"`
 
-	// A2A
 	A2ADisabled bool   `json:"a2aDisabled"`
 	A2APort     int    `json:"a2aPort"`
 	A2AHost     string `json:"a2aHost"`
 
-	// Stream (video capture)
 	StreamEncoder string `json:"streamEncoder"`
 	StreamFPS     int    `json:"streamFPS"`
 
-	// Knight
 	KnightEnabled    bool   `json:"knightEnabled"`
 	KnightTrustLevel string `json:"knightTrustLevel"`
 
-	// UI
 	SidebarVisible *bool `json:"sidebarVisible"`
 
-	// Workspace
 	WorkDir string `json:"workDir"`
 
-	// State
 	NeedsSetup bool `json:"needsSetup"`
 }
 
-// GetFullConfig returns a complete config snapshot.
 func GetFullConfig() (*FullConfig, error) {
 	globalMu.RLock()
 	cfg := globalCfg
@@ -278,7 +236,6 @@ func GetFullConfig() (*FullConfig, error) {
 	}, nil
 }
 
-// UpdateConfig applies a map of config values and saves.
 func UpdateConfig(values map[string]interface{}) error {
 	globalMu.Lock()
 	defer globalMu.Unlock()
@@ -402,14 +359,7 @@ func UpdateConfig(values map[string]interface{}) error {
 		cfg.Impersonation.CustomVersion = cv
 	}
 	if v, ok := values["impersonatePreset"].(string); ok {
-		// #1815 case 2: this path must go through the same validation and
-		// package-global update as ApplyImpersonation. Writing cfg directly
-		// left activeImpersonation stale, so the provider rebuild that
-		// App.UpdateConfig triggers still baked the OLD headers into the new
-		// provider; and an unknown preset id persisted silently and died at
-		// next init (#614's guard only covered the ApplyImpersonation path).
-		// Preset existence is pre-validated above (#3770) so this branch
-		// cannot fail after earlier fields were written.
+
 		var preset *provider.ImpersonationPreset
 		if v != "none" && v != "" {
 			for _, p := range provider.DefaultImpersonationPresets() {
@@ -483,10 +433,6 @@ func UpdateConfig(values map[string]interface{}) error {
 	return persistTouchedInstanceFields(cfg, values)
 }
 
-// updateConfigInstanceKeys maps UpdateConfig value keys to the top-level YAML
-// config keys they write. Used to detect when an update touches a field that
-// Save() would strip from the global file because it originated from the
-// instance config.
 var updateConfigInstanceKeys = map[string]string{
 	"baseURL":                  "vendors",
 	"vendor":                   "vendor",
@@ -515,11 +461,6 @@ var updateConfigInstanceKeys = map[string]string{
 	"sidebarVisible":           "ui",
 }
 
-// persistTouchedInstanceFields re-persists instance-sourced fields that the
-// current UpdateConfig call modified. cfg.Save() excludes those keys from the
-// global file; without this write-back the in-memory change would only survive
-// until restart (#282). It uses SaveInstanceScoped so the sticky save scope is
-// left untouched (see SetEndpointLimits).
 func persistTouchedInstanceFields(cfg *config.Config, values map[string]interface{}) error {
 	if !cfg.HasInstanceConfigAttached() {
 		return nil
@@ -541,17 +482,6 @@ func persistTouchedInstanceFields(cfg *config.Config, values map[string]interfac
 	return nil
 }
 
-// saveWithInstanceWriteback persists cfg and, when the change touched a
-// vendor that only exists in the merged (instance-bound) view, mirrors it
-// to the instance file and the global snapshot.
-//
-// cfg.Save() funnels vendors through globalOnlyVendors, which drops every
-// vendor absent from globalSnap — so on instance-bound workspaces a NEW
-// vendor/endpoint written by AddCustomEndpoint (or a key binding written by
-// SaveAPIKey) silently vanished on restart (#368). The instance write-back
-// uses marshalInstanceDelta semantics (vendor exists in current but not in
-// globalSnap → included), and the snapshot sync keeps future Save() calls
-// from stripping it from the vendors.yaml write too.
 func saveWithInstanceWriteback(cfg *config.Config, vendor string) error {
 	if err := cfg.Save(); err != nil {
 		return err
@@ -571,7 +501,6 @@ func saveWithInstanceWriteback(cfg *config.Config, vendor string) error {
 	return nil
 }
 
-// SaveAPIKey saves an API key for a vendor/endpoint.
 func SaveAPIKey(vendor, endpoint, apiKey string) error {
 	globalMu.Lock()
 	defer globalMu.Unlock()
@@ -591,7 +520,6 @@ func SaveAPIKey(vendor, endpoint, apiKey string) error {
 	return saveWithInstanceWriteback(cfg, vendor)
 }
 
-// SaveDefaultMode saves the default permission mode.
 func SaveDefaultMode(mode string) error {
 	globalMu.Lock()
 	defer globalMu.Unlock()
@@ -612,14 +540,12 @@ func SaveA2AEnabled(enabled bool) error {
 	return cfg.SaveA2AEnabled(enabled)
 }
 
-// VendorPresets returns vendor preset info for onboarding.
 type VendorPresetInfo struct {
 	ID          string               `json:"id"`
 	DisplayName string               `json:"displayName"`
 	Endpoints   []EndpointPresetInfo `json:"endpoints"`
 }
 
-// EndpointPresetInfo describes an endpoint preset.
 type EndpointPresetInfo struct {
 	ID              string   `json:"id"`
 	DisplayName     string   `json:"displayName"`
@@ -627,7 +553,6 @@ type EndpointPresetInfo struct {
 	DefaultEndpoint bool     `json:"defaultEndpoint"`
 }
 
-// GetVendorPresets returns vendor presets for onboarding.
 func GetVendorPresets() []VendorPresetInfo {
 	presets := config.VendorPresets()
 	result := make([]VendorPresetInfo, len(presets))
@@ -650,7 +575,6 @@ func GetVendorPresets() []VendorPresetInfo {
 	return result
 }
 
-// VendorNames returns available vendor names.
 func VendorNames() []string {
 	globalMu.RLock()
 	defer globalMu.RUnlock()
@@ -666,13 +590,11 @@ func VendorNames() []string {
 	return names
 }
 
-// EndpointInfo describes a vendor endpoint.
 type EndpointInfo struct {
 	Key         string `json:"key"`
 	DisplayName string `json:"displayName"`
 }
 
-// EndpointsForVendor returns endpoint info for a vendor.
 func EndpointsForVendor(vendor string) []EndpointInfo {
 	globalMu.RLock()
 	defer globalMu.RUnlock()
@@ -695,7 +617,6 @@ func EndpointsForVendor(vendor string) []EndpointInfo {
 	return result
 }
 
-// ModelsForEndpoint returns available model names for a vendor and endpoint key.
 func ModelsForEndpoint(vendor, endpointKey string) []string {
 	globalMu.RLock()
 	defer globalMu.RUnlock()
@@ -714,7 +635,6 @@ func ModelsForEndpoint(vendor, endpointKey string) []string {
 	return ep.Models
 }
 
-// ImpersonationPresetInfo describes an impersonation preset for the frontend.
 type ImpersonationPresetInfo struct {
 	ID             string            `json:"id"`
 	DisplayName    string            `json:"displayName"`
@@ -722,7 +642,6 @@ type ImpersonationPresetInfo struct {
 	ExtraHeaders   map[string]string `json:"extraHeaders,omitempty"`
 }
 
-// GetImpersonationPresets returns the real presets from provider.DefaultImpersonationPresets().
 func GetImpersonationPresets() []ImpersonationPresetInfo {
 	presets := provider.DefaultImpersonationPresets()
 	result := make([]ImpersonationPresetInfo, len(presets))
@@ -737,13 +656,6 @@ func GetImpersonationPresets() []ImpersonationPresetInfo {
 	return result
 }
 
-// ApplyImpersonation applies an impersonation preset and persists to config.
-// #614: an unknown presetID is rejected instead of silently disabling
-// impersonation while still persisting the ID (UI/runtime state fork), and
-// an empty/nil customHeaders map means "keep existing headers" — the
-// frontend submits `{} as Record<string,string>` on a plain preset switch,
-// and the old full-struct overwrite wiped user-saved custom headers
-// (#67/#69 struct-overwrite family, 4th instance).
 func ApplyImpersonation(presetID, version string, customHeaders map[string]string) error {
 	globalMu.Lock()
 	chatSnap := GetChatBridge()
@@ -805,10 +717,6 @@ func applyImpersonationLocked(presetID, version string, customHeaders map[string
 	return nil
 }
 
-// refreshRuntimeImpersonationHeaders pushes the currently-active
-// impersonation headers into the bridge's running provider (TUI
-// impersonate_panel.go parity, #1815 case 1). Must not be called while
-// holding globalMu (b.mu inside).
 func (b *ChatBridge) refreshRuntimeImpersonationHeaders() {
 	b.mu.Lock()
 	ag := b.agent
@@ -837,16 +745,13 @@ func (b *ChatBridge) refreshRuntimeImpersonationHeaders() {
 	}
 }
 
-// Ensure unused imports are referenced.
 var (
 	_ = time.Duration(0)
 	_ = stream.StreamConfig{}
 )
 
-// HookConfigJSON is a JSON-serializable wrapper for hooks.HookConfig.
 type HookConfigJSON = hooks.HookConfig
 
-// GetHooks returns the current hooks configuration.
 func (b *ChatBridge) GetHooks() hooks.HookConfig {
 
 	globalMu.RLock()
@@ -857,7 +762,6 @@ func (b *ChatBridge) GetHooks() hooks.HookConfig {
 	return b.cfg.Hooks
 }
 
-// SaveHooks saves the hooks configuration.
 func (b *ChatBridge) SaveHooks(cfg hooks.HookConfig) error {
 
 	globalMu.Lock()
@@ -888,13 +792,11 @@ func (b *ChatBridge) SaveHooks(cfg hooks.HookConfig) error {
 	return nil
 }
 
-// TestHookMatchResult is the result of testing a hook match pattern.
 type TestHookMatchResult struct {
 	Matched bool   `json:"matched"`
 	Error   string `json:"error,omitempty"`
 }
 
-// TestHookMatch tests a hook match pattern against a tool name and raw input.
 func (b *ChatBridge) TestHookMatch(mode, pattern, toolName, rawInput string) TestHookMatchResult {
 	matched, err := hooks.TestMatch(mode, pattern, toolName, rawInput)
 	if err != nil {
@@ -903,7 +805,6 @@ func (b *ChatBridge) TestHookMatch(mode, pattern, toolName, rawInput string) Tes
 	return TestHookMatchResult{Matched: matched}
 }
 
-// TestEndpointResult is the result of testing an endpoint connection.
 type TestEndpointResult struct {
 	OK         bool     `json:"ok"`
 	Message    string   `json:"message"`
@@ -911,7 +812,6 @@ type TestEndpointResult struct {
 	ModelCount int      `json:"modelCount"`
 }
 
-// TestEndpointConnection tests an endpoint by fetching its model list.
 func TestEndpointConnection(protocol, baseURL, apiKey string) (*TestEndpointResult, error) {
 	tmpResolved := &config.ResolvedEndpoint{
 		Protocol: protocol,
@@ -932,8 +832,6 @@ func TestEndpointConnection(protocol, baseURL, apiKey string) (*TestEndpointResu
 	}, nil
 }
 
-// AddCustomEndpoint adds a new endpoint to a vendor in the config and saves.
-// If an endpoint with the same name already exists, only the provided fields are updated.
 func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 	globalMu.Lock()
 	defer globalMu.Unlock()
@@ -981,7 +879,6 @@ func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 	return saveWithInstanceWriteback(cfg, vendor)
 }
 
-// ResolvedEndpointInfo provides the current resolved LLM endpoint details for the frontend.
 type ResolvedEndpointInfo struct {
 	VendorID       string   `json:"vendorId"`
 	VendorName     string   `json:"vendorName"`
@@ -997,7 +894,6 @@ type ResolvedEndpointInfo struct {
 	SupportsVision bool     `json:"supportsVision"`
 }
 
-// GetResolvedEndpoint returns the currently resolved active endpoint info.
 func GetResolvedEndpoint() (*ResolvedEndpointInfo, error) {
 	globalMu.RLock()
 	defer globalMu.RUnlock()
@@ -1027,7 +923,6 @@ func GetResolvedEndpoint() (*ResolvedEndpointInfo, error) {
 	}, nil
 }
 
-// maskAPIKey returns a masked version of the API key for display.
 func maskAPIKey(key string) string {
 	if key == "" {
 		return ""
@@ -1038,9 +933,6 @@ func maskAPIKey(key string) string {
 	return string([]rune(key)[:3]) + "***" + string([]rune(key)[len([]rune(key))-3:])
 }
 
-// FetchModelsForEndpoint dynamically discovers models from an API endpoint.
-// If the target endpoint fails, tries other endpoints with the same BaseURL
-// within the same vendor. Only reports error if ALL same-domain endpoints fail.
 func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string, error) {
 
 	globalMu.RLock()
@@ -1071,7 +963,6 @@ func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string,
 		apiKey = resolveAPIKey(cfg, vendor, endpoint)
 	}
 
-	// Pre-resolve same-domain fallback endpoints while still locked.
 	type fallbackEP struct {
 		name, protocol, baseURL, apiKey string
 	}
@@ -1100,7 +991,6 @@ func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string,
 		return models, nil
 	}
 
-	// Failed — try other endpoints with the same BaseURL (same domain)
 	var errs []string
 	if err != nil {
 		errs = append(errs, fmt.Sprintf("%s: %v", endpoint, err))
@@ -1125,8 +1015,6 @@ func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string,
 	return nil, fmt.Errorf("all endpoints for %s failed: %s", baseURL, strings.Join(errs, "; "))
 }
 
-// resolveAPIKey mimics the resolve chain: endpoint key → vendor key → expand env vars.
-// This avoids calling ResolveEndpoint which requires a model.
 func resolveAPIKey(cfg *config.Config, vendor, endpoint string) string {
 	vc, ok := cfg.Vendors[vendor]
 	if !ok {
@@ -1144,7 +1032,6 @@ func resolveAPIKey(cfg *config.Config, vendor, endpoint string) string {
 	return config.ExpandEnv(key)
 }
 
-// EndpointDetails provides detailed info about a configured endpoint.
 type EndpointDetails struct {
 	DisplayName    string   `json:"displayName"`
 	Protocol       string   `json:"protocol"`
@@ -1159,7 +1046,6 @@ type EndpointDetails struct {
 	SupportsVision bool     `json:"supportsVision"`
 }
 
-// GetEndpointDetails returns details for a specific vendor endpoint.
 func GetEndpointDetails(vendor, endpoint string) *EndpointDetails {
 	globalMu.RLock()
 	defer globalMu.RUnlock()
@@ -1193,21 +1079,6 @@ func GetEndpointDetails(vendor, endpoint string) *EndpointDetails {
 	}
 }
 
-// persistLimitChange persists a vendor limit edit made in the settings UI.
-//
-// When an instance config is attached, the delta goes to the instance override
-// file via SaveInstanceScoped WITHOUT changing the sticky save scope: using
-// SaveScoped("instance") here would redirect all subsequent scope-aware saves
-// (Save*Preference, PatchIMAdapter) to the instance file for the lifetime of
-// this long-held shared config (#282). This path also avoids the full
-// Validate() which requires a non-empty model — limit changes don't affect
-// model validity.
-//
-// When NO instance config is attached, InstanceWorkspace() is "" and the
-// previously unconditional SaveInstanceScoped("") returned nil while
-// silently writing to a garbage instances/e3b0c442… (sha256 of empty string)
-// directory no one parses — the edit was lost on restart (#532). Fall back to
-// the global Save(), the same no-instance path saveWithInstanceWriteback uses.
 func persistLimitChange(cfg *config.Config) error {
 
 	defer noteConfigFileSaved()
@@ -1217,8 +1088,6 @@ func persistLimitChange(cfg *config.Config) error {
 	return cfg.Save()
 }
 
-// SetEndpointLimits updates context_window and max_tokens for a vendor/endpoint.
-// A value of 0 means "auto" (clears the override).
 func SetEndpointLimits(vendor, endpoint string, contextWindow, maxTokens int) error {
 	globalMu.Lock()
 	defer globalMu.Unlock()
@@ -1240,9 +1109,6 @@ func SetEndpointLimits(vendor, endpoint string, contextWindow, maxTokens int) er
 	return persistLimitChange(globalCfg)
 }
 
-// SetModelLimits updates per-model context_window and max_tokens overrides
-// for a vendor/endpoint/model combination. A value of 0 means "auto" (clears
-// the override for that field, falling back to endpoint-level or inference).
 func SetModelLimits(vendor, endpoint, model string, contextWindow, maxTokens int) error {
 	globalMu.Lock()
 	defer globalMu.Unlock()
@@ -1274,14 +1140,12 @@ func SetModelLimits(vendor, endpoint, model string, contextWindow, maxTokens int
 	return persistLimitChange(globalCfg)
 }
 
-// ModelLimitInfo represents per-model limit overrides for the frontend.
 type ModelLimitInfo struct {
 	Model         string `json:"model"`
 	ContextWindow int    `json:"contextWindow"`
 	MaxTokens     int    `json:"maxTokens"`
 }
 
-// GetModelLimits returns all per-model limit overrides for a vendor/endpoint.
 func GetModelLimits(vendor, endpoint string) []ModelLimitInfo {
 	globalMu.RLock()
 	defer globalMu.RUnlock()
@@ -1307,11 +1171,6 @@ func GetModelLimits(vendor, endpoint string) []ModelLimitInfo {
 	return result
 }
 
-// AnthropicOAuthStatus reports whether the stored Anthropic OAuth token is
-// usable OR recoverable (#599 O2 - disk fields only, deliberately no network
-// probe: the #1805 permanent-failure cleanup lives in the resolve path that
-// already owns the network - config_vendor.go deletes the token on
-// invalid_grant, which flips this status by itself).
 func AnthropicOAuthStatus() bool {
 	store := auth.DefaultStore()
 	usable, err := store.HasUsableToken(auth.ProviderAnthropic)
@@ -1327,7 +1186,6 @@ func AnthropicOAuthStatus() bool {
 	return false
 }
 
-// StartAnthropicOAuth initiates the OAuth flow and returns the URL for the user to visit.
 func StartAnthropicOAuth() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1347,23 +1205,6 @@ func StartAnthropicOAuth() (string, error) {
 	return flow.AutoURL, nil
 }
 
-// CompleteAnthropicOAuth blocks until the OAuth callback is received and the token is saved.
-// Should be called from a goroutine after the browser is opened.
-//
-// #670: single-flight — concurrent callers (double-click / event replay)
-// previously raced as independent waiters on the shared flow's capacity-1
-// callback channel; the loser returned a misleading "waiting for auth code"
-// failure even though the winner had actually saved the token. Concurrent
-// callers now join the in-flight call and observe its outcome.
-//
-// #674: the flight is bound to the flow generation. A caller arriving while
-// a completion from an OLDER generation is still parked (user re-clicked
-// login; Start closed the old flow and installed a new one) must NOT
-// inherit the old flight's outcome — that hijack surfaced the old flow's
-// failure to the fresh login while the new flow itself ended up with no
-// waiter, leaking its callback listener and dropping the new auth code.
-// Such callers wait for the stale flight to release the slot and then run
-// their own completion against the current flow.
 func CompleteAnthropicOAuth() (err error) {
 	var call *oauthCompleteCall
 	var flow *auth.ClaudeOAuthFlow
@@ -1469,24 +1310,12 @@ func CompleteAnthropicOAuth() (err error) {
 	return nil
 }
 
-// refreshRunningProviderAfterAuth nudges the active bridge to rebuild its
-// provider so a freshly persisted credential is picked up immediately
-// instead of on the next config save or app restart (#616).
 func refreshRunningProviderAfterAuth() {
 	if bridge := GetChatBridge(); bridge != nil {
 		bridge.OnConfigProviderChanged()
 	}
 }
 
-// LogoutAnthropicOAuth removes the stored Anthropic OAuth token.
-//
-// #670: logout is the mirror image of CompleteAnthropicOAuth's #616 fix —
-// the running provider only re-reads credentials when it is rebuilt, so
-// without the symmetric refresh below the provider kept authenticating
-// with the deleted access token until it expired, while the UI (which
-// reads the store) already showed "disconnected". The in-flight OAuth
-// flow (callback listener + receiver goroutine) is also cancelled so it
-// does not linger until Complete's timeout.
 func LogoutAnthropicOAuth() error {
 
 	oauthMu.Lock()
@@ -1507,33 +1336,14 @@ var (
 	oauthMu          sync.Mutex
 	currentOAuthFlow *auth.ClaudeOAuthFlow
 
-	// #674: flow generation counter. Bumped under oauthMu whenever the
-	// current flow is replaced (StartAnthropicOAuth) or torn down
-	// (LogoutAnthropicOAuth). Completions snapshot it into their
-	// single-flight slot; joiners only inherit a flight of the SAME
-	// generation, so a re-login's fresh Complete is never hijacked by a
-	// stale flight's failure.
 	oauthFlowEpoch uint64
 
-	// #674: logout generation counter. Bumped under oauthMu at the top of
-	// LogoutAnthropicOAuth. A completion whose uncancellable token
-	// exchange finishes after the logout compares its snapshotted value
-	// against the current one and skips Save — the token must not revive.
 	oauthLogoutGen uint64
 
-	// #670 single-flight slot for CompleteAnthropicOAuth.
 	oauthCompleteMu       sync.Mutex
 	oauthCompleteInFlight *oauthCompleteCall
 )
 
-// oauthCompleteCall represents one in-flight CompleteAnthropicOAuth run.
-// The winner writes err exactly once (under oauthCompleteMu, before
-// closing done); concurrent losers wait on done and observe the shared
-// outcome instead of racing the flow's capacity-1 callback channel (#670).
-// flowEpoch/logoutGen snapshot the OAuth generations at slot acquisition
-// (#674): joiners from a different flow generation run their own
-// completion instead of inheriting a stale outcome, and a winner whose
-// exchange straddles a logout refuses to save the revived token.
 type oauthCompleteCall struct {
 	done      chan struct{}
 	err       error
@@ -1541,10 +1351,6 @@ type oauthCompleteCall struct {
 	logoutGen uint64
 }
 
-// supersededByLogout reports whether a logout ran after this call snapshotted
-// the logout generation (#674). Used to gate the post-exchange token Save: an
-// uncancellable exchange that straddles a logout must not revive the token
-// the user just deleted.
 func (c *oauthCompleteCall) supersededByLogout() bool {
 	oauthMu.Lock()
 	defer oauthMu.Unlock()

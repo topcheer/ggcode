@@ -7,9 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// #4124: sendContentUserSummary drives the liveHistory/tunnel push for the
-// pasted-image path. Matrix: text-only, image-only, mixed, empty, and
-// whitespace-only text blocks.
 func TestSendContentUserSummary(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -33,8 +30,6 @@ func TestSendContentUserSummary(t *testing.T) {
 	}
 }
 
-// #4124 contract: a non-empty summary must be non-empty so the liveHistory
-// append + tunnel push never get skipped for a pasted image round.
 func TestSendContentUserSummaryImageNeverEmpty(t *testing.T) {
 	if sendContentUserSummary([]provider.ContentBlock{{Type: "image", ImageMIME: "image/jpeg"}}) == "" {
 		t.Fatal("image-only paste must produce a non-empty summary or the round becomes an orphan turn")

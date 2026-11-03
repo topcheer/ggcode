@@ -8,14 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/plugin"
 )
 
-// TestSetMCPServerEnabledEnablePathPersistWins verifies #2872: the enable
-// path must mirror #2389's disable semantics - when a manager is present but
-// the name is not in its live plugin set (definition joined after session
-// start: workspace .mcp.json edit, migration file, stale scope after a
-// workspace switch), Reconnect has no rebuild path and returned false, so
-// the UI reported "enable failed" forever even though the persist had
-// already hit disk. The fix reports the persist result and additionally
-// rebuilds the session MCP set so the server actually connects in-session.
 func TestSetMCPServerEnabledEnablePathPersistWins(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -48,11 +40,6 @@ func TestSetMCPServerEnabledEnablePathPersistWins(t *testing.T) {
 	}
 }
 
-// TestSetMCPServerEnabledEnablePathReloadIsHarmless asserts the rebuild path
-// does not disturb the manager when the merged origin genuinely has nothing
-// for the name (definition absent everywhere): the return value still
-// reflects the persist (true), matching the no-manager branch's semantics
-// for the same persist.
 func TestSetMCPServerEnabledEnablePathReloadIsHarmless(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

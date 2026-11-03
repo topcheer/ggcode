@@ -10,10 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// issue740Setup loads an isolated config (HOME redirected to a temp dir) and
-// installs it as the global config, returning the cfg and its file path.
-// The base shape mirrors zz_issue734_test.go: a single vendor/endpoint with
-// known scalar fields so a partial-mutation leak is observable field by field.
 func issue740Setup(t *testing.T) (*config.Config, string) {
 	t.Helper()
 	home := t.TempDir()
@@ -51,8 +47,6 @@ vendors:
 	return cfg, cfgPath
 }
 
-// issue740AssertUntouched verifies the in-memory cfg and the GetFullConfig
-// snapshot still report the pristine base values after a failed UpdateConfig.
 func issue740AssertUntouched(t *testing.T, cfg *config.Config, where string) {
 	t.Helper()
 	if cfg.Vendor != "a" {
@@ -82,13 +76,6 @@ func issue740AssertUntouched(t *testing.T, cfg *config.Config, where string) {
 	}
 }
 
-// TestIssue740BatchVendorErrorLeavesConfigUntouched reproduces the SettingsPage
-// six-field batch shape: several valid fields plus a vendor that does not
-// exist, with a baseURL update targeting it. Before #740 the vendor/endpoint
-// existence check ran mid-chain, so every earlier field (vendor, endpoint,
-// model, language, defaultMode, maxIterations...) was already written into the
-// shared in-memory cfg while Save() never ran: the UI reported the failed
-// values as active and the next successful save silently persisted them.
 func TestIssue740BatchVendorErrorLeavesConfigUntouched(t *testing.T) {
 	cfg, cfgPath := issue740Setup(t)
 	before, err := os.ReadFile(cfgPath)
@@ -122,8 +109,6 @@ func TestIssue740BatchVendorErrorLeavesConfigUntouched(t *testing.T) {
 	}
 }
 
-// TestIssue740BatchEndpointErrorLeavesConfigUntouched covers the second
-// mid-chain existence failure: valid vendor, nonexistent endpoint.
 func TestIssue740BatchEndpointErrorLeavesConfigUntouched(t *testing.T) {
 	cfg, cfgPath := issue740Setup(t)
 	before, err := os.ReadFile(cfgPath)
@@ -155,9 +140,6 @@ func TestIssue740BatchEndpointErrorLeavesConfigUntouched(t *testing.T) {
 	}
 }
 
-// TestIssue740BadDurationsLeaveConfigUntouched covers the two duration parse
-// failures (subAgentTimeout / swarmTimeout). They sat at the very END of the
-// old mutation chain, so a bad value leaked every preceding field.
 func TestIssue740BadDurationsLeaveConfigUntouched(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -222,10 +204,6 @@ func TestIssue740BadDurationsLeaveConfigUntouched(t *testing.T) {
 	}
 }
 
-// TestIssue740ValidBatchStillAppliesAndSaves guards the happy path: a fully
-// valid batch must keep applying every field and persisting via Save(), and a
-// retry after a failed update must still succeed once the offending value is
-// corrected (no residual poisoned state from the failed attempt).
 func TestIssue740ValidBatchStillAppliesAndSaves(t *testing.T) {
 	cfg, cfgPath := issue740Setup(t)
 

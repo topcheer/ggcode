@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// #1504 case 3 pin: deliverUnix must use a bounded context - a hung
-// osascript/notify-send cannot wedge the single worker (queue-full would
-// then wedge the agent event-dispatch goroutine).
 func Test1504DeliverUnixBounded(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
@@ -25,9 +22,6 @@ func Test1504DeliverUnixBounded(t *testing.T) {
 	}
 }
 
-// #1504 case 4/5 structural pins: the callbacks must exist in source.
-// (Wails lifecycle/runtime behavior is not unit-testable headless; the
-// deliverUnix bound above is the behavioral one.)
 func Test1504SourceContracts(t *testing.T) {
 	srcs := map[string]string{
 		"main.go":          "runtime.WindowShow(app.ctx)",

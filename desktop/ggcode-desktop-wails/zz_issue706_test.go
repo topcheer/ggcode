@@ -7,12 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// #706: with a FULL main buffer, an interactive event must not be dropped —
-// it is dispatched through the lossless bypass instead (ctx==nil keeps the
-// dispatch a no-op, but the important property is the call RETURNS and does
-// not drop silently: the bypass path is taken, not the drop path). Prove the
-// classification end-to-end: fill the buffer, enqueue an interactive event,
-// and verify it did not get dropped while the non-interactive one was.
 func TestIssue706_InteractiveEventNotDroppedOnFullBuffer(t *testing.T) {
 	debug.Init()
 	a := NewApp()
@@ -46,8 +40,6 @@ func TestIssue706_InteractiveEventNotDroppedOnFullBuffer(t *testing.T) {
 	}
 }
 
-// #706: classification — exactly the interactive event names get the
-// lossless treatment; regenerable stream traffic does not.
 func TestIssue706_InteractiveUIEventClassification(t *testing.T) {
 	interactive := []string{
 		"ask_user:request", "approval:request",
@@ -66,10 +58,6 @@ func TestIssue706_InteractiveUIEventClassification(t *testing.T) {
 	}
 }
 
-// #706: request and cancel must never BOTH be lost. With a permanently full
-// buffer and a dead consumer, enqueueing a request followed by its cancel
-// must complete both (bypass path) — the frontend dialog lifecycle stays
-// consistent even in the worst case the #701 fix was designed for.
 func TestIssue706_RequestAndCancelBothSurviveFullBuffer(t *testing.T) {
 	debug.Init()
 	a := NewApp()

@@ -27,8 +27,6 @@ func issue2741WriteSession(t *testing.T, dir, id, title string) {
 	}
 }
 
-// blockingLoadStore gates store.Load to hold LoadSession inside the
-// disk-IO window while the test injects a run start.
 type blockingLoadStore struct {
 	session.Store
 	entered chan struct{}
@@ -50,10 +48,6 @@ func issue2741CurrentSessionID(b *ChatBridge) string {
 	return b.currentSes.ID
 }
 
-// Run starts mid-IO must abort the load: the previously-selected session
-// stays current, the run's cancel stays untouched, the target session's
-// lock is released, and no generation bump happens (the in-flight run must
-// keep owning the finish path for the session it belongs to).
 func TestIssue2741_LoadSessionRefusesWhenRunStartsDuringIO(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
@@ -133,9 +127,6 @@ func TestIssue2741_LoadSessionRefusesWhenRunStartsDuringIO(t *testing.T) {
 	lock.Release()
 }
 
-// A clean load (no in-flight run) must bump runGeneration exactly once so
-// any run that raced into the residual window between the busy re-check
-// and setSessionState is superseded and self-drops (#489 emitIfCurrent).
 func TestIssue2741_LoadSessionBumpsGenerationOnInstall(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)

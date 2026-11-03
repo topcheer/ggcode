@@ -8,34 +8,22 @@ import (
 	"github.com/topcheer/ggcode/internal/usage"
 )
 
-// UsageWindowInfo is the JSON shape of one rolling window for the frontend.
 type UsageWindowInfo struct {
 	Label       string  `json:"label"`
 	UsedPercent float64 `json:"usedPercent"`
-	ResetsAt    string  `json:"resetsAt"` // RFC3339, "" when unknown
+	ResetsAt    string  `json:"resetsAt"`
 }
 
-// UsageInfoResult is the JSON shape returned to the desktop frontend.
 type UsageInfoResult struct {
 	Vendor  string            `json:"vendor"`
 	Source  string            `json:"source"`
-	Balance *float64          `json:"balance"` // null when the vendor has no PAYG balance
+	Balance *float64          `json:"balance"`
 	Windows []UsageWindowInfo `json:"windows"`
-	Error   string            `json:"error"` // non-empty when the probe failed (shown as a muted hint)
+	Error   string            `json:"error"`
 }
 
-// usageService is the process-wide cache (3min TTL + negative cache +
-// singleflight from #2352); desktop polling and any later consumer share it.
-// #2150 batch 2b: DefaultService is the single registration site for all
-// P1 probes - consumers no longer inline their own (three-list drift made
-// kimi/minimax/anthropic-oauth/openrouter/siliconflow invisible here and
-// in the TUI until both were updated in lockstep).
 var usageService = usage.DefaultService()
 
-// GetUsageInfo resolves the ACTIVE vendor from the global config and returns
-// its live usage/balance through the cached probe layer. Meant to be polled
-// by the desktop UI; errors degrade to a result with Error set (never a Wails
-// error popup - usage is ambient information, not a blocking action).
 func (b *ChatBridge) GetUsageInfo() UsageInfoResult {
 	res := UsageInfoResult{Windows: []UsageWindowInfo{}}
 	cfg := GetGlobalConfig()
@@ -82,10 +70,6 @@ func (b *ChatBridge) GetUsageInfo() UsageInfoResult {
 
 type usageEndpoint struct{ baseURL, apiKey string }
 
-// usageEndpointFor resolves the active endpoint's base URL and API key from
-// the loaded config. #2284-A strips config-managed secrets from child
-// shells, but the in-process config retains the resolved key (keys.env
-// seeding happens inside config.Load).
 func usageEndpointFor(cfg *config.Config) usageEndpoint {
 	v, ok := cfg.Vendors[cfg.Vendor]
 	if !ok {
