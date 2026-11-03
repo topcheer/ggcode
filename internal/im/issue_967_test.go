@@ -1,19 +1,5 @@
 package im
 
-// Regression tests for GitHub issue #967: binding ownership protocol
-// asymmetries.
-//
-//	1: EnableBinding must reject hijacking a binding owned by another LIVE
-//	   session (same #689/#693 guard as UnmuteBinding/UnmuteAll).
-//	2: EnableAll must claim (memory + store) and DisableAll must clear
-//	   LastSessionID in the store, mirroring EnableBinding/DisableBinding.
-//	3: HandleInbound must compare the TRIMMED inbound ChannelID against the
-//	   (trimmed) persisted binding.ChannelID - a channel ID with surrounding
-//	   whitespace must no longer be permanently denied after the first
-//	   message.
-//	4: UnbindChannel/DeleteBinding/UnbindAdapter must cascade stopAdapter so
-//	   no live adapter goroutine survives its binding's removal.
-
 import (
 	"context"
 	"encoding/json"
@@ -25,8 +11,6 @@ import (
 	"testing"
 	"time"
 )
-
-// ---- shared helpers ----
 
 type okBridge967 struct{}
 
@@ -85,8 +69,6 @@ func newManager967(t *testing.T, withLivePeer bool) (*Manager, *MemoryBindingSto
 		_ = os.WriteFile(fmt.Sprintf("%s/%d-peer-967.json", instancesDir, info.PID), mustMarshal967(t, info), 0o644)
 	}
 
-	// Register self so instanceDetect is non-nil; with no peer file above,
-	// foreignOwnerPossiblyAliveLocked reports false (dead owner).
 	if _, _, err := m.RegisterInstance(dir, ""); err != nil {
 		t.Fatalf("RegisterInstance: %v", err)
 	}
@@ -111,8 +93,6 @@ func disabledForeignBinding967(workspace string) *ChannelBinding {
 	}
 }
 
-// ---- Issue 1: EnableBinding foreign-live hijack rejection ----
-
 func TestIssue967EnableBindingRejectsForeignLiveOwner(t *testing.T) {
 	m, _ := newManager967(t, true)
 	m.disabledBindings["test-adp"] = disabledForeignBinding967(m.session.Workspace)
@@ -124,7 +104,7 @@ func TestIssue967EnableBindingRejectsForeignLiveOwner(t *testing.T) {
 	if !strings.Contains(err.Error(), "another live session") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// The binding must STAY disabled and ownership must be untouched.
+
 	if _, ok := m.currentBindings["test-adp"]; ok {
 		t.Fatal("rejected EnableBinding must not move the binding to currentBindings")
 	}
@@ -134,7 +114,7 @@ func TestIssue967EnableBindingRejectsForeignLiveOwner(t *testing.T) {
 }
 
 func TestIssue967EnableBindingDeadOwnerTakeoverAllowed(t *testing.T) {
-	m, _ := newManager967(t, false) // no live peer -> foreign owner is dead
+	m, _ := newManager967(t, false)
 	m.disabledBindings["test-adp"] = disabledForeignBinding967(m.session.Workspace)
 
 	if err := m.EnableBinding("test-adp"); err != nil {
@@ -145,8 +125,6 @@ func TestIssue967EnableBindingDeadOwnerTakeoverAllowed(t *testing.T) {
 		t.Fatalf("binding must be re-enabled and claimed for sess-A, got %+v", b)
 	}
 }
-
-// ---- Issue 2: EnableAll/DisableAll symmetric claim/clear ----
 
 func TestIssue967DisableAllClearsStoreSessionID(t *testing.T) {
 	m, store := newManager967(t, false)
@@ -177,8 +155,7 @@ func TestIssue967DisableAllClearsStoreSessionID(t *testing.T) {
 func TestIssue967EnableAllClaimsAndSkipsForeignLive(t *testing.T) {
 	m, store := newManager967(t, true)
 	ws := m.session.Workspace
-	// Seed store rows so the EnableAll claim (UpdateSessionID) has a row to
-	// update: owned: eligible for claim; foreignLive: must be skipped.
+
 	if err := store.Save(ChannelBinding{Workspace: ws, Adapter: "adp-ours", ChannelID: "c1"}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -213,8 +190,6 @@ func TestIssue967EnableAllClaimsAndSkipsForeignLive(t *testing.T) {
 	}
 }
 
-// ---- Issue 3: ChannelID with whitespace must not lock out ----
-
 func TestIssue967HandleInboundChannelIDWhitespaceNotDenied(t *testing.T) {
 	m, store := newManager967(t, false)
 	ws := m.session.Workspace
@@ -223,8 +198,6 @@ func TestIssue967HandleInboundChannelIDWhitespaceNotDenied(t *testing.T) {
 	}
 	m.currentBindings["test-adp"] = &ChannelBinding{Workspace: ws, Adapter: "test-adp"}
 
-	// First inbound: channel ID has surrounding whitespace. Before the fix
-	// this returned ErrInboundChannelDenied (write trims, compare didn't).
 	msg := InboundMessage{
 		Envelope: Envelope{Adapter: "test-adp", ChannelID: "  ch-967  ", MessageID: "m1"},
 		Text:     "hello",
@@ -232,14 +205,13 @@ func TestIssue967HandleInboundChannelIDWhitespaceNotDenied(t *testing.T) {
 	if err := m.HandleInbound(context.Background(), msg); err != nil {
 		t.Fatalf("first inbound with whitespace-padded channel ID must be accepted, got: %v", err)
 	}
-	// Second inbound from the same padded channel must also be accepted
-	// (regression for the "permanently locked" symptom).
+
 	msg2 := msg
 	msg2.Envelope.MessageID = "m2"
 	if err := m.HandleInbound(context.Background(), msg2); err != nil {
 		t.Fatalf("second inbound from padded channel ID must be accepted, got: %v", err)
 	}
-	// A DIFFERENT channel must still be denied.
+
 	msg3 := InboundMessage{
 		Envelope: Envelope{Adapter: "test-adp", ChannelID: "other-channel", MessageID: "m3"},
 		Text:     "intruder",
@@ -248,8 +220,6 @@ func TestIssue967HandleInboundChannelIDWhitespaceNotDenied(t *testing.T) {
 		t.Fatal("inbound from a different channel must still be denied")
 	}
 }
-
-// ---- Ancillary: fanOutSend must report ctx-cancellation drops ----
 
 func TestIssue967EmitCancelledCtxReportsError(t *testing.T) {
 	m, _ := newManager967(t, false)
@@ -270,8 +240,6 @@ func TestIssue967EmitCancelledCtxReportsError(t *testing.T) {
 	}
 }
 
-// ---- Ancillary: HandleInbound persist failure must roll back binding ----
-
 func TestIssue967HandleInboundPersistFailureRollsBack(t *testing.T) {
 	m, _ := newManager967(t, false)
 	ws := m.session.Workspace
@@ -285,15 +253,12 @@ func TestIssue967HandleInboundPersistFailureRollsBack(t *testing.T) {
 	if err := m.HandleInbound(context.Background(), msg); err == nil {
 		t.Fatal("persist failure must surface as an error from HandleInbound")
 	}
-	// The in-memory mutations (ChannelID + LastInboundMessageID) must be
-	// rolled back so memory matches the unchanged store entry.
+
 	b := m.currentBindings["test-adp"]
 	if b.ChannelID != "" || b.LastInboundMessageID != "" {
 		t.Fatalf("binding must roll back on persist failure, got ChannelID=%q LastInboundMessageID=%q", b.ChannelID, b.LastInboundMessageID)
 	}
 }
-
-// ---- Issue 4: unbind paths must stop the adapter ----
 
 func TestIssue967UnbindPathsStopAdapter(t *testing.T) {
 	type step struct {
@@ -321,13 +286,13 @@ func TestIssue967UnbindPathsStopAdapter(t *testing.T) {
 			if err := st.fn(m); err != nil {
 				t.Fatalf("%s: %v", st.name, err)
 			}
-			// Cancel must have been invoked by stopAdapter.
+
 			select {
 			case <-ctx.Done():
 			default:
 				t.Fatalf("%s must stop the adapter (cancel not invoked)", st.name)
 			}
-			// Sink must be closed and unregistered.
+
 			if sink.closeCount() == 0 {
 				t.Fatalf("%s must close the adapter connection", st.name)
 			}

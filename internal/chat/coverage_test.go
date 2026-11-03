@@ -162,7 +162,6 @@ func TestToolIconCoverage(t *testing.T) {
 func TestToolIconAnimationFrames(t *testing.T) {
 	s := Styles{}
 
-	// Running icon should change with frame
 	SetToolAnimFrame(0)
 	frame0 := s.ToolIcon(StatusRunning)
 	SetToolAnimFrame(1)
@@ -179,18 +178,16 @@ func TestToolIconAnimationFrames(t *testing.T) {
 		t.Errorf("expected distinct animation frames, got %q %q %q %q", frame0, frame1, frame2, frame3)
 	}
 
-	// Frame should wrap around
-	SetToolAnimFrame(4) // same as frame 0
+	SetToolAnimFrame(4)
 	if got := s.ToolIcon(StatusRunning); got != frame0 {
 		t.Errorf("expected frame wrap to %q, got %q", frame0, got)
 	}
 
-	// Pending should always be the static circle, regardless of frame
 	pendingIcon := s.ToolIcon(StatusPending)
 	if pendingIcon != "○" {
 		t.Errorf("expected pending icon ○, got %q", pendingIcon)
 	}
-	// Running should differ from pending
+
 	if frame0 == pendingIcon {
 		t.Errorf("running icon %q should differ from pending %q", frame0, pendingIcon)
 	}
@@ -216,5 +213,5 @@ func TestGetToolBodyBehaviorCoverage(t *testing.T) {
 }
 
 func TestStylesStringCoverage(t *testing.T) {
-	// Styles.String() may not exist; just verify no panic
+
 }

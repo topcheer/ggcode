@@ -1,9 +1,5 @@
 package provider
 
-// sa-81: service_tier support in the OpenAI Responses adapter. The tier hint
-// must ride the request's `service_tier` field and degrade gracefully when an
-// OpenAI-compatible gateway predates the parameter.
-
 import (
 	"context"
 	"encoding/json"

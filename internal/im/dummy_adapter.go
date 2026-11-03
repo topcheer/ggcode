@@ -87,10 +87,6 @@ func (a *dummyAdapter) autoBind() error {
 	return err
 }
 
-// --- config helpers ---
-// Named with dummy- prefix to avoid conflict with stringValue (qq_adapter.go:1380)
-// and intValue (qq_adapter.go:1435).
-
 func dummyStringValue(m map[string]interface{}, key, defaultVal string) string {
 	if m == nil {
 		return defaultVal

@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// --- Issue #971 Problem 1: lsp_* tool results must hit the hidden LSP branch
-// (empty message), NOT the MCP formatting path, regardless of the "_" in the
-// tool name.
-
 func TestFormatSpecialIMToolResult_LSPToolsHidden(t *testing.T) {
 	lspTools := []string{
 		"lsp_definition", "lsp_references", "lsp_document_highlights",
@@ -36,8 +32,6 @@ func TestFormatSpecialIMToolResult_LSPToolsHidden(t *testing.T) {
 	}
 }
 
-// --- Issue #971 Problem 2: previously missing imLabel keys.
-
 func TestIMLabel_Issue971MissingKeys(t *testing.T) {
 	cases := []struct {
 		key string
@@ -57,8 +51,6 @@ func TestIMLabel_Issue971MissingKeys(t *testing.T) {
 		}
 	}
 }
-
-// --- Issue #971 Problem 3: fence-safe code block wrapping.
 
 func TestImFenceLen(t *testing.T) {
 	cases := []struct {
@@ -81,7 +73,7 @@ func TestImFenceLen(t *testing.T) {
 func TestImCodeBlock_FenceSafe(t *testing.T) {
 	content := "func main() {\n\tfmt.Println(```go nested```)\n}"
 	block := imCodeBlock(content)
-	// Outer fence must be 4 backticks and must wrap the whole content.
+
 	if !strings.HasPrefix(block, "````\n") || !strings.HasSuffix(block, "\n````") {
 		t.Fatalf("imCodeBlock did not use extended fence: %q", block)
 	}
@@ -89,7 +81,7 @@ func TestImCodeBlock_FenceSafe(t *testing.T) {
 	if inner != content {
 		t.Fatalf("imCodeBlock altered content: %q", inner)
 	}
-	// A simple 3-fence content still uses the standard triple fence.
+
 	simple := imCodeBlock("echo hello")
 	if !strings.HasPrefix(simple, "```\n") || !strings.HasSuffix(simple, "\n```") {
 		t.Fatalf("imCodeBlock should use 3-tick fence for plain content: %q", simple)

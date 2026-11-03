@@ -188,6 +188,6 @@ func TestFormatAskUserPrompt_Multi(t *testing.T) {
 func TestFormatAskUserPrompt_EmptyQuestions(t *testing.T) {
 	req := toolpkg.AskUserRequest{Title: "Title"}
 	got := FormatAskUserPrompt("en", req)
-	// May return empty or minimal output for empty questions
+
 	_ = got
 }

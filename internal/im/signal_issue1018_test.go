@@ -13,11 +13,9 @@ func TestSignalResolveImageDataURLNoSemicolon(t *testing.T) {
 	a := &signalAdapter{}
 	_, _, _, err := a.resolveImageBytes(t.Context(), ExtractedImage{
 		Kind: "data_url",
-		Data: "data:image/png,%89PNG%0D%0A", // no ";base64" marker
+		Data: "data:image/png,%89PNG%0D%0A",
 	})
-	// The critical assertion is that we got here without panicking; either a
-	// clean error (base64 decode of URL-encoded data fails) or success with a
-	// sane mime is acceptable.
+
 	if err != nil && !strings.Contains(err.Error(), "decode data URL") {
 		t.Fatalf("unexpected error shape: %v", err)
 	}

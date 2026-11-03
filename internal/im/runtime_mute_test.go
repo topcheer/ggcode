@@ -15,7 +15,6 @@ func TestMuteUnmuteBinding(t *testing.T) {
 		Workspace: "/workspace/test",
 	})
 
-	// Bind a channel
 	_, err := mgr.BindChannel(ChannelBinding{
 		Workspace: "/workspace/test",
 		Platform:  PlatformQQ,
@@ -27,17 +26,14 @@ func TestMuteUnmuteBinding(t *testing.T) {
 		t.Fatalf("BindChannel: %v", err)
 	}
 
-	// Verify not muted
 	if mgr.IsBindingMuted("qq-bot-1") {
 		t.Fatal("should not be muted initially")
 	}
 
-	// Mute the binding
 	if err := mgr.MuteBinding("qq-bot-1"); err != nil {
 		t.Fatalf("MuteBinding: %v", err)
 	}
 
-	// Verify binding stays in currentBindings but is marked muted
 	bindings := mgr.CurrentBindings()
 	if len(bindings) != 1 {
 		t.Fatalf("expected 1 binding after mute (stays in currentBindings), got %d", len(bindings))
@@ -46,12 +42,10 @@ func TestMuteUnmuteBinding(t *testing.T) {
 		t.Fatal("expected binding to be marked Muted")
 	}
 
-	// Verify it's muted
 	if !mgr.IsBindingMuted("qq-bot-1") {
 		t.Fatal("should be muted")
 	}
 
-	// Verify muted bindings snapshot
 	muted := mgr.MutedBindings()
 	if len(muted) != 1 {
 		t.Fatalf("expected 1 muted binding, got %d", len(muted))
@@ -63,23 +57,19 @@ func TestMuteUnmuteBinding(t *testing.T) {
 		t.Fatalf("expected channelID channel-123, got %s", muted[0].ChannelID)
 	}
 
-	// Verify snapshot includes muted bindings
 	snapshot := mgr.Snapshot()
 	if len(snapshot.MutedBindings) != 1 {
 		t.Fatalf("expected 1 muted binding in snapshot, got %d", len(snapshot.MutedBindings))
 	}
 
-	// Mute again should fail
 	if err := mgr.MuteBinding("qq-bot-1"); err != ErrNoChannelBound {
 		t.Fatalf("expected ErrNoChannelBound for already-muted, got %v", err)
 	}
 
-	// Unmute the binding
 	if err := mgr.UnmuteBinding("qq-bot-1"); err != nil {
 		t.Fatalf("UnmuteBinding: %v", err)
 	}
 
-	// Verify it's back in currentBindings
 	bindings = mgr.CurrentBindings()
 	if len(bindings) != 1 {
 		t.Fatalf("expected 1 binding after unmute, got %d", len(bindings))
@@ -91,12 +81,10 @@ func TestMuteUnmuteBinding(t *testing.T) {
 		t.Fatalf("expected channelID channel-123, got %s", bindings[0].ChannelID)
 	}
 
-	// Verify it's not muted
 	if mgr.IsBindingMuted("qq-bot-1") {
 		t.Fatal("should not be muted after unmute")
 	}
 
-	// Unmute again should fail
 	if err := mgr.UnmuteBinding("qq-bot-1"); err != ErrNoChannelBound {
 		t.Fatalf("expected ErrNoChannelBound for already-active, got %v", err)
 	}
@@ -109,7 +97,6 @@ func TestMuteAllUnmuteAll(t *testing.T) {
 		Workspace: "/workspace/test",
 	})
 
-	// Bind three channels
 	adapters := []struct {
 		adapter   string
 		platform  Platform
@@ -131,7 +118,6 @@ func TestMuteAllUnmuteAll(t *testing.T) {
 		}
 	}
 
-	// Mute all
 	count, err := mgr.MuteAll()
 	if err != nil {
 		t.Fatalf("MuteAll: %v", err)
@@ -140,7 +126,6 @@ func TestMuteAllUnmuteAll(t *testing.T) {
 		t.Fatalf("expected 3 muted, got %d", count)
 	}
 
-	// Verify all bindings are still present but muted
 	allBindings := mgr.CurrentBindings()
 	if len(allBindings) != 3 {
 		t.Fatalf("expected 3 bindings after MuteAll (stays in currentBindings), got %d", len(allBindings))
@@ -154,7 +139,6 @@ func TestMuteAllUnmuteAll(t *testing.T) {
 		t.Fatalf("expected 3 muted bindings, got %d", len(mgr.MutedBindings()))
 	}
 
-	// MuteAll again should return 0 (nothing to mute)
 	count, err = mgr.MuteAll()
 	if err != nil {
 		t.Fatalf("MuteAll (empty): %v", err)
@@ -163,7 +147,6 @@ func TestMuteAllUnmuteAll(t *testing.T) {
 		t.Fatalf("expected 0 on second MuteAll, got %d", count)
 	}
 
-	// Unmute all
 	count, err = mgr.UnmuteAll()
 	if err != nil {
 		t.Fatalf("UnmuteAll: %v", err)
@@ -172,7 +155,6 @@ func TestMuteAllUnmuteAll(t *testing.T) {
 		t.Fatalf("expected 3 unmuted, got %d", count)
 	}
 
-	// Verify all are active again
 	if len(mgr.CurrentBindings()) != 3 {
 		t.Fatalf("expected 3 active bindings after UnmuteAll, got %d", len(mgr.CurrentBindings()))
 	}
@@ -180,7 +162,6 @@ func TestMuteAllUnmuteAll(t *testing.T) {
 		t.Fatalf("expected 0 muted bindings after UnmuteAll, got %d", len(mgr.MutedBindings()))
 	}
 
-	// Verify snapshot is clean
 	snapshot := mgr.Snapshot()
 	if len(snapshot.MutedBindings) != 0 {
 		t.Fatalf("expected 0 muted in snapshot after UnmuteAll, got %d", len(snapshot.MutedBindings))
@@ -197,7 +178,6 @@ func TestMuteAndDisableAreIndependent(t *testing.T) {
 		Workspace: "/workspace/test",
 	})
 
-	// Bind two channels
 	_, _ = mgr.BindChannel(ChannelBinding{
 		Workspace: "/workspace/test",
 		Platform:  PlatformQQ,
@@ -211,17 +191,14 @@ func TestMuteAndDisableAreIndependent(t *testing.T) {
 		ChannelID: "ch-2",
 	})
 
-	// Mute qq-bot-1
 	if err := mgr.MuteBinding("qq-bot-1"); err != nil {
 		t.Fatalf("MuteBinding: %v", err)
 	}
 
-	// Disable tg-bot-1
 	if err := mgr.DisableBinding("tg-bot-1"); err != nil {
 		t.Fatalf("DisableBinding: %v", err)
 	}
 
-	// Verify qq-bot-1 still in currentBindings (muted), tg-bot-1 moved out (disabled)
 	allBindings := mgr.CurrentBindings()
 	if len(allBindings) != 1 {
 		t.Fatalf("expected 1 binding after mute+disable, got %d", len(allBindings))
@@ -230,7 +207,6 @@ func TestMuteAndDisableAreIndependent(t *testing.T) {
 		t.Fatal("expected qq-bot-1 to be muted in currentBindings")
 	}
 
-	// Verify muted and disabled are tracked separately
 	if !mgr.IsBindingMuted("qq-bot-1") {
 		t.Fatal("qq-bot-1 should be muted")
 	}
@@ -244,7 +220,6 @@ func TestMuteAndDisableAreIndependent(t *testing.T) {
 		t.Fatal("tg-bot-1 should NOT be muted")
 	}
 
-	// Snapshot should have both
 	snapshot := mgr.Snapshot()
 	if len(snapshot.MutedBindings) != 1 {
 		t.Fatalf("expected 1 muted in snapshot, got %d", len(snapshot.MutedBindings))
@@ -253,7 +228,6 @@ func TestMuteAndDisableAreIndependent(t *testing.T) {
 		t.Fatalf("expected 1 disabled in snapshot, got %d", len(snapshot.DisabledBindings))
 	}
 
-	// UnmuteAll should only restore muted, not disabled
 	count, _ := mgr.UnmuteAll()
 	if count != 1 {
 		t.Fatalf("expected 1 unmuted, got %d", count)
@@ -268,10 +242,8 @@ func TestMuteAndDisableAreIndependent(t *testing.T) {
 		t.Fatal("tg-bot-1 should still be disabled after UnmuteAll")
 	}
 
-	// EnableAll should only restore disabled, not muted
-	// First re-mute qq
 	_ = mgr.MuteBinding("qq-bot-1")
-	// EnableBinding is single, so just check state
+
 	if err := mgr.EnableBinding("tg-bot-1"); err != nil {
 		t.Fatalf("EnableBinding: %v", err)
 	}
@@ -287,7 +259,6 @@ func TestMuteBindingSkipsInbound(t *testing.T) {
 		Workspace: "/workspace/test",
 	})
 
-	// Bind and mute
 	_, _ = mgr.BindChannel(ChannelBinding{
 		Workspace: "/workspace/test",
 		Platform:  PlatformQQ,
@@ -296,8 +267,6 @@ func TestMuteBindingSkipsInbound(t *testing.T) {
 	})
 	_ = mgr.MuteBinding("qq-bot-1")
 
-	// Inbound should be silently dropped (no bridge set, but the key test
-	// is that it returns nil without error rather than trying to process)
 	err := mgr.HandleInbound(context.Background(), InboundMessage{
 		Envelope: Envelope{Adapter: "qq-bot-1"},
 		Text:     "should be dropped",
@@ -323,7 +292,6 @@ func TestUnbindSessionClearsMuted(t *testing.T) {
 
 	_ = mgr.MuteBinding("qq-bot-1")
 
-	// Unbind session should clear muted
 	mgr.UnbindSession()
 
 	if mgr.IsBindingMuted("qq-bot-1") {
@@ -341,21 +309,17 @@ func TestMuteAllPreservesDisabled(t *testing.T) {
 		Workspace: "/workspace/test",
 	})
 
-	// Bind three channels
 	_, _ = mgr.BindChannel(ChannelBinding{Workspace: "/workspace/test", Platform: PlatformQQ, Adapter: "qq", ChannelID: "1"})
 	_, _ = mgr.BindChannel(ChannelBinding{Workspace: "/workspace/test", Platform: PlatformTelegram, Adapter: "tg", ChannelID: "2"})
 	_, _ = mgr.BindChannel(ChannelBinding{Workspace: "/workspace/test", Platform: PlatformDiscord, Adapter: "dc", ChannelID: "3"})
 
-	// Disable qq
 	_ = mgr.DisableBinding("qq")
 
-	// Now only tg and dc are active. MuteAll should mute those 2.
 	count, _ := mgr.MuteAll()
 	if count != 2 {
 		t.Fatalf("expected 2 muted (only active ones), got %d", count)
 	}
 
-	// qq should still be disabled, not muted
 	if !mgr.IsBindingDisabled("qq") {
 		t.Fatal("qq should still be disabled")
 	}
@@ -363,7 +327,6 @@ func TestMuteAllPreservesDisabled(t *testing.T) {
 		t.Fatal("qq should NOT be muted (it was disabled, not active)")
 	}
 
-	// UnmuteAll should restore tg and dc, but qq stays disabled
 	count, _ = mgr.UnmuteAll()
 	if count != 2 {
 		t.Fatalf("expected 2 unmuted, got %d", count)
@@ -390,16 +353,13 @@ func TestMuteBindingCancelsAdapter(t *testing.T) {
 		ChannelID: "ch-1",
 	})
 
-	// Register a cancel func (simulates what startConfiguredAdapter does)
 	cancelled := false
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mgr.RegisterAdapterCancel("qq-bot-1", func() { cancelled = true; cancel() })
 
-	// Register a sink (simulates the adapter)
 	mgr.RegisterSink(&dummySink{name: "qq-bot-1"})
 
-	// Mute should cancel the adapter and unregister the sink
 	if err := mgr.MuteBinding("qq-bot-1"); err != nil {
 		t.Fatalf("MuteBinding: %v", err)
 	}
@@ -409,7 +369,7 @@ func TestMuteBindingCancelsAdapter(t *testing.T) {
 	if ctx.Err() == nil {
 		t.Fatal("expected adapter context to be cancelled")
 	}
-	// Sink should be removed
+
 	snapshot := mgr.Snapshot()
 	for _, a := range snapshot.Adapters {
 		if a.Name == "qq-bot-1" {
@@ -488,29 +448,25 @@ func TestUnbindSessionClearsAdapterCancels(t *testing.T) {
 	mgr.RegisterAdapterCancel("qq-bot-1", func() { cancelled = true })
 	_ = mgr.MuteBinding("qq-bot-1")
 
-	// cancelled was called during mute above
 	if !cancelled {
 		t.Fatal("expected cancel to be called during mute")
 	}
 
-	// UnbindSession should reset adapterCancels
 	mgr.UnbindSession()
 
-	// After unbind, a fresh cancel registration should work
 	cancelled2 := false
 	mgr.RegisterAdapterCancel("qq-bot-1", func() { cancelled2 = true })
-	// No panic means adapterCancels was properly reinitialized
+
 	_ = cancelled2
 }
 
 func TestStopAdapterIdempotent(t *testing.T) {
 	mgr := NewManager()
-	// stopAdapter on non-existent adapter should not panic
+
 	mgr.mu.Lock()
 	mgr.stopAdapter("nonexistent")
 	mgr.mu.Unlock()
 
-	// stopAdapter with nil cancel should not panic
 	mgr.RegisterAdapterCancel("test", nil)
 	mgr.mu.Lock()
 	mgr.stopAdapter("test")
@@ -531,11 +487,9 @@ func TestMuteBindingCallsClose(t *testing.T) {
 		ChannelID: "ch-1",
 	})
 
-	// Register a sink that tracks Close calls
 	sink := &dummySink{name: "qq-bot-1"}
 	mgr.RegisterSink(sink)
 
-	// Mute should call Close
 	_ = mgr.MuteBinding("qq-bot-1")
 	if !sink.closed {
 		t.Fatal("expected Close() to be called on mute")
@@ -606,14 +560,12 @@ func TestMuteBindingSetsDisconnected(t *testing.T) {
 		ChannelID: "ch-1",
 	})
 
-	// Simulate adapter publishing healthy state
 	mgr.PublishAdapterState(AdapterState{
 		Name:    "qq-bot-1",
 		Healthy: true,
 		Status:  "connected",
 	})
 
-	// Verify it's healthy
 	snapshot := mgr.Snapshot()
 	var state AdapterState
 	for _, a := range snapshot.Adapters {
@@ -625,10 +577,8 @@ func TestMuteBindingSetsDisconnected(t *testing.T) {
 		t.Fatal("should be healthy before mute")
 	}
 
-	// Mute it
 	_ = mgr.MuteBinding("qq-bot-1")
 
-	// Verify adapter state is now disconnected
 	snapshot = mgr.Snapshot()
 	for _, a := range snapshot.Adapters {
 		if a.Name == "qq-bot-1" {
@@ -723,8 +673,6 @@ func (d *dummySink) Close() error {
 	return nil
 }
 
-// --- onRestart tests ---
-
 func TestUnmuteBindingRestartsAdapter(t *testing.T) {
 	mgr := NewManager()
 	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp"})
@@ -813,13 +761,11 @@ func TestUnmuteNoRestartWhenNoCallback(t *testing.T) {
 	if err := mgr.MuteBinding("test-qq"); err != nil {
 		t.Fatalf("MuteBinding: %v", err)
 	}
-	// No onRestart set — should not panic
+
 	if err := mgr.UnmuteBinding("test-qq"); err != nil {
 		t.Fatalf("UnmuteBinding: %v", err)
 	}
 }
-
-// --- persistBinding / reload tests ---
 
 func TestPersistBindingStripsMuted(t *testing.T) {
 	var saved ChannelBinding
@@ -837,12 +783,10 @@ func TestPersistBindingStripsMuted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Mute it
 	if err := mgr.MuteBinding("qq-1"); err != nil {
 		t.Fatal(err)
 	}
 
-	// Manually trigger persistBinding — should strip Muted
 	b.Muted = true
 	if err := mgr.persistBinding(b); err != nil {
 		t.Fatal(err)
@@ -853,7 +797,7 @@ func TestPersistBindingStripsMuted(t *testing.T) {
 }
 
 func TestReloadBindingClearsMuted(t *testing.T) {
-	// Simulate a store that returns a binding with Muted=true (e.g. corrupted data)
+
 	mgr := NewManager()
 	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp"})
 	mgr.SetBindingStore(&stubBindingStoreForMute{
@@ -863,12 +807,11 @@ func TestReloadBindingClearsMuted(t *testing.T) {
 				Platform:  PlatformQQ,
 				Adapter:   "qq-1",
 				ChannelID: "ch-1",
-				Muted:     true, // Should be cleared on reload
+				Muted:     true,
 			}}, nil
 		},
 	})
 
-	// Reload bindings
 	if err := mgr.SetBindingStore(mgr.bindingStore); err != nil {
 		t.Fatal(err)
 	}
@@ -930,13 +873,11 @@ func TestHandlePairingInboundDropsMuted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandlePairingInbound: %v", err)
 	}
-	// Should return empty result (silently ignored).
+
 	if result.Bound {
 		t.Fatal("HandlePairingInbound should silently ignore muted adapters")
 	}
 }
-
-// --- stub stores ---
 
 type stubBindingStoreForMute struct {
 	save            func(ChannelBinding) error
@@ -972,7 +913,6 @@ func TestPublishAdapterStateIgnoredWhenMuted(t *testing.T) {
 	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp"})
 	_, _ = mgr.BindChannel(ChannelBinding{Workspace: "/tmp", Platform: PlatformTelegram, Adapter: "tg-1", ChannelID: "ch-1"})
 
-	// Simulate adapter publishing its initial state
 	mgr.PublishAdapterState(AdapterState{
 		Name:     "tg-1",
 		Platform: PlatformTelegram,
@@ -984,13 +924,11 @@ func TestPublishAdapterStateIgnoredWhenMuted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// State should be "disconnected" (set by stopAdapter)
 	state := mgr.adapters["tg-1"]
 	if state.Status != "disconnected" {
 		t.Fatalf("expected status 'disconnected' after mute, got '%s'", state.Status)
 	}
 
-	// Simulate the old goroutine publishing a late error (like 409)
 	mgr.PublishAdapterState(AdapterState{
 		Name:      "tg-1",
 		Platform:  PlatformTelegram,
@@ -999,7 +937,6 @@ func TestPublishAdapterStateIgnoredWhenMuted(t *testing.T) {
 		LastError: "poll updates: Telegram API [409]",
 	})
 
-	// State should remain "disconnected", not overwritten to "error"
 	state = mgr.adapters["tg-1"]
 	if state.Status != "disconnected" {
 		t.Fatalf("expected status 'disconnected' after late publishState, got '%s'", state.Status)
@@ -1016,7 +953,6 @@ func TestMuteAllExcept(t *testing.T) {
 		Workspace: "/workspace/test",
 	})
 
-	// Bind 3 channels
 	for _, name := range []string{"qq", "telegram", "discord"} {
 		_, err := mgr.BindChannel(ChannelBinding{
 			Workspace: "/workspace/test",
@@ -1029,7 +965,6 @@ func TestMuteAllExcept(t *testing.T) {
 		}
 	}
 
-	// MuteAllExcept("telegram") — should mute qq and discord, keep telegram
 	count, err := mgr.MuteAllExcept("telegram")
 	if err != nil {
 		t.Fatal(err)
@@ -1038,7 +973,6 @@ func TestMuteAllExcept(t *testing.T) {
 		t.Fatalf("expected 2 muted, got %d", count)
 	}
 
-	// Verify telegram is NOT muted
 	snap := mgr.Snapshot()
 	for _, b := range snap.CurrentBindings {
 		switch b.Adapter {
@@ -1070,7 +1004,6 @@ func TestMuteAllExceptEmptyExclude(t *testing.T) {
 		})
 	}
 
-	// Empty exclude → mute all
 	count, err := mgr.MuteAllExcept("")
 	if err != nil {
 		t.Fatal(err)
@@ -1101,7 +1034,6 @@ func TestMuteAllExceptNonexistent(t *testing.T) {
 		ChannelID: "ch-qq",
 	})
 
-	// Exclude a name that doesn't exist — qq should still be muted
 	count, err := mgr.MuteAllExcept("nonexistent")
 	if err != nil {
 		t.Fatal(err)
@@ -1131,12 +1063,10 @@ func TestStartNamedAdapterRejectsMuted(t *testing.T) {
 		t.Fatalf("BindChannel failed: %v", err)
 	}
 
-	// Mute the binding
 	if err := mgr.MuteBinding("qq-muted"); err != nil {
 		t.Fatalf("MuteBinding failed: %v", err)
 	}
 
-	// StartNamedAdapter must refuse to start a muted adapter
 	cfg := config.IMConfig{
 		Adapters: map[string]config.IMAdapterConfig{
 			"qq-muted": {Enabled: true, Platform: string(PlatformQQ)},

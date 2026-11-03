@@ -66,8 +66,6 @@ func wecomIssue974Gateway(t *testing.T, respond func(cmd string, frame map[strin
 	a.connected = true
 	a.mu.Unlock()
 
-	// Mirror connectAndServe's read loop: feed every server frame into
-	// dispatchPayload so ack routing is exercised exactly as in production.
 	readerDone := make(chan struct{})
 	go func() {
 		defer close(readerDone)
@@ -138,7 +136,7 @@ func TestWeComSendAckSuccess(t *testing.T) {
 // waiter must time out and return an error instead of blocking forever.
 func TestWeComSendNoAckTimesOut(t *testing.T) {
 	a, cleanup := wecomIssue974Gateway(t, func(string, map[string]any) (int, string, bool) {
-		return 0, "", false // never ack
+		return 0, "", false
 	})
 	defer cleanup()
 	a.mu.Lock()

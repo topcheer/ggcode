@@ -32,19 +32,18 @@ func TestIssue4756_EditOfReplyStripGateSeesInnerReplyTo(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &c); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	// Outer: replace marker only - no reply-to (the pre-fix gate read this).
+
 	if c.GetReplyTo() != "" {
 		t.Fatalf("outer reply-to should be empty for m.replace, got %q", c.GetReplyTo())
 	}
-	// Inner: the reply relation the fixed gate falls back to.
+
 	if c.NewContent == nil {
 		t.Fatal("NewContent missing")
 	}
 	if got := c.NewContent.GetReplyTo(); got != "$orig" {
 		t.Fatalf("NewContent.GetReplyTo() = %q, want $orig", got)
 	}
-	// The stripper must remove the serialized fallback prefix from the
-	// new_content body such an edit carries.
+
 	stripped := stripMatrixReplyFallback(c.NewContent.Body)
 	if stripped != "edited reply body" {
 		t.Fatalf("strip = %q, want %q", stripped, "edited reply body")

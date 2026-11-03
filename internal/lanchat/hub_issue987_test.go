@@ -94,7 +94,6 @@ func TestIssue987ManualApprovalCompletedReceipt(t *testing.T) {
 	msg := agentDirectMsg("msg-987-approve", RoleHuman)
 	h.HandleIncomingMessage(msg)
 
-	// Human-role @agent DM with no policy -> queued for manual approval.
 	pending := h.PendingApprovals()
 	if len(pending) != 1 || pending[0].Message.ID != msg.ID {
 		t.Fatalf("expected 1 pending approval for %s, got %+v", msg.ID, pending)
@@ -105,7 +104,6 @@ func TestIssue987ManualApprovalCompletedReceipt(t *testing.T) {
 		t.Fatalf("ApproveMessage(%s) failed: %v", msg.ID, err)
 	}
 
-	// The TUI calls this from update_done.go when the agent run finishes.
 	h.NotifyAgentComplete(msg.ID)
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -133,10 +131,9 @@ func TestIssue987DuplicateMessageDeduped(t *testing.T) {
 		mu.Unlock()
 	})
 
-	msg := agentDirectMsg("msg-987-dup", RoleAgent) // agent role -> auto-approved
+	msg := agentDirectMsg("msg-987-dup", RoleAgent)
 	h.HandleIncomingMessage(msg)
 
-	// Wait for the (async) first injection to land.
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		mu.Lock()
@@ -154,8 +151,6 @@ func TestIssue987DuplicateMessageDeduped(t *testing.T) {
 		t.Fatalf("first delivery should inject exactly once, got %d", first)
 	}
 
-	// Simulate the double delivery: same ID arrives again (TCP retry or
-	// UDP fallback). Must be dropped synchronously at the ingress.
 	h.HandleIncomingMessage(msg)
 	h.HandleIncomingMessage(msg)
 
@@ -179,7 +174,6 @@ func TestIssue987PendingApprovalTTLCleanup(t *testing.T) {
 	h := newIssue987Hub(t)
 	registerPeer(h, srv)
 
-	// Seed the queue with an entry older than the TTL.
 	h.mu.Lock()
 	h.pendingApproval = append(h.pendingApproval, PendingAgentMsg{
 		Message:  agentDirectMsg("msg-987-stale", RoleHuman),
@@ -187,7 +181,6 @@ func TestIssue987PendingApprovalTTLCleanup(t *testing.T) {
 	})
 	h.mu.Unlock()
 
-	// A fresh @agent DM triggers append-time pruning.
 	fresh := agentDirectMsg("msg-987-fresh", RoleHuman)
 	h.HandleIncomingMessage(fresh)
 
@@ -196,7 +189,6 @@ func TestIssue987PendingApprovalTTLCleanup(t *testing.T) {
 		t.Fatalf("expected only the fresh pending approval to survive, got %+v", pending)
 	}
 
-	// The stale sender must be told their message expired.
 	deadline := time.Now().Add(2 * time.Second)
 	for rec.find("msg-987-stale", StatusRejected) == nil && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
@@ -218,7 +210,6 @@ func TestIssue987PendingApprovalCapacityCap(t *testing.T) {
 	h := newIssue987Hub(t)
 	registerPeer(h, srv)
 
-	// Fill the queue to the cap with fresh (non-expiring) entries.
 	h.mu.Lock()
 	for i := 0; i < maxPendingApprovals; i++ {
 		h.pendingApproval = append(h.pendingApproval, PendingAgentMsg{

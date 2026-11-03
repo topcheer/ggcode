@@ -15,8 +15,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// --- test relay server ---
-
 // pcTestRelayServer is a minimal relay provider endpoint for tests: upgrades
 // WebSocket connections, sends relay:provider_ready, then drains (which also
 // answers client heartbeat pings per RFC6455).
@@ -103,8 +101,6 @@ func pcWaitFor(t *testing.T, timeout time.Duration, cond func() bool, msg string
 	t.Fatalf("condition not met within %s: %s", timeout, msg)
 }
 
-// --- Issue #965 problem 1: ReadLoop must not bind to the caller ctx ---
-
 // TestPCRelayReadLoopSurvivesCallerCtxCancel verifies that cancelling the ctx
 // passed to Connect (as runtime sendWithTimeout does the moment Send returns)
 // does NOT kill the resident ReadLoop. Old behavior: the loop exited after
@@ -124,7 +120,7 @@ func TestPCRelayReadLoopSurvivesCallerCtxCancel(t *testing.T) {
 	if err := client.Connect(ctx); err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	cancel() // simulate request-scoped ctx dying right after first Send
+	cancel()
 
 	for i := 0; i < 2; i++ {
 		sid := fmt.Sprintf("sess-%d", i)
@@ -150,8 +146,6 @@ func TestPCRelayReadLoopSurvivesCallerCtxCancel(t *testing.T) {
 	}
 }
 
-// --- Issue #965 problem 2: disconnect must be observed and recovered ---
-
 // TestPCAdapterHandleRelayDisconnectedClearsClientAndPublishes verifies the
 // ReadLoop-exit callback: the dead client is cleared (ensureConnected no
 // longer short-circuits on a stale pointer) and "disconnected" is published
@@ -160,7 +154,7 @@ func TestPCAdapterHandleRelayDisconnectedClearsClientAndPublishes(t *testing.T) 
 	mgr := NewManager()
 	adapter := &pcAdapter{name: "pc-test", manager: mgr, providerID: "p1"}
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // adapter stopped: must suppress the background reconnect loop
+	cancel()
 	adapter.ctx = ctx
 
 	dead := &pcRelayClient{}
@@ -176,15 +170,11 @@ func TestPCAdapterHandleRelayDisconnectedClearsClientAndPublishes(t *testing.T) 
 	mgr.mu.RLock()
 	state, ok := mgr.adapters[adapter.name]
 	mgr.mu.RUnlock()
-	// "reconnecting" (not terminal "disconnected") because the manager's
-	// terminal-state guard drops all updates once status == disconnected;
-	// the adapter intends to recover, so the state must stay mutable.
+
 	if !ok || state.Status != "reconnecting" || state.Healthy {
 		t.Fatalf("expected published reconnecting state, got ok=%v state=%+v", ok, state)
 	}
 
-	// A disconnect from a client that is not the installed one must be a
-	// no-op (e.g. a failed Connect candidate or an already-replaced client).
 	adapter.handleRelayDisconnected(&pcRelayClient{}, "stale event")
 }
 
@@ -218,8 +208,6 @@ func TestPCAdapterReconnectsAfterRelayDrop(t *testing.T) {
 		t.Fatalf("expected 1 upgrade after initial connect, got %d", got)
 	}
 
-	// Drop the server side: ReadLoop exits -> adapter clears client ->
-	// background reconnect loop establishes a new connection.
 	ts.closeAll()
 
 	pcWaitFor(t, 5*time.Second, func() bool {
@@ -236,8 +224,6 @@ func TestPCAdapterReconnectsAfterRelayDrop(t *testing.T) {
 		t.Fatalf("expected connected state after reconnect, got %+v", state)
 	}
 }
-
-// --- Issue #965 problem 3: concurrent ensureConnected must not double-dial ---
 
 // TestPCAdapterEnsureConnectedConcurrentSingleConnection races N concurrent
 // ensureConnected calls and asserts exactly one WebSocket connection is

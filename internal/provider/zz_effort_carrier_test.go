@@ -1,12 +1,5 @@
 package provider
 
-// Effort carrier (top-level output_config.effort) tests.
-//
-// Cache contract (Anthropic effort guidance, 2026): a top-level effort
-// change does not preserve cached prefixes, so the carrier must only be
-// attached for user-established, stable effort levels — never for the
-// per-turn oscillation produced by the adaptive-effort adapter.
-
 import (
 	"context"
 	"errors"
@@ -32,7 +25,7 @@ func TestSetReasoningEffortAcceptsXhighAndMax(t *testing.T) {
 			t.Errorf("SetReasoningEffort(%q) = %q, want %q", level, p.ReasoningEffort(), normalizeEffortForTest(level))
 		}
 	}
-	// Invalid levels are still ignored.
+
 	p.SetReasoningEffort("turbo")
 	if p.ReasoningEffort() != "high" {
 		t.Errorf("invalid effort overwrote existing level: %q", p.ReasoningEffort())
@@ -68,9 +61,7 @@ func TestEffortCarrierHysteresis(t *testing.T) {
 	})
 
 	t.Run("constant applied+restored level stabilizes", func(t *testing.T) {
-		// Adaptive-effort pattern with base "": apply high before each call,
-		// restore "" after. Every REQUEST is at high, so the top-level
-		// carrier is constant across requests — attaching is cache-correct.
+
 		p := newCarrierProvider()
 		for i := 0; i < 4; i++ {
 			p.SetReasoningEffort("high")
@@ -102,7 +93,7 @@ func TestEffortCarrierHysteresis(t *testing.T) {
 	t.Run("user switch re-establishes after one suppressed call", func(t *testing.T) {
 		p := newCarrierProvider()
 		p.beginEffortTracking()
-		p.beginEffortTracking() // established at high
+		p.beginEffortTracking()
 		p.SetReasoningEffort("medium")
 		if p.beginEffortTracking() {
 			t.Fatal("first call after a switch must not attach the new level")
@@ -137,7 +128,7 @@ func TestBuildParamsOutputConfigCarrier(t *testing.T) {
 
 	t.Run("suppressed during stability window", func(t *testing.T) {
 		p := newCarrierProvider()
-		p.beginEffortTracking() // first call: window opens
+		p.beginEffortTracking()
 		params := p.buildParams(context.Background(), nil, nil)
 		if params.OutputConfig.Effort != "" {
 			t.Errorf("first call attached carrier: %q", params.OutputConfig.Effort)
@@ -176,10 +167,7 @@ func TestIsEffortError(t *testing.T) {
 		name string
 		err  error
 	}{
-		// Bare errors carry no extractable status, so the anchored-phrase
-		// fallback applies (same design as isThinkingError); the negative
-		// cases that matter are typed-status errors, which production SDK
-		// errors always are.
+
 		{"typed 500 with anchor", statusErr{500, "output_config internal error"}},
 		{"typed 429 quota", statusErr{429, "output_config quota exceeded"}},
 		{"unrelated 400", errors.New("[400] messages: field required")},
@@ -195,7 +183,7 @@ func TestIsEffortError(t *testing.T) {
 func TestCloneWithModelInheritsLatchResetsWindow(t *testing.T) {
 	parent := newCarrierProvider()
 	parent.beginEffortTracking()
-	parent.beginEffortTracking() // established at high
+	parent.beginEffortTracking()
 
 	clone := parent.CloneWithModel("claude-sonnet-4-5").(*AnthropicProvider)
 	if !clone.effortCarrier.Load() {
@@ -205,7 +193,6 @@ func TestCloneWithModelInheritsLatchResetsWindow(t *testing.T) {
 		t.Fatalf("clone must reset the stability window, got last=%q conv=%q", clone.lastCallEffort, clone.conversationEffort)
 	}
 
-	// A rejected-output_config endpoint keeps the latch off across clones.
 	parent.effortCarrier.Store(false)
 	clone2 := parent.CloneWithModel("claude-opus-4-6").(*AnthropicProvider)
 	if clone2.effortCarrier.Load() {

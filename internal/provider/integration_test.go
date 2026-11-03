@@ -12,9 +12,6 @@ import (
 	"time"
 )
 
-// Integration tests against zai provider (BigModel/ZhipuAI).
-// Set ZAI_API_KEY to run; otherwise tests are skipped.
-
 const (
 	zaiAnthropicBaseURL = "https://open.bigmodel.cn/api/anthropic"
 	zaiOpenAIBaseURL    = "https://open.bigmodel.cn/api/coding/paas/v4"
@@ -64,7 +61,6 @@ func collectStreamUsage(t *testing.T, ch <-chan StreamEvent) *TokenUsage {
 	return usage
 }
 
-// TestAnthropicChat verifies a non-streaming chat call via the Anthropic-compatible endpoint.
 func TestAnthropicChat(t *testing.T) {
 	key := zaiAPIKey()
 	if key == "" {
@@ -98,7 +94,6 @@ func TestAnthropicChat(t *testing.T) {
 	}
 }
 
-// TestAnthropicStreaming verifies streaming chat via the Anthropic-compatible endpoint.
 func TestAnthropicStreaming(t *testing.T) {
 	key := zaiAPIKey()
 	if key == "" {
@@ -147,7 +142,6 @@ func TestAnthropicStreaming(t *testing.T) {
 	}
 }
 
-// TestAnthropicToolUse verifies tool calling via the Anthropic-compatible endpoint.
 func TestAnthropicToolUse(t *testing.T) {
 	key := zaiAPIKey()
 	if key == "" {
@@ -188,7 +182,7 @@ func TestAnthropicToolUse(t *testing.T) {
 			if block.ToolName != "get_weather" {
 				t.Errorf("Expected tool name 'get_weather', got %q", block.ToolName)
 			}
-			// Validate JSON input
+
 			var input map[string]interface{}
 			if err := json.Unmarshal(block.Input, &input); err != nil {
 				t.Errorf("Invalid tool input JSON: %v", err)
@@ -201,7 +195,6 @@ func TestAnthropicToolUse(t *testing.T) {
 	}
 }
 
-// TestAnthropicToolResult verifies sending a tool result back and getting a final response.
 func TestAnthropicToolResult(t *testing.T) {
 	key := zaiAPIKey()
 	if key == "" {
@@ -227,7 +220,6 @@ func TestAnthropicToolResult(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// First call: get tool use
 	resp1, err := prov.Chat(ctx, []Message{
 		{Role: "user", Content: []ContentBlock{TextBlock("What's the weather in Shanghai?")}},
 	}, tools)
@@ -235,7 +227,6 @@ func TestAnthropicToolResult(t *testing.T) {
 		t.Fatalf("First chat failed: %v", err)
 	}
 
-	// Check if model used the tool
 	var toolBlock *ContentBlock
 	for i := range resp1.Message.Content {
 		if resp1.Message.Content[i].Type == "tool_use" {
@@ -248,7 +239,6 @@ func TestAnthropicToolResult(t *testing.T) {
 		t.Skip("Model did not call tool — skipping tool result test")
 	}
 
-	// Second call: send tool result
 	messages := []Message{
 		{Role: "user", Content: []ContentBlock{TextBlock("What's the weather in Shanghai?")}},
 		{Role: "assistant", Content: resp1.Message.Content},
@@ -276,7 +266,6 @@ func TestAnthropicToolResult(t *testing.T) {
 	t.Logf("Final response: %q", finalText)
 }
 
-// TestAnthropicMultiTurn verifies a multi-turn conversation maintains context.
 func TestAnthropicMultiTurn(t *testing.T) {
 	key := zaiAPIKey()
 	if key == "" {
@@ -288,7 +277,6 @@ func TestAnthropicMultiTurn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// Turn 1
 	resp1, err := prov.Chat(ctx, []Message{
 		{Role: "user", Content: []ContentBlock{TextBlock("My favorite color is blue. Remember this.")}},
 	}, nil)
@@ -297,7 +285,6 @@ func TestAnthropicMultiTurn(t *testing.T) {
 	}
 	t.Logf("Turn 1: %s", resp1.Message.Content[0].Text)
 
-	// Turn 2: ask about the remembered info
 	resp2, err := prov.Chat(ctx, []Message{
 		{Role: "user", Content: []ContentBlock{TextBlock("My favorite color is blue. Remember this.")}},
 		{Role: "assistant", Content: resp1.Message.Content},
@@ -314,7 +301,6 @@ func TestAnthropicMultiTurn(t *testing.T) {
 	t.Logf("Turn 2: %s", resp2.Message.Content[0].Text)
 }
 
-// TestAnthropicCountTokens verifies the CountTokens method returns a reasonable estimate.
 func TestAnthropicCountTokens(t *testing.T) {
 	key := zaiAPIKey()
 	if key == "" {
@@ -337,7 +323,6 @@ func TestAnthropicCountTokens(t *testing.T) {
 	t.Logf("Estimated tokens: %d", count)
 }
 
-// TestAnthropicMultipleModels verifies the provider works with different zai models.
 func TestAnthropicMultipleModels(t *testing.T) {
 	key := zaiAPIKey()
 	if key == "" {
@@ -366,7 +351,6 @@ func TestAnthropicMultipleModels(t *testing.T) {
 	}
 }
 
-// TestAnthropicProviderName verifies the provider reports the correct name.
 func TestAnthropicProviderName(t *testing.T) {
 	prov := NewAnthropicProviderWithBaseURL("test-key", "test-model", 100, "https://example.com")
 	if prov.Name() != "anthropic" {
@@ -374,7 +358,6 @@ func TestAnthropicProviderName(t *testing.T) {
 	}
 }
 
-// TestAnthropicStreamingToolUse verifies tool calls arrive correctly during streaming.
 func TestAnthropicStreamingToolUse(t *testing.T) {
 	key := zaiAPIKey()
 	if key == "" {
@@ -445,7 +428,6 @@ func TestAnthropicStreamingToolUse(t *testing.T) {
 	t.Logf("Streamed %d text chunks, %d tool calls", len(textParts), len(toolCalls))
 }
 
-// TestAnthropicEmptyMessages verifies handling of edge cases.
 func TestAnthropicEmptyMessages(t *testing.T) {
 	key := zaiAPIKey()
 	if key == "" {
@@ -457,7 +439,6 @@ func TestAnthropicEmptyMessages(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Very short message
 	resp, err := prov.Chat(ctx, []Message{
 		{Role: "user", Content: []ContentBlock{TextBlock("Hi")}},
 	}, nil)
@@ -470,7 +451,6 @@ func TestAnthropicEmptyMessages(t *testing.T) {
 	t.Logf("Short message response: %q", resp.Message.Content[0].Text)
 }
 
-// TestAnthropicContextCancellation verifies that context cancellation works.
 func TestAnthropicContextCancellation(t *testing.T) {
 	key := zaiAPIKey()
 	if key == "" {
@@ -481,7 +461,6 @@ func TestAnthropicContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Cancel immediately
 	cancel()
 
 	_, err := prov.Chat(ctx, []Message{
@@ -494,9 +473,6 @@ func TestAnthropicContextCancellation(t *testing.T) {
 	}
 }
 
-// TestAnthropicSystemPrompt verifies system prompt handling.
-// Note: zai's Anthropic-compatible endpoint may not support 'system' role in messages;
-// this test validates that the provider handles the message format correctly.
 func TestAnthropicSystemPrompt(t *testing.T) {
 	key := zaiAPIKey()
 	if key == "" {
@@ -508,7 +484,6 @@ func TestAnthropicSystemPrompt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Embed system instruction in user message (works with all providers)
 	resp, err := prov.Chat(ctx, []Message{
 		{Role: "user", Content: []ContentBlock{TextBlock("You must always respond in French. Now say hello.")}},
 	}, nil)
@@ -523,7 +498,6 @@ func TestAnthropicSystemPrompt(t *testing.T) {
 	}
 }
 
-// TestZAIConnectivity is a quick smoke test to verify the zai endpoint is reachable.
 func TestZAIConnectivity(t *testing.T) {
 	key := zaiAPIKey()
 	if key == "" {
@@ -551,22 +525,18 @@ func TestZAIConnectivity(t *testing.T) {
 	}
 }
 
-// TestAnthropicModelsEndpoint is a standalone test that verifies the models API.
 func TestAnthropicModelsEndpoint(t *testing.T) {
 	key := zaiAPIKey()
 	if key == "" {
 		t.Skip("ZAI_API_KEY not set, skipping integration test")
 	}
 
-	// Use the OpenAI-compatible /models endpoint via a quick HTTP call
-	// This test exists outside the provider interface but validates the zai setup
 	t.Logf("Available models can be fetched from %s/models", zaiOpenAIBaseURL)
 	t.Logf("Using Anthropic-compatible endpoint at %s", zaiAnthropicBaseURL)
 	t.Logf("Using model: %s", zaiModel())
 	_ = fmt.Sprintf("Config: key=%s...%s", key[:4], key[len(key)-4:])
 }
 
-// TestAnthropicLongResponse verifies streaming works for longer responses.
 func TestAnthropicLongResponse(t *testing.T) {
 	key := zaiAPIKey()
 	if key == "" {
@@ -605,8 +575,6 @@ func TestAnthropicLongResponse(t *testing.T) {
 		t.Log("Warning: response came in fewer than 2 chunks (may not be truly streamed)")
 	}
 }
-
-// --- OpenAI Provider Integration Tests ---
 
 func TestOpenAIChat(t *testing.T) {
 	key := zaiAPIKey()

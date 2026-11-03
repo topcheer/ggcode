@@ -11,9 +11,6 @@ import (
 	"time"
 )
 
-// Tests for anthropic.go request/response paths driven through a real
-// httptest server (FailureAtlas-style failure injection + happy paths).
-
 // newSA142AnthropicServer spins up a fake Anthropic Messages API.
 func newSA142AnthropicServer(t *testing.T, handler http.HandlerFunc) *AnthropicProvider {
 	t.Helper()
@@ -64,7 +61,7 @@ func TestSA142_AnthropicChatText(t *testing.T) {
 	if resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 5 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
-	// PTC container captured from the response and still fresh.
+
 	if id, ok := p.freshPTCContainer(); !ok || id != "cnt_1" {
 		t.Fatalf("freshPTCContainer = %q, %v; want cnt_1, true", id, ok)
 	}
@@ -271,7 +268,7 @@ func TestSA142_AnthropicCountTokensUnsupported(t *testing.T) {
 	if p.calibrator == nil || p.calibrator.enabled {
 		t.Fatal("calibrator should be disabled after a 404 count_tokens endpoint")
 	}
-	// A second call takes the fast path with the local estimate.
+
 	if n2, err := p.CountTokens(context.Background(), msgs); err != nil || n2 != n {
 		t.Fatalf("second CountTokens = %d, %v; want %d, nil", n2, err, n)
 	}
@@ -293,7 +290,7 @@ func TestSA142_AnthropicAccessorsAndSampling(t *testing.T) {
 	if p.maxTokens != 777 {
 		t.Fatalf("SetMaxTokens ignored: %d", p.maxTokens)
 	}
-	p.SetMaxTokens(0) // zero is ignored, not destructive
+	p.SetMaxTokens(0)
 	if p.maxTokens != 777 {
 		t.Fatalf("SetMaxTokens(0) clobbered the budget: %d", p.maxTokens)
 	}
@@ -314,7 +311,7 @@ func TestSA142_AnthropicAccessorsAndSampling(t *testing.T) {
 	if p.Temperature() != 0.7 || p.TopP() != 0.9 {
 		t.Fatalf("sampling accessors = %v/%v", p.Temperature(), p.TopP())
 	}
-	// Sampling override wins over the configured budget (#2248).
+
 	p.SetSamplingOverride(&SamplingOverride{MaxTokens: 500})
 	if got := p.effectiveMaxTokens(); got != 500 {
 		t.Fatalf("effectiveMaxTokens with override = %d, want 500", got)
@@ -328,7 +325,6 @@ func TestSA142_AnthropicAccessorsAndSampling(t *testing.T) {
 		t.Fatalf("effectiveMaxTokens without override = %d, want 777", got)
 	}
 
-	// Runtime header injection + session ID.
 	h := http.Header{}
 	h.Set("X-SA142", "1")
 	p.UpdateRuntimeHeaders(h)
@@ -337,12 +333,10 @@ func TestSA142_AnthropicAccessorsAndSampling(t *testing.T) {
 	if snap.Get("X-SA142") != "1" || snap.Get("GGCode-SessionID") != "sess-sa142" {
 		t.Fatalf("injected headers = %v", snap)
 	}
-	p.SetSessionID("") // empty is a no-op, not a panic
+	p.SetSessionID("")
 	rl := p.RateLimitInfo()
-	_ = rl // must not panic with an initialized transport
+	_ = rl
 
-	// Effort-carrier hysteresis: two consecutive calls at the same level
-	// establish the carrier (Anthropic effort guidance, 2026).
 	p.SetReasoningEffort("high")
 	p.effortCarrier.Store(true)
 	if p.beginEffortTracking() {
@@ -351,12 +345,11 @@ func TestSA142_AnthropicAccessorsAndSampling(t *testing.T) {
 	if !p.beginEffortTracking() {
 		t.Fatal("second consecutive call at the same level must establish the carrier")
 	}
-	p.SetReasoningEffort("") // oscillation resets the stability window
+	p.SetReasoningEffort("")
 	if p.beginEffortTracking() {
 		t.Fatal("empty effort must reset the carrier window")
 	}
 
-	// probeChat: single messages request without retry bookkeeping.
 	if err := p.probeChat(context.Background(), []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}}); err != nil {
 		t.Fatalf("probeChat error: %v", err)
 	}
@@ -368,7 +361,7 @@ func TestSA142_AnthropicPTCAndServerTools(t *testing.T) {
 	p := newSA142AnthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	})
-	// Container inside the 30s safety margin must be treated as expired.
+
 	p.storePTCContainer("cnt_exp", time.Now().Add(10*time.Second))
 	if id, ok := p.freshPTCContainer(); ok {
 		t.Fatalf("freshPTCContainer inside expiry margin = %q, %v; want expired", id, ok)
@@ -401,7 +394,7 @@ func TestSA142_AnthropicPTCAndServerTools(t *testing.T) {
 	if hv := p.betaHeaderValue(false); hv != advancedToolUseBeta {
 		t.Fatal("aggregated beta value must carry the advanced-tool-use beta header")
 	}
-	// Unknown tool types keep both flags off.
+
 	p.SetServerTools([]ServerToolConfig{{Type: "web_search"}})
 	if p.ptcCodeExecutionEnabled() || p.ServerToolSearchActive() {
 		t.Fatal("web_search must not enable PTC or tool search beta")

@@ -1,14 +1,5 @@
 package im
 
-// #2749 regression: Matrix mention detection must handle localparts that
-// LEGALLY end with non-word characters (Matrix charset [a-z0-9._=-+/]).
-// The \b boundary never matched after endings like "bot-", "x=", "a." -
-// hasMention returned false (message silently dropped in requireMention
-// rooms) and stripMention left the raw "@bot-" prefix in the LLM prompt.
-// The replacement boundary (?![a-z0-9._=\-+/]) must also keep the #2719
-// guarantee: "@bot" must not match inside "@bot.a" (a DIFFERENT user's
-// full mention).
-
 import (
 	"strings"
 	"testing"
@@ -30,8 +21,7 @@ func TestIssue2749_NonWordEndingLocalpartMention(t *testing.T) {
 }
 
 func TestIssue2749_PrefixConfusionStillRefused(t *testing.T) {
-	// #2719 invariant preserved: "al" must not match "@alex", and "bot"
-	// must not match "@bot.a" (bot.a is a different user's localpart).
+
 	for _, tc := range []struct{ localPart, body string }{
 		{"al", "@alex hello"},
 		{"bot", "@bot.a hello"},
@@ -49,7 +39,7 @@ func TestIssue2749_PrefixConfusionStillRefused(t *testing.T) {
 }
 
 func TestIssue2749_WordEndingLocalpartUnchanged(t *testing.T) {
-	// Word-ending localparts behave exactly as before (#2719 suite).
+
 	a := &matrixAdapter{userID: "@al:matrix.org"}
 	if !a.hasMention("@al do it", nil) {
 		t.Errorf("plain word-ending mention must still match")
@@ -60,8 +50,7 @@ func TestIssue2749_WordEndingLocalpartUnchanged(t *testing.T) {
 }
 
 func TestIssue2749_MixedCaseLocalpart(t *testing.T) {
-	// #2749 case follow-up: self-hosted homeservers may issue mixed-case
-	// localparts; the old (?i) regex matched them. Lower both sides.
+
 	a := &matrixAdapter{userID: "@Bot-:matrix.org"}
 	if !a.hasMention("@Bot- check the build", nil) {
 		t.Errorf("mixed-case non-word-ending mention must match")

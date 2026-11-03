@@ -1,7 +1,5 @@
 package provider
 
-// sa-62 tests for OpenAI Responses hosted (server-side) tools (web_search).
-
 import (
 	"context"
 	"encoding/json"
@@ -128,14 +126,14 @@ func TestResponsesChatStreamHostedWebSearch(t *testing.T) {
 			t.Fatalf("stream error: %v", ev.Error)
 		}
 	}
-	// Exactly one emission: output_item.added must be ignored, done emitted once.
+
 	if serverToolEvents != 1 {
 		t.Fatalf("server tool events = %d, want 1", serverToolEvents)
 	}
 	if !done {
 		t.Fatalf("stream never finished")
 	}
-	// Request must carry the hosted tool declaration alongside function tools.
+
 	if !strings.Contains(body, `"type":"web_search"`) {
 		t.Fatalf("request body missing hosted tool: %s", body)
 	}
@@ -152,13 +150,13 @@ func TestBuildResponsesInputHostedToolReplay(t *testing.T) {
 		}},
 	}
 	items := buildResponsesInput(msgs)
-	if len(items) != 3 { // user text, assistant text message, verbatim web_search_call
+	if len(items) != 3 {
 		t.Fatalf("want 3 items, got %d: %+v", len(items), items)
 	}
 	if items[1].Role != "assistant" || !strings.Contains(string(items[1].Content), "searching") {
 		t.Fatalf("item1 = %+v, want assistant text", items[1])
 	}
-	// The hosted item must round-trip byte-for-byte.
+
 	b, err := json.Marshal(items[2])
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -166,7 +164,7 @@ func TestBuildResponsesInputHostedToolReplay(t *testing.T) {
 	if string(b) != responsesWebSearchCallRaw {
 		t.Fatalf("replay not verbatim:\n got %s\nwant %s", b, responsesWebSearchCallRaw)
 	}
-	// Foreign provider blocks must never leak into Responses input.
+
 	for _, it := range items {
 		if it.RawReplay != nil && strings.Contains(string(it.RawReplay), "server_tool_use") {
 			t.Fatalf("foreign block leaked: %s", it.RawReplay)

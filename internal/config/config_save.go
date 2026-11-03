@@ -36,9 +36,7 @@ func (c *Config) Save() error {
 	if strings.TrimSpace(c.FilePath) == "" {
 		return fmt.Errorf("config file path is empty")
 	}
-	// Test isolation guard: writing into the real user HOME from a test
-	// binary is always a bug (fixture leakage; see the vendors.yaml
-	// base_url incident). Explicit temp paths pass; real-home paths fail.
+
 	if err := GuardRealHomePath(c.FilePath, "Save()"); err != nil {
 		return err
 	}
@@ -48,31 +46,20 @@ func (c *Config) Save() error {
 		return err
 	}
 
-	// 0. Save external sections (vendors, im, mcp_servers) to standalone files.
-	// The directory resolution is unified with the vendors.yaml migration below
-	// (both use Dir(FilePath) with the ConfigDir fallback) (#293).
 	extDir := filepath.Dir(c.FilePath)
 	if extDir == "." {
 		extDir = ConfigDir()
 	}
-	// Instance-only vendors (added by MergeInstance but absent from the global
-	// vendors.yaml snapshot) must NOT be persisted to the global external
-	// files — otherwise a workspace-private plaintext API key leaks into the
-	// shared ~/.ggcode/vendors.yaml and keys.env where other workspaces pick
-	// it up (#293).
+
 	vendorsToSave := c.Vendors
 	if c.globalSnap != nil {
 		vendorsToSave = globalOnlyVendors(c.Vendors, c.globalSnap.Vendors)
 	}
-	// #4697 (defect B): external-section write failures must surface - the
-	// old discard made Save() report success while vendors.yaml/im.yaml/
-	// mcp_servers.yaml silently failed (read-only dir, full disk, lock),
-	// and the config reverted on restart with no user-visible warning.
+
 	if err := saveExternalSections(c, extDir, vendorsToSave); err != nil {
 		return fmt.Errorf("saving external sections: %w", err)
 	}
 
-	// 1. Marshal current config into a raw map.
 	currentData, err := yaml.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("marshaling config: %w", err)
@@ -82,72 +69,36 @@ func (c *Config) Save() error {
 		return fmt.Errorf("parsing current config: %w", err)
 	}
 
-	// 1b. Strip external sections from the main config map — they live in
-	//     separate files now. This prevents them from being written back.
 	delete(currentRaw, "vendors")
 	delete(currentRaw, "im")
 	delete(currentRaw, "mcp_servers")
 
-	// 2. Exclude fields that came from instance config merge so they don't
-	//    leak into the global file.
 	if c.globalSnap != nil && len(c.instanceFields) > 0 {
 		for key := range c.instanceFields {
 			delete(currentRaw, key)
 		}
 	}
 
-	// 3. Remove zero-value entries from the current map. This ensures that
-	//    un-set fields don't overwrite real values that exist in the file.
-	//    Only non-zero values participate in the merge overlay.
-	//
-	//    3a. (#610) First collect string leaves that are "" in memory. Combined
-	//    with the Load-time disk snapshot (c.diskStrSnap) these identify fields
-	//    that were explicitly cleared: the deep-merge below would otherwise
-	//    keep the stale file value for a key the overlay no longer carries.
-	//    3b. (#4506) Same collection for ZERO NUMBERS: the public contract
-	//    (e.g. SetEndpointModelLimits "A value of 0 means 'unset' and will
-	//    clear the field") requires 0 to clear the persisted value, but the
-	//    overlay strips zeroes (3) and deep-merge keeps absent keys - so the
-	//    disk value survived every save. Collected here so the merged map can
-	//    be pruned below.
 	clearedInMemory := collectEmptyStringPaths(currentRaw)
-	// #4506 note: raw-map collection CANNOT see the zeros - ContextWindow/
-	// MaxTokens carry yaml omitempty, so yaml.Marshal drops 0 before we ever
-	// look. The contract fields are collected from the CONFIG STRUCT instead
-	// (endpointZeroClearPaths below).
+
 	clearedZeros := endpointZeroClearPaths(c)
 	cleanZeroYAMLValues(currentRaw)
 
 	// 4. Build the data to write: merge onto existing file, or full write.
 	var data []byte
 	existingData, readErr := os.ReadFile(c.FilePath)
-	// #4697 (defect A): a real read error (EACCES/EIO/transient) must ABORT
-	// - falling into the full-write branch skipped deep-merge/tombstone
-	// protection and silently wiped disk-only fields, reporting success.
-	// Only a missing (or empty) file legitimately takes the full-write path
-	// (#1160 semantics; patchConfigFile/patchExternalFile already behave
-	// this way).
+
 	if readErr != nil && !os.IsNotExist(readErr) {
 		return fmt.Errorf("reading existing config %s: %w", c.FilePath, readErr)
 	}
 	if readErr == nil && len(existingData) > 0 {
-		// File exists — deep-merge current onto existing.
+
 		existingRaw := map[string]interface{}{}
 		if yamlErr := yaml.Unmarshal(existingData, &existingRaw); yamlErr == nil {
 			deepMergeYAMLMaps(existingRaw, currentRaw)
-			// (#610) Delete keys that existed on disk at Load time and were
-			// explicitly cleared in memory, instead of letting the merge keep
-			// the old value. Keys absent at Load time are never touched, and a
-			// key whose on-disk value changed since our Load (another process)
-			// is preserved — the #284 semantics.
+
 			applyClearedTombstones(existingRaw, c.diskStrSnap, clearedInMemory)
-			// (#4506) Delete numeric keys the merged view says are 0 - the
-			// "0 = unset/clear" contract. Numeric fields carry no Load-time
-			// string snapshot, so there is no #284 changed-on-disk guard
-			// here; a 0 in memory against a nonzero on-disk value is BY
-			// CONTRACT an explicit clear, so deleting is the documented
-			// behavior (a field merely never set is 0 in memory AND absent
-			// from disk, which this loop no-ops on).
+
 			applyZeroNumberClears(existingRaw, clearedZeros)
 			merged, marshalErr := yaml.Marshal(existingRaw)
 			if marshalErr != nil {
@@ -155,12 +106,7 @@ func (c *Config) Save() error {
 			}
 			data = stripDefaultsFromYAML(merged)
 		} else {
-			// Existing file is unparseable — fall back to full write.
-			// #4643: use currentRaw (external sections + instance-only
-			// fields already stripped in steps 1b/2), NOT the raw
-			// currentData marshal — the unstripped form wrote vendors/im/
-			// mcp_servers and instance secrets straight back into the main
-			// config file on this branch.
+
 			fallbackData, marshalErr := yaml.Marshal(currentRaw)
 			if marshalErr != nil {
 				return fmt.Errorf("marshaling config for fallback write: %w", marshalErr)
@@ -168,9 +114,7 @@ func (c *Config) Save() error {
 			data = stripDefaultsFromYAML(fallbackData)
 		}
 	} else {
-		// File doesn't exist or is empty — full write.
-		// Use currentRaw (after stripping external sections) so vendors/im/mcp_servers
-		// don't leak into the main config file on first write.
+
 		fullData, marshalErr := yaml.Marshal(currentRaw)
 		if marshalErr != nil {
 			return fmt.Errorf("marshaling config for first write: %w", marshalErr)
@@ -181,13 +125,7 @@ func (c *Config) Save() error {
 	if err := writeSecureConfigFile(c.FilePath, data); err != nil {
 		return err
 	}
-	// Re-migrate any plaintext secrets that yaml.Marshal produced.
-	// #4505: the migration intent (config_migration.go) is "no plaintext
-	// key readable on disk" - a failure here (read-only/locked keys.env
-	// dir) previously only hit debug.Log, so Save() reported success while
-	// plaintext keys stayed in ggcode.yaml with no user-visible signal and
-	// no retry path. Surface it: the config IS saved, but the security
-	// migration did not complete.
+
 	if migrated, migrateErr := MigratePlaintextAPIKeys(c.FilePath); migrateErr != nil {
 		return fmt.Errorf("config saved, but migrating plaintext API keys out of %s failed (they remain readable on disk): %w", c.FilePath, migrateErr)
 	} else if len(migrated) > 0 {
@@ -195,13 +133,9 @@ func (c *Config) Save() error {
 			debug.Log("config", "Save: recompact error: %v", err)
 		}
 	}
-	// Also migrate plaintext keys in the external vendors.yaml — it was split
-	// out of the main config file, so the main-file migration never sees it (#250).
-	// Uses the same directory as saveExternalSections above; since instance-only
-	// vendors were excluded from the file, any plaintext key found here is
-	// global-sourced and belongs in the global keys.env (#293).
+
 	if migrated, migrateErr := MigrateVendorsFilePlaintextAPIKeys(VendorsPath(extDir), ""); migrateErr != nil {
-		// #4505: same security-visibility rationale as the main-file migration.
+
 		return fmt.Errorf("config saved, but migrating plaintext API keys out of vendors.yaml failed (they remain readable on disk): %w", migrateErr)
 	} else if len(migrated) > 0 {
 		debug.Log("config", "Save: migrated %d plaintext API keys out of vendors.yaml", len(migrated))
@@ -219,14 +153,7 @@ func globalOnlyVendors(merged, globalSnapVendors map[string]VendorConfig) map[st
 	out := make(map[string]VendorConfig, len(merged))
 	for name := range merged {
 		if gvc, isGlobal := globalSnapVendors[name]; isGlobal {
-			// #4262: a same-named vendor OVERRIDDEN by the instance merge
-			// (#2289 instance-wins) carries instance-sourced fields (api_key/
-			// base_url overrides); writing the merged struct to the global
-			// vendors.yaml/keys.env would leak the workspace-private key into
-			// the shared ~/.ggcode every other workspace loads. Write the
-			// snapshot's ORIGINAL struct instead. Runtime global edits are
-			// unaffected: they flow through SyncVendorToGlobalSnapshot (#368),
-			// which refreshes the snapshot before Save runs.
+
 			out[name] = gvc
 		}
 	}
@@ -242,9 +169,7 @@ func globalOnlyVendors(merged, globalSnapVendors map[string]VendorConfig) map[st
 // wholesale (honoring additions and removals from the current process).
 func deepMergeYAMLMaps(dst, src map[string]interface{}) {
 	for key, srcVal := range src {
-		// nil is an explicit deletion marker (#2106): the source wants the
-		// key gone from the merged result (e.g. an instance override reset
-		// back to the global value), not a YAML null written to disk.
+
 		if srcVal == nil {
 			delete(dst, key)
 			continue
@@ -364,11 +289,11 @@ func applyClearedTombstones(existingRaw map[string]interface{}, snap map[string]
 		}
 		curVal, exists := yamlPathLookup(existingRaw, path)
 		if !exists {
-			continue // already gone from the file
+			continue
 		}
 		curStr, isStr := curVal.(string)
 		if !isStr || curStr != loadedVal {
-			continue // changed on disk since our Load — preserve (#284)
+			continue
 		}
 		yamlPathDelete(existingRaw, strings.Split(path, "."))
 	}
@@ -476,7 +401,7 @@ func (c *Config) patchConfigFile(patch func(raw map[string]interface{})) error {
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("reading config %s: %w", fp, err)
 		}
-		// File doesn't exist yet — start with empty map.
+
 	} else if len(data) > 0 {
 		if err := yaml.Unmarshal(data, &raw); err != nil {
 			return fmt.Errorf("parsing config %s: %w", fp, err)
@@ -493,7 +418,6 @@ func (c *Config) patchConfigFile(patch func(raw map[string]interface{})) error {
 		return err
 	}
 
-	// Migrate plaintext API keys if saving to a real file.
 	if c.saveScope == "instance" && c.instanceDir != "" {
 		hash := filepath.Base(c.instanceDir)
 		if _, migrateErr := MigrateInstancePlaintextAPIKeys(fp, hash); migrateErr != nil {
@@ -570,9 +494,7 @@ func (c *Config) SaveSidebarPreference(visible bool) error {
 func (c *Config) SaveDefaultModePreference(mode string) error {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	switch mode {
-	// two-mode refactor: plan is tool-internal (a session must not boot
-	// into it); auto/autopilot persist as-is for compat but normalize at
-	// load time.
+
 	case "supervised", "auto", "bypass", "autopilot":
 	default:
 		return fmt.Errorf("default_mode %q must be supervised or bypass (legacy aliases auto/autopilot normalize; plan is tool-internal)", mode)
@@ -660,14 +582,13 @@ func (c *Config) AddIMTarget(adapterName string, target IMTargetConfig) error {
 		adapter.Targets = append(adapter.Targets, target)
 	}
 	c.IM.Adapters[adapterName] = adapter
-	// Use patchConfigFile so the target list is explicitly written,
-	// avoiding omitempty issues with Save()-based merge.
+
 	targetData, _ := yaml.Marshal(target)
 	targetMap := map[string]interface{}{}
 	yaml.Unmarshal(targetData, &targetMap)
 	return c.patchIMAdapterUnlocked(adapterName, func(a map[string]interface{}) {
 		targets, _ := a["targets"].([]interface{})
-		// Replace existing target with same ID, or append.
+
 		found := false
 		for i, t := range targets {
 			if tm, ok := t.(map[string]interface{}); ok {
@@ -706,15 +627,9 @@ func (c *Config) AddIMAdapter(name string, adapter IMAdapterConfig) error {
 		return fmt.Errorf("IM adapter %q already exists", name)
 	}
 	c.IM.Adapters[name] = adapter
-	// #4913: creating a bot MEANS the user wants IM to work - every panel's
-	// apply sets IM.Enabled=true in memory, but neither patch branch below
-	// persisted the global switch, so the bot silently failed to start on
-	// the next session (daemon/root gate on the DISK config). Persist
-	// im.enabled=true alongside the adapter in both scopes; idempotent when
-	// IM was already enabled. RemoveIMAdapter deliberately does NOT reset
-	// it - other adapters may still be live.
+
 	c.IM.Enabled = true
-	// Instance scope: write to instance ggcode.yaml; Global: write to im.yaml
+
 	adapterData, _ := yaml.Marshal(adapter)
 	adapterMap := map[string]interface{}{}
 	yaml.Unmarshal(adapterData, &adapterMap)
@@ -730,7 +645,7 @@ func (c *Config) AddIMAdapter(name string, adapter IMAdapterConfig) error {
 			}
 			adaptersRaw[name] = adapterMap
 			imRaw["adapters"] = adaptersRaw
-			imRaw["enabled"] = true // #4913
+			imRaw["enabled"] = true
 			raw["im"] = imRaw
 		})
 	}
@@ -741,7 +656,7 @@ func (c *Config) AddIMAdapter(name string, adapter IMAdapterConfig) error {
 		}
 		adaptersRaw[name] = adapterMap
 		raw["adapters"] = adaptersRaw
-		raw["enabled"] = true // #4913
+		raw["enabled"] = true
 	})
 }
 
@@ -888,7 +803,7 @@ func (c *Config) PatchIMAdapter(name string, patch func(adapter map[string]inter
 }
 
 func (c *Config) patchIMAdapterUnlocked(name string, patch func(adapter map[string]interface{})) error {
-	// Instance scope: patch instance ggcode.yaml directly (old behavior)
+
 	if c.saveScope == "instance" {
 		return c.patchConfigFile(func(raw map[string]interface{}) {
 			imRaw, _ := raw["im"].(map[string]interface{})
@@ -910,7 +825,6 @@ func (c *Config) patchIMAdapterUnlocked(name string, patch func(adapter map[stri
 		})
 	}
 
-	// Global scope: patch im.yaml (external file)
 	configDir := c.externalConfigDir()
 	imPath := IMPath(configDir)
 
@@ -923,9 +837,7 @@ func (c *Config) patchIMAdapterUnlocked(name string, patch func(adapter map[stri
 		return fmt.Errorf("reading im config %s: %w", imPath, err)
 	}
 	if len(data) > 0 {
-		// #1160: a corrupted im.yaml must abort the patch. Swallowing this
-		// error used to rewrite the whole file from an empty structure,
-		// irreversibly dropping every existing adapter.
+
 		if err := yaml.Unmarshal(data, &raw); err != nil {
 			return fmt.Errorf("parsing im config %s: %w", imPath, err)
 		}
@@ -962,13 +874,11 @@ func (c *Config) patchExternalFile(section string, patch func(raw map[string]int
 	raw := map[string]interface{}{}
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
-		// Match patchConfigFile: propagate read errors instead of treating
-		// every failure like a missing file (#1160).
+
 		return fmt.Errorf("reading %s: %w", section, err)
 	}
 	if len(data) > 0 {
-		// #1160: a corrupted external file must abort the patch instead of
-		// being silently replaced by a file containing only the new entry.
+
 		if err := yaml.Unmarshal(data, &raw); err != nil {
 			return fmt.Errorf("parsing %s: %w", section, err)
 		}
@@ -985,7 +895,7 @@ func (c *Config) patchExternalFile(section string, patch func(raw map[string]int
 
 // externalConfigDir returns the directory where external config files live.
 func (c *Config) externalConfigDir() string {
-	// For instance scope, write external files in the instance directory.
+
 	if c.saveScope == "instance" && c.instanceDir != "" {
 		return c.instanceDir
 	}

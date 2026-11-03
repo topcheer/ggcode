@@ -35,13 +35,11 @@ func TestInstanceToolPermValueChangeSurvivesReload(t *testing.T) {
 		t.Fatalf("precondition: global bash perm = %q, want allow", cfg.ToolPerms["bash"])
 	}
 
-	// Instance-scope value change: allow → deny.
 	cfg.ToolPerms["bash"] = ToolPermDeny
 	if err := cfg.SaveInstance(workspace); err != nil {
 		t.Fatalf("SaveInstance: %v", err)
 	}
 
-	// Write side: the value difference must be persisted to the instance file.
 	instData, err := os.ReadFile(filepath.Join(InstanceDir(workspace), "ggcode.yaml"))
 	if err != nil {
 		t.Fatalf("instance config should exist after SaveInstance: %v", err)
@@ -50,7 +48,6 @@ func TestInstanceToolPermValueChangeSurvivesReload(t *testing.T) {
 		t.Errorf("instance config missing bash: deny override; got:\n%s", instData)
 	}
 
-	// Read side: after reload the instance-wins deny must still be in effect.
 	cfg2, err := LoadWithInstance(globalPath, workspace)
 	if err != nil {
 		t.Fatalf("reload LoadWithInstance: %v", err)
@@ -59,8 +56,6 @@ func TestInstanceToolPermValueChangeSurvivesReload(t *testing.T) {
 		t.Errorf("after reload bash perm = %q, want deny (instance override lost)", got)
 	}
 
-	// The global file must keep its own allow — instance overrides never
-	// leak into the global config.
 	globData, err := os.ReadFile(globalPath)
 	if err != nil {
 		t.Fatal(err)
@@ -79,8 +74,8 @@ func TestInstanceToolPermMergeMatrix(t *testing.T) {
 		"bash": ToolPermAllow,
 	}}
 	instance := &Config{ToolPerms: map[string]ToolPermission{
-		"bash": ToolPermDeny, // value conflict → instance wins
-		"grep": ToolPermAsk,  // new key → added
+		"bash": ToolPermDeny,
+		"grep": ToolPermAsk,
 	}}
 	MergeInstance(global, instance)
 
@@ -122,7 +117,6 @@ func TestInstanceHooksOverrideSurvivesReload(t *testing.T) {
 		t.Fatalf("precondition: global pre_tool_use hooks = %+v", cfg.Hooks.PreToolUse)
 	}
 
-	// Instance-level hook change: replace the global hook with another.
 	cfg.Hooks.PreToolUse = []hooks.Hook{{Match: "edit_file", Command: "echo instance-hook"}}
 	if err := cfg.SaveInstance(workspace); err != nil {
 		t.Fatalf("SaveInstance: %v", err)
@@ -136,8 +130,6 @@ func TestInstanceHooksOverrideSurvivesReload(t *testing.T) {
 		t.Errorf("instance config missing hook override; got:\n%s", instData)
 	}
 
-	// Reload: the instance hook must replace (not be dropped, not appended
-	// after) the global hook.
 	cfg2, err := LoadWithInstance(globalPath, workspace)
 	if err != nil {
 		t.Fatalf("reload LoadWithInstance: %v", err)
@@ -146,8 +138,6 @@ func TestInstanceHooksOverrideSurvivesReload(t *testing.T) {
 		t.Errorf("after reload pre_tool_use = %+v, want exactly one instance-hook", cfg2.Hooks.PreToolUse)
 	}
 
-	// Idempotence across another save/reload cycle — append semantics would
-	// grow the list ([global, instance, instance, ...]) here.
 	if err := cfg2.SaveInstance(workspace); err != nil {
 		t.Fatalf("second SaveInstance: %v", err)
 	}
@@ -159,7 +149,6 @@ func TestInstanceHooksOverrideSurvivesReload(t *testing.T) {
 		t.Errorf("hook list not stable across save/reload cycles: %+v", cfg3.Hooks.PreToolUse)
 	}
 
-	// The global file keeps its own hook untouched.
 	globData, err := os.ReadFile(globalPath)
 	if err != nil {
 		t.Fatal(err)

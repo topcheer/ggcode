@@ -55,13 +55,11 @@ func TestIssue610ClearedStringFieldDoesNotResurrect(t *testing.T) {
 		t.Fatalf("after first Load, ExtraPrompt = %q, want %q", cfg.ExtraPrompt, "old-prompt-610")
 	}
 
-	// Explicitly clear in memory, then save.
 	cfg.ExtraPrompt = ""
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// The key must be gone from the raw file, not just ""-valued.
 	raw, err := os.ReadFile(cfgPath)
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +68,6 @@ func TestIssue610ClearedStringFieldDoesNotResurrect(t *testing.T) {
 		t.Fatalf("extra_prompt still present in config after clear+Save:\n%s", raw)
 	}
 
-	// Re-Load: the old value must not resurrect.
 	cfg2, err := Load(cfgPath)
 	if err != nil {
 		t.Fatalf("re-Load: %v", err)
@@ -125,7 +122,6 @@ func TestIssue610NeverOnDiskKeyNotWritten(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	// No extra_prompt on disk at Load time.
 	cfgPath := issue610WriteConfig(t, cfgDir, "")
 
 	cfg, err := Load(cfgPath)
@@ -136,14 +132,11 @@ func TestIssue610NeverOnDiskKeyNotWritten(t *testing.T) {
 		t.Fatalf("expected empty ExtraPrompt, got %q", cfg.ExtraPrompt)
 	}
 
-	// Simulate another process writing extra_prompt after our Load.
 	other := []byte("\nextra_prompt: written-by-other-process\n")
 	if err := appendYAMLToFile(cfgPath, other); err != nil {
 		t.Fatal(err)
 	}
 
-	// Our Save() with ExtraPrompt still "" must NOT erase the other process's
-	// value (#284 multi-process guard) and must not write our zero value.
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -209,9 +202,8 @@ func TestIssue610DiskValueChangedAfterLoadPreserved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	cfg.ExtraPrompt = "" // explicit clear in memory
+	cfg.ExtraPrompt = ""
 
-	// Another process rewrites extra_prompt to a NEW value after our Load.
 	if err := replaceYAMLValue(cfgPath, "extra_prompt: old-prompt-610", "extra_prompt: newer-prompt-610"); err != nil {
 		t.Fatal(err)
 	}

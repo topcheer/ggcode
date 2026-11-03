@@ -59,10 +59,10 @@ func TestWrapLines(t *testing.T) {
 		want  int // expected number of lines
 	}{
 		{"short", 80, 1},
-		{"short", 3, 2},         // "sho" + "rt"
-		{"a b c d", 5, 2},       // "a b c" + "d" (wraps at space)
-		{"line1\nline2", 80, 2}, // preserves explicit newlines
-		{"", 80, 1},             // empty = one empty line
+		{"short", 3, 2},
+		{"a b c d", 5, 2},
+		{"line1\nline2", 80, 2},
+		{"", 80, 1},
 	}
 	for _, tt := range tests {
 		lines := wrapLines(tt.text, tt.width)
@@ -74,23 +74,21 @@ func TestWrapLines(t *testing.T) {
 
 func TestWrapLinesMultibyte(t *testing.T) {
 	t.Run("pure CJK no panic", func(t *testing.T) {
-		// Pure Chinese text, each rune is ~2 cells wide.
-		// Small width forces multiple wraps - must not panic.
+
 		text := "你好世界这是一段用于测试多字节文字换行的中文文本内容"
 		lines := wrapLines(text, 10)
 		if len(lines) < 2 {
 			t.Errorf("expected multiple lines for long CJK text, got %d: %v", len(lines), lines)
 		}
 		for _, l := range lines {
-			if w := lipgloss.Width(l); w > 12 { // allow a little slack for a single wide char overshoot
+			if w := lipgloss.Width(l); w > 12 {
 				t.Errorf("line too wide (width=%d): %q", w, l)
 			}
 		}
 	})
 
 	t.Run("CJK with spaces no panic", func(t *testing.T) {
-		// The exact pattern that caused the original panic:
-		// multi-byte chars + spaces + small width → byte index used as rune index.
+
 		text := "你好 世界 测试 多字节 文本 换行 功能 是否 正常 工作"
 		lines := wrapLines(text, 10)
 		if len(lines) < 2 {
@@ -112,10 +110,10 @@ func TestWrapLinesMultibyte(t *testing.T) {
 	})
 
 	t.Run("very narrow width with CJK", func(t *testing.T) {
-		// Width so small that even a single CJK char (2 cells) exceeds it
+
 		text := "你好世界"
 		lines := wrapLines(text, 1)
-		// Each character should be emitted on its own line
+
 		if len(lines) != 4 {
 			t.Errorf("expected 4 lines for 4 CJK chars at width 1, got %d: %v", len(lines), lines)
 		}
@@ -137,7 +135,7 @@ func TestUserItemRender(t *testing.T) {
 	if !strings.Contains(rendered, "hello world") {
 		t.Fatalf("expected content in render, got: %s", rendered)
 	}
-	// Prefix is now styled with ANSI - check for the icon character
+
 	if !strings.Contains(rendered, "❯") {
 		t.Fatalf("expected ❯ icon in render, got: %s", rendered)
 	}
@@ -180,7 +178,7 @@ func TestToolHeaderWordWrap(t *testing.T) {
 		longCmd := strings.Repeat("x", 200)
 		header := styles.ToolHeader(StatusSuccess, "Bash", 80, longCmd)
 		clean := stripTestAnsi(header)
-		// Content should be fully preserved across wrapped lines
+
 		if !strings.Contains(clean, longCmd[:50]) {
 			t.Fatalf("long command start should be preserved, got: %q", clean)
 		}
@@ -193,7 +191,7 @@ func TestToolHeaderWordWrap(t *testing.T) {
 		longPath := "/very/long/path/to/some/deeply/nested/directory/structure/with/many/components/file.go"
 		header := styles.ToolHeader(StatusSuccess, "Read", 80, longPath)
 		clean := stripTestAnsi(header)
-		// Path may be split across wrapped lines, but start and end must be present
+
 		if !strings.Contains(clean, "/very/long") || !strings.Contains(clean, "file.go") {
 			t.Fatalf("long path content should be preserved, got: %q", clean)
 		}
@@ -241,7 +239,7 @@ func TestBashToolItem(t *testing.T) {
 
 	item.SetResult("ok  github.com/example  1.234s", false)
 	rendered = item.Render(80)
-	// Bash tool body is now rendered (was suppressed before streaming support)
+
 	if !strings.Contains(rendered, "1.234s") {
 		t.Fatalf("Bash tool body should be visible: %s", rendered)
 	}
@@ -250,7 +248,6 @@ func TestBashToolItem(t *testing.T) {
 func TestToolElapsedTimer(t *testing.T) {
 	styles := DefaultStyles()
 
-	// Running tool should show live elapsed timer
 	item := NewBashToolItem("t1", "Bash", "go build ./...", StatusRunning, styles)
 	if item.startedAt.IsZero() {
 		t.Fatal("startedAt should be set for running items")
@@ -260,8 +257,7 @@ func TestToolElapsedTimer(t *testing.T) {
 	if !strings.Contains(firstLine, "Bash") {
 		t.Fatalf("expected tool name in render: %s", firstLine)
 	}
-	// Elapsed should be empty (< 1s since just created) - no timer shown yet
-	// but after manually setting startedAt to the past, timer should appear
+
 	item.startedAt = time.Now().Add(-5 * time.Second)
 	rendered = stripTestAnsi(item.Render(80))
 	firstLine = strings.SplitN(rendered, "\n", 2)[0]
@@ -269,7 +265,6 @@ func TestToolElapsedTimer(t *testing.T) {
 		t.Fatalf("running tool should show elapsed time '5s', got: %q", firstLine)
 	}
 
-	// Completed tool should show final elapsed via SetElapsed
 	item.SetElapsed(3 * time.Second)
 	item.SetStatus(StatusSuccess)
 	item.SetResult("ok", false)
@@ -279,7 +274,6 @@ func TestToolElapsedTimer(t *testing.T) {
 		t.Fatalf("completed tool should show final elapsed '3s', got: %q", firstLine)
 	}
 
-	// Tool created as Success (not previously Running) has no elapsed
 	item2 := NewBashToolItem("t2", "Bash", "echo hi", StatusSuccess, styles)
 	item2.SetResult("ok", false)
 	rendered2 := stripTestAnsi(item2.Render(80))
@@ -442,7 +436,7 @@ func TestNewToolItemPreservesRawToolMetadata(t *testing.T) {
 
 func fmtTypeName(v interface{}) string {
 	s := fmt.Sprintf("%T", v)
-	// Remove "chat." prefix for comparison
+
 	return s
 }
 
@@ -483,7 +477,7 @@ func TestNewToolItemDetailFlowsToRender(t *testing.T) {
 			}
 
 			rendered := item.Render(80)
-			// Strip ANSI for comparison
+
 			clean := stripTestAnsi(rendered)
 			if !strings.Contains(clean, tt.wantParam) {
 				t.Errorf("expected render to contain %q, got:\n%s", tt.wantParam, clean)
@@ -565,7 +559,6 @@ func TestCmdToolHeadersVisible(t *testing.T) {
 				t.Errorf("expected render to contain %q, got:\n%s", tt.wantIn, clean)
 			}
 
-			// Most command tool bodies should be suppressed; start_command should retain its summary.
 			if setter, ok := item.(interface{ SetResult(string, bool) }); ok {
 				setter.SetResult("some long output that should not be visible", false)
 				rendered = item.Render(80)
@@ -600,12 +593,10 @@ func TestExitPlanModeHeaderVisible(t *testing.T) {
 	rendered := item.Render(80)
 	clean := stripTestAnsi(rendered)
 
-	// Header must be visible
 	if !strings.Contains(clean, "Exit Plan") {
 		t.Errorf("expected render to contain 'Exit Plan', got:\n%s", clean)
 	}
 
-	// Body (markdown) should also be visible
 	if !strings.Contains(clean, "Plan") {
 		t.Errorf("expected render to contain plan body, got:\n%s", clean)
 	}
@@ -618,17 +609,13 @@ func TestAssistantItemPrefixOnSameLine(t *testing.T) {
 
 	rendered := item.Render(80)
 
-	// The prefix icon and the first line of text must be on the same line.
-	// Before the fix, glamour added a leading newline, so the prefix
-	// ended up alone on the first line with the text on the next line.
 	firstLine := strings.SplitN(rendered, "\n", 2)[0]
 
-	// First line must contain both the prefix and some text content
 	prefix := styles.AssistantPrefix
 	if !strings.Contains(firstLine, prefix) {
 		t.Fatalf("first line should contain prefix %q, got: %q", prefix, firstLine)
 	}
-	// Strip ANSI to check for actual text content
+
 	clean := stripTestAnsi(firstLine)
 	if !strings.Contains(clean, "Hello") {
 		t.Fatalf("first line should contain text content, got:\n%q\nfull render:\n%s", clean, rendered)
@@ -646,17 +633,16 @@ func TestAssistantItemMarkdownPrefixAlignment(t *testing.T) {
 	prefix := styles.AssistantPrefix
 	prefixWidth := lipgloss.Width(styles.AssistantStyle.Render(prefix))
 
-	// Every continuation line (after the first) should be indented by prefixWidth
 	for i, line := range lines {
 		if i == 0 {
-			continue // first line has the prefix icon
+			continue
 		}
-		// Skip empty lines (they're fine)
+
 		clean := stripTestAnsi(line)
 		if clean == "" {
 			continue
 		}
-		// Count leading spaces
+
 		leading := countLeadingSpaces(line)
 		if leading < prefixWidth {
 			t.Errorf("line %d: expected at least %d leading spaces, got %d (line: %q)",
@@ -666,7 +652,7 @@ func TestAssistantItemMarkdownPrefixAlignment(t *testing.T) {
 }
 
 func countLeadingSpaces(s string) int {
-	// Skip ANSI escape sequences
+
 	n := 0
 	inEscape := false
 	for _, c := range s {
@@ -711,7 +697,6 @@ func stripTestAnsi(s string) string {
 func TestToolHeaderShowsParams(t *testing.T) {
 	styles := DefaultStyles()
 
-	// BashToolItem - should show command in header
 	bash := NewBashToolItem("t1", "Bash", "go build ./...", StatusSuccess, styles)
 	bash.SetResult("ok", false)
 	rendered := bash.Render(80)
@@ -724,7 +709,6 @@ func TestToolHeaderShowsParams(t *testing.T) {
 		t.Fatalf("BashToolItem first line should contain 'Bash', got: %q", clean)
 	}
 
-	// FileToolItem - should show path in header
 	file := NewFileToolItem("t2", "Read", "internal/config/config.go", StatusSuccess, styles, "en", "", "read_file")
 	rendered2 := file.Render(80)
 	firstLine2 := strings.SplitN(rendered2, "\n", 2)[0]
@@ -733,7 +717,6 @@ func TestToolHeaderShowsParams(t *testing.T) {
 		t.Fatalf("FileToolItem first line should contain file path, got: %q", clean2)
 	}
 
-	// Generic tool - should show query/pattern or fallback to truncated input
 	generic := NewGenericToolItem("t3", "SomeTool", StatusRunning, `target: fix the bug, scope: full`, styles)
 	rendered3 := generic.Render(80)
 	firstLine3 := strings.SplitN(rendered3, "\n", 2)[0]
@@ -741,7 +724,7 @@ func TestToolHeaderShowsParams(t *testing.T) {
 	if clean3 == "" {
 		t.Fatal("generic tool should have non-empty first line")
 	}
-	// Should at least show the tool name and detail
+
 	if !strings.Contains(clean3, "SomeTool") {
 		t.Fatalf("generic tool first line should contain tool name, got: %q", clean3)
 	}
@@ -823,13 +806,7 @@ func testVisualWidthForItemType(t *testing.T, styles Styles, text string, width 
 }
 
 func TestMeasureHeightWidth(t *testing.T) {
-	// Contract (see measureHeightWidth doc): height is the EXACT physical
-	// \n-delimited line count - identical to what List.Render slices via
-	// splitVisualLines. Width-wrapping is NOT predicted here; producers
-	// (FormatBody, ToolHeader, markdown, wrapLines) pre-wrap and are held
-	// to the width invariant by tool_render_invariant_test.go. Predicting
-	// wrapped rows here caused Height()/Render() divergence: viewport ghost
-	// height -> blank rows below content and panel borders pushed off-screen.
+
 	cases := []struct {
 		s     string
 		width int

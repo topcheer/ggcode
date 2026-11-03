@@ -23,7 +23,7 @@ func TestClassifyLLMError_Anchored401StillAuth(t *testing.T) {
 		`openai: {"error":{"status":401,"message":"bad key"}}`,
 		"statusCode:401",
 		"invalid api key provided",
-		// #313: go-openai SDK forms previously missed.
+
 		"error, status code: 401, message: You must be a member of an organization to use the API",
 		"error, status code: 401, status: , message: bad key",
 		"failed with code: 401",
@@ -52,7 +52,7 @@ func TestMaybeFailover_CanceledNotCounted(t *testing.T) {
 	f := &FallbackProvider{
 		consecutiveFail: atomic.Int32{},
 	}
-	// simulate 5 consecutive cancellations
+
 	for i := 0; i < 5; i++ {
 		_, retry := f.maybeFailover(context.Canceled, 0)
 		if retry {

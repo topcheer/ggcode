@@ -1,11 +1,5 @@
 package provider
 
-// Structured outputs (response_format=json_schema strict): the final
-// assistant response is constrained to a JSON Schema. sa-228 gap: the
-// repo had zero constrained-decoding support and was forced to
-// post-hoc repair free-text JSON (jsonrepair.go); this pins the
-// request-side contract.
-
 import (
 	"encoding/json"
 	"testing"
@@ -16,7 +10,6 @@ import (
 func TestOpenAIApplyResponseSchema(t *testing.T) {
 	p := NewOpenAIProviderWithBaseURL("k", "gpt-5", 0, "http://localhost")
 
-	// No schema installed: no-op.
 	req := openai.ChatCompletionRequest{}
 	p.applyResponseSchema(&req)
 	if req.ResponseFormat != nil {
@@ -41,7 +34,7 @@ func TestOpenAIApplyResponseSchema(t *testing.T) {
 	if js.Name != "final_answer" {
 		t.Errorf("schema name = %q, want final_answer", js.Name)
 	}
-	// Schema must marshal through verbatim.
+
 	blob, err := js.Schema.MarshalJSON()
 	if err != nil {
 		t.Fatalf("schema marshal: %v", err)
@@ -55,7 +48,6 @@ func TestOpenAIApplyResponseSchema(t *testing.T) {
 		t.Errorf("schema type = %v, want object", got["type"])
 	}
 
-	// Clearing restores unconstrained behavior.
 	p.SetResponseSchema(nil)
 	req = openai.ChatCompletionRequest{}
 	p.applyResponseSchema(&req)

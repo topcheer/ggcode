@@ -25,7 +25,6 @@ func TestMigratePlaintextAPIKeys_NoPlaintext(t *testing.T) {
 		t.Fatalf("expected 0 findings, got %d", len(findings))
 	}
 
-	// File should be unchanged
 	data, _ := os.ReadFile(cfgPath)
 	if string(data) != string(content) {
 		t.Fatalf("file was modified when it should not have been")
@@ -57,12 +56,10 @@ func TestMigratePlaintextAPIKeys_VendorLevelKey(t *testing.T) {
 		t.Errorf("expected env var ZAI_API_KEY, got %s", f.EnvVar)
 	}
 
-	// Check environment variable was set
 	if v := os.Getenv("ZAI_API_KEY"); v != "sk-test-1234567890abcdef" {
 		t.Errorf("expected env var set to plaintext key, got %q", v)
 	}
 
-	// Check keys.env was written
 	keysData, err := os.ReadFile(KeysEnvPath())
 	if err != nil {
 		t.Logf("keys.env not found at %s (expected in CI), skipping content check", KeysEnvPath())
@@ -72,7 +69,6 @@ func TestMigratePlaintextAPIKeys_VendorLevelKey(t *testing.T) {
 		}
 	}
 
-	// Check YAML was rewritten with ${VAR}
 	data, _ := os.ReadFile(cfgPath)
 	if !containsString(string(data), "${ZAI_API_KEY}") {
 		t.Errorf("config was not rewritten: %s", data)
@@ -110,7 +106,6 @@ func TestMigratePlaintextAPIKeys_EndpointLevelKey(t *testing.T) {
 		t.Errorf("expected env var MYVENDOR_EP1_API_KEY, got %s", f.EnvVar)
 	}
 
-	// Check YAML was rewritten
 	data, _ := os.ReadFile(cfgPath)
 	if !containsString(string(data), "${MYVENDOR_EP1_API_KEY}") {
 		t.Errorf("endpoint key was not rewritten: %s", data)
@@ -135,13 +130,12 @@ func TestMigratePlaintextAPIKeys_ConfigFilePermission(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The function writes with 0600 and forces chmod.
 	stat, err := os.Stat(cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	perm := stat.Mode().Perm()
-	// After explicit chmod(0600), permissions should be exactly 0600.
+
 	if perm != 0600 {
 		t.Errorf("expected config file permission 0600, got %o", perm)
 	}
@@ -150,18 +144,15 @@ func TestMigratePlaintextAPIKeys_ConfigFilePermission(t *testing.T) {
 func TestLoadKeysEnv(t *testing.T) {
 	dir := t.TempDir()
 
-	// Write a keys.env file
 	keysPath := filepath.Join(dir, "keys.env")
 	content := "# Managed by ggcode\nexport TEST_GGCODE_KEY='my-secret-value'\n"
 	if err := os.WriteFile(keysPath, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
 
-	// Temporarily override KeysEnvPath
 	defer func() { keysEnvPathOverride = "" }()
 	keysEnvPathOverride = keysPath
 
-	// Ensure env var is not already set
 	os.Unsetenv("TEST_GGCODE_KEY")
 
 	if err := LoadKeysEnv(); err != nil {
@@ -182,7 +173,6 @@ func TestLoadKeysEnv_DoesNotOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Set env var before loading keys.env
 	os.Setenv("TEST_GGCODE_EXISTING", "from-shell")
 	defer os.Unsetenv("TEST_GGCODE_EXISTING")
 
@@ -193,7 +183,6 @@ func TestLoadKeysEnv_DoesNotOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Shell env should take precedence
 	if v := os.Getenv("TEST_GGCODE_EXISTING"); v != "from-shell" {
 		t.Errorf("shell env should take precedence, got %q", v)
 	}
@@ -225,12 +214,12 @@ func TestLooksLikeSecretField(t *testing.T) {
 		{"token", true},
 		{"password", true},
 		{"credential", true},
-		{"Authorization", false}, // no match — "authorization" doesn't contain secret/token/password/credential
+		{"Authorization", false},
 		{"appid", false},
 		{"app_id", false},
 		{"display_name", false},
 		{"base_url", false},
-		{"SecretKey", true}, // case-insensitive
+		{"SecretKey", true},
 	}
 	for _, tc := range cases {
 		got := looksLikeSecretField(tc.key)
@@ -277,13 +266,13 @@ im:
 	if len(imFindings) != 2 {
 		t.Fatalf("expected 2 IM findings, got %d: %+v", len(imFindings), imFindings)
 	}
-	// Check that appid was NOT flagged
+
 	for _, f := range imFindings {
 		if strings.Contains(f.KeyPath, "appid") {
 			t.Errorf("appid should not be flagged as secret: %s", f.KeyPath)
 		}
 	}
-	// Check that display_name was NOT flagged
+
 	for _, f := range imFindings {
 		if strings.Contains(f.KeyPath, "display_name") {
 			t.Errorf("display_name should not be flagged as secret: %s", f.KeyPath)
@@ -329,7 +318,7 @@ mcp_servers:
 	if len(mcpFindings) != 2 {
 		t.Fatalf("expected 2 MCP findings, got %d: %+v", len(mcpFindings), mcpFindings)
 	}
-	// Verify env var names are prefixed with GGCODE_MCP_
+
 	for _, f := range mcpFindings {
 		if !strings.HasPrefix(f.EnvVar, "GGCODE_MCP_") {
 			t.Errorf("expected MCP env var to start with GGCODE_MCP_, got %s", f.EnvVar)
@@ -372,7 +361,6 @@ im:
 		t.Fatalf("expected 1 IM migration, got %d", len(imFindings))
 	}
 
-	// Read back the migrated config
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -384,16 +372,15 @@ im:
 	if strings.Contains(migrated, "plaintext-qq-secret") {
 		t.Error("plaintext secret should be removed from config")
 	}
-	// appid should be untouched
+
 	if !strings.Contains(migrated, `"123456"`) {
 		t.Error("appid should be untouched")
 	}
 
-	// Check keys.env
 	keysEnv := filepath.Join(tmp, "keys.env")
 	keysEnvPathOverride = keysEnv
 	defer func() { keysEnvPathOverride = "" }()
-	// The keys.env was written to default path, not our override, so check env var
+
 	val := os.Getenv("GGCODE_IM_QQ_BOT_APPSECRET")
 	if val != "plaintext-qq-secret" {
 		t.Errorf("expected os.Getenv to return migrated value, got %q", val)
@@ -436,7 +423,6 @@ mcp_servers:
 		t.Fatalf("expected 2 MCP migrations, got %d", len(mcpFindings))
 	}
 
-	// Read back migrated config
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

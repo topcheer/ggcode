@@ -1,11 +1,5 @@
 package provider
 
-// sa-54 tests: stateless encrypted reasoning round-trip for the OpenAI
-// Responses API adapter. With store=false the API cannot reconstruct a
-// reasoning model's chain-of-thought between tool calls unless the client
-// replays the reasoning items it received (via
-// include=["reasoning.encrypted_content"]) verbatim on the next request.
-
 import (
 	"context"
 	"encoding/json"
@@ -35,7 +29,7 @@ func TestBuildResponsesInputEncryptedReasoningReplay(t *testing.T) {
 	if len(items) != 4 {
 		t.Fatalf("want 4 items, got %d: %+v", len(items), items)
 	}
-	// Reasoning item first, replayed losslessly.
+
 	if items[1].Type != "reasoning" || items[1].ID != "rs_1" || items[1].EncryptedContent != "ENC-1" {
 		t.Errorf("item1 = %+v, want replayed reasoning item rs_1", items[1])
 	}
@@ -49,7 +43,7 @@ func TestBuildResponsesInputEncryptedReasoningReplay(t *testing.T) {
 	if !strings.Contains(string(wire), `"type":"reasoning"`) || !strings.Contains(string(wire), `"encrypted_content":"ENC-1"`) {
 		t.Errorf("wire form %s must round-trip type + encrypted_content", wire)
 	}
-	// Tool call/result ordering is untouched.
+
 	if items[2].Type != "function_call" || items[2].CallID != "call_1" {
 		t.Errorf("item2 = %+v, want function_call", items[2])
 	}
@@ -64,10 +58,10 @@ func TestDecodeResponsesReasoningItemGating(t *testing.T) {
 	if it, ok := decodeResponsesReasoningItem(sa54ReasoningItemRaw); !ok || it.ID != "rs_1" {
 		t.Errorf("valid item rejected: ok=%v item=%+v", ok, it)
 	}
-	// Anthropic signature / Gemini blob / garbage: dropped.
+
 	for _, bad := range []string{
 		"", `not json`, `{"type":"message"}`, `{"type":"reasoning"}`,
-		`{"type":"reasoning","id":"rs_2"}`, // no encrypted content: unreplayable
+		`{"type":"reasoning","id":"rs_2"}`,
 	} {
 		if _, ok := decodeResponsesReasoningItem(bad); ok {
 			t.Errorf("%q should not be replayable", bad)
@@ -99,7 +93,7 @@ func TestOpenAIResponsesChatCapturesReasoningItems(t *testing.T) {
 	if th.Type != "thinking" || !strings.Contains(th.ThinkingSignature, "rs_1") || !strings.Contains(th.ThinkingSignature, "ENC-1") {
 		t.Errorf("block0 = %+v, want thinking block with raw reasoning item", th)
 	}
-	// And the captured block replays cleanly.
+
 	if _, ok := decodeResponsesReasoningItem(th.ThinkingSignature); !ok {
 		t.Error("captured block should decode as a replayable reasoning item")
 	}
@@ -144,7 +138,7 @@ func TestOpenAIResponsesChatStreamCapturesEncryptedItem(t *testing.T) {
 	if !gotTool {
 		t.Error("function_call done event lost")
 	}
-	// Round-trip: what the stream produced, the input builder replays.
+
 	if itemEv != nil {
 		blk := ContentBlock{Type: "thinking", ThinkingSignature: itemEv.ThinkingSignature}
 		if it, ok := decodeResponsesReasoningItem(blk.ThinkingSignature); !ok || it.ID != "rs_9" || it.EncryptedContent != "E9" {

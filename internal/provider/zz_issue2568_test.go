@@ -1,9 +1,5 @@
 package provider
 
-// Regression tests for #2568: fileUploader's transient-failure negative cache
-// must expire (filesRetryTTL) instead of poisoning a content hash for the
-// provider lifetime, while permanent 4xx still disables the whole endpoint.
-
 import (
 	"context"
 	"crypto/sha256"
@@ -53,7 +49,7 @@ func TestIssue2568_ExpiredTransientFailureRetries(t *testing.T) {
 	if _, ok := u.resolve(context.Background(), "image/png", data); ok {
 		t.Fatal("expected retried resolve to fail again (no network)")
 	}
-	// Retry happened iff the failure timestamp is fresh, not the backdated one.
+
 	if age := failedAge(t, u, key); age > time.Second {
 		t.Fatalf("failed entry age = %v after retry, want fresh (upload re-attempted)", age)
 	}
@@ -71,7 +67,7 @@ func TestIssue2568_FreshTransientFailureShortCircuits(t *testing.T) {
 		t.Fatal("expected first resolve to fail (no network)")
 	}
 
-	backdateFailed(t, u, key, 30*time.Second) // within 2min TTL
+	backdateFailed(t, u, key, 30*time.Second)
 
 	if _, ok := u.resolve(context.Background(), "image/png", data); ok {
 		t.Fatal("expected short-circuit")
@@ -97,7 +93,7 @@ func TestIssue2568_Permanent4xxStillBreaksEndpoint(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("failed entries = %d, want 0 (permanent path must not poison per-hash map)", n)
 	}
-	// Any later resolve must be disabled regardless of hash/TTL state.
+
 	if _, ok := u.resolve(context.Background(), "image/png", []byte("irrelevant")); ok {
 		t.Fatal("resolve must be disabled once endpoint is broken")
 	}

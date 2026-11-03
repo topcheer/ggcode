@@ -17,7 +17,7 @@ func gzipBomb(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
-	payload := make([]byte, maxUDPDecompressed+1024*1024) // 5MB
+	payload := make([]byte, maxUDPDecompressed+1024*1024)
 	if _, err := gz.Write(payload); err != nil {
 		t.Fatalf("write bomb: %v", err)
 	}
@@ -54,20 +54,16 @@ func TestIssue991GzipBombDroppedBeforeAllocation(t *testing.T) {
 		t.Fatalf("dial transport: %v", err)
 	}
 	defer sender.Close()
-	// Feed the bomb straight into the datagram parser. Writing it through a
-	// real socket fails with EMSGSIZE on OSes whose max UDP datagram is small
-	// (macOS net.inet.udp.maxdgram defaults to 9216), and the property under
-	// test is the decompression cap, not the socket layer.
+
 	udp.processDatagram(bomb, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 65001}, "udp-test")
 
 	select {
 	case id := <-got:
 		t.Fatalf("oversized gzip payload dispatched message %q", id)
 	case <-time.After(300 * time.Millisecond):
-		// dropped as required; transport still alive
+
 	}
-	// Transport must still be alive (no panic) — a well-formed message now
-	// goes through and is dispatched.
+
 	env := udpEnvelope{Type: "message", APIKey: hub.APIKey(), FromNode: "peer-991"}
 	payload, _ := json.Marshal(Message{ID: "m-after-bomb", FromNodeID: "peer-991", Content: "ok"})
 	env.Payload = payload
@@ -148,7 +144,6 @@ func TestIssue991SendUnicastErrorOnRetryExhaustion(t *testing.T) {
 	udpAckWaitFn = func() time.Duration { return 20 * time.Millisecond }
 	defer func() { udpAckWaitFn = orig }()
 
-	// Fresh port with no listener: writes succeed (UDP) but no ACK ever returns.
 	dead, err := net.ResolveUDPAddr("udp4", "127.0.0.1:1")
 	if err != nil {
 		t.Fatalf("resolve dead addr: %v", err)
@@ -209,8 +204,7 @@ func TestIssue991SendUnicastSuccessReturnsNil(t *testing.T) {
 	if !ok {
 		t.Fatalf("B addr is %T", udpB.conn.LocalAddr())
 	}
-	// The listener reports 0.0.0.0 — rewrite to loopback for a routable
-	// destination.
+
 	baddr = &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: baddr.Port}
 	if err := udpA.SendUnicast(ctx, baddr, env); err != nil {
 		t.Fatalf("ACKed unicast send returned error: %v", err)
@@ -247,10 +241,6 @@ func TestIssue991ACKPreregistrationNoLoss(t *testing.T) {
 	udpA.Start()
 	udpB.Start()
 
-	// Rapid-fire round trips: each must ACK without exhausting retries.
-	// Success is measured by total wall time — 20 sends that each need the
-	// full 1s timeout would take 20s+; fully ACKed first-attempt sends
-	// finish in milliseconds.
 	baddr, ok := udpB.conn.LocalAddr().(*net.UDPAddr)
 	if !ok {
 		t.Fatalf("B addr is %T", udpB.conn.LocalAddr())

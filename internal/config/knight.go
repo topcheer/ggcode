@@ -128,10 +128,7 @@ func (kc KnightConfig) MarshalYAML() (interface{}, error) {
 // Knight returns the Knight configuration, applying defaults for zero values.
 func (c *Config) Knight() KnightConfig {
 	kc := c.KnightConfig
-	// Apply defaults for fields not set in the YAML. The YAML tag uses
-	// "omitempty" so an absent "knight:" section leaves all fields at Go
-	// zero-values (Enabled=false, TrustLevel="", etc). We must restore the
-	// intended defaults here so that "no knight config" == "default config".
+
 	kc.SetDefaults()
 	return kc
 }
@@ -175,7 +172,7 @@ func (c *Config) ResolveKnightEndpoint() (*ResolvedEndpoint, error) {
 	endpoint := kc.Endpoint
 	model := kc.Model
 	if vendor == c.Vendor {
-		// Same vendor as the main selection: main-scoped ids are valid.
+
 		if endpoint == "" {
 			endpoint = c.Endpoint
 		}
@@ -183,11 +180,7 @@ func (c *Config) ResolveKnightEndpoint() (*ResolvedEndpoint, error) {
 			model = c.Model
 		}
 	} else if endpoint == "" {
-		// #1523: endpoint ids are per-vendor scoped - the old fallback
-		// spliced the MAIN vendor's endpoint id into the knight vendor
-		// (either "endpoint not configured for <knight vendor>" or a
-		// same-id silent cross-vendor misresolution). Fall back to the
-		// knight vendor's first endpoint, deterministically sorted.
+
 		if vc, ok := c.Vendors[vendor]; ok && len(vc.Endpoints) > 0 {
 			ids := make([]string, 0, len(vc.Endpoints))
 			for id := range vc.Endpoints {
@@ -197,7 +190,6 @@ func (c *Config) ResolveKnightEndpoint() (*ResolvedEndpoint, error) {
 			endpoint = ids[0]
 		}
 	}
-	// When the model is empty, ResolveEndpointSelection falls back to the
-	// endpoint's own SelectedModel/DefaultModel - the correct scope.
+
 	return c.ResolveEndpointSelection(vendor, endpoint, model)
 }

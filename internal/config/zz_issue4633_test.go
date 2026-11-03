@@ -26,12 +26,11 @@ func TestIssue4633_MigrationCarriesAllEndpoints(t *testing.T) {
 		t.Fatal("legacy vendor must be migrated away")
 	}
 	ag := cfg.Vendors["ai-gateway"]
-	// Primary endpoint carries the vendor-level key per #959 placement;
-	// endpoint-level keys survive via the namespaced copies below.
+
 	if got := ag.Endpoints["openrouter"].APIKey; got != "VENDOR-LEVEL-KEY" {
 		t.Fatalf("primary endpoint key = %q, want VENDOR-LEVEL-KEY (#959 placement)", got)
 	}
-	// Every endpoint-level credential must survive, namespaced.
+
 	for name, want := range map[string]string{
 		"openrouter-a-first": "SECRET-A",
 		"openrouter-b-mid":   "SECRET-B",

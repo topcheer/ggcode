@@ -65,13 +65,13 @@ func (c *adaptiveCap) OnTruncated() {
 	}
 	c.mu.Lock()
 	cur := c.cur.Load()
-	// `cur` is now known to be too small → it's a safe lower bound.
+
 	if cur > c.lo {
 		c.lo = cur
 	}
 	next := cur + capStep
 	if c.hi > 0 && next >= c.hi {
-		// Don't push up to the rejected ceiling; back off by 1.
+
 		next = c.hi - 1
 	}
 	if next > capCeiling {
@@ -122,11 +122,7 @@ func (c *adaptiveCap) OnRejected(parsedLimit int) {
 		next = 1
 	}
 	if next >= cur {
-		// The floor clamp already pinned next at cur (lo==cur with
-		// parsedLimit<=0): stepping below it would break the documented
-		// cur >= lo invariant. Hold cur instead - the invariant outranks
-		// guaranteed progress, and the next OnTruncated re-raises cur
-		// anyway (#3066).
+
 		next = cur
 	}
 	c.cur.Store(next)
@@ -134,8 +130,6 @@ func (c *adaptiveCap) OnRejected(parsedLimit int) {
 	c.mu.Unlock()
 	saveAdaptiveCaps()
 }
-
-// ─── registry / persistence ──────────────────────────────────────────────────
 
 var (
 	capRegistryMu sync.Mutex
@@ -158,9 +152,7 @@ func AdaptiveCapFor(vendor, baseURL, model string, userHint int) *adaptiveCap {
 	defer capRegistryMu.Unlock()
 
 	if c, ok := capRegistry[key]; ok {
-		// #784: an explicit user hint must always be honored, including on
-		// already-registered caps: lowering max_tokens below the learned cap
-		// is by definition safe (anything <= lo is verified-safe).
+
 		if hint := int64(userHint); hint > 0 && hint < c.cur.Load() {
 			c.userHint = hint
 			c.cur.Store(hint)
@@ -174,8 +166,7 @@ func AdaptiveCapFor(vendor, baseURL, model string, userHint int) *adaptiveCap {
 	if persisted, ok := persistedCaps[key]; ok {
 		c.lo = persisted.Lo
 		c.hi = persisted.Hi
-		// Start from the persisted value but allow the user's new hint to
-		// move us within the known-safe range.
+
 		start := persisted.Cur
 		hint := int64(userHint)
 		if hint > 0 {
@@ -183,15 +174,13 @@ func AdaptiveCapFor(vendor, baseURL, model string, userHint int) *adaptiveCap {
 			case c.hi > 0 && hint >= c.hi:
 				start = c.hi - 1
 				if start < c.lo {
-					// #784: lo==hi (converged) -- hi-1 < lo violates the file
-					// invariant cur in [lo,hi] and makes OnTruncated jitter.
+
 					start = c.lo
 				}
 			case hint > c.lo:
 				start = hint
 			default:
-				// #784: hint <= lo: user explicitly lowered the cap; anything
-				// below the highest verified-safe value is safe.
+
 				start = hint
 			}
 		}
@@ -218,8 +207,7 @@ func AdaptiveCapForModelSwap(old *adaptiveCap, newModel string, userHint int) *a
 	if old == nil {
 		return nil
 	}
-	// key = vendor|baseURL|model - split vendor (first), then model is
-	// the LAST segment so a '|' inside baseURL cannot be misread.
+
 	vendor := old.key
 	baseURL := ""
 	if i := strings.Index(old.key, "|"); i >= 0 {
@@ -270,10 +258,7 @@ func loadAdaptiveCaps() {
 // writes it. Caller may hold an individual cap's mu; we briefly take the
 // registry mu to enumerate.
 func saveAdaptiveCaps() {
-	// Snapshot the registry keys first under the registry lock, then read
-	// each cap's fields under its own lock. This avoids holding both locks
-	// simultaneously (which would deadlock with OnTruncated's lock ordering:
-	// cap.mu → saveAdaptiveCaps → capRegistryMu).
+
 	capRegistryMu.Lock()
 	keys := make([]string, 0, len(capRegistry))
 	caps := make([]*adaptiveCap, 0, len(capRegistry))
@@ -304,8 +289,6 @@ func saveAdaptiveCaps() {
 	}
 }
 
-// ─── error parsing ───────────────────────────────────────────────────────────
-
 // maxTokensRejection inspects an error returned by a provider's HTTP/SDK call
 // and reports whether it indicates the max_tokens parameter exceeded the
 // model's allowed range. parsedLimit is non-zero if the upstream message
@@ -314,14 +297,7 @@ func maxTokensRejection(err error) (rejected bool, parsedLimit int) {
 	if err == nil {
 		return false, 0
 	}
-	// Don't false-positive on context-window errors — those are about input,
-	// not output cap.
-	// #577(G): reuse the authoritative IsContextOverflowError word list (20+
-	// phrases — the same authority isRetryable consults) instead of the old
-	// two-phrase check. Combined messages like "prompt tokens + max_tokens
-	// exceeds the maximum" were misjudged 3/3 in the ver-65 probe as output-cap
-	// rejections, so OnRejected clamped the output cap to the input window —
-	// and the lo/hi monotonic invariant makes that wrong clamp permanent.
+
 	if IsContextOverflowError(err) {
 		return false, 0
 	}
@@ -334,7 +310,7 @@ func maxTokensRejection(err error) (rejected bool, parsedLimit int) {
 	if !hasMaxTok {
 		return false, 0
 	}
-	// Only treat as "too large"; ignore "must be > 0" style messages.
+
 	tooLarge := strings.Contains(msg, "too large") ||
 		strings.Contains(msg, "exceed") ||
 		strings.Contains(msg, "less than") ||

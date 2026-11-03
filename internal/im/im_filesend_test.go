@@ -1,7 +1,5 @@
 package im
 
-// #3316 probes: FileSender dispatch, QQ document path, Telegram document path.
-
 import (
 	"bytes"
 	"context"
@@ -104,7 +102,7 @@ func TestIssue3316_QQSendFileDocumentAndCaption(t *testing.T) {
 	if _, ok := mediaMsg["media"]; !ok {
 		t.Fatalf("media message must carry file_info media: %v", mediaMsg)
 	}
-	if s, _ := captionMsg["msg_seq"].(float64); int(s) != 3 { // count=1 -> media seq 2, caption seq 3
+	if s, _ := captionMsg["msg_seq"].(float64); int(s) != 3 {
 		t.Fatalf("caption must ride the next seq slot (3), got %v (msg=%v)", captionMsg["msg_seq"], captionMsg)
 	}
 	if stored.PassiveReplyCount != 3 {

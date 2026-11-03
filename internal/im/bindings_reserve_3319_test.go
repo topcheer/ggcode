@@ -1,10 +1,5 @@
 package im
 
-// #3319: two ggcode instances (TUI + daemon) each hold divergent in-memory
-// PassiveReplyCount views of the same JSON binding store. Reserving seqs
-// must serialize under the cross-process file lock so both instances never
-// emit the same (msg_id, msg_seq) - QQ's server-side dedup key.
-
 import (
 	"path/filepath"
 	"sync"
@@ -13,7 +8,7 @@ import (
 
 func TestReservePassiveSeqsCrossInstanceNoCollision(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "im-bindings.json")
-	// Two store handles simulate two processes on the same file.
+
 	storeA, err := NewJSONFileBindingStore(path)
 	if err != nil {
 		t.Fatal(err)
@@ -87,11 +82,11 @@ func TestReservePassiveSeqsBatchStartAndMismatch(t *testing.T) {
 	if start2 != 4 {
 		t.Fatalf("second batch start = %d, want 4 (5-2+1)", start2)
 	}
-	// A different inbound message ID must not reserve against this binding.
+
 	if _, err := store.ReservePassiveSeqs("ws", "msg-other", 1); err != ErrNoChannelBound {
 		t.Fatalf("mismatched messageID err = %v, want ErrNoChannelBound", err)
 	}
-	// Invalid n is rejected without touching the counter.
+
 	if _, err := store.ReservePassiveSeqs("ws", "msg-1", 0); err == nil {
 		t.Fatal("n=0 must be rejected")
 	}

@@ -10,8 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// --- pc_crypto ---
-
 func TestPCGenerateAndDecodeSessionKey(t *testing.T) {
 	key, err := pcGenerateSessionKey()
 	if err != nil {
@@ -38,7 +36,7 @@ func TestPCDecodeSessionKey_InvalidBase64(t *testing.T) {
 }
 
 func TestPCDecodeSessionKey_WrongLength(t *testing.T) {
-	// base64url of a single byte
+
 	_, err := pcDecodeSessionKey("AA")
 	if err == nil {
 		t.Error("expected error for wrong length")
@@ -124,8 +122,6 @@ func TestPCDecryptPayload_WrongSessionID(t *testing.T) {
 	}
 }
 
-// --- pc_invite ---
-
 func TestPCEncodeInviteToURI(t *testing.T) {
 	invite := PCInvite{
 		Version:    1,
@@ -205,14 +201,12 @@ func TestPCNowISO(t *testing.T) {
 	if result == "" {
 		t.Error("expected non-empty ISO timestamp")
 	}
-	// Should be parseable
+
 	_, err := time.Parse("2006-01-02T15:04:05.000Z", result)
 	if err != nil {
 		t.Errorf("expected valid ISO timestamp, got %q: %v", result, err)
 	}
 }
-
-// --- pc_protocol ---
 
 func TestPCPayloadAccessors(t *testing.T) {
 	p := pcPayload{
@@ -235,7 +229,6 @@ func TestPCPayloadAccessors(t *testing.T) {
 		t.Errorf("count = %d", pcPayloadInt(p, "count"))
 	}
 
-	// Missing keys
 	if pcPayloadString(p, "missing") != "" {
 		t.Error("expected empty for missing string")
 	}
@@ -246,14 +239,11 @@ func TestPCPayloadAccessors(t *testing.T) {
 		t.Error("expected 0 for missing int")
 	}
 
-	// Int from actual int (not float64)
 	p["int_val"] = 99
 	if pcPayloadInt(p, "int_val") != 99 {
 		t.Errorf("int_val = %d", pcPayloadInt(p, "int_val"))
 	}
 }
-
-// --- pc_session ---
 
 func TestPCSession_Lifecycle(t *testing.T) {
 	invite := PCInvite{
@@ -293,13 +283,11 @@ func TestPCSession_Participants(t *testing.T) {
 		t.Errorf("expected 1 participant, got %d", sess.ParticipantCount())
 	}
 
-	// Upsert same - update
 	sess.UpsertParticipant("app1", "Bob", "PC")
 	if sess.ParticipantCount() != 1 {
 		t.Errorf("expected 1 participant after upsert, got %d", sess.ParticipantCount())
 	}
 
-	// Remove
 	sess.MarkAppRemoved("app1")
 	if !sess.IsAppRemoved("app1") {
 		t.Error("app1 should be removed")
@@ -328,14 +316,11 @@ func TestPCSession_History(t *testing.T) {
 		t.Errorf("expected msg-2, got %q", recent[0].MessageID)
 	}
 
-	// All history
 	all := sess.RecentHistory(0)
 	if len(all) != 5 {
 		t.Errorf("expected 5, got %d", len(all))
 	}
 }
-
-// --- pc_adapter resolve URLs ---
 
 func TestPCResolveRelayWSURL(t *testing.T) {
 	tests := []struct {
@@ -375,8 +360,6 @@ func TestPCResolveAppWsURL(t *testing.T) {
 	}
 }
 
-// --- pc_adapter payloadKindToRole ---
-
 func TestPCPayloadKindToRole(t *testing.T) {
 	tests := []struct {
 		kind string
@@ -394,8 +377,6 @@ func TestPCPayloadKindToRole(t *testing.T) {
 		}
 	}
 }
-
-// --- JSON round-trip for protocol types ---
 
 func TestPCEncryptedEnvelopeJSON(t *testing.T) {
 	env := pcEncryptedEnvelope{
@@ -430,8 +411,6 @@ func TestPCRelayErrorJSON(t *testing.T) {
 		t.Errorf("expected code in JSON: %s", data)
 	}
 }
-
-// --- PC attachment resolution tests ---
 
 func TestPCResolveAttachment_DataURL(t *testing.T) {
 	adapter := &pcAdapter{}

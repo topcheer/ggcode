@@ -20,7 +20,7 @@ func TestDingtalkKeyAliases(t *testing.T) {
 	if err != nil || a2.appKey != "ak" || a2.appSecret != "as" {
 		t.Fatalf("canonical keys rejected: err=%v", err)
 	}
-	// yaml null: key present, value nil -> must fail, not "<nil>" token.
+
 	_, err = newDingtalkAdapter("d", nil, config.IMAdapterConfig{
 		Extra: map[string]interface{}{"app_key": nil, "app_secret": nil},
 	})

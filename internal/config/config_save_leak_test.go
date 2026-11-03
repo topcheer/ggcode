@@ -39,8 +39,7 @@ vendors:
 	}
 
 	ws := t.TempDir()
-	// Instance config lives at ~/.ggcode/instances/{hash}/ggcode.yaml, not in
-	// the workspace itself.
+
 	instDir := InstanceDir(ws)
 	if instDir == "" {
 		t.Fatal("InstanceDir returned empty")
@@ -48,7 +47,7 @@ vendors:
 	if err := os.MkdirAll(instDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	// Instance-only vendor with a plaintext key (the leak vector from #293).
+
 	instYAML := `
 vendors:
   privatews:
@@ -67,7 +66,7 @@ vendors:
 	if err != nil {
 		t.Fatalf("LoadWithInstance: %v", err)
 	}
-	// Sanity: merge happened.
+
 	if _, ok := cfg.Vendors["privatews"]; !ok {
 		t.Fatal("instance vendor privatews should be merged into memory")
 	}
@@ -76,7 +75,6 @@ vendors:
 		t.Fatalf("Save: %v", err)
 	}
 
-	// The instance-only vendor must NOT appear in the global vendors.yaml.
 	vendorsYAML, err := os.ReadFile(filepath.Join(cfgDir, "vendors.yaml"))
 	if err != nil {
 		t.Fatalf("reading global vendors.yaml: %v", err)
@@ -91,7 +89,6 @@ vendors:
 		t.Error("global vendor should still be saved to global vendors.yaml")
 	}
 
-	// The instance plaintext key must NOT be migrated into the global keys.env.
 	keysEnv, rerr := os.ReadFile(filepath.Join(cfgDir, "keys.env"))
 	if rerr != nil && !os.IsNotExist(rerr) {
 		t.Fatalf("reading global keys.env: %v", rerr)
@@ -130,7 +127,6 @@ vendors:
 		t.Fatal(err)
 	}
 
-	// No instance config — plain Load keeps globalSnap nil-equivalent path.
 	cfg, err := Load(cfgPath)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -149,7 +145,7 @@ vendors:
 	if strings.Contains(string(keysEnv), "GGCODE_I_") {
 		t.Error("global keys.env should not contain instance-prefixed var names")
 	}
-	// vendors.yaml should now reference the env var instead of the plaintext.
+
 	vendorsYAML, err := os.ReadFile(filepath.Join(cfgDir, "vendors.yaml"))
 	if err != nil {
 		t.Fatalf("reading vendors.yaml: %v", err)

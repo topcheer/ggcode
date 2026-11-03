@@ -2,11 +2,6 @@ package im
 
 import "testing"
 
-// #4322: RE2's \b never matches after a username ending in "-" or "." (both
-// legal per Mattermost's ^[a-z0-9.\-_]+$ charset), so hasMention/stripMention
-// silently dropped those mentions. These tests pin the post-match boundary
-// fix and the #963 short-name guard it must preserve.
-
 func TestIssue4322HasMentionTrailingDashOrDot(t *testing.T) {
 	a := &mattermostAdapter{botUsername: "dev-", botUserID: "abc123"}
 
@@ -18,7 +13,7 @@ func TestIssue4322HasMentionTrailingDashOrDot(t *testing.T) {
 		{"trailing dash username", "@dev- 帮我看下日志", true},
 		{"trailing dash at end of text", "@dev-", true},
 		{"uppercase mention", "@DEV- x", true},
-		{"trailing dot is not our bot", "@ops1. hello", false}, // "ops1." bot covered below
+		{"trailing dot is not our bot", "@ops1. hello", false},
 		{"user id mention", "@abc123 ping", true},
 		{"embedded not a mention", "email dev@example.com", false},
 		{"plain text", "hello world", false},
@@ -30,7 +25,6 @@ func TestIssue4322HasMentionTrailingDashOrDot(t *testing.T) {
 		}
 	}
 
-	// Dedicated trailing-dot adapter.
 	b := &mattermostAdapter{botUsername: "ops1."}
 	if !b.hasMention("@ops1. hello") {
 		t.Error("hasMention must match a username ending in '.'")
@@ -68,8 +62,7 @@ func TestIssue4322StripMention(t *testing.T) {
 		{"user id stripped", "@abc123 ping me", "ping me"},
 		{"longer username not carved (#963)", "@alex is here", "@alex is here"},
 		{"no mention untouched", "plain text", "plain text"},
-		// Double space is pre-existing semantics (old regex left it too);
-		// only the mention itself is removed mid-text.
+
 		{"mid-text mention stripped", "hey @dev- check this", "hey  check this"},
 	}
 

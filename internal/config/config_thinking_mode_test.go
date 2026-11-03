@@ -1,9 +1,5 @@
 package config
 
-// Adaptive thinking (sa77): thinking_mode endpoint field plumbing tests. The
-// provider wire behavior is covered in internal/provider; these assert the
-// yaml tag parses and the resolved endpoint carries the trimmed mode.
-
 import "testing"
 
 func TestResolveEndpointThinkingMode(t *testing.T) {
@@ -18,8 +14,7 @@ func TestResolveEndpointThinkingMode(t *testing.T) {
 						APIKey:       "sk-ant-test",
 						MaxTokens:    32000,
 						DefaultModel: "claude-opus-4-6",
-						// Whitespace proves the resolver trims like it does
-						// for reasoning_effort/tool_choice/text_verbosity.
+
 						ThinkingMode: " adaptive ",
 					},
 				},

@@ -21,22 +21,13 @@ func LoadA2AOverride(workspace string) *A2AConfig {
 
 	var raw map[string]interface{}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
-		// #1515-E1: a parse error used to silently return nil - a typo'd
-		// a2a.yaml disabled the WHOLE override file with zero signal and
-		// the user kept the global config with no hint why. The main Load
-		// path returns the error; mirror at least a debug log line.
+
 		debug.Log("config", "a2a override %s: parse error (override ignored): %v", path, err)
 		return nil
 	}
-	// #1515-A: the main config, vendors and IM sections all expand ${VAR}
-	// references - the a2a override was the one config surface that did
-	// not, so `auth: {api_key: ${A2A_KEY}}` merged the LITERAL
-	// "${A2A_KEY}" string over the real value and auth failed silently.
-	// Expand before the legacy-key migration below so both the flat
-	// api_key form and the nested auth form resolve identically.
+
 	raw = ExpandEnvRecursive(raw)
-	// a2a.yaml override files are flat (no "a2a:" wrapper), so check
-	// top-level api_key and move it to auth.api_key directly.
+
 	if legacyKey, hasLegacy := raw["api_key"]; hasLegacy {
 		auth, _ := raw["auth"].(map[string]interface{})
 		if auth == nil {
@@ -59,10 +50,7 @@ func LoadA2AOverride(workspace string) *A2AConfig {
 	if err := yaml.Unmarshal(migrated, &override); err != nil {
 		return nil
 	}
-	// #665: remember whether the "disabled" key was explicitly present in
-	// the source yaml (either true or false). MergeA2AConfig uses this to
-	// distinguish "explicitly set" from "absent" (zero value), enabling
-	// the instance-wins semantics in both directions.
+
 	if _, ok := raw["disabled"]; ok {
 		override.disabledExplicit = true
 	}
@@ -75,11 +63,7 @@ func MergeA2AConfig(base *A2AConfig, override *A2AConfig) {
 	if override == nil {
 		return
 	}
-	// #665: instance wins — when the "disabled" key was explicitly present
-	// in the override yaml (true OR false), assign it unconditionally so a
-	// workspace a2a.yaml with `disabled: false` can re-enable a globally
-	// disabled A2A. Overrides constructed programmatically (no explicit
-	// marker) keep the legacy one-way merge: only disable, never re-enable.
+
 	if override.disabledExplicit {
 		base.Disabled = override.Disabled
 	} else if override.Disabled {
@@ -98,7 +82,6 @@ func MergeA2AConfig(base *A2AConfig, override *A2AConfig) {
 		base.TaskTimeout = override.TaskTimeout
 	}
 
-	// Auth overrides
 	if override.Auth.APIKey != "" {
 		base.Auth.APIKey = override.Auth.APIKey
 	}

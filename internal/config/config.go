@@ -734,10 +734,10 @@ func (n NotificationConfig) EffectiveMinDuration() int {
 // To disable, use a negative value (e.g. -1).
 func (n NotificationConfig) EffectiveInputBellDelay() int {
 	if n.InputBellDelay < 0 {
-		return 0 // explicitly disabled
+		return 0
 	}
 	if n.InputBellDelay == 0 {
-		return 5 // default: 5 seconds
+		return 5
 	}
 	return n.InputBellDelay
 }
@@ -750,7 +750,7 @@ func (n NotificationConfig) ShouldBell() bool {
 	if n.Bell != nil {
 		return *n.Bell
 	}
-	return true // backward-compatible default: unset = on
+	return true
 }
 
 // FallbackConfig configures one automatic provider/model failover level.
@@ -983,11 +983,7 @@ func DefaultConfig() *Config {
 				),
 			}),
 			"opencode": defaultVendor("OpenCode Zen", "${OPENCODE_API_KEY}", map[string]EndpointConfig{
-				// Static model snapshot from the public https://opencode.ai/zen/v1/models
-				// listing (2026-09-18, 74 models); curated subset per protocol:
-				// /messages models on zen-anthropic, /chat/completions+responses
-				// models on zen-openai. Dynamic discovery (/models) supplements
-				// this once a credential is configured.
+
 				"zen-anthropic": func() EndpointConfig {
 					ep := defaultEndpoint(
 						"Zen (Anthropic)",
@@ -1016,7 +1012,7 @@ func DefaultConfig() *Config {
 						"zen", "openai", "free",
 					)
 					ep.Models = []string{
-						// Free tier.
+
 						"mimo-v2.5-free",
 						"deepseek-v4-flash-free",
 						"jev-1.13-free",
@@ -1024,7 +1020,7 @@ func DefaultConfig() *Config {
 						"nemotron-3-ultra-free",
 						"nemotron-3.5-lightning-free",
 						"muse-spark-1.3-contributor-free",
-						// Paid mainstays (/responses endpoint).
+
 						"gpt-5.3-codex",
 						"gpt-5-nano",
 					}
@@ -1381,22 +1377,9 @@ func Load(path string) (*Config, error) {
 			if !skipAuto {
 				applyFirstLaunchAnthropicBootstrapWith(cfg, lookup)
 			}
-			// #591: a missing main config does not mean no config exists at
-			// all — external sections (im.yaml etc.) can predate it (e.g.
-			// SaveIMAdapter → AddIMAdapter writes im.yaml while the main
-			// ggcode.yaml has not been created yet). The first-run branch
-			// previously returned without loadExternalSections, so a
-			// freshly created adapter was invisible to every later Load —
-			// Test Connection and the adapter list permanently reported
-			// "not found". External-file loading is read-only here (the
-			// migrate-out path can't trigger: hasMainSection is false for a
-			// missing file), so it is safe regardless of skipAuto.
+
 			loadExternalSections(cfg, path)
-			// When skipAutoConfig is set on first launch, clear the default
-			// vendor/endpoint/model so NeedsOnboard() returns true and the
-			// user gets the onboarding wizard instead of silently using a
-			// default vendor whose ${VAR} API key may resolve from the
-			// ambient environment.
+
 			if skipAuto {
 				cfg.Vendor = ""
 				cfg.Endpoint = ""
@@ -1404,9 +1387,7 @@ func Load(path string) (*Config, error) {
 			}
 			cfg.expandEnvWithLookup(lookup)
 			cfg.normalizeActiveModel()
-			// #736: heal legacy non-canonical IM adapter platform names
-			// (e.g. "Telegram" persisted before #648) at load time so the
-			// runtime exact-match switch actually starts them.
+
 			cfg.normalizeIMAdapterPlatforms()
 			if err := cfg.Validate(); err != nil {
 				return nil, err
@@ -1455,7 +1436,7 @@ func Load(path string) (*Config, error) {
 			default:
 			}
 		}
-		// Reload the config file after migration rewrote it.
+
 		data, err = os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("re-reading migrated config %s: %w", path, err)
@@ -1464,33 +1445,18 @@ func Load(path string) (*Config, error) {
 		if err := yaml.Unmarshal(data, &raw); err != nil {
 			return nil, fmt.Errorf("parsing migrated config %s: %w", path, err)
 		}
-		// #4881: the reload above reads the DISK file, which still holds the
-		// legacy a2a.api_key (MigratePlaintextAPIKeys only scans
-		// vendors/im/mcp_env/mcp_headers), so the in-memory migration from
-		// migrateLegacyA2AAPIKey earlier in Load was silently discarded and the
-		// A2A server ran without auth for the whole session. Re-apply the
-		// legacy migration to the reloaded raw map to restore the invariant
-		// "raw has been legacy-migrated before expansion/parse".
+
 		migrateLegacyA2AAPIKey(raw)
 	}
 
-	// #610: record the raw (pre-expansion) string values present on disk so a
-	// later Save() can distinguish "explicitly cleared in memory" from
-	// "never set" and delete the stale key instead of letting the deep-merge
-	// resurrect it. Keys absent from disk at Load time are never recorded and
-	// therefore never deleted by Save (the #284 multi-process guard).
 	cfg.diskStrSnap = snapshotDiskStringKeys(raw)
 
-	// Expand env vars
 	lookup = runtimeEnvLookup(raw)
 
-	// Remove deprecated system_prompt key from YAML if present.
 	if !skipAuto {
 		if _, has := raw["system_prompt"]; has {
 			delete(raw, "system_prompt")
-			// #959: hold the in-process config lock while rewriting, matching
-			// api_keys.go and config_save.go (cross-process safety is still
-			// provided by writeSecureConfigFile's atomic write).
+
 			unlock := lockConfigFile(path)
 			rewriteErr := rewriteYAML(path, raw)
 			unlock()
@@ -1502,12 +1468,8 @@ func Load(path string) (*Config, error) {
 
 	expanded := ExpandEnvRecursiveWithLookup(raw, lookup)
 
-	// #559 (Bug F): surface ${...} forms the expander does not understand
-	// (e.g. "${KEY:?err}") instead of letting them silently become literal
-	// credential values.
 	WarnUnresolvedEnvRefs(expanded)
 
-	// Re-marshal and unmarshal into struct
 	expandedData, err := yaml.Marshal(expanded)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling expanded config: %w", err)
@@ -1521,26 +1483,18 @@ func Load(path string) (*Config, error) {
 		migrateLegacyMaxIterations(path, raw, cfg)
 	}
 
-	// Load external sections (vendors, im, mcp_servers) from standalone files.
-	// Auto-migrates from main config file if standalone files don't exist yet.
 	if !skipAuto {
 		loadExternalSections(cfg, path)
 	}
 
 	cfg.expandEnvWithLookup(lookup)
 	cfg.normalizeActiveModel()
-	// #736: heal legacy non-canonical IM adapter platform names (e.g.
-	// "Telegram" persisted before #648 fixed the save path). In-memory
-	// canonicalization here means the next compact re-save below persists
-	// the canonical ID, so bad data self-heals.
+
 	cfg.normalizeIMAdapterPlatforms()
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validating config %s: %w", path, err)
 	}
 
-	// Re-save to apply compact format (strip default vendors, inline models/tags).
-	// Idempotent: compact files stay compact.
-	// Skipped when GGCODE_SKIP_AUTOCONFIG is set to avoid rewriting config file.
 	if !skipAuto {
 		cfg.globalSnap = nil
 		cfg.instanceFields = nil
@@ -1703,7 +1657,7 @@ func (c *Config) expandEnvWithLookup(lookup envLookupFunc) {
 		}
 		c.MCPServers[i] = mcp
 	}
-	// IM adapter env expansion: Extra and Env maps.
+
 	for adapterName, adapter := range c.IM.Adapters {
 		for key, val := range adapter.Extra {
 			if s, ok := val.(string); ok {
@@ -1715,11 +1669,11 @@ func (c *Config) expandEnvWithLookup(lookup envLookupFunc) {
 		}
 		c.IM.Adapters[adapterName] = adapter
 	}
-	// IM STT env expansion.
+
 	c.IM.STT.APIKey = ExpandEnvWithLookup(c.IM.STT.APIKey, lookup)
 	c.IM.STT.BaseURL = ExpandEnvWithLookup(c.IM.STT.BaseURL, lookup)
 	c.IM.STT.Model = ExpandEnvWithLookup(c.IM.STT.Model, lookup)
-	// A2A env expansion.
+
 	c.A2A.Auth.APIKey = ExpandEnvWithLookup(c.A2A.Auth.APIKey, lookup)
 
 	for i, k := range c.A2A.Auth.APIKeys {
@@ -1730,9 +1684,7 @@ func (c *Config) expandEnvWithLookup(lookup envLookupFunc) {
 
 // Validate checks for invalid core configuration values that should fail fast.
 func (c *Config) Validate() error {
-	// On first run (no config file yet), allow empty vendor/endpoint so the
-	// onboarding wizard can trigger. NeedsOnboard() will return true and the
-	// caller will run onboarding instead of proceeding with an invalid config.
+
 	if c.FirstRun && strings.TrimSpace(c.Vendor) == "" {
 		return nil
 	}
@@ -1755,11 +1707,7 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(ep.AuthType) == "" {
 		ep.AuthType = "api_key"
-		// #4504: ep is a MAP-VALUE COPY - the defaults written above (and
-		// ep.Provider below) landed on the copy and never reached
-		// vc.Endpoints, so post-Load readers of the map still saw an empty
-		// AuthType. ResolveCurrentProvider's own fallback masked it, but any
-		// direct reader got "". Write the endpoint back.
+
 		vc.Endpoints[c.Endpoint] = ep
 	}
 	if strings.TrimSpace(c.Model) == "" && strings.TrimSpace(ep.SelectedModel) == "" && strings.TrimSpace(ep.DefaultModel) == "" {
@@ -1768,7 +1716,7 @@ func (c *Config) Validate() error {
 	if c.MaxIterations < 0 {
 		return fmt.Errorf("max_iterations must not be negative")
 	}
-	// Validate tool_choice on the active endpoint.
+
 	if ep.ToolChoice != "" {
 		switch strings.ToLower(strings.TrimSpace(ep.ToolChoice)) {
 		case "auto", "required", "none":
@@ -1787,16 +1735,10 @@ func (c *Config) Validate() error {
 	}
 	if c.DefaultMode != "" {
 		switch strings.ToLower(c.DefaultMode) {
-		// "auto"/"autopilot" are accepted legacy aliases (normalized to
-		// supervised/bypass at consumption); "plan" is tool-internal.
+
 		case "supervised", "auto", "bypass", "autopilot":
 		case "plan":
-			// #4267: pre-two-mode-refactor binaries could persist
-			// default_mode: plan via /mode plan or the IM channel. It is
-			// tool-internal now and must not boot a session, but a stored
-			// legacy value must not brick every CLI entry point either.
-			// Normalize to supervised (same philosophy as auto/autopilot
-			// legacy handling) instead of failing Load.
+
 			c.DefaultMode = "supervised"
 		default:
 			return fmt.Errorf("default_mode %q must be supervised or bypass (legacy aliases auto/autopilot normalize; stored plan normalizes to supervised)", c.DefaultMode)
@@ -1811,7 +1753,7 @@ func (c *Config) Validate() error {
 	if c.SubAgents.Timeout < 0 {
 		return fmt.Errorf("subagents.timeout must not be negative")
 	}
-	// A2A defaults and validation.
+
 	if !c.A2A.Disabled {
 		if c.A2A.Port < 0 {
 			return fmt.Errorf("a2a.port must not be negative")
@@ -1822,9 +1764,7 @@ func (c *Config) Validate() error {
 		if c.A2A.TaskTimeout == "" {
 			c.A2A.TaskTimeout = "5m"
 		}
-		// Host defaults to 0.0.0.0 (LAN accessible) since A2A + mDNS is always on.
-		// Loopback addresses are overridden to 0.0.0.0 so mDNS discovery and
-		// LAN Chat work correctly.
+
 		if c.A2A.Host == "" || isLoopbackHost(c.A2A.Host) {
 			c.A2A.Host = "0.0.0.0"
 		}
@@ -1856,7 +1796,6 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Validate hooks configuration.
 	if hookErrs := hooks.ValidateHooks(c.Hooks); len(hookErrs) > 0 {
 		return fmt.Errorf("invalid hooks config: %s", strings.Join(hookErrs, "; "))
 	}
@@ -1967,10 +1906,7 @@ func BuildSystemPrompt(extraPrompt, workingDir, language string, toolNames []str
 
 	var sb strings.Builder
 	sb.WriteString(DefaultSystemPrompt)
-	// GGCODE_NO_COAUTHOR opts out of the automatic Co-Authored-By trailer
-	// (see internal/tool coAuthorInjectionDisabled). Drop the prompt-side
-	// directive too, otherwise the model keeps hand-writing the trailer and
-	// the env var is meaningless.
+
 	if os.Getenv("GGCODE_NO_COAUTHOR") != "" {
 		s := sb.String()
 		s = strings.ReplaceAll(s, "- Always include \"Co-Authored-By: ggcode <noreply@ggcode.dev>\" in git commit messages.\n", "")
@@ -2017,10 +1953,6 @@ func BuildSystemPrompt(extraPrompt, workingDir, language string, toolNames []str
 		sb.WriteString(fmt.Sprintf("- Custom slash commands: %s\n", summarizeNames(customCmds, 8)))
 	}
 
-	// Auto-detected project profile (languages, build system, frameworks).
-	// Zero-LLM-cost deterministic detection via marker files (go.mod,
-	// package.json, Cargo.toml, etc.). Helps the agent use correct
-	// commands from the first interaction without trial-and-error.
 	if profileText := detectProfileText(workingDir); profileText != "" {
 		sb.WriteString("\n")
 		sb.WriteString(profileText)
@@ -2067,8 +1999,7 @@ func buildReplyLanguageGuidance(language string) string {
 
 func normalizedConfigLanguage(language string) string {
 	norm := strings.ToLower(strings.TrimSpace(language))
-	// Strip POSIX codeset suffix (fr_FR.UTF-8) and normalize _ to -,
-	// mirroring the TUI layer's normalizeLanguage.
+
 	if i := strings.IndexByte(norm, '.'); i >= 0 {
 		norm = norm[:i]
 	}
@@ -2141,12 +2072,10 @@ func mergeDefaultEndpoints(cfg, defaults *Config) {
 		for epName, defaultEP := range defaultVC.Endpoints {
 			cfgEP, exists := cfgVC.Endpoints[epName]
 			if !exists {
-				// Endpoint missing from config — add the built-in default.
+
 				cfgVC.Endpoints[epName] = defaultEP
 			} else if isPlaceholderBaseURL(cfgEP.BaseURL) {
-				// Endpoint exists but has a placeholder base_url — patch it
-				// with the correct built-in URL while preserving user overrides
-				// for other fields (models, tags, selected_model, etc.).
+
 				cfgEP.BaseURL = defaultEP.BaseURL
 				if cfgEP.Protocol == "" {
 					cfgEP.Protocol = defaultEP.Protocol
@@ -2160,7 +2089,6 @@ func mergeDefaultEndpoints(cfg, defaults *Config) {
 		cfg.Vendors[vendorName] = cfgVC
 	}
 
-	// Migrate standalone gateway vendors into ai-gateway endpoints.
 	gatewayVendors := map[string]string{
 		"openrouter": "openrouter",
 		"aihubmix":   "aihubmix",
@@ -2183,10 +2111,7 @@ func mergeDefaultEndpoints(cfg, defaults *Config) {
 				continue
 			}
 			if _, hasEP := agVC.Endpoints[epName]; !hasEP {
-				// #1422-B2: iterating a map takes a RANDOM last element -
-				// merged multi-endpoint vendors got a nondeterministic
-				// pick, then Save (compact) persisted it as permanent
-				// config. Deterministic: lowest endpoint name.
+
 				epNames := make([]string, 0, len(oldVC.Endpoints))
 				for k := range oldVC.Endpoints {
 					epNames = append(epNames, k)
@@ -2196,15 +2121,7 @@ func mergeDefaultEndpoints(cfg, defaults *Config) {
 					agVC.Endpoints[epName] = oldVC.Endpoints[epNames[0]]
 				}
 			}
-			// #4633: carry EVERY legacy endpoint through the migration,
-			// namespaced under the gateway endpoint name - previously only
-			// the sort-lowest endpoint survived and the rest (endpoint-level
-			// API keys, model lists, tags) were silently dropped by the
-			// unconditional delete below, violating the "cannot
-			// irreversibly drop credentials" contract (#959, #4408-C1).
-			// The primary pick above keeps active-selection semantics; the
-			// suffixed copies preserve every credential for discovery.
-			// Existing names are never overwritten.
+
 			for legacyName, legacyEP := range oldVC.Endpoints {
 				namespaced := epName + "-" + legacyName
 				if _, taken := agVC.Endpoints[namespaced]; !taken {
@@ -2212,18 +2129,11 @@ func mergeDefaultEndpoints(cfg, defaults *Config) {
 				}
 			}
 			carryGatewayVendorKey(&agVC, epName, oldVC.APIKey)
-			// #3986: if the top-level active selection points at the legacy
-			// vendor being deleted, redirect it to ai-gateway first —
-			// otherwise cfg.Vendor dangles, Validate() fails with
-			// "vendor %q is not configured" on next Load, and ggcode cannot
-			// start until the yaml is fixed by hand.
+
 			if cfg.Vendor == oldVendor {
 				cfg.Vendor = "ai-gateway"
 				if _, ok := agVC.Endpoints[cfg.Endpoint]; !ok {
-					// Legacy endpoint names do not carry over (they merge
-					// under the gateway endpoint names); fall back to the
-					// first endpoint deterministically (#1422-B2: lowest
-					// name, never map-iteration order).
+
 					eps := make([]string, 0, len(agVC.Endpoints))
 					for k := range agVC.Endpoints {
 						eps = append(eps, k)
@@ -2256,23 +2166,12 @@ func carryGatewayVendorKey(agVC *VendorConfig, epName, oldKey string) {
 		ep.APIKey = oldKey
 		agVC.Endpoints[epName] = ep
 	case hasEP:
-		// #4678: the endpoint already carries its own key, so neither the
-		// placement branch above nor the !hasEP branches below fires - the
-		// legacy vendor-level key used to be silently dropped and the
-		// subsequent delete made it unrecoverable, contradicting the
-		// "cannot irreversibly drop credentials" contract. Park it on a
-		// namespaced stub so it survives the migration (never overwrite
-		// the endpoint's existing key).
+
 		agVC.Endpoints[epName+"-legacy-vendor-key"] = EndpointConfig{APIKey: oldKey}
 	case !hasEP && agVC.APIKey == "":
 		agVC.APIKey = oldKey
 	case !hasEP:
-		// #4408-C1: a SECOND legacy gateway vendor's key (vendor-level,
-		// no matching endpoint) used to be silently dropped here - the
-		// vendor-level slot was already taken by the first one and no
-		// switch branch fired, directly contradicting the "cannot
-		// irreversibly drop credentials" contract above. Preserve it on
-		// a per-vendor endpoint stub keyed by the original endpoint name.
+
 		agVC.Endpoints[epName] = EndpointConfig{APIKey: oldKey}
 	}
 }

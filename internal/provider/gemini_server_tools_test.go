@@ -16,8 +16,8 @@ func TestGeminiServerToolsDeclaration(t *testing.T) {
 	p.SetServerTools([]config.ServerToolConfig{
 		{Type: "google_search"},
 		{Type: "url_context"},
-		{Type: "web_search"},                   // alias → second GoogleSearch entry
-		{Type: "definitely_not_real_20260101"}, // ignored
+		{Type: "web_search"},
+		{Type: "definitely_not_real_20260101"},
 	})
 
 	tools := p.convertTools(nil)
@@ -78,7 +78,6 @@ func TestGeminiToolChoiceAnyDowngrade(t *testing.T) {
 		t.Fatalf("ANY must downgrade to AUTO with builtin tools, got %v", got)
 	}
 
-	// Without builtin tools, ANY stays ANY.
 	p2 := &GeminiProvider{}
 	p2.SetToolChoice("required")
 	cfg2 := &genai.GenerateContentConfig{}
@@ -99,8 +98,8 @@ func TestGeminiGroundingAccum(t *testing.T) {
 	})
 	a.add(&genai.GroundingMetadata{
 		GroundingChunks: []*genai.GroundingChunk{
-			{Web: &genai.GroundingChunkWeb{URI: "https://example.com/a"}}, // dup URI
-			{Web: &genai.GroundingChunkWeb{URI: "https://example.com/b"}}, // no title
+			{Web: &genai.GroundingChunkWeb{URI: "https://example.com/a"}},
+			{Web: &genai.GroundingChunkWeb{URI: "https://example.com/b"}},
 		},
 	})
 
@@ -115,7 +114,6 @@ func TestGeminiGroundingAccum(t *testing.T) {
 		t.Fatalf("titleless source should render as bare URI: %q", s)
 	}
 
-	// nil metadata and empty accumulator are no-ops.
 	if newGeminiGroundingAccum().add(nil).summary() != "" {
 		t.Fatalf("empty accum should summarize to empty string")
 	}
@@ -146,7 +144,6 @@ func TestGeminiConvertResponseGroundingBlock(t *testing.T) {
 		t.Fatalf("grounding block missing source/query info: %+v", last)
 	}
 
-	// No grounding metadata → no extra block.
 	resp.Candidates[0].GroundingMetadata = nil
 	blocks, _ = p.convertResponse(resp)
 	if len(blocks) != 1 {

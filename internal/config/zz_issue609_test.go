@@ -67,7 +67,6 @@ a2a:
 		t.Fatalf("LoadWithInstance: %v", err)
 	}
 
-	// Sanity: the instance values are merged into memory.
 	if cfg.KnightConfig.TrustLevel != "high" {
 		t.Fatalf("knight.trust_level should be merged in memory, got %q", cfg.KnightConfig.TrustLevel)
 	}
@@ -95,7 +94,6 @@ a2a:
 		}
 	}
 
-	// The values must persist in the instance file instead.
 	inst, err := os.ReadFile(instPath)
 	if err != nil {
 		t.Fatalf("reading instance config: %v", err)

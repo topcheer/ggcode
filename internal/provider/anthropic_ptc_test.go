@@ -70,7 +70,6 @@ func TestToolUseBlockParamRestoresPTCCaller(t *testing.T) {
 		t.Fatalf("caller not restored in request block: %s", data)
 	}
 
-	// Without callerRaw the plain constructor is used (no caller field).
 	plain := toolUseBlockParam("toolu_y", map[string]any{}, "read_file", nil)
 	data, err = json.Marshal(plain)
 	if err != nil {
@@ -172,7 +171,7 @@ func TestCloneWithModelInheritsCapabilityConfig(t *testing.T) {
 	if ce := clone.contextEditing.Load(); ce == nil || ce.Mode == "" {
 		t.Fatal("#2567: clone lost the context-editing latch")
 	}
-	// Sanity: ServerToolSearchActive drives agent-side meta-tool gating.
+
 	if !clone.ServerToolSearchActive() {
 		t.Fatal("#2567: clone reports server tool search inactive while the declaration is configured")
 	}

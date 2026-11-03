@@ -1,24 +1,5 @@
 package im
 
-// Regression tests for issue #603 (ver-92 review: 4 probes + 1 -race capture).
-//
-// I2  runtime.go          pruneApprovals len<32 gate blocked the #259 Deny
-//                         fallback; abandoned approvals were never cleaned and
-//                         waiters blocked on <-resp forever. Fixed: no size
-//                         gate + a time-driven pruner goroutine.
-// I4a whatsapp_adapter.go reconnect gave up permanently after ~2min outage.
-//                         Fixed: unbounded retries with capped backoff; only
-//                         errWhatsAppLoggedOut is terminal.
-// I4b whatsapp_adapter.go Start wrote a.cancel / Stop read it without a.mu.
-//                         Fixed: both under a.mu.
-// I3  slack_adapter.go    deterministic auth failures retried forever.
-//                         Fixed: terminal auth error codes exit the run loop.
-// I1b emitter.go          close() shared the dispatcher-start sync.Once, so it
-//                         was dead-on-arrival after the first enqueue.
-//                         Fixed: dedicated mu/started/closed state.
-// I5  binding_watcher.go  strict ModTime().After() swallowed same-mtime
-//                         rewrites. Fixed: mtime+size change detection.
-
 import (
 	"context"
 	"errors"
@@ -31,11 +12,6 @@ import (
 
 	"github.com/topcheer/ggcode/internal/permission"
 )
-
-// ---------------------------------------------------------------------------
-// I2 — approval pruning must not be gated by map size, and must also run
-// time-driven (no further RegisterApproval required).
-// ---------------------------------------------------------------------------
 
 // TestIssue603_PruneApprovalsBelowThresholdDenies verifies that abandoned
 // approvals are denied and removed even when the approvals map never reaches
@@ -55,8 +31,6 @@ func TestIssue603_PruneApprovalsBelowThresholdDenies(t *testing.T) {
 		chans = append(chans, ch)
 	}
 
-	// Every stale approval must have been denied (each registration's
-	// synchronous prune evicts stale entries — no size gate anymore).
 	for i, ch := range chans {
 		select {
 		case d, ok := <-ch:
@@ -78,7 +52,6 @@ func TestIssue603_PruneApprovalsBelowThresholdDenies(t *testing.T) {
 		t.Fatalf("expected 0 approvals left after pruning stale entries, got %d", remaining)
 	}
 
-	// A fresh approval must survive pruning (no over-eager eviction).
 	_, freshCh := mgr.RegisterApproval(ApprovalRequest{
 		ToolName:    "run_command",
 		Input:       `{"command":"pwd"}`,
@@ -103,11 +76,9 @@ func TestIssue603_PruneApprovalsTimeDrivenDeny(t *testing.T) {
 	_, ch := mgr.RegisterApproval(ApprovalRequest{
 		ToolName:    "run_command",
 		Input:       `{"command":"ls"}`,
-		RequestedAt: time.Now(), // fresh at registration: survives sync prune
+		RequestedAt: time.Now(),
 	})
 
-	// Age the approval behind the manager lock so only the background
-	// pruner can evict it.
 	mgr.mu.Lock()
 	for _, ap := range mgr.approvals {
 		ap.state.Request.RequestedAt = time.Now().Add(-2 * time.Hour)
@@ -170,11 +141,6 @@ func TestIssue603_ApprovalPrunerSelfTerminates(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// I4a — WhatsApp reconnect policy: unbounded retries, capped backoff,
-// only LoggedOut is terminal.
-// ---------------------------------------------------------------------------
-
 // TestIssue603_WhatsAppBackoffUnboundedCapped verifies the backoff schedule
 // caps at the last waBackoffs entry instead of giving up after 5 attempts.
 func TestIssue603_WhatsAppBackoffUnboundedCapped(t *testing.T) {
@@ -219,10 +185,6 @@ func TestIssue603_WhatsAppTerminalOnlyLoggedOut(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// I4b — Start/Stop data race on a.cancel (both must hold a.mu now).
-// ---------------------------------------------------------------------------
-
 // TestIssue603_WhatsAppStartStopConcurrent hammers concurrent Start/Stop on a
 // shared adapter. Under -race this reproduces the original DATA RACE
 // (unsynchronized write a.cancel in Start vs read in Stop) and must stay
@@ -251,14 +213,9 @@ func TestIssue603_WhatsAppStartStopConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 	a.Stop()
-	// Wait for every run goroutine to finish writing session state before
-	// t.TempDir cleanup removes the store directory (avoided cleanup race).
+
 	a.waitRunStopped()
 }
-
-// ---------------------------------------------------------------------------
-// I3 — Slack deterministic auth failures must stop the run loop permanently.
-// ---------------------------------------------------------------------------
 
 // TestIssue603_SlackTerminalAuthStopsRetrying verifies that invalid_auth from
 // auth.test exits the run loop (previously: retried every cycle forever).
@@ -284,7 +241,7 @@ func TestIssue603_SlackTerminalAuthStopsRetrying(t *testing.T) {
 
 	select {
 	case <-done:
-		// Terminal auth failure exited the run loop on its own — correct.
+
 	case <-time.After(5 * time.Second):
 		t.Fatal("run loop still retrying a deterministic invalid_auth failure (#603)")
 	}
@@ -312,15 +269,12 @@ func TestIssue603_SlackTransientAuthKeepsRetrying(t *testing.T) {
 	done := make(chan struct{})
 	go func() { a.run(ctx); close(done) }()
 
-	// A transient error must NOT exit the loop on its own within the first
-	// backoff window.
 	select {
 	case <-done:
 		t.Fatal("run loop exited on a transient error — retry semantics broken")
 	case <-time.After(400 * time.Millisecond):
 	}
 
-	// Cancellation must still stop it promptly.
 	cancel()
 	select {
 	case <-done:
@@ -329,10 +283,6 @@ func TestIssue603_SlackTransientAuthKeepsRetrying(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// I1b — emitter close() must work after enqueue.
-// ---------------------------------------------------------------------------
-
 // TestIssue603_EmitterCloseAfterEnqueue verifies close() actually closes the
 // channel after enqueue() has run. Before the fix, the shared sync.Once was
 // consumed by the first enqueue, making close() a permanent no-op.
@@ -340,18 +290,14 @@ func TestIssue603_EmitterCloseAfterEnqueue(t *testing.T) {
 	s := newIMEmitterState()
 	s.enqueue(NewManager(), OutboundEvent{Kind: OutboundEventText, Text: "hello"}, "")
 
-	// Must not panic and must actually close the channel.
 	s.close()
 
-	// A closed channel eventually yields ok==false on receive (the dispatcher
-	// drains buffered items first). If close() were a no-op, this receive
-	// would block forever and hit the deadline.
 	deadline := time.After(3 * time.Second)
 	for {
 		select {
 		case _, ok := <-s.ch:
 			if !ok {
-				return // channel confirmed closed
+				return
 			}
 		case <-deadline:
 			t.Fatal("emitter channel never closed — close() is dead-on-arrival after enqueue (#603)")
@@ -365,9 +311,8 @@ func TestIssue603_EmitterCloseAfterEnqueue(t *testing.T) {
 func TestIssue603_EmitterCloseIdempotentAndDropAfterClose(t *testing.T) {
 	s := newIMEmitterState()
 	s.close()
-	s.close() // second close must be a no-op
+	s.close()
 
-	// Enqueue after close must drop the event silently.
 	s.enqueue(NewManager(), OutboundEvent{Kind: OutboundEventText, Text: "dropped"}, "")
 
 	s.mu.Lock()
@@ -381,10 +326,6 @@ func TestIssue603_EmitterCloseIdempotentAndDropAfterClose(t *testing.T) {
 		t.Fatal("enqueue after close must not start the dispatcher")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// I5 — binding watcher must detect same-mtime rewrites (size fallback).
-// ---------------------------------------------------------------------------
 
 // TestIssue603_BindingStatChangedMatrix covers the change-detection matrix:
 // mtime advance, same-mtime+size-change (the swallowed takeover case),

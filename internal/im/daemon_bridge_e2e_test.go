@@ -15,19 +15,12 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// newE2EAgent creates a minimal agent for testing (no tools, 3 iterations max).
 func newE2EAgent(t *testing.T, prov provider.Provider) *agent.Agent {
 	t.Helper()
 	registry := tool.NewRegistry()
 	return agent.NewAgent(prov, registry, "You are a test assistant. Respond with exactly one word.", 3)
 }
 
-// ============================================================
-// SubmitInboundMessage — full agent submission path
-// ============================================================
-
-// TestE2ESubmitInboundMessage_AgentRun verifies that a regular text message
-// starts an agent run and the agent responds.
 func TestE2ESubmitInboundMessage_AgentRun(t *testing.T) {
 	if os.Getenv("GGCODE_E2E") == "" {
 		t.Skip("set GGCODE_E2E=1 to run")
@@ -59,7 +52,6 @@ func TestE2ESubmitInboundMessage_AgentRun(t *testing.T) {
 		t.Fatalf("SubmitInboundMessage error: %v", err)
 	}
 
-	// Wait for agent to finish (max 30s)
 	deadline := time.After(30 * time.Second)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -82,12 +74,6 @@ func TestE2ESubmitInboundMessage_AgentRun(t *testing.T) {
 	}
 }
 
-// ============================================================
-// SubmitInboundMessage — interruption queuing
-// ============================================================
-
-// TestE2ESubmitInboundMessage_InterruptionQueue verifies that a second message
-// while the agent is running is queued as an interruption.
 func TestE2ESubmitInboundMessage_InterruptionQueue(t *testing.T) {
 	if os.Getenv("GGCODE_E2E") == "" {
 		t.Skip("set GGCODE_E2E=1 to run")
@@ -111,7 +97,6 @@ func TestE2ESubmitInboundMessage_InterruptionQueue(t *testing.T) {
 	emitter := NewIMEmitter(mgr, "en", "/ws")
 	bridge := NewDaemonBridge(mgr, ag, emitter, nil, nil)
 
-	// First message starts agent run
 	err := bridge.SubmitInboundMessage(context.Background(), InboundMessage{
 		Envelope: Envelope{Adapter: "qq", Platform: PlatformQQ},
 		Text:     "Count from 1 to 5.",
@@ -120,7 +105,6 @@ func TestE2ESubmitInboundMessage_InterruptionQueue(t *testing.T) {
 		t.Fatalf("first SubmitInboundMessage error: %v", err)
 	}
 
-	// Wait until agent is running
 	time.Sleep(1 * time.Second)
 
 	bridge.mu.Lock()
@@ -130,7 +114,6 @@ func TestE2ESubmitInboundMessage_InterruptionQueue(t *testing.T) {
 		t.Fatal("expected agent to be running after first message")
 	}
 
-	// Second message should be queued as interruption
 	err = bridge.SubmitInboundMessage(context.Background(), InboundMessage{
 		Envelope: Envelope{Adapter: "qq", Platform: PlatformQQ},
 		Text:     "Now count from 6 to 10.",
@@ -146,7 +129,6 @@ func TestE2ESubmitInboundMessage_InterruptionQueue(t *testing.T) {
 		t.Error("expected interruption to be queued")
 	}
 
-	// Wait for both runs to finish
 	deadline := time.After(60 * time.Second)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -166,12 +148,6 @@ func TestE2ESubmitInboundMessage_InterruptionQueue(t *testing.T) {
 	}
 }
 
-// ============================================================
-// HandleAskUser — blocking wait + button callback
-// ============================================================
-
-// TestE2EHandleAskUser_InteractiveCallback verifies the full cycle:
-// HandleAskUser blocks → interactive button sent → callback arrives → answer returned.
 func TestE2EHandleAskUser_InteractiveCallback(t *testing.T) {
 	if os.Getenv("GGCODE_E2E") == "" {
 		t.Skip("set GGCODE_E2E=1 to run")
@@ -236,8 +212,6 @@ func TestE2EHandleAskUser_InteractiveCallback(t *testing.T) {
 	}
 }
 
-// TestE2EHandleAskUser_TextReply verifies HandleAskUser with text reply
-// from a non-interactive adapter.
 func TestE2EHandleAskUser_TextReply(t *testing.T) {
 	if os.Getenv("GGCODE_E2E") == "" {
 		t.Skip("set GGCODE_E2E=1 to run")
@@ -293,8 +267,6 @@ func TestE2EHandleAskUser_TextReply(t *testing.T) {
 	}
 }
 
-// TestE2EHandleAskUser_MultiQuestion verifies multi-question ask_user
-// with mixed question types (choice + text).
 func TestE2EHandleAskUser_MultiQuestion(t *testing.T) {
 	if os.Getenv("GGCODE_E2E") == "" {
 		t.Skip("set GGCODE_E2E=1 to run")
@@ -341,22 +313,18 @@ func TestE2EHandleAskUser_MultiQuestion(t *testing.T) {
 		})
 	}()
 
-	// Wait for first question (choice with interactive buttons)
 	time.Sleep(500 * time.Millisecond)
 
 	if tg.lastInteractive() == nil {
 		t.Fatal("expected interactive message for first question")
 	}
 
-	// Answer first question via button callback
 	mgr.HandleInteractiveCallback(InteractiveCallback{
 		Values: []string{"go"},
 	})
 
-	// Wait for second question (text)
 	time.Sleep(500 * time.Millisecond)
 
-	// Answer second question via text
 	err := bridge.SubmitInboundMessage(context.Background(), InboundMessage{
 		Envelope: Envelope{Adapter: "qq", Platform: PlatformQQ},
 		Text:     "myproject",
@@ -384,8 +352,6 @@ func TestE2EHandleAskUser_MultiQuestion(t *testing.T) {
 	}
 }
 
-// TestE2EHandleAskUser_ContextCancel verifies HandleAskUser returns error
-// when context is cancelled while waiting.
 func TestE2EHandleAskUser_ContextCancel(t *testing.T) {
 	mgr := NewManager()
 	qq := &trackingSink{testSink: testSink{name: "qq"}}
@@ -430,12 +396,6 @@ func TestE2EHandleAskUser_ContextCancel(t *testing.T) {
 	}
 }
 
-// ============================================================
-// handleInteractiveCallback — multi-select
-// ============================================================
-
-// TestE2EHandleInteractiveCallback_MultiSelect verifies multi-select toggle
-// and __done__ submission.
 func TestE2EHandleInteractiveCallback_MultiSelect(t *testing.T) {
 	mgr := NewManager()
 	tg := &mockInteractiveAdapter{testSink: testSink{name: "tg"}}
@@ -471,19 +431,15 @@ func TestE2EHandleInteractiveCallback_MultiSelect(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	// Toggle A on
 	mgr.HandleInteractiveCallback(InteractiveCallback{Values: []string{"a"}})
 	time.Sleep(100 * time.Millisecond)
 
-	// Toggle B on
 	mgr.HandleInteractiveCallback(InteractiveCallback{Values: []string{"b"}})
 	time.Sleep(100 * time.Millisecond)
 
-	// Toggle A off
 	mgr.HandleInteractiveCallback(InteractiveCallback{Values: []string{"a"}})
 	time.Sleep(100 * time.Millisecond)
 
-	// Submit
 	mgr.HandleInteractiveCallback(InteractiveCallback{Values: []string{"__done__"}})
 
 	wg.Wait()
@@ -496,10 +452,6 @@ func TestE2EHandleInteractiveCallback_MultiSelect(t *testing.T) {
 		t.Errorf("expected only 'b' selected, got %v", selected)
 	}
 }
-
-// ============================================================
-// ConsumeRestartDebug
-// ============================================================
 
 func TestE2EConsumeRestartDebug(t *testing.T) {
 	mgr := NewManager()
@@ -522,11 +474,6 @@ func TestE2EConsumeRestartDebug(t *testing.T) {
 	}
 }
 
-// ============================================================
-// Subscribe
-// ============================================================
-
-// TestE2EBridge_Subscribe verifies event subscription works via broadcastEvent.
 func TestE2EBridge_Subscribe(t *testing.T) {
 	mgr := NewManager()
 	qq := &trackingSink{testSink: testSink{name: "qq"}}
@@ -544,7 +491,6 @@ func TestE2EBridge_Subscribe(t *testing.T) {
 		t.Fatal("expected non-nil unsubscribe function")
 	}
 
-	// Broadcast an event directly
 	bridge.broadcastEvent(provider.StreamEvent{
 		Type: provider.StreamEventText,
 		Text: "hello subscriber",
@@ -562,8 +508,6 @@ func TestE2EBridge_Subscribe(t *testing.T) {
 	unsub()
 }
 
-// TestE2EMultiSelectClearsPendingAsk verifies #122: after a multi-select __done__
-// submission, pendingAsk is cleared so a subsequent text message doesn't deadlock.
 func TestE2EMultiSelectClearsPendingAsk(t *testing.T) {
 	mgr := NewManager()
 	tg := &mockInteractiveAdapter{testSink: testSink{name: "tg"}}
@@ -597,14 +541,12 @@ func TestE2EMultiSelectClearsPendingAsk(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	// Select A and submit
 	mgr.HandleInteractiveCallback(InteractiveCallback{Values: []string{"a"}})
 	time.Sleep(100 * time.Millisecond)
 	mgr.HandleInteractiveCallback(InteractiveCallback{Values: []string{"__done__"}})
 
 	wg.Wait()
 
-	// After submission, pendingAsk should be nil
 	bridge.mu.Lock()
 	stillPending := bridge.pendingAsk
 	bridge.mu.Unlock()

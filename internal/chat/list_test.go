@@ -28,9 +28,8 @@ func TestListAppend(t *testing.T) {
 
 func TestListVirtualScroll(t *testing.T) {
 	styles := DefaultStyles()
-	l := NewList(80, 5) // small viewport
+	l := NewList(80, 5)
 
-	// Add 10 items, each 1 line + gap = 2 lines
 	for i := 0; i < 10; i++ {
 		l.Append(NewSystemItem("s", "line", styles))
 	}
@@ -53,7 +52,7 @@ func TestListScrollDown(t *testing.T) {
 
 	l.ScrollDown(3)
 	rendered := l.Render()
-	// Should have scrolled — not showing the first items
+
 	if rendered == "" {
 		t.Fatal("expected non-empty render")
 	}
@@ -116,13 +115,12 @@ func TestListFollow(t *testing.T) {
 	l := NewList(80, 3)
 	l.SetFollow(true)
 
-	// Append many items — should auto-scroll to last
 	for i := 0; i < 20; i++ {
 		l.Append(NewSystemItem("s", "line", styles))
 	}
 
 	rendered := l.Render()
-	// The last items should be visible
+
 	if !strings.Contains(rendered, "line") {
 		t.Fatalf("expected content in rendered view")
 	}
@@ -141,7 +139,7 @@ func TestListSetSize(t *testing.T) {
 }
 
 func TestSplitVisualLinesMatchesMeasureHeight(t *testing.T) {
-	// Every string's splitVisualLines count must equal measureHeight.
+
 	cases := []string{
 		"hello",
 		"hello\nworld",
@@ -150,7 +148,7 @@ func TestSplitVisualLinesMatchesMeasureHeight(t *testing.T) {
 		"",
 		"\n",
 		"\n\n",
-		"header\n  body1\n  body2\n", // typical tool render
+		"header\n  body1\n  body2\n",
 	}
 	for _, s := range cases {
 		lines := splitVisualLines(s)
@@ -163,9 +161,7 @@ func TestSplitVisualLinesMatchesMeasureHeight(t *testing.T) {
 
 func TestListScrollShowsAllContent(t *testing.T) {
 	styles := DefaultStyles()
-	// Use a small viewport and enough tool items to overflow.
-	// Each BashToolItem with a result produces a header + body ending in \n,
-	// which is exactly the pattern that caused Height/Render mismatch.
+
 	viewport := 5
 	l := NewList(80, viewport)
 	l.SetFollow(false)
@@ -176,17 +172,12 @@ func TestListScrollShowsAllContent(t *testing.T) {
 		l.Append(item)
 	}
 
-	// Scroll to end and verify that the last item is actually rendered.
 	l.ScrollToEnd()
 	rendered := l.Render()
 	if rendered == "" {
 		t.Fatal("expected non-empty render")
 	}
 
-	// The last item should have "ok" somewhere in the render output.
-	// Before the fix, scrollToEnd would stop too early because
-	// calcEndPositionLocked used Height() (undercounted) while Render()
-	// consumed more lines, pushing the last item off-screen.
 	if !l.AtBottom() {
 		t.Error("expected AtBottom after ScrollToEnd")
 	}
@@ -208,38 +199,30 @@ func TestListToolItemHeightMatchesRenderLines(t *testing.T) {
 }
 
 func TestListShrinkViewportShowsLastItem(t *testing.T) {
-	// Simulates: user sends a multi-line message, then the viewport shrinks
-	// because a status bar appears. The last line of the message must still
-	// be visible.
+
 	styles := DefaultStyles()
 	width := 60
 
-	// Start with a large viewport (no status bar)
 	l := NewList(width, 20)
 	l.SetFollow(true)
 
-	// Fill with enough content to require scrolling
 	for i := 0; i < 15; i++ {
 		l.Append(NewSystemItem("s", "filler line "+strings.Repeat("x", 20), styles))
 	}
 
-	// Append a multi-line user message (the one the user just sent)
 	userMsg := "this isa test,这是一个测试\n阿萨德发顺丰"
 	l.Append(NewUserItem("user1", userMsg, styles))
 
-	// Render at original size — last line should be visible
 	rendered := l.Render()
 	if !strings.Contains(rendered, "阿萨德发顺丰") {
 		t.Errorf("at size 20, last line should be visible.\nRendered:\n%s", rendered)
 	}
 
-	// Now shrink viewport by 2 (simulates status bar appearing)
 	l.SetSize(width, 18)
 
-	// Re-render — last line must STILL be visible
 	rendered = l.Render()
 	if !strings.Contains(rendered, "阿萨德发顺丰") {
-		// Show what IS visible
+
 		lines := strings.Split(rendered, "\n")
 		t.Errorf("at size 18, last line '阿萨德发顺丰' should be visible but isn't.\nVisible lines (%d):\n%s",
 			len(lines), rendered)
@@ -265,15 +248,14 @@ func TestUserItemHeightMatchesRenderLines(t *testing.T) {
 				t.Errorf("UserItem(%q) at width %d: Height()=%d but Render() has %d visual lines.\nRendered:\n%s",
 					text[:min(len(text), 30)], w, h, len(visualLines), rendered)
 			}
-			// Reset cache for next width
+
 			item.Invalidate()
 		}
 	}
 }
 
 func TestListRenderProducesExactHeightLines(t *testing.T) {
-	// Verify that Render() produces exactly l.height lines AND the last
-	// item's content is visible when scrolled to the end.
+
 	styles := DefaultStyles()
 	width := 60
 	height := 10
@@ -318,7 +300,6 @@ func TestTruncateAfterLastUser(t *testing.T) {
 		t.Errorf("expected 4 items after truncate, got %d", l.Len())
 	}
 
-	// Last item should be the user item "u2"
 	last := l.ItemAt(l.Len() - 1)
 	if last == nil || last.ID() != "u2" {
 		t.Errorf("expected last item to be u2, got %v", last)
@@ -353,7 +334,7 @@ func TestTruncateAfterLastUser_LastIsUser(t *testing.T) {
 func TestFollowPausedWhenScrolledUp(t *testing.T) {
 	styles := DefaultStyles()
 	l := NewList(80, 10)
-	// Fill beyond one viewport so scrolling up is meaningful.
+
 	for i := 0; i < 5; i++ {
 		l.Append(NewSystemItem(fmt.Sprintf("s%d", i), strings.Repeat("line\n", 6), styles))
 	}
@@ -362,33 +343,29 @@ func TestFollowPausedWhenScrolledUp(t *testing.T) {
 		t.Fatal("expected follow=true after ScrollToEnd")
 	}
 
-	// User scrolls up: follow must pause.
 	l.ScrollUp(5)
 	if l.Follow() {
 		t.Fatal("expected follow=false after ScrollUp")
 	}
 	yBefore := l.YOffset()
 
-	// Streaming output arrives while paused: viewport must not move.
 	l.Append(NewSystemItem("s-new", "new streamed content", styles))
 	l.FollowOutput()
 	if y := l.YOffset(); y != yBefore {
 		t.Fatalf("expected YOffset unchanged while follow paused (before=%d after=%d)", yBefore, y)
 	}
 
-	// Scroll back down to the end: follow resumes.
 	l.ScrollDown(1000)
 	if !l.Follow() {
 		t.Fatal("expected follow=true after scrolling back to bottom")
 	}
-	// Subsequent output follows again.
+
 	l.Append(NewSystemItem("s-new2", "more content", styles))
 	l.FollowOutput()
 	if !l.AtBottom() {
 		t.Fatal("expected AtBottom=true after FollowOutput with follow active")
 	}
 
-	// Empty-Enter semantics: ScrollToEnd re-enables follow directly.
 	l.ScrollUp(3)
 	if l.Follow() {
 		t.Fatal("expected follow=false after ScrollUp")
@@ -410,7 +387,7 @@ func TestListTrimBounded(t *testing.T) {
 	if n > 100 {
 		t.Fatalf("expected <= 100 items after trim, got %d", n)
 	}
-	// Oldest dropped, newest kept: first ID derives from final length.
+
 	firstWant := fmt.Sprintf("s%d", 130-n)
 	if it := l.ItemAt(0); it == nil || it.ID() != firstWant {
 		t.Fatalf("expected first item %s, got %v", firstWant, it)
@@ -418,7 +395,7 @@ func TestListTrimBounded(t *testing.T) {
 	if it := l.ItemAt(n - 1); it == nil || it.ID() != "s129" {
 		t.Fatalf("expected last item s129, got %v", it)
 	}
-	// follow was active: still pinned to end.
+
 	if !l.Follow() || !l.AtBottom() {
 		t.Fatal("expected follow and AtBottom after trim")
 	}
@@ -431,11 +408,10 @@ func TestListTrimPreservesViewport(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		l.Append(NewSystemItem(fmt.Sprintf("s%d", i), "line", styles))
 	}
-	// User scrolled up to read item ~s40; follow paused.
+
 	l.ScrollUp(60)
 	firstBefore := l.ItemAt(0).ID()
 
-	// Appends push past cap: viewport must stay on the same content.
 	for i := 100; i < 125; i++ {
 		l.Append(NewSystemItem(fmt.Sprintf("s%d", i), "line", styles))
 	}
@@ -443,7 +419,7 @@ func TestListTrimPreservesViewport(t *testing.T) {
 	if firstBefore == firstAfter {
 		t.Fatalf("expected head to advance past %s after trim, still at %s", firstBefore, firstAfter)
 	}
-	// The visible content (what the user was reading) must still be present.
+
 	found := false
 	for i := 0; i < l.Len(); i++ {
 		if l.ItemAt(i).ID() == "s40" {

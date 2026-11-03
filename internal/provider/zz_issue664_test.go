@@ -25,11 +25,11 @@ func TestParseDurationSafeOverflowClamped(t *testing.T) {
 		input string
 		want  time.Duration
 	}{
-		{"9300000000000", 24 * time.Hour},         // 9.3e12 ms — overflow point
-		{"9999999999999999", 24 * time.Hour},      // far overflow
-		{"86400001", 24 * time.Hour},              // 1ms above cap
-		{"86400000", 24 * time.Hour},              // exactly at cap
-		{"86399999", 86399999 * time.Millisecond}, // just under cap
+		{"9300000000000", 24 * time.Hour},
+		{"9999999999999999", 24 * time.Hour},
+		{"86400001", 24 * time.Hour},
+		{"86400000", 24 * time.Hour},
+		{"86399999", 86399999 * time.Millisecond},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {

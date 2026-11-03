@@ -15,14 +15,11 @@ import (
 func TestStreamingBodyHeightMatchesRenderLines(t *testing.T) {
 	styles := DefaultStyles()
 	item := NewBaseToolItem("t1", "wait_command", StatusRunning, "", styles)
-	item.SetStreamingBody(strings.Repeat("x", 300)) // one 300-char line, width 80
+	item.SetStreamingBody(strings.Repeat("x", 300))
 
 	const width = 80
 	rendered := item.RenderBody(width)
-	// The invariant: the width-aware count used by Height() must equal the
-	// physical line count used by List.Render's splitVisualLines. Before the
-	// fix, the 300-char single line counted as 4 wrapped lines in Height but
-	// stayed 1 physical line in Render.
+
 	wrapped := measureHeightWidth(rendered, width)
 	physical := strings.Split(rendered, "\n")
 	if wrapped != len(physical) {
@@ -47,13 +44,13 @@ func TestStreamingBodyCappedToMaxLines(t *testing.T) {
 
 	body := item.RenderBody(80)
 	n := strings.Count(body, "\n") + 1
-	if n > ToolBodyMaxLines+1 { // +1 for the "… N more lines" marker
+	if n > ToolBodyMaxLines+1 {
 		t.Fatalf("streaming body must cap at %d lines + marker, got %d", ToolBodyMaxLines, n-1)
 	}
 	if !strings.Contains(body, "more lines") {
 		t.Fatal("expected truncation marker for oversized streaming body")
 	}
-	// Newest output survives: streaming shows the tail.
+
 	if !strings.Contains(body, "short") {
 		t.Fatal("expected kept tail content in streaming body")
 	}

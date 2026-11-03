@@ -7,65 +7,55 @@ func TestInferContextWindow_KnownModels(t *testing.T) {
 		model string
 		want  int
 	}{
-		// OpenAI exact matches (from catwalk data)
+
 		{"gpt-4.1", 1047576},
 		{"gpt-4.1-mini", 1047576},
 		{"gpt-4.1-nano", 1047576},
 		{"gpt-4o", 128000},
 		{"gpt-4o-mini", 128000},
 		{"gpt-4-turbo", 128000},
-		{"gpt-4", 8192}, // models.dev: base gpt-4 is 8k (32k was the turbo variant)
+		{"gpt-4", 8192},
 		{"o3", 200000},
 		{"o3-mini", 200000},
 		{"o4-mini", 200000},
 
-		// OpenAI prefix matches (fall through to prefix heuristic)
 		{"gpt-4.1-2025-04-14", 1_000_000},
 		{"gpt-4o-2024-08-06", 128000},
 		{"gpt-4-turbo-2024-04-09", 128000},
 
-		// Anthropic Claude
-		{"claude-sonnet-4-6", 1_000_000}, // models.dev: Sonnet 4.6 ships with 1M context
+		{"claude-sonnet-4-6", 1_000_000},
 		{"claude-opus-4-7", 1_000_000},
-		{"claude-sonnet-4-5-20250929", 1_000_000}, // models.dev: 4.5 carries the 1M beta window
+		{"claude-sonnet-4-5-20250929", 1_000_000},
 		{"claude-opus-4-5-20251101", 200000},
 		{"claude-opus-4-20250514", 200000},
 		{"claude-sonnet-4-20250514", 200000},
 		{"claude-haiku-4-5-20251001", 200000},
 
-		// Google Gemini (prefix fallback when exact not found)
 		{"gemini-2.5-pro", 1048576},
 		{"gemini-2.5-flash", 1048576},
 		{"gemini-2.0-flash", 1_000_000},
 		{"gemini-1.5-pro", 2_000_000},
 		{"gemini-1.5-flash", 1_000_000},
 
-		// DeepSeek
 		{"deepseek-chat", 128000},
 		{"deepseek-reasoner", 128000},
 
-		// Groq
-		{"llama-3.3-70b-versatile", 131072}, // models.dev: exact 128KiB (was rounded 128000)
+		{"llama-3.3-70b-versatile", 131072},
 		{"mixtral-8x7b-32768", 32768},
 
-		// Zhipu GLM (from catwalk zai.json)
 		{"glm-5", 204800},
 		{"glm-5.1", 204800},
 		{"glm-4-long", 1_000_000},
 
-		// Moonshot / Kimi
 		{"moonshot-v1-128k", 128000},
 		{"moonshot-v1-32k", 32000},
 		{"moonshot-v1-8k", 8000},
 		{"kimi-k2", 262144},
 
-		// XiaoMi MIMO (models.dev upstream: 1MiB measured windows win over the
-		// localProviders 1M-decimal entries via the richer-output dedup rule)
 		{"MiMo-V2.5-Pro", 1_048_576},
 		{"MiMo-V2.5", 1_048_576},
 		{"MiMo-V2-Pro", 1_048_576},
 
-		// Protocol fallback
 		{"unknown-model", 128000},
 	}
 
@@ -90,7 +80,7 @@ func TestInferContextWindow_ProtocolFallback(t *testing.T) {
 }
 
 func TestInferContextWindow_HintParsing(t *testing.T) {
-	// Models with embedded context hints like "256k" or "1m"
+
 	if got := inferContextWindow("my-model-256k", "openai"); got != 256000 {
 		t.Errorf("hint 256k = %d, want 256000", got)
 	}
@@ -125,17 +115,16 @@ func TestInferVisionSupportCapabilityTableOnly(t *testing.T) {
 		protocol string
 		want     bool
 	}{
-		// Table hits decide.
+
 		{"glm-5.3-flash", "openai", true},
 		{"claude-3-5-haiku", "anthropic", true},
 		{"deepseek-chat", "openai", false},
-		{"glm-5.3", "openai", false}, // absent from table: NOT vision
-		// Keyword heuristics are gone: names containing vision-ish substrings
-		// but absent from the table must NOT be flagged.
+		{"glm-5.3", "openai", false},
+
 		{"my-claude-proxy", "openai", false},
 		{"custom-gpt-gateway", "openai", false},
 		{"weird-glm-vision-thing", "openai", false},
-		// Gemini protocol natively multimodal (protocol property, not name).
+
 		{"whatever-model", "gemini", true},
 	}
 	for _, tc := range cases {

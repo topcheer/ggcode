@@ -16,7 +16,6 @@ func TestIssue2152_LockedReadsRaceWithWriters(t *testing.T) {
 	c := &Config{}
 	c.IM.Adapters = map[string]IMAdapterConfig{}
 
-	// Seed one adapter directly (load-time path, single-threaded).
 	c.IM.Adapters["seed"] = IMAdapterConfig{
 		Enabled:  true,
 		Platform: "qq",
@@ -28,9 +27,6 @@ func TestIssue2152_LockedReadsRaceWithWriters(t *testing.T) {
 	var writers, readers sync.WaitGroup
 	stop := make(chan struct{})
 
-	// Writers: toggle enabled + set env (runtime writers from config_save.go).
-	// Iterations kept small: each write round-trips a YAML patch to disk;
-	// the race detector needs interleaving, not volume.
 	for w := 0; w < 2; w++ {
 		writers.Add(1)
 		go func(w int) {
@@ -42,7 +38,6 @@ func TestIssue2152_LockedReadsRaceWithWriters(t *testing.T) {
 		}(w)
 	}
 
-	// Readers: the locked accessors TUI Cmd goroutines now use.
 	for r := 0; r < 4; r++ {
 		readers.Add(1)
 		go func() {
@@ -69,9 +64,6 @@ func TestIssue2152_LockedReadsRaceWithWriters(t *testing.T) {
 		}()
 	}
 
-	// Writers finish first, then readers are released and joined —
-	// readers must NOT share the writers' WaitGroup or close(stop) would
-	// deadlock behind Wait() (this exact hang killed the first version).
 	writers.Wait()
 	close(stop)
 	readers.Wait()

@@ -67,9 +67,7 @@ func DefaultImpersonationPresets() []ImpersonationPreset {
 			UATemplate:     "opencode/{version}",
 			DefaultVersion: "1.17.20",
 			ExtraHeaders: map[string]string{
-				// OpenCode Zen gateway branding headers (mirrors the zenmux
-				// plugin in opencode: HTTP-Referer + X-Title identify the
-				// client to the gateway the same way the official CLI does).
+
 				"HTTP-Referer": "https://opencode.ai/",
 				"X-Title":      "opencode",
 			},
@@ -165,12 +163,7 @@ func ResolveImpersonationHeaders() http.Header {
 	impersonationMu.RUnlock()
 
 	if preset == nil {
-		// #1610-C: an early nil return dropped CUSTOM headers entirely -
-		// the panel collects them alongside the (empty) preset, saving
-		// succeeded, and the header NEVER reached the wire (gateway
-		// auth/routing silently broken). With no preset, custom headers
-		// alone still apply - the documented "custom > preset" precedence
-		// degenerates to "custom only".
+
 		if len(custom) == 0 {
 			return nil
 		}
@@ -183,7 +176,6 @@ func ResolveImpersonationHeaders() http.Header {
 
 	h := make(http.Header, 4)
 
-	// Build User-Agent from template
 	v := strings.TrimSpace(version)
 	if v == "" {
 		v = preset.DefaultVersion
@@ -191,15 +183,12 @@ func ResolveImpersonationHeaders() http.Header {
 	ua := strings.ReplaceAll(preset.UATemplate, "{version}", v)
 	h.Set("User-Agent", ua)
 
-	// Apply preset extra headers
 	for k, hv := range preset.ExtraHeaders {
-		// #789: reuse the User-Agent fallback (v); the raw version variable
-		// produced 'aider/' for Editor-Version when version was empty.
+
 		val := strings.ReplaceAll(hv, "{version}", v)
 		h.Set(k, val)
 	}
 
-	// Apply custom headers (override preset values)
 	for k, v := range custom {
 		h.Set(k, v)
 	}
@@ -219,7 +208,7 @@ func DefaultHeadersForProtocol(protocol string) http.Header {
 	case "gemini":
 		h.Set("User-Agent", "gemini-cli/0.23.0")
 	case "copilot":
-		// Copilot provider manages its own headers internally
+
 		h.Set("User-Agent", "ggcode")
 	default:
 		h.Set("User-Agent", fmt.Sprintf("claude-cli/%s (individual, cli)", claudeCLIVersion))

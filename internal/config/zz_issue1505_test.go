@@ -9,16 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/auth"
 )
 
-// #1505 case 2: refreshClaudeOAuthToken must single-flight the Anthropic
-// OAuth refresh and, critically, re-read the store after acquiring the
-// lock: a concurrent refresh that finished while we waited has already
-// persisted a fresh token, and reusing it avoids replaying the (now
-// server-side invalidated) refresh token.
-//
-// The fresh-on-disk short-circuit is what makes these tests network-free:
-// if the function wrongly decided to refresh, it would dial the real
-// Anthropic token endpoint and these tests would fail or hang instead.
-
 func TestRefreshClaudeOAuthTokenReusesFreshTokenOnDisk(t *testing.T) {
 	store := auth.NewStore(filepath.Join(t.TempDir(), "provider_auth.json"))
 	fresh := &auth.Info{

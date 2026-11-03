@@ -1,13 +1,5 @@
 package provider
 
-// #4664: the non-streaming Chat() path lacked the mirror of the streaming
-// #4563 input backfill. A completion-only usage payload (CompletionTokens>0,
-// PromptTokens==0 - common with vLLM/gateway relays) satisfied NEITHER the
-// double-zero estimation branch NOR the #4563 output branch, leaving
-// InputTokens permanently 0 for the compaction summarizer (the only caller).
-// Also pins the widened estimation base: tool-call Name+Arguments count
-// toward outputChars exactly like the streaming path.
-
 import (
 	"context"
 	"io"
@@ -19,7 +11,7 @@ import (
 func TestIssue4664_NonStreamingCompletionOnlyBackfillsInput(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// Completion-only usage: the exact relay shape from the issue.
+
 		io.WriteString(w, `{"id":"r1","object":"chat.completion","choices":[{"index":0,`+
 			`"message":{"role":"assistant","content":"summary text"},`+
 			`"finish_reason":"stop"}],`+
@@ -48,9 +40,7 @@ func TestIssue4664_NonStreamingCompletionOnlyBackfillsInput(t *testing.T) {
 func TestIssue4664_ToolCallOnlyResponseEstimationCountsTools(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// No usage at all + tool-call-only message: the estimation branch
-		// must now fire (outputChars>0 via tool Name+Arguments) whereas the
-		// old len(Content)>0 gate skipped it entirely.
+
 		io.WriteString(w, `{"id":"r2","object":"chat.completion","choices":[{"index":0,`+
 			`"message":{"role":"assistant","content":"",`+
 			`"tool_calls":[{"id":"c1","type":"function","function":{`+

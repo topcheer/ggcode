@@ -61,7 +61,7 @@ func TestOpenAIConvertMessages_Empty(t *testing.T) {
 }
 
 func TestOpenAIConvertMessages_NormalizesInvalidToolUseInput(t *testing.T) {
-	// Truncated JSON (missing closing brace) that should be repaired.
+
 	p := &OpenAIProvider{}
 	msgs := []Message{
 		{Role: "assistant", Content: []ContentBlock{
@@ -76,7 +76,7 @@ func TestOpenAIConvertMessages_NormalizesInvalidToolUseInput(t *testing.T) {
 	if !json.Valid([]byte(args)) {
 		t.Fatalf("expected normalized OpenAI tool arguments to be valid JSON, got %q", args)
 	}
-	// Repaired JSON should contain the valid path, not the raw fallback.
+
 	if !strings.Contains(args, "README.md") {
 		t.Fatalf("expected repaired path in OpenAI tool arguments, got %q", args)
 	}
@@ -92,7 +92,7 @@ func TestEstimateTokensFromChars(t *testing.T) {
 	if got := estimateTokensFromChars(3); got != 1 {
 		t.Fatalf("expected minimum 1 token for non-empty output, got %d", got)
 	}
-	if got := estimateTokensFromChars(40); got != 13 { // 40/3 ≈ 13
+	if got := estimateTokensFromChars(40); got != 13 {
 		t.Fatalf("expected 13, got %d", got)
 	}
 }
@@ -158,14 +158,14 @@ func TestAnthropicBuildParams_SystemInUser(t *testing.T) {
 		{Role: "user", Content: []ContentBlock{{Type: "text", Text: "Hello"}}},
 	}
 	params := p.buildParams(context.Background(), msgs, nil)
-	// System should be embedded into first user message, not separate
+
 	if len(params.Messages) != 1 {
 		t.Fatalf("expected 1 message (system merged into user), got %d", len(params.Messages))
 	}
 }
 
 func TestGeminiConvertMessages_NormalizesInvalidToolUseInput(t *testing.T) {
-	// Truncated JSON (missing closing brace) that should be repaired.
+
 	p := &GeminiProvider{}
 	contents, _ := p.convertMessages([]Message{
 		{Role: "assistant", Content: []ContentBlock{
@@ -175,7 +175,7 @@ func TestGeminiConvertMessages_NormalizesInvalidToolUseInput(t *testing.T) {
 	if len(contents) != 1 || len(contents[0].Parts) != 1 || contents[0].Parts[0].FunctionCall == nil {
 		t.Fatalf("expected one Gemini function call part, got %#v", contents)
 	}
-	// Repaired JSON should contain the valid path.
+
 	if got := contents[0].Parts[0].FunctionCall.Args["path"]; got != "README.md" {
 		t.Fatalf("expected repaired path in Gemini function args, got %#v", contents[0].Parts[0].FunctionCall.Args)
 	}
@@ -185,7 +185,7 @@ func TestGeminiConvertMessages_NormalizesInvalidToolUseInput(t *testing.T) {
 }
 
 func TestConvertAnthropicResponse(t *testing.T) {
-	// Test with empty response
+
 	result := convertAnthropicResponse(nil)
 	if len(result) != 0 {
 		t.Errorf("expected empty, got %d blocks", len(result))
@@ -199,12 +199,11 @@ func TestIsRetryableRecognizesProviderErrors(t *testing.T) {
 	if !isRetryable(&anthropic.Error{StatusCode: http.StatusBadGateway}) {
 		t.Fatal("expected anthropic 502 to be retryable")
 	}
-	// 400 Bad Request is NOT retryable — it's a permanent client error
-	// (malformed request, invalid tool_use/tool_result pairing, bad parameters).
+
 	if isRetryable(&openai.APIError{HTTPStatusCode: http.StatusBadRequest, Message: "bad request"}) {
 		t.Fatal("expected openai 400 not to be retryable")
 	}
-	// 401/403/404 are NOT retryable
+
 	if isRetryable(&openai.APIError{HTTPStatusCode: http.StatusUnauthorized, Message: "unauthorized"}) {
 		t.Fatal("expected openai 401 not to be retryable")
 	}
@@ -312,9 +311,7 @@ func TestOpenAIReasoningEffortRetriesWithoutUnsupportedParam(t *testing.T) {
 	if _, ok := bodies[1]["reasoning_effort"]; ok {
 		t.Fatalf("expected fallback request to omit reasoning_effort, got %#v", bodies[1]["reasoning_effort"])
 	}
-	// #110: Reasoning effort preference should persist after a model that
-	// doesn't support it is used. The retry only clears req-level field,
-	// not the provider state, so switching back to a supporting model works.
+
 	if got := p.ReasoningEffort(); got != "high" {
 		t.Fatalf("expected reasoning_effort to persist as \"high\" after unsupported-model retry (issue #110), got %q", got)
 	}
@@ -367,7 +364,7 @@ func TestRetryWithBackoffCtxDoesNotRetryExpiredCallerContext(t *testing.T) {
 }
 
 func TestHeaderInjectingTransportConcurrentUpdate(t *testing.T) {
-	// Regression test: UpdateHeaders and RoundTrip must be safe for concurrent use.
+
 	base := http.DefaultTransport
 	tr := &headerInjectingTransport{
 		base:    base,
@@ -377,7 +374,6 @@ func TestHeaderInjectingTransportConcurrentUpdate(t *testing.T) {
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
 
-	// Writer goroutine: continuously update headers.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -395,7 +391,6 @@ func TestHeaderInjectingTransportConcurrentUpdate(t *testing.T) {
 		}
 	}()
 
-	// Reader goroutines: continuously read headers via RoundTrip.
 	for range 4 {
 		wg.Add(1)
 		go func() {
@@ -406,15 +401,13 @@ func TestHeaderInjectingTransportConcurrentUpdate(t *testing.T) {
 					return
 				default:
 					req, _ := http.NewRequestWithContext(context.Background(), "GET", "http://127.0.0.1:1", nil)
-					// RoundTrip will fail to connect but that's fine — we just
-					// need to exercise the header-reading path.
+
 					_, _ = tr.RoundTrip(req)
 				}
 			}
 		}()
 	}
 
-	// Let the goroutines hammer it for 100ms.
 	time.Sleep(100 * time.Millisecond)
 	close(stop)
 	wg.Wait()
@@ -444,7 +437,7 @@ func TestEstimateTokensForMessages(t *testing.T) {
 				if got == 0 {
 					t.Fatal("expected non-zero token count for text")
 				}
-				// "hello world" = 11 chars / 3 = 3.67 → 3 tokens
+
 				if got != 3 {
 					t.Fatalf("expected 3, got %d", got)
 				}
@@ -464,7 +457,7 @@ func TestEstimateTokensForMessages(t *testing.T) {
 				}},
 			},
 			check: func(t *testing.T, got int) {
-				// "run this" = 8 chars, output = 300 chars, total = 308 / 3 = 102
+
 				if got < 100 {
 					t.Fatalf("expected ~102 tokens (output counted), got %d", got)
 				}
@@ -474,13 +467,13 @@ func TestEstimateTokensForMessages(t *testing.T) {
 			name: "text + output + input all counted",
 			msgs: []Message{
 				{Role: "user", Content: []ContentBlock{
-					{Type: "text", Text: "hello"},                                    // 5 chars
-					{Type: "tool_result", Output: "world"},                           // 5 chars
-					{Type: "image", Input: json.RawMessage(strings.Repeat("a", 30))}, // 30 chars
+					{Type: "text", Text: "hello"},
+					{Type: "tool_result", Output: "world"},
+					{Type: "image", Input: json.RawMessage(strings.Repeat("a", 30))},
 				}},
 			},
 			check: func(t *testing.T, got int) {
-				// total = 5 + 5 + 30 = 40 chars / 3 = 13 tokens
+
 				if got != 13 {
 					t.Fatalf("expected 13, got %d", got)
 				}
@@ -493,11 +486,11 @@ func TestEstimateTokensForMessages(t *testing.T) {
 					{Type: "text", Text: "list files"},
 				}},
 				{Role: "user", Content: []ContentBlock{
-					{Type: "tool_result", ToolID: "c1", Output: strings.Repeat("file.txt\n", 1000)}, // 9000 chars
+					{Type: "tool_result", ToolID: "c1", Output: strings.Repeat("file.txt\n", 1000)},
 				}},
 			},
 			check: func(t *testing.T, got int) {
-				// "list files" = 10 + 9000 = 9010 / 3 = 3003
+
 				if got < 2900 {
 					t.Fatalf("expected ~3003 tokens (output dominates), got %d", got)
 				}
@@ -514,7 +507,7 @@ func TestEstimateTokensForMessages(t *testing.T) {
 }
 
 func TestCountTokens_AllProvidersCountOutput(t *testing.T) {
-	// Verify Anthropic and Gemini now count tool_result Output (not just Text).
+
 	messages := []Message{
 		{Role: "user", Content: []ContentBlock{
 			{Type: "text", Text: "short"},
@@ -524,7 +517,6 @@ func TestCountTokens_AllProvidersCountOutput(t *testing.T) {
 		}},
 	}
 
-	// All providers should return roughly the same count now.
 	providers := []struct {
 		name string
 		prov Provider
@@ -544,14 +536,12 @@ func TestCountTokens_AllProvidersCountOutput(t *testing.T) {
 		t.Logf("%s: %d tokens", p.name, count)
 	}
 
-	// All should be > 2900 (the output dominates at 9000 chars / 3 = 3000).
 	for name, count := range counts {
 		if count < 2900 {
 			t.Errorf("%s: expected >= 2900 tokens (output should be counted), got %d", name, count)
 		}
 	}
 
-	// All should agree (they all use the same estimateTokensForMessages now).
 	openaiCount := counts["openai"]
 	for name, count := range counts {
 		if count != openaiCount {
@@ -592,21 +582,18 @@ func TestAnthropicUsageIncludesCacheTokens(t *testing.T) {
 }
 
 func TestRetryDelayJitterRange(t *testing.T) {
-	// Test that jitter keeps delays within ±25% of the base delay.
-	// attempt=2 → base delay = 4s, jitter range = ±0.5s → [3.5s, 4.5s]
+
 	base := time.Second * 4
-	minExpected := base - base/4 // 3s
-	maxExpected := base + base/4 // 5s
+	minExpected := base - base/4
+	maxExpected := base + base/4
 
 	for i := 0; i < 100; i++ {
-		delay := retryDelay(nil, 2) // nil err → uses exponential backoff path
+		delay := retryDelay(nil, 2)
 		if delay < minExpected || delay > maxExpected {
 			t.Errorf("attempt %d: delay %v outside expected range [%v, %v]", i, delay, minExpected, maxExpected)
 		}
 	}
 
-	// Verify attempt=5+ hits the cap (30s) with jitter → [22.5s, 30s]
-	// The cap is re-applied after jitter so the delay never exceeds it.
 	cap := providerRetryBackoffCap
 	minCap := cap - cap/4
 	for i := 0; i < 100; i++ {
@@ -618,7 +605,7 @@ func TestRetryDelayJitterRange(t *testing.T) {
 }
 
 func TestRetryDelayRetryAfterNoJitter(t *testing.T) {
-	// Retry-After header values must not get jitter — respect server instruction exactly.
+
 	err := &anthropic.Error{
 		StatusCode: http.StatusTooManyRequests,
 		Response: &http.Response{
@@ -636,8 +623,7 @@ func TestRetryDelayRetryAfterNoJitter(t *testing.T) {
 }
 
 func TestRetryDelayRetryAfterCapped(t *testing.T) {
-	// Retry-After values exceeding providerRetryBackoffCap must be capped
-	// so the interactive agent doesn't freeze for minutes.
+
 	err := &anthropic.Error{
 		StatusCode: http.StatusTooManyRequests,
 		Response: &http.Response{
@@ -665,12 +651,12 @@ func TestConvertToolsSchemaValidation(t *testing.T) {
 	if len(result) != len(tools) {
 		t.Fatalf("expected %d tools, got %d", len(tools), len(result))
 	}
-	// Every tool's parameters must be valid JSON (either original or fallback)
+
 	for i, r := range result {
 		name := tools[i].Name
 		raw, _ := r.Function.Parameters.(json.RawMessage)
 		if raw == nil {
-			// May be marshaled as other types; serialize to check
+
 			data, _ := json.Marshal(r.Function.Parameters)
 			raw = data
 		}
@@ -678,7 +664,7 @@ func TestConvertToolsSchemaValidation(t *testing.T) {
 			t.Errorf("tool %q: parameters is not valid JSON: %s", name, string(raw))
 		}
 	}
-	// Verify fallback applied for invalid entries
+
 	raw, _ := result[1].Function.Parameters.(json.RawMessage)
 	var emptyParams map[string]any
 	if err := json.Unmarshal(raw, &emptyParams); err != nil {

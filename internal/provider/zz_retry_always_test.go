@@ -9,12 +9,6 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
-// --llm-retry-always (ad-hoc pipe mode): when SetRetryAlways(true) is active
-// every error class becomes retryable, including the permanent ones the
-// classifier normally rejects (401/404/422/400, quota, context overflow).
-// Caller-context cancellation stays non-retryable so Ctrl-C still works, and
-// the attempt/backoff caps are lifted (callPolicy.attempts, retryBudget).
-
 func TestRetryAlwaysPermanentErrorsBecomeRetryable(t *testing.T) {
 	SetRetryAlways(true)
 	t.Cleanup(func() { SetRetryAlways(false) })
@@ -24,8 +18,7 @@ func TestRetryAlwaysPermanentErrorsBecomeRetryable(t *testing.T) {
 		&openai.APIError{HTTPStatusCode: 404, Message: "model not found"},
 		&openai.APIError{HTTPStatusCode: 422, Message: "unprocessable"},
 		errors.New("status code: 400, message: bad request"),
-		// context overflow removed (#4214): deterministic failure, excluded
-		// from retry-always - see TestRetryAlwaysDoesNotRetryContextOverflow.
+
 		errors.New("quota exceeded: billing cycle"),
 	}
 	ctx := context.Background()
@@ -57,9 +50,6 @@ func TestRetryAlwaysBudgetUnlimited(t *testing.T) {
 	SetRetryAlways(true)
 	t.Cleanup(func() { SetRetryAlways(false) })
 
-	// retryWithBackoffCtx marks the budget unlimited under retry-always:
-	// deadline checks are skipped entirely and the budget can never report
-	// exhaustion. Probe that mechanism directly.
 	b := &retryBudget{unlimited: true}
 	if err := b.sleep(context.Background(), time.Millisecond); err != nil {
 		t.Fatalf("zero-deadline budget must not exhaust, got %v", err)

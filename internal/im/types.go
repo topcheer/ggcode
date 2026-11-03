@@ -87,9 +87,7 @@ func (m InboundMessage) ProviderContent() []provider.ContentBlock {
 			}
 			mime := strings.TrimSpace(attachment.MIME)
 			b64 := strings.TrimSpace(attachment.DataBase64)
-			// Auto-detect MIME from base64 data when not provided by the adapter.
-			// Some adapters (e.g. WeCom) provide base64 image data without a MIME type,
-			// which would cause the image to be silently dropped.
+
 			if mime == "" && b64 != "" {
 				if data, err := base64.StdEncoding.DecodeString(b64); err == nil {
 					mime = imagepkg.DetectMIME(data)

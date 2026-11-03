@@ -1,10 +1,5 @@
 package config
 
-// #2284-A phase 1: the wholesale keys.env→os.Setenv loop is gone - a
-// keys.env value must NOT reach the process environment (any `bash env`
-// dumped every vendor key in plaintext), while the anthropic bootstrap
-// still resolves its trio through the runtime lookup map.
-
 import (
 	"os"
 	"path/filepath"
@@ -24,12 +19,11 @@ func Test2284A_KeysEnvNotLeakedToProcessEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A runtime env lookup must see the value...
 	lookup := runtimeEnvLookup(nil)
 	if v, ok := lookup("OPENAI_API_KEY_2284A"); !ok || v != secret {
 		t.Fatalf("lookup must resolve keys.env values, got %q %v", v, ok)
 	}
-	// ...but it must NOT be sitting in the process environment.
+
 	if v, ok := os.LookupEnv("OPENAI_API_KEY_2284A"); ok {
 		t.Fatalf("keys.env value leaked into process env (present, len=%d)", len(v))
 	}

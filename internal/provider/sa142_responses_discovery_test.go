@@ -13,8 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// ---- OpenAIResponsesProvider accessors -------------------------------------
-
 func TestSA142_ResponsesAccessors(t *testing.T) {
 	p := NewOpenAIResponsesProvider("k", "gpt-5.2", 1024, "http://127.0.0.1:9/v1")
 	if p.Name() != "openai-responses" {
@@ -44,19 +42,17 @@ func TestSA142_ResponsesAccessors(t *testing.T) {
 	if !p.background {
 		t.Fatal("SetBackgroundMode ignored")
 	}
-	// CountTokens is a local estimate, no network.
+
 	n, err := p.CountTokens(context.Background(), []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hello world"}}}})
 	if err != nil || n <= 0 {
 		t.Fatalf("CountTokens = %d, %v", n, err)
 	}
 }
 
-// ---- Model discovery --------------------------------------------------------
-
 func TestSA142_DiscoverModelsFromURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// OpenAI protocol discovery is a single unpaginated request.
+
 		fmt.Fprint(w, `{"data":[{"id":"m1"},{"id":"m2"}]}`)
 	}))
 	defer server.Close()
@@ -72,7 +68,7 @@ func TestSA142_DiscoverModelsFromURL(t *testing.T) {
 			t.Fatalf("models %v missing %q", models, want)
 		}
 	}
-	// Bad URL surfaces an error instead of an empty list.
+
 	if _, err := discoverModelsFromURL(context.Background(), server.Client(), "http://127.0.0.1:1/x", resolved); err == nil {
 		t.Fatal("unreachable discovery endpoint must error")
 	}
@@ -88,8 +84,7 @@ func TestSA142_DiscoverModelsFromURL(t *testing.T) {
 func TestSA142_DiscoverModelsFromURL_ResponsesProtocol(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// Mirror the openai-protocol test: serve the discovery payload on
-		// every path - the helper probes candidate URLs itself.
+
 		if got := r.Header.Get("Authorization"); got != "Bearer k" {
 			t.Errorf("Authorization = %q, want Bearer k (default/openai header branch)", got)
 		}
@@ -110,11 +105,8 @@ func TestSA142_DiscoverModelsFromURL_ResponsesProtocol(t *testing.T) {
 	}
 }
 
-// ---- Anthropic stream error event -------------------------------------------
-
 func TestSA142_AnthropicStreamErrorEvent(t *testing.T) {
-	// A 400 at stream start is non-retryable: the stream goroutine must
-	// surface exactly one StreamEventError and close the channel promptly.
+
 	p := newSA142AnthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -148,13 +140,8 @@ loop:
 	}
 }
 
-// ---- Session header survives impersonation (#sa-142 regression) ------------
-
 func TestSA142_SessionHeaderSurvivesImpersonation(t *testing.T) {
-	// Production order: agent startup sets GGCode-SessionID, then the
-	// impersonation panel replaces the whole header set with one that has
-	// no session ID. All three header-mutable providers must carry the
-	// session header over instead of silently dropping it.
+
 	makeHeaders := func() http.Header {
 		h := http.Header{}
 		h.Set("User-Agent", "imp/1.0")
@@ -188,7 +175,6 @@ func TestSA142_SessionHeaderSurvivesImpersonation(t *testing.T) {
 		t.Fatalf("openai headers = %v", snap)
 	}
 
-	// An explicit session ID in the new set wins over the carried-over one.
 	h := makeHeaders()
 	h.Set("GGCode-SessionID", "sess-explicit")
 	ap.UpdateRuntimeHeaders(h)
@@ -197,10 +183,8 @@ func TestSA142_SessionHeaderSurvivesImpersonation(t *testing.T) {
 	}
 }
 
-// ---- Remaining zero-coverage leaves ------------------------------------------
-
 func TestSA142_ZeroCoverageLeaves(t *testing.T) {
-	// serverToolUseRaw: empty input normalizes to {}.
+
 	raw := serverToolUseRaw("srv_1", "web_search", nil)
 	if raw == nil || !strings.Contains(string(raw), `"type":"server_tool_use"`) || !strings.Contains(string(raw), `"input":{}`) {
 		t.Fatalf("serverToolUseRaw = %s", raw)
@@ -209,12 +193,12 @@ func TestSA142_ZeroCoverageLeaves(t *testing.T) {
 	if !strings.Contains(string(withInput), `"query":"go"`) {
 		t.Fatalf("serverToolUseRaw input lost: %s", withInput)
 	}
-	// responsesImagePart builds a data URI.
+
 	part := responsesImagePart("image/png", "QUJD")
 	if part["type"] != "input_image" || part["image_url"] != "data:image/png;base64,QUJD" {
 		t.Fatalf("responsesImagePart = %v", part)
 	}
-	// setCallPolicy roundtrips on each provider type.
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"id":"chatcmpl_z","object":"chat.completion","created":0,"model":"m",`+
@@ -237,7 +221,7 @@ func TestSA142_ZeroCoverageLeaves(t *testing.T) {
 		fmt.Fprint(w, `{"id":"msg_z","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
 	})
 	ap.setCallPolicy(cp)
-	// The policy applies: all four complete a Chat within the deadline.
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := op.Chat(ctx, []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}}, nil); err != nil {
@@ -246,7 +230,7 @@ func TestSA142_ZeroCoverageLeaves(t *testing.T) {
 	if _, err := ap.Chat(ctx, []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}}, nil); err != nil {
 		t.Fatalf("anthropic chat with policy: %v", err)
 	}
-	// OpenAI probeChat + logprobs flag.
+
 	op.SetLogprobsRequest(true)
 	if !op.LogprobsRequested() {
 		t.Fatal("LogprobsRequested must reflect SetLogprobsRequest")

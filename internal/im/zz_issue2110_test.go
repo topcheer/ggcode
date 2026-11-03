@@ -1,14 +1,5 @@
 package im
 
-// #2110 regression: Feishu's Encrypt Key callback protocol was entirely
-// unimplemented - an encrypted body ({"encrypt":"<b64>"}) passed the
-// signature check (it signs the RAW ciphertext) but the header/token/
-// challenge all live inside the ciphertext, so the header assertion
-// silently dropped every event with a bare 200 and zero logs. The
-// webhook now decrypts (AES-256-CBC, key=sha256(encrypt_key), IV=key[:16])
-// before token/challenge/event processing. Round-trip: encrypt a
-// challenge payload with the official scheme and expect the echo.
-
 import (
 	"bytes"
 	"crypto/aes"
@@ -45,7 +36,6 @@ func TestFeishuEncryptedWebhookRoundTrip(t *testing.T) {
 	mgr.SetInteractiveCallback(func(cb InteractiveCallback) {})
 	a := newFeishu955Adapter(mgr, "")
 	a.encryptKey = "test-encrypt-key"
-	// key[:16]; the random pad above is PKCS7. Sanity: encrypt+decrypt.
 
 	inner := map[string]any{"challenge": "ch-2110"}
 	innerRaw, _ := json.Marshal(inner)
@@ -53,8 +43,7 @@ func TestFeishuEncryptedWebhookRoundTrip(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{"encrypt": enc})
 	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
-	// The signature covers the RAW (encrypted) body - official behavior,
-	// and the reason encrypted events passed the gate while dying later.
+
 	ts := fmt.Sprintf("%d", time.Now().Unix())
 	nonce := "n-2110"
 	mac := hmac.New(sha256.New, []byte(a.encryptKey))
@@ -77,7 +66,7 @@ func TestFeishuEncryptedWebhookNoKeyConfigured(t *testing.T) {
 	mgr := NewManager()
 	mgr.SetInteractiveCallback(func(cb InteractiveCallback) {})
 	a := newFeishu955Adapter(mgr, "")
-	a.encryptKey = "" // console has Encrypt Key on; local config does not
+	a.encryptKey = ""
 
 	body, _ := json.Marshal(map[string]string{"encrypt": "AAAA"})
 	rec := httptest.NewRecorder()

@@ -60,16 +60,12 @@ func StartCurrentBindingAdapter(parent context.Context, cfg config.IMConfig, mgr
 		if strings.TrimSpace(binding.Adapter) == "" {
 			continue
 		}
-		// Skip muted bindings — muted adapters must never start connections
+
 		if binding.Muted {
 			debug.Log("im", "StartCurrentBindingAdapter: skipping muted adapter %q", binding.Adapter)
 			continue
 		}
-		// Skip bindings owned by another session. If the binding has a
-		// persisted LastSessionID that doesn't match our session, another
-		// instance owns it — only the matching session should activate it.
-		// Bindings with empty LastSessionID use the old logic (first process
-		// claims all) and are started here.
+
 		if binding.LastSessionID != "" {
 			sessionID := mgr.CurrentSessionID()
 			if sessionID == "" || binding.LastSessionID != sessionID {
@@ -78,19 +74,12 @@ func StartCurrentBindingAdapter(parent context.Context, cfg config.IMConfig, mgr
 				continue
 			}
 		}
-		// Built-in PC adapter — only start when binding explicitly targets it.
-		// #1543: startPCAdapter's "explicit config already present" skip
-		// must only fire for the AUTO binding name (_pc_builtin). A binding
-		// literally NAMED "privateclaw" (UI default names bindings after
-		// the platform) hit the same skip via the platform-name match, so
-		// the CLI/daemon restore path returned from startPCAdapter and the
-		// continue skipped startConfiguredAdapter - zero startup, zero
-		// logs, zero errors.
+
 		if binding.Adapter == "_pc_builtin" || strings.EqualFold(binding.Adapter, string(PlatformPrivateClaw)) {
 			if binding.Adapter == "_pc_builtin" {
 				startPCAdapter(ctx, cfg, mgr)
 			} else {
-				// User-named binding: treat like any explicit config entry.
+
 				adapterCfg, ok := cfg.Adapters[binding.Adapter]
 				if ok && adapterCfg.Enabled {
 					if err := startConfiguredAdapter(ctx, cfg, binding.Adapter, adapterCfg, mgr); err != nil {
@@ -117,8 +106,7 @@ func StartNamedAdapter(parent context.Context, cfg config.IMConfig, name string,
 	if mgr == nil {
 		return fmt.Errorf("IM manager is nil")
 	}
-	// Never start a muted adapter — this is a hard guard to prevent
-	// muted adapters from opening connections regardless of caller.
+
 	if mgr.IsMuted(name) {
 		debug.Log("im", "StartNamedAdapter: refusing to start muted adapter %q", name)
 		return fmt.Errorf("adapter %q is muted — unmute it first", name)
@@ -134,7 +122,7 @@ func startConfiguredAdapter(ctx context.Context, cfg config.IMConfig, name strin
 	if !adapterCfg.Enabled {
 		return nil
 	}
-	// Create a child context so Manager can cancel this adapter individually.
+
 	adapterCtx, adapterCancel := context.WithCancel(ctx)
 	mgr.RegisterAdapterCancel(name, adapterCancel)
 
@@ -261,11 +249,7 @@ func startConfiguredAdapter(ctx context.Context, cfg config.IMConfig, name strin
 		}
 		start(adapter)
 	default:
-		// #736: an unrecognized platform previously fell through silently -
-		// no error, no log, the adapter just never started (a diagnostic
-		// black hole for legacy non-canonical configs like platform:
-		// "Telegram"). Leave a traceable log line. We intentionally do NOT
-		// return an error: one bad adapter must not block the others.
+
 		adapterCancel()
 		debug.Log("im", "adapter %q: unknown platform %q (expected canonical registry ID e.g. \"telegram\"), skipping start", name, adapterCfg.Platform)
 	}
@@ -301,7 +285,7 @@ func newDefaultPCSessionStore() PCSessionStore {
 // startPCAdapter starts the built-in PrivateClaw adapter with defaults.
 // It uses config from im.adapters if a PrivateClaw entry exists, otherwise uses defaults.
 func startPCAdapter(ctx context.Context, cfg config.IMConfig, mgr *Manager) {
-	// Check if a PC adapter was already started via explicit config
+
 	for name, adapterCfg := range cfg.Adapters {
 		if adapterCfg.Enabled && strings.EqualFold(adapterCfg.Platform, string(PlatformPrivateClaw)) {
 			debug.Log("pc", "skip auto-start: explicit config %q already present", name)
@@ -309,7 +293,6 @@ func startPCAdapter(ctx context.Context, cfg config.IMConfig, mgr *Manager) {
 		}
 	}
 
-	// Build a default adapter config
 	defaultCfg := config.IMAdapterConfig{
 		Enabled:  true,
 		Platform: string(PlatformPrivateClaw),

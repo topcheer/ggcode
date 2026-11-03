@@ -81,12 +81,11 @@ func (s *imEmitterState) enqueue(mgr *Manager, event OutboundEvent, excludeAdapt
 	if s == nil || mgr == nil {
 		return
 	}
-	// Hold mu across the send: close() also runs under mu, so a concurrent
-	// close can never turn this send into a panic on a closed channel (#603).
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		// Dispatcher already shut down — drop the event.
+
 		return
 	}
 	if !s.started {
@@ -141,7 +140,7 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 		if strings.TrimSpace(event.Text) == "" {
 			return
 		}
-		// Debug: log text emission with caller stack for tracing replay bugs
+
 		if len(event.Text) > 50 {
 			_, file, line, _ := runtime.Caller(2)
 			debug.Log("emitter", "EmitText len=%d caller=%s:%d", len(event.Text), file, line)
@@ -154,26 +153,19 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 		}
 	}
 
-	// Relativize absolute paths in all output text
 	event.Text = e.relativizePaths(event.Text)
 	event.Status = e.relativizePaths(event.Status)
-	// #1299: agent final replies carried secrets in cleartext to IM -
-	// tool results were redacted (redactResult) but OutboundEventText
-	// went straight to adapters, and IM is an outbound boundary (leaves
-	// this machine for Telegram/Discord/DingTalk servers). Redact at
-	// this single choke point so every emitter path is covered.
+
 	event.Text = redactResult(event.Text)
 	event.Status = redactResult(event.Status)
 	if event.ToolRes != nil {
 		event.ToolRes.Args = e.relativizePaths(event.ToolRes.Args)
 		event.ToolRes.Result = e.relativizePaths(event.ToolRes.Result)
-		// #1333 defense-in-depth: format helpers already redact, but make the
-		// choke point self-sufficient (idempotent) for any future path.
+
 		event.ToolRes.Args = redactResult(event.ToolRes.Args)
 		event.ToolRes.Result = redactResult(event.ToolRes.Result)
 	}
 
-	// Set language on tool events so format functions can localize
 	if event.ToolCall != nil && event.ToolCall.Lang == "" {
 		event.ToolCall.Lang = e.language
 	}
@@ -187,7 +179,7 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 	case OutboundEventStatus:
 		debug.Log("emitter", "emit im status=%q", truncateEmitter(event.Status, 80))
 	default:
-		// Don't log every emit — extremely noisy for tool_result events
+
 	}
 	e.mu.Lock()
 	if e.state == nil {
@@ -252,9 +244,6 @@ func (e *IMEmitter) EmitAskUserInteractive(title string, q toolpkg.AskUserQuesti
 		buttons[0].Style = "primary"
 	}
 
-	// #1333: cardText carries agent-generated question text that may quote
-	// secrets read from files (e.g. "api_key=sk-xxx, confirm?"). SendInteractive
-	// bypasses the EmitEvent choke point, so redact here explicitly.
 	cardText := e.redactOutbound(q.Title)
 	if q.Kind == toolpkg.AskUserKindMulti {
 		cardText += "\n📋 Multi-select — click options then ✅ Done"
@@ -273,12 +262,10 @@ func (e *IMEmitter) EmitAskUserInteractive(title string, q toolpkg.AskUserQuesti
 		Placeholder: "Select an option",
 	}
 
-	// #1333: fallback path (EmitToNonInteractive) also bypasses EmitEvent -
-	// redact before it leaves this machine.
 	fallbackRedacted := e.redactOutbound(fallbackText)
 	msgIDs := e.manager.SendInteractive(context.Background(), imMsg)
 	debug.Log("emitter", "EmitAskUserInteractive: SendInteractive returned msgIDs=%v", msgIDs)
-	// Send text fallback ONLY to adapters that do NOT support InteractiveSender
+
 	if strings.TrimSpace(fallbackRedacted) != "" {
 		e.manager.EmitToNonInteractive(context.Background(), OutboundEvent{
 			Kind: OutboundEventText,
@@ -330,9 +317,7 @@ func (e *IMEmitter) EmitUserTextExcept(text, excludeAdapter string) {
 	if strings.TrimSpace(echoText) == "" {
 		return
 	}
-	// #1333: this path enqueues directly and bypasses the EmitEvent choke
-	// point. Redact so a secret the user pasted on one channel is not
-	// forwarded verbatim to other bound adapters' external servers.
+
 	echoText = e.redactOutbound(echoText)
 	e.mu.Lock()
 	e.lastStatus = ""
@@ -405,7 +390,7 @@ func (e *IMEmitter) EmitToolStatus(toolName, rawArgs string) {
 		return
 	}
 	if !imLongRunningTools[toolName] {
-		return // short tools: only result notification, no start notification
+		return
 	}
 	lang := ToolLanguage(e.language)
 	present := DescribeTool(lang, toolName, rawArgs)
@@ -533,8 +518,6 @@ func (e *IMEmitter) FormatAskUserPrompt(rawArgs string) string {
 
 	return FormatAskUserPrompt(e.language, req)
 }
-
-// Helper functions
 
 // userEchoLabel returns the localized prefix for user echo messages.
 func (e *IMEmitter) userEchoLabel() string {

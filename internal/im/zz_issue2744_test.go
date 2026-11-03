@@ -1,17 +1,5 @@
 package im
 
-// #2744 probes.
-//
-// 1. handleUpdate's callback_query branch returned BEFORE seenUpdate ran, so
-//    a re-delivered callback (Telegram re-sends until the next successful
-//    getUpdates carries the new offset; timeout/network failure/process
-//    restart in between re-delivers the same update_id) executed the handler
-//    twice -- flipping multi-select choices and re-answering the callback.
-//    The dedup must now cover BOTH update kinds.
-// 2. publishState read a.botUsername bare while connectAndServe writes it
-//    under a.mu -- a string-header data race during reconnect. The read must
-//    take the same RLock as the group-mention read in handleUpdate.
-
 import (
 	"context"
 	"fmt"
@@ -47,9 +35,6 @@ func TestIssue2744CallbackQueryDeduplicatedOnRedelivery(t *testing.T) {
 		"callback_query": map[string]any{"id": "cb1"},
 	}
 
-	// First delivery: handler runs and the update MUST land in the seen map.
-	// Pre-fix, the callback branch returned ahead of seenUpdate and the seen
-	// map stayed empty forever.
 	a.handleUpdate(context.Background(), upd)
 	a.mu.RLock()
 	_, recorded := a.seen[1001]
@@ -58,18 +43,15 @@ func TestIssue2744CallbackQueryDeduplicatedOnRedelivery(t *testing.T) {
 		t.Fatalf("callback_query update was not recorded by seenUpdate dedup")
 	}
 
-	// Redelivery of the same update_id (reconnect window): the handler must
-	// NOT run again -- exactly one answerCallbackQuery network request total.
 	a.handleUpdate(context.Background(), upd)
-	time.Sleep(300 * time.Millisecond) // answerCallbackQuery fires via safego.Go
+	time.Sleep(300 * time.Millisecond)
 	if got := atomic.LoadInt32(&answers); got != 1 {
 		t.Fatalf("redelivered callback re-executed handler: answerCallbackQuery called %d times, want 1", got)
 	}
 }
 
 func TestIssue2744PublishStateConcurrentBotUsername(t *testing.T) {
-	// Manager with the maps PublishAdapterState writes, so the publish path
-	// runs to completion instead of panicking on nil-map assignment.
+
 	mgr := &Manager{
 		currentBindings: make(map[string]*ChannelBinding),
 		adapters:        make(map[string]AdapterState),
@@ -90,19 +72,12 @@ func TestIssue2744PublishStateConcurrentBotUsername(t *testing.T) {
 			a.mu.Unlock()
 		}
 	}()
-	// Concurrent publishState reads: pre-fix this read a.botUsername bare
-	// (string-header race with the writer); -race flags it immediately.
+
 	for i := 0; i < 500; i++ {
 		a.publishState(true, "connected", "")
 	}
 	wg.Wait()
 
-	// The 500 racing publishes may have read any intermediate username (the
-	// writer goroutine is not synchronized with the publish loop) -- under
-	// CI load the last racing publish can observe bot388 while the writer
-	// only later reaches bot499, leaving a stale recorded state (flaky on
-	// #2949/#2950 CI). With the writer DONE (wg.Wait above), one more
-	// publish deterministically reads the final bot499.
 	a.publishState(true, "connected", "")
 
 	mgr.mu.RLock()

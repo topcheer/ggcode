@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-// #4654/#4655: dedup semantics for the Slack Socket Mode adapter.
-
 // newDedupTestAdapter builds the minimal slackAdapter surface the dedup pair
 // touches (seen map + mutex + name).
 func newDedupTestAdapter() *slackAdapter {
@@ -28,7 +26,7 @@ func TestSlackDedupCheckDoesNotLatch(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("checkSeenDedup must not latch, wrote %d keys", n)
 	}
-	// Same ts still passes until the late markSeenDedup latch.
+
 	if !a.checkSeenDedup("C1", "1.2") {
 		t.Fatal("read-only check must not consume the key")
 	}
@@ -65,8 +63,7 @@ func TestSlackInteractiveDedupOnTriggerID(t *testing.T) {
 	handleForTest := func(p map[string]any) {
 		a.handleInteractive(context.Background(), p)
 	}
-	// First delivery reaches the action dispatch (count via dedup side
-	// effect: the trigger key gets latched).
+
 	handleForTest(payload)
 	a.mu.Lock()
 	_, latched := a.seen["interactive:trig-abc"]
@@ -74,9 +71,9 @@ func TestSlackInteractiveDedupOnTriggerID(t *testing.T) {
 	if !latched {
 		t.Fatal("block_actions with trigger_id must latch the dedup key")
 	}
-	// Redelivery of the same envelope: must be dropped by the dedup guard.
+
 	handleForTest(payload)
-	// A fresh interaction (new trigger_id) is a different key: passes guard.
+
 	payload["trigger_id"] = "trig-xyz"
 	if !a.checkSeenDedup("interactive", "trig-xyz") {
 		t.Fatal("distinct trigger_id must not collide")

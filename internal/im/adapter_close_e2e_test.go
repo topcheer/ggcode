@@ -15,14 +15,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// TestMutePhysicallyDropsConnection verifies the full mute pipeline:
-//  1. Start a real WebSocket server
-//  2. Create a QQ adapter and connect it to the server
-//  3. Register the adapter with Manager
-//  4. Mute via Manager
-//  5. Verify the server sees the connection close
 func TestMutePhysicallyDropsConnection(t *testing.T) {
-	// 1. Start a WS server that detects client disconnect
+
 	var (
 		mu           sync.Mutex
 		connected    = make(chan struct{})
@@ -36,7 +30,7 @@ func TestMutePhysicallyDropsConnection(t *testing.T) {
 			return
 		}
 		close(connected)
-		// Read loop — when client closes, we get an error
+
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
 				mu.Lock()
@@ -52,7 +46,6 @@ func TestMutePhysicallyDropsConnection(t *testing.T) {
 	defer srv.Close()
 	wsURL := "ws" + srv.URL[4:]
 
-	// 2. Create adapter and manually connect (simulating what Start does)
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -64,14 +57,12 @@ func TestMutePhysicallyDropsConnection(t *testing.T) {
 	adapter.connected = true
 	adapter.mu.Unlock()
 
-	// Wait for server to confirm connection
 	select {
 	case <-connected:
 	case <-time.After(2 * time.Second):
 		t.Fatal("server did not see connection")
 	}
 
-	// 3. Register with Manager
 	mgr := NewManager()
 	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp"})
 	_, _ = mgr.BindChannel(ChannelBinding{
@@ -82,25 +73,22 @@ func TestMutePhysicallyDropsConnection(t *testing.T) {
 	})
 	mgr.RegisterSink(adapter)
 
-	// 4. Mute via Manager
 	if err := mgr.MuteBinding("test-qq"); err != nil {
 		t.Fatalf("MuteBinding: %v", err)
 	}
 
-	// 5. Verify server sees the disconnect
 	select {
 	case err := <-disconnected:
 		if err == nil {
 			t.Fatal("expected error from server read (connection should be closed)")
 		}
-		// Success: server detected the client closed the connection
+
 		t.Logf("server detected disconnect: %v", err)
 	case <-time.After(3 * time.Second):
 		t.Fatal("timeout: server did not detect disconnect within 3s — connection NOT physically closed")
 	}
 }
 
-// TestDisablePhysicallyDropsConnection same test but with Disable.
 func TestDisablePhysicallyDropsConnection(t *testing.T) {
 	var (
 		connected    = make(chan struct{})
@@ -166,7 +154,6 @@ func TestDisablePhysicallyDropsConnection(t *testing.T) {
 	}
 }
 
-// TestMuteAllPhysicallyDropsAllConnections verifies MuteAll closes all connections.
 func TestMuteAllPhysicallyDropsAllConnections(t *testing.T) {
 	type serverState struct {
 		connected    chan struct{}
@@ -247,7 +234,6 @@ func TestMuteAllPhysicallyDropsAllConnections(t *testing.T) {
 		t.Fatalf("expected 2 muted, got %d", count)
 	}
 
-	// Both servers should see disconnect
 	for i, s := range servers {
 		select {
 		case err := <-s.disconnected:
@@ -258,16 +244,12 @@ func TestMuteAllPhysicallyDropsAllConnections(t *testing.T) {
 	}
 }
 
-// TestMutePreventsReconnect simulates the full run-loop lifecycle:
-// adapter connects → ws server records connection count → manager mutes
-// → adapter's Close() drops the ws → run loop sees ctx.Err() and exits
-// → server should see exactly 1 connection, not 2 (no reconnect).
 func TestMutePreventsReconnect(t *testing.T) {
 	var (
 		mu             sync.Mutex
 		connectCount   int
 		connected      = make(chan struct{})
-		disconnectChan = make(chan error, 2) // buffer for potential reconnect
+		disconnectChan = make(chan error, 2)
 	)
 
 	upgrader := websocket.Upgrader{}
@@ -296,7 +278,6 @@ func TestMutePreventsReconnect(t *testing.T) {
 	defer srv.Close()
 	wsURL := "ws" + srv.URL[4:]
 
-	// Create adapter with a real context (like startConfiguredAdapter does)
 	_, adapterCancel := context.WithCancel(context.Background())
 
 	adapter := &qqAdapter{
@@ -307,14 +288,13 @@ func TestMutePreventsReconnect(t *testing.T) {
 		httpClient: &http.Client{
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-					// Redirect gateway URL requests to our test WS server
+
 					return net.Dial("tcp", strings.TrimPrefix(wsURL, "ws://"))
 				},
 			},
 		},
 	}
 
-	// Manually connect (simulating what connectAndServe does)
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -324,14 +304,12 @@ func TestMutePreventsReconnect(t *testing.T) {
 	adapter.connected = true
 	adapter.mu.Unlock()
 
-	// Wait for server to see the connection
 	select {
 	case <-connected:
 	case <-time.After(2 * time.Second):
 		t.Fatal("server did not see initial connection")
 	}
 
-	// Register with Manager (like startConfiguredAdapter does)
 	mgr := NewManager()
 	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp"})
 	_, _ = mgr.BindChannel(ChannelBinding{
@@ -343,19 +321,16 @@ func TestMutePreventsReconnect(t *testing.T) {
 	mgr.RegisterSink(adapter)
 	mgr.RegisterAdapterCancel("test-qq", adapterCancel)
 
-	// Mute — this should cancel + close
 	if err := mgr.MuteBinding("test-qq"); err != nil {
 		t.Fatalf("MuteBinding: %v", err)
 	}
 
-	// Wait for server to see the disconnect
 	select {
 	case <-disconnectChan:
 	case <-time.After(3 * time.Second):
 		t.Fatal("timeout: server did not see disconnect")
 	}
 
-	// Wait a bit to see if the adapter reconnects
 	time.Sleep(500 * time.Millisecond)
 
 	mu.Lock()
@@ -366,8 +341,6 @@ func TestMutePreventsReconnect(t *testing.T) {
 	}
 }
 
-// TestMuteWithoutCloseDoesNotDropConnection proves that WITHOUT the
-// Close() call, the connection stays alive (baseline for the fix).
 func TestMuteWithoutCloseDoesNotDropConnection(t *testing.T) {
 	disconnected := make(chan error, 1)
 
@@ -392,25 +365,22 @@ func TestMuteWithoutCloseDoesNotDropConnection(t *testing.T) {
 
 	conn, _, _ := websocket.DefaultDialer.Dial(wsURL, nil)
 
-	// Only cancel context, DON'T call Close — simulates the old behavior
 	ctx, cancel := context.WithCancel(context.Background())
 	_ = ctx
 	cancel()
 
-	// Connection should still be alive because ws.Close() was never called
 	select {
 	case <-disconnected:
 		t.Fatal("connection should NOT have dropped — we only cancelled context")
 	case <-time.After(500 * time.Millisecond):
-		// Expected: connection is still alive
+
 	}
 
-	// Now actually close it
 	conn.Close()
 
 	select {
 	case <-disconnected:
-		// Now it's really gone
+
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected disconnect after conn.Close()")
 	}

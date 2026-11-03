@@ -6,8 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// --- anthropic_bootstrap.go 0% functions ---
-
 func TestInferBootstrapVendorID(t *testing.T) {
 	tests := []struct {
 		input string
@@ -80,8 +78,6 @@ func TestIsCommonHostPrefix(t *testing.T) {
 	}
 }
 
-// --- api_keys.go 0% functions ---
-
 func TestPreferredVendorAPIKeyEnvVar(t *testing.T) {
 	got := PreferredVendorAPIKeyEnvVar("anthropic")
 	if got == "" {
@@ -109,8 +105,6 @@ func TestSanitizeEnvVarSegment(t *testing.T) {
 		t.Errorf("expected 'MY_VENDOR', got %q", got)
 	}
 }
-
-// --- config.go 0% functions ---
 
 func TestVendorNames(t *testing.T) {
 	cfg := &Config{Vendors: map[string]VendorConfig{
@@ -142,12 +136,12 @@ func TestEndpointNames(t *testing.T) {
 func TestActiveEndpointConfig_Nil(t *testing.T) {
 	cfg := &Config{}
 	ep := cfg.ActiveEndpointConfig()
-	// Should return nil or default
+
 	_ = ep
 }
 
 func TestSetEndpointAPIKey(t *testing.T) {
-	// SetEndpointAPIKey requires config file path - skip for unit test
+
 }
 
 func TestSetEndpointModels(t *testing.T) {
@@ -162,10 +156,10 @@ func TestSetEndpointModels(t *testing.T) {
 			}},
 		},
 	}
-	// API refresh returns new models — should REPLACE pre-built list, only keeping SelectedModel.
+
 	cfg.SetEndpointModels("anthropic", "default", []string{"claude-4", "claude-4.5"})
 	ep := cfg.Vendors["anthropic"].Endpoints["default"]
-	// Should have the 2 API models + the selected model (claude-3), but NOT the old pre-built models.
+
 	if len(ep.Models) != 3 {
 		t.Fatalf("expected 3 models, got %d: %v", len(ep.Models), ep.Models)
 	}
@@ -176,7 +170,7 @@ func TestSetEndpointModels(t *testing.T) {
 			}
 		}
 	}
-	// SelectedModel should be preserved.
+
 	found := false
 	for _, m := range ep.Models {
 		if m == "claude-3" {
@@ -220,15 +214,13 @@ func TestRemoveVendor(t *testing.T) {
 }
 
 func TestSetVendorAPIKey(t *testing.T) {
-	// SetVendorAPIKey requires config file path - skip for unit test
+
 }
 
 func TestDefaultKnightConfig(t *testing.T) {
 	kc := DefaultKnightConfig()
-	_ = kc // just ensure no panic
+	_ = kc
 }
-
-// --- env.go ---
 
 func TestExpandEnvRecursive(t *testing.T) {
 	m := map[string]interface{}{
@@ -239,8 +231,6 @@ func TestExpandEnvRecursive(t *testing.T) {
 		t.Error("expected non-nil")
 	}
 }
-
-// --- IM adapter methods ---
 
 func TestRemoveIMAdapter(t *testing.T) {
 	withTestHome(t)
@@ -274,14 +264,14 @@ func TestSetIMAdapterEnabled(t *testing.T) {
 
 func TestSetIMAdapterExtra(t *testing.T) {
 	withTestHome(t)
-	// Requires config path, just test it handles missing adapter gracefully
+
 	cfg := &Config{
 		IM: IMConfig{
 			Adapters: map[string]IMAdapterConfig{},
 		},
 	}
 	err := cfg.SetIMAdapterExtra("nonexistent", "key", "value")
-	// Should error for nonexistent adapter
+
 	_ = err
 }
 

@@ -42,8 +42,7 @@ func TestMatrixRetryAfterClamp(t *testing.T) {
 // issue: the raw conversion of 9.3e12 ms wraps negative, while the clamped
 // helper returns a positive, bounded duration.
 func TestMatrixRetryAfterOverflowRegression(t *testing.T) {
-	// Use a variable so the multiplication happens at runtime (a constant
-	// expression overflows at compile time, which is itself the bug signal).
+
 	ms := float64(9.3e12)
 	raw := time.Duration(ms) * time.Millisecond
 	if raw > 0 {

@@ -89,7 +89,6 @@ func newWeComAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapter
 		wsURL = wecomDefaultWSURL
 	}
 
-	// Access policies
 	dmPolicy := strings.TrimSpace(stringValue(adapterCfg.Extra, "dm_policy", "dmPolicy"))
 	if dmPolicy == "" {
 		dmPolicy = "open"
@@ -136,8 +135,7 @@ func (a *wecomAdapter) Close() error {
 	ws := a.ws
 	a.ws = nil
 	a.mu.Unlock()
-	// Close outside the lock to avoid potential deadlock if ws.Close()
-	// triggers internal callbacks that try to acquire a.mu.RLock().
+
 	if ws != nil {
 		ws.Close()
 	}
@@ -156,9 +154,7 @@ func (a *wecomAdapter) run(ctx context.Context) {
 			a.publishState(false, "error", err.Error())
 			debug.Log("wecom", "adapter=%s error: %v", a.name, err)
 		} else {
-			// Clean exit (ctx cancelled / ws closed by us): reset the backoff
-			// so a future start is not penalized by stale attempt counts
-			// (#974, mirrors whatsapp run()).
+
 			attempt = 0
 		}
 		a.mu.RLock()
@@ -188,12 +184,10 @@ func (a *wecomAdapter) connectAndServe(ctx context.Context) error {
 	a.publishState(true, "connected", "")
 	debug.Log("wecom", "adapter=%s connected to %s", a.name, a.wsURL)
 
-	// Start heartbeat
 	heartbeatCtx, heartbeatCancel := context.WithCancel(ctx)
 	defer heartbeatCancel()
 	safego.Go("im.wecom.heartbeat", func() { a.heartbeatLoop(heartbeatCtx) })
 
-	// Read loop
 	defer func() {
 		a.mu.Lock()
 		a.connected = false
@@ -241,7 +235,6 @@ func (a *wecomAdapter) connect() error {
 		return fmt.Errorf("dial %s: %w", a.wsURL, err)
 	}
 
-	// Send subscribe
 	reqID := newWeComReqID("subscribe")
 	subscribeMsg := map[string]any{
 		"cmd":     wecomCmdSubscribe,
@@ -253,7 +246,6 @@ func (a *wecomAdapter) connect() error {
 		return fmt.Errorf("subscribe write: %w", err)
 	}
 
-	// Wait for subscribe ack
 	ws.SetReadDeadline(time.Now().Add(wecomConnectTimeout))
 	_, msgBytes, err := ws.ReadMessage()
 	if err != nil {
@@ -268,7 +260,6 @@ func (a *wecomAdapter) connect() error {
 		return fmt.Errorf("subscribe ack parse: %w", err)
 	}
 
-	// Skip pings until we get our response
 	for {
 		cmd, _ := ack["cmd"].(string)
 		ackReqID := payloadReqID(ack)
@@ -297,7 +288,7 @@ func (a *wecomAdapter) connect() error {
 			}
 			break
 		}
-		// Unknown pre-auth message, read next
+
 		ws.SetReadDeadline(time.Now().Add(wecomConnectTimeout))
 		_, msgBytes, err = ws.ReadMessage()
 		if err != nil {
@@ -340,8 +331,7 @@ func (a *wecomAdapter) heartbeatLoop(ctx context.Context) {
 			a.writeMu.Unlock()
 			if err != nil {
 				debug.Log("wecom", "adapter=%s heartbeat send failed: %v", a.name, err)
-				// Close the WebSocket to unblock ReadMessage in the main loop,
-				// which triggers the reconnect cycle.
+
 				ws.Close()
 				return
 			}
@@ -350,20 +340,16 @@ func (a *wecomAdapter) heartbeatLoop(ctx context.Context) {
 }
 
 func (a *wecomAdapter) dispatchPayload(ctx context.Context, payload map[string]any) {
-	// Outbound ack frames first: a payload whose req_id matches a pending
-	// outbound request resolves that waiter (#974). Server acks echo the
-	// req_id WE generated ("send-…", "respond…" prefixes), so this can never
-	// swallow an inbound callback frame — those carry server-generated ids.
+
 	if reqID := payloadReqID(payload); reqID != "" {
 		if v, ok := a.pendingAcks.LoadAndDelete(reqID); ok {
-			// Frame-carrying waiters (media upload) get the full ack body so they
-			// can extract response fields like upload_id / media_id.
+
 			if fch, ok := v.(chan map[string]any); ok {
-				fch <- payload // buffered(1); waiter may be gone
+				fch <- payload
 				return
 			}
 			if ch, ok := v.(chan error); ok {
-				ch <- wecomAckError(reqID, payload) // buffered(1); waiter may be gone
+				ch <- wecomAckError(reqID, payload)
 			}
 			return
 		}
@@ -375,7 +361,7 @@ func (a *wecomAdapter) dispatchPayload(ctx context.Context, payload map[string]a
 	case wecomCmdCallback, wecomCmdLegacyCallback:
 		a.handleMessage(ctx, payload)
 	case wecomCmdEventCallback, wecomCmdPing:
-		// Ignore
+
 	default:
 		debug.Log("wecom", "adapter=%s ignoring payload cmd=%s", a.name, cmd)
 	}
@@ -395,14 +381,13 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 		return
 	}
 
-	// Dedup
 	a.mu.Lock()
 	if _, seen := a.seen[msgID]; seen {
 		a.mu.Unlock()
 		return
 	}
 	a.seen[msgID] = time.Now()
-	// Evict old entries
+
 	if len(a.seen) > wecomDedupMaxSize {
 		cutoff := time.Now().Add(-5 * time.Minute)
 		for k, t := range a.seen {
@@ -410,9 +395,7 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 				delete(a.seen, k)
 			}
 		}
-		// #1567-D (#974 pattern, missed here): a burst inside the TTL window
-		// leaves the map over-capacity with no oldest-entry fallback - it
-		// grows unbounded until entries age out. Drop oldest by timestamp.
+
 		for len(a.seen) >= wecomDedupMaxSize {
 			var oldestKey string
 			var oldestT time.Time
@@ -424,13 +407,12 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 			delete(a.seen, oldestKey)
 		}
 	}
-	// Remember req_id for respond_msg replies
+
 	reqID := payloadReqID(payload)
 	if reqID != "" {
 		a.replyReqIDs[msgID] = reqID
 		a.replyReqOrder = append(a.replyReqOrder, msgID)
-		// Evict oldest-first instead of a random map entry (#974): random
-		// eviction could drop exactly the req_id we are about to reply to.
+
 		for len(a.replyReqIDs) > wecomDedupMaxSize && len(a.replyReqOrder) > 0 {
 			oldest := a.replyReqOrder[0]
 			a.replyReqOrder = a.replyReqOrder[1:]
@@ -439,7 +421,6 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 	}
 	a.mu.Unlock()
 
-	// Extract sender
 	from, _ := body["from"].(map[string]any)
 	senderID := jsonStringField(from, "userid")
 	chatID := jsonStringField(body, "chatid")
@@ -453,7 +434,6 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 	chatType, _ := body["chattype"].(string)
 	isGroup := strings.EqualFold(chatType, "group")
 
-	// Access policy check
 	if isGroup {
 		if !a.isGroupAllowed(chatID, senderID) {
 			debug.Log("wecom", "adapter=%s group %s sender %s blocked by policy", a.name, chatID, senderID)
@@ -466,19 +446,13 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 		}
 	}
 
-	// Extract text and quote
 	text := a.extractText(body)
 	quoteText := a.extractQuote(body)
 
-	// If text is empty but we have a quote, use the quote as text
 	if text == "" && quoteText != "" {
 		text = quoteText
 	}
-	// #1252: attachments must be extracted BEFORE the emptiness check - the
-	// old `text == "" → return` sat in front of extractAttachments, so pure
-	// media messages (image/file/voice without any text) were dropped
-	// entirely: the attachment code below was unreachable dead code on this
-	// path and neither pairing nor HandleInbound ever saw the message.
+
 	attachments := a.extractAttachments(body)
 	if text == "" && len(attachments) == 0 {
 		debug.Log("wecom", "adapter=%s handleMessage: no text and no attachments, skipping", a.name)
@@ -498,16 +472,11 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 		Attachments: attachments,
 	}
 
-	// Pairing flow: first inbound from an unbound channel triggers pairing.
 	if a.manager != nil {
 		pairingResult, err := a.manager.HandlePairingInbound(msg)
 		debug.Log("wecom", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
 		if err != nil && err != ErrNoSessionBound {
-			// #1255: message-level pairing errors do not flip the adapter state
-			// (#1238/#1243/#1248 family, 4th instance): connected is published
-			// only once on websocket login and nothing re-publishes it while the
-			// connection lives, so one transient store hiccup pinned a healthy
-			// adapter at warning until the next reconnect. Log only.
+
 			debug.Log("wecom", "adapter=%s pairing error (websocket unaffected): %v", a.name, err)
 		}
 		if pairingResult.Consumed {
@@ -551,14 +520,14 @@ func (a *wecomAdapter) extractText(body map[string]any) string {
 		if content := strings.TrimSpace(jsonStringField(textBlock, "content")); content != "" {
 			textParts = append(textParts, content)
 		}
-		// Voice transcription
+
 		if strings.EqualFold(msgType, "voice") {
 			voiceBlock, _ := body["voice"].(map[string]any)
 			if content := strings.TrimSpace(jsonStringField(voiceBlock, "content")); content != "" {
 				textParts = append(textParts, content)
 			}
 		}
-		// App message title (file attachments sent via AI Bot)
+
 		if strings.EqualFold(msgType, "appmsg") {
 			appmsg, _ := body["appmsg"].(map[string]any)
 			if title := strings.TrimSpace(jsonStringField(appmsg, "title")); title != "" {
@@ -592,7 +561,6 @@ func (a *wecomAdapter) extractAttachments(body map[string]any) []Attachment {
 	msgType, _ := body["msgtype"].(string)
 	var attachments []Attachment
 
-	// Image
 	if strings.EqualFold(msgType, "image") {
 		if img, _ := body["image"].(map[string]any); img != nil {
 			if url := jsonStringField(img, "url"); url != "" {
@@ -601,7 +569,7 @@ func (a *wecomAdapter) extractAttachments(body map[string]any) []Attachment {
 					URL:  url,
 				})
 			}
-			// base64 image data
+
 			if b64 := jsonStringField(img, "base64"); b64 != "" {
 				attachments = append(attachments, Attachment{
 					Kind:       AttachmentImage,
@@ -611,10 +579,6 @@ func (a *wecomAdapter) extractAttachments(body map[string]any) []Attachment {
 		}
 	}
 
-	// #1253: mixed messages carry per-item msgtypes - each image item must be
-	// collected the same way a top-level image is, or "text + screenshot"
-	// compositions delivered the text while the screenshot silently vanished
-	// (neither in text nor in attachments).
 	if strings.EqualFold(msgType, "mixed") {
 		if mixed, _ := body["mixed"].(map[string]any); mixed != nil {
 			if items, _ := mixed["msg_item"].([]any); items != nil {
@@ -638,7 +602,6 @@ func (a *wecomAdapter) extractAttachments(body map[string]any) []Attachment {
 		}
 	}
 
-	// File
 	if strings.EqualFold(msgType, "file") {
 		if file, _ := body["file"].(map[string]any); file != nil {
 			if url := jsonStringField(file, "url"); url != "" {
@@ -650,7 +613,6 @@ func (a *wecomAdapter) extractAttachments(body map[string]any) []Attachment {
 		}
 	}
 
-	// App message file/image (AI Bot attachments like PDF/Word/Excel)
 	if strings.EqualFold(msgType, "appmsg") {
 		appmsg, _ := body["appmsg"].(map[string]any)
 		if appmsg != nil {
@@ -674,7 +636,6 @@ func (a *wecomAdapter) extractAttachments(body map[string]any) []Attachment {
 		}
 	}
 
-	// Quote image/file
 	if quote, _ := body["quote"].(map[string]any); quote != nil {
 		quoteType, _ := quote["msgtype"].(string)
 		switch strings.ToLower(quoteType) {
@@ -702,8 +663,6 @@ func (a *wecomAdapter) extractAttachments(body map[string]any) []Attachment {
 	return attachments
 }
 
-// --- Access policy ---
-
 func (a *wecomAdapter) isDMAllowed(senderID string) bool {
 	if a.dmPolicy == "disabled" {
 		return false
@@ -711,7 +670,7 @@ func (a *wecomAdapter) isDMAllowed(senderID string) bool {
 	if a.dmPolicy == "allowlist" {
 		return entryMatches(a.allowFrom, senderID)
 	}
-	return true // "open"
+	return true
 }
 
 func (a *wecomAdapter) isGroupAllowed(chatID, senderID string) bool {
@@ -723,8 +682,6 @@ func (a *wecomAdapter) isGroupAllowed(chatID, senderID string) bool {
 	}
 	return true
 }
-
-// --- Outbound ---
 
 // Send delivers an outbound message to a WeCom chat.
 // Prefers aibot_respond_msg (stream reply) when the inbound message's req_id
@@ -743,9 +700,6 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 		return nil
 	}
 
-	// Images first (chunked upload + msgtype=image), then the remaining text.
-	// Extraction failures degrade to a text notice instead of dropping the
-	// whole reply.
 	images, remainder := ExtractImagesFromText(text)
 	sentImage := false
 	for _, img := range images {
@@ -755,10 +709,7 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 			continue
 		}
 		sentImage = true
-		// #1254: the official limit is ~30 uploads/min per bot - back-to-back
-		// multi-image replies tripped 45009 and the remaining uploads failed.
-		// Space every delivered image like the text chunks below; this also
-		// spaces the last image from the first text chunk (firstProactive gate).
+
 		select {
 		case <-time.After(wecomInterMsgDelay):
 		case <-ctx.Done():
@@ -767,18 +718,11 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	}
 	text = remainder
 	if strings.TrimSpace(text) == "" && len(images) > 0 {
-		return nil // images carried the content
+		return nil
 	}
 
-	// Split long messages instead of truncating — losing content is worse UX
-	// than sending multiple messages. WeCom limit is 2048 bytes per message.
-	// Note: do NOT strip markdown here — sendProactive uses msgtype=markdown
-	// which renders formatting. sendRespond strips markdown per-call since
-	// the stream msgtype renders plain text only.
 	chunks := SplitMessageForPlatform(text, PlatformWeCom)
 
-	// First chunk: try respond_msg if we have a tracked req_id.
-	// Subsequent chunks: must use proactive API (respond_msg has reply limits).
 	hasReply := false
 	if msgID := strings.TrimSpace(binding.LastInboundMessageID); msgID != "" {
 		a.mu.RLock()
@@ -795,11 +739,9 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	firstProactive := true
 	for i := 0; i < len(chunks); i++ {
 		if hasReply && i == 0 {
-			continue // already sent via respond_msg
+			continue
 		}
-		// #1254: the very first proactive chunk must also wait when images
-		// were just uploaded (same rate-limit domain); plain first-chunk sends
-		// without images stay immediate.
+
 		if !firstProactive || sentImage {
 			select {
 			case <-time.After(wecomInterMsgDelay):
@@ -856,7 +798,7 @@ func (a *wecomAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding
 
 // sendRespond sends via aibot_respond_msg — shows as a reply bubble in WeCom.
 func (a *wecomAdapter) sendRespond(chatID, replyReqID, text string) error {
-	// stream msgtype renders plain text only — strip markdown formatting
+
 	text = stripMarkdown(text)
 
 	respondMsg := map[string]any{
@@ -872,10 +814,7 @@ func (a *wecomAdapter) sendRespond(chatID, replyReqID, text string) error {
 		},
 	}
 	if err := a.writeAndAwaitAck(replyReqID, respondMsg); err != nil {
-		// Fall back to proactive send on respond failure (reply quota hit,
-		// stream window closed, transport error). #974: the fallback now
-		// verifies its OWN ack too, so a genuinely lost message surfaces
-		// as an error to the caller instead of being silently dropped.
+
 		debug.Log("wecom", "adapter=%s respond_msg failed: %v, falling back to send_msg", a.name, err)
 		return a.sendProactive(chatID, text)
 	}
@@ -925,8 +864,6 @@ func (a *wecomAdapter) publishState(healthy bool, status, lastErr string) {
 		UpdatedAt:  time.Now(),
 	})
 }
-
-// --- Helpers ---
 
 // wecomReqSeq guarantees req_id uniqueness even when two sends land on the
 // same nanosecond — req_ids now key the pending-ack table, so collisions

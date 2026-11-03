@@ -14,8 +14,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// --- qqUploadPath ---
-
 func TestQQUploadPath(t *testing.T) {
 	tests := []struct {
 		chatType string
@@ -40,8 +38,6 @@ func TestQQUploadPath(t *testing.T) {
 	}
 }
 
-// --- uploadCacheKey ---
-
 func TestUploadCacheKey(t *testing.T) {
 	a := &qqAdapter{}
 	key1 := a.uploadCacheKey("abc", "c2c", "user1", 1)
@@ -55,17 +51,13 @@ func TestUploadCacheKey(t *testing.T) {
 	}
 }
 
-// --- getUploadCache / setUploadCache ---
-
 func TestUploadCacheSetGet(t *testing.T) {
 	a := &qqAdapter{uploadCache: make(map[string]qqUploadCacheEntry)}
 
-	// Cache miss
 	if _, ok := a.getUploadCache("nonexistent"); ok {
 		t.Error("expected cache miss")
 	}
 
-	// Cache set + hit
 	a.setUploadCache("key1", "file_info_abc")
 	got, ok := a.getUploadCache("key1")
 	if !ok || got != "file_info_abc" {
@@ -77,7 +69,7 @@ func TestUploadCacheExpiration(t *testing.T) {
 	a := &qqAdapter{uploadCache: make(map[string]qqUploadCacheEntry)}
 	a.uploadCache["expired_key"] = qqUploadCacheEntry{
 		FileInfo:  "old_info",
-		ExpiresAt: time.Now().Add(-1 * time.Hour), // expired
+		ExpiresAt: time.Now().Add(-1 * time.Hour),
 	}
 	if _, ok := a.getUploadCache("expired_key"); ok {
 		t.Error("expired entry should be a miss")
@@ -86,11 +78,11 @@ func TestUploadCacheExpiration(t *testing.T) {
 
 func TestUploadCacheEviction(t *testing.T) {
 	a := &qqAdapter{uploadCache: make(map[string]qqUploadCacheEntry)}
-	// Fill beyond max
+
 	for i := 0; i < qqUploadCacheMaxEntries+10; i++ {
 		a.uploadCache[fmt.Sprintf("old_%d", i)] = qqUploadCacheEntry{
 			FileInfo:  fmt.Sprintf("info_%d", i),
-			ExpiresAt: time.Now().Add(-1 * time.Hour), // all expired
+			ExpiresAt: time.Now().Add(-1 * time.Hour),
 		}
 	}
 	a.setUploadCache("new_key", "new_info")
@@ -99,8 +91,6 @@ func TestUploadCacheEviction(t *testing.T) {
 		t.Errorf("after eviction, expected new_key to be set, got %q ok=%v", got, ok)
 	}
 }
-
-// --- qqCloseReason ---
 
 func TestQQCloseReason(t *testing.T) {
 	tests := []struct {
@@ -127,8 +117,6 @@ func TestQQCloseReason(t *testing.T) {
 	}
 }
 
-// --- sequence ---
-
 func TestSequence(t *testing.T) {
 	a := &qqAdapter{}
 	if _, ok := a.sequence(); ok {
@@ -143,8 +131,6 @@ func TestSequence(t *testing.T) {
 	}
 }
 
-// --- currentHeartbeatEvery ---
-
 func TestCurrentHeartbeatEvery(t *testing.T) {
 	a := &qqAdapter{}
 	if d := a.currentHeartbeatEvery(); d != 0 {
@@ -158,8 +144,6 @@ func TestCurrentHeartbeatEvery(t *testing.T) {
 	}
 }
 
-// --- qqPayloadKeys ---
-
 func TestQQPayloadKeys(t *testing.T) {
 	if got := qqPayloadKeys(nil); got != "-" {
 		t.Errorf("nil = %q, want -", got)
@@ -172,8 +156,6 @@ func TestQQPayloadKeys(t *testing.T) {
 		t.Errorf("got %q, want a,z", got)
 	}
 }
-
-// --- truncateStr ---
 
 func TestTruncateStr(t *testing.T) {
 	if got := truncateStr("abc", 5); got != "abc" {
@@ -189,8 +171,6 @@ func TestTruncateStr(t *testing.T) {
 		t.Errorf("maxLen=0 should pass through: %q", got)
 	}
 }
-
-// --- qqAttachmentExt ---
 
 func TestQQAttachmentExt(t *testing.T) {
 	tests := []struct {
@@ -218,12 +198,9 @@ func TestQQAttachmentExt(t *testing.T) {
 	}
 }
 
-// --- resolveImageSource (data_url branch) ---
-
 func TestResolveImageSource_DataURL(t *testing.T) {
 	a := &qqAdapter{}
 
-	// Create a valid 1x1 PNG
 	b64 := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
 	dataURL := "data:image/png;base64," + b64
 
@@ -259,7 +236,6 @@ func TestResolveImageSource_DataURLInvalidImage(t *testing.T) {
 func TestResolveImageSource_LocalFile(t *testing.T) {
 	a := &qqAdapter{}
 
-	// Create a temp PNG file
 	pngB64 := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
 	pngData, _ := base64.StdEncoding.DecodeString(pngB64)
 	tmpFile := filepath.Join(t.TempDir(), "test.png")
@@ -295,18 +271,14 @@ func TestResolveImageSource_UnknownKind(t *testing.T) {
 	}
 }
 
-// --- sendUnauthorized ---
-
 func TestSendUnauthorized(t *testing.T) {
 	adapter := &qqAdapter{connected: false}
 	err := adapter.sendUnauthorized(t.Context(), "channel1", "")
-	// Should not error when not connected (returns nil)
+
 	if err != nil {
 		t.Errorf("sendUnauthorized when not connected: %v", err)
 	}
 }
-
-// --- outboundText (all branches) ---
 
 func TestOutboundText_AllKinds(t *testing.T) {
 	adapter := &qqAdapter{}
@@ -333,8 +305,6 @@ func TestOutboundText_AllKinds(t *testing.T) {
 	}
 }
 
-// --- buildTextBody ---
-
 func TestBuildTextBody(t *testing.T) {
 	adapter := &qqAdapter{markdownSupport: true}
 	body := adapter.buildTextBody("hello", "c2c", "", 0)
@@ -342,8 +312,6 @@ func TestBuildTextBody(t *testing.T) {
 		t.Errorf("expected markdown msg_type, got %v", body["msg_type"])
 	}
 }
-
-// --- boolValue (more branches) ---
 
 func TestBoolValue_AllBranches(t *testing.T) {
 	tests := []struct {
@@ -378,8 +346,6 @@ func TestBoolValue_AllBranches(t *testing.T) {
 	}
 }
 
-// --- intValue (more branches) ---
-
 func TestIntValue_AllTypes(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -403,8 +369,6 @@ func TestIntValue_AllTypes(t *testing.T) {
 	}
 }
 
-// --- isQQTokenExpiredPayload (full branches) ---
-
 func TestIsQQTokenExpiredPayload(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -427,8 +391,6 @@ func TestIsQQTokenExpiredPayload(t *testing.T) {
 		})
 	}
 }
-
-// --- isQQVoiceAttachment (more branches) ---
 
 func TestIsQQVoiceAttachment(t *testing.T) {
 	tests := []struct {
@@ -458,8 +420,6 @@ func TestIsQQVoiceAttachment(t *testing.T) {
 	}
 }
 
-// --- normalizeQQURL ---
-
 func TestNormalizeQQURL(t *testing.T) {
 	tests := []struct {
 		input string
@@ -479,8 +439,6 @@ func TestNormalizeQQURL(t *testing.T) {
 		})
 	}
 }
-
-// --- isQQTokenExpiredBody (more branches) ---
 
 func TestIsQQTokenExpiredBody(t *testing.T) {
 	tests := []struct {
@@ -504,8 +462,6 @@ func TestIsQQTokenExpiredBody(t *testing.T) {
 		})
 	}
 }
-
-// --- resolveQQSTTConfig ---
 
 func TestResolveQQSTTConfig_Empty(t *testing.T) {
 	cfg := resolveQQSTTConfig(config.IMSTTConfig{}, nil)
@@ -548,8 +504,6 @@ func TestResolveQQSTTConfig_ExtraOverride(t *testing.T) {
 	}
 }
 
-// --- isQQMarkdownRejected ---
-
 func TestIsQQMarkdownRejected(t *testing.T) {
 	tests := []struct {
 		name string
@@ -571,8 +525,6 @@ func TestIsQQMarkdownRejected(t *testing.T) {
 	}
 }
 
-// --- parseQQExpiresIn ---
-
 func TestParseQQExpiresIn(t *testing.T) {
 	tests := []struct {
 		input any
@@ -582,13 +534,13 @@ func TestParseQQExpiresIn(t *testing.T) {
 		{"7200", 7200, true},
 		{"", 0, true},
 		{"abc", 0, false},
-		{nil, 0, true}, // stringFromAny(nil) = "" → empty case
+		{nil, 0, true},
 	}
 	for i, tc := range tests {
 		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
 			got, err := parseQQExpiresIn(tc.input)
 			if (err != nil) == tc.ok && tc.want == 0 && err != nil {
-				// error case
+
 				return
 			}
 			if got != tc.want {
@@ -597,8 +549,6 @@ func TestParseQQExpiresIn(t *testing.T) {
 		})
 	}
 }
-
-// --- qqEnvelopeFields ---
 
 func TestQQEnvelopeFields(t *testing.T) {
 	tests := []struct {

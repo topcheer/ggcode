@@ -15,7 +15,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// testNostrSink captures outbound messages sent through the manager.
 type testNostrSink struct {
 	name    string
 	mu      sync.Mutex
@@ -32,7 +31,6 @@ func (s *testNostrSink) Send(ctx context.Context, binding ChannelBinding, event 
 	return nil
 }
 
-// testNostrBridge captures inbound messages delivered to the bridge.
 type testNostrBridge struct {
 	mu      sync.Mutex
 	inbound []InboundMessage
@@ -45,12 +43,11 @@ func (b *testNostrBridge) SubmitInboundMessage(ctx context.Context, msg InboundM
 	return nil
 }
 
-// setupNostrTest creates a bot adapter + sender identity + manager with session bound.
 func setupNostrTest(t *testing.T, adapterName string) (*nostrAdapter, string, string, *Manager, *testNostrBridge) {
 	t.Helper()
 
 	botSK := nostr.GeneratePrivateKey()
-	_, _ = nostr.GetPublicKey(botSK) // botPK derived by adapter
+	_, _ = nostr.GetPublicKey(botSK)
 	senderSK := nostr.GeneratePrivateKey()
 	senderPK, _ := nostr.GetPublicKey(senderSK)
 
@@ -77,7 +74,6 @@ func setupNostrTest(t *testing.T, adapterName string) (*nostrAdapter, string, st
 	return adapter, senderSK, senderPK, mgr, bridge
 }
 
-// encryptAndSign creates a signed NIP-04 DM event from sender to bot.
 func encryptAndSign(t *testing.T, senderSK, botPK, text string) *nostr.Event {
 	t.Helper()
 	shared, err := nip04.ComputeSharedSecret(botPK, senderSK)
@@ -102,18 +98,12 @@ func encryptAndSign(t *testing.T, senderSK, botPK, text string) *nostr.Event {
 	return evt
 }
 
-// ---------------------------------------------------------------------------
-// E2E Test: Pairing flow — first message generates pairing code
-// ---------------------------------------------------------------------------
-
 func TestNostrE2E_PairingFirstMessage(t *testing.T) {
 	adapter, senderSK, senderPK, mgr, _ := setupNostrTest(t, "e2e-pair")
 
-	// Send first message — should trigger pairing
 	evt := encryptAndSign(t, senderSK, adapter.pubKey, "hello bot")
 	adapter.handleEvent(context.Background(), evt)
 
-	// Verify pendingPairing was set (pairing code generated)
 	mgr.mu.Lock()
 	pending := mgr.pendingPairing
 	mgr.mu.Unlock()
@@ -133,14 +123,9 @@ func TestNostrE2E_PairingFirstMessage(t *testing.T) {
 	t.Logf("Pairing code generated: %s for sender %s", pending.Code, senderPK[:12])
 }
 
-// ---------------------------------------------------------------------------
-// E2E Test: Pairing flow — second message with correct code completes binding
-// ---------------------------------------------------------------------------
-
 func TestNostrE2E_PairingCompleteBinding(t *testing.T) {
 	adapter, senderSK, senderPK, mgr, _ := setupNostrTest(t, "e2e-bind")
 
-	// First message triggers pairing
 	evt1 := encryptAndSign(t, senderSK, adapter.pubKey, "hello")
 	adapter.handleEvent(context.Background(), evt1)
 
@@ -152,11 +137,9 @@ func TestNostrE2E_PairingCompleteBinding(t *testing.T) {
 		t.Fatal("no pairing code")
 	}
 
-	// Second message with correct pairing code
 	evt2 := encryptAndSign(t, senderSK, adapter.pubKey, code)
 	adapter.handleEvent(context.Background(), evt2)
 
-	// Verify binding was created
 	bindings, _ := mgr.ListBindings()
 	var found *ChannelBinding
 	for i := range bindings {
@@ -174,22 +157,15 @@ func TestNostrE2E_PairingCompleteBinding(t *testing.T) {
 	t.Logf("Binding created: channel=%s… adapter=%s", found.ChannelID[:12], found.Adapter)
 }
 
-// ---------------------------------------------------------------------------
-// E2E Test: Wrong pairing code does not bind
-// ---------------------------------------------------------------------------
-
 func TestNostrE2E_WrongPairingCode(t *testing.T) {
 	adapter, senderSK, _, mgr, _ := setupNostrTest(t, "e2e-wrong")
 
-	// First message triggers pairing
 	evt1 := encryptAndSign(t, senderSK, adapter.pubKey, "hello")
 	adapter.handleEvent(context.Background(), evt1)
 
-	// Wrong code
 	evt2 := encryptAndSign(t, senderSK, adapter.pubKey, "0000")
 	adapter.handleEvent(context.Background(), evt2)
 
-	// Should NOT be bound
 	bindings, _ := mgr.ListBindings()
 	for _, b := range bindings {
 		if b.Adapter == "e2e-wrong" {
@@ -197,7 +173,6 @@ func TestNostrE2E_WrongPairingCode(t *testing.T) {
 		}
 	}
 
-	// Pending should still exist
 	mgr.mu.Lock()
 	pending := mgr.pendingPairing
 	mgr.mu.Unlock()
@@ -206,14 +181,9 @@ func TestNostrE2E_WrongPairingCode(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// E2E Test: Bound message goes to HandleInbound → bridge
-// ---------------------------------------------------------------------------
-
 func TestNostrE2E_BoundMessageDeliveredToBridge(t *testing.T) {
 	adapter, senderSK, senderPK, mgr, bridge := setupNostrTest(t, "e2e-inbound")
 
-	// Manually bind the channel
 	binding := ChannelBinding{
 		ChannelID: senderPK,
 		Platform:  PlatformNostr,
@@ -225,7 +195,6 @@ func TestNostrE2E_BoundMessageDeliveredToBridge(t *testing.T) {
 	evt := encryptAndSign(t, senderSK, adapter.pubKey, testMessage)
 	adapter.handleEvent(context.Background(), evt)
 
-	// Verify bridge received the message
 	bridge.mu.Lock()
 	defer bridge.mu.Unlock()
 	if len(bridge.inbound) != 1 {
@@ -247,21 +216,15 @@ func TestNostrE2E_BoundMessageDeliveredToBridge(t *testing.T) {
 	t.Logf("Inbound delivered: text=%q sender=%s", msg.Text, msg.Envelope.SenderID[:12])
 }
 
-// ---------------------------------------------------------------------------
-// E2E Test: Self-message ignored
-// ---------------------------------------------------------------------------
-
 func TestNostrE2E_SelfMessageIgnored(t *testing.T) {
 	adapter, _, _, mgr, bridge := setupNostrTest(t, "e2e-self")
 
-	// Pre-bind with bot's own pubkey
 	mgr.currentBindings["e2e-self"] = &ChannelBinding{
 		ChannelID: adapter.pubKey,
 		Platform:  PlatformNostr,
 		Adapter:   "e2e-self",
 	}
 
-	// Bot sends event to itself
 	shared, _ := nip04.ComputeSharedSecret(adapter.pubKey, adapter.privKey)
 	encrypted, _ := nip04.Encrypt("self message", shared)
 	evt := &nostr.Event{
@@ -282,10 +245,6 @@ func TestNostrE2E_SelfMessageIgnored(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// E2E Test: Dedup — same event processed only once
-// ---------------------------------------------------------------------------
-
 func TestNostrE2E_DedupSameEvent(t *testing.T) {
 	adapter, senderSK, senderPK, mgr, bridge := setupNostrTest(t, "e2e-dedup")
 
@@ -295,7 +254,6 @@ func TestNostrE2E_DedupSameEvent(t *testing.T) {
 
 	evt := encryptAndSign(t, senderSK, adapter.pubKey, "dedup test")
 
-	// Process same event twice
 	adapter.handleEvent(context.Background(), evt)
 	adapter.handleEvent(context.Background(), evt)
 
@@ -305,10 +263,6 @@ func TestNostrE2E_DedupSameEvent(t *testing.T) {
 		t.Errorf("dedup: got %d inbound, want 1", len(bridge.inbound))
 	}
 }
-
-// ---------------------------------------------------------------------------
-// E2E Test: Empty message ignored
-// ---------------------------------------------------------------------------
 
 func TestNostrE2E_EmptyMessageIgnored(t *testing.T) {
 	adapter, senderSK, senderPK, mgr, bridge := setupNostrTest(t, "e2e-empty")
@@ -327,10 +281,6 @@ func TestNostrE2E_EmptyMessageIgnored(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// E2E Test: Encrypted for wrong recipient fails to decrypt
-// ---------------------------------------------------------------------------
-
 func TestNostrE2E_WrongRecipientIgnored(t *testing.T) {
 	adapter, senderSK, senderPK, mgr, bridge := setupNostrTest(t, "e2e-wrongrec")
 
@@ -338,7 +288,6 @@ func TestNostrE2E_WrongRecipientIgnored(t *testing.T) {
 		ChannelID: senderPK, Platform: PlatformNostr, Adapter: "e2e-wrongrec",
 	}
 
-	// Encrypt for a different pubkey, but p-tag points to bot
 	otherPK := strings.Repeat("c", 64)
 	shared, _ := nip04.ComputeSharedSecret(otherPK, senderSK)
 	encrypted, _ := nip04.Encrypt("wrong recipient", shared)
@@ -361,17 +310,12 @@ func TestNostrE2E_WrongRecipientIgnored(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// E2E Test: NIP-19 key interoperability
-// ---------------------------------------------------------------------------
-
 func TestNostrE2E_NIP19Keys(t *testing.T) {
 	sk := nostr.GeneratePrivateKey()
 	pk, _ := nostr.GetPublicKey(sk)
 	nsec, _ := nip19.EncodePrivateKey(sk)
 	npub, _ := nip19.EncodePublicKey(pk)
 
-	// Adapter accepts nsec
 	a, err := newNostrAdapter("e2e-nip19", config.IMConfig{}, config.IMAdapterConfig{
 		Enabled:  true,
 		Platform: "nostr",
@@ -384,20 +328,14 @@ func TestNostrE2E_NIP19Keys(t *testing.T) {
 		t.Errorf("pubKey mismatch: got %q, want %q", a.pubKey, pk)
 	}
 
-	// resolveNostrPubkey handles npub
 	if got := resolveNostrPubkey(npub); got != pk {
 		t.Errorf("resolveNostrPubkey(npub) = %q, want %q", got, pk)
 	}
 
-	// resolveNostrPubkey passes through hex
 	if got := resolveNostrPubkey(pk); got != pk {
 		t.Errorf("resolveNostrPubkey(hex) = %q, want %q", got, pk)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// E2E Test: Outbound encrypt → decrypt round-trip
-// ---------------------------------------------------------------------------
 
 func TestNostrE2E_OutboundRoundTrip(t *testing.T) {
 	botSK := nostr.GeneratePrivateKey()
@@ -407,7 +345,6 @@ func TestNostrE2E_OutboundRoundTrip(t *testing.T) {
 
 	outboundText := "outbound reply from bot 🤖"
 
-	// Bot encrypts to sender
 	botShared, _ := nip04.ComputeSharedSecret(senderPK, botSK)
 	encrypted, _ := nip04.Encrypt(outboundText, botShared)
 
@@ -422,7 +359,6 @@ func TestNostrE2E_OutboundRoundTrip(t *testing.T) {
 		t.Fatalf("sign: %v", err)
 	}
 
-	// Verify signature
 	ok, err := evt.CheckSignature()
 	if err != nil {
 		t.Fatalf("check sig: %v", err)
@@ -431,7 +367,6 @@ func TestNostrE2E_OutboundRoundTrip(t *testing.T) {
 		t.Error("signature should be valid")
 	}
 
-	// Sender decrypts
 	senderShared, _ := nip04.ComputeSharedSecret(evt.PubKey, senderSK)
 	decrypted, err := nip04.Decrypt(evt.Content, senderShared)
 	if err != nil {
@@ -442,10 +377,6 @@ func TestNostrE2E_OutboundRoundTrip(t *testing.T) {
 	}
 	t.Logf("Outbound round-trip OK: %q", decrypted)
 }
-
-// ---------------------------------------------------------------------------
-// E2E Test: Unicode messages
-// ---------------------------------------------------------------------------
 
 func TestNostrE2E_UnicodeMessages(t *testing.T) {
 	adapter, senderSK, senderPK, mgr, bridge := setupNostrTest(t, "e2e-unicode")
@@ -486,10 +417,6 @@ func TestNostrE2E_UnicodeMessages(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// E2E Test: Long message
-// ---------------------------------------------------------------------------
-
 func TestNostrE2E_LongMessage(t *testing.T) {
 	adapter, senderSK, senderPK, mgr, bridge := setupNostrTest(t, "e2e-long")
 
@@ -497,7 +424,6 @@ func TestNostrE2E_LongMessage(t *testing.T) {
 		ChannelID: senderPK, Platform: PlatformNostr, Adapter: "e2e-long",
 	}
 
-	// Note: handleEvent does strings.TrimSpace on plaintext, so trailing space is trimmed
 	longText := strings.TrimSpace(strings.Repeat("Hello 世界 ", 500))
 	evt := encryptAndSign(t, senderSK, adapter.pubKey, longText)
 	adapter.handleEvent(context.Background(), evt)
@@ -513,10 +439,6 @@ func TestNostrE2E_LongMessage(t *testing.T) {
 	t.Logf("Long message OK: %d chars", len(bridge.inbound[0].Text))
 }
 
-// ---------------------------------------------------------------------------
-// E2E Test: TriggerTyping is a no-op
-// ---------------------------------------------------------------------------
-
 func TestNostrE2E_TriggerTypingNoop(t *testing.T) {
 	adapter, _, _, _, _ := setupNostrTest(t, "e2e-typing")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -525,10 +447,6 @@ func TestNostrE2E_TriggerTypingNoop(t *testing.T) {
 		t.Errorf("TriggerTyping should be noop, got: %v", err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// E2E Test: sendNostrDM with empty target/text is a no-op
-// ---------------------------------------------------------------------------
 
 func TestNostrE2E_SendNostrDMEdgeCases(t *testing.T) {
 	adapter, _, _, _, _ := setupNostrTest(t, "e2e-send-edge")
@@ -540,14 +458,9 @@ func TestNostrE2E_SendNostrDMEdgeCases(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// E2E Test: Multiple senders each get their own pairing flow
-// ---------------------------------------------------------------------------
-
 func TestNostrE2E_MultipleSenders(t *testing.T) {
 	adapter, _, _, mgr, _ := setupNostrTest(t, "e2e-multi")
 
-	// Generate 3 different senders
 	type sender struct {
 		sk, pk string
 	}
@@ -557,13 +470,11 @@ func TestNostrE2E_MultipleSenders(t *testing.T) {
 		senders[i].pk, _ = nostr.GetPublicKey(senders[i].sk)
 	}
 
-	// Each sender sends first message
 	for i, s := range senders {
 		evt := encryptAndSign(t, s.sk, adapter.pubKey, "message from sender "+strings.Repeat("!", i+1))
 		adapter.handleEvent(context.Background(), evt)
 	}
 
-	// Only one pending pairing at a time (last sender wins)
 	mgr.mu.Lock()
 	pending := mgr.pendingPairing
 	mgr.mu.Unlock()
@@ -573,19 +484,13 @@ func TestNostrE2E_MultipleSenders(t *testing.T) {
 	t.Logf("Pending pairing for sender %s (last one wins)", pending.ChannelID[:12])
 }
 
-// ---------------------------------------------------------------------------
-// E2E Test: Close and reconnect state
-// ---------------------------------------------------------------------------
-
 func TestNostrE2E_CloseClearsConnections(t *testing.T) {
 	adapter, _, _, _, _ := setupNostrTest(t, "e2e-close")
 
-	// Verify initial state
 	if adapter.connected != 0 {
 		t.Errorf("initial connected = %d, want 0", adapter.connected)
 	}
 
-	// Close should not panic
 	if err := adapter.Close(); err != nil {
 		t.Errorf("close error: %v", err)
 	}

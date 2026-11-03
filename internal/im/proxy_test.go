@@ -36,7 +36,7 @@ func TestResolveProxy_Env(t *testing.T) {
 }
 
 func TestProxyDial_HTTPConnect(t *testing.T) {
-	// Start a fake target TCP server
+
 	targetLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +44,6 @@ func TestProxyDial_HTTPConnect(t *testing.T) {
 	defer targetLn.Close()
 	targetAddr := targetLn.Addr().String()
 
-	// Accept one connection on target and send hello
 	go func() {
 		conn, err := targetLn.Accept()
 		if err != nil {
@@ -54,7 +53,6 @@ func TestProxyDial_HTTPConnect(t *testing.T) {
 		conn.Close()
 	}()
 
-	// Start an HTTP CONNECT proxy
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodConnect {
 			t.Errorf("expected CONNECT, got %s", r.Method)
@@ -63,7 +61,6 @@ func TestProxyDial_HTTPConnect(t *testing.T) {
 			t.Errorf("expected target %s, got %s", targetAddr, r.URL.String())
 		}
 
-		// Tunnel
 		targetConn, err := net.Dial("tcp", targetAddr)
 		if err != nil {
 			w.WriteHeader(http.StatusBadGateway)

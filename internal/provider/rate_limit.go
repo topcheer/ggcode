@@ -154,7 +154,6 @@ func parseRateLimitHeaders(h http.Header) RateLimitInfo {
 		LimitTokens:       -1,
 	}
 
-	// Try OpenAI format first (x-ratelimit-*).
 	if v := h.Get("x-ratelimit-remaining-requests"); v != "" {
 		info.RemainingRequests = parseIntSafe(v, -1)
 	}
@@ -174,20 +173,6 @@ func parseRateLimitHeaders(h http.Header) RateLimitInfo {
 		info.ResetTokens = parseDurationSafe(v)
 	}
 
-	// #624: do NOT early-return when the OpenAI group is non-empty. LiteLLM/
-	// OpenRouter-style gateways send their own x-ratelimit-* headers (often
-	// only the requests fields) ALONGSIDE the upstream anthropic-ratelimit-*
-	// token headers. The old `if !info.IsEmpty() { return info }` here
-	// dropped the Anthropic token headers, leaving RemainingTokens=-1 so
-	// TokenFractionRemaining() read as 100% and token-critical warnings never
-	// fired — the same failure mode #602 R6 fixed for the anthropic/rerate
-	// prefix pair. All groups now merge into one info; each field is only
-	// written when that specific header exists, so single-group responses
-	// parse exactly as before.
-
-	// Try Anthropic format (anthropic-ratelimit-* or reratelimit-*).
-	// The Anthropic SDK changed prefix from "anthropic-ratelimit-" to "reratelimit-"
-	// in late 2024; we check both for compatibility.
 	for _, prefix := range []string{"anthropic-ratelimit-", "reratelimit-"} {
 		if v := h.Get(prefix + "requests-remaining"); v != "" {
 			info.RemainingRequests = parseIntSafe(v, -1)
@@ -207,13 +192,7 @@ func parseRateLimitHeaders(h http.Header) RateLimitInfo {
 		if v := h.Get(prefix + "tokens-reset"); v != "" {
 			info.ResetTokens = parseAnthropicResetDuration(v)
 		}
-		// #602(R6): do NOT early-return after the first non-empty prefix
-		// group. A mixed-prefix response (old prefix carrying request
-		// headers, new prefix carrying token headers) used to return here
-		// with RemainingTokens=-1, so TokenFractionRemaining() read as 100%
-		// and token-critical warnings never fired. Both prefixes now merge
-		// into one info; each field is only overwritten when that specific
-		// header exists, so single-prefix responses parse exactly as before.
+
 	}
 
 	return info
@@ -225,17 +204,15 @@ func parseIntSafe(s string, fallback int) int {
 	if s == "" {
 		return fallback
 	}
-	// Some providers send "Infinity" or non-numeric values.
+
 	n, err := strconv.Atoi(s)
 	if err != nil {
-		// Try float (e.g., "100.0")
+
 		f, err2 := strconv.ParseFloat(s, 64)
 		if err2 != nil {
 			return fallback
 		}
-		// #1617: "Infinity"/"NaN" parse successfully but int() conversion is
-		// implementation-defined garbage - remaining counts scrambled and
-		// bogus critical alerts.
+
 		if math.IsInf(f, 0) || math.IsNaN(f) {
 			return fallback
 		}
@@ -251,12 +228,10 @@ func parseDurationSafe(s string) time.Duration {
 	if s == "" {
 		return 0
 	}
-	// Try Go duration format first.
+
 	d, err := time.ParseDuration(s)
 	if err == nil {
-		// #1617: the bare-ms branch below rejects negatives and clamps to
-		// 24h (#664), but the Go-format branch let "-45s"/"876000h" flow
-		// straight into the tracker display.
+
 		if d <= 0 {
 			return 0
 		}
@@ -265,14 +240,9 @@ func parseDurationSafe(s string) time.Duration {
 		}
 		return d
 	}
-	// Try raw milliseconds (OpenAI sometimes sends "86400000ms" which
-	// time.ParseDuration handles, but also bare "86400000").
+
 	if ms, err := strconv.ParseInt(s, 10, 64); err == nil {
-		// #664: reject non-positive and clamp oversized values BEFORE the
-		// ms→ns multiplication (same family as #513/#658). A bare "-5000"
-		// produced a negative duration and ~9.3e12 overflowed negative —
-		// both flowed into tracker display as misleading values. This path
-		// is display/logging only; values above 24h clamp to 24h.
+
 		if ms <= 0 {
 			return 0
 		}

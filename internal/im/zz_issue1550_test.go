@@ -1,11 +1,5 @@
 package im
 
-// #1550: the feishu WEBHOOK branch never read message_type and never
-// called processAttachments - an image message's raw {"image_key":...}
-// JSON fell through parseMessageContent and reached the agent as text,
-// while the WS branch of the SAME adapter downloads the image. The
-// webhook branch now mirrors the WS pipeline.
-
 import (
 	"os"
 	"strings"
@@ -21,8 +15,7 @@ func TestIssue1550ImageJSONNotText(t *testing.T) {
 }
 
 func TestIssue1550WebhookBranchMirrorsWS(t *testing.T) {
-	// Source pin: the webhook branch must read message_type and route
-	// through processAttachments with the same empty gate as the WS branch.
+
 	b, err := os.ReadFile("feishu_adapter.go")
 	if err != nil {
 		t.Fatal(err)

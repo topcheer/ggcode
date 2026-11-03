@@ -1,34 +1,5 @@
 package provider
 
-// OpenAI Responses API adapter (sa-40).
-//
-// The Responses API is OpenAI's flagship agent-facing surface (2025-2026):
-// Codex-family and o-series models are served through /v1/responses, and the
-// protocol differs materially from Chat Completions (stateful `input` item
-// stream, function_call/function_call_output items, output_text.delta SSE
-// events). Until now ggcode's openai protocol only ever spoke
-// /chat/completions, so those models were unreachable.
-//
-// Activation paths (internal/provider/registry.go):
-//   - protocol "openai-responses" in the endpoint config, or
-//   - protocol "openai" with a BaseURL whose path ends in "/responses".
-//
-// Scope note: this adapter is stateless per call - it always sends the full
-// conversation as `input` items instead of using `previous_response_id`.
-// Stateless replay keeps ggcode's existing context-manager/failover/compaction
-// machinery working unchanged; the server-side state remains an optimization
-// for a later pass.
-//
-// Encrypted reasoning round-trip (sa-54): because every request runs with
-// store=false, OpenAI reasoning models (o-series, gpt-5.x, codex) lose their
-// chain-of-thought between tool calls unless the client replays the reasoning
-// items back. We request `include: ["reasoning.encrypted_content"]`, capture
-// the opaque reasoning items the API returns, and echo them verbatim at the
-// head of the assistant turn on the next request - exactly what OpenAI's
-// stateless-multi-turn guidance requires. Items without encrypted content are
-// not replayed (nothing useful to reconstruct, and item ids alone cannot be
-// resolved once store=false discards server state).
-
 import (
 	"bufio"
 	"bytes"
@@ -90,7 +61,7 @@ func NewOpenAIResponsesProvider(apiKey, model string, maxTokens int, baseURL str
 		model:      model,
 		baseURL:    baseURL,
 		maxTokens:  maxTokens,
-		httpClient: &http.Client{Timeout: 0}, // streams are long-lived; ctx governs lifetime
+		httpClient: &http.Client{Timeout: 0},
 		pollDelay:  time.Second,
 	}
 }
@@ -178,8 +149,6 @@ func normalizeResponsesEffort(effort string) string {
 	}
 }
 
-// ---- request types ----
-
 type responsesInputItem struct {
 	Type    string          `json:"type,omitempty"` // "message", "function_call", "function_call_output", "reasoning"
 	Role    string          `json:"role,omitempty"`
@@ -254,8 +223,6 @@ type responsesTextConfig struct {
 	Verbosity string `json:"verbosity,omitempty"`
 }
 
-// ---- message mapping ----
-
 func responsesTextPart(text string) map[string]any {
 	return map[string]any{"type": "input_text", "text": text}
 }
@@ -271,17 +238,12 @@ func responsesImagePart(mime, base64 string) map[string]any {
 // separated by a role boundary violation - both are flat items in one input array.
 func buildResponsesInput(messages []Message) []responsesInputItem {
 	var items []responsesInputItem
-	// sa-67: call ids already seen as apply_patch_call blocks in this history;
-	// their tool_result items map back to apply_patch_call_output instead of
-	// function_call_output. A single forward pass suffices: a tool_result is
-	// always preceded in history by its assistant tool_use block.
+
 	applyPatchCalls := make(map[string]bool)
 	for _, msg := range messages {
 		var textParts []map[string]any
 		isToolRole := msg.Role == "tool"
-		// flushText emits accumulated text as a message item so that, within an
-		// assistant turn, the text precedes the function_call items that follow
-		// it in block order.
+
 		flushText := func() {
 			if len(textParts) == 0 {
 				return
@@ -301,7 +263,7 @@ func buildResponsesInput(messages []Message) []responsesInputItem {
 					outParts = append(outParts, map[string]any{"type": "output_text", "text": part["text"]})
 				}
 				items = append(items, responsesInputItem{Role: "assistant", Content: mustJSON(outParts)})
-			default: // user (and anything else input-facing)
+			default:
 				if msg.Role == "user" && len(textParts) == 1 {
 					if t, ok := textParts[0]["text"].(string); ok {
 						items = append(items, responsesInputItem{Role: "user", Content: mustJSON(t)})
@@ -321,9 +283,7 @@ func buildResponsesInput(messages []Message) []responsesInputItem {
 					out = "(empty output)"
 				}
 				if applyPatchCalls[b.ToolID] {
-					// sa-67: route the executor's outcome back as the
-					// apply_patch_call_output item the Responses API expects;
-					// status mirrors the Result error flag (failed/completed).
+
 					items = append(items, responsesInputItem{
 						Type:      "apply_patch_call_output",
 						CallID:    b.ToolID,
@@ -335,10 +295,7 @@ func buildResponsesInput(messages []Message) []responsesInputItem {
 			case "tool_use":
 				flushText()
 				if b.ToolName == applyPatchInternalToolName {
-					// sa-67: replay the model's apply_patch_call verbatim so the
-					// stateless request re-presents its V4A patch (store=false),
-					// then record the call id so the paired tool_result maps to an
-					// apply_patch_call_output item below.
+
 					items = append(items, responsesInputItem{
 						Type:      "apply_patch_call",
 						CallID:    b.ToolID,
@@ -353,34 +310,23 @@ func buildResponsesInput(messages []Message) []responsesInputItem {
 				}
 				items = append(items, responsesInputItem{Type: "function_call", CallID: b.ToolID, Name: b.ToolName, Args: args})
 			case "server_tool":
-				// sa-62: hosted web_search items from a previous Responses turn.
-				// Replay the raw item verbatim - store=false discards server
-				// state, so an unechoed web_search_call loses the search context.
-				// Foreign provider blocks fail the type probe and are dropped,
-				// keeping cross-provider failover leak-free.
+
 				if it, ok := decodeResponsesServerToolItem(b.Raw); ok {
 					flushText()
 					items = append(items, it)
 				}
 			case "text":
 				if isToolRole {
-					// Text in a tool-role message is decoration; the output is the payload.
+
 					continue
 				}
 				if b.Text == "" {
-					// Reasoning-only block: streamed reasoning summaries land in
-					// ReasoningContent, and the encrypted reasoning item block
-					// replays them; an empty output_text part would be noise.
+
 					continue
 				}
 				textParts = append(textParts, responsesTextPart(b.Text))
 			case "thinking":
-				// sa-54: an encrypted Responses reasoning item captured verbatim
-				// in a "thinking" block (Anthropic-style carrier). Replay it
-				// unchanged: with store=false the API cannot reconstruct the
-				// model's reasoning context otherwise. Signatures from other
-				// providers (Anthropic/Gemini) fail the decode and are skipped,
-				// so cross-provider failover never leaks foreign blocks.
+
 				if it, ok := decodeResponsesReasoningItem(b.ThinkingSignature); ok {
 					flushText()
 					items = append(items, it)
@@ -439,7 +385,7 @@ func (p *OpenAIResponsesProvider) buildRequest(messages []Message, tools []ToolD
 		Model:   p.model,
 		Input:   buildResponsesInput(messages),
 		Stream:  stream,
-		Store:   boolPtr(false), // stateless replay; no server-side conversation state
+		Store:   boolPtr(false),
 		Include: []string{responsesIncludeEncryptedReasoning},
 	}
 	if p.background {
@@ -458,9 +404,9 @@ func (p *OpenAIResponsesProvider) buildRequest(messages []Message, tools []ToolD
 	if p.textVerbosity != "" {
 		req.Text = &responsesTextConfig{Verbosity: p.textVerbosity}
 	}
-	// sa-81: processing-tier hint; omitempty drops it when unset.
+
 	req.ServiceTier = p.serviceTier
-	// sa-231: prompt-cache routing affinity; omitempty drops it when unset.
+
 	req.PromptCacheKey = p.promptCacheKey
 	for _, t := range tools {
 		params := t.Parameters
@@ -469,16 +415,13 @@ func (p *OpenAIResponsesProvider) buildRequest(messages []Message, tools []ToolD
 		}
 		req.Tools = append(req.Tools, responsesTool{Type: "function", Name: t.Name, Description: t.Description, Parameters: params})
 	}
-	// Hosted (server-side) tools (sa-62): appended after the declared
-	// function tools. OpenAI addresses them purely by type.
+
 	for _, st := range p.serverTools {
 		if rt, ok := responsesHostedTool(st); ok {
 			req.Tools = append(req.Tools, rt)
 		}
 	}
-	// sa-63: built-in tools are separate tool entries (never function
-	// declarations) executed server-side; results arrive in-band as
-	// code_interpreter_call / file_search_call output items.
+
 	if builtins := responsesBuiltinTools(p.serverTools); len(builtins) > 0 {
 		req.Tools = append(req.Tools, builtins...)
 		for _, bt := range builtins {
@@ -493,17 +436,15 @@ func (p *OpenAIResponsesProvider) buildRequest(messages []Message, tools []ToolD
 	case "none":
 		req.ToolChoice = json.RawMessage(`"none"`)
 	case "", "auto":
-		// API default
+
 	default:
-		// Pass through structured choices ({"type":"function", ...}) verbatim.
+
 		req.ToolChoice = json.RawMessage(p.toolChoice)
 	}
 	return req, nil
 }
 
 func boolPtr(b bool) *bool { return &b }
-
-// ---- background mode (sa-73) ----
 
 // Responses background-mode lifecycle states. Per OpenAI's background mode
 // guide: queued/in_progress are pending; completed/failed/incomplete/
@@ -560,12 +501,7 @@ func (p *OpenAIResponsesProvider) pollBackground(ctx context.Context, payload *r
 		next, err := p.get(ctx, payload.ID)
 		if err != nil {
 			if ctx.Err() != nil {
-				// #3894: when ctx.Done and the delay timer are BOTH ready
-				// the select may pick the timer, and this get then fails on
-				// the canceled context - this early return used to skip the
-				// best-effort server-side cancel the Done branch performs,
-				// so the /cancel endpoint was never hit (flaky
-				// TestBackgroundChatCancelOnContextCancel under -race).
+
 				p.cancelResponse(payload.ID)
 				return nil, ctx.Err()
 			}
@@ -678,10 +614,7 @@ func (p *OpenAIResponsesProvider) chatStreamBackground(ctx context.Context, req 
 	safego.Go("provider.openaiResponses.pollLoop", func() {
 		defer close(ch)
 		var emitted int
-		// #4230 case C: every send honors cancellation - the consumer may
-		// stop reading after ctx cancel (agent abort), and a bare send on
-		// the 64-buffer channel would block this goroutine forever once
-		// >64 events backlog, leaking the goroutine and the final payload.
+
 		send := func(ev StreamEvent) bool {
 			select {
 			case ch <- ev:
@@ -719,14 +652,12 @@ func (p *OpenAIResponsesProvider) chatStreamBackground(ctx context.Context, req 
 			}
 			switch item.Type {
 			case "reasoning":
-				// sa-54: forward the raw reasoning item through the reasoning
-				// channel; the thinking accumulator stores it verbatim for
-				// stateless replay.
+
 				if !send(StreamEvent{Type: StreamEventReasoning, ThinkingSignature: string(rawItem)}) {
 					return
 				}
 			case "web_search_call":
-				// sa-62: keep the hosted tool exchange replayable.
+
 				if !send(StreamEvent{Type: StreamEventServerTool, Block: responsesServerToolBlock(rawItem)}) {
 					return
 				}
@@ -750,16 +681,13 @@ func (p *OpenAIResponsesProvider) chatStreamBackground(ctx context.Context, req 
 		usage := &TokenUsage{
 			InputTokens:  final.Usage.InputTokens,
 			OutputTokens: final.Usage.OutputTokens,
-			// #4230 case B: cache discount for background cost accounting,
-			// same decode as parseResponsesFinal on the streaming path.
+
 			CacheRead: final.Usage.InputTokensDetails.CachedTokens,
 		}
 		send(StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: final.Status == responsesStatusIncomplete})
 	})
 	return ch, nil
 }
-
-// ---- HTTP plumbing ----
 
 func (p *OpenAIResponsesProvider) post(ctx context.Context, req *responsesRequest) (*http.Response, error) {
 	body, err := json.Marshal(req)
@@ -780,17 +708,12 @@ func (p *OpenAIResponsesProvider) post(ctx context.Context, req *responsesReques
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
-		// Some OpenAI-compatible gateways predate the GPT-5 text.verbosity
-		// control and reject it as an unknown/unsupported parameter. Drop the
-		// hint once and retry so verbosity-aware config degrades to the API
-		// default instead of hard-failing the request.
+
 		if req.Text != nil && responsesRejectsVerbosity(snippet) {
 			req.Text = nil
 			return p.post(ctx, req)
 		}
-		// sa-81: same graceful degrade for service_tier - older gateways and
-		// backends that merely proxy other vendors reject the tier hint as an
-		// unknown parameter. Drop it once and retry against the API default.
+
 		if req.ServiceTier != "" && responsesRejectsServiceTier(snippet) {
 			req.ServiceTier = ""
 			return p.post(ctx, req)
@@ -832,11 +755,8 @@ func responsesRejectsServiceTier(snippet []byte) bool {
 	return false
 }
 
-// ---- non-streaming Chat ----
-
 func (p *OpenAIResponsesProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
-	// sa-78 + #4729: single-wrap deadline when configured (fail-fast, zz_issue2573_test.go);
-	// in-place timeout retry only on the default path.
+
 	ctx, cancel := p.policy.withTimeout(ctx)
 	defer cancel()
 	req, err := p.buildRequest(messages, tools, false)
@@ -844,8 +764,7 @@ func (p *OpenAIResponsesProvider) Chat(ctx context.Context, messages []Message, 
 		return nil, err
 	}
 	var resp *http.Response
-	// #2573: retry transient failures (429/5xx) per the resolved policy
-	// instead of a single throwaway post.
+
 	if err := retryWithBackoffCtx(ctx, func() error {
 		var callErr error
 		resp, callErr = p.post(ctx, req)
@@ -940,19 +859,13 @@ func chatResponseFromPayload(payload *responsesPayload) *ChatResponse {
 		case "message":
 			for _, c := range item.Content {
 				if c.Type == "output_text" && (c.Text != "" || len(c.Annotations) > 0) {
-					// sa-63: keep generated-file / retrieval citations next to
-					// the text that referenced them.
-					// #4230 case A: append at encounter position so Content keeps
-					// generation order (text-then-tool_call); the old collect-then-
-					// append-at-end reversed [message, function_call] outputs.
+
 					out.Message.Content = append(out.Message.Content,
 						TextBlock(appendResponsesCitations(c.Text, c.Annotations)))
 				}
 			}
 		case "code_interpreter_call", "file_search_call":
-			// sa-63: server-executed tool results; surface the transcript
-			// as text (observability only, nothing is replayed to the API).
-			// #4230 case A: encounter-position append (order fidelity).
+
 			if block, ok := formatResponsesServerItem(rawItem); ok {
 				out.Message.Content = append(out.Message.Content, TextBlock(block))
 			}
@@ -969,23 +882,16 @@ func chatResponseFromPayload(payload *responsesPayload) *ChatResponse {
 			out.Message.Content = append(out.Message.Content,
 				ToolUseBlock(item.CallID, item.Name, json.RawMessage(args)))
 		case "reasoning":
-			// sa-54: keep the raw reasoning item verbatim (thinking-block
-			// carrier) so the next stateless request replays the model's
-			// encrypted chain-of-thought context.
+
 			out.Message.Content = append(out.Message.Content, ContentBlock{
 				Type:              "thinking",
 				ThinkingSignature: string(rawItem),
 			})
 		case "web_search_call":
-			// sa-62: hosted web_search executed inside the Responses API;
-			// keep the raw item verbatim so the next stateless request
-			// echoes the full search exchange back.
+
 			out.Message.Content = append(out.Message.Content, responsesServerToolBlock(rawItem))
 		default:
-			// sa-67: apply_patch_call is a client-executed tool call. Convert it
-			// to a ToolUseBlock naming the hidden apply_patch executor so the
-			// standard agent loop applies the V4A diff and returns a tool_result,
-			// which buildResponsesInput maps back to apply_patch_call_output.
+
 			if id, op, ok := decodeResponsesApplyPatchCall(rawItem); ok {
 				args := op
 				if len(args) == 0 {
@@ -999,9 +905,7 @@ func chatResponseFromPayload(payload *responsesPayload) *ChatResponse {
 	out.Usage = TokenUsage{
 		InputTokens:  payload.Usage.InputTokens,
 		OutputTokens: payload.Usage.OutputTokens,
-		// #4230 case B: cached-token detail, same decode as the streaming
-		// path (parseResponsesFinal) so background/non-stream cost accounting
-		// gets the cache discount too.
+
 		CacheRead: payload.Usage.InputTokensDetails.CachedTokens,
 	}
 	if payload.Status == responsesStatusIncomplete {
@@ -1010,21 +914,13 @@ func chatResponseFromPayload(payload *responsesPayload) *ChatResponse {
 	return out
 }
 
-// ---- streaming ----
-
 // #4266: the same leak family as #3068 (gemini) / #3071 (openai chat) /
 // #4230 case C (background path here): a bare send on the 64-buffer
 // channel parks the producer goroutine forever once a cancelling consumer
 // stops reading. Every send on the SSE (non-background) path must go
 // through here.
 func (p *OpenAIResponsesProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
-	// #flake (CI 39042845474/39042902916): when the deadline fires at the
-	// same instant the terminal error event is sent, the select below had
-	// BOTH cases ready and picked ctx.Done 50/50 - dropping the very error
-	// the deadline produced (consumer saw a silent close). ch is buffered
-	// and the consumer drains until close, so a non-blocking send succeeds
-	// deterministically here; only a full buffer (slow consumer) falls
-	// through to the racing select, preserving the #4266/#3068 leak guard.
+
 	select {
 	case ch <- ev:
 		return true
@@ -1049,20 +945,18 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 	ch := make(chan StreamEvent, 64)
 	safego.Go("provider.openaiResponses.streamRead", func() {
 		defer close(ch)
-		// #4729: per-ATTEMPT deadline (was one withTimeout around the whole
-		// retry loop - see anthropic.go Chat's note). Parent ctx stays live.
+
 		parentCtx := ctx
 		var cancelAttempt context.CancelFunc
-		defer func() { cancelAttempt() }() // idempotent; covers mid-loop returns
-		budget := newRetryBudget()         // #722: cap cumulative retry backoff sleep per stream call
+		defer func() { cancelAttempt() }()
+		budget := newRetryBudget()
 		attempts := p.policy.attempts()
 		for attempt := 0; attempt < attempts; attempt++ {
 			if attempt > 0 {
-				cancelAttempt() // release the previous attempt's deadline timer
+				cancelAttempt()
 				debug.Log("openai-responses", "Stream retry attempt %d/%d model=%s baseURL=%s", attempt+1, p.policy.attempts(), p.model, p.baseURL)
 			}
-			// #4729: renewal is a no-op on the default path (parent stays live);
-			// with a configured deadline only attempt 0 derives one (#2573).
+
 			if attempt == 0 || p.policy.requestTimeout <= 0 {
 				ctx, cancelAttempt = p.policy.withTimeout(parentCtx)
 			}
@@ -1071,11 +965,11 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 				if isRetryableForContext(ctx, err) && attempt < attempts-1 {
 					delay := retryDelay(err, attempt)
 					debug.Log("openai-responses", "CONNECT FAILED model=%s baseURL=%s attempt=%d/%d delay=%v: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), delay, err, err)
-					// Notify user about retry
+
 					if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}) {
 						return
 					}
-					if isTimeoutClassError(err) && p.policy.timeoutRetryInPlace() { // #4729: in-place retry, unbounded
+					if isTimeoutClassError(err) && p.policy.timeoutRetryInPlace() {
 						budget.unlimited = true
 						attempts = retryAlwaysAttempts
 					}
@@ -1085,8 +979,7 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 						}
 					}
 					if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
-						// #722: budget exhausted - stop retrying now; wrap with the
-						// sentinel so the failover layer switches immediately.
+
 						if sleepErr == errRetryBudgetExhausted {
 							sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
 						}
@@ -1103,15 +996,12 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 			if !retry {
 				return
 			}
-			// Mid-stream transport failure with nothing emitted yet; every
-			// request replays the full stateless input, so re-establishing is
-			// lossless. Content already delivered can never be unsent, which is
-			// exactly why readResponsesStream only retries pre-emission.
+
 			delay := retryDelay(scanErr, attempt)
 			if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}) {
 				return
 			}
-			if isTimeoutClassError(scanErr) && p.policy.timeoutRetryInPlace() { // #4729: in-place retry, unbounded
+			if isTimeoutClassError(scanErr) && p.policy.timeoutRetryInPlace() {
 				budget.unlimited = true
 				attempts = retryAlwaysAttempts
 			}
@@ -1145,7 +1035,7 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 
 	var doneSent bool
-	emitted := false // a content event already reached ch; guards mid-stream retry
+	emitted := false
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {
@@ -1198,9 +1088,7 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 				}
 				emitted = true
 			}
-			// sa-67: apply_patch_call is a client-executed tool call; surface
-			// it through the same channel as function_call so the agent loop
-			// runs the V4A executor and pairs the result back.
+
 			if id, op, ok := decodeResponsesApplyPatchCall(ev.Item); ok {
 				args := op
 				if len(args) == 0 {
@@ -1221,10 +1109,7 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 				Arguments string `json:"arguments"`
 			}
 			if json.Unmarshal(ev.Item, &item) == nil && item.Type == "reasoning" {
-				// sa-54: forward the raw item through the reasoning channel;
-				// the agent's thinking accumulator stores it verbatim in a
-				// "thinking" block for stateless replay. Text stays empty so
-				// UIs render nothing for the opaque payload.
+
 				if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventReasoning, ThinkingSignature: string(ev.Item)}) {
 					return false, ctx.Err()
 				}
@@ -1247,8 +1132,7 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 				}
 				emitted = true
 			}
-			// sa-67: final apply_patch_call item; emit the authoritative done
-			// event so the call is executed exactly once per patch.
+
 			if id, op, ok := decodeResponsesApplyPatchCall(ev.Item); ok {
 				args := op
 				if len(args) == 0 {
@@ -1262,17 +1146,14 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 				emitted = true
 			}
 			if json.Unmarshal(ev.Item, &item) == nil && item.Type == "web_search_call" {
-				// sa-62: hosted web_search item finished; forward it once
-				// through the server-tool channel so the agent stores the
-				// raw item and the next stateless request echoes it back.
+
 				if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventServerTool, Block: responsesServerToolBlock(ev.Item)}) {
 					return false, ctx.Err()
 				}
 				emitted = true
 			}
 			if json.Unmarshal(ev.Item, &item) == nil && (item.Type == "code_interpreter_call" || item.Type == "file_search_call") {
-				// sa-63: server-executed built-in tool completed; surface the
-				// in-band result as a text block (like Gemini grounding).
+
 				if block, ok := formatResponsesServerItem(ev.Item); ok {
 					if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventText, Text: block}) {
 						return false, ctx.Err()
@@ -1318,8 +1199,7 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		// #2573: transport failure. Retryable only when nothing was emitted
-		// yet - the retry is a lossless idempotent replay of the same input.
+
 		if !emitted && isRetryableForContext(ctx, err) {
 			return true, err
 		}
@@ -1335,8 +1215,7 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 			p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: ctx.Err()})
 			return false, ctx.Err()
 		}
-		// Stream closed without a terminal event: still emit Done so the
-		// agent loop finalizes the turn instead of hanging.
+
 		p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventDone})
 	}
 	return false, nil

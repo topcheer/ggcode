@@ -27,7 +27,7 @@ func (m *mockEmitter) EmitAskUserInteractive(title string, q toolpkg.AskUserQues
 	if m.sendInteractiveMsgIDs == nil {
 		m.sendInteractiveMsgIDs = make(map[string]string)
 	}
-	// Return mock message IDs for testing
+
 	return map[string]string{"discord": "msg_123", "feishu": "msg_456"}
 }
 
@@ -110,16 +110,6 @@ func TestBugF_PendingAskRegisteredBeforeSend(t *testing.T) {
 		},
 	}
 
-	// The key fix: pendingAsk should be registered BEFORE sending interactive
-	// This test verifies the fix by checking the order of operations
-
-	// In the fixed code, the order should be:
-	// 1. Create pending response channel
-	// 2. Register pendingAsk under lock
-	// 3. Send interactive buttons (which can now be safely received)
-	// 4. Wait for response
-
-	// For this test, we just verify that the mock infrastructure works
 	msgIDs := mockEm.EmitAskUserInteractive("Test", req.Questions[0], "fallback text")
 	if len(msgIDs) == 0 {
 		t.Fatal("EmitAskUserInteractive should return message IDs")
@@ -133,15 +123,6 @@ func TestBugF_PendingAskRegisteredBeforeSend(t *testing.T) {
 // after re-locking to avoid the race where approval/ask timeout between routing
 // snapshot and channel read
 func TestBugA_SubmitInboundMessageReverifyPending(t *testing.T) {
-	// This test would require a full DaemonBridge setup with mock agent/manager
-	// For now, we verify the concept: after taking a snapshot and re-locking,
-	// we must re-verify the pending channel still exists before using it
-
-	// The fix pattern:
-	// 1. Lock, snapshot pendingApproval/pendingAsk, unlock
-	// 2. Route based on snapshot
-	// 3. Lock again, re-verify pending still exists
-	// 4. If nil, drop message and log (don't send to agent)
 
 	t.Skip("Requires full bridge setup - covered by integration tests")
 }
@@ -149,8 +130,6 @@ func TestBugA_SubmitInboundMessageReverifyPending(t *testing.T) {
 // TestBugB_PublishAdapterStateTerminalGuard tests that late error states
 // don't overwrite a properly set disconnected state
 func TestBugB_PublishAdapterStateTerminalGuard(t *testing.T) {
-	// This would test the terminal state guard pattern from whatsapp_adapter
-	// The guard prevents late error states from overwriting disconnected
 
 	t.Skip("Requires adapter runtime setup - covered by integration tests")
 }

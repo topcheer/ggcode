@@ -1,9 +1,5 @@
 package im
 
-// Issue #552-D: a StreamEventError mid-run must reset the round buffer so
-// partial text from the failed attempt is not concatenated with the next
-// round's text in the same IM bubble.
-
 import (
 	"errors"
 	"strings"
@@ -53,8 +49,7 @@ func TestIssue552D_StreamErrorResetsRoundBuffer(t *testing.T) {
 			if strings.Contains(ev.Text, "LEFTOVER_HALF_SENTENCE") {
 				sawLeftover = true
 			}
-			// UserFacingError maps a generic error to the zh-CN fallback
-			// "请求失败，请稍后重试" — assert on that, not the raw error.
+
 			if strings.Contains(ev.Text, "请求失败") {
 				sawError = true
 			}

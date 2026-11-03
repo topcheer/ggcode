@@ -12,8 +12,8 @@ func TestResponsesBuiltinToolsJSON(t *testing.T) {
 	tools := responsesBuiltinTools([]config.ServerToolConfig{
 		{Type: "code_interpreter", MemoryLimit: "4g", FileIDs: []string{"file-1", " file-2 ", ""}},
 		{Type: "file_search", VectorStoreIDs: []string{"vs_1"}, MaxNumResults: 5},
-		{Type: "definitely_not_real_20260101"},               // unknown: dropped
-		{Type: "file_search", VectorStoreIDs: []string{" "}}, // malformed: dropped
+		{Type: "definitely_not_real_20260101"},
+		{Type: "file_search", VectorStoreIDs: []string{" "}},
 	})
 	if len(tools) != 2 {
 		t.Fatalf("expected 2 builtin tools, got %d: %+v", len(tools), tools)
@@ -49,15 +49,15 @@ func TestResponsesSetServerToolsFailClosed(t *testing.T) {
 	p := NewOpenAIResponsesProvider("k", "gpt-5.2", 1024, "http://127.0.0.1:9/v1")
 	p.SetServerTools([]config.ServerToolConfig{
 		{Type: "code_interpreter"},
-		{Type: "FILE_SEARCH", VectorStoreIDs: []string{"vs_1"}}, // case-insensitive
-		{Type: "web_search_preview"},                            // hosted family: kept (union semantics)
-		{Type: "bogus_tool"},                                    // unsupported: dropped
+		{Type: "FILE_SEARCH", VectorStoreIDs: []string{"vs_1"}},
+		{Type: "web_search_preview"},
+		{Type: "bogus_tool"},
 		{Type: ""},
 	})
 	if len(p.serverTools) != 3 {
 		t.Fatalf("expected 3 kept tools, got %d: %+v", len(p.serverTools), p.serverTools)
 	}
-	// A reload with no recognized entries must not wipe the previous set.
+
 	p.SetServerTools([]config.ServerToolConfig{{Type: "bogus_tool"}})
 	if len(p.serverTools) != 3 {
 		t.Fatalf("unrecognized reload wiped stored set: %+v", p.serverTools)
@@ -123,11 +123,11 @@ func TestFormatResponsesServerItem(t *testing.T) {
 	if _, ok := formatResponsesServerItem(json.RawMessage(`{"type":"message"}`)); ok {
 		t.Error("non-server item must not be formatted")
 	}
-	// object-shaped console output (alternate API revision) must parse
+
 	ci2, ok := formatResponsesServerItem(json.RawMessage(`{
 		"type":"code_interpreter_call","status":"completed","container_id":"c2","code":"1",
 		"outputs":[{"type":"console","console":{"outputs":[{"type":"logs","text":"hello"}]}}]}`))
-	// object console is not a plain string: tolerated, no crash, no console text
+
 	if !ok || !strings.Contains(ci2, "c2") {
 		t.Errorf("object console shape handling wrong: ok=%v %q", ok, ci2)
 	}
@@ -137,8 +137,8 @@ func TestAppendResponsesCitations(t *testing.T) {
 	got := appendResponsesCitations("Chart generated.", []responseAnnotation{
 		{Type: "container_file_citation", FileID: "f1", Filename: "chart.png", ContainerID: "c1"},
 		{Type: "file_citation", FileID: "f2", Filename: "notes.md", Quote: strings.Repeat("q", 100)},
-		{Type: "container_file_citation", FileID: "f1", Filename: "chart.png"}, // duplicate: collapsed
-		{Type: "unknown_kind"}, // ignored
+		{Type: "container_file_citation", FileID: "f1", Filename: "chart.png"},
+		{Type: "unknown_kind"},
 	})
 	want := "Chart generated.\n[container file: chart.png (f1)]\n[file: notes.md (f2) \"" + strings.Repeat("q", 80) + "...\"]"
 	if got != want {

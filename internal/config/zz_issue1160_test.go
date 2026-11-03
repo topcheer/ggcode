@@ -7,13 +7,6 @@ import (
 	"testing"
 )
 
-// #1160: patchExternalFile and PatchIMAdapter used to swallow
-// yaml.Unmarshal errors when reading external files (im.yaml and friends).
-// A corrupted file decoded into an empty map, the patch was applied to that
-// empty map, and the result atomically replaced the user's file - silently
-// dropping every existing entry. The Unmarshal error must propagate and the
-// file must be left untouched.
-
 const corruptYAML = "adapters:\n  qq:\n    enabled: true\n\tding: broken-tab\n"
 
 // TestIssue1160PatchIMAdapterRejectsCorruptFile verifies that patching with a

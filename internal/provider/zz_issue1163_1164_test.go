@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// Test providers dedicated to issues #1163/#1164. Kept separate from
-// mockProvider so these scenarios can express async-before-output streams.
-
 type zz116xProvider struct {
 	name        string
 	syncErr     error // returned synchronously by ChatStream/Chat

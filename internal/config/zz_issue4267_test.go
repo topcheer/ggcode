@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// zz_issue4267_test.go - a legacy `default_mode: plan` persisted by a
-// pre-two-mode-refactor binary must not brick every CLI entry point: Load
-// normalizes it to supervised instead of failing Validate.
-
 func loadWithDefaultMode(t *testing.T, mode string) (*Config, error) {
 	t.Helper()
 	withTestHome(t)

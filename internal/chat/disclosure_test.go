@@ -1,8 +1,5 @@
 package chat
 
-// sa-86 tests: second-level disclosure - expanded lifts the render caps,
-// cache invalidation, list toggle, truncation hint affordance.
-
 import (
 	"strings"
 	"testing"
@@ -75,7 +72,7 @@ func TestDisclosure_ErrorPathExpand(t *testing.T) {
 func TestDisclosure_CacheInvalidation(t *testing.T) {
 	it := newExpandedTestItem(longBodyLines(ToolBodyMaxLines*2), false)
 	before := it.Height(80)
-	it.Render(80) // fill cache
+	it.Render(80)
 	it.ToggleExpanded()
 	after := it.Height(80)
 	if after <= before {
@@ -105,7 +102,7 @@ func TestDisclosure_ListToggle(t *testing.T) {
 	if ex := it.Expanded(); !ex {
 		t.Fatal("most recent expandable item must now be expanded")
 	}
-	// Toggling again collapses: the assistant item in between is skipped.
+
 	if !l.ToggleLastExpandable() {
 		t.Fatal("second toggle must find the same tool item")
 	}

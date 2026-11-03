@@ -24,14 +24,13 @@ func PCEncodeInviteToURI(invite PCInvite) (string, error) {
 func pcDecodeInviteString(input string) (*PCInvite, error) {
 	trimmed := strings.TrimSpace(input)
 
-	// Format 1: privateclaw://connect?payload=...
 	if strings.HasPrefix(trimmed, "privateclaw://") {
 		idx := strings.Index(trimmed, "payload=")
 		if idx < 0 {
 			return nil, fmt.Errorf("invalid invite URI: missing payload parameter")
 		}
 		b64 := trimmed[idx+len("payload="):]
-		// Strip any trailing query parameters or fragments
+
 		if ampIdx := strings.IndexByte(b64, '&'); ampIdx >= 0 {
 			b64 = b64[:ampIdx]
 		}
@@ -41,7 +40,6 @@ func pcDecodeInviteString(input string) (*PCInvite, error) {
 		return pcDecodeInviteFromBase64(b64)
 	}
 
-	// Format 2: JSON object
 	if strings.HasPrefix(trimmed, "{") {
 		var invite PCInvite
 		if err := json.Unmarshal([]byte(trimmed), &invite); err != nil {
@@ -50,7 +48,6 @@ func pcDecodeInviteString(input string) (*PCInvite, error) {
 		return &invite, nil
 	}
 
-	// Format 3: raw base64url
 	return pcDecodeInviteFromBase64(trimmed)
 }
 

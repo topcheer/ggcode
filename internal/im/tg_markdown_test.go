@@ -23,14 +23,14 @@ func TestEscapeMarkdownV2_DotsAndExclamations(t *testing.T) {
 }
 
 func TestEscapeMarkdownV2_AllSpecialChars(t *testing.T) {
-	// All MarkdownV2 special chars outside of formatting should be escaped
+
 	input := "_ * [ ] ( ) ~ ` > # + - = | { } . !"
 	got := EscapeMarkdownV2(input)
-	// Each special char should be preceded by \
+
 	for _, ch := range mdv2Special {
 		expected := "\\" + string(ch)
 		if ch == '`' {
-			// backtick without matching pair gets escaped
+
 			continue
 		}
 		if !strings.Contains(got, expected) {
@@ -85,7 +85,7 @@ func TestEscapeMarkdownV2_InlineCode(t *testing.T) {
 }
 
 func TestEscapeMarkdownV2_InlineCodeNoEscape(t *testing.T) {
-	// Content inside backticks should NOT be escaped
+
 	input := "Run `echo hello.world` now."
 	want := "Run `echo hello.world` now\\."
 	got := EscapeMarkdownV2(input)
@@ -176,7 +176,7 @@ func TestEscapeMarkdownV2_Headers(t *testing.T) {
 }
 
 func TestEscapeMarkdownV2_UnevenBackticks(t *testing.T) {
-	// Single backtick without closing should be escaped
+
 	input := "code: `no closing backtick."
 	want := "code: \\`no closing backtick\\."
 	got := EscapeMarkdownV2(input)

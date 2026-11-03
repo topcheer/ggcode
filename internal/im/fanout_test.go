@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-// --- sendWithTimeout tests ---
-
 func TestSendWithTimeout_Success(t *testing.T) {
 	sink := &stubSink{name: "test"}
 	binding := ChannelBinding{Adapter: "test", ChannelID: "ch1"}
@@ -60,7 +58,7 @@ func TestSendWithTimeout_BothAttemptsFail(t *testing.T) {
 
 func TestSendWithTimeout_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately
+	cancel()
 
 	sink := &blockSink{unblock: make(chan struct{})}
 	binding := ChannelBinding{Adapter: "test", ChannelID: "ch1"}
@@ -71,8 +69,6 @@ func TestSendWithTimeout_ContextCancelled(t *testing.T) {
 		t.Fatal("expected error from cancelled context")
 	}
 }
-
-// --- fanOutSend tests ---
 
 func TestFanOutSend_ParallelDelivery(t *testing.T) {
 	var (
@@ -107,7 +103,6 @@ func TestFanOutSend_ParallelDelivery(t *testing.T) {
 		done <- fanOutSend(context.Background(), targets, OutboundEvent{Kind: OutboundEventText, Text: "hi"})
 	}()
 
-	// Unblock B first — if parallel, B can finish before A
 	unblockB <- struct{}{}
 	time.Sleep(50 * time.Millisecond)
 	unblockA <- struct{}{}
@@ -118,7 +113,7 @@ func TestFanOutSend_ParallelDelivery(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	// B should appear before A since we unblocked B first
+
 	if len(order) != 2 || order[0] != "b" || order[1] != "a" {
 		t.Fatalf("expected parallel execution [b, a], got %v", order)
 	}
@@ -165,8 +160,7 @@ func TestFanOutSend_EmptyTargets(t *testing.T) {
 }
 
 func TestFanOutSend_TimeoutOnSlowSink(t *testing.T) {
-	// Use a short-lived context to keep the test fast.
-	// The real defaultSendTimeout is 10s, but we verify the timeout mechanism works.
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -181,27 +175,19 @@ func TestFanOutSend_TimeoutOnSlowSink(t *testing.T) {
 	}
 }
 
-// --- non-blocking enqueue tests ---
-
 func TestEnqueue_NonBlocking(t *testing.T) {
 	mgr, sink := newManagerWithBinding(t)
 
 	s := newIMEmitterState()
 
-	// Block the consumer goroutine so the channel fills up.
-	// We make sink.Send block until we unblock it.
 	unblock := make(chan struct{})
 	sink.sendBlock = unblock
 
-	// Send enough events to fill the channel (capacity 256).
-	// The consumer goroutine will be stuck on sink.Send for the first event,
-	// so subsequent events pile up in the channel.
 	for i := 0; i < 256; i++ {
 		event := OutboundEvent{Kind: OutboundEventText, Text: "fill"}
 		s.enqueue(mgr, event, "")
 	}
 
-	// The 257th event should be dropped (non-blocking), not hang the test.
 	done := make(chan struct{})
 	go func() {
 		s.enqueue(mgr, OutboundEvent{Kind: OutboundEventStatus, Status: "overflow"}, "")
@@ -210,12 +196,11 @@ func TestEnqueue_NonBlocking(t *testing.T) {
 
 	select {
 	case <-done:
-		// correct: enqueue returned immediately (dropped)
+
 	case <-time.After(time.Second):
 		t.Fatal("enqueue blocked when channel was full — non-blocking write broken")
 	}
 
-	// Unblock the consumer so the goroutine can drain
 	close(unblock)
 }
 
@@ -227,7 +212,6 @@ func TestEnqueue_NormalDelivery(t *testing.T) {
 	event := OutboundEvent{Kind: OutboundEventText, Text: "normal"}
 	s.enqueue(mgr, event, "")
 
-	// Wait for the consumer goroutine to process
 	deadline := time.After(2 * time.Second)
 	for {
 		sink.mu.Lock()
@@ -261,8 +245,6 @@ func newManagerWithBinding(t *testing.T) (*Manager, *blockingStubSink) {
 	mgr.RegisterSink(sink)
 	return mgr, sink
 }
-
-// --- test helpers ---
 
 // retrySink calls fn on each Send, for controlling retry behavior.
 type retrySink struct {

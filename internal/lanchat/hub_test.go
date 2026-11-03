@@ -75,7 +75,6 @@ func TestStoreLoadEmpty(t *testing.T) {
 func TestLoadSaveNick(t *testing.T) {
 	tmp := t.TempDir()
 
-	// No persisted nick yet — returns "" with no error
 	nick, err := LoadNick(tmp)
 	if err != nil {
 		t.Fatalf("LoadNick on nonexistent: %v", err)
@@ -84,7 +83,6 @@ func TestLoadSaveNick(t *testing.T) {
 		t.Errorf("LoadNick = %q, want empty", nick)
 	}
 
-	// Save and reload
 	if err := SaveNick(tmp, "MyNick"); err != nil {
 		t.Fatalf("SaveNick: %v", err)
 	}
@@ -97,7 +95,6 @@ func TestLoadSaveNick(t *testing.T) {
 		t.Errorf("LoadNick = %q, want %q", nick, "MyNick")
 	}
 
-	// Verify file path
 	if _, err := os.Stat(filepath.Join(tmp, "lanchat-nick")); err != nil {
 		t.Errorf("nick file not created: %v", err)
 	}
@@ -142,13 +139,11 @@ func TestHubSetNick(t *testing.T) {
 		t.Errorf("AgentNick = %q, want Alice_frontend_agent", hub.AgentNick())
 	}
 
-	// Verify persisted
 	nick, _ := LoadNick(tmp)
 	if nick != "Alice_frontend" {
 		t.Errorf("persisted nick = %q, want Alice_frontend", nick)
 	}
 
-	// origNick should differ
 	if origNick == "Alice" {
 		t.Error("random nick should differ from Alice")
 	}
@@ -159,7 +154,6 @@ func TestHubApprovalFlow(t *testing.T) {
 	store := NewStore(tmp)
 	hub := NewHub("node-a", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp/test"})
 
-	// Simulate an incoming @agent message
 	msg := Message{
 		ID:         "msg-1",
 		FromNodeID: "node-b",
@@ -171,13 +165,11 @@ func TestHubApprovalFlow(t *testing.T) {
 	}
 	hub.HandleIncomingMessage(msg)
 
-	// Should be in pending approvals
 	pending := hub.PendingApprovals()
 	if len(pending) != 1 {
 		t.Fatalf("expected 1 pending approval, got %d", len(pending))
 	}
 
-	// Approve it
 	approved, err := hub.ApproveMessage("msg-1")
 	if err != nil {
 		t.Fatalf("ApproveMessage: %v", err)
@@ -186,7 +178,6 @@ func TestHubApprovalFlow(t *testing.T) {
 		t.Errorf("approved content = %q", approved.Content)
 	}
 
-	// Should no longer be pending
 	pending = hub.PendingApprovals()
 	if len(pending) != 0 {
 		t.Errorf("expected 0 pending after approval, got %d", len(pending))
@@ -248,7 +239,6 @@ func TestPresenceNoDuplicateJoinAfterRecovery(t *testing.T) {
 		joinCount.Add(1)
 	}, nil, nil, nil)
 
-	// Simulate a peer joining via presence
 	peer := Participant{
 		NodeID:    "node-b",
 		HumanNick: "Alice_frontend",
@@ -256,23 +246,19 @@ func TestPresenceNoDuplicateJoinAfterRecovery(t *testing.T) {
 	}
 	hub.HandlePresence(peer)
 
-	// Wait for async callback
 	time.Sleep(50 * time.Millisecond)
 	if joinCount.Load() != 1 {
 		t.Fatalf("expected 1 join notification, got %d", joinCount.Load())
 	}
 
-	// Mark the peer offline by aging out LastSeen
 	hub.mu.Lock()
 	if p, ok := hub.peers["node-b"]; ok {
 		p.LastSeen = time.Now().Add(-ageOffline - time.Second).Unix()
 	}
 	hub.mu.Unlock()
 
-	// Call UpdatePeers to trigger offline detection (empty list = no mDNS peers)
 	hub.UpdatePeers(nil)
 
-	// The peer should be offline but NOT deleted
 	hub.mu.RLock()
 	p, exists := hub.peers["node-b"]
 	hub.mu.RUnlock()
@@ -286,16 +272,13 @@ func TestPresenceNoDuplicateJoinAfterRecovery(t *testing.T) {
 		t.Error("notifiedJoin should still be true")
 	}
 
-	// Now simulate recovery — peer sends presence again
 	hub.HandlePresence(peer)
 	time.Sleep(50 * time.Millisecond)
 
-	// Should NOT have fired another join notification
 	if joinCount.Load() != 1 {
 		t.Errorf("expected 1 join notification (no duplicate on recovery), got %d", joinCount.Load())
 	}
 
-	// Peer should be back online
 	hub.mu.RLock()
 	p = hub.peers["node-b"]
 	hub.mu.RUnlock()
@@ -311,11 +294,11 @@ func TestPresenceNoDuplicateJoinAfterRecovery(t *testing.T) {
 // is delayed by offlineNotifyDelay. A peer that goes offline and stays
 // offline should only fire leave after the delay period.
 func TestPresenceLeaveNotificationDelayed(t *testing.T) {
-	// Save and restore constants
+
 	origDelay := offlineNotifyDelay
 	origOffline := ageOffline
 	offlineNotifyDelay = 200 * time.Millisecond
-	ageOffline = 2 * time.Second // long enough that test operations don't cause re-staleness
+	ageOffline = 2 * time.Second
 	defer func() {
 		offlineNotifyDelay = origDelay
 		ageOffline = origOffline
@@ -330,7 +313,6 @@ func TestPresenceLeaveNotificationDelayed(t *testing.T) {
 		leaveCount.Add(1)
 	}, nil, nil)
 
-	// Peer joins
 	peer := Participant{
 		NodeID:    "node-c",
 		HumanNick: "Bob_backend",
@@ -339,7 +321,6 @@ func TestPresenceLeaveNotificationDelayed(t *testing.T) {
 	hub.HandlePresence(peer)
 	time.Sleep(20 * time.Millisecond)
 
-	// Age the peer and call UpdatePeers — should mark offline but NOT notify yet
 	hub.mu.Lock()
 	hub.peers["node-c"].LastSeen = time.Now().Add(-ageOffline - time.Second).Unix()
 	hub.mu.Unlock()
@@ -350,7 +331,6 @@ func TestPresenceLeaveNotificationDelayed(t *testing.T) {
 		t.Errorf("leave should be delayed, but got %d notifications", leaveCount.Load())
 	}
 
-	// Peer is offline but within the delay window
 	hub.mu.RLock()
 	p := hub.peers["node-c"]
 	hub.mu.RUnlock()
@@ -361,7 +341,6 @@ func TestPresenceLeaveNotificationDelayed(t *testing.T) {
 		t.Error("leave should not be notified yet (within delay)")
 	}
 
-	// Wait for the delay to pass and call UpdatePeers again
 	time.Sleep(offlineNotifyDelay + 50*time.Millisecond)
 	hub.UpdatePeers(nil)
 	time.Sleep(20 * time.Millisecond)
@@ -378,7 +357,7 @@ func TestPresenceLeaveSuppressedOnQuickRecovery(t *testing.T) {
 	origDelay := offlineNotifyDelay
 	origOffline := ageOffline
 	offlineNotifyDelay = 200 * time.Millisecond
-	ageOffline = 2 * time.Second // long enough that peer doesn't re-stale during test sleeps
+	ageOffline = 2 * time.Second
 	defer func() {
 		offlineNotifyDelay = origDelay
 		ageOffline = origOffline
@@ -393,7 +372,6 @@ func TestPresenceLeaveSuppressedOnQuickRecovery(t *testing.T) {
 		leaveCount.Add(1)
 	}, nil, nil)
 
-	// Peer joins
 	peer := Participant{
 		NodeID:    "node-d",
 		HumanNick: "Carol_devops",
@@ -402,24 +380,19 @@ func TestPresenceLeaveSuppressedOnQuickRecovery(t *testing.T) {
 	hub.HandlePresence(peer)
 	time.Sleep(20 * time.Millisecond)
 
-	// Peer goes stale → offline marked but leave not yet notified
 	hub.mu.Lock()
 	hub.peers["node-d"].LastSeen = time.Now().Add(-ageOffline - time.Second).Unix()
 	hub.mu.Unlock()
 	hub.UpdatePeers(nil)
 	time.Sleep(20 * time.Millisecond)
 
-	// Verify leave was NOT fired yet (within offlineNotifyDelay)
 	if leaveCount.Load() != 0 {
 		t.Fatalf("leave should not fire within delay, got %d", leaveCount.Load())
 	}
 
-	// Peer recovers before offlineNotifyDelay expires
 	hub.HandlePresence(peer)
 	time.Sleep(20 * time.Millisecond)
 
-	// Wait beyond offlineNotifyDelay, then call UpdatePeers.
-	// Peer is online (LastSeen fresh from HandlePresence), so no leave.
 	time.Sleep(offlineNotifyDelay + 50*time.Millisecond)
 	hub.UpdatePeers(nil)
 	time.Sleep(20 * time.Millisecond)
@@ -462,13 +435,11 @@ func TestPresencePeerDeletedAfterLongAbsence(t *testing.T) {
 		t.Fatalf("expected 1 join, got %d", joinCount.Load())
 	}
 
-	// Age the peer well beyond peerDeleteAfter
 	hub.mu.Lock()
 	hub.peers["node-e"].LastSeen = time.Now().Add(-peerDeleteAfter - time.Hour).Unix()
 	hub.mu.Unlock()
 	hub.UpdatePeers(nil)
 
-	// Peer should be deleted
 	hub.mu.RLock()
 	_, exists := hub.peers["node-e"]
 	hub.mu.RUnlock()
@@ -476,7 +447,6 @@ func TestPresencePeerDeletedAfterLongAbsence(t *testing.T) {
 		t.Fatal("peer should be deleted after peerDeleteAfter")
 	}
 
-	// notifiedNicks should be cleared for this nick
 	hub.mu.RLock()
 	inNotified := hub.notifiedNicks["Dave_frontend"]
 	hub.mu.RUnlock()
@@ -484,7 +454,6 @@ func TestPresencePeerDeletedAfterLongAbsence(t *testing.T) {
 		t.Error("notifiedNicks should be cleared on deletion")
 	}
 
-	// Re-appearance should fire a new join notification
 	hub.HandlePresence(peer)
 	time.Sleep(20 * time.Millisecond)
 	if joinCount.Load() != 2 {
@@ -504,7 +473,6 @@ func TestPresenceNoMDNSBasedDeletion(t *testing.T) {
 	store := NewStore(tmp)
 	hub := NewHub("node-self", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp"})
 
-	// Peer joins via presence
 	hub.HandlePresence(Participant{
 		NodeID:    "node-f",
 		HumanNick: "Eve_testing",
@@ -512,15 +480,12 @@ func TestPresenceNoMDNSBasedDeletion(t *testing.T) {
 	})
 	time.Sleep(20 * time.Millisecond)
 
-	// Age the peer so it goes offline
 	hub.mu.Lock()
 	hub.peers["node-f"].LastSeen = time.Now().Add(-ageOffline - time.Second).Unix()
 	hub.mu.Unlock()
 
-	// Call UpdatePeers with an EMPTY list (mDNS doesn't see the peer)
 	hub.UpdatePeers(nil)
 
-	// Peer should still exist — deletion is time-based only, not mDNS-based
 	hub.mu.RLock()
 	_, exists := hub.peers["node-f"]
 	hub.mu.RUnlock()
@@ -543,27 +508,22 @@ func TestPresenceHeartbeatProbesAllPeers(t *testing.T) {
 	store := NewStore(tmp)
 	hub := NewHub("node-self", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp"})
 
-	// Add a peer directly to the hub (simulating one discovered earlier)
 	hub.mu.Lock()
 	hub.peers["node-g"] = &Participant{
 		NodeID:    "node-g",
 		HumanNick: "Frank_backend",
 		Endpoint:  "http://localhost:11111",
 		Online:    true,
-		LastSeen:  time.Now().Unix(), // fresh now
+		LastSeen:  time.Now().Unix(),
 	}
 	hub.mu.Unlock()
 
-	// Wait until LastSeen is stale beyond presenceHeartbeat
 	time.Sleep(presenceHeartbeat + 20*time.Millisecond)
 
-	// Call UpdatePeers with a DIFFERENT peer (node-h), NOT node-g.
-	// mDNS "discovers" only node-h, completely missing node-g.
 	hub.UpdatePeers([]Participant{
 		{NodeID: "node-h", Endpoint: "http://localhost:22222"},
 	})
 
-	// node-g should STILL exist in the hub (not deleted)
 	hub.mu.RLock()
 	g, existsG := hub.peers["node-g"]
 	hub.mu.RUnlock()
@@ -571,12 +531,10 @@ func TestPresenceHeartbeatProbesAllPeers(t *testing.T) {
 		t.Fatal("node-g should still exist in hub even though mDNS missed it")
 	}
 
-	// node-g should still be online (within ageOffline window)
 	if !g.Online {
 		t.Error("node-g should be online — it was recently added and within ageOffline")
 	}
 
-	// node-h should have been added by mDNS discovery
 	hub.mu.RLock()
 	_, existsH := hub.peers["node-h"]
 	hub.mu.RUnlock()
@@ -584,8 +542,6 @@ func TestPresenceHeartbeatProbesAllPeers(t *testing.T) {
 		t.Fatal("node-h should have been added by mDNS discovery")
 	}
 }
-
-// ── Team feature tests ──
 
 func TestParseNickRoleTeam(t *testing.T) {
 	tests := []struct {
@@ -611,7 +567,7 @@ func TestParseNickRoleTeam(t *testing.T) {
 }
 
 func TestParseNickRoleBackwardCompat(t *testing.T) {
-	// ParseNickRole should still work as a 2-value return
+
 	nick, role := ParseNickRole("alice@frontend")
 	if nick != "alice" || role != "frontend" {
 		t.Errorf("ParseNickRole backward compat failed: got (%q, %q)", nick, role)
@@ -623,17 +579,14 @@ func TestSetNickRoleTeam(t *testing.T) {
 	store := NewStore(tmp)
 	hub := NewHub("node-A", "tui", "http://localhost:11111", "", store, WorkspaceMeta{Workspace: "/tmp"})
 
-	// Initial state: default team
 	if hub.Team() != DefaultTeam {
 		t.Fatalf("initial team should be %q, got %q", DefaultTeam, hub.Team())
 	}
 
-	// Set nick with team
 	if err := hub.SetNickRoleTeam("alice", "frontend", "platform"); err != nil {
 		t.Fatalf("SetNickRoleTeam: %v", err)
 	}
 
-	// Verify in-memory state
 	if hub.Role() != "frontend" {
 		t.Errorf("role = %q, want 'frontend'", hub.Role())
 	}
@@ -644,7 +597,6 @@ func TestSetNickRoleTeam(t *testing.T) {
 		t.Errorf("humanNick = %q, want 'alice_frontend'", hub.HumanNick())
 	}
 
-	// Verify persistence
 	loadedTeam, err := LoadTeam(tmp)
 	if err != nil {
 		t.Fatalf("LoadTeam: %v", err)
@@ -653,7 +605,6 @@ func TestSetNickRoleTeam(t *testing.T) {
 		t.Errorf("persisted team = %q, want 'platform'", loadedTeam)
 	}
 
-	// Verify SelfParticipant includes team
 	self := hub.SelfParticipant()
 	if self.Team != "platform" {
 		t.Errorf("SelfParticipant team = %q, want 'platform'", self.Team)
@@ -665,7 +616,6 @@ func TestPresencePropagatesTeam(t *testing.T) {
 	store := NewStore(tmp)
 	hub := NewHub("node-A", "tui", "http://localhost:11111", "", store, WorkspaceMeta{Workspace: "/tmp"})
 
-	// Simulate an incoming presence from a peer with a team
 	hub.HandlePresence(Participant{
 		NodeID:    "node-B",
 		HumanNick: "bob_backend",
@@ -694,10 +644,8 @@ func TestSetNickRolePreservesTeam(t *testing.T) {
 	store := NewStore(tmp)
 	hub := NewHub("node-A", "tui", "http://localhost:11111", "", store, WorkspaceMeta{Workspace: "/tmp"})
 
-	// Set nick with team first
 	hub.SetNickRoleTeam("alice", "frontend", "platform")
 
-	// Now use old SetNickRole API — should preserve team
 	hub.SetNickRole("alice", "devops")
 
 	if hub.Team() != "platform" {
@@ -713,14 +661,12 @@ func TestHandleNickChangeUpdatesTeam(t *testing.T) {
 	store := NewStore(tmp)
 	hub := NewHub("node-A", "tui", "http://localhost:11111", "", store, WorkspaceMeta{Workspace: "/tmp"})
 
-	// Add a peer
 	hub.HandlePresence(Participant{
 		NodeID:    "node-B",
 		HumanNick: "bob_dev",
 		Endpoint:  "http://localhost:22222",
 	})
 
-	// Simulate incoming NickChange with team
 	hub.HandleNickChange(NickChange{
 		NodeID:    "node-B",
 		HumanNick: "bob_devops",
@@ -815,13 +761,11 @@ func TestPresencePropagatesTeamViaHandlePresence(t *testing.T) {
 	store := NewStore(tmp)
 	hub := NewHub("node-A", "tui", "http://localhost:11111", "", store, WorkspaceMeta{})
 
-	// Peer initially has no team
 	hub.HandlePresence(Participant{
 		NodeID:    "node-B",
 		HumanNick: "bob_dev",
 		Endpoint:  "http://localhost:22222",
 		Role:      "developer",
-		// Team intentionally omitted
 	})
 
 	hub.mu.RLock()
@@ -831,7 +775,6 @@ func TestPresencePropagatesTeamViaHandlePresence(t *testing.T) {
 		t.Errorf("peer team should be empty initially, got %q", peer.Team)
 	}
 
-	// Peer sends updated presence with team
 	hub.HandlePresence(Participant{
 		NodeID:    "node-B",
 		HumanNick: "bob_dev",
@@ -853,11 +796,9 @@ func TestTeamPersistenceAcrossSessionReload(t *testing.T) {
 	store := NewStore(tmp)
 	hub := NewHub("node-A", "tui", "http://localhost:11111", "", store, WorkspaceMeta{})
 
-	// SetSessionID creates a session-scoped store at <baseDir>/sessions/<sessionID>
 	hub.SetSessionID(tmp, "session-1")
 	hub.SetNickRoleTeam("alice", "frontend", "platform")
 
-	// Verify persisted to session dir
 	sessionDir := filepath.Join(tmp, "sessions", "session-1")
 	loadedTeam, err := LoadTeam(sessionDir)
 	if err != nil {
@@ -874,7 +815,6 @@ func TestTeamPersistenceAcrossSessionReload(t *testing.T) {
 		t.Fatalf("persisted role = %q, want 'frontend'", loadedRole)
 	}
 
-	// Simulate session reload — SetSessionID should restore from disk
 	hub2 := NewHub("node-A", "tui", "http://localhost:11111", "", NewStore(tmp), WorkspaceMeta{})
 	hub2.SetSessionID(tmp, "session-1")
 
@@ -887,7 +827,7 @@ func TestTeamPersistenceAcrossSessionReload(t *testing.T) {
 }
 
 func TestParseNickRoleTeamEmptyParts(t *testing.T) {
-	// Empty role between two @ signs should default
+
 	nick, role, team := ParseNickRoleTeam("alice@@platform")
 	if nick != "alice" {
 		t.Errorf("nick = %q, want 'alice'", nick)
@@ -899,7 +839,6 @@ func TestParseNickRoleTeamEmptyParts(t *testing.T) {
 		t.Errorf("team = %q, want 'platform'", team)
 	}
 
-	// Empty team after @
 	nick, role, team = ParseNickRoleTeam("alice@frontend@")
 	if nick != "alice" || role != "frontend" || team != DefaultTeam {
 		t.Errorf("ParseNickRoleTeam('alice@frontend@') = (%q, %q, %q), want (%q, %q, %q)",
@@ -921,7 +860,6 @@ func TestHandleIncomingMessage_FiresOnInboundDM(t *testing.T) {
 		gotInbound.Store(fromNodeID)
 	})
 
-	// Send a non-broadcast DM from node-bob to self
 	msg := Message{
 		ID:         "msg-1",
 		FromNodeID: "node-bob",
@@ -933,7 +871,6 @@ func TestHandleIncomingMessage_FiresOnInboundDM(t *testing.T) {
 	}
 	hub.HandleIncomingMessage(msg)
 
-	// Wait briefly for the async safego.Go callback
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if v := gotInbound.Load(); v != nil && v.(string) == "node-bob" {
@@ -964,7 +901,6 @@ func TestHandleIncomingMessage_ReplayWindowDropsStaleSigned(t *testing.T) {
 	var gotInbound atomic.Value // string
 	hub.SetOnInboundDM(func(fromNodeID string) { gotInbound.Store(fromNodeID) })
 
-	// Signed but stale (2 hours old) DM from node-bob.
 	stale := Message{
 		ID:         "msg-stale",
 		FromNodeID: "node-bob",
@@ -985,9 +921,6 @@ func TestHandleIncomingMessage_ReplayWindowDropsStaleSigned(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	// The stale message must NOT have consumed a dedup slot (gate sits
-	// before markSeenLocked): the same ID with a FRESH timestamp is still
-	// admitted.
 	fresh := stale
 	fresh.Timestamp = time.Now().UnixMilli()
 	fresh.Content = "legitimate resend"
@@ -1004,7 +937,6 @@ func TestHandleIncomingMessage_ReplayWindowDropsStaleSigned(t *testing.T) {
 		t.Fatal("fresh resend of the same ID was dropped - stale rejection poisoned the dedup set")
 	}
 
-	// Unsigned stale message bypasses the gate (pre-#3402 compatibility).
 	hub2 := NewHub("node-self2", "tui", "http://localhost:1", "", NewStore(t.TempDir()), WorkspaceMeta{Workspace: "/tmp/test"})
 	var gotInbound2 atomic.Value
 	hub2.SetOnInboundDM(func(fromNodeID string) { gotInbound2.Store(fromNodeID) })
@@ -1041,19 +973,17 @@ func TestHandleIncomingMessage_BroadcastDoesNotFireOnInboundDM(t *testing.T) {
 		fired.Store(true)
 	})
 
-	// Send a broadcast message
 	msg := Message{
 		ID:         "msg-broadcast",
 		FromNodeID: "node-bob",
 		FromNick:   "bob_dev",
 		FromRole:   RoleAgent,
-		ToNodeID:   "", // broadcast
+		ToNodeID:   "",
 		Content:    "announcement",
 		Timestamp:  time.Now().UnixMilli(),
 	}
 	hub.HandleIncomingMessage(msg)
 
-	// Wait briefly to see if callback fires
 	time.Sleep(100 * time.Millisecond)
 
 	if fired.Load() {

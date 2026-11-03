@@ -28,9 +28,7 @@ func TestAnthropicBuildParamsMarshalsValidToolUseInput(t *testing.T) {
 }
 
 func TestAnthropicBuildParamsImageRoutingFallback(t *testing.T) {
-	// Regression pin for the ctx-aware buildParams: with the Files uploader
-	// unavailable (nil), image blocks in user messages and tool_results must
-	// degrade to inline base64 sources and marshal cleanly.
+
 	tiny := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 	p := &AnthropicProvider{model: "test-model", maxTokens: 128}
 	params := p.buildParams(context.Background(), []Message{
@@ -62,8 +60,7 @@ func TestAnthropicBuildParamsImageRoutingFallback(t *testing.T) {
 }
 
 func TestAnthropicBuildParamsFallsBackForInvalidToolUseInput(t *testing.T) {
-	// Truncated JSON that can be repaired (missing closing brace).
-	// normalizeToolInputValue should repair it to valid JSON.
+
 	p := &AnthropicProvider{model: "test-model", maxTokens: 128}
 	params := p.buildParams(context.Background(), []Message{
 		{
@@ -82,7 +79,7 @@ func TestAnthropicBuildParamsFallsBackForInvalidToolUseInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected anthropic params to marshal with repaired input, got %v", err)
 	}
-	// Repaired JSON should contain the valid path, not the raw fallback.
+
 	if !strings.Contains(string(data), "README.md") {
 		t.Fatalf("expected repaired path in marshaled params, got %s", string(data))
 	}
@@ -92,7 +89,7 @@ func TestAnthropicBuildParamsFallsBackForInvalidToolUseInput(t *testing.T) {
 }
 
 func TestAnthropicBuildParamsFallsBackForUnrepairableInput(t *testing.T) {
-	// Truly garbled input that cannot be repaired.
+
 	p := &AnthropicProvider{model: "test-model", maxTokens: 128}
 	params := p.buildParams(context.Background(), []Message{
 		{
@@ -147,24 +144,20 @@ func TestThinkingBudgetForEffort(t *testing.T) {
 func TestAnthropicSetReasoningEffort(t *testing.T) {
 	p := &AnthropicProvider{maxTokens: 64000}
 
-	// Default is empty
 	if p.ReasoningEffort() != "" {
 		t.Fatalf("expected empty default effort, got %q", p.ReasoningEffort())
 	}
 
-	// Set valid effort
 	p.SetReasoningEffort("high")
 	if p.ReasoningEffort() != "high" {
 		t.Fatalf("expected 'high', got %q", p.ReasoningEffort())
 	}
 
-	// Invalid effort is ignored
 	p.SetReasoningEffort("turbo")
 	if p.ReasoningEffort() != "high" {
 		t.Fatalf("invalid effort should be ignored, got %q", p.ReasoningEffort())
 	}
 
-	// Empty disables
 	p.SetReasoningEffort("")
 	if p.ReasoningEffort() != "" {
 		t.Fatalf("expected empty after disable, got %q", p.ReasoningEffort())
@@ -172,8 +165,7 @@ func TestAnthropicSetReasoningEffort(t *testing.T) {
 }
 
 func TestAnthropicBuildParamsWithThinking(t *testing.T) {
-	// Extended-thinking-only generation: medium effort maps to budget_tokens.
-	// (4.6+ models auto-select adaptive thinking; see thinking_mode_test.go.)
+
 	p := &AnthropicProvider{model: "claude-sonnet-4-5-20250929", maxTokens: 64000}
 	p.SetReasoningEffort("medium")
 
@@ -190,7 +182,7 @@ func TestAnthropicBuildParamsWithThinking(t *testing.T) {
 
 func TestAnthropicBuildParamsWithoutThinking(t *testing.T) {
 	p := &AnthropicProvider{model: "claude-sonnet-4-6", maxTokens: 64000}
-	// No effort set — thinking should not be configured
+
 	params := p.buildParams(context.Background(), nil, nil)
 
 	if params.Thinking.OfEnabled != nil {

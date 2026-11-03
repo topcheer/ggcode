@@ -68,7 +68,6 @@ func TestIssue2702_GapFillSemanticsUnchanged(t *testing.T) {
 		t.Error("global knight.enabled must stay when instance has no knight section")
 	}
 
-	// Explicit true override in the other direction also works.
 	instanceTrue := load2702(t, "knight:\n  enabled: true\n")
 	globalFalse := &Config{KnightConfig: KnightConfig{Enabled: false}}
 	MergeInstance(globalFalse, instanceTrue)

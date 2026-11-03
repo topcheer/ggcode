@@ -6,23 +6,6 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// sa-86: second-level progressive disclosure for tool output.
-//
-// Frontier context: agent-native UI discussions (HumanLayer agent-native
-// UI series; ardalis.com "Optimizing AI Agents with Progressive
-// Disclosure", 2025) treat progressive disclosure as the core density
-// lever for agent interfaces - level 1 shows a collapsed summary, level
-// 2 expands on demand. ggcode already had level 1 (FormatBody caps tool
-// bodies at ToolBodyMaxLines and marks "… N more lines"), but there was
-// NO second level: a truncated go-test failure body could not be
-// expanded anywhere in the UI - the user had to re-run the command or
-// dig debug logs.
-//
-// This file adds the missing second level: BaseToolItem.expanded lifts
-// the render caps (chat/tools.go RenderBody) and List.ToggleLastExpandable
-// flips the most recent expandable tool item, bound to alt+e in the TUI
-// (ctrl+e is reserved by textarea's end-of-line binding).
-
 // ToggleExpanded flips the expanded state and invalidates the render
 // cache so Height/Render recompute. Returns the new state.
 func (t *BaseToolItem) ToggleExpanded() bool {

@@ -145,8 +145,7 @@ func TestStripMatrixReplyFallback(t *testing.T) {
 			input: "> <@user:example.org> Original",
 			want:  "> <@user:example.org> Original",
 		},
-		// #1222: only the TOP fallback block is stripped; the user's own
-		// blockquotes and code fences after the separator stay verbatim.
+
 		{
 			name:  "body quote preserved",
 			input: "> <@user:example.org> Original\n\nMy reply:\n> my own quote\nsee this",
@@ -157,8 +156,7 @@ func TestStripMatrixReplyFallback(t *testing.T) {
 			input: "> <@user:example.org> Original\n\nOutput:\n```sh\n$ grep '^>' file\n```",
 			want:  "Output:\n```sh\n$ grep '^>' file\n```",
 		},
-		// No blank-line separator after the leading quote block: per spec
-		// this is not a reply fallback, so nothing is stripped.
+
 		{
 			name:  "no separator keeps body",
 			input: "> quoted line\nstill body",
@@ -196,8 +194,7 @@ func TestMatrixAdapter_HasMention(t *testing.T) {
 			want:    true,
 		},
 		{
-			// #2719: bare localPart as a plain word inside another handle or
-			// mid-sentence must not fire (ported #963 semantics).
+
 			name:    "local part as substring not a mention",
 			body:    "请问 @botsquad 这个方案可行吗",
 			content: map[string]any{},
@@ -259,24 +256,22 @@ func TestMatrixAdapter_StripMention(t *testing.T) {
 }
 
 func TestSplitMatrixMessage(t *testing.T) {
-	// Short message
+
 	chunks := chunkText("hello", 10)
 	if len(chunks) != 1 || chunks[0] != "hello" {
 		t.Errorf("short message: %v", chunks)
 	}
 
-	// Long message, no newlines
 	long := strings.Repeat("a", 100)
 	chunks = chunkText(long, 30)
 	if len(chunks) < 3 {
 		t.Errorf("expected >= 3 chunks, got %d", len(chunks))
 	}
 
-	// Long message with newlines
 	longWithNewlines := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10"
 	chunks = chunkText(longWithNewlines, 20)
 	for _, chunk := range chunks {
-		if len(chunk) > 25 { // allow slightly over for newline splits
+		if len(chunk) > 25 {
 			t.Errorf("chunk too long (%d): %q", len(chunk), chunk)
 		}
 	}
@@ -337,7 +332,7 @@ func TestMatrixGetHistoryVisibilityFailsClosed(t *testing.T) {
 // Matrix's documented default ("shared") - a default, not an error.
 func TestMatrixGetHistoryVisibilityDefaultsToShared(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// State event exists but content carries no visibility field.
+
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{}`)
 	}))
@@ -406,7 +401,7 @@ func TestIssue1553_FileSyncStorePersistsToken(t *testing.T) {
 	if err := s.SaveNextBatch(context.Background(), "@u:srv", "s99_42"); err != nil {
 		t.Fatal(err)
 	}
-	// Fresh instance = restart semantics.
+
 	s2 := &fileSyncStore{path: path}
 	tok, err = s2.LoadNextBatch(context.Background(), "@u:srv")
 	if err != nil || tok != "s99_42" {
@@ -434,8 +429,6 @@ func TestIssue1553B_ShortEventIDNoPanic(t *testing.T) {
 	}
 }
 
-// --- #1661: fileSyncStore crash-safety and account binding ---
-
 func TestFileSyncStoreAtomicSaveAndRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	s := &fileSyncStore{path: filepath.Join(dir, "m.json")}
@@ -459,7 +452,7 @@ func TestFileSyncStoreForeignAccountDiscarded(t *testing.T) {
 	if err := s.SaveNextBatch(ctx, "@alice:example.org", "alice-token"); err != nil {
 		t.Fatal(err)
 	}
-	// Same adapter name, different account (shared ~/.ggcode across workspaces).
+
 	got, err := s.LoadNextBatch(ctx, "@bob:example.org")
 	if err != nil {
 		t.Fatal(err)
@@ -467,13 +460,12 @@ func TestFileSyncStoreForeignAccountDiscarded(t *testing.T) {
 	if got != "" {
 		t.Fatalf("foreign token leaked: %q", got)
 	}
-	// Bob's save must not clobber Alice's data with a mixed state.
+
 	if err := s.SaveNextBatch(ctx, "@bob:example.org", "bob-token"); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.LoadNextBatch(ctx, "@alice:example.org"); got != "alice-token" {
-		// After Bob's save the file is Bob-owned; Alice's next load is a
-		// clean discard, not a replay of Bob's token.
+
 		if got != "" {
 			t.Fatalf("expected discard after ownership switch, got %q", got)
 		}
@@ -511,10 +503,7 @@ func TestSelfHealingSyncerResetsOnUnknownPos(t *testing.T) {
 	retry, fatal := wrapped.OnFailedSync(nil, &mautrix.HTTPError{
 		RespError: &mautrix.RespError{ErrCode: "M_UNKNOWN_POS", StatusCode: http.StatusBadRequest},
 	})
-	// #1851 case 1: the heal must make Sync EXIT (non-nil error) so the
-	// outer run() loop rebuilds the client - the old (retry>0, nil) kept
-	// mautrix's loop retrying its cached local token every 2s with the
-	// adapter showing "connected" but receiving zero events until restart.
+
 	if fatal == nil {
 		t.Fatal("M_UNKNOWN_POS must return an error so Sync exits and the outer loop reconnects with a fresh client")
 	}
@@ -522,7 +511,7 @@ func TestSelfHealingSyncerResetsOnUnknownPos(t *testing.T) {
 		t.Fatalf("token must be reset after M_UNKNOWN_POS, got %q", got)
 	}
 	_ = retry
-	// Unrelated errors keep DefaultSyncer behavior (retry, non-fatal).
+
 	retry2, fatal2 := wrapped.OnFailedSync(nil, &mautrix.HTTPError{
 		RespError: &mautrix.RespError{ErrCode: "M_LIMIT_EXCEEDED", StatusCode: http.StatusTooManyRequests},
 	})

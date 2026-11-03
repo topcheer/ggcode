@@ -7,11 +7,8 @@ import (
 	"testing"
 )
 
-// #4471: relays that omit index may stream parallel tool calls one chunk
-// each; distinct IDs must land in distinct slots instead of merging into
-// slot 0 (ID last-write-wins + arguments byte-concatenation).
 func TestResolveNoIndexToolCallSlot(t *testing.T) {
-	// call_A already accumulated in slot 0.
+
 	mk := func() map[int]*ToolCallDelta {
 		return map[int]*ToolCallDelta{
 			0: {Index: 0, ID: "call_A", Name: "mkdir", Arguments: json.RawMessage(`{"path":"x"}`)},
@@ -27,12 +24,12 @@ func TestResolveNoIndexToolCallSlot(t *testing.T) {
 	if got := resolveNoIndexToolCallSlot(mk(), "call_B"); got != 1 {
 		t.Errorf("distinct ID must open a new slot, got %d, want 1", got)
 	}
-	// Slot 0 without an identity yet: first ID-bearing chunk claims it.
+
 	unlabeled := map[int]*ToolCallDelta{0: {Index: 0}}
 	if got := resolveNoIndexToolCallSlot(unlabeled, "call_A"); got != 0 {
 		t.Errorf("unlabeled slot 0 must be claimable, got %d", got)
 	}
-	// Two existing calls: a third distinct ID must not reuse either.
+
 	two := map[int]*ToolCallDelta{
 		0: {Index: 0, ID: "call_A"},
 		1: {Index: 1, ID: "call_B"},
@@ -45,11 +42,8 @@ func TestResolveNoIndexToolCallSlot(t *testing.T) {
 	}
 }
 
-// #4472: a prompt-only usage chunk materializes non-nil usage with
-// OutputTokens==0; the done-time fallback must backfill the output
-// estimate instead of silently zeroing cost/budget accounting.
 func TestOpenAIUsageBackfillCondition(t *testing.T) {
-	// Simulate the exact states the done-time fallback distinguishes.
+
 	cases := []struct {
 		name        string
 		usage       *TokenUsage
@@ -69,7 +63,7 @@ func TestOpenAIUsageBackfillCondition(t *testing.T) {
 			}
 		})
 	}
-	// estimateTokensFromChars is the backfill source; sanity-check scaling.
+
 	if est := estimateTokensFromChars(400); est <= 0 {
 		t.Errorf("estimateTokensFromChars(400) = %d, want > 0", est)
 	}

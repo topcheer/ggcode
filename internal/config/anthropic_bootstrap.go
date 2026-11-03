@@ -31,7 +31,6 @@ func applyFirstLaunchAnthropicBootstrapWith(cfg *Config, lookup func(string) (st
 		return false
 	}
 
-	// Allow skipping env-based auto-config entirely (e.g. for onboarding testing).
 	if skipAutoConfig() {
 		return false
 	}
@@ -51,8 +50,6 @@ func applyFirstLaunchAnthropicBootstrapWith(cfg *Config, lookup func(string) (st
 		return false
 	}
 
-	// Only bootstrap when the URL points to a known built-in vendor.
-	// For bigmodel URLs, reuse the existing zai/cn-coding-anthropic endpoint.
 	if !isBootstrapKnownHost(baseURL) {
 		return false
 	}
@@ -138,7 +135,6 @@ func upsertAnthropicBootstrapVendor(cfg *Config, baseURL, apiKey, model, authVar
 		normalizedBaseURL = strings.TrimSpace(baseURL)
 	}
 
-	// Exact baseURL match against existing vendor endpoints.
 	for vendorID, vendor := range cfg.Vendors {
 		for endpointID, ep := range vendor.Endpoints {
 			if strings.TrimSpace(ep.Protocol) != "anthropic" {
@@ -161,11 +157,6 @@ func upsertAnthropicBootstrapVendor(cfg *Config, baseURL, apiKey, model, authVar
 		}
 	}
 
-	// Fallback: match against known host patterns (e.g. bigmodel → zai/cn-coding-anthropic).
-	// #1515 case C: the fallback must re-check the URL against the pattern
-	// table - the entry gate (isBootstrapKnownHost) only verified the URL
-	// contains SOME pattern's substring; picking the first table entry
-	// unconditionally was correct only while the table had a single row.
 	if vendorID, endpointID := matchKnownAnthropicEndpoint(cfg, normalizedBaseURL, apiKey, model); vendorID != "" {
 		return vendorID, endpointID
 	}

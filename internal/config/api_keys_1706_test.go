@@ -15,7 +15,7 @@ func TestAddEndpointPartialUpdateKeepsProtocol1706(t *testing.T) {
 	if err := c.AddEndpoint("zai", "ep1", "anthropic", "https://a.example", "sk-x"); err != nil {
 		t.Fatal(err)
 	}
-	// Update base_url only.
+
 	if err := c.AddEndpoint("zai", "ep1", "", "https://b.example", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestAddEndpointPartialUpdateKeepsProtocol1706(t *testing.T) {
 	if got.BaseURL != "https://b.example" {
 		t.Fatalf("base_url not updated: %q", got.BaseURL)
 	}
-	// NEW endpoint without protocol still defaults to openai.
+
 	if err := c.AddEndpoint("zai", "ep2", "", "https://c.example", ""); err != nil {
 		t.Fatal(err)
 	}

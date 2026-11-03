@@ -30,12 +30,6 @@ func resolveProxy(configValue, envKey string) string {
 	return ""
 }
 
-// setEnvTemp previously lived here: it set HTTPS_PROXY around nostr connects,
-// but net/http caches the env-proxy func in a sync.Once at first use, so the
-// hack either never took effect (cache already primed by earlier HTTP traffic)
-// or permanently latched the temporary proxy into the process-wide transport
-// (#758). Replaced by the per-host transport interceptor below.
-
 // hostProxyRoutes maps destination hosts to the proxy they must use,
 // overriding the environment default. Populated by adapters whose relays
 // need a proxy (nostr), consulted by nostrTransportProxy.
@@ -89,7 +83,7 @@ func installProxyInterceptor() {
 	proxyInterceptorOnce.Do(func() {
 		t, ok := http.DefaultTransport.(*http.Transport)
 		if !ok || t == nil {
-			return // custom transport; do not touch
+			return
 		}
 		orig := t.Proxy
 		if orig == nil {
@@ -143,10 +137,8 @@ func httpConnectDial(proxy *url.URL, targetAddr string) (net.Conn, error) {
 		return nil, fmt.Errorf("dial proxy %s: %w", proxyAddr, err)
 	}
 
-	// Build CONNECT request
 	connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", targetAddr, targetAddr)
 
-	// Add proxy auth if configured
 	if proxy.User != nil {
 		username := proxy.User.Username()
 		password, _ := proxy.User.Password()
@@ -162,7 +154,6 @@ func httpConnectDial(proxy *url.URL, targetAddr string) (net.Conn, error) {
 		return nil, fmt.Errorf("CONNECT write: %w", err)
 	}
 
-	// Read proxy response
 	reader := bufio.NewReader(conn)
 	resp, err := reader.ReadString('\n')
 	if err != nil {
@@ -174,7 +165,6 @@ func httpConnectDial(proxy *url.URL, targetAddr string) (net.Conn, error) {
 		return nil, fmt.Errorf("proxy refused CONNECT to %s: %s", targetAddr, strings.TrimSpace(resp))
 	}
 
-	// Consume remaining headers until blank line
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil || strings.TrimSpace(line) == "" {
@@ -197,11 +187,6 @@ func socks5Dial(proxy *url.URL, targetAddr string) (net.Conn, error) {
 		return nil, fmt.Errorf("dial socks5 proxy %s: %w", proxyAddr, err)
 	}
 
-	// SOCKS5 handshake: no auth. Read the 2-byte greeting with ReadFull -
-	// a single Read may deliver fragments (some proxies write VER and METHOD
-	// separately; TCP segmentation can split them), leaving a zero byte in
-	// buf[1] that wrongly passes the no-auth check while the real method
-	// byte stays in the stream and corrupts the reply parse (#2970).
 	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("socks5 greeting: %w", err)
@@ -216,7 +201,6 @@ func socks5Dial(proxy *url.URL, targetAddr string) (net.Conn, error) {
 		return nil, fmt.Errorf("socks5 auth not supported: %x", buf)
 	}
 
-	// SOCKS5 connect
 	host, portStr, _ := net.SplitHostPort(targetAddr)
 	port := 0
 	fmt.Sscanf(portStr, "%d", &port)
@@ -238,12 +222,6 @@ func socks5Dial(proxy *url.URL, targetAddr string) (net.Conn, error) {
 		req = append(req, byte(port>>8), byte(port))
 	}
 
-	// Read the reply header with ReadFull, then drain the bound address
-	// and port per the address type (RFC 1928). A single Read only checked
-	// n >= 4 and left the bound-addr bytes in the stream when the reply was
-	// fragmented - the caller's next write (e.g. a TLS ClientHello) then
-	// interleaved with leftover proxy bytes and the handshake failed with a
-	// misleading error attributed to the target server (#2970).
 	if _, err := conn.Write(req); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("socks5 connect write: %w", err)
@@ -262,16 +240,16 @@ func socks5Dial(proxy *url.URL, targetAddr string) (net.Conn, error) {
 	// Drain BND.ADDR + BND.PORT based on ATYP so the connection is clean.
 	var boundLen int
 	switch head[3] {
-	case 0x01: // IPv4
+	case 0x01:
 		boundLen = 4
-	case 0x03: // domain: 1 length byte + domain
+	case 0x03:
 		lenBuf := make([]byte, 1)
 		if _, err := io.ReadFull(conn, lenBuf); err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("socks5 connect response bound addr: %w", err)
 		}
 		boundLen = int(lenBuf[0])
-	case 0x04: // IPv6
+	case 0x04:
 		boundLen = 16
 	default:
 		conn.Close()

@@ -21,11 +21,11 @@ func TestFilesAPIAllowed(t *testing.T) {
 		baseURL string
 		want    bool
 	}{
-		{"", true},                                   // default official API
-		{"https://api.anthropic.com", true},          // official
-		{"https://api.anthropic.com/", true},         // official with slash
-		{"https://proxy.example.com/v1", false},      // third-party gateway
-		{"https://api.anthropic.com.evil.io", false}, // lookalike domain
+		{"", true},
+		{"https://api.anthropic.com", true},
+		{"https://api.anthropic.com/", true},
+		{"https://proxy.example.com/v1", false},
+		{"https://api.anthropic.com.evil.io", false},
 	}
 	for _, tc := range cases {
 		if got := filesAPIAllowed(tc.baseURL); got != tc.want {
@@ -38,15 +38,11 @@ func TestFilesResolveCachesByID(t *testing.T) {
 	u := newFileUploader(&anthropic.Client{}, "")
 	data, _ := base64.StdEncoding.DecodeString(testTinyPNG)
 
-	// Cache miss without network access: upload would hit the API; with a
-	// zero-value client this fails, and the uploader must fall back.
 	id, ok := u.resolve(context.Background(), "image/png", data)
 	if ok {
 		t.Fatalf("expected fallback (ok=false) when upload unavailable, got file_id %q", id)
 	}
 
-	// Prime the cache the way a successful upload would and verify the
-	// hit path returns the same file_id without any network activity.
 	sum := sha256.Sum256(data)
 	key := hex.EncodeToString(sum[:])
 	u.mu.Lock()
@@ -63,7 +59,6 @@ func TestFilesResolveNegativeCache(t *testing.T) {
 	u := newFileUploader(&anthropic.Client{}, "")
 	data, _ := base64.StdEncoding.DecodeString(testTinyPNG)
 
-	// First attempt fails (no network in unit tests) -> negative cache.
 	if _, ok := u.resolve(context.Background(), "image/png", data); ok {
 		t.Fatal("expected first resolve to fail")
 	}
@@ -73,7 +68,7 @@ func TestFilesResolveNegativeCache(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("negative-cache entries = %d, want 1", n)
 	}
-	// Second attempt with identical bytes must short-circuit.
+
 	if _, ok := u.resolve(context.Background(), "image/png", data); ok {
 		t.Fatal("expected negative cache to short-circuit retry")
 	}
@@ -87,19 +82,19 @@ func TestFilesResolveNegativeCache(t *testing.T) {
 
 func TestFilesImageSourceThreshold(t *testing.T) {
 	p := &AnthropicProvider{files: newFileUploader(&anthropic.Client{}, "")}
-	small := testTinyPNG // below threshold -> base64 path
+	small := testTinyPNG
 	if src, ok := p.filesImageSource(context.Background(), "image/png", small); ok {
 		t.Fatalf("below-threshold image should stay base64, got %v", src)
 	}
 
-	big := strings.Repeat("A", filesUploadThresholdBytes+16) // over threshold
+	big := strings.Repeat("A", filesUploadThresholdBytes+16)
 	if _, ok := p.filesImageSource(context.Background(), "image/png", big); ok {
 		t.Fatal("upload failure should fall back, not return file source")
 	}
 }
 
 func TestImageContentBlockFallback(t *testing.T) {
-	p := &AnthropicProvider{} // files uploader nil -> must not panic
+	p := &AnthropicProvider{}
 	blk := p.imageContentBlock(context.Background(), "image/png", testTinyPNG)
 	if blk.OfImage == nil || blk.OfImage.Source.OfBase64 == nil {
 		t.Fatal("expected base64 fallback block when uploader is unavailable")
@@ -112,7 +107,7 @@ func TestFilesExtForMIME(t *testing.T) {
 		"image/jpeg": ".jpg",
 		"image/gif":  ".gif",
 		"image/webp": ".webp",
-		"image/x":    ".png", // default
+		"image/x":    ".png",
 	}
 	for mime, want := range cases {
 		if got := filesExtForMIME(mime); got != want {

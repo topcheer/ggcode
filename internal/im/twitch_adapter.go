@@ -59,10 +59,6 @@ var errTwitchAuthFailed = errors.New("twitch: login authentication failed")
 // twitchDefaultHelixClient is the shared HTTP client for Helix API calls.
 var twitchDefaultHelixClient = &http.Client{Timeout: 20 * time.Second}
 
-// ---------------------------------------------------------------------------
-// Adapter struct
-// ---------------------------------------------------------------------------
-
 type twitchAdapter struct {
 	// #1565 case B: PRIVMSG pacing is per-CONNECTION, not per-call: the
 	// old local `sent` flags paced only within one Send while concurrent
@@ -139,9 +135,6 @@ func newTwitchAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapte
 
 	proxy := resolveProxy(stringValue(adapterCfg.Extra, "proxy"), "TWITCH_PROXY")
 
-	// Client ID is optional for Helix: a user OAuth token already identifies
-	// the client, but sending it explicitly is harmless and avoids issues with
-	// some token types.
 	clientID := strings.TrimSpace(stringValue(adapterCfg.Extra, "client_id"))
 	if clientID == "" {
 		clientID = strings.TrimSpace(os.Getenv("TWITCH_CLIENT_ID"))
@@ -169,7 +162,7 @@ func (a *twitchAdapter) Start(ctx context.Context) {
 func (a *twitchAdapter) Close() error {
 	a.mu.Lock()
 	if a.closed {
-		// Idempotent: a second Close only needs to drop the conn again.
+
 		conn := a.conn
 		a.mu.Unlock()
 		if conn != nil {
@@ -186,11 +179,6 @@ func (a *twitchAdapter) Close() error {
 	close(a.stopCh)
 	a.mu.Unlock()
 
-	// Send QUIT and close OUTSIDE the lock to avoid self-deadlock:
-	// sendRaw acquires a.mu.RLock(), which deadlocks if we hold a.mu.Lock().
-	// #2113 F2: sendRaw's write is deadline-bounded now, so a wedged prior
-	// writer can delay (not forever-block) this QUIT; conn.Close below then
-	// unblocks any remaining writer immediately.
 	if conn != nil {
 		a.sendRaw("QUIT :ggcode shutting down")
 		conn.Close()
@@ -209,10 +197,6 @@ func (a *twitchAdapter) stopChannel() chan struct{} {
 	return a.stopCh
 }
 
-// ---------------------------------------------------------------------------
-// Main run loop
-// ---------------------------------------------------------------------------
-
 func (a *twitchAdapter) run(ctx context.Context) {
 	backoff := twitchReconnectBackoff
 	for {
@@ -225,9 +209,7 @@ func (a *twitchAdapter) run(ctx context.Context) {
 		served := time.Since(started)
 		if err != nil {
 			if errors.Is(err, errTwitchAuthFailed) {
-				// Token rejected by Twitch: retrying with the same dead token
-				// forever is pointless — terminate with an explicit error state
-				// (issue #972).
+
 				a.publishState(false, "error", "Twitch authentication failed: OAuth token rejected (NOTICE \"Login authentication failed\"). Update extra.token / TWITCH_TOKEN and restart the adapter.")
 				debug.Log("twitch", "adapter=%s terminating after authentication failure", a.name)
 				return
@@ -242,8 +224,7 @@ func (a *twitchAdapter) run(ctx context.Context) {
 			return
 		}
 		if err == nil && ctx.Err() == nil {
-			// Clean EOF without an error — surface it instead of leaving the
-			// state stuck on "connected" (issue #972).
+
 			a.publishState(false, "reconnecting", "")
 		}
 		select {
@@ -251,8 +232,7 @@ func (a *twitchAdapter) run(ctx context.Context) {
 			a.publishState(false, "stopped", "")
 			return
 		case <-a.stopChannel():
-			// Close() was called during the reconnect window — do not
-			// reconnect (issue #972).
+
 			return
 		case <-time.After(jitterDuration(backoff)):
 		}
@@ -276,9 +256,7 @@ func twitchNextBackoff(cur, initial, max time.Duration, served time.Duration) ti
 }
 
 func (a *twitchAdapter) connectAndServe(ctx context.Context) error {
-	// Issue #972: never dial after Close(). The run loop's backoff select
-	// handles Close during the sleep window; this check (plus the one after
-	// the dial) covers a Close racing with connection establishment.
+
 	a.mu.RLock()
 	closed := a.closed
 	a.mu.RUnlock()
@@ -297,17 +275,13 @@ func (a *twitchAdapter) connectAndServe(ctx context.Context) error {
 	closed = a.closed
 	a.mu.RUnlock()
 	if closed {
-		// Close() ran while we were dialing — drop the fresh connection.
+
 		conn.Close()
 		return nil
 	}
 
 	a.mu.Lock()
-	// #2113 F1: re-check closed under the SAME lock that stores the conn -
-	// the earlier RLock check released before this store, and a Close in
-	// that window captured a nil conn (dropping nothing) while this fresh
-	// connection got stored, published "connected", and leaked until the
-	// serve loop happened to exit.
+
 	if a.closed {
 		a.mu.Unlock()
 		conn.Close()
@@ -327,10 +301,9 @@ func (a *twitchAdapter) connectAndServe(ctx context.Context) error {
 		a.mu.Unlock()
 	}()
 
-	// Register
 	a.sendRaw(fmt.Sprintf("PASS %s", a.token))
 	a.sendRaw(fmt.Sprintf("NICK %s", a.nick))
-	// Request Twitch-specific tags
+
 	a.sendRaw("CAP REQ :twitch.tv/tags twitch.tv/commands")
 
 	return a.serveIRC(ctx, conn)
@@ -340,16 +313,13 @@ func (a *twitchAdapter) connectAndServe(ctx context.Context) error {
 // It returns when the connection drops, ctx is cancelled, or an auth-failure
 // NOTICE arrives (errTwitchAuthFailed).
 func (a *twitchAdapter) serveIRC(ctx context.Context, conn net.Conn) error {
-	// Read loop
+
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 4096), 512*1024)
 
 	var lastPongNs atomic.Int64
 	lastPongNs.Store(time.Now().UnixNano())
 
-	// Keepalive: send periodic PING and detect dead connections.
-	// scanner.Scan() blocks indefinitely when the server goes silent,
-	// so the timeout must run in a separate goroutine.
 	keepAliveDone := make(chan struct{})
 	safego.Go("im.twitch.keepalive", func() {
 		ticker := time.NewTicker(twitchPingInterval)
@@ -379,7 +349,6 @@ func (a *twitchAdapter) serveIRC(ctx context.Context, conn net.Conn) error {
 			continue
 		}
 
-		// Parse Twitch IRC message (may have @tags prefix)
 		tags := make(map[string]string)
 		ircLine := line
 
@@ -401,8 +370,6 @@ func (a *twitchAdapter) serveIRC(ctx context.Context, conn net.Conn) error {
 		}
 	}
 
-	// Connection closed (by keepalive goroutine on timeout, or by server)
-
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("read: %w", err)
 	}
@@ -419,7 +386,7 @@ func (a *twitchAdapter) handleIRCLine(ctx context.Context, msg *ircMessage, tags
 		lastPongNs.Store(time.Now().UnixNano())
 	case "PONG":
 		lastPongNs.Store(time.Now().UnixNano())
-	case "001": // RPL_WELCOME
+	case "001":
 		debug.Log("twitch", "adapter=%s logged in as %s", a.name, a.nick)
 		for _, ch := range a.channels {
 			ch = strings.TrimSpace(ch)
@@ -433,28 +400,17 @@ func (a *twitchAdapter) handleIRCLine(ctx context.Context, msg *ircMessage, tags
 			debug.Log("twitch", "adapter=%s credentials rejected by server (NOTICE)", a.name)
 			return true
 		}
-		// Other NOTICEs (rate limits, whispers, moderation) are logged so
-		// they are no longer silently dropped (issue #972).
+
 		debug.Log("twitch", "adapter=%s NOTICE: %s", a.name, msg.Trailing)
 	case "PRIVMSG":
 		a.handlePRIVMSG(ctx, msg, tags)
 	case "WHISPER":
-		// Twitch delivers DMs as WHISPER commands (we CAP REQ'd
-		// twitch.tv/commands), NOT as PRIVMSG addressed to our nick — the
-		// isDM branch inside handlePRIVMSG was dead code on Twitch and every
-		// inbound DM was silently dropped here, pairing included (#1247).
-		// A WHISPER's Params[0] is OUR nick (no # prefix), so routing it
-		// through handlePRIVMSG activates the DM path: channelID=senderNick,
-		// no channel mention gating.
+
 		debug.Log("twitch", "adapter=%s inbound WHISPER from %s", a.name, msg.Prefix)
 		a.handlePRIVMSG(ctx, msg, tags)
 	}
 	return false
 }
-
-// ---------------------------------------------------------------------------
-// Twitch tag parsing
-// ---------------------------------------------------------------------------
 
 func parseTwitchTags(tagStr string) map[string]string {
 	tags := make(map[string]string)
@@ -471,11 +427,7 @@ func parseTwitchTags(tagStr string) map[string]string {
 }
 
 func unescapeTwitchTag(val string) string {
-	// Twitch escapes: \s → space, \n → newline, \\ → backslash, \: → semicolon.
-	// Must be a single left-to-right pass: sequential ReplaceAll calls
-	// re-process earlier substitutions, so the literal sequence `\\s`
-	// (escaped backslash followed by plain 's') was corrupted into `\ `
-	// because the \s replacement ran first (issue #972).
+
 	if !strings.Contains(val, "\\") {
 		return val
 	}
@@ -498,7 +450,7 @@ func unescapeTwitchTag(val string) string {
 		case '\\':
 			b.WriteByte('\\')
 		default:
-			// Unknown escape: keep the backslash and the character literally.
+
 			b.WriteByte('\\')
 			b.WriteByte(val[i])
 		}
@@ -518,10 +470,6 @@ func isTwitchAuthFailureNOTICE(msg *ircMessage) bool {
 		strings.Contains(text, "improperly formatted auth")
 }
 
-// ---------------------------------------------------------------------------
-// Message handling
-// ---------------------------------------------------------------------------
-
 func (a *twitchAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage, tags map[string]string) {
 	senderNick, _, _ := parseIRCPrefix(msg.Prefix)
 	if senderNick == "" {
@@ -530,23 +478,20 @@ func (a *twitchAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage, tags
 	if len(msg.Params) == 0 {
 		return
 	}
-	target := msg.Params[0] // #channel
+	target := msg.Params[0]
 	text := msg.Trailing
 
-	// Get display name from tags
 	displayName := tags["display-name"]
 	if displayName == "" {
 		displayName = senderNick
 	}
 
-	// User ID from tags
 	userID := tags["user-id"]
 
 	if strings.TrimSpace(text) == "" {
 		return
 	}
 
-	// Ignore self
 	a.mu.RLock()
 	currentNick := a.nick
 	a.mu.RUnlock()
@@ -554,17 +499,15 @@ func (a *twitchAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage, tags
 		return
 	}
 
-	// Determine channel
 	channelID := target
 	isDM := !strings.HasPrefix(target, "#")
 	if isDM {
-		// Twitch whisper (DM)
+
 		channelID = senderNick
 	}
 
-	// Mention gating for channels
 	if !isDM {
-		// #1565: token-bounded, case-insensitive mention check.
+
 		if !twitchNickMentioned(text, currentNick) {
 			return
 		}
@@ -605,22 +548,18 @@ func (a *twitchAdapter) handlePairing(ctx context.Context, ircMsg InboundMessage
 	pairingResult, err := a.manager.HandlePairingInbound(ircMsg)
 	debug.Log("twitch", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
 	if err != nil && err != ErrNoSessionBound {
-		// #1248: message-level errors do not flip the adapter state - connected
-		// is only published once on IRC login and nothing re-publishes it
-		// while the connection lives, so one transient pairing hiccup pinned a
-		// healthy adapter at warning forever. Log only (#1238/#1243 family).
+
 		debug.Log("twitch", "adapter=%s pairing error (IRC unaffected): %v", a.name, err)
 	}
 	if !pairingResult.Consumed {
 		return false
 	}
 	if err := a.sendTwitchMessage(ctx, channelID, pairingResult.ReplyText); err != nil {
-		// DM replies go through Helix; make failures visible instead of
-		// silently dropping the pairing reply (issue #972).
+
 		debug.Log("twitch", "adapter=%s pairing reply to %s failed: %v", a.name, channelID, err)
 	}
 	if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
-		// #1248: same message-level downgrade as above.
+
 		debug.Log("twitch", "adapter=%s notify previous binding failed: %v", a.name, err)
 	}
 	return true
@@ -652,19 +591,11 @@ func stripTwitchMention(text, nick string) string {
 	if nick == "" {
 		return strings.Join(strings.Fields(text), " ")
 	}
-	// #1565: token-level, case-INSENSITIVE removal. The old ReplaceAll
-	// pair was case-sensitive ("@GGCode do X" kept the mention after the
-	// gate matched it) and matched substrings inside words, corrupting
-	// them. Dropping whole tokens also collapses consecutive mentions
-	// cleanly ("@bot @bot double" -> "double").
+
 	ln := strings.ToLower(nick)
 	kept := make([]string, 0, len(strings.Fields(text)))
 	for _, word := range strings.Fields(text) {
-		// #1747: the gate tokenizes with FieldsFunc (any non
-		// letter/digit/underscore is a separator), so "@ggcode," passed the
-		// gate but the Fields+TrimPrefix strip kept "ggcode," - the mention
-		// survived into the agent's prompt. Tokenize each word the SAME way
-		// and drop it when ANY of its tokens is the nick.
+
 		drop := false
 		for _, tok := range strings.FieldsFunc(strings.ToLower(word), func(r rune) bool {
 			return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
@@ -681,10 +612,6 @@ func stripTwitchMention(text, nick string) string {
 	return strings.Join(kept, " ")
 }
 
-// ---------------------------------------------------------------------------
-// Outbound
-// ---------------------------------------------------------------------------
-
 func (a *twitchAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	target := binding.ChannelID
 	if target == "" {
@@ -698,17 +625,10 @@ func (a *twitchAdapter) sendTwitchMessage(ctx context.Context, target, text stri
 		return nil
 	}
 	if !strings.HasPrefix(target, "#") {
-		// Twitch chat IRC (a modified RFC1459) has no whisper channel: a
-		// PRIVMSG addressed to a nick is rejected/ignored by the server, so DM
-		// replies used to be lost 100% of the time with no error (issue #972).
-		// DMs go through the Helix API instead.
+
 		return a.sendWhisper(ctx, target, text)
 	}
-	// Split by newlines first — IRC uses CRLF as message delimiter, so
-	// embedded \n would prematurely terminate the PRIVMSG. Each line is
-	// sent as a separate PRIVMSG, matching the standard IRC pattern.
-	// The delay applies between ALL messages (not just chunks within a line),
-	// so a multi-line message doesn't burst all lines at once.
+
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimRight(line, "\r")
 		if strings.TrimSpace(line) == "" {
@@ -716,8 +636,7 @@ func (a *twitchAdapter) sendTwitchMessage(ctx context.Context, target, text stri
 		}
 		chunks := splitIRCMessage(line, twitchMaxMessageLen)
 		for _, chunk := range chunks {
-			// #1565 case B: connection-level pacing (concurrent Sends
-			// share the budget); the old per-call `sent` flag is retired.
+
 			if err := a.pacePrivMsg(ctx); err != nil {
 				return err
 			}
@@ -745,7 +664,7 @@ func (a *twitchAdapter) pacePrivMsg(ctx context.Context) error {
 		}
 		a.privMsgMu.Lock()
 		wait = twitchInterMessageDelay - time.Since(a.lastPrivMsgAt)
-		if wait > 0 { // lost the race to another sender - wait out the rest
+		if wait > 0 {
 			a.privMsgMu.Unlock()
 			select {
 			case <-time.After(wait):
@@ -761,12 +680,8 @@ func (a *twitchAdapter) pacePrivMsg(ctx context.Context) error {
 }
 
 func (a *twitchAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
-	return nil // Twitch has no typing indicator via IRC
+	return nil
 }
-
-// ---------------------------------------------------------------------------
-// Connection dialing
-// ---------------------------------------------------------------------------
 
 // dialFunc returns the connection establishment function, allowing tests to
 // inject a fake transport. The default implements the proxy/TLS logic.
@@ -799,10 +714,6 @@ func (a *twitchAdapter) defaultDialIRC(addr string) (net.Conn, error) {
 	}
 	return conn, nil
 }
-
-// ---------------------------------------------------------------------------
-// DMs via the Helix API (whispers)
-// ---------------------------------------------------------------------------
 
 // sendWhisper delivers a DM through the Helix API. target is the recipient's
 // login (nick). Failures are returned to the caller (who logs them) — they
@@ -975,36 +886,15 @@ func (a *twitchAdapter) sendRaw(line string) error {
 	if c == nil {
 		return fmt.Errorf("not connected")
 	}
-	// #1249: serialize writes — read-loop PONGs, keepalive PINGs, Sends and
-	// the Close QUIT all race here; an interleaved write corrupts the IRC
-	// line and the server drops the connection.
+
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
-	// #2113 F2: bound the write. On a half-dead connection (peer stopped
-	// reading, TCP send buffer full) this write used to block FOREVER
-	// while holding writeMu - the keepalive PING itself became the wedged
-	// writer (its pong-timeout check runs before sendRaw), Close's QUIT
-	// queued behind it, and the conn.Close() that would unblock everything
-	// sat behind the QUIT: StopAdapter then held the IM Manager's m.mu for
-	// the TCP retransmit timeout (15-30min) - a global manager stall.
-	// #2747: call SetWriteDeadline through the net.Conn interface - the
-	// production conn is ALWAYS a *tls.Conn (defaultDialIRC wraps in
-	// tls.Client), so the old *net.TCPConn type assertion never matched and
-	// the deadline was never set: the whole #2113 F2 anti-wedge protection
-	// was dead code on every real connection. tls.Conn propagates the
-	// deadline to the wrapped TCP conn, and the proxy path (proxyDial)
-	// returns plain conns where the interface call is equally valid. Clear
-	// the deadline after the write so later reads on this conn are not
-	// affected by a lingering write deadline.
+
 	_ = c.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	_, err := fmt.Fprintf(c, "%s\r\n", line)
 	_ = c.SetWriteDeadline(time.Time{})
 	return err
 }
-
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
 
 func (a *twitchAdapter) publishState(healthy bool, status, lastErr string) {
 	if a.manager == nil {

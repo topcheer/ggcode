@@ -19,7 +19,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// findTGAdapterConfig finds the first Telegram adapter config in the user's config.
 func findTGAdapterConfig(t *testing.T, cfg *config.Config) (string, config.IMAdapterConfig, bool) {
 	t.Helper()
 	for name, adapter := range cfg.IM.Adapters {
@@ -30,12 +29,6 @@ func findTGAdapterConfig(t *testing.T, cfg *config.Config) (string, config.IMAda
 	return "", config.IMAdapterConfig{}, false
 }
 
-// TestE2ETGBotGetMe verifies the Telegram bot token works by calling getMe.
-//
-// Set GGCODE_E2E=1 to run. Requires:
-//   - ~/.ggcode/ggcode.yaml with a Telegram adapter config (bot_token)
-//
-// This test does NOT send any messages — it only verifies the bot token.
 func TestE2ETGBotGetMe(t *testing.T) {
 	if os.Getenv("GGCODE_E2E") == "" {
 		t.Skip("GGCODE_E2E not set, skipping")
@@ -64,14 +57,12 @@ func TestE2ETGBotGetMe(t *testing.T) {
 		t.Fatalf("getMe: %v", err)
 	}
 
-	// Telegram API returns {"ok":true,"result":{"username":"...",...}}
-	// getMe returns the full response map; username is nested under "result"
 	username := ""
 	if sub, ok := result["result"].(map[string]any); ok {
 		username, _ = sub["username"].(string)
 	}
 	if username == "" {
-		// Try top-level (in case apiRequest already unwraps)
+
 		username, _ = result["username"].(string)
 	}
 	if username == "" {
@@ -80,13 +71,6 @@ func TestE2ETGBotGetMe(t *testing.T) {
 	t.Logf("Bot @%s connected (adapter=%s, apiBase=%s)", username, adapterName, adapter.apiBase)
 }
 
-// TestE2ETGSendTextMessages sends multiple text messages to a real Telegram chat.
-//
-// Set GGCODE_E2E=1 to run. Requires:
-//   - ~/.ggcode/ggcode.yaml with a Telegram adapter config (bot_token)
-//   - GGCODE_E2E_TG_CHAT_ID set to a Telegram chat ID (e.g., your user ID or group ID)
-//
-// This test sends real messages — check Telegram to verify.
 func TestE2ETGSendTextMessages(t *testing.T) {
 	if os.Getenv("GGCODE_E2E") == "" {
 		t.Skip("GGCODE_E2E not set, skipping")
@@ -112,14 +96,12 @@ func TestE2ETGSendTextMessages(t *testing.T) {
 		t.Skip("GGCODE_E2E_TG_CHAT_ID not set (set to a Telegram chat ID to send test messages to)")
 	}
 
-	// Mark as connected for Send to work
 	adapter.mu.Lock()
 	adapter.connected = true
 	adapter.mu.Unlock()
 
 	ctx := context.Background()
 
-	// Verify bot token first
 	if _, err := adapter.getMe(ctx); err != nil {
 		t.Fatalf("getMe failed: %v", err)
 	}
@@ -181,11 +163,6 @@ func TestE2ETGSendTextMessages(t *testing.T) {
 	}
 }
 
-// TestE2ETGSendStatusAndApproval tests sending status and approval events to Telegram.
-//
-// Set GGCODE_E2E=1 to run. Requires:
-//   - ~/.ggcode/ggcode.yaml with a Telegram adapter config (bot_token)
-//   - GGCODE_E2E_TG_CHAT_ID set to a Telegram chat ID
 func TestE2ETGSendStatusAndApproval(t *testing.T) {
 	if os.Getenv("GGCODE_E2E") == "" {
 		t.Skip("GGCODE_E2E not set, skipping")
@@ -245,7 +222,7 @@ func TestE2ETGSendStatusAndApproval(t *testing.T) {
 			event: OutboundEvent{
 				Kind: OutboundEventApprovalResult,
 				Result: &ApprovalResult{
-					Decision:    1, // permission.Allow
+					Decision:    1,
 					RespondedBy: "test-user",
 				},
 			},
@@ -270,11 +247,6 @@ func TestE2ETGSendStatusAndApproval(t *testing.T) {
 	}
 }
 
-// TestE2ETGSendSplitMessage tests that long messages are split correctly.
-//
-// Set GGCODE_E2E=1 to run. Requires:
-//   - ~/.ggcode/ggcode.yaml with a Telegram adapter config (bot_token)
-//   - GGCODE_E2E_TG_CHAT_ID set to a Telegram chat ID
 func TestE2ETGSendSplitMessage(t *testing.T) {
 	if os.Getenv("GGCODE_E2E") == "" {
 		t.Skip("GGCODE_E2E not set, skipping")
@@ -306,7 +278,6 @@ func TestE2ETGSendSplitMessage(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Create a message longer than 4096 chars (TG max)
 	longText := fmt.Sprintf("E2E 测试：长消息分割（共 %d 字符）\n\n", 5000)
 	for i := 1; i <= 100; i++ {
 		longText += fmt.Sprintf("第 %d 行：这是一段很长的消息内容，用于测试 Telegram 消息分割功能是否正常工作。\n", i)
@@ -328,7 +299,6 @@ func TestE2ETGSendSplitMessage(t *testing.T) {
 	t.Log("Long message split and sent OK")
 }
 
-// TestE2ETGBotWithCustomAPIRoot tests TG adapter with custom API root (if configured).
 func TestE2ETGBotWithCustomAPIRoot(t *testing.T) {
 	if os.Getenv("GGCODE_E2E") == "" {
 		t.Skip("GGCODE_E2E not set, skipping")
@@ -351,7 +321,6 @@ func TestE2ETGBotWithCustomAPIRoot(t *testing.T) {
 
 	t.Logf("API base: %s (default: %s)", adapter.apiBase, tgDefaultAPIBase)
 
-	// Verify connectivity regardless of API root
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -367,10 +336,8 @@ func TestE2ETGBotWithCustomAPIRoot(t *testing.T) {
 	t.Logf("Bot @%s reachable via %s", username, adapter.apiBase)
 }
 
-// A small 1x1 red PNG for image tests (same as QQ E2E tests).
 const tgTestPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
 
-// tgSetupAdapter is a helper that creates and verifies a TG adapter for E2E tests.
 func tgSetupAdapter(t *testing.T) (*tgAdapter, string, string) {
 	t.Helper()
 	if os.Getenv("GGCODE_E2E") == "" {
@@ -410,10 +377,6 @@ func tgSetupAdapter(t *testing.T) (*tgAdapter, string, string) {
 	return adapter, adapterName, chatID
 }
 
-// TestE2ETGSendDataUrlImage sends a message with an embedded data:image/png;base64,... image.
-//
-// Set GGCODE_E2E=1 and GGCODE_E2E_TG_CHAT_ID to run.
-// This test sends a real image message — check Telegram to verify.
 func TestE2ETGSendDataUrlImage(t *testing.T) {
 	adapter, adapterName, chatID := tgSetupAdapter(t)
 	ctx := context.Background()
@@ -427,7 +390,6 @@ func TestE2ETGSendDataUrlImage(t *testing.T) {
 	t.Log("Data URL image sent OK")
 }
 
-// TestE2ETGSendTextWithMultipleImages sends a message with multiple embedded images.
 func TestE2ETGSendTextWithMultipleImages(t *testing.T) {
 	adapter, adapterName, chatID := tgSetupAdapter(t)
 	ctx := context.Background()
@@ -441,7 +403,6 @@ func TestE2ETGSendTextWithMultipleImages(t *testing.T) {
 	t.Log("Multiple images sent OK")
 }
 
-// TestE2ETGSendImagePlusText sends a message with an image followed by analysis text.
 func TestE2ETGSendImagePlusText(t *testing.T) {
 	adapter, adapterName, chatID := tgSetupAdapter(t)
 	ctx := context.Background()
@@ -455,7 +416,6 @@ func TestE2ETGSendImagePlusText(t *testing.T) {
 	t.Log("Image + text sent OK")
 }
 
-// TestE2ETGSendPhotoByUpload directly tests sendPhotoByUpload with raw image bytes.
 func TestE2ETGSendPhotoByUpload(t *testing.T) {
 	adapter, _, chatID := tgSetupAdapter(t)
 	ctx := context.Background()
@@ -471,8 +431,6 @@ func TestE2ETGSendPhotoByUpload(t *testing.T) {
 	t.Log("Photo upload sent OK")
 }
 
-// TestE2ETGSendPhotoByURL tests sending a photo via public URL.
-// Uses httpbin.org/image/png as a publicly accessible test image.
 func TestE2ETGSendPhotoByURL(t *testing.T) {
 	adapter, _, chatID := tgSetupAdapter(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -485,12 +443,10 @@ func TestE2ETGSendPhotoByURL(t *testing.T) {
 	t.Log("Photo by URL sent OK")
 }
 
-// TestE2ETGSendLocalFileImage tests sending an image from a local file path.
 func TestE2ETGSendLocalFileImage(t *testing.T) {
 	adapter, adapterName, chatID := tgSetupAdapter(t)
 	ctx := context.Background()
 
-	// Create a temp PNG file
 	tmpDir := t.TempDir()
 	pngPath := filepath.Join(tmpDir, "local_test.png")
 	pngData, _ := base64.StdEncoding.DecodeString(tgTestPngBase64)
@@ -507,7 +463,6 @@ func TestE2ETGSendLocalFileImage(t *testing.T) {
 	t.Logf("Local file image sent OK (path=%s)", pngPath)
 }
 
-// TestE2ETGSendMixedContent sends a mixed content message with text, code, and multiple images.
 func TestE2ETGSendMixedContent(t *testing.T) {
 	adapter, adapterName, chatID := tgSetupAdapter(t)
 	ctx := context.Background()
@@ -521,7 +476,6 @@ func TestE2ETGSendMixedContent(t *testing.T) {
 	t.Log("Mixed content sent OK")
 }
 
-// TestE2ETGSend10ImageScenarios sends 10 different message types with images to a real TG chat.
 func TestE2ETGSend10ImageScenarios(t *testing.T) {
 	adapter, adapterName, chatID := tgSetupAdapter(t)
 	ctx := context.Background()
@@ -595,28 +549,6 @@ func TestE2ETGSend10ImageScenarios(t *testing.T) {
 	}
 }
 
-// TestE2ERealLLMToTGCallRealLLM is a TRUE end-to-end test that mimics the exact
-// user workflow: user prompt → agent (LLM + tools) → response → TG send.
-//
-// Each sub-test creates a fresh project directory and agent with full built-in tools,
-// just like the TUI does. The prompts are real project tasks designed to trigger the
-// LLM to write files, execute commands, and include image references in its response.
-//
-// Image pipeline: LLM writes HTML → run_command takes screenshot → LLM references
-// the screenshot file path in its text response → ExtractImagesFromText extracts it
-// → sendExtractedImage uploads to TG → send remaining text.
-//
-// Tool call events are formatted through the formal TUI pipeline:
-//
-//	DescribeTool → FormatIMStatus → LocalizeIMProgress → adapter.Send
-//
-// This exactly mirrors the TUI's submit.go → im_emit.go processing chain.
-//
-// Set GGCODE_E2E=1 to run. Requires:
-//   - ~/.ggcode/ggcode.yaml with a valid provider and TG adapter config
-//   - GGCODE_E2E_TG_CHAT_ID set to a Telegram chat ID
-//
-// This test sends real messages — check Telegram to verify.
 func TestE2ERealLLMToTGCallRealLLM(t *testing.T) {
 	if os.Getenv("GGCODE_E2E") == "" {
 		t.Skip("GGCODE_E2E not set, skipping")
@@ -640,11 +572,6 @@ func TestE2ERealLLMToTGCallRealLLM(t *testing.T) {
 		t.Fatalf("resolve endpoint: %v", resolveErr)
 	}
 
-	// Real project-task prompts that trigger the LLM to:
-	//  1. write_file → create HTML/JS files
-	//  2. run_command → open browser + take screenshot
-	//  3. Reference the screenshot file in its text response
-	//  4. The file path gets extracted by ExtractImagesFromText → uploaded to TG
 	prompts := []struct {
 		name    string
 		prompt  string
@@ -701,11 +628,10 @@ func TestE2ERealLLMToTGCallRealLLM(t *testing.T) {
 	totalToolCalls := 0
 	for _, p := range prompts {
 		t.Run(p.name, func(t *testing.T) {
-			// Each sub-test gets its own project directory (like a real user workspace).
+
 			projectDir := t.TempDir()
 			t.Logf("Project dir: %s", projectDir)
 
-			// Create agent with full built-in tools (exactly like TUI does).
 			registry := tool.NewRegistry()
 			if regErr := tool.RegisterBuiltinTools(registry, nil, projectDir, nil, nil); regErr != nil {
 				t.Fatalf("register builtin tools: %v", regErr)
@@ -728,9 +654,6 @@ func TestE2ERealLLMToTGCallRealLLM(t *testing.T) {
 			llmCtx, llmCancel := context.WithTimeout(ctx, p.timeout)
 			defer llmCancel()
 
-			// Capture all events using the formal TUI formatting pipeline:
-			// DescribeTool → FormatIMStatus → LocalizeIMProgress → adapter.Send
-			// This exactly mirrors submit.go → im_emit.go in the TUI.
 			var responseText strings.Builder
 			toolCallCount := 0
 			toolResultCount := 0
@@ -742,12 +665,10 @@ func TestE2ERealLLMToTGCallRealLLM(t *testing.T) {
 					responseText.WriteString(event.Text)
 
 				case provider.StreamEventToolCallDone:
-					// Tool call completed — format through the formal pipeline.
-					// Same as TUI's submit.go: describeTool → statusMsg → emitIMStatusMsg
+
 					toolCallCount++
 					lastToolPresent = DescribeTool(ToolLangZhCN, event.Tool.Name, string(event.Tool.Arguments))
 
-					// Format status: FormatIMStatus(activity, displayName, detail) → LocalizeIMProgress
 					statusMsg := FormatIMStatus(ToolLangZhCN, lastToolPresent.Activity, lastToolPresent.DisplayName, lastToolPresent.Detail)
 					if statusMsg == "" {
 						statusMsg = lastToolPresent.Activity
@@ -755,7 +676,6 @@ func TestE2ERealLLMToTGCallRealLLM(t *testing.T) {
 					t.Logf("[tool_call #%d] %s (display=%q detail=%q activity=%q)",
 						toolCallCount, statusMsg, lastToolPresent.DisplayName, lastToolPresent.Detail, lastToolPresent.Activity)
 
-					// Send tool call status to TG (non-blocking, ignore errors)
 					binding := ChannelBinding{ChannelID: chatID, Adapter: adapterName}
 					if sendErr := adapter.Send(ctx, binding, OutboundEvent{
 						Kind:   OutboundEventStatus,
@@ -765,8 +685,7 @@ func TestE2ERealLLMToTGCallRealLLM(t *testing.T) {
 					}
 
 				case provider.StreamEventToolResult:
-					// Tool result — format through the formal pipeline.
-					// Same as TUI: describeTool → statusMsg → emitIMStatusMsg
+
 					toolResultCount++
 					resultPreview := event.Result
 					if len(resultPreview) > 100 {
@@ -775,7 +694,6 @@ func TestE2ERealLLMToTGCallRealLLM(t *testing.T) {
 					t.Logf("[tool_result #%d] tool=%s ok=%v preview=%s",
 						toolResultCount, lastToolPresent.DisplayName, !event.IsError, resultPreview)
 
-					// For tool results, TUI sends "thinking" status with tool context
 					thinkingStatus := FormatIMStatus(ToolLangZhCN,
 						localizedThinking(ToolLangZhCN),
 						lastToolPresent.DisplayName,
@@ -816,14 +734,12 @@ func TestE2ERealLLMToTGCallRealLLM(t *testing.T) {
 			}
 			t.Logf("LLM response (%d chars): %s", len(output), truncateStr(output, 500))
 
-			// Extract images from LLM response text.
 			images, remainingText := ExtractImagesFromText(output)
 			t.Logf("Extracted %d image(s) from response", len(images))
 			for i, img := range images {
 				t.Logf("  image[%d]: kind=%s data_len=%d preview=%s", i, img.Kind, len(img.Data), truncateStr(img.Data, 100))
 			}
 
-			// Send the full LLM response to real TG.
 			binding := ChannelBinding{
 				ChannelID: chatID,
 				Adapter:   adapterName,
@@ -836,7 +752,7 @@ func TestE2ERealLLMToTGCallRealLLM(t *testing.T) {
 			if sendErr != nil {
 				t.Errorf("TG Send failed: %v", sendErr)
 				t.Logf("FULL LLM response that failed: %s", output)
-				// Show what happens after extract + escape
+
 				_, rem := ExtractImagesFromText(output)
 				t.Logf("After extract images, remaining (%d chars): %s", len(rem), rem)
 				escaped := EscapeMarkdownV2(rem)
@@ -855,7 +771,6 @@ func TestE2ERealLLMToTGCallRealLLM(t *testing.T) {
 			t.Logf("Sent to TG OK (%d chars text, %d images, %d tool calls, remaining: %q)",
 				len(output), len(images), toolCallCount, remaining)
 
-			// Delay between messages to avoid rate limiting
 			time.Sleep(5 * time.Second)
 		})
 	}

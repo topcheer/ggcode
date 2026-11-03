@@ -22,8 +22,6 @@ func withNoopSleep(t *testing.T) {
 	t.Cleanup(func() { sleepRetryFn = orig })
 }
 
-// --- parseRetryAfter unit tests ---
-
 func TestParseRetryAfter_IntegerSeconds(t *testing.T) {
 	resp := &http.Response{Header: http.Header{}}
 	resp.Header.Set("Retry-After", "5")
@@ -71,7 +69,7 @@ func TestParseRetryAfter_Garbage(t *testing.T) {
 
 func TestParseRetryAfter_MattermostXRateLimitReset(t *testing.T) {
 	resp := &http.Response{Header: http.Header{}}
-	// X-RateLimit-Reset is Unix timestamp in milliseconds
+
 	futureMs := time.Now().Add(3 * time.Second).UnixMilli()
 	resp.Header.Set("X-RateLimit-Reset", fmt.Sprintf("%d", futureMs))
 	d := parseRetryAfter(resp)
@@ -133,8 +131,6 @@ func TestParseRetryAfter_FeishuFloatReset(t *testing.T) {
 	}
 }
 
-// --- capDuration unit tests ---
-
 func TestCapDuration_NegativeReturnsDefault(t *testing.T) {
 	d := capDuration(-5 * time.Second)
 	if d != defaultRetryDelay {
@@ -155,8 +151,6 @@ func TestCapDuration_InRange(t *testing.T) {
 		t.Fatalf("expected 5s, got %v", d)
 	}
 }
-
-// --- sleepRetry unit tests ---
 
 func TestSleepRetry_NormalCompletion(t *testing.T) {
 	start := time.Now()
@@ -179,8 +173,6 @@ func TestSleepRetry_ContextCancelled(t *testing.T) {
 	}
 }
 
-// --- JitterDuration tests ---
-
 func TestJitterDuration_ZeroOrNegative(t *testing.T) {
 	if d := jitterDuration(0); d != 0 {
 		t.Errorf("jitterDuration(0) = %v, want 0", d)
@@ -192,8 +184,8 @@ func TestJitterDuration_ZeroOrNegative(t *testing.T) {
 
 func TestJitterDuration_StaysWithinBounds(t *testing.T) {
 	base := 10 * time.Second
-	minAllowed := time.Duration(float64(base) * 0.74) // slightly below 0.75 for float rounding
-	maxAllowed := time.Duration(float64(base) * 1.26) // slightly above 1.25
+	minAllowed := time.Duration(float64(base) * 0.74)
+	maxAllowed := time.Duration(float64(base) * 1.26)
 	for i := 0; i < 1000; i++ {
 		d := jitterDuration(base)
 		if d < minAllowed || d > maxAllowed {
@@ -213,8 +205,6 @@ func TestJitterDuration_ProducesVariedOutput(t *testing.T) {
 	}
 }
 
-// --- Integration: HTTP 429 retry behavior ---
-
 // TestRetryOn429_SlackResponse simulates a Slack-style 429 then 200.
 func TestRetryOn429_SlackResponse(t *testing.T) {
 	withNoopSleep(t)
@@ -222,7 +212,7 @@ func TestRetryOn429_SlackResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		if callCount <= 2 {
-			w.Header().Set("Retry-After", "0") // immediate retry for test speed
+			w.Header().Set("Retry-After", "0")
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
@@ -278,7 +268,7 @@ func TestRetryOn429_SlackExhausted(t *testing.T) {
 	if !strings.Contains(err.Error(), "rate limited") {
 		t.Fatalf("expected 'rate limited' error, got: %v", err)
 	}
-	// maxRateLimitRetries + 1 initial = total calls
+
 	expectedCalls := maxRateLimitRetries + 1
 	if callCount != expectedCalls {
 		t.Fatalf("expected %d calls, got %d", expectedCalls, callCount)
@@ -296,7 +286,7 @@ func TestRetryOn429_DiscordResponse(t *testing.T) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
-		w.WriteHeader(http.StatusNoContent) // 204 success for Discord
+		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
 
@@ -323,7 +313,7 @@ func TestRetryOn429_MattermostResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		if callCount == 1 {
-			// Mattermost uses X-RateLimit-Reset (ms timestamp)
+
 			futureMs := time.Now().Add(1 * time.Millisecond).UnixMilli()
 			w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", futureMs))
 			w.WriteHeader(http.StatusTooManyRequests)
@@ -392,7 +382,7 @@ func TestSlackRatelimitedInBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		if callCount == 1 {
-			// Slack can return 200 with ok=false and error=ratelimited
+
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"ok":    false,

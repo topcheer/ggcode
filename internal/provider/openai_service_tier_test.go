@@ -1,9 +1,5 @@
 package provider
 
-// sa-81: service_tier support in the OpenAI chat adapter. The tier hint must
-// ride the request's `service_tier` field, survive model swaps, and degrade
-// gracefully when an OpenAI-compatible gateway rejects it.
-
 import (
 	"errors"
 	"testing"

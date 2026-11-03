@@ -1,14 +1,5 @@
 package provider
 
-// #4563: two usage undercounts in openai.go.
-//   A) non-streaming prompt-only usage (PromptTokens>0, CompletionTokens==0)
-//      passed through with OutputTokens==0 - the streaming path backfills
-//      this (#4472), the non-streaming path did not.
-//   B) applyOpenAIUsage materializes a completion-only chunk (Output>0,
-//      Input==0), which then skipped both the usage==nil estimation
-//      fallback and the #4472 output-backfill branch (it requires
-//      Output==0) - InputTokens stayed 0 forever.
-
 import (
 	"testing"
 
@@ -25,7 +16,7 @@ func TestIssue4563_CompletionOnlyChunkMaterializes(t *testing.T) {
 	if got.OutputTokens != 42 || got.InputTokens != 0 {
 		t.Fatalf("materialized usage = %+v, want Output=42 Input=0", got)
 	}
-	// All-zero chunk still does not materialize (#1286 fallback preserved).
+
 	if applyOpenAIUsage(nil, openai.Usage{}) != nil {
 		t.Fatal("#1286 regression: all-zero chunk must not materialize")
 	}

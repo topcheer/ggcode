@@ -1,29 +1,5 @@
 package provider
 
-// OpenAI Responses hosted (server-side) tools (sa-62).
-//
-// The Responses API ships hosted tools that execute inside OpenAI's
-// infrastructure - {type: "web_search"} being the flagship. Like Anthropic's
-// server_tool_use and Gemini's google_search/url_context built-ins, ggcode
-// never receives an executable client-side tool_use for them: the model calls
-// the tool in-API and the response output carries web_search_call items
-// describing what was searched. This leg closes the provider symmetry: all
-// three major protocols now accept the same config declaration
-// (`server_tools: [{type: ...}]`) via ServerToolsSetter.
-//
-// Stateless replay contract: ggcode always sends store=false, so server-side
-// conversation state is discarded between turns. A web_search_call item from
-// a previous response must therefore be echoed back verbatim in the next
-// request's input or the model loses the search context entirely. Items ride
-// the shared "server_tool" content-block carrier (Raw = verbatim JSON) and
-// buildResponsesInput replays them byte-for-byte. Foreign provider blocks
-// (Anthropic/Gemini signatures from a failed-over session) fail the type
-// probe and are dropped, keeping cross-provider failover leak-free.
-//
-// References:
-//   - https://developers.openai.com/api/docs/guides/tools-web-search
-//   - https://github.com/openai/openai-go (responses.WebSearchTool params)
-
 import (
 	"encoding/json"
 	"fmt"
@@ -38,8 +14,7 @@ import (
 func responsesHostedTool(t ServerToolConfig) (responsesTool, bool) {
 	normalized := strings.ToLower(strings.TrimSpace(t.Type))
 	switch normalized {
-	// sa-67: apply_patch is declared in-API (the model addresses it purely by
-	// type) but executed CLIENT-side - see applyPatchInternalToolName.
+
 	case "apply_patch":
 		return responsesTool{Type: normalized}, true
 	case "web_search", "web_search_2025_08_26", "web_search_preview":
@@ -83,10 +58,7 @@ func decodeResponsesServerToolItem(raw json.RawMessage) (responsesInputItem, boo
 	if json.Unmarshal(raw, &probe) != nil {
 		return responsesInputItem{}, false
 	}
-	// "web_search_call" today; the suffix match tolerates variant/legacy
-	// naming (e.g. preview relays) without opening the door to message or
-	// reasoning items. apply_patch_call is NOT a hosted tool (sa-67): it is
-	// handled by the dedicated apply_patch path, never as a server_tool.
+
 	if strings.HasPrefix(probe.Type, "web_search") && strings.HasSuffix(probe.Type, "_call") {
 		return responsesInputItem{RawReplay: raw}, true
 	}

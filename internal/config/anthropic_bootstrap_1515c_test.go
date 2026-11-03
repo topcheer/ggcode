@@ -23,20 +23,15 @@ func TestMatchKnownAnthropicEndpointURLScoped(t *testing.T) {
 		}}
 	}
 
-	// URL contains bigmodel -> zai endpoint selected and carries the key.
 	v, e := matchKnownAnthropicEndpoint(cfg(), "https://BIGMODEL.cn/api/anthropic", "sk-test", "glm-4.7")
 	if v != "zai" || e != "cn-coding-anthropic" {
 		t.Fatalf("bigmodel URL matched (%s, %s), want (zai, cn-coding-anthropic)", v, e)
 	}
 
-	// URL that matches NO pattern row must not match anything - even
-	// though the table's first row exists. (Old code returned the first
-	// row unconditionally.)
 	if v, e := matchKnownAnthropicEndpoint(cfg(), "https://api.anthropic.com", "sk-test", "m1"); v != "" || e != "" {
 		t.Fatalf("unmatched URL returned (%s, %s), want empty", v, e)
 	}
 
-	// Two-row table: the row matching the URL wins, not the first row.
 	old := knownAnthropicHostPatterns
 	knownAnthropicHostPatterns = append(knownAnthropicHostPatterns,
 		struct {
@@ -50,7 +45,7 @@ func TestMatchKnownAnthropicEndpointURLScoped(t *testing.T) {
 	if v != "other" || e != "mirror" {
 		t.Fatalf("second-row URL matched (%s, %s), want (other, mirror)", v, e)
 	}
-	// First row still wins for its own URL.
+
 	if v, e := matchKnownAnthropicEndpoint(cfg(), "https://bigmodel.cn/x", "sk-3", "m3"); v != "zai" || e != "cn-coding-anthropic" {
 		t.Fatalf("first-row URL matched (%s, %s), want (zai, cn-coding-anthropic)", v, e)
 	}

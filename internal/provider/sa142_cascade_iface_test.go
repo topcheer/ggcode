@@ -110,7 +110,6 @@ func TestSA142_CascadeIfaceDelegation(t *testing.T) {
 		t.Fatalf("CountTokens = %d, %v; want 7, nil", n, err)
 	}
 
-	// Setters fan out to BOTH chain members.
 	fp.SetReasoningEffort("low")
 	fp.SetTextVerbosity("short")
 	fp.SetServiceTier("default")
@@ -123,7 +122,7 @@ func TestSA142_CascadeIfaceDelegation(t *testing.T) {
 			t.Fatalf("level %d did not receive all forwarded setters: %+v", i, p)
 		}
 	}
-	// Getter now reflects the still-active level 0.
+
 	if got := fp.ReasoningEffort(); got != "low" {
 		t.Fatalf("ReasoningEffort after set = %q, want low", got)
 	}
@@ -158,7 +157,7 @@ func TestSA142_CascadeGettersNonCapable(t *testing.T) {
 	if got := fp.RateLimitInfo(); got != (RateLimitInfo{}) {
 		t.Fatalf("RateLimitInfo = %+v, want zero", got)
 	}
-	// Setters must be no-ops, not panics, on non-capable chains.
+
 	fp.SetReasoningEffort("high")
 	fp.SetTextVerbosity("long")
 	fp.SetServiceTier("batch")
@@ -177,8 +176,6 @@ func TestSA142_CascadeCloneWithModel(t *testing.T) {
 	notified := make(chan struct{}, 1)
 	fp.SetFailoverNotify(func(FailoverTrigger, error) { notified <- struct{}{} })
 
-	// Advance to level 1 and give the clone a huge probe interval so the
-	// inherited recovery prober never fires during the test.
 	fp.activeIdx.Store(1)
 	fp.probeInterval = time.Hour
 
@@ -186,7 +183,7 @@ func TestSA142_CascadeCloneWithModel(t *testing.T) {
 	if !ok {
 		t.Fatalf("CloneWithModel did not return *FallbackProvider")
 	}
-	defer clone.Reset() // stop the inherited recovery prober
+	defer clone.Reset()
 	if !clone.HasFailedOver() {
 		t.Fatal("clone must inherit the advanced active index")
 	}
@@ -199,18 +196,18 @@ func TestSA142_CascadeCloneWithModel(t *testing.T) {
 	if got := clone.ModelName(); got != "strong-model" {
 		t.Fatalf("clone ModelName = %q, want strong-model", got)
 	}
-	// Original wrapper must stay untouched.
+
 	if fp.ModelName() != "m1" {
 		t.Fatalf("original mutated by clone: ModelName = %q", fp.ModelName())
 	}
-	// Clone started at level 1, so the recovery prober must be running.
+
 	clone.mu.RLock()
 	running := clone.probeCancel != nil
 	clone.mu.RUnlock()
 	if !running {
 		t.Fatal("clone did not inherit the recovery prober while active != 0")
 	}
-	// Cloning the ALREADY-cloned wrapper keeps the chain clonable.
+
 	if _, ok := clone.CloneWithModel("x").(*FallbackProvider); !ok {
 		t.Fatal("re-cloning a cascade clone lost the FallbackProvider type")
 	}

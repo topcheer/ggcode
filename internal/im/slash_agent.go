@@ -16,10 +16,6 @@ import (
 	"github.com/topcheer/ggcode/internal/usage"
 )
 
-// Path-A (daemon bridge) implementation of SlashDeps. The agent and disk
-// stores are the data sources; the TUI-attached path supplies its own live
-// implementation from the model state.
-
 // BuildCrossSessionCostSummary is retired (#2312 ruling B): the .cost.json
 // store it loaded has no live writer - the IM fallback rendered empty or
 // stale legacy data. The first-class usage/balance surface (#2150, in
@@ -40,13 +36,7 @@ func (b *DaemonBridge) SessionCostSummary() (string, error) {
 }
 
 func (b *DaemonBridge) SessionUsageSummary() (string, error) {
-	// #2150 batch 3: live vendor usage/balance via the shared probe layer.
-	// Instance config follows the #2205 pattern (LoadInstanceConfig with the
-	// bridge's workingDir inherited from the agent) - the daemon process
-	// keeps keys.env seeds in-process, so the resolved active endpoint and
-	// API key are readable here. The Service is a package-level singleton so
-	// repeated /usage commands (and any other im consumer) share the
-	// 3min cache instead of cold-querying every time.
+
 	cfg := config.LoadInstanceConfig(b.workingDir)
 	if cfg == nil || cfg.Vendor == "" {
 		return "usage: no active vendor", nil
@@ -60,14 +50,12 @@ func (b *DaemonBridge) SessionUsageSummary() (string, error) {
 	if apiKey == "" {
 		return fmt.Sprintf("usage: %s (no API key resolved for the active endpoint)", cfg.Vendor), nil
 	}
-	// #2399: BY-URL probe selection (owner ruling) - the config vendor
-	// name never picks the probe here either; unknown host => no probe.
+
 	probeID := imUsageService().Resolve(baseURL)
 	if probeID == "" {
 		return fmt.Sprintf("usage: %s (no usage probe for this endpoint)", cfg.Vendor), nil
 	}
-	// #2400: outer 15s aligned with the TUI baseline; the probe's own 10s
-	// budget rules (a 5s outer clamp made 5-10s endpoints fail outright).
+
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	info, err := imUsageService().Get(ctx, probeID, baseURL, apiKey)
@@ -96,12 +84,7 @@ func (b *DaemonBridge) CurrentMode() string {
 }
 
 func (b *DaemonBridge) SwitchMode(name string) error {
-	// #2205: mirror the TUI-side gate (#2185/PR #2203) on the daemon
-	// bridge - the second consumer of IM-remote mode switching. Escalation
-	// to bypass/autopilot requires the im.remote_dangerous_commands opt-in;
-	// downgrade/level switches and plan/auto stay ungated. Fail closed on
-	// missing config. Unknown mode names error instead of silently
-	// falling back to supervised.
+
 	if !permission.IsValidPermissionMode(name) {
 		return fmt.Errorf("unknown permission mode %q (valid: supervised, bypass; legacy aliases auto/autopilot normalize)", name)
 	}
@@ -152,9 +135,7 @@ func (b *DaemonBridge) ToolList() (string, error) {
 	for _, t := range tools {
 		desc := t.Description()
 		if len(desc) > 120 {
-			// #4237: rune-safe cut - a byte slice can land mid-rune and the
-			// IM channel then shows U+FFFD mojibake for CJK/emoji tool
-			// descriptions (same class as the #4229 truncate fix).
+
 			r := []rune(desc)
 			if len(r) > 117 {
 				desc = string(r[:117]) + "..."
@@ -221,9 +202,7 @@ func SanitizeGitDiffArgs(args []string) []string {
 			out = append(out, a)
 			continue
 		}
-		// Positional tokens (refs, paths - no leading dash) pass; every
-		// other `-`-prefixed token is dropped silently, so the resulting
-		// command is always a plain read-only diff.
+
 		if !strings.HasPrefix(a, "-") {
 			out = append(out, a)
 		}
@@ -236,9 +215,7 @@ func (b *DaemonBridge) GitDiff(args []string) (string, error) {
 	dir := b.workingDir
 	b.mu.Unlock()
 	gitArgs := append([]string{"diff"}, SanitizeGitDiffArgs(args)...)
-	// #4237: bounded context - a hung git (network mount, giant repo, lock
-	// wait) used to block the IM callback goroutine forever. Same pattern
-	// as inbound_shell.go / stt/local.go.
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", gitArgs...)
@@ -247,12 +224,7 @@ func (b *DaemonBridge) GitDiff(args []string) (string, error) {
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		// #1560-B: CombinedOutput merges stderr - "fatal: bad revision"
-		// plus the full usage text used to be handed back as the DIFF
-		// BODY when the exit was non-zero with non-empty output (the TUI
-		// path fixed this in #909; the IM path was the un-synced parity
-		// copy). Any error now surfaces as an error, carrying the first
-		// line of output for diagnosis.
+
 		first := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
 		if first != "" {
 			return "", fmt.Errorf("git diff: %v (%s)", err, first)
@@ -261,8 +233,7 @@ func (b *DaemonBridge) GitDiff(args []string) (string, error) {
 	}
 	trimmed := strings.TrimRight(string(out), "\n")
 	if trimmed == "" {
-		// Clean tree: git diff exits 0 with empty output. IM users would
-		// otherwise receive an empty message. Mirrors the TUI path's fix.
+
 		return "No changes.", nil
 	}
 	return trimmed, nil

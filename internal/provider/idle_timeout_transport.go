@@ -36,7 +36,7 @@ func streamIdleReadTimeoutFromEnv() time.Duration {
 		return defaultStreamIdleReadTimeout
 	}
 	if secs == 0 {
-		return 0 // disabled
+		return 0
 	}
 	return time.Duration(secs) * time.Second
 }
@@ -59,12 +59,6 @@ func (t *idleTimeoutTransport) RoundTrip(req *http.Request) (*http.Response, err
 	ctx, cancel := context.WithCancel(req.Context())
 	req = req.WithContext(ctx)
 
-	// Start the watchdog BEFORE the request is written, not after headers
-	// arrive: a dropped proxy can also wedge the request-write phase (peer
-	// dead with a full send buffer / zero window — writes never complete,
-	// CLOSE-WAIT with unread recv-Q data, dirty reused idle conn), a phase
-	// where ResponseHeaderTimeout has not started counting yet. One idle
-	// window uniformly covers write + headers + body.
 	timer := time.AfterFunc(t.timeout, cancel)
 
 	resp, err := t.base.RoundTrip(req)

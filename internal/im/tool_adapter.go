@@ -60,7 +60,7 @@ func (a *ToolManagerAdapter) Emit(ctx context.Context, event tool.IMOutboundEven
 }
 
 func (a *ToolManagerAdapter) SendDirect(ctx context.Context, adapter string, event tool.IMOutboundEvent) error {
-	// Find the binding for this adapter
+
 	snap := a.Mgr.Snapshot()
 	for _, b := range snap.CurrentBindings {
 		if b.Adapter == adapter {
@@ -71,7 +71,7 @@ func (a *ToolManagerAdapter) SendDirect(ctx context.Context, adapter string, eve
 			})
 		}
 	}
-	// Also check disabled bindings
+
 	for _, b := range snap.DisabledBindings {
 		if b.Adapter == adapter {
 			return a.Mgr.SendDirect(ctx, b, OutboundEvent{
@@ -118,7 +118,7 @@ func (a *ToolManagerAdapter) OtherInstancesHaveActiveChannels() bool {
 	}
 	for _, info := range d.ListInstances() {
 		if info.PID == a.Mgr.InstanceDetect().Info().PID {
-			continue // skip self
+			continue
 		}
 		if info.HasActiveChannels {
 			return true

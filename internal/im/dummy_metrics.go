@@ -69,7 +69,6 @@ func (m *EvalMetrics) RecordEvent(event OutboundEvent) {
 		m.ToolCalls[name]++
 		m.TotalToolCalls++
 
-		// Rework detection: consecutive calls to the same tool
 		if m.lastToolName == name {
 			m.ReworkCount++
 		}

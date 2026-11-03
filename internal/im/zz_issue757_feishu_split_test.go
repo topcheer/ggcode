@@ -10,7 +10,7 @@ import (
 // through, so every long Chinese reply failed the card API and degraded to
 // plain text.
 func TestSplitFeishuMessage_CJKChunksAreByteBounded(t *testing.T) {
-	// 30000 CJK chars = 90000 bytes: must split into byte-bounded chunks.
+
 	text := strings.Repeat("汉", 30000)
 	chunks := splitFeishuMessage(text, 28000)
 	if len(chunks) < 3 {
@@ -37,8 +37,8 @@ func TestByteLimitPlatforms_FeishuRegistered(t *testing.T) {
 	if !ByteLimitPlatforms[PlatformFeishu] {
 		t.Fatal("PlatformFeishu must be in ByteLimitPlatforms (#757)")
 	}
-	// Round-trip via the generic path with a CJK payload.
-	text := strings.Repeat("字", 20000) // 60000 bytes
+
+	text := strings.Repeat("字", 20000)
 	chunks := SplitMessageForPlatform(text, PlatformFeishu)
 	if len(chunks) < 2 {
 		t.Fatalf("generic path must also byte-split Feishu CJK, got %d chunks", len(chunks))

@@ -8,7 +8,7 @@ import (
 // back to a remaining one instead of leaving it dangling (which made
 // NeedsOnboard pop onboarding on every launch).
 func Test1517RemoveActiveSelectionFallback(t *testing.T) {
-	// Active endpoint removed -> first remaining endpoint of same vendor.
+
 	c := &Config{
 		Vendor:   "v1",
 		Endpoint: "e2",
@@ -25,7 +25,6 @@ func Test1517RemoveActiveSelectionFallback(t *testing.T) {
 		t.Fatalf("expected fallback to v1/e1, got %s/%s", c.Vendor, c.Endpoint)
 	}
 
-	// Last endpoint of active vendor removed -> another vendor takes over.
 	c2 := &Config{
 		Vendor:   "v1",
 		Endpoint: "only",
@@ -41,7 +40,6 @@ func Test1517RemoveActiveSelectionFallback(t *testing.T) {
 		t.Fatalf("expected fallback to v2/a, got %s/%s", c2.Vendor, c2.Endpoint)
 	}
 
-	// Active vendor removed -> another vendor takes over.
 	c3 := &Config{
 		Vendor:   "v1",
 		Endpoint: "x",
@@ -57,7 +55,6 @@ func Test1517RemoveActiveSelectionFallback(t *testing.T) {
 		t.Fatalf("expected fallback to v2/b, got %s/%s", c3.Vendor, c3.Endpoint)
 	}
 
-	// Non-active removal must not touch the selection.
 	c4 := &Config{
 		Vendor:   "v1",
 		Endpoint: "e1",

@@ -8,9 +8,6 @@ import (
 	"testing"
 )
 
-// #4529 pin: publishState runs on the RTM read-loop goroutine and must
-// snapshot botUserID under a.mu (authTest writes it on the connect/reconnect
-// goroutine); the auth-OK debug.Log must not re-read the field after Unlock.
 func TestIssue4529_BotUserIDReadsSynchronized(t *testing.T) {
 	b, err := os.ReadFile("slack_adapter.go")
 	if err != nil {

@@ -1,11 +1,5 @@
 package im
 
-// Issue #2719 probe: the localPart branch of matrix hasMention used a bare
-// substring Contains (no "@" prefix, no word boundary), so a bot named "al"
-// fired on "@alex", "usually", "also"... (#963 fixed the same class for
-// mattermost; matrix was never ported). stripMention's localPart regex had
-// "@" but no \b, mangling "@alex" into "ex".
-
 import "testing"
 
 func TestIssue2719ShortLocalPartRequiresBoundary(t *testing.T) {

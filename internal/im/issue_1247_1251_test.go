@@ -1,8 +1,5 @@
 package im
 
-// Regression tests for GitHub issues #1247/#1248/#1249 (twitch) and
-// #1250/#1251 (wechat).
-
 import (
 	"context"
 	"fmt"
@@ -12,10 +9,6 @@ import (
 	"testing"
 	"time"
 )
-
-// ---------------------------------------------------------------------------
-// #1247: inbound WHISPER commands must be routed as DMs
-// ---------------------------------------------------------------------------
 
 // TestTwitchInboundWhisperRoutedAsDM pins #1247: Twitch delivers DMs as
 // WHISPER commands (not PRIVMSG-to-nick); without a WHISPER case every
@@ -94,7 +87,6 @@ func TestTwitchInboundWhisperTriggersPairing(t *testing.T) {
 	<-srv.connOpened
 	srv.send(":viewer!~viewer@viewer.tmi.twitch.tv WHISPER testbot :/bind")
 
-	// Pairing consumed the message: nothing reaches the bridge...
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		srv.send(":viewer!~viewer@viewer.tmi.twitch.tv WHISPER testbot :/bind")
@@ -105,13 +97,9 @@ func TestTwitchInboundWhisperTriggersPairing(t *testing.T) {
 		if n > 0 {
 			t.Fatalf("pairing-consumed whisper must not reach inbound routing, got %d messages", n)
 		}
-		return // one cycle is enough: reaching here means handleIRCLine dispatched WHISPER
+		return
 	}
 }
-
-// ---------------------------------------------------------------------------
-// #1249: concurrent sendRaw writes must produce intact IRC lines
-// ---------------------------------------------------------------------------
 
 // TestTwitchSendRawConcurrentLinesIntact pins #1249: read-loop PONGs,
 // keepalive PINGs, Sends and the Close QUIT all call sendRaw concurrently;
@@ -134,8 +122,7 @@ func TestTwitchSendRawConcurrentLinesIntact(t *testing.T) {
 	var wg sync.WaitGroup
 	for g := 0; g < goroutines; g++ {
 		for i := 0; i < perGoroutine; i++ {
-			// Long distinct payloads (>=1KB) to make an interleaved write
-			// obvious if the mutex were missing.
+
 			want[fmt.Sprintf("PRIVMSG #chan%d :%s-%d", g, strings.Repeat("x", 1024), i)] = true
 		}
 	}
@@ -172,10 +159,6 @@ func TestTwitchSendRawConcurrentLinesIntact(t *testing.T) {
 	}
 	t.Fatalf("only %d/%d lines arrived", len(srv.lines()), total)
 }
-
-// ---------------------------------------------------------------------------
-// #1251: wechat voice/video inbound gets an explicit notice, not silence
-// ---------------------------------------------------------------------------
 
 func TestWechatVoiceMessageRepliesUnsupportedNotice(t *testing.T) {
 	mgr, bridge := newWechatTestManager(t, "u1")
@@ -224,10 +207,6 @@ func TestWechatVideoMessageRepliesUnsupportedNotice(t *testing.T) {
 		t.Fatalf("expected video-unsupported notice, got %q", txt)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// #1250: image send failures are honest; multi-image sends are spaced
-// ---------------------------------------------------------------------------
 
 // TestWechatSendImageAllFailedHonestError pins #1250's misleading placeholder:
 // when every image fails, Send must return an error instead of emitting

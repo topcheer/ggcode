@@ -50,12 +50,10 @@ func TestDaemonBridgeInterruptionQueuing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Simulate an active agent run
 	bridge.mu.Lock()
 	bridge.cancelFunc = cancel
 	bridge.mu.Unlock()
 
-	// Send a message while agent is running
 	err := bridge.SubmitInboundMessage(ctx, InboundMessage{
 		Text:     "second message",
 		Envelope: Envelope{Adapter: "test", Platform: PlatformQQ},
@@ -64,7 +62,6 @@ func TestDaemonBridgeInterruptionQueuing(t *testing.T) {
 		t.Fatalf("SubmitInboundMessage during active run: %v", err)
 	}
 
-	// Verify the message was queued
 	bridge.mu.Lock()
 	pending := bridge.pendingInterruptions
 	bridge.mu.Unlock()
@@ -72,7 +69,6 @@ func TestDaemonBridgeInterruptionQueuing(t *testing.T) {
 		t.Fatalf("expected 1 pending interruption containing 'second message' (plus the sa-221 IM provenance header), got %v", pending)
 	}
 
-	// CRITICAL: context must NOT be cancelled — old code would cancel here
 	if ctx.Err() != nil {
 		t.Fatal("BUG: context was cancelled — new messages must NOT cancel active agent run")
 	}
@@ -116,7 +112,6 @@ func TestDaemonBridgeInterruptionDrain(t *testing.T) {
 		},
 	}
 
-	// This mirrors the handler set up in SubmitInboundMessage
 	handler := func() string {
 		bridge.mu.Lock()
 		defer bridge.mu.Unlock()
@@ -255,8 +250,7 @@ func TestDaemonBridgePersistsMetricsToSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitInboundMessage error: %v", err)
 	}
-	// SubmitInboundMessage runs the agent asynchronously. Wait for it to
-	// finish so the metric collector has time to persist the event.
+
 	time.Sleep(200 * time.Millisecond)
 	bridge.Close()
 
@@ -319,8 +313,7 @@ func TestDaemonBridgeMetricsResumeTurnIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitInboundMessage error: %v", err)
 	}
-	// SubmitInboundMessage runs the agent asynchronously. Wait for it to
-	// finish so the metric collector has time to persist the event.
+
 	time.Sleep(200 * time.Millisecond)
 	bridge.Close()
 
@@ -336,10 +329,6 @@ func TestDaemonBridgeMetricsResumeTurnIndex(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Slash command tests
-// ---------------------------------------------------------------------------
-
 func TestHandleSlashCommand_Help(t *testing.T) {
 	mgr := NewManager()
 	emitter := NewIMEmitter(mgr, "en", t.TempDir())
@@ -349,8 +338,7 @@ func TestHandleSlashCommand_Help(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Help should list all new commands
-	// (We can't easily capture emitted text, but we verify no panic/error)
+
 }
 
 func TestHandleSlashCommand_Unknown(t *testing.T) {
@@ -442,7 +430,6 @@ func TestHandleSlashCommand_MuteSelfWithAdapter(t *testing.T) {
 	emitter := NewIMEmitter(mgr, "en", t.TempDir())
 	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
 
-	// MuteSelf with an adapter name but no binding — should not panic
 	err := bridge.handleSlashCommand(context.Background(), "/muteself", testMsg("telegram"))
 	if err != nil {
 		t.Fatal(err)
@@ -465,7 +452,6 @@ func TestHandleListIMWithAdapters(t *testing.T) {
 	emitter := NewIMEmitter(mgr, "en", t.TempDir())
 	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
 
-	// Add a binding so there's something to show
 	mgr.currentBindings["qq"] = &ChannelBinding{
 		Adapter:   "qq",
 		Platform:  PlatformQQ,
@@ -496,16 +482,12 @@ func TestHandleListIMWithMutedAdapter(t *testing.T) {
 	}
 }
 
-// --- test helpers ---
-
 func testMsg(adapter string) InboundMessage {
 	return InboundMessage{
 		Text:     "/test",
 		Envelope: Envelope{Adapter: adapter, Platform: PlatformTelegram},
 	}
 }
-
-// --- Activity Hook Tests ---
 
 func TestDaemonBridge_SetActivityHook(t *testing.T) {
 	br := &DaemonBridge{}
@@ -542,7 +524,6 @@ func TestDaemonBridge_SetActivityHookNil(t *testing.T) {
 func TestDaemonBridge_SendUserMessageTriggersActivity(t *testing.T) {
 	br := &DaemonBridge{}
 
-	// Simulate agent running state to avoid nil deref in SendUserMessage
 	br.mu.Lock()
 	br.cancelFunc = func() {}
 	br.mu.Unlock()
@@ -569,10 +550,6 @@ func TestDaemonBridge_SendUserMessageEmptyNoActivity(t *testing.T) {
 		t.Error("SendUserMessage with empty content should not trigger activity hook")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Daemon approval tests
-// ---------------------------------------------------------------------------
 
 func TestParseDaemonApprovalReply(t *testing.T) {
 	tests := []struct {
@@ -635,13 +612,11 @@ func TestDaemonApproval_IMReply(t *testing.T) {
 	emitter := NewIMEmitter(mgr, "en", t.TempDir())
 	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
 
-	// Simulate pending approval
 	ch := make(chan approvalReply, 1)
 	bridge.mu.Lock()
 	bridge.pendingApproval = ch
 	bridge.mu.Unlock()
 
-	// IM user replies "y"
 	err := bridge.SubmitInboundMessage(context.Background(), InboundMessage{
 		Text:     "y",
 		Envelope: Envelope{Adapter: "test", Platform: PlatformQQ},
@@ -650,7 +625,6 @@ func TestDaemonApproval_IMReply(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Should have received Allow on the channel
 	select {
 	case reply := <-ch:
 		if reply.Decision != permission.Allow {
@@ -663,7 +637,6 @@ func TestDaemonApproval_IMReply(t *testing.T) {
 		t.Fatal("timed out waiting for approval decision")
 	}
 
-	// pendingApproval should be cleared
 	bridge.mu.Lock()
 	pending := bridge.pendingApproval
 	bridge.mu.Unlock()
@@ -701,7 +674,7 @@ func TestDaemonApproval_DenyReply(t *testing.T) {
 }
 
 func TestDaemonApproval_InvalidReplyIgnored(t *testing.T) {
-	// Test ParseApprovalReply directly — invalid text returns false
+
 	_, ok := ParseApprovalReply("hello")
 	if ok {
 		t.Error("should not parse 'hello' as approval reply")
@@ -806,7 +779,6 @@ func TestDaemonApproval_HandleApprovalAlwaysPersistsGrant(t *testing.T) {
 		decision = bridge.handleApproval(context.Background(), "write_file", `{"path":"`+sandboxDir+`/x.txt","content":"x"}`)
 	}()
 
-	// Wait for the pending approval channel to be registered, then reply "always".
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		bridge.mu.Lock()
@@ -823,8 +795,7 @@ func TestDaemonApproval_HandleApprovalAlwaysPersistsGrant(t *testing.T) {
 	if decision != permission.Allow {
 		t.Fatalf("expected Allow, got %v", decision)
 	}
-	// The always-allow grant must be persisted: a subsequent write_file check
-	// must not return Ask (it previously would, since Always was dropped).
+
 	probePath := sandboxDir + "/x.txt"
 	if d, err := policy.Check("write_file", json.RawMessage(`{"path":"`+probePath+`","content":"x"}`)); err == nil && d == permission.Ask {
 		t.Error("expected write_file to be auto-allowed after 'always' reply - grant was not persisted (#943)")
@@ -854,7 +825,6 @@ func TestDaemonAskUser_DoubleSenderDoesNotBlock(t *testing.T) {
 		})
 	}()
 
-	// Wait until pendingAsk is registered.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		bridge.mu.Lock()
@@ -868,8 +838,6 @@ func TestDaemonAskUser_DoubleSenderDoesNotBlock(t *testing.T) {
 
 	msg := InboundMessage{Text: "answer", Envelope: Envelope{Adapter: "a1", Platform: PlatformQQ}}
 
-	// First reply fills the 1-buffered channel; second reply must not block
-	// even though HandleAskUser will exit via ctx.Done() without draining.
 	senderDone := make(chan struct{}, 2)
 	for i := 0; i < 2; i++ {
 		go func() {
@@ -878,13 +846,10 @@ func TestDaemonAskUser_DoubleSenderDoesNotBlock(t *testing.T) {
 		}()
 	}
 
-	// Give senders a moment to reach the send, then cancel the ask context
-	// (HandleAskUser exits via ctx.Done without draining).
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 	wg.Wait()
 
-	// Both senders must complete promptly (non-blocking send, #944).
 	for i := 0; i < 2; i++ {
 		select {
 		case <-senderDone:
@@ -926,7 +891,7 @@ func TestExpiryNoticeEmitted(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 		for _, ev := range sink.events() {
 			if ev.Kind == OutboundEventText && strings.Contains(ev.Text, "approval prompt above has expired") {
-				return // notice observed
+				return
 			}
 		}
 		t.Fatal("expiry notice not emitted for cancelled approval")
@@ -962,7 +927,7 @@ func TestExpiryNoticeEmitted(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 		for _, ev := range sink.events() {
 			if ev.Kind == OutboundEventText && strings.Contains(ev.Text, "question above has expired") {
-				return // notice observed
+				return
 			}
 		}
 		t.Fatal("expiry notice not emitted for cancelled ask_user")

@@ -1,9 +1,5 @@
 package provider
 
-// #3933 probes: (1) a key match beyond the cursor must not strand the
-// skipped middle entries; (2) a zero-event stream is recorded as a
-// placeholder so replay key alignment survives.
-
 import (
 	"context"
 	"os"
@@ -26,11 +22,11 @@ func TestIssue3933_SkippedEntryStaysReachable(t *testing.T) {
 	if e := tp.take("A"); e == nil || e.Key != "A" {
 		t.Fatal("second take(A) failed")
 	}
-	// The skipped B must still be reachable - via FIFO fallback at minimum.
+
 	if e := tp.take("B"); e == nil || e.Key != "B" {
 		t.Fatalf("skipped B must stay reachable, got %+v", e)
 	}
-	// Tape is now truly exhausted.
+
 	if e := tp.take("A"); e != nil {
 		t.Fatalf("exhausted tape must return nil, got %+v", e)
 	}
@@ -75,8 +71,7 @@ func TestIssue3933_ZeroEventStreamRecorded(t *testing.T) {
 	}
 	for range out {
 	}
-	// The tape FILE must hold a stream entry for that key (append writes
-	// the file; t.order is only populated on replay load).
+
 	raw, err := os.ReadFile(tape)
 	if err != nil {
 		t.Fatal(err)

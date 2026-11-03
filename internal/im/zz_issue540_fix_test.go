@@ -1,13 +1,5 @@
 package im
 
-// Regression tests for GitHub issue #540 (IM adapter bug batch).
-// Probe scenarios converted to persistent tests:
-//   A: HandleInbound dedup mark must roll back on failure paths
-//   B: Slack app_mention text must strip the bot's own <@BOTID> token
-//   C: DingTalk reconnect attempt counter must reset on clean disconnect
-//   D: Feishu startup token fetch must retry with backoff
-//   E: TG mention stripping must not lack word boundaries (@dev vs @devops)
-
 import (
 	"context"
 	"errors"
@@ -18,8 +10,6 @@ import (
 	"testing"
 	"time"
 )
-
-// ---- Bug A: dedup rollback on failure ----
 
 type errBridge540 struct {
 	mu    sync.Mutex
@@ -54,11 +44,11 @@ func TestHandleInboundDedupRollbackOnSubmitFailure(t *testing.T) {
 		Envelope: Envelope{Adapter: "slack", ChannelID: "C1", MessageID: "m1"},
 		Text:     "hello",
 	}
-	// First delivery: submit fails, mark must be rolled back.
+
 	if err := m.HandleInbound(context.Background(), msg); err == nil {
 		t.Fatal("expected error from failing bridge")
 	}
-	// Second delivery of the same MessageID (SDK retry) must NOT be deduped away.
+
 	if err := m.HandleInbound(context.Background(), msg); err == nil {
 		t.Fatal("expected error from failing bridge on retry")
 	}
@@ -68,7 +58,7 @@ func TestHandleInboundDedupRollbackOnSubmitFailure(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("retry after submit failure was swallowed by dedup: bridge called %d times, want 2", calls)
 	}
-	// Once submit succeeds, redelivery must be deduplicated.
+
 	bridge.mu.Lock()
 	bridge.err = nil
 	bridge.mu.Unlock()
@@ -117,8 +107,6 @@ func TestHandleInboundDedupRollbackOnEarlyFailures(t *testing.T) {
 	}
 }
 
-// ---- Bug B: Slack bot mention stripping ----
-
 func TestSlackStripBotMention(t *testing.T) {
 	a := &slackAdapter{}
 	a.mu.Lock()
@@ -131,8 +119,8 @@ func TestSlackStripBotMention(t *testing.T) {
 		{"<@U123BOT> y", "y"},
 		{"<@U123BOT>    hello world", "hello world"},
 		{"<@U123BOT|ggcode> run tests", "run tests"},
-		{"<@U123BOT><@U123BOT> /deploy", "/deploy"},                  // duplicated token
-		{"hey <@U999USER> check this", "hey <@U999USER> check this"}, // other mentions kept
+		{"<@U123BOT><@U123BOT> /deploy", "/deploy"},
+		{"hey <@U999USER> check this", "hey <@U999USER> check this"},
 		{"plain text", "plain text"},
 		{"", ""},
 	}
@@ -151,8 +139,6 @@ func TestSlackStripBotMentionEmptyBotID(t *testing.T) {
 	}
 }
 
-// ---- Bug C: DingTalk backoff reset ----
-
 func TestBackoffForResetsOnCleanDisconnect(t *testing.T) {
 	backoffs := []time.Duration{3 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
 	delay, attempt := backoffFor(nil, 3, backoffs)
@@ -163,14 +149,12 @@ func TestBackoffForResetsOnCleanDisconnect(t *testing.T) {
 	if delay != backoffs[2] || attempt != 3 {
 		t.Fatalf("error should advance backoff: got delay=%v attempt=%d, want %v/3", delay, attempt, backoffs[2])
 	}
-	// Capping: attempt beyond the slice stays at the last entry.
+
 	delay, attempt = backoffFor(errors.New("x"), 9, backoffs)
 	if delay != backoffs[len(backoffs)-1] || attempt != 10 {
 		t.Fatalf("backoff should cap: got delay=%v attempt=%d", delay, attempt)
 	}
 }
-
-// ---- Bug D: Feishu startup token retry ----
 
 type fakeFeishuTransport540 struct {
 	mu    sync.Mutex
@@ -255,8 +239,6 @@ func TestFeishuFetchTokenWithRetryContextCancel(t *testing.T) {
 	}
 }
 
-// ---- Bug E: TG structured mention stripping ----
-
 func tgEntities540(pairs ...[2]int) []any {
 	out := make([]any, 0, len(pairs))
 	for _, p := range pairs {
@@ -280,9 +262,8 @@ func tgEntities540(pairs ...[2]int) []any {
 }
 
 func TestTGStripBotMentionEntitiesExact(t *testing.T) {
-	// botUN="dev"; mention entity covers only "@dev" (offset 0, len 4).
-	// "@devops" is a DIFFERENT user's mention entity and must survive.
-	ents := tgEntities540([2]int{0, 4}, [2]int{5, 8}) // @dev, @devops
+
+	ents := tgEntities540([2]int{0, 4}, [2]int{5, 8})
 	got := tgStripBotMention("@dev @devops status", "dev", ents)
 	if got != "@devops status" {
 		t.Fatalf("entity-based strip = %q, want %q", got, "@devops status")
@@ -294,8 +275,8 @@ func TestTGStripBotMentionFallbackWordBoundary(t *testing.T) {
 		in, want string
 	}{
 		{"@dev /status", "/status"},
-		{"@devops status", "@devops status"},     // prefix collision preserved
-		{"dev@devtools.com", "dev@devtools.com"}, // email preserved
+		{"@devops status", "@devops status"},
+		{"dev@devtools.com", "dev@devtools.com"},
 		{"hi @dev run tests", "hi run tests"},
 		{"@dev", ""},
 	}
@@ -307,7 +288,7 @@ func TestTGStripBotMentionFallbackWordBoundary(t *testing.T) {
 }
 
 func TestTGStripBotMentionEntitiesNoBotMention(t *testing.T) {
-	// Entities present but none matches the bot username: text untouched.
+
 	ents := tgEntities540([2]int{0, 8})
 	if got := tgStripBotMention("@devops go", "dev", ents); got != "@devops go" {
 		t.Fatalf("entities without bot mention must not alter text: %q", got)
@@ -315,7 +296,7 @@ func TestTGStripBotMentionEntitiesNoBotMention(t *testing.T) {
 }
 
 func TestTGStripBotMentionUTF16Offsets(t *testing.T) {
-	// "⚠️ @dev run" — emoji is 2 UTF-16 units, so @dev starts at unit 3.
+
 	ents := tgEntities540([2]int{3, 4})
 	got := tgStripBotMention("\u26a0\ufe0f @dev run", "dev", ents)
 	if got != "\u26a0\ufe0f run" {

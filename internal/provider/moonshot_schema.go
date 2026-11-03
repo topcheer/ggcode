@@ -6,30 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Moonshot (Kimi) flavored-schema normalization (#4276).
-//
-// The moonshot API rejects tool parameter schemas it considers recursive
-// without a termination condition; its live error shape is:
-//
-//	tools.function.parameters is not a valid moonshot flavored json schema,
-//	details: <At path 'properties.steps': detected infinite recursion
-//	without termination condition>
-//
-// Root cause: ggcode ships several tools whose parameters contain FREE-FORM
-// object nodes - {"type":"object"} with neither "properties" nor
-// "additionalProperties" (e.g. define_tool/macro steps[].args, which hold
-// arbitrary per-tool arguments). The moonshot validator treats an
-// unconstrained object as permitting unbounded nesting depth, i.e. infinite
-// recursion with no termination. The official OpenAI endpoint accepts the
-// same schema, so the divergence only bites moonshot-flavored endpoints.
-//
-// Fix strategy (decided in #4276, vendor-gated so no other endpoint sees a
-// byte of difference): when the request targets a moonshot backend, walk
-// every tool schema and give each free-form object node an explicit
-// "additionalProperties": true. Declaring the extension point explicitly is
-// the standard JSON Schema way to terminate the "anything may nest here"
-// ambiguity the validator complains about.
-
 // moonshotSchemaGateActive reports whether the request targets a moonshot
 // backend. Dual-axis OR detection (#4276 final analysis):
 //   - URL axis: base URL host contains moonshot.cn / moonshot.ai / kimi.com
@@ -142,15 +118,7 @@ func normalizeMoonshotSchema(params json.RawMessage) json.RawMessage {
 	if err != nil {
 		return params
 	}
-	// Pass 4 (#4276 round 3): size guard. MoonshotAI/walle caps each tool
-	// schema at 120000 serialized bytes ("schema exceeds maximum allowed
-	// size" at root). Pass-1 dereferencing can inflate a schema whose
-	// $defs are referenced many times, and some MCP tool schemas are simply
-	// huge to begin with. Either way the tool must stay usable: degrade the
-	// parameters to the permissive free-form object (the tool-level
-	// description, which carries the calling convention, lives outside the
-	// parameters schema and is untouched). Runs regardless of `changed`:
-	// an untouched-but-oversized schema must still degrade.
+
 	if len(out) > moonshotMaxSchemaBytes {
 		debug.Log("provider", "moonshot normalize: tool schema %d bytes exceeds %d cap, degrading to free-form object", len(out), moonshotMaxSchemaBytes)
 		return json.RawMessage(`{"type":"object","additionalProperties":true}`)
@@ -259,7 +227,7 @@ func expandMoonshotRefs(node any, defs map[string]any, depth int, budget *int) a
 			if !isMap {
 				return withFallbackSiblings(v)
 			}
-			// sibling keywords ride along on the inlined body.
+
 			for k, sv := range v {
 				if k == "$ref" {
 					continue
@@ -272,9 +240,7 @@ func expandMoonshotRefs(node any, defs map[string]any, depth int, budget *int) a
 		}
 		out := make(map[string]any, len(v))
 		for k, child := range v {
-			// defs tables are consumed by collectMoonshotDefs; they are
-			// dropped at every level here (the resolver only reads the root
-			// table, so nothing can reference a nested one).
+
 			if k == "$defs" || k == "definitions" {
 				continue
 			}
@@ -358,8 +324,7 @@ func walkMoonshotSchema(node any) bool {
 			}
 		}
 		for key, child := range v {
-			// The boolean true we just set is not a schema; skip it. A map
-			// or array child is a schema node or schema container.
+
 			if b, ok := child.(bool); ok && key == "additionalProperties" && b {
 				continue
 			}

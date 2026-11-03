@@ -11,10 +11,10 @@ import (
 // fabricates usage and emits a false StreamEventDone. State-level check: the
 // guard expression itself - mirrors the branch ordering in anthropic.go.
 func TestIssue4227_EffortGuardExpression(t *testing.T) {
-	attempts := 1 // model_policy.go documented example: max_retries: 1
+	attempts := 1
 	for attempt := 0; attempt < attempts; attempt++ {
 		finalAttempt := attempt == attempts-1
-		guardedRetry := !finalAttempt // new branch condition
+		guardedRetry := !finalAttempt
 		if finalAttempt && guardedRetry {
 			t.Fatal("final attempt must NOT take the effort-retry branch (false-success path)")
 		}

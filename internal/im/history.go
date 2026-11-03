@@ -11,7 +11,7 @@ import (
 func SessionHistoryEvents(messages []provider.Message) []OutboundEvent {
 	events := make([]OutboundEvent, 0, len(messages))
 	for _, msg := range messages {
-		// Skip system messages (system prompt, project memory) — never send to IM
+
 		if strings.EqualFold(msg.Role, "system") {
 			continue
 		}

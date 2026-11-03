@@ -36,7 +36,7 @@ func TestIssue2747SendRawSetsWriteDeadlineViaInterface(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
 	defer client.Close()
-	// Drain the pipe so sendRaw's write completes.
+
 	go func() {
 		_, _ = io.Copy(io.Discard, server)
 	}()

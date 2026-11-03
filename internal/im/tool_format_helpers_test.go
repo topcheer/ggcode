@@ -745,7 +745,7 @@ func TestParseArchiveTruncation(t *testing.T) {
 	if shown2 != 0 || total2 != 0 {
 		t.Errorf("parseArchiveTruncation() = (%d, %d), want (0, 0)", shown2, total2)
 	}
-	// No "of" separator
+
 	shown3, total3 := parseArchiveTruncation("[Showing first 50]")
 	if shown3 != 0 || total3 != 0 {
 		t.Errorf("parseArchiveTruncation no-of = (%d, %d), want (0, 0)", shown3, total3)

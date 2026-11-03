@@ -10,7 +10,6 @@ func TestArchivePeerRingBuffer(t *testing.T) {
 		peers: make(map[string]*Participant),
 	}
 
-	// Fill archive beyond capacity
 	for i := 0; i < maxArchiveEntries+10; i++ {
 		p := &Participant{
 			NodeID:    "node-" + string(rune('a'+i%26)) + string(rune('0'+i/26)),
@@ -22,13 +21,10 @@ func TestArchivePeerRingBuffer(t *testing.T) {
 		hub.archivePeer(p)
 	}
 
-	// Should be capped at maxArchiveEntries
 	if len(hub.archive) != maxArchiveEntries {
 		t.Errorf("archive size = %d, want %d", len(hub.archive), maxArchiveEntries)
 	}
 
-	// Oldest entries should have been evicted (the first 10)
-	// Check that the oldest remaining entry is index 10 of the original
 	first := hub.archive[0]
 	if first.HumanNick == "usera" {
 		t.Error("expected oldest entry (usera) to be evicted")
@@ -46,7 +42,6 @@ func TestLookupArchiveByNodeID(t *testing.T) {
 	}
 	hub.archivePeer(p)
 
-	// Found
 	ap := hub.LookupArchiveByNodeID("node-xyz")
 	if ap == nil {
 		t.Fatal("expected to find node-xyz in archive")
@@ -58,7 +53,6 @@ func TestLookupArchiveByNodeID(t *testing.T) {
 		t.Errorf("Team=%s Role=%s, want platform/dev", ap.Team, ap.Role)
 	}
 
-	// Not found
 	ap = hub.LookupArchiveByNodeID("nonexistent")
 	if ap != nil {
 		t.Error("expected nil for nonexistent node")
@@ -68,7 +62,6 @@ func TestLookupArchiveByNodeID(t *testing.T) {
 func TestLookupArchiveByTeamRole(t *testing.T) {
 	hub := &Hub{peers: make(map[string]*Participant)}
 
-	// Add two peers with same team+role (e.g., two frontend devs)
 	hub.archivePeer(&Participant{
 		NodeID: "node-old", HumanNick: "alice_fe", Team: "web", Role: "frontend",
 	})
@@ -76,7 +69,6 @@ func TestLookupArchiveByTeamRole(t *testing.T) {
 		NodeID: "node-newer", HumanNick: "bob_fe", Team: "web", Role: "frontend",
 	})
 
-	// Should return the most recent (last added)
 	ap := hub.LookupArchiveByTeamRole("web", "frontend")
 	if ap == nil {
 		t.Fatal("expected to find web/frontend in archive")
@@ -85,7 +77,6 @@ func TestLookupArchiveByTeamRole(t *testing.T) {
 		t.Errorf("NodeID = %s, want node-newer (most recent)", ap.NodeID)
 	}
 
-	// Not found
 	ap = hub.LookupArchiveByTeamRole("nonexistent", "role")
 	if ap != nil {
 		t.Error("expected nil for nonexistent team/role")
@@ -100,7 +91,6 @@ func TestLookupArchiveByNick(t *testing.T) {
 		Team: "dev-team", Role: "dev",
 	})
 
-	// Match by human_nick (case-insensitive)
 	ap := hub.LookupArchiveByNick("alice_dev")
 	if ap == nil {
 		t.Fatal("expected to find alice_dev in archive")
@@ -109,13 +99,11 @@ func TestLookupArchiveByNick(t *testing.T) {
 		t.Errorf("NodeID = %s, want node-1", ap.NodeID)
 	}
 
-	// Match by agent_nick (case-insensitive)
 	ap = hub.LookupArchiveByNick("alice_dev_agent")
 	if ap == nil {
 		t.Fatal("expected to find alice_dev_agent in archive")
 	}
 
-	// Not found
 	ap = hub.LookupArchiveByNick("nobody")
 	if ap != nil {
 		t.Error("expected nil for nonexistent nick")
@@ -158,7 +146,7 @@ func TestArchivePeerFIFOOrder(t *testing.T) {
 	if len(archive) != 3 {
 		t.Fatalf("archive size = %d, want 3", len(archive))
 	}
-	// FIFO: alpha should be first, gamma last
+
 	if archive[0].HumanNick != "alpha" {
 		t.Errorf("first entry = %s, want alpha", archive[0].HumanNick)
 	}

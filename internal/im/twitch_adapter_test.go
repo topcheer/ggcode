@@ -17,10 +17,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
-
 // twitchFakeIRCServer is a minimal in-process Twitch IRC server: a TCP
 // listener that greets the client, records everything it sends, and lets the
 // test script the conversation.
@@ -73,14 +69,13 @@ func (s *twitchFakeIRCServer) acceptLoop() {
 }
 
 func (s *twitchFakeIRCServer) serveConn(conn net.Conn) {
-	// Close client connections when the server stops, so the adapter's read
-	// loop observes EOF instead of blocking forever.
+
 	go func() {
 		<-s.quit
 		conn.Close()
 	}()
 	defer conn.Close()
-	// Drain any scripted writes in the background so writes never block tests.
+
 	go func() {
 		for {
 			select {
@@ -131,10 +126,6 @@ func newTestTwitchAdapter(dial func(addr string) (net.Conn, error)) *twitchAdapt
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Issue #972 problem 1: Close() during the backoff window must stop reconnect
-// ---------------------------------------------------------------------------
-
 // TestTwitchCloseDuringBackoffDoesNotReconnect verifies that Close() called
 // while the run loop is sleeping in its reconnect backoff window prevents any
 // further connection attempts (issue #972 problem 1: closed=true but conn=nil
@@ -148,38 +139,27 @@ func TestTwitchCloseDuringBackoffDoesNotReconnect(t *testing.T) {
 	done := make(chan struct{})
 	go func() { adapter.run(ctx); close(done) }()
 
-	// Wait for the first connection, then kill it server-side so the run
-	// loop enters the backoff window.
 	select {
 	case <-srv.connOpened:
 	case <-time.After(3 * time.Second):
 		t.Fatal("adapter never connected to fake IRC server")
 	}
 
-	// Force a disconnect: stopping the server closes the conn; scanner EOF
-	// makes connectAndServe return and the run loop enter backoff.
 	srv.stop()
 
-	// Give the run loop a moment to land inside the backoff sleep
-	// (backoff ≥ 5s * 0.75 jitter, so a short sleep is safely inside it).
 	time.Sleep(300 * time.Millisecond)
 
-	// Close during the backoff window.
 	if err := adapter.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// The run loop must exit promptly (well before the ~3.75s lower-bound of
-	// the jittered 5s backoff expires) — proves the stopCh interrupt worked
-	// rather than the timer simply firing.
 	select {
 	case <-done:
-		// success
+
 	case <-time.After(2 * time.Second):
 		t.Fatal("run loop did not exit after Close() during backoff window")
 	}
 
-	// And it must STAY exited — no zombie reconnect goroutine.
 	time.Sleep(500 * time.Millisecond)
 	select {
 	case <-done:
@@ -193,10 +173,6 @@ func TestTwitchCloseDuringBackoffDoesNotReconnect(t *testing.T) {
 		t.Fatal("adapter.closed should remain true")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Issue #972 problem 3: auth-failure NOTICE terminates the run loop
-// ---------------------------------------------------------------------------
 
 // TestTwitchAuthFailureNOTICETerminatesRun verifies that a NOTICE
 // "Login authentication failed" makes connectAndServe return
@@ -217,17 +193,15 @@ func TestTwitchAuthFailureNOTICETerminatesRun(t *testing.T) {
 		t.Fatal("adapter never connected")
 	}
 
-	// Twitch rejects the credentials with a NOTICE and then disconnects.
 	srv.send(":tmi.twitch.tv NOTICE * :Login authentication failed")
 
 	select {
 	case <-done:
-		// run loop exited — correct
+
 	case <-time.After(3 * time.Second):
 		t.Fatal("run loop did not terminate after auth-failure NOTICE")
 	}
 
-	// The final published state must carry the explicit auth error.
 	mgr := adapter.manager
 	mgr.mu.RLock()
 	state, ok := mgr.adapters[adapter.name]
@@ -268,10 +242,6 @@ func TestTwitchIsAuthFailureNOTICE(t *testing.T) {
 		t.Error("isTwitchAuthFailureNOTICE(nil) must be false")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Issue #972 problem 2: DMs go through the Helix API
-// ---------------------------------------------------------------------------
 
 // TestTwitchDMViaHelixAPI verifies that a non-# target is delivered via
 // POST /helix/messages (whisper) with a preceding users?login= lookup, and
@@ -399,7 +369,6 @@ func TestTwitchChannelMessageStillUsesPRIVMSG(t *testing.T) {
 	srv := newTwitchFakeIRCServer(t)
 	adapter := newTestTwitchAdapter(srv.dialTo())
 
-	// Wire the conn so sendRaw works.
 	client, err := net.Dial("tcp", srv.listener.Addr().String())
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -409,7 +378,6 @@ func TestTwitchChannelMessageStillUsesPRIVMSG(t *testing.T) {
 	adapter.conn = client
 	adapter.mu.Unlock()
 
-	// DM target must NOT hit the fake IRC server as PRIVMSG; a channel must.
 	if err := adapter.sendTwitchMessage(context.Background(), "#mychan", "hi"); err != nil {
 		t.Fatalf("channel send: %v", err)
 	}
@@ -417,7 +385,7 @@ func TestTwitchChannelMessageStillUsesPRIVMSG(t *testing.T) {
 	for time.Now().Before(deadline) {
 		for _, l := range srv.lines() {
 			if strings.HasPrefix(l, "PRIVMSG #mychan :hi") {
-				return // success
+				return
 			}
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -425,26 +393,22 @@ func TestTwitchChannelMessageStillUsesPRIVMSG(t *testing.T) {
 	t.Fatal("PRIVMSG to #mychan was never sent")
 }
 
-// ---------------------------------------------------------------------------
-// Issue #972 side items
-// ---------------------------------------------------------------------------
-
 // TestTwitchBackoffResetAfterHealthyCycle covers twitchNextBackoff: a serve
 // cycle that lasted >= twitchBackoffResetAfter resets the backoff to its
 // initial value; short flapping cycles still grow up to the cap.
 func TestTwitchBackoffResetAfterHealthyCycle(t *testing.T) {
-	// Healthy cycle: resets to initial regardless of accumulated backoff.
+
 	if got := twitchNextBackoff(twitchMaxBackoff, twitchReconnectBackoff, twitchMaxBackoff, twitchBackoffResetAfter); got != twitchReconnectBackoff {
 		t.Errorf("healthy cycle: got %v, want reset to %v", got, twitchReconnectBackoff)
 	}
-	// Flapping: doubles and caps.
+
 	if got := twitchNextBackoff(5*time.Second, 5*time.Second, 120*time.Second, time.Second); got != 10*time.Second {
 		t.Errorf("flap 1: got %v, want 10s", got)
 	}
 	if got := twitchNextBackoff(80*time.Second, 5*time.Second, 120*time.Second, time.Second); got != 120*time.Second {
 		t.Errorf("cap: got %v, want 120s", got)
 	}
-	// Just under the reset threshold still grows.
+
 	if got := twitchNextBackoff(10*time.Second, 5*time.Second, 120*time.Second, twitchBackoffResetAfter-time.Second); got != 20*time.Second {
 		t.Errorf("below threshold: got %v, want 20s", got)
 	}
@@ -454,14 +418,14 @@ func TestTwitchBackoffResetAfterHealthyCycle(t *testing.T) {
 // sequence `\s`-produced-by-`\\` must not corrupt (issue #972 side item).
 func TestTwitchUnescapeTagOrder(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{`hello\sword`, "hello word"},    // \s → space
-		{`line1\nline2`, "line1\nline2"}, // \n → newline
-		{`a\\sb`, `a\sb`},                // \\ then 's' → backslash + s (sequential ReplaceAll corrupted this)
-		{`semi\:colon`, "semi;colon"},    // \: → semicolon
-		{`back\\slash`, `back\slash`},    // \\ → backslash
-		{"plain", "plain"},               // fast path, no escapes
-		{`trailing\`, `trailing\`},       // dangling backslash kept
-		{`unknown\q`, `unknown\q`},       // unknown escape kept literally
+		{`hello\sword`, "hello word"},
+		{`line1\nline2`, "line1\nline2"},
+		{`a\\sb`, `a\sb`},
+		{`semi\:colon`, "semi;colon"},
+		{`back\\slash`, `back\slash`},
+		{"plain", "plain"},
+		{`trailing\`, `trailing\`},
+		{`unknown\q`, `unknown\q`},
 	}
 	for _, tc := range cases {
 		if got := unescapeTwitchTag(tc.in); got != tc.want {
@@ -483,10 +447,6 @@ func TestTwitchParseTagsRoundTrip(t *testing.T) {
 
 // Unused import guard (keeps io referenced if the file evolves).
 var _ = io.Discard
-
-// ---------------------------------------------------------------------------
-// Pre-existing constructor / helper tests (restored from HEAD)
-// ---------------------------------------------------------------------------
 
 func TestNewTwitchAdapter_MissingToken(t *testing.T) {
 	_, err := newTwitchAdapter("test", config.IMConfig{}, config.IMAdapterConfig{
@@ -672,9 +632,7 @@ func TestStripTwitchMention(t *testing.T) {
 		{"@bot hello", "bot", "hello"},
 		{"bot hello world", "bot", "hello world"},
 		{"hello world", "bot", "hello world"},
-		// #1565: reversed - the old case-sensitive strip was asymmetric
-		// with the (case-insensitive) mention gate: "@GGCode do X" passed
-		// the gate but kept the mention. Strip is case-insensitive now.
+
 		{"@Bot hello", "bot", "hello"},
 		{"@bot @bot double", "bot", "double"},
 	}

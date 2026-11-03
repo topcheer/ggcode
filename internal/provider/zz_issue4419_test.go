@@ -2,11 +2,6 @@
 
 package provider
 
-// #4419: gemini/openai CloneWithModel dropped responseSchema (plain slice
-// zero-value) and samplingOverride (atomic.Pointer literal = zero state) -
-// the same trap #3066 fixed for anthropic; a model-override subagent clone
-// silently lost its structured-output constraint and sampling hints.
-
 import (
 	"encoding/json"
 	"testing"
@@ -27,7 +22,7 @@ func TestIssue4419_GeminiCloneKeepsSchemaAndSampling(t *testing.T) {
 	if ov == nil || ov.MaxTokens != 128 || ov.Temperature != 0.2 {
 		t.Fatalf("samplingOverride lost on clone: %+v (#4419)", ov)
 	}
-	// Deep-copy guard: mutating the clone's schema must not touch the parent.
+
 	clone.responseSchema[0] = ' '
 	if p.responseSchema[0] != '{' {
 		t.Fatalf("responseSchema must be copied, not shared (#4419)")

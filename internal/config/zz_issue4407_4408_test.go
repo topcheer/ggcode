@@ -2,17 +2,11 @@
 
 package config
 
-// #4407/#4408 regression tests (config review round).
-
 import (
 	"testing"
 	"time"
 )
 
-// #4407: removing the ACTIVE vendor/endpoint must pick a DETERMINISTIC
-// successor (lowest vendor name, then lowest endpoint name) per the
-// #1422-B2 principle - bare map iteration picked a random survivor and
-// the caller persisted the random pick as permanent config.
 func TestIssue4407_RemoveVendorDeterministicSuccessor(t *testing.T) {
 	c := &Config{
 		Vendors: map[string]VendorConfig{
@@ -49,9 +43,6 @@ func TestIssue4407_RemoveEndpointCrossVendorDeterministic(t *testing.T) {
 	}
 }
 
-// #4408-C2: a model_limits entry takes priority with "0 = none" - an
-// explicit per-model 0 must not be overridden by the endpoint-level
-// timeout, else there is no way to disable the timeout for one model.
 func TestIssue4408C2_ModelLimitsExplicitZeroWins(t *testing.T) {
 	c := &Config{
 		Vendors: map[string]VendorConfig{
@@ -78,7 +69,7 @@ func TestIssue4408C2_ModelLimitsExplicitZeroWins(t *testing.T) {
 	if re.RequestTimeout != 0 {
 		t.Fatalf("explicit per-model 0 timeout must not inherit endpoint 45s, got %v (#4408-C2)", re.RequestTimeout)
 	}
-	// No model_limits entry at all: endpoint values inherit as before.
+
 	re2, err := c.ResolveEndpointSelection("v", "e", "model-other")
 	if err != nil {
 		t.Fatalf("ResolveEndpointSelection(other): %v", err)
@@ -88,9 +79,6 @@ func TestIssue4408C2_ModelLimitsExplicitZeroWins(t *testing.T) {
 	}
 }
 
-// #4408-C1: a second legacy gateway vendor key (no matching endpoint,
-// vendor-level slot already taken) must be preserved on a per-vendor
-// endpoint stub, never silently dropped.
 func TestIssue4408C1_SecondLegacyKeyPreserved(t *testing.T) {
 	agVC := &VendorConfig{
 		APIKey: "first-key",
@@ -103,19 +91,13 @@ func TestIssue4408C1_SecondLegacyKeyPreserved(t *testing.T) {
 	if !ok || ep.APIKey != "second-key" {
 		t.Fatalf("second legacy key must be preserved on an endpoint stub, endpoints: %+v (#4408-C1)", agVC.Endpoints)
 	}
-	// Existing keys are never overwritten: a third key with the same stub
-	// name does not clobber it.
+
 	carryGatewayVendorKey(agVC, "second-vendor", "third-key")
 	if agVC.Endpoints["second-vendor"].APIKey != "second-key" {
 		t.Fatalf("existing stub key must not be overwritten (#4408-C1)")
 	}
 }
 
-// #4678: when the target endpoint EXISTS and already carries its own key,
-// none of the three original switch branches fired - the legacy vendor-level
-// key was silently dropped and the subsequent delete made it unrecoverable.
-// It must be parked on a namespaced stub instead, and the endpoint's own
-// key must never be overwritten.
 func TestIssue4678_KeyPreservedWhenEndpointHasOwnKey(t *testing.T) {
 	agVC := &VendorConfig{
 		Endpoints: map[string]EndpointConfig{
@@ -123,18 +105,16 @@ func TestIssue4678_KeyPreservedWhenEndpointHasOwnKey(t *testing.T) {
 		},
 	}
 	carryGatewayVendorKey(agVC, "primary", "legacy-vendor-key")
-	// Endpoint's own key untouched.
+
 	if agVC.Endpoints["primary"].APIKey != "endpoint-own-key" {
 		t.Fatalf("endpoint's own key must never be overwritten, got %q", agVC.Endpoints["primary"].APIKey)
 	}
-	// Legacy key preserved on the namespaced stub.
+
 	stub, ok := agVC.Endpoints["primary-legacy-vendor-key"]
 	if !ok || stub.APIKey != "legacy-vendor-key" {
 		t.Fatalf("legacy vendor key must be parked on a namespaced stub, endpoints: %+v (#4678)", agVC.Endpoints)
 	}
-	// Idempotent: a second carry with the same shape must not clobber the
-	// existing stub (the hasEP&&APIKey=="" branch still doesn't fire - the
-	// primary endpoint keeps its own key).
+
 	carryGatewayVendorKey(agVC, "primary", "another-legacy-key")
 	if agVC.Endpoints["primary"].APIKey != "endpoint-own-key" {
 		t.Fatalf("endpoint's own key must survive a second carry (#4678)")

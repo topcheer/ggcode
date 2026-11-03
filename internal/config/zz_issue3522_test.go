@@ -1,10 +1,5 @@
 package config
 
-// #3522 probe: SetEndpointAPIKey on a NONEXISTENT endpoint must fail with
-// ZERO side effects - no plaintext secret in keys.env, none in the process
-// env. The old order persisted the secret first and validated the endpoint
-// only afterwards.
-
 import (
 	"os"
 	"path/filepath"
@@ -37,7 +32,6 @@ func TestIssue3522_BadEndpointZeroSideEffects(t *testing.T) {
 		t.Fatalf("error should name the missing endpoint, got: %v", err)
 	}
 
-	// keys.env untouched: no secret persisted on the failure path.
 	data, err := os.ReadFile(keysPath)
 	if err != nil {
 		t.Fatal(err)
@@ -45,13 +39,13 @@ func TestIssue3522_BadEndpointZeroSideEffects(t *testing.T) {
 	if strings.Contains(string(data), "sk-secret-3522") {
 		t.Fatalf("plaintext secret persisted to keys.env on a FAILED call:\n%s", string(data))
 	}
-	// Process env untouched too.
+
 	for _, ev := range os.Environ() {
 		if strings.Contains(ev, "sk-secret-3522") {
 			t.Fatalf("plaintext secret leaked into process env on a FAILED call: %s", ev)
 		}
 	}
-	// And the config object itself was not mutated to a dangling reference.
+
 	if ref := c.Vendors["zai"].Endpoints["main"].APIKey; ref != "" {
 		t.Fatalf("endpoint main api_key mutated on failed call: %q", ref)
 	}

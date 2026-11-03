@@ -130,11 +130,11 @@ var errSlackAuthTerminal = errors.New("slack auth terminal failure")
 // slackTerminalAuthErrors lists Slack API error codes (from auth.test and
 // apps.connections.open) that are terminal for the adapter.
 var slackTerminalAuthErrors = map[string]bool{
-	"invalid_auth":     true, // token is invalid
-	"not_authed":       true, // token missing / not provided
-	"token_revoked":    true, // token revoked by user or admin
-	"token_expired":    true, // token expired
-	"account_inactive": true, // workspace deactivated
+	"invalid_auth":     true,
+	"not_authed":       true,
+	"token_revoked":    true,
+	"token_expired":    true,
+	"account_inactive": true,
 }
 
 func (a *slackAdapter) run(ctx context.Context) {
@@ -149,19 +149,14 @@ func (a *slackAdapter) run(ctx context.Context) {
 		if err != nil {
 			a.publishState(false, "error", err.Error())
 			debug.Log("slack", "adapter=%s error: %v", a.name, err)
-			// Deterministic auth failures (bad/revoked token) can never be fixed
-			// by retrying — exit permanently with an error state so the user is
-			// told to fix the token, instead of retrying every 60s forever
-			// (#603). Transient errors keep the retry path below.
+
 			if errors.Is(err, errSlackAuthTerminal) {
 				a.publishState(false, "error", "terminal auth failure, giving up: "+err.Error())
 				debug.Log("slack", "adapter=%s terminal auth failure, stopping adapter", a.name)
 				return
 			}
 		}
-		// Successful return (nil error) means the connection served until a
-		// clean disconnect — reset the backoff counter so the NEXT first retry
-		// uses the short delay instead of the capped 60s (#389).
+
 		if err == nil {
 			attempt = 0
 		}
@@ -177,12 +172,11 @@ func (a *slackAdapter) run(ctx context.Context) {
 }
 
 func (a *slackAdapter) connectAndServe(ctx context.Context) error {
-	// Verify auth
+
 	if err := a.authTest(ctx); err != nil {
 		return fmt.Errorf("auth.test: %w", err)
 	}
 
-	// Open Socket Mode connection
 	wsURL, err := a.appsConnectionsOpen(ctx)
 	if err != nil {
 		return fmt.Errorf("apps.connections.open: %w", err)
@@ -214,8 +208,6 @@ func (a *slackAdapter) connectAndServe(ctx context.Context) error {
 	a.publishState(true, "connected", "")
 	debug.Log("slack", "adapter=%s connected", a.name)
 
-	// WebSocket ping ticker — prevents AWS API Gateway idle timeout (10min)
-	// and detects dead connections within slackWSReadTimeout.
 	pingDone := make(chan struct{})
 	safego.Go("im.slack.ping", func() {
 		ticker := time.NewTicker(slackWSPingInterval)
@@ -236,7 +228,6 @@ func (a *slackAdapter) connectAndServe(ctx context.Context) error {
 	})
 	defer close(pingDone)
 
-	// Message read loop
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -256,12 +247,6 @@ func (a *slackAdapter) connectAndServe(ctx context.Context) error {
 		msgType, _ := envelope["type"].(string)
 		envelopeID, _ := envelope["envelope_id"].(string)
 
-		// Acknowledge the envelope (#968): Slack requires an ack for EVERY
-		// envelope carrying an envelope_id, otherwise it redelivers. The old
-		// condition also required accepts_response_payload==true, but that
-		// flag only governs whether the ack response MAY carry a payload -
-		// for message/app_mention envelopes it is commonly false, so most
-		// events went unacked and redelivery was the norm.
 		if ack, ok := slackAckForEnvelope(envelopeID); ok {
 			_ = conn.WriteMessage(websocket.TextMessage, ack)
 		}
@@ -273,17 +258,7 @@ func (a *slackAdapter) connectAndServe(ctx context.Context) error {
 				if event != nil {
 					eventType, _ := event["type"].(string)
 					if eventType == "message" || eventType == "app_mention" {
-						// #4528: handleMessage ran synchronously INSIDE the
-						// read loop (ffmpeg STT, attachment downloads,
-						// HandleInbound) - while it ran, ReadMessage never
-						// returned, the pong handler could not renew the read
-						// deadline, and past slackWSReadTimeout the next read
-						// errored into a reconnect. Worse, the envelope was
-						// already acked, so Slack never redelivered: messages
-						// arriving in the blocked window were lost for real.
-						// Dedup already happened above (before this point), so
-						// processing asynchronously is idempotent-safe; the ack
-						// stays here on the read loop.
+
 						ev := event
 						safego.Go("im.slack.envelope", func() { a.handleMessage(ctx, ev) })
 					}
@@ -349,8 +324,7 @@ func (a *slackAdapter) authTest(ctx context.Context) error {
 	a.mu.Lock()
 	a.botUserID, _ = result["user_id"].(string)
 	a.botID, _ = result["bot_id"].(string)
-	// #4529: read the logged value from the local we just wrote - logging
-	// a.botUserID after the Unlock re-read the field unsynchronized.
+
 	botUserID := a.botUserID
 	a.mu.Unlock()
 	debug.Log("slack", "adapter=%s auth OK botUserID=%s", a.name, botUserID)
@@ -397,10 +371,7 @@ func (a *slackAdapter) appsConnectionsOpen(ctx context.Context) (string, error) 
 }
 
 func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) {
-	// Skip bot's own messages. #1236: bot-posted events (chat.postMessage,
-	// files.upload) carry bot_id and NO user field, so the userID comparison
-	// below never matched them; file_share events (whitelisted) fed the agent
-	// its own images as fresh user input.
+
 	userID, _ := event["user"].(string)
 	eventBotID, _ := event["bot_id"].(string)
 	a.mu.RLock()
@@ -420,24 +391,15 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 	threadTS, _ := event["thread_ts"].(string)
 	subtype, _ := event["subtype"].(string)
 
-	// Skip non-text subtypes (except file_share)
 	if subtype != "" && subtype != "file_share" {
 		return
 	}
 
-	// Dedup check (read-only) by (channel, ts) (#968): Socket Mode delivery
-	// is at-least-once - unacked envelopes are redelivered and reconnect
-	// windows can replay events. #4655 (mirrors mattermost #4465): the seen
-	// write is DEFERRED until attachment parsing and the empty-text filter
-	// have passed - writing it here would (a) swallow the message when Slack
-	// redelivers the same ts after a transient attachment-parse failure, and
-	// (b) burn dedup capacity on filtered empties, evicting live keys.
 	if !a.checkSeenDedup(channel, ts) {
 		debug.Log("slack", "adapter=%s dedup drop channel=%s ts=%s", a.name, channel, ts)
 		return
 	}
 
-	// Process file attachments (images, files, audio)
 	attachments, voiceText := a.processSlackAttachments(ctx, event)
 	if voiceText != "" {
 		if text != "" {
@@ -447,18 +409,12 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 		}
 	}
 
-	// Strip the bot's own @-mention token. In channels the only way to
-	// trigger the bot is an @-mention, and Slack renders it as a literal
-	// "<@U123>" token in the text field; without stripping, commands like
-	// "<@U123> /status" don't satisfy HasPrefix("/") and approval replies
-	// ("<@U123> y") fail to match the exact approval vocabulary (#540).
-	// Mentions of OTHER users are preserved.
 	text = a.stripBotMention(text)
 	text = strings.TrimSpace(text)
 	if text == "" && len(attachments) == 0 {
-		return // filtered: dedup key must NOT be latched (#4655)
+		return
 	}
-	// All filters passed - latch the dedup key now (#4655).
+
 	if !a.markSeenDedup(channel, ts) {
 		debug.Log("slack", "adapter=%s dedup drop (late latch) channel=%s ts=%s", a.name, channel, ts)
 		return
@@ -481,8 +437,7 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 	}
 
 	if a.manager == nil {
-		// nil manager only occurs in unit-test constructions; pairing and
-		// inbound dispatch both require it (#968, mirrors the signal guard).
+
 		return
 	}
 	pairingResult, err := a.manager.HandlePairingInbound(inbound)
@@ -504,20 +459,12 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 			debug.Log("slack", "adapter=%s unauthorized inbound channel=%s", a.name, channel)
 			return
 		}
-		// #4608: an unbound channel is routine routing (app subscription
-		// covers message.channels while the workspace only bound message.im)
-		// - the message was never meant for this agent, so there is no
-		// delivery failure to report. Replying "session not ready, please
-		// retry" made the bot answer every ordinary message in any channel
-		// it was joined to, and retrying could never succeed. Silent like
-		// ErrInboundChannelDenied above and the Discord adapter.
+
 		if err == ErrNoChannelBound {
 			debug.Log("slack", "adapter=%s channel not bound to any workspace session, ignoring channel=%s", a.name, channel)
 			return
 		}
-		// Processing failed — the message would otherwise be silently dropped.
-		// Acknowledge the failure back to the sender so they know to retry (#260).
-		// Reply failure is only logged, never recursed.
+
 		if _, sendErr := a.sendChannelMessage(ctx, channel, threadTS, "message could not be delivered (session not ready), please retry"); sendErr != nil {
 			debug.Log("slack", "adapter=%s failed to notify sender of delivery error: %v", a.name, sendErr)
 		}
@@ -575,9 +522,9 @@ func (a *slackAdapter) stripBotMention(text string) string {
 	if botID == "" || text == "" {
 		return text
 	}
-	// Simple form: <@U123>
+
 	text = strings.ReplaceAll(text, "<@"+botID+">", "")
-	// Labelled form: <@U123|display name> — remove through the closing '>'.
+
 	labelled := "<@" + botID + "|"
 	for {
 		idx := strings.Index(text, labelled)
@@ -612,7 +559,7 @@ func (a *slackAdapter) processSlackAttachments(ctx context.Context, event map[st
 		fileID, _ := file["id"].(string)
 		mimetype, _ := file["mimetype"].(string)
 		name, _ := file["name"].(string)
-		// url_private_download is the direct download URL (needs Authorization header)
+
 		downloadURL, _ := file["url_private_download"].(string)
 		if downloadURL == "" {
 			downloadURL, _ = file["url_private"].(string)
@@ -622,7 +569,7 @@ func (a *slackAdapter) processSlackAttachments(ctx context.Context, event map[st
 		}
 
 		if strings.HasPrefix(mimetype, "audio/") {
-			// Audio/voice attachment — transcribe if STT is available
+
 			transcript := ""
 			if a.stt != nil {
 				transcript = a.transcribeSlackAudio(ctx, downloadURL, name, mimetype)
@@ -748,7 +695,6 @@ func (a *slackAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 		return nil
 	}
 
-	// Extract images from text and upload them first
 	images, remainingText := ExtractImagesFromText(content)
 	sentImages := 0
 	for _, img := range images {
@@ -759,12 +705,10 @@ func (a *slackAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 		sentImages++
 	}
 
-	// Send remaining text (converted to mrkdwn)
 	remainingText = strings.TrimSpace(remainingText)
 	if remainingText == "" {
 		if len(images) > 0 && sentImages == 0 {
-			// #4464: an image-only message whose uploads all failed must not
-			// be silently dropped - fall back to the original markdown text.
+
 			remainingText = content
 		} else {
 			return nil
@@ -778,8 +722,7 @@ func (a *slackAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 			return err
 		}
 		a.recordOutboundMessage(binding, msgID)
-		// Inter-message delay to respect Slack's ~1 msg/sec per-channel rate limit.
-		// Short bursts >1 are tolerated but sustained bursts risk rate limiting.
+
 		if i < len(chunks)-1 {
 			select {
 			case <-time.After(slackInterMsgDelay):
@@ -861,7 +804,7 @@ func (a *slackAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding
 	}
 	if ok, _ := result["ok"].(bool); !ok {
 		errMsg, _ := result["error"].(string)
-		// "already_reacted" is not an error — typing indicator already present
+
 		if errMsg != "already_reacted" {
 			debug.Log("slack", "adapter=%s typing reaction error: %s", a.name, errMsg)
 			return nil
@@ -903,7 +846,6 @@ func (a *slackAdapter) sendChannelMessage(ctx context.Context, channelID, thread
 			return "", err
 		}
 
-		// Handle HTTP 429 rate limit with Retry-After backoff.
 		if resp.StatusCode == http.StatusTooManyRequests {
 			resp.Body.Close()
 			if attempt < maxRateLimitRetries {
@@ -930,7 +872,7 @@ func (a *slackAdapter) sendChannelMessage(ctx context.Context, channelID, thread
 		}
 		if ok, _ := result["ok"].(bool); !ok {
 			errMsg, _ := result["error"].(string)
-			// Slack may return ok=false with error="ratelimited" inside a 200 body.
+
 			if errMsg == "ratelimited" && attempt < maxRateLimitRetries {
 				debug.Log("slack", "adapter=%s Slack ratelimited error, retrying (attempt %d/%d)",
 					a.name, attempt+1, maxRateLimitRetries)
@@ -960,10 +902,7 @@ func (a *slackAdapter) publishState(healthy bool, status, lastErr string) {
 	if a.manager == nil {
 		return
 	}
-	// #4529: snapshot botUserID under the adapter lock - publishState runs
-	// on the RTM read-loop goroutine while authTest (connect/reconnect
-	// goroutine) writes it under a.mu; the bare read was a data race whose
-	// visible symptom was an empty/stale ContactURI during reconnect.
+
 	a.mu.RLock()
 	botUserID := a.botUserID
 	a.mu.RUnlock()
@@ -987,7 +926,7 @@ func (a *slackAdapter) sendExtractedImage(ctx context.Context, channelID, thread
 	switch img.Kind {
 	case "url":
 		if IsLocalFilePath(img.Data) {
-			// #1739: bound the local-path read (the #1557 qq fix, all adapters).
+
 			f, err := os.Open(img.Data)
 			if err != nil {
 				return fmt.Errorf("read local image: %w", err)
@@ -1002,7 +941,7 @@ func (a *slackAdapter) sendExtractedImage(ctx context.Context, channelID, thread
 			}
 			return a.uploadFile(ctx, channelID, threadTS, filepath.Base(img.Data), data, "")
 		}
-		// For remote URLs, download first then upload (with context for cancellation)
+
 		dlReq, err := http.NewRequestWithContext(ctx, http.MethodGet, img.Data, nil)
 		if err != nil {
 			_, err = a.sendChannelMessage(ctx, channelID, threadTS, img.Data)
@@ -1010,7 +949,7 @@ func (a *slackAdapter) sendExtractedImage(ctx context.Context, channelID, thread
 		}
 		resp, err := a.httpClient.Do(dlReq)
 		if err != nil {
-			// Fallback: send URL as text
+
 			_, err = a.sendChannelMessage(ctx, channelID, threadTS, img.Data)
 			return err
 		}
@@ -1054,10 +993,7 @@ func (a *slackAdapter) sendExtractedImage(ctx context.Context, channelID, thread
 
 // uploadFile uploads a file to a Slack channel via multipart/form-data.
 func (a *slackAdapter) uploadFile(ctx context.Context, channelID, threadTS, filename string, data []byte, comment string) error {
-	// Respect the apiBase test override like every other call site (#968).
-	// NOTE: files.upload v1 is deprecated in favor of the
-	// files.getUploadURLExternal + files.completeUploadForeign flow; that
-	// migration is a larger change and is intentionally out of scope here.
+
 	baseURL := slackAPIBase
 	if a.apiBase != "" {
 		baseURL = a.apiBase
@@ -1093,15 +1029,8 @@ func (a *slackAdapter) uploadFile(ctx context.Context, channelID, threadTS, file
 		return fmt.Errorf("close multipart writer: %w", err)
 	}
 
-	// #4811: multipart upload is more rate-limit-prone than the text path
-	// (larger payloads, higher token cost per call), yet it had no 429
-	// retry while every sibling sender did - a mixed text+image message
-	// silently lost the image on 429. Mirror the sendMessage retry loop:
-	// Retry-After backoff, bounded by maxRateLimitRetries, and Slack's
-	// ok=false "ratelimited" inside a 200 body.
 	for attempt := 0; ; attempt++ {
-		// Rewind the multipart body: http.NewRequestWithContext captured &buf
-		// at its current position, so each retry needs a fresh reader.
+
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(buf.Bytes()))
 		if err != nil {
 			return err
@@ -1137,7 +1066,7 @@ func (a *slackAdapter) uploadFile(ctx context.Context, channelID, threadTS, file
 		}
 		if ok, _ := result["ok"].(bool); !ok {
 			errMsg, _ := result["error"].(string)
-			// Slack may return ok=false with error="ratelimited" inside a 200 body.
+
 			if errMsg == "ratelimited" && attempt < maxRateLimitRetries {
 				debug.Log("slack", "adapter=%s files.upload ratelimited error, retrying (attempt %d/%d)",
 					a.name, attempt+1, maxRateLimitRetries)
@@ -1168,7 +1097,6 @@ func markdownToMrkdwn(text string) string {
 	text = slackCodeBlockRe.ReplaceAllStringFunc(text, protectCode)
 	text = slackInlineCodeRe.ReplaceAllStringFunc(text, protectCode)
 
-	// Convert GFM tables to plain text (Slack mrkdwn doesn't support tables)
 	text = mdTableRe.ReplaceAllStringFunc(text, func(match string) string {
 		lines := strings.Split(match, "\n")
 		var result []string
@@ -1200,20 +1128,17 @@ func markdownToMrkdwn(text string) string {
 	// then convert that *bold* to _bold_ (wrong — bold would render as italic).
 	const boldPlaceholder = "\x00B\x00"
 	text = replaceDelimiters(text, "**", boldPlaceholder)
-	// Convert *italic* to _italic_ using regex to avoid false positives on
-	// unpaired asterisks (e.g., "5 * 3" would become "5 _ 3" with naive replacement).
+
 	text = slackItalicRe.ReplaceAllString(text, "_${1}_")
-	// Restore bold placeholders as Slack mrkdwn *bold*
+
 	text = strings.ReplaceAll(text, boldPlaceholder, "*")
-	// Convert ~~strikethrough~~ to ~strikethrough~ using regex (same guard).
+
 	text = slackStrikeRe.ReplaceAllString(text, "~$1~")
-	// Convert markdown links [text](url) to Slack mrkdwn <url|text>
+
 	text = slackLinkRe.ReplaceAllString(text, "<$2|$1>")
-	// Convert markdown headers (# H1, ## H2, etc.) to Slack bold (*text*)
-	// Slack mrkdwn has no native header support.
+
 	text = slackHeaderRe.ReplaceAllString(text, "*$2*")
 
-	// Restore protected code segments
 	for i, seg := range codeSegments {
 		text = strings.ReplaceAll(text, fmt.Sprintf("\x00C%d\x00", i), seg)
 	}
@@ -1247,13 +1172,11 @@ func (a *slackAdapter) transcribeSlackAudio(ctx context.Context, downloadURL, fi
 		return ""
 	}
 
-	// Determine extension
 	ext := filepath.Ext(filename)
 	if ext == "" {
 		ext = audioExtFromMIME(contentType)
 	}
 
-	// Write to temp file
 	src, err := os.CreateTemp("", "ggcode-slack-audio-*"+ext)
 	if err != nil {
 		return ""
@@ -1267,7 +1190,6 @@ func (a *slackAdapter) transcribeSlackAudio(ctx context.Context, downloadURL, fi
 	audioPath := src.Name()
 	cleanup := func() { _ = os.Remove(audioPath) }
 
-	// Convert to wav if needed
 	if ext != ".wav" {
 		dst, err := os.CreateTemp("", "ggcode-slack-audio-*.wav")
 		if err != nil {
@@ -1329,7 +1251,6 @@ func (a *slackAdapter) SendInteractive(ctx context.Context, binding ChannelBindi
 		return "", fmt.Errorf("Slack channel is not configured")
 	}
 
-	// Build Block Kit message
 	textBlock := map[string]any{
 		"type": "section",
 		"text": map[string]any{
@@ -1370,9 +1291,7 @@ func (a *slackAdapter) SendInteractive(ctx context.Context, binding ChannelBindi
 	}
 
 	blocks := []map[string]any{textBlock, actionsBlock}
-	// Respect the apiBase test override like every other call site (#968) —
-	// SendInteractive was the one path still pinned to the production URL,
-	// which is also why its missing ratelimited retry went unnoticed (#1237).
+
 	baseURL := slackAPIBase
 	if a.apiBase != "" {
 		baseURL = a.apiBase
@@ -1399,7 +1318,6 @@ func (a *slackAdapter) SendInteractive(ctx context.Context, binding ChannelBindi
 			return "", err
 		}
 
-		// Handle HTTP 429 rate limit with Retry-After backoff.
 		if resp.StatusCode == http.StatusTooManyRequests {
 			resp.Body.Close()
 			if attempt < maxRateLimitRetries {
@@ -1422,12 +1340,7 @@ func (a *slackAdapter) SendInteractive(ctx context.Context, binding ChannelBindi
 		resp.Body.Close()
 		if ok, _ := result["ok"].(bool); !ok {
 			errMsg, _ := result["error"].(string)
-			// #1237: Slack also signals rate limiting as ok=false with
-			// error "ratelimited" inside a 200 body (no Retry-After header
-			// in this form). sendChannelMessage already retries this shape;
-			// the interactive path is the twin that was missed, silently
-			// dropping approval questionnaires while ask_user waited
-			// forever for a callback that never came.
+
 			if errMsg == "ratelimited" && attempt < maxRateLimitRetries {
 				debug.Log("slack", "adapter=%s interactive ratelimited (200 body), retrying (attempt %d/%d)",
 					a.name, attempt+1, maxRateLimitRetries)
@@ -1438,7 +1351,7 @@ func (a *slackAdapter) SendInteractive(ctx context.Context, binding ChannelBindi
 			}
 			return "", fmt.Errorf("Slack chat.postMessage: %s", errMsg)
 		}
-		// Extract ts (message ID)
+
 		messageTs, _ := result["ts"].(string)
 		return messageTs, nil
 	}
@@ -1452,12 +1365,6 @@ func (a *slackAdapter) handleInteractive(ctx context.Context, payload map[string
 		return
 	}
 
-	// #4654: Socket Mode redelivers unacked envelopes, and trigger_id is
-	// stable across redeliveries of the SAME interaction - dedup on it so a
-	// replayed envelope cannot re-fire a button action (side effects like
-	// approvals would run twice). Empty trigger_id (unexpected) passes
-	// through rather than being dropped: matching the events-path contract
-	// where a missing key never blocks delivery.
 	triggerID, _ := payload["trigger_id"].(string)
 	if triggerID != "" && !a.markSeenDedup("interactive", triggerID) {
 		debug.Log("slack", "adapter=%s interactive dedup drop trigger_id=%s", a.name, triggerID)
@@ -1484,7 +1391,6 @@ func (a *slackAdapter) handleInteractive(ctx context.Context, payload map[string
 		return
 	}
 
-	// Extract sender info
 	user, _ := payload["user"].(map[string]any)
 	senderID, _ := user["id"].(string)
 	senderName, _ := user["username"].(string)

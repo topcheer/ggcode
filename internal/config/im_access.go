@@ -1,20 +1,5 @@
 package config
 
-// im_access.go — locked read accessors for the IM adapter map (#2152).
-//
-// #1367/#1794 migrated all *writes* to c.IM.Adapters onto the Update loop
-// (configMutationMsg), but the *reads* stayed behind in TUI Cmd goroutines:
-// a bind/create Cmd that lives for seconds (waitForXxxAdapterHealthy polls
-// up to 10s) races an Update-loop "d" toggle (`SetIMAdapterEnabled` map
-// write) — Go fatal "concurrent map read and map write", process death.
-// The same applies to `im.StartNamedAdapter(ctx, m.config.IM, ...)` which
-// hands the live map (by struct copy) to a long-lived adapter.
-//
-// The runtime *writers* in config_save.go take imAdaptersMu for their
-// read-modify-write sections; the accessors below take RLock. Load-time
-// normalization (normalizeIMPlatforms / expandEnv) is single-threaded and
-// intentionally unguarded.
-
 // GetIMAdapter returns a deep copy of the named adapter's config. Safe to
 // call from any goroutine; mutating the copy never touches live config.
 func (c *Config) GetIMAdapter(name string) (IMAdapterConfig, bool) {
@@ -46,7 +31,7 @@ func (c *Config) IMSnapshot() IMConfig {
 	}
 	c.imAdaptersMu.RLock()
 	defer c.imAdaptersMu.RUnlock()
-	snap := c.IM // struct copy; Adapters still aliased below
+	snap := c.IM
 	if c.IM.Adapters != nil {
 		snap.Adapters = make(map[string]IMAdapterConfig, len(c.IM.Adapters))
 		for name, adapter := range c.IM.Adapters {

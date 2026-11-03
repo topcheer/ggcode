@@ -350,7 +350,7 @@ func TestFormatIMStartCommandResult(t *testing.T) {
 }
 
 func TestFormatSpecialIMToolResult(t *testing.T) {
-	// Test dispatching to correct formatters
+
 	tests := []struct {
 		name    string
 		tr      *ToolResultInfo
@@ -389,11 +389,11 @@ func TestFormatSpecialIMToolResult(t *testing.T) {
 		{name: "wait_command", tr: &ToolResultInfo{ToolName: "wait_command"}, handled: true},
 		{name: "mcp_read_resource", tr: &ToolResultInfo{ToolName: "mcp_read_resource"}, handled: true},
 		{name: "mcp_get_prompt", tr: &ToolResultInfo{ToolName: "mcp_get_prompt"}, handled: true},
-		// Silent tools (handled but empty result is ok)
+
 		{name: "teammate_list silent", tr: &ToolResultInfo{ToolName: "teammate_list"}, handled: true},
 		{name: "swarm_task_list silent", tr: &ToolResultInfo{ToolName: "swarm_task_list"}, handled: true},
 		{name: "a2a_discover silent", tr: &ToolResultInfo{ToolName: "a2a_discover"}, handled: true},
-		// Unknown tool still handled (by error formatter)
+
 		{name: "unknown tool", tr: &ToolResultInfo{ToolName: "unknown_tool_xyz"}, handled: true},
 	}
 	for _, tt := range tests {

@@ -38,10 +38,6 @@ const (
 	nostrWatchdogTimeout = 5 * time.Minute
 )
 
-// ---------------------------------------------------------------------------
-// Adapter struct
-// ---------------------------------------------------------------------------
-
 type nostrAdapter struct {
 	name    string
 	manager *Manager
@@ -74,13 +70,11 @@ func newNostrAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapter
 		return nil, fmt.Errorf("Nostr private_key is required for adapter %q (set 'private_key' in extra or NOSTR_PRIVATE_KEY env)", name)
 	}
 
-	// Decode nsec → hex if needed
 	privKey = normalizeNostrKey(privKey)
 	if len(privKey) != 64 {
 		return nil, fmt.Errorf("Nostr private_key must be 32 bytes hex (64 chars) or nsec format")
 	}
 
-	// Verify the key is valid by deriving pubkey
 	pubKey, err := nostr.GetPublicKey(privKey)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Nostr private_key: %w", err)
@@ -123,16 +117,12 @@ func (a *nostrAdapter) Close() error {
 	a.relayConns = nil
 	a.connected = 0
 	a.mu.Unlock()
-	// Close outside the lock to avoid potential deadlock.
+
 	for _, r := range relays {
 		r.Close()
 	}
 	return nil
 }
-
-// ---------------------------------------------------------------------------
-// Main run loop
-// ---------------------------------------------------------------------------
 
 func (a *nostrAdapter) run(ctx context.Context) {
 	for _, relayURL := range a.relays {
@@ -195,12 +185,6 @@ func nostrBackoffNext(backoff time.Duration, err error) time.Duration {
 func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error {
 	debug.Log("nostr", "adapter=%s connecting to %s proxy=%s", a.name, relayURL, a.proxy)
 
-	// #758: the old HTTPS_PROXY env hack never worked reliably -- net/http
-	// caches the env-proxy func in a sync.Once at first use, so the temp
-	// value was either ignored (cache primed by earlier HTTP traffic) or
-	// permanently captured into the process-wide transport. Route this
-	// relay's host through the per-host transport interceptor instead:
-	// deterministic for the relay, untouched for all other traffic.
 	relayHost := ""
 	if a.proxy != "" {
 		if u, err := url.Parse(relayURL); err == nil && u.Host != "" {
@@ -214,9 +198,6 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 		}
 	}
 
-	// #2731: fail fast on a closed adapter BEFORE the (blocking) relay
-	// dial: Close() and connectRelay race otherwise - the closed check in
-	// relayLoop happens at iteration top only.
 	a.mu.Lock()
 	closed := a.closed
 	a.mu.Unlock()
@@ -230,11 +211,7 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 	}
 
 	a.mu.Lock()
-	// #2731: re-check under the lock - Close() may have run while
-	// RelayConnect was blocking. Refuse the freshly established relay
-	// instead of appending it to a shut-down adapter (which used to
-	// re-report "connected" state and leave the conn draining inbound
-	// messages until the watchdog window closed it).
+
 	if a.closed {
 		a.mu.Unlock()
 		relay.Close()
@@ -259,7 +236,6 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 		a.mu.Unlock()
 	}()
 
-	// Subscribe to DMs (kind 4) with p-tag = our pubkey
 	since := nostr.Now() - nostrStartupLookback
 	filter := nostr.Filter{
 		Kinds: []int{nostr.KindEncryptedDirectMessage},
@@ -274,10 +250,6 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 	}
 	debug.Log("nostr", "adapter=%s subscribed to DMs on %s", a.name, relayURL)
 
-	// Event loop with watchdog timer for dead connection detection.
-	// Since go-nostr doesn't expose the WebSocket for read deadlines, we use
-	// a periodic watchdog. Nostr relays persist events, so reconnection with
-	// a Since filter recovers any missed events.
 	watchdog := time.NewTimer(nostrWatchdogTimeout)
 	defer watchdog.Stop()
 
@@ -287,42 +259,28 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 			return nil
 		case evt, ok := <-sub.Events:
 			if !ok {
-				// Relay closed a previously-healthy subscription — serve-phase
-				// exit, tagged so relayLoop resets the backoff (#964).
+
 				return fmt.Errorf("subscription closed: %w", errNostrServed)
 			}
 			if evt != nil {
-				// #1663 case 1: dispatch asynchronously (whatsapp
-				// pattern). handleEvent -> manager.HandleInbound runs the
-				// ENTIRE agent run synchronously; calling it inline blocked
-				// this relayLoop, so a nostr-DM approval reply ("y") - a
-				// kind-4 DM only consumed by relayLoop - deadlocked the
-				// run it was supposed to answer (guaranteed with a single
-				// relay, possible once run messages occupy every loop),
-				// backpressured the unbuffered Events channel, and tripped
-				// the watchdog into a false reconnect after 5min.
+
 				evt := evt
 				safego.Go(fmt.Sprintf("nostr-inbound-%s", a.name), func() {
 					a.handleEvent(ctx, evt)
 				})
 			}
-			// Reset watchdog on any activity
+
 			watchdog.Reset(nostrWatchdogTimeout)
 		case <-sub.EndOfStoredEvents:
 			debug.Log("nostr", "adapter=%s EOSE from %s", a.name, relayURL)
 			watchdog.Reset(nostrWatchdogTimeout)
 		case <-watchdog.C:
 			debug.Log("nostr", "adapter=%s watchdog timeout on %s, forcing reconnect", a.name, relayURL)
-			// Serve-phase exit from a healthy connection — tagged for backoff
-			// reset (#964).
+
 			return fmt.Errorf("watchdog: no activity within %s: %w", nostrWatchdogTimeout, errNostrServed)
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Event handling
-// ---------------------------------------------------------------------------
 
 // nostrShortID returns a display-safe prefix. #1553-B: raw evt.ID[:12] /
 // evt.PubKey[:12] panics on short values from a MALICIOUS relay (nothing
@@ -340,7 +298,6 @@ func (a *nostrAdapter) handleEvent(ctx context.Context, evt *nostr.Event) {
 		return
 	}
 
-	// Dedup
 	a.mu.Lock()
 	if _, seen := a.seen[evt.ID]; seen {
 		a.mu.Unlock()
@@ -357,12 +314,10 @@ func (a *nostrAdapter) handleEvent(ctx context.Context, evt *nostr.Event) {
 	}
 	a.mu.Unlock()
 
-	// Ignore our own events
 	if evt.PubKey == a.pubKey {
 		return
 	}
 
-	// Decrypt NIP-04 content
 	sharedSecret, err := nip04.ComputeSharedSecret(evt.PubKey, a.privKey)
 	if err != nil {
 		debug.Log("nostr", "adapter=%s ECDH failed for event %s: %v", a.name, nostrShortID(evt.ID), err)
@@ -391,7 +346,6 @@ func (a *nostrAdapter) handleEvent(ctx context.Context, evt *nostr.Event) {
 		Text: strings.TrimSpace(plaintext),
 	}
 
-	// Pairing flow
 	if a.manager != nil {
 		pairingResult, err := a.manager.HandlePairingInbound(msg)
 		debug.Log("nostr", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
@@ -409,10 +363,6 @@ func (a *nostrAdapter) handleEvent(ctx context.Context, evt *nostr.Event) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Outbound
-// ---------------------------------------------------------------------------
-
 func (a *nostrAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	target := binding.ChannelID
 	if target == "" {
@@ -426,14 +376,10 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 		return nil
 	}
 
-	// Resolve npub → hex if needed
 	recipientPubKey = resolveNostrPubkey(recipientPubKey)
 
 	chunks := splitNostrMessage(text, nostrMaxMessageLen)
 
-	// Compute shared secret once — it only depends on recipientPubKey and our
-	// private key, both constant across all chunks. ECDH scalar multiplication
-	// is expensive (~0.1ms), so this avoids N redundant computations.
 	sharedSecret, err := nip04.ComputeSharedSecret(recipientPubKey, a.privKey)
 	if err != nil {
 		return fmt.Errorf("ECDH: %w", err)
@@ -443,12 +389,11 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 	for i, chunk := range chunks {
 		encrypted, err := nip04.Encrypt(chunk, sharedSecret)
 		if err != nil {
-			// Encryption error is also recipient-level
+
 			hardErr = fmt.Errorf("NIP-04 encrypt: %w", err)
 			break
 		}
 
-		// Build and sign event
 		evt := nostr.Event{
 			PubKey:    a.pubKey,
 			CreatedAt: nostr.Now(),
@@ -458,13 +403,9 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 		}
 		if err := evt.Sign(a.privKey); err != nil {
 			hardErr = fmt.Errorf("sign: %w", err)
-			break // signing key error: will fail for every chunk
+			break
 		}
 
-		// Publish to all connected relays. If every relay is down (conns empty)
-		// we must return an error, NOT nil — the caller (sendWithTimeout)
-		// treats nil as delivered and skips its retry loop, silently dropping
-		// the message (#964).
 		a.mu.RLock()
 		conns := make([]*nostr.Relay, len(a.relayConns))
 		copy(conns, a.relayConns)
@@ -484,17 +425,9 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 			}
 			success++
 		}
-		// #1225: at least one relay accepted this chunk - treat it as
-		// delivered. Surfacing a partial failure as an error makes the caller
-		// resend the whole message, and re-encryption (random IV) produces a
-		// new event ID the recipient's dedupe cannot catch: the user receives
-		// duplicate DMs. Only a zero-success chunk (or no connections at
-		// all) errors. The error is STICKY: a later delivered chunk must
-		// never erase an earlier chunk's total failure - that chunk is
-		// undelivered data, and returning nil would silently drop it (the
-		// #964 class the original patch regressed for multi-chunk sends).
+
 		hardErr = nostrFoldChunk(hardErr, success, relayErr)
-		// Inter-chunk delay to avoid relay rate-limiting (skip after last chunk).
+
 		if i < len(chunks)-1 {
 			select {
 			case <-time.After(nostrInterMsgDelay):
@@ -522,10 +455,6 @@ func nostrFoldChunk(hardErr error, success int, relayErr error) error {
 func (a *nostrAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 	return nil
 }
-
-// ---------------------------------------------------------------------------
-// Key helpers
-// ---------------------------------------------------------------------------
 
 // NormalizeNostrPrivateKey canonicalizes a private key to 64-char hex,
 // accepting both hex and nsec1... (bech32) input. Exported for the TUI
@@ -561,7 +490,7 @@ func resolveNostrPubkey(input string) string {
 			return pk
 		}
 	}
-	// Verify it's valid hex
+
 	if _, err := hex.DecodeString(input); err == nil && len(input) == 64 {
 		return input
 	}
@@ -573,10 +502,6 @@ func resolveNostrPubkey(input string) string {
 func splitNostrMessage(text string, maxLen int) []string {
 	return splitMessageRunes(text, maxLen, false, false, true)
 }
-
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
 
 func (a *nostrAdapter) publishState(healthy bool, status, lastErr string) {
 	if a.manager == nil {

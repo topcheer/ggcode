@@ -27,7 +27,7 @@ func TestNormalizeOutputStyle(t *testing.T) {
 }
 
 func TestNextOutputStyle(t *testing.T) {
-	// Cycle: "" -> concise -> detailed -> socratic -> ""
+
 	tests := []struct {
 		current string
 		want    string
@@ -36,7 +36,7 @@ func TestNextOutputStyle(t *testing.T) {
 		{"concise", "detailed"},
 		{"detailed", "socratic"},
 		{"socratic", ""},
-		{"unknown", "concise"}, // unknown normalizes to start of cycle
+		{"unknown", "concise"},
 	}
 	for _, tc := range tests {
 		got := NextOutputStyle(tc.current)
@@ -47,12 +47,11 @@ func TestNextOutputStyle(t *testing.T) {
 }
 
 func TestOutputStyleGuidance(t *testing.T) {
-	// Default style returns no guidance
+
 	if g := OutputStyleGuidance(""); g != "" {
 		t.Errorf("OutputStyleGuidance(\"\") should be empty, got %q", g)
 	}
 
-	// Known styles return non-empty guidance
 	for _, style := range []string{"concise", "detailed", "socratic"} {
 		g := OutputStyleGuidance(style)
 		if g == "" {
@@ -63,7 +62,6 @@ func TestOutputStyleGuidance(t *testing.T) {
 		}
 	}
 
-	// Unknown style returns empty
 	if g := OutputStyleGuidance("unknown"); g != "" {
 		t.Errorf("OutputStyleGuidance(\"unknown\") should be empty, got %q", g)
 	}
@@ -82,8 +80,7 @@ func TestDisplayOutputStyle(t *testing.T) {
 }
 
 func TestBuildSystemPromptWithOutputStyle(t *testing.T) {
-	// BuildSystemPrompt doesn't directly use OutputStyle; the prompt builder
-	// in agentruntime adds it. But we can verify the guidance is injectable.
+
 	base := BuildSystemPrompt("", "/tmp", "en", []string{"read_file"}, "", nil, nil)
 	if strings.Contains(base, "Output Style: Concise") {
 		t.Error("base prompt should not contain output style guidance")

@@ -256,8 +256,6 @@ func ApplyRemoteQuestionnaireAnswer(req toolpkg.AskUserRequest, parsed []ParsedQ
 	return parsed, nextIdx < 0, nextIdx, nil
 }
 
-// --- internal helpers ---
-
 func parseRemoteSelections(raw string, question toolpkg.AskUserQuestion) (map[string]struct{}, bool, error) {
 	text := strings.TrimSpace(raw)
 	if text == "" || len(question.Choices) == 0 {

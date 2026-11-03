@@ -37,14 +37,13 @@ func TestInstanceHooksClearToEmptySilentlyLost(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
-	// Global has NO hooks; hooks live only at instance scope.
+
 	if err := os.WriteFile(globalPath, []byte("language: en\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	workspace := t.TempDir()
 	instPath := filepath.Join(InstanceDir(workspace), "ggcode.yaml")
 
-	// Phase 1: set an instance-scope hook [A] and save.
 	cfg, err := LoadWithInstance(globalPath, workspace)
 	if err != nil {
 		t.Fatalf("LoadWithInstance: %v", err)
@@ -58,7 +57,6 @@ func TestInstanceHooksClearToEmptySilentlyLost(t *testing.T) {
 		t.Fatalf("precondition: instance file should carry hook A; err=%v data=%s", err, instData)
 	}
 
-	// Phase 2: reload so [A] comes from the instance file, then CLEAR hooks.
 	cfg2, err := LoadWithInstance(globalPath, workspace)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
@@ -72,10 +70,6 @@ func TestInstanceHooksClearToEmptySilentlyLost(t *testing.T) {
 		t.Fatalf("SaveInstance(clear): %v", err)
 	}
 
-	// Write side: FIXED (#4315) - the cleared hooks must NOT remain on disk.
-	// With hooks as the only instance key, the post-reset prune may remove
-	// the instance file entirely (existing family behavior for fully-reset
-	// instances) - absence is the strongest pass.
 	instData, err = os.ReadFile(instPath)
 	if err == nil {
 		if strings.Contains(string(instData), "echo A") {
@@ -85,8 +79,6 @@ func TestInstanceHooksClearToEmptySilentlyLost(t *testing.T) {
 		t.Fatalf("read instance file after clear: %v", err)
 	}
 
-	// Read side: FIXED (#4315) - no resurrection on reload (global has no
-	// hooks in this fixture, so the merged config must be empty).
 	cfg3, err := LoadWithInstance(globalPath, workspace)
 	if err != nil {
 		t.Fatalf("reload after clear: %v", err)

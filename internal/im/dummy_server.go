@@ -73,16 +73,14 @@ func (b *sseBroker) push(eventType string, data []byte) int64 {
 	b.seq++
 	entry := sseEntry{seq: b.seq, event: eventType, data: data}
 
-	// Write to ring buffer
 	b.buffer[b.head] = entry
 	b.head = (b.head + 1) % b.bufSize
 
-	// Fan out to subscribers
 	for ch := range b.subs {
 		select {
 		case ch <- entry:
 		default:
-			// subscriber too slow, drop
+
 		}
 	}
 	return b.seq
@@ -149,7 +147,7 @@ func outboundToSSE(event OutboundEvent) (string, []byte) {
 			data, _ := json.Marshal(map[string]string{"kind": "knight_report", "content": text})
 			return "knight_report", data
 		}
-		// Heuristic round_done detection
+
 		if roundPattern.MatchString(text) {
 			data, _ := json.Marshal(map[string]string{"kind": "round_done", "content": text})
 			return "round_done", data
@@ -207,9 +205,7 @@ func (s *httpServer) handler() http.Handler {
 
 // start starts the HTTP server on the given address.
 func (s *httpServer) start(ctx context.Context, listenAddr, portFile string) {
-	// #2959: derive a cancellable child so POST /shutdown can trigger the
-	// graceful stop path (srv.Close + listener.Close below) instead of only
-	// the caller's external signal.
+
 	ctx, s.cancel = context.WithCancel(ctx)
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
@@ -219,7 +215,6 @@ func (s *httpServer) start(ctx context.Context, listenAddr, portFile string) {
 
 	srv := &http.Server{Handler: s.handler()}
 
-	// Write port file atomically
 	if portFile != "" {
 		addr := listener.Addr().String()
 		content := fmt.Sprintf("%s\n%s\n", addr, s.shutdownToken)
@@ -264,18 +259,15 @@ func (s *httpServer) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reset metrics if requested
 	if r.URL.Query().Get("reset_metrics") == "true" {
 		s.adapter.metrics.Reset()
 	}
 
-	// Generate message ID
 	msgID := req.ClientMessageID
 	if msgID == "" {
 		msgID = "msg_" + newID()
 	}
 
-	// Build InboundMessage
 	msg := InboundMessage{
 		Envelope: Envelope{
 			Adapter:    s.adapter.name,
@@ -288,18 +280,14 @@ func (s *httpServer) handleSend(w http.ResponseWriter, r *http.Request) {
 		Text: req.Text,
 	}
 
-	// Track user message count
 	s.adapter.metrics.IncUserMessages()
 
-	// Respond immediately so the caller (eval SSE consumer) can proceed
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":     "ok",
 		"message_id": msgID,
 	})
 
-	// Submit through the manager in background to avoid blocking HTTP handler.
-	// Use a fresh context detached from the HTTP request lifetime.
 	safego.Go("im.dummy.handleInbound", func() {
 		ctx := context.Background()
 		if err := s.adapter.manager.HandleInbound(ctx, msg); err != nil {
@@ -323,17 +311,10 @@ func (s *httpServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ch, lastSeq := s.sseBroker.subscribe()
 	defer s.sseBroker.unsubscribe(ch)
 
-	// Send hello with current seq
 	helloData, _ := json.Marshal(map[string]int64{"last_seq": lastSeq})
 	fmt.Fprintf(w, "event: hello\ndata: %s\n\n", helloData)
 	flusher.Flush()
 
-	// #2973: replay-on-reconnect. The SSE-standard Last-Event-ID header (or
-	// ?since= query fallback) names the last event the client saw; entries
-	// with seq > since are replayed from the ring buffer before the live
-	// loop. subscribe() above already registered this connection, so no event
-	// is lost between snapshot and live; entries arriving on BOTH paths are
-	// deduped by seq (lastSent).
 	since := lastSeq
 	if h := strings.TrimSpace(r.Header.Get("Last-Event-ID")); h != "" {
 		if v, err := strconv.ParseInt(h, 10, 64); err == nil {
@@ -358,7 +339,6 @@ func (s *httpServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Heartbeat ticker
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 
@@ -366,7 +346,7 @@ func (s *httpServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case entry := <-ch:
 			if entry.seq <= lastSent {
-				continue // already replayed from the snapshot (#2973)
+				continue
 			}
 			lastSent = entry.seq
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", entry.event, entry.data)
@@ -414,7 +394,6 @@ func (s *httpServer) handleShutdown(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify bearer token
 	auth := r.Header.Get("Authorization")
 	token := strings.TrimPrefix(auth, "Bearer ")
 	if token != s.shutdownToken {
@@ -424,9 +403,7 @@ func (s *httpServer) handleShutdown(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "shutting_down"})
-	// #2959: fire the derived cancel - the stop goroutine in start()
-	// observes ctx.Done() and closes srv+listener (graceful path). Guarded
-	// for the pathological case of a request racing ahead of start().
+
 	if s.cancel != nil {
 		s.cancel()
 	}

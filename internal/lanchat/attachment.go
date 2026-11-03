@@ -139,7 +139,7 @@ func sanitizeAttachmentName(name string) string {
 
 // HandleAttachmentDownload serves an attachment by ID via HTTP.
 func (am *AttachmentManager) HandleAttachmentDownload(w http.ResponseWriter, r *http.Request) {
-	// Extract ID from path: /lanchat/attach/{id}
+
 	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/lanchat/attach/"), "/")
 	id := pathParts[0]
 	if id == "" {
@@ -153,16 +153,13 @@ func (am *AttachmentManager) HandleAttachmentDownload(w http.ResponseWriter, r *
 		return
 	}
 
-	// Always prevent MIME sniffing: the Content-Type below comes from a peer
-	// and must not be re-interpreted by the browser (#986).
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	name := sanitizeAttachmentName(att.name)
 	if inlineSafeMIMEs[att.mimeType] {
 		w.Header().Set("Content-Type", att.mimeType)
 		w.Header().Set("Content-Disposition", "inline; filename=\""+name+"\"")
 	} else {
-		// Untrusted MIME type: never render inline - force a download with the
-		// sanitized filename so the browser cannot execute peer content (#986).
+
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
 	}

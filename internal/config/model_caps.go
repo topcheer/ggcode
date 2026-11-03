@@ -1,12 +1,5 @@
 package config
 
-// Exported model-capability lookups for cross-package consumers (system
-// prompt rendering, vision fallback model selection). These run the same
-// inference chain used for endpoint resolution: exact capability-table match
-// first, then name heuristics. Endpoint-level supports_vision overrides are
-// NOT applied here - callers holding a resolved endpoint should prefer
-// ResolvedEndpoint.SupportsVision.
-
 // ModelSupportsVision reports whether a model is inferred to accept image
 // input.
 func ModelSupportsVision(model string) bool {

@@ -220,19 +220,13 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 	baseNick := RandomNick()
 	nick := baseNick + "_" + DefaultRole
 
-	// Load persisted approval policies (keyed by peer nick). A missing file
-	// is an empty-but-valid state; a corrupt file keeps the hub running with
-	// no policies and blocks write-back so the file is not wiped (#990).
 	policies, err := LoadApprovalPolicies(store.dir)
 	policiesLoaded := err == nil
 	if err != nil {
 		policies = map[string]string{}
 		debug.Log("lanchat", "approval policies in %s not loaded (refusing to overwrite on save): %v", store.dir, err)
 	}
-	// #3402: trusted-peers.json values are fingerprints ("fp:<hex>"); a
-	// legacy bool true entry loads as "" - endorsement still shows in the
-	// panel, but the strict-mode exemption needs re-endorsement to bind the
-	// key fingerprint.
+
 	trustedFPs, trustErr := LoadTrustedPeers(store.dir)
 	trustedLoaded := trustErr == nil
 	if trustErr != nil {
@@ -292,7 +286,7 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 		seenMsgIDs:             make(map[string]bool),
 		recentAgentMsgs:        make(map[string]Message),
 		httpClient: &http.Client{
-			Timeout: 2 * time.Second, // LAN: if TCP doesn't connect in 2s, it's down
+			Timeout: 2 * time.Second,
 		},
 	}
 }
@@ -321,11 +315,7 @@ func (h *Hub) SetSessionID(baseDir, sessionID string) {
 	if sessionID == "" || baseDir == "" {
 		return
 	}
-	// sessionID is embedded into a filesystem path (sessions/<id>/...).
-	// Production IDs are UUIDs, but future callers (resume --session, IM
-	// bindings) may pass user-controlled values, so reject anything that
-	// could escape the sessions directory (#990). Keep the previous store
-	// on rejection.
+
 	if strings.ContainsAny(sessionID, `\/`) || strings.Contains(sessionID, "..") {
 		debug.Log("lanchat", "rejecting unsafe sessionID %q (path separator or parent traversal)", sessionID)
 		return
@@ -334,27 +324,27 @@ func (h *Hub) SetSessionID(baseDir, sessionID string) {
 	h.mu.Lock()
 	h.sessionID = sessionID
 	h.store = NewStore(sessionDir)
-	// Load session-specific nick if previously persisted.
+
 	if persisted, err := LoadNick(h.store.dir); err == nil && persisted != "" {
 		h.humanNick = persisted
 		h.agentNick = AgentNick(persisted)
 	} else {
-		// No session nick yet — persist the current random nick.
+
 		_ = SaveNick(h.store.dir, h.humanNick)
 	}
-	// Load session-specific role if previously persisted.
+
 	if persisted, err := LoadRole(h.store.dir); err == nil && persisted != "" {
 		h.role = persisted
 	} else {
 		_ = SaveRole(h.store.dir, h.role)
 	}
-	// Load session-specific team if previously persisted.
+
 	if persisted, err := LoadTeam(h.store.dir); err == nil && persisted != "" {
 		h.team = persisted
 	} else {
 		_ = SaveTeam(h.store.dir, h.team)
 	}
-	// Load persisted messages into memory so they survive across restarts.
+
 	if h.store != nil {
 		if msgs, err := h.store.LoadRecent(sessionID, maxHistoryPerSession); err == nil {
 			h.messages = msgs
@@ -362,8 +352,6 @@ func (h *Hub) SetSessionID(baseDir, sessionID string) {
 	}
 	h.mu.Unlock()
 
-	// Re-broadcast presence so peers learn our updated identity (nick/role/team).
-	// SetSessionID may change all three when switching sessions.
 	for _, peer := range h.Participants() {
 		if peer.NodeID == h.nodeID || !peer.Online {
 			continue
@@ -491,7 +479,6 @@ func (h *Hub) SetAgentBusy(busy bool) {
 	h.agentBusy = busy
 	h.mu.Unlock()
 
-	// Notify peers of the state change
 	h.broadcastPresence()
 }
 
@@ -525,12 +512,10 @@ func (h *Hub) shouldNotifyLeave(nick, excludeNodeID string) bool {
 			continue
 		}
 		if p.Online && strings.TrimSpace(p.HumanNick) == nick {
-			return false // another instance with same nick is still online
+			return false
 		}
 	}
-	// Don't delete from notifiedNicks here — that would allow a duplicate
-	// "is online" notification when the peer recovers. notifiedNicks is
-	// cleared only when the peer is deleted from the map after peerDeleteAfter.
+
 	return true
 }
 
@@ -683,7 +668,6 @@ func (h *Hub) SetNickRoleTeam(nick, role, team string) error {
 	sessionDir := h.store.dir
 	h.mu.Unlock()
 
-	// Persist nick, role, and team to session-scoped path
 	if err := SaveNick(sessionDir, composite); err != nil {
 		debug.Log("lanchat", "failed to persist session nick: %v", err)
 	}
@@ -694,7 +678,6 @@ func (h *Hub) SetNickRoleTeam(nick, role, team string) error {
 		debug.Log("lanchat", "failed to persist session team: %v", err)
 	}
 
-	// Broadcast nick/role/team change to peers
 	safego.Go("lanchat.broadcastNickChange", func() { h.broadcastNickChange(composite, role, team) })
 	return nil
 }
@@ -715,30 +698,20 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 
 	var newPeers []Participant
 
-	// ── Loop 1: mDNS discovery — ONLY adds new peers and updates endpoint ──
-	// mDNS is a stateless discovery service. Its results jitter between ticks:
-	// a peer may appear, disappear, and reappear without any real state change.
-	// Therefore mDNS is used SOLELY for initial peer discovery (learning the
-	// NodeID + Endpoint of a new peer). It must NEVER influence liveness:
-	//   - No LastSeen updates (liveness is HTTP presence only)
-	//   - No Online status changes
-	//   - No deletion based on mDNS absence
 	for _, p := range participants {
 		if p.NodeID == h.nodeID {
-			continue // skip self
+			continue
 		}
 		existing, ok := h.peers[p.NodeID]
 		if !ok {
-			// New peer discovered via mDNS — add with optimistic initial state.
-			// Online=true is provisional; confirmed by sendPresence below.
+
 			cp := p
 			cp.Online = true
 			cp.LastSeen = time.Now().Unix()
 			h.peers[p.NodeID] = &cp
 			newPeers = append(newPeers, cp)
 		} else {
-			// Existing peer — update endpoint metadata only.
-			// Don't touch Online, LastSeen, or nicks.
+
 			if p.Endpoint != "" {
 				existing.Endpoint = p.Endpoint
 			}
@@ -777,11 +750,9 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 		if isStale && p.Online {
 			p.Online = false
 			p.lastOfflineTime = now.UnixNano()
-			// Don't fire leave yet — wait for offlineNotifyDelay.
+
 		}
-		// Fire delayed leave notification: only after offlineNotifyDelay
-		// has passed since the peer went offline, and we haven't already
-		// notified. This absorbs brief offline blips.
+
 		if !p.Online && p.lastOfflineTime > 0 && !p.notifiedLeave {
 			if now.Sub(time.Unix(0, p.lastOfflineTime)) >= offlineNotifyDelay {
 				p.notifiedLeave = true
@@ -790,14 +761,12 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 				}
 			}
 		}
-		// Delete peers only after extended unreachability (peerDeleteAfter).
+
 		if time.Since(time.Unix(p.LastSeen, 0)) > peerDeleteAfter {
 			if p.HumanNick != "" {
 				delete(h.notifiedNicks, strings.TrimSpace(p.HumanNick))
 			}
-			// Archive the peer before deletion so long-running agents
-			// can correlate it with a returning peer (new NodeID, same
-			// team/role/nicks).
+
 			h.archivePeer(p)
 			delete(h.peers, id)
 		}
@@ -809,23 +778,18 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 	}{h.onParticipantAdd, h.onParticipantRm}
 	h.mu.Unlock()
 
-	// Fire callbacks outside lock — but only for peers whose nick we
-	// already know (from a prior presence exchange). Peers discovered
-	// via A2A registry have empty nicks; we sendPresence to learn them,
-	// and HandlePresence will fire the callback once the nick arrives.
 	for _, np := range newPeers {
 		if np.HumanNick != "" && callbacks.add != nil {
 			safego.Go("lanchat.participantAdd", func() { callbacks.add(np) })
 		}
-		// Proactively send our presence to the new peer
+
 		safego.Go("lanchat.sendPresence", func() { h.sendPresence(np) })
 	}
-	// Retry presence for peers whose nick we still don't know.
+
 	for _, ep := range emptyNickPeers {
 		safego.Go("lanchat.sendPresence", func() { h.sendPresence(ep) })
 	}
-	// Heartbeat: probe all peers whose LastSeen is stale.
-	// This is the SOLE liveness mechanism — independent of mDNS.
+
 	for _, sp := range stalePeers {
 		safego.Go("lanchat.sendPresence", func() { h.sendPresence(sp) })
 	}
@@ -835,8 +799,6 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 		}
 	}
 
-	// Check for nick conflicts with peers (only once — when we first learn
-	// peer nicks). If a peer shares our nick, auto-resolve by appending a suffix.
 	h.resolveNickConflict()
 }
 
@@ -857,7 +819,7 @@ func (h *Hub) resolveNickConflict() {
 		h.mu.Unlock()
 		return
 	}
-	// Collect all taken nicks
+
 	taken := make(map[string]bool)
 	for _, p := range h.peers {
 		if p.HumanNick != "" {
@@ -868,10 +830,7 @@ func (h *Hub) resolveNickConflict() {
 	h.humanNick = newNick
 	h.agentNick = AgentNick(newNick)
 	sessionDir := h.store.dir
-	// #2128: capture role/team under the lock - reading h.role/h.team
-	// inside the goroutine closure evaluated them at goroutine time
-	// (after Unlock), racing SetNickRoleTeam's locked writes (-race
-	// confirmed). Same pattern as the L628 sibling call passing locals.
+
 	role, team := h.role, h.team
 	h.mu.Unlock()
 
@@ -887,7 +846,7 @@ func (h *Hub) HandlePresence(p Participant) {
 	existing, ok := h.peers[p.NodeID]
 	needCallback := false
 	if !ok {
-		// Truly new peer — create and fire callback (if nick is genuinely new)
+
 		cp := p
 		cp.Online = true
 		cp.LastSeen = time.Now().Unix()
@@ -897,7 +856,7 @@ func (h *Hub) HandlePresence(p Participant) {
 		}
 		h.peers[p.NodeID] = &cp
 	} else {
-		// Update existing — protect learned nicks and workspace info from empty overwrites
+
 		if p.HumanNick != "" {
 			existing.HumanNick = p.HumanNick
 		}
@@ -914,8 +873,8 @@ func (h *Hub) HandlePresence(p Participant) {
 		existing.Endpoint = p.Endpoint
 		existing.Online = true
 		existing.LastSeen = time.Now().Unix()
-		existing.notifiedLeave = false // reset: peer recovered, future offline can notify again
-		// Update workspace metadata (always overwrite — workspace changes are meaningful)
+		existing.notifiedLeave = false
+
 		if p.Workspace != "" {
 			existing.Workspace = p.Workspace
 		}
@@ -934,16 +893,15 @@ func (h *Hub) HandlePresence(p Participant) {
 		if p.HasTests {
 			existing.HasTests = true
 		}
-		// Update agent busy state (always overwrite — busy state changes are meaningful)
+
 		existing.AgentBusy = p.AgentBusy
-		// Update model health fields (always overwrite — presence is authoritative)
+
 		existing.AgentStatus = p.AgentStatus
 		existing.AgentStatusSince = p.AgentStatusSince
 		if p.Model != "" {
 			existing.Model = p.Model
 		}
-		// If we previously didn't know the nick but now we do, fire callback
-		// so the join notification shows the real name.
+
 		if existing.HumanNick != "" && !existing.notifiedJoin && h.shouldNotifyJoin(existing.HumanNick) {
 			needCallback = true
 			existing.notifiedJoin = true
@@ -985,13 +943,12 @@ func (h *Hub) sendPresence(peer Participant) {
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
-		// TCP failed — mark peer TCP as down immediately
+
 		h.recordTransportResult(peer.NodeID, "tcp", false)
 		return
 	}
 	defer resp.Body.Close()
 
-	// TCP succeeded — mark peer TCP as up
 	h.recordTransportResult(peer.NodeID, "tcp", true)
 
 	// The response contains the peer's own presence — learn it too.
@@ -1007,7 +964,7 @@ func (h *Hub) sendPresence(peer Participant) {
 		var participant Participant
 		h.mu.Lock()
 		if existing, ok := h.peers[peerInfo.NodeID]; ok {
-			// Guard against empty overwrites
+
 			if peerInfo.HumanNick != "" {
 				existing.HumanNick = peerInfo.HumanNick
 			}
@@ -1023,8 +980,8 @@ func (h *Hub) sendPresence(peer Participant) {
 			existing.Mode = peerInfo.Mode
 			existing.Online = true
 			existing.LastSeen = time.Now().Unix()
-			existing.notifiedLeave = false // reset: peer recovered
-			// Update workspace metadata from peer's response
+			existing.notifiedLeave = false
+
 			if peerInfo.Workspace != "" {
 				existing.Workspace = peerInfo.Workspace
 			}
@@ -1044,9 +1001,7 @@ func (h *Hub) sendPresence(peer Participant) {
 				existing.HasTests = true
 			}
 			participant = *existing
-			// Fire join callback only if we haven't already announced this nick.
-			// The wasOffline re-join was removed — it caused duplicate "is online"
-			// notifications every time a presence heartbeat recovered.
+
 			if existing.HumanNick != "" && !existing.notifiedJoin && h.shouldNotifyJoin(existing.HumanNick) {
 				existing.notifiedJoin = true
 				cb = h.onParticipantAdd
@@ -1071,8 +1026,6 @@ func (h *Hub) IsOnline(nodeID string) bool {
 	}
 	return false
 }
-
-// ---- Outbound ----
 
 // SendBroadcast sends a message to all peers (human role only).
 func (h *Hub) SendBroadcast(ctx context.Context, content string, attachments []Attachment) error {
@@ -1111,7 +1064,7 @@ func (h *Hub) BroadcastAsAgent(ctx context.Context, content string) error {
 }
 
 func (h *Hub) newMessage(fromRole, fromNick, toNodeID, toRole, content string, attachments []Attachment) Message {
-	// Populate attachment URLs from this node's endpoint
+
 	if len(attachments) > 0 {
 		h.mu.RLock()
 		ep := h.endpoint
@@ -1131,25 +1084,24 @@ func (h *Hub) newMessage(fromRole, fromNick, toNodeID, toRole, content string, a
 		Attachments: attachments,
 		Timestamp:   time.Now().UnixMilli(),
 	}
-	// #3402 (TUFU): every outbound message carries the node's public key
-	// plus a signature over the canonical payload.
+
 	signMessage(&m, h.nodeKey)
 	return m
 }
 
 func (h *Hub) deliverMessage(ctx context.Context, msg Message, broadcast bool) error {
-	// Store locally
+
 	h.mu.Lock()
 	h.messages = append(h.messages, msg)
 	if len(h.messages) > maxHistoryPerSession*2 {
 		h.messages = h.messages[len(h.messages)-maxHistoryPerSession:]
 	}
-	// Persist to session store if available
+
 	h.persistMessage(msg)
 	h.mu.Unlock()
 
 	if broadcast {
-		// Send to all peers (fire-and-forget for broadcasts)
+
 		h.mu.RLock()
 		peers := make([]Participant, 0, len(h.peers))
 		for _, p := range h.peers {
@@ -1165,8 +1117,6 @@ func (h *Hub) deliverMessage(ctx context.Context, msg Message, broadcast bool) e
 		return nil
 	}
 
-	// Direct message — find the target peer and deliver synchronously
-	// so the caller learns about delivery failures immediately.
 	h.mu.RLock()
 	peer, ok := h.peers[msg.ToNodeID]
 	// #2135: peers is map[string]*Participant - the map lookup only
@@ -1218,21 +1168,19 @@ func (h *Hub) postToPeerWithRetry(ctx context.Context, nodeID, endpoint string, 
 // It checks peerHealthMap to decide whether to try TCP first or go straight to UDP.
 // This is zero-wait: if TCP is marked down, UDP is used immediately.
 func (h *Hub) sendToPeerSmart(ctx context.Context, nodeID, endpoint string, msg Message) error {
-	// Check if TCP is known to be down for this peer
+
 	if !h.shouldTryTCP(nodeID) {
 		debug.Log("lanchat", "TCP marked down for %s, using UDP fallback", nodeID)
 		return h.postToPeerWithFallback(ctx, endpoint, "message", msg)
 	}
 
-	// Try TCP first
 	if err := h.postToPeer(ctx, endpoint, msg); err != nil {
-		// TCP failed — record and fallback to UDP immediately
+
 		h.recordTransportResult(nodeID, "tcp", false)
 		debug.Log("lanchat", "TCP failed for %s, falling back to UDP: %v", nodeID, err)
 		return h.postToPeerWithFallback(ctx, endpoint, "message", msg)
 	}
 
-	// TCP succeeded
 	h.recordTransportResult(nodeID, "tcp", true)
 	return nil
 }
@@ -1245,12 +1193,12 @@ func (h *Hub) shouldTryTCP(nodeID string) bool {
 	defer h.mu.RUnlock()
 	ph, ok := h.peerHealthMap[nodeID]
 	if !ok {
-		return true // unknown peer — try TCP
+		return true
 	}
 	if ph.tcpOK {
 		return true
 	}
-	// TCP is down — check if retry cooldown has expired
+
 	return time.Now().After(ph.tcpRetryAt)
 }
 
@@ -1343,11 +1291,7 @@ func (h *Hub) broadcastNickChange(newNick, newRole, newTeam string) {
 	for _, peer := range peers {
 		safego.Go("lanchat.nickChangePeer", func() {
 			url := strings.TrimRight(peer.Endpoint, "/") + "/lanchat/nick"
-			// #2135: the last unguarded NewRequest in this file (#2114
-			// fixed sendPresence/sendReceipt; postToPeer was already safe) -
-			// a malformed peer Endpoint (presence JSON is unvalidated) made
-			// req nil and the Header.Set panicked inside safego, silently
-			// dropping this peer's nick/role/team change notice.
+
 			req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 			if err != nil {
 				return
@@ -1362,8 +1306,6 @@ func (h *Hub) broadcastNickChange(newNick, newRole, newTeam string) {
 		})
 	}
 }
-
-// ---- Inbound (called by HTTP handlers) ----
 
 // persistMessage saves a message to the per-session store if both store and
 // sessionID are set. Must be called with h.mu held.
@@ -1385,17 +1327,6 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	var persistSession string
 	var persistStore *Store // #2128: captured under h.mu, read after Unlock
 
-	// Cross-transport ID dedup (#987): TCP retries (postToPeerWithRetry) and
-	// the TCP→UDP fallback can deliver the same message ID twice, and the
-	// old per-transport checks (self-node filter on TCP, hasMessageLocked on
-	// UDP) never covered @agent messages — a duplicate auto-approved @agent
-	// DM would be injected into the agent loop twice. Dedup every message
-	// here, at the single ingress both transports converge on.
-	//
-	// Replay freshness (r20, #3402 follow-up): checked BEFORE the dedup
-	// lookup so a rejected replay does not consume (or poison-evict) a
-	// dedup slot. Only signed messages are bound - the signature covers
-	// msg.Timestamp via the canonical payload (#3419).
 	if msg.Sig != "" {
 		if skew := time.Now().UnixMilli() - msg.Timestamp; skew > replayWindowMs || skew < -replayWindowMs {
 			h.mu.Unlock()
@@ -1411,11 +1342,6 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	}
 	h.markSeenLocked(msg.ID)
 
-	// #3402 (TUFU): verify the signature and enforce the first-sight
-	// identity pin. Forged from_node_id claims (plain body fields) verify
-	// false; a pinned node_id presenting a DIFFERENT key is unverified and
-	// flagged, never silently accepted. Unsigned pre-#3402 messages stay
-	// routed but unverified - callers gate policy on msg.Verified.
 	if ok, fp, err := verifyMessage(&msg); ok {
 		if pin, seen := h.keyPins[msg.FromNodeID]; seen && pin != fp {
 			debug.Log("lanchat", "identity pin conflict for %s: pinned %s, now presenting %s - treating as unverified", msg.FromNodeID, pin, fp)
@@ -1431,13 +1357,8 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 		debug.Log("lanchat", "message from %s failed signature verification: %v", msg.FromNodeID, err)
 	}
 
-	// Check if this is an @agent direct message
 	needsApproval := msg.IsDirectToAgent() && msg.ToNodeID == h.nodeID
 
-	// Agent-directed messages are injected into the agent loop and should NOT
-	// appear in the LAN Chat panel or history — they are agent context, not
-	// human conversation. Skip both in-memory history and disk persistence.
-	// Regular (human-to-human) messages are stored normally.
 	if !needsApproval {
 		h.messages = append(h.messages, msg)
 		if len(h.messages) > maxHistoryPerSession*2 {
@@ -1445,22 +1366,13 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 		}
 		if h.store != nil {
 			persistSession = h.sessionID
-			persistStore = h.store // #2128: capture under lock (see below) // append after unlock (#991)
+			persistStore = h.store
 		}
 	} else {
-		// Index @agent messages by ID: they never enter h.messages, but
-		// NotifyAgentComplete still needs to resolve them after a manually
-		// approved agent run finishes so the completed receipt goes out
-		// (#987). Without this index the lookup always failed and the
-		// remote sender's DM stayed "processing" forever.
+
 		h.recordAgentMsgLocked(msg)
 	}
 
-	// Determine approval action based on policy or agent-to-agent auto-approve.
-	// FromRole is peer-supplied JSON, so it is treated as a routing hint, not
-	// proof of identity — human-role @agent DMs always go through the manual
-	// gate unless the operator explicitly set an "always" policy for the
-	// sender (#986). Daemon mode no longer auto-approves human DMs.
 	autoApproved, autoRejected := false, false
 	if needsApproval {
 		autoApproved, autoRejected = h.decideAutoApprovalLocked(msg)
@@ -1469,9 +1381,7 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	// Only queue for manual approval if not auto-handled
 	var evicted []evictedPending
 	if needsApproval && !autoApproved && !autoRejected {
-		// Bound the queue first: expire stale entries past the TTL and
-		// enforce the capacity cap so unattended (daemon) hubs cannot
-		// accumulate pending approvals forever (#987).
+
 		evicted = h.prunePendingApprovalsLocked()
 		pending := PendingAgentMsg{Message: msg, Received: time.Now()}
 		h.pendingApproval = append(h.pendingApproval, pending)
@@ -1479,21 +1389,12 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 
 	h.mu.Unlock()
 
-	// #991: session-store append moved outside h.mu — a slow disk write here
-	// used to hold the hub lock for seconds. Synchronous (not safego.Go) so
-	// store append order is preserved for this ingress path.
-	// #2128: capture the store INTERFACE under the lock like persistSession
-	// - re-reading h.store after Unlock races SetSessionID's whole-field
-	// replacement (h.store = NewStore(...)) at L279, -race confirmed; the
-	// worst case was a message persisted into the PREVIOUS session's dir.
 	if persistSession != "" && persistStore != nil {
 		if err := persistStore.Append(persistSession, msg); err != nil {
 			debug.Log("lanchat", "persist message: %v", err)
 		}
 	}
 
-	// All side effects (receipts, UI callbacks, auto-approve fan-out) are
-	// dispatched after the lock is released.
 	h.dispatchInboundReceipts(msg, needsApproval, autoApproved, autoRejected, evicted)
 }
 
@@ -1504,14 +1405,9 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 // explicitly set an "always" policy for the sender (#986). Daemon mode no
 // longer auto-approves human DMs. Must be called with h.mu held.
 func (h *Hub) decideAutoApprovalLocked(msg Message) (autoApproved, autoRejected bool) {
-	// Web-of-trust exemption (PANDA arXiv:2609.38482): when the strict
-	// requireAgentApproval mode is on, agent DMs from explicitly trusted
-	// peer NODES (operator endorsement, persisted in trusted-peers.json)
-	// still auto-approve — trust constrains agent-to-agent interactions to
-	// established relationships instead of the all-or-nothing LAN default.
+
 	if msg.FromRole == RoleAgent && (!h.requireAgentApproval || h.trustedExemptLocked(&msg)) {
-		// Agent-to-agent messages are auto-approved — no human intervention
-		// needed — unless lanchat.require_approval_for_agents opts out (#986).
+
 		return true, false
 	}
 	policy := h.approvalPolicies[msg.FromNick]
@@ -1533,8 +1429,7 @@ func (h *Hub) decideAutoApprovalLocked(msg Message) (autoApproved, autoRejected 
 // pattern — setters are registration-time calls, so the tiny window between
 // the main unlock and this read is benign.
 func (h *Hub) dispatchInboundReceipts(msg Message, needsApproval, autoApproved, autoRejected bool, evicted []evictedPending) {
-	// Notify senders whose pending approvals expired or were dropped by
-	// the capacity cap (#987) — previously they stayed "pending" forever.
+
 	for _, ev := range evicted {
 		e := ev
 		safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(e.msg, StatusRejected, e.reason) })
@@ -1547,49 +1442,36 @@ func (h *Hub) dispatchInboundReceipts(msg Message, needsApproval, autoApproved, 
 	inboundDMCb := h.onInboundDM
 	h.mu.RUnlock()
 
-	// Fire onMessage callback for regular messages only.
-	// Agent-directed messages are injected into the agent loop (via
-	// onAutoApprove or manual approval) and will appear as user messages —
-	// firing onMessage here would cause duplicate rendering in the UI.
 	if callback != nil && !needsApproval {
 		safego.Go("lanchat.messageCallback", func() { callback(msg) })
 	}
 
-	// Fire onInboundDM callback for non-broadcast messages so the rate
-	// limiter can reset the DM cooldown for the sender. This is critical
-	// for the HTTP transport path — without it, the agent can never reply
-	// to an inbound DM without waiting for the full cooldown to expire.
 	if !msg.IsBroadcast() && inboundDMCb != nil {
 		fromID := msg.FromNodeID
 		safego.Go("lanchat.onInboundDM", func() { inboundDMCb(fromID) })
 	}
 
-	// Broadcast messages (no specific recipient) are fire-and-forget.
-	// They do NOT generate any receipt — there is no single sender expecting
-	// confirmation, and sending receipts from every receiver creates noise.
 	if msg.IsBroadcast() {
 		return
 	}
 
-	// Send delivered receipt immediately (direct messages only)
 	safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusDelivered, "") })
 
-	// Handle auto-approve or auto-reject
 	if autoApproved {
-		// Auto-approved: approved → processing → (agent runs) → completed
+
 		safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusApproved, "") })
 		safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusProcessing, "") })
 		if autoApproveCb != nil {
 			safego.Go("lanchat.autoApprove", func() {
 				autoApproveCb(msg)
-				// After agent run finishes, send completed receipt
+
 				safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusCompleted, "") })
 			})
 		}
 	} else if autoRejected {
 		safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusRejected, "auto-rejected by policy") })
 	} else if needsApproval {
-		// Manual approval needed — send pending receipt, then trigger approval callback
+
 		safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusPending, "") })
 		if approvalCb != nil {
 			safego.Go("lanchat.approvalCallback", func() { approvalCb(PendingAgentMsg{Message: msg, Received: time.Now()}) })
@@ -1604,7 +1486,6 @@ func (h *Hub) HandleReceipt(r Receipt) {
 	callback := h.onReceipt
 	h.mu.Unlock()
 
-	// Fire callback asynchronously to avoid blocking the HTTP handler.
 	if callback != nil {
 		safego.Go("lanchat.receiptCallback", func() { callback(r) })
 	}
@@ -1642,8 +1523,6 @@ func (h *Hub) HandleParticipantQuery() Participant {
 	return h.SelfParticipant()
 }
 
-// ---- Approval flow ----
-
 // ApproveMessage removes a pending approval and returns the message for
 // injection into the agent loop. Sends "approved" then "processing" receipts.
 // The caller must call NotifyAgentComplete(messageID) when the agent run finishes.
@@ -1655,7 +1534,6 @@ func (h *Hub) ApproveMessage(messageID string) (*Message, error) {
 			msg := pending.Message
 			h.mu.Unlock()
 
-			// Send approved then processing receipts
 			safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusApproved, "") })
 			safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusProcessing, "") })
 			return &msg, nil
@@ -1691,7 +1569,7 @@ func (h *Hub) GetReceipt(messageID string) (Receipt, bool) {
 }
 
 func (h *Hub) sendReceipt(originalMsg Message, status, reason string) {
-	// Read nicks under lock — SetSessionID may change them concurrently.
+
 	h.mu.RLock()
 	fromNick := h.humanNick
 	fromRole := RoleHuman
@@ -1708,13 +1586,12 @@ func (h *Hub) sendReceipt(originalMsg Message, status, reason string) {
 		FromNodeID: nodeID,
 		FromNick:   fromNick,
 		FromRole:   fromRole,
-		ToNodeID:   originalMsg.FromNodeID, // route back to original sender
-		ToRole:     originalMsg.ToRole,     // original message's target role (agent/human) — routes receipt to the same DM room
+		ToNodeID:   originalMsg.FromNodeID,
+		ToRole:     originalMsg.ToRole,
 		Timestamp:  time.Now().UnixMilli(),
 		Reason:     reason,
 	}
 
-	// Find sender's endpoint
 	h.mu.RLock()
 	peer, ok := h.peers[originalMsg.FromNodeID]
 	// #2135: same use-after-unlock as deliverMessage - copy the struct
@@ -1730,11 +1607,7 @@ func (h *Hub) sendReceipt(originalMsg Message, status, reason string) {
 
 	url := strings.TrimRight(peerCopy.Endpoint, "/") + "/lanchat/receipt"
 	data, _ := json.Marshal(r)
-	// #2114: a malformed Endpoint (arbitrary string from presence JSON,
-	// no format constraint) makes NewRequest fail - the ignored error left
-	// req nil and req.Header.Set panicked; the safego wrapper recovered,
-	// but the receipt was silently lost (the peer never learns the
-	// message was delivered/approved/completed). Same guard as sendPresence.
+
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		return
@@ -1759,8 +1632,6 @@ func (h *Hub) PersistMessage(sessionID string, msg Message) error {
 	return h.store.Append(sessionID, msg)
 }
 
-// ---- Approval Policy ----
-
 // SetApprovalPolicy sets the approval policy for a peer (by nick) and persists it.
 // policy: "always" (auto-approve), "never" (auto-reject), "" (ask).
 func (h *Hub) SetApprovalPolicy(peerNick string, policy string) {
@@ -1779,11 +1650,6 @@ func (h *Hub) SetApprovalPolicy(peerNick string, policy string) {
 	}
 	h.mu.Unlock()
 
-	// Persist outside lock. If the on-disk file was never loaded
-	// successfully (corrupt JSON), writing back would silently wipe the
-	// user's persisted policies with the in-memory (incomplete) map, so
-	// refuse the write-back (#990); the in-memory policy still applies for
-	// this run.
 	if dir != "" {
 		h.mu.RLock()
 		loaded := h.approvalPoliciesLoaded
@@ -1822,7 +1688,7 @@ func (h *Hub) trustedExemptLocked(msg *Message) bool {
 	}
 	want, ok := h.trustedKeys[msg.FromNodeID]
 	if !ok || want == "" {
-		return false // legacy endorsement: not key-bound yet
+		return false
 	}
 	return msg.Verified && msg.SignerFP == want
 }
@@ -1838,8 +1704,7 @@ func (h *Hub) persistPinsLocked() {
 		pins[k] = v
 	}
 	dir := h.store.dir
-	// #987 discipline: async disk write wrapped in safego (no unprotected
-	// goroutine launches - pins marshal is already snapshotted above).
+
 	safego.Go("lanchat.persistPins", func() {
 		if err := SaveKeyPins(dir, pins); err != nil {
 			debug.Log("lanchat", "persist key pins: %v", err)
@@ -1859,10 +1724,7 @@ func (h *Hub) SetTrustedPeer(nodeID string, trusted bool) {
 	}
 	if trusted {
 		h.trustedPeers[nodeID] = true
-		// #3402: bind the endorsed node's pinned key fingerprint so the
-		// strict-mode exemption only fires for signature-verified messages
-		// from that exact key. No pin yet (node never seen) leaves the
-		// endorsement without an exemption until seen + re-endorsed.
+
 		if h.trustedKeys == nil {
 			h.trustedKeys = map[string]string{}
 		}
@@ -1881,15 +1743,12 @@ func (h *Hub) SetTrustedPeer(nodeID string, trusted bool) {
 	}
 	h.mu.Unlock()
 
-	// Persist outside the lock; refuse write-back when the on-disk file was
-	// never loaded successfully so a corrupt file is never silently wiped
-	// (same rule as SetApprovalPolicy, #990).
 	if dir != "" {
 		h.mu.RLock()
 		loaded := h.trustedPeersLoaded
 		peers := make(map[string]string, len(h.trustedPeers))
 		for k := range h.trustedPeers {
-			peers[k] = h.trustedKeys[k] // "" for legacy endorsements
+			peers[k] = h.trustedKeys[k]
 		}
 		h.mu.RUnlock()
 		if !loaded {
@@ -1997,15 +1856,11 @@ func (h *Hub) NotifyAgentNotCompleted(messageID string) {
 
 // handleUDPEnvelope processes incoming UDP messages (called by UDPTransport).
 func (h *Hub) handleUDPEnvelope(env udpEnvelope, remoteAddr net.Addr) {
-	// Handle ACK: reliable unicast delivery is driven by udp_transport.go's
-	// bounded acks channel map (registerACK/signalACK/unregisterACK). The
-	// envelope is swallowed here; the old ackTracker sync.Map (#3033) was
-	// written but never read and grew without bound - removed.
+
 	if env.Type == "ack" && env.ACKID != "" {
 		return
 	}
 
-	// Dispatch based on type
 	switch env.Type {
 	case "leave":
 		var p Participant
@@ -2016,10 +1871,7 @@ func (h *Hub) handleUDPEnvelope(env udpEnvelope, remoteAddr net.Addr) {
 		debug.Log("lanchat", "received leave from %s (%s)", p.NodeID, p.HumanNick)
 		h.mu.Lock()
 		if existing, ok := h.peers[p.NodeID]; ok {
-			// #765: LastSeen is second-granularity everywhere else (written
-			// with .Unix(), read with time.Unix(p.LastSeen, 0)). Writing
-			// UnixNano here made time.Since always negative -> the peer never
-			// went stale, never got cleaned up (ghost-online forever).
+
 			existing.LastSeen = time.Now().Add(-offlineNotifyDelay * 2).Unix()
 			existing.lastOfflineTime = time.Now().UnixNano()
 			h.peers[p.NodeID] = existing
@@ -2034,12 +1886,12 @@ func (h *Hub) handleUDPEnvelope(env udpEnvelope, remoteAddr net.Addr) {
 			debug.Log("lanchat-udp", "message payload parse error: %v", err)
 			return
 		}
-		// For multicast DMs, check if this message is for us
+
 		h.mu.RLock()
 		myNodeID := h.nodeID
 		h.mu.RUnlock()
 		if msg.ToNodeID != "" && msg.ToNodeID != myNodeID {
-			return // not for us (multicast DM filtering)
+			return
 		}
 		h.handleReceiveMessageData(msg, remoteAddr.String())
 
@@ -2076,17 +1928,15 @@ func (h *Hub) SetUDPTransport(t *UDPTransport) {
 
 // postToPeerWithFallback tries TCP first, then UDP unicast, then UDP multicast.
 func (h *Hub) postToPeerWithFallback(ctx context.Context, endpoint string, msgType string, payload interface{}) error {
-	// 1. Try TCP (HTTP POST)
+
 	if err := h.postToPeerTCPDirect(ctx, endpoint, msgType, payload); err == nil {
 		return nil
 	}
 
-	// 2. TCP failed — try UDP if available
 	if h.udpTransport == nil {
 		return fmt.Errorf("tcp failed and no udp transport")
 	}
 
-	// Extract host:port from endpoint
 	host, port, err := parseHostPort(endpoint)
 	if err != nil {
 		return fmt.Errorf("tcp failed, cannot parse endpoint for udp: %w", err)
@@ -2104,14 +1954,12 @@ func (h *Hub) postToPeerWithFallback(ctx context.Context, endpoint string, msgTy
 		Payload:  payloadData,
 	}
 
-	// 2a. Try UDP unicast
 	udpAddr := &net.UDPAddr{IP: net.ParseIP(host), Port: port}
 	if err := h.udpTransport.SendUnicast(ctx, udpAddr, env); err == nil {
 		debug.Log("lanchat", "delivered via udp unicast to %s", host)
 		return nil
 	}
 
-	// 3. Try UDP multicast (last resort — fire and forget, no ACK)
 	if err := h.udpTransport.SendMulticast(env); err == nil {
 		debug.Log("lanchat", "delivered via udp multicast")
 		return nil
@@ -2121,7 +1969,7 @@ func (h *Hub) postToPeerWithFallback(ctx context.Context, endpoint string, msgTy
 }
 
 func parseHostPort(endpoint string) (string, int, error) {
-	// endpoint format: "http://192.168.1.100:38471"
+
 	u := strings.TrimPrefix(endpoint, "http://")
 	u = strings.TrimPrefix(u, "https://")
 	u = strings.TrimRight(u, "/")
@@ -2177,16 +2025,11 @@ func (h *Hub) postToPeerTCPDirect(ctx context.Context, endpoint string, msgType 
 
 // handleReceiveMessageData processes a message from any transport.
 func (h *Hub) handleReceiveMessageData(msg Message, source string) {
-	// Ignore messages from self (loop prevention for UDP multicast path).
-	// HTTP handler already filters this in handlers.go, but UDP multicast
-	// can deliver our own packets back to us.
+
 	if msg.FromNodeID == h.nodeID {
 		return
 	}
-	// Delegate to the full HandleIncomingMessage path which includes
-	// @agent approval, receipts, and policy checks. The previous
-	// inline implementation bypassed all of these for UDP-delivered
-	// messages, causing @agent messages to be silently lost.
+
 	h.mu.Lock()
 	dedup := h.hasMessageLocked(msg.ID)
 	h.mu.Unlock()
@@ -2319,8 +2162,6 @@ func (h *Hub) prunePendingApprovalsLocked() []evictedPending {
 	}
 	h.pendingApproval = kept
 
-	// Capacity cap: drop oldest first. The check runs BEFORE the caller
-	// appends the new entry, so the queue stays at or below the cap.
 	for len(h.pendingApproval) >= maxPendingApprovals {
 		oldest := h.pendingApproval[0]
 		h.pendingApproval = h.pendingApproval[1:]
@@ -2349,12 +2190,7 @@ func (h *Hub) hasMessageLocked(msgID string) bool {
 // timeout (typically 90s).
 func (h *Hub) Close() {
 	h.closeOnce.Do(func() {
-		// #1583-B: settle pending approvals BEFORE the transport dies -
-		// the TTL pruner only runs on the inbound path, so a process exit
-		// with an @agent DM pending (or a run processing) left the peer
-		// stuck on StatusPending/processing forever: the prune timer died
-		// with the process and Close never sent a verdict. Reject
-		// everything still queued so senders' GetReceipt resolves.
+
 		h.mu.Lock()
 		pending := append([]PendingAgentMsg(nil), h.pendingApproval...)
 		h.pendingApproval = nil
@@ -2363,7 +2199,7 @@ func (h *Hub) Close() {
 			pm := p
 			safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(pm.Message, StatusRejected, "node shutting down") })
 		}
-		// Stop the health probe loop first — it must not outlive the hub.
+
 		h.mu.Lock()
 		if h.probeCancel != nil {
 			h.probeCancel()
@@ -2379,7 +2215,6 @@ func (h *Hub) Close() {
 			return
 		}
 
-		// Broadcast leave via UDP multicast (best-effort, no retry).
 		self := h.SelfParticipant()
 		if payload, err := json.Marshal(self); err == nil {
 			env := udpEnvelope{
@@ -2390,7 +2225,6 @@ func (h *Hub) Close() {
 			debug.Log("lanchat", "broadcast leave to all peers")
 		}
 
-		// Stop the transport (closes sockets, waits for goroutines).
 		transport.Stop()
 	})
 }

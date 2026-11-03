@@ -32,21 +32,11 @@ func RouteInboundText(text string, hasPendingApproval, hasPendingAskUser bool) I
 	if strings.HasPrefix(trimmed, "/") {
 		return InboundRoute{Kind: InboundRouteSlash, Text: trimmed}
 	}
-	// Shell passthrough ($ cmd / ! cmd) routes BEFORE approval/ask/message:
-	// like the TUI escape, it must execute immediately even while the agent
-	// is mid-turn — queuing it into the agent loop would defer a command the
-	// user expects to run now (and the model might reinterpret it).
+
 	if IsInboundShellCommand(trimmed) {
 		return InboundRoute{Kind: InboundRouteShell, Text: trimmed}
 	}
-	// #1833 case 2: when BOTH an approval and a questionnaire are pending,
-	// the questionnaire wins. Questionnaire confirmations ("y"/"ok"/"好的")
-	// sit squarely inside ParseApprovalReply's affirmative set, so the old
-	// approval-first order intercepted them: the approval the user had not
-	// even seen got released and the questionnaire answer vanished - after
-	// a multi-round questionnaire, the confirm word colliding with a newly
-	// inserted approval misfired every time. Questionnaires carry explicit
-	// question-number semantics, so the disambiguation is deterministic.
+
 	if hasPendingAskUser {
 		return InboundRoute{Kind: InboundRouteAskUser, Text: trimmed}
 	}

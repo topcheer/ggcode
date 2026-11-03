@@ -17,10 +17,10 @@ import (
 // truncated '[::1]:11434' to '[' and made both ::1 branches dead code.
 func TestIssue2572_ProviderIsLocalBaseURLIPv6(t *testing.T) {
 	local := []string{
-		"http://[::1]:11434", // bracketed + port (Ollama default listen)
+		"http://[::1]:11434",
 		"http://[::1]",
 		"[::1]",
-		"http://::1:11434", // bare IPv6 + port (SplitHostPort rejects; last-colon strip)
+		"http://::1:11434",
 		"http://localhost:11434",
 		"http://127.0.0.1:11434",
 	}
@@ -83,7 +83,7 @@ func TestIssue2574_PaginationClosesLastBody(t *testing.T) {
 		return resp, err
 	})}
 	_, _ = discoverModelsFromURL(context.Background(), client, srv.URL, resolved)
-	// Both page bodies must be closed (the old defer closed only page 1).
+
 	deadline := time.After(2 * time.Second)
 	got := 0
 	for got < 2 {

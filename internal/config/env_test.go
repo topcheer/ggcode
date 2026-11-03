@@ -25,10 +25,7 @@ func TestHomeDir_FallbackToOS(t *testing.T) {
 	os.Unsetenv("HOME")
 
 	got := HomeDir()
-	// On macOS, HOME is the primary source and os.UserHomeDir may also
-	// rely on it. An empty result is acceptable when HOME is unset.
-	// The important thing is that it doesn't panic or return a hard-coded
-	// path like "/root" which is wrong on most systems.
+
 	if got == "/root" {
 		t.Error("HomeDir() should not return /root as fallback")
 	}
@@ -52,7 +49,7 @@ func TestConfigDir_RespectsHomeOverride(t *testing.T) {
 // referencing each other (A=1 / B=${A}) must resolve regardless of map
 // iteration order - the old lookup kept the literal "${A}" half the runs.
 func TestExpandShellEnvCrossReference(t *testing.T) {
-	// Simulate the inner expansion the loader performs per value.
+
 	env := map[string]string{"PATH": "/usr/bin"}
 	values := map[string]string{"A": "1", "B": "${A}"}
 	expand := func(value string) string {
@@ -70,7 +67,7 @@ func TestExpandShellEnvCrossReference(t *testing.T) {
 			return "", false
 		})
 	}
-	for i := 0; i < 50; i++ { // map order randomization across runs
+	for i := 0; i < 50; i++ {
 		if got := expand(values["B"]); got != "1" {
 			t.Fatalf("${A} cross-reference must resolve to 1 regardless of order, got %q", got)
 		}

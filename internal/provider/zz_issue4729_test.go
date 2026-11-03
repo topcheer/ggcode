@@ -1,10 +1,5 @@
 package provider
 
-// #4729 regression tests: connection timeouts must retry in place (per-attempt
-// deadline renewal + lifted attempt cap / backoff budget for timeout-class
-// errors), the periodic notice fires every 3rd timeout retry, and the
-// friendly-error wrapper keeps the error chain alive for UserFacingErrorLang.
-
 import (
 	"context"
 	"errors"
@@ -58,13 +53,13 @@ func TestIssue4729_IsTimeoutClassError(t *testing.T) {
 func TestIssue4729_TimeoutRetryNoticeCadence(t *testing.T) {
 	err := fmt.Errorf("post: %w", context.DeadlineExceeded)
 	for attempt, wantDue := range map[int]bool{
-		0: false, // retry 1
-		1: false, // retry 2
-		2: true,  // retry 3 -> notice
-		3: false, // retry 4
-		4: false, // retry 5
-		5: true,  // retry 6 -> notice
-		8: true,  // retry 9 -> notice
+		0: false,
+		1: false,
+		2: true,
+		3: false,
+		4: false,
+		5: true,
+		8: true,
 	} {
 		got := TimeoutRetryNotice(err, attempt)
 		if (got != "") != wantDue {
@@ -74,18 +69,17 @@ func TestIssue4729_TimeoutRetryNoticeCadence(t *testing.T) {
 			t.Fatalf("notice %q missing retry number %d", got, attempt+1)
 		}
 	}
-	// Non-timeout errors never produce a notice.
+
 	if got := TimeoutRetryNotice(errors.New("status code: 503"), 2); got != "" {
 		t.Fatalf("non-timeout notice should be empty, got %q", got)
 	}
 }
 
 func TestIssue4729_RetryWithBackoffCtxTimeoutRetriesInPlace(t *testing.T) {
-	// A timeout-class failure must keep retrying BEYOND maxAttempts: the old
-	// loop returned at i == maxAttempts-1 and the run died after one retry.
+
 	calls := 0
 	origSleep := retrySleep
-	retrySleep = func(context.Context, time.Duration) error { return nil } // no real sleeping in tests
+	retrySleep = func(context.Context, time.Duration) error { return nil }
 	defer func() { retrySleep = origSleep }()
 
 	const succeedAfter = 5
@@ -95,7 +89,7 @@ func TestIssue4729_RetryWithBackoffCtxTimeoutRetriesInPlace(t *testing.T) {
 			return nil
 		}
 		return fmt.Errorf("post: %w", context.DeadlineExceeded)
-	}, 1, true) // cap of 1, in-place on: old code returned after the FIRST timeout
+	}, 1, true)
 	if err != nil {
 		t.Fatalf("expected in-place retry to succeed, got %v", err)
 	}
@@ -105,7 +99,7 @@ func TestIssue4729_RetryWithBackoffCtxTimeoutRetriesInPlace(t *testing.T) {
 }
 
 func TestIssue4729_RetryWithBackoffCtxNonTimeoutStillCapped(t *testing.T) {
-	// Non-timeout retryable errors (5xx) keep the normal attempt cap.
+
 	calls := 0
 	err := retryWithBackoffCtx(context.Background(), func() error {
 		calls++
@@ -120,7 +114,7 @@ func TestIssue4729_RetryWithBackoffCtxNonTimeoutStillCapped(t *testing.T) {
 }
 
 func TestIssue4729_WrapFriendlyKeepsChain(t *testing.T) {
-	// DeadlineExceeded chain survives the friendly wrapper.
+
 	inner := fmt.Errorf("dial tcp: %w", context.DeadlineExceeded)
 	w := WrapFriendly(inner)
 	if w.Error() != FriendlyError(inner) {
@@ -129,7 +123,7 @@ func TestIssue4729_WrapFriendlyKeepsChain(t *testing.T) {
 	if !errors.Is(w, context.DeadlineExceeded) {
 		t.Fatal("errors.Is(DeadlineExceeded) lost through WrapFriendly")
 	}
-	// net.Error chain survives the friendly wrapper.
+
 	innerNet := fmt.Errorf("post: %w", fakeTimeoutNetErr{})
 	w2 := WrapFriendly(innerNet)
 	var netErr net.Error
@@ -145,8 +139,7 @@ func TestIssue4729_WrapFriendlyKeepsChain(t *testing.T) {
 }
 
 func TestIssue4729_UserFacingTimeoutStringMapped(t *testing.T) {
-	// String-form "connection timed out" (relay that destroyed the typed
-	// chain) must map to the network branch, not the blind-spot fallback.
+
 	msg := UserFacingErrorLang(errors.New(`Post "https://api.example.com/v1": connection timed out`), "en")
 	if !strings.Contains(msg, "connect") && !strings.Contains(msg, "network") {
 		t.Fatalf("expected network-branch mapping, got blind-spot text: %q", msg)

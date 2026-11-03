@@ -49,7 +49,7 @@ func NewBaseToolItem(id, toolName string, status ToolStatus, input string, style
 		toolName: toolName,
 		status:   status,
 		input:    input,
-		params:   input, // default: use input as params
+		params:   input,
 		styles:   styles,
 	}
 	if status == StatusRunning {
@@ -64,8 +64,7 @@ func (t *BaseToolItem) ID() string { return t.id }
 func (t *BaseToolItem) SetStatus(s ToolStatus) {
 	if t.status != s {
 		if t.status == StatusRunning && s != StatusRunning {
-			// Capture final elapsed on transition out of Running,
-			// but only if not already set explicitly via SetElapsed.
+
 			if t.finalElapsed == 0 && !t.startedAt.IsZero() {
 				t.finalElapsed = time.Since(t.startedAt)
 			}
@@ -77,9 +76,7 @@ func (t *BaseToolItem) SetStatus(s ToolStatus) {
 
 // SetResult updates the tool result and invalidates cache.
 func (t *BaseToolItem) SetResult(result string, isError bool) {
-	// Display boundary: neutralize terminal control sequences before secret
-	// redaction (sa-41, ATR-2026-00259) — untrusted tool output must reach
-	// the screen with OSC/CSI hijack primitives and raw control bytes gone.
+
 	t.result = security.RedactForDisplay(security.SanitizeTerminalForDisplay(result))
 	t.isError = isError
 	t.Invalidate()
@@ -88,8 +85,7 @@ func (t *BaseToolItem) SetResult(result string, isError bool) {
 // SetStreamingBody sets live intermediate output shown while the tool is running.
 // When the tool finishes, the final result replaces this via SetResult.
 func (t *BaseToolItem) SetStreamingBody(body string) {
-	// Same display boundary as SetResult; streaming bodies are rendered
-	// live and previously reached the screen completely unfiltered.
+
 	t.streamingBody = security.RedactForDisplay(security.SanitizeTerminalForDisplay(body))
 	t.Invalidate()
 }
@@ -175,14 +171,7 @@ func (t *BaseToolItem) setToolMeta(rawToolName, rawArgs string) {
 // RenderBody renders the tool output body.
 // Override in concrete types for specialized body rendering.
 func (t *BaseToolItem) RenderBody(width int) string {
-	// While running, show live streaming output if available. It MUST go
-	// through the same width-aware wrapping + line cap as the final result:
-	// Height() counts width-wrapped lines via measureHeightWidth, while
-	// List.Render slices physical lines via splitVisualLines. Unwrapped long
-	// lines (build logs, compiler errors) made the two disagree, causing
-	// blank-line artifacts and skipped/repeated lines while scrolling during
-	// streaming. FormatBody keeps the last lines and marks truncation, which
-	// is exactly right for a live tail.
+
 	if t.status == StatusRunning && t.streamingBody != "" {
 		body, _ := FormatBody(t.streamingBody, width, ToolBodyMaxLines)
 		return t.styles.ToolBody.Render(body)
@@ -192,23 +181,12 @@ func (t *BaseToolItem) RenderBody(width int) string {
 	}
 
 	if t.isError {
-		// Normalize like FormatBody (#995): the error path previously fed
-		// raw output straight into wrapLines, bypassing both the CR
-		// normalization (10a9b217) and TAB expansion (bf7fb660) defenses.
-		// Width libraries count '\t' as 0-1 cols while terminals advance
-		// to 8-col tab stops, so tab-indented compiler errors (go build,
-		// gofmt diffs, ls -l) measured narrow, never wrapped, and rendered
-		// past the width invariant - scroll offsets desynced. Stray CRs
-		// (Windows CRLF command output) broke the physical-line split the
-		// same way as the normal-body path fixed earlier.
+
 		body := strings.ReplaceAll(t.result, "\r\n", "\n")
 		body = strings.ReplaceAll(body, "\r", "\n")
 		body = expandTabs(body)
 		lines := wrapLines(body, width)
-		// #1697 case 1: the normal path caps at ToolBodyMaxLines (and
-		// streaming too) - the error path had NO cap, so a 200-line
-		// build/test failure flooded the body. Same cap, error styling.
-		// sa-86: expanded lifts the cap (progressive disclosure level 2).
+
 		if !t.expanded && len(lines) > ToolBodyMaxLines {
 			hidden := len(lines) - ToolBodyMaxLines
 			lines = lines[:ToolBodyMaxLines]
@@ -217,7 +195,6 @@ func (t *BaseToolItem) RenderBody(width int) string {
 		return t.styles.ErrorStyle.Render(strings.Join(lines, "\n"))
 	}
 
-	// File tool: line count or edit diff
 	switch t.fileBodyMode {
 	case "linecount":
 		return t.renderFileLineCount()
@@ -237,7 +214,7 @@ func (t *BaseToolItem) RenderBody(width int) string {
 
 	if t.markdownBody {
 		result := t.result
-		// If rawArgs contains a plan field, extract and render it as markdown
+
 		if t.rawArgs != "" {
 			var args struct {
 				Plan string `json:"plan"`
@@ -257,7 +234,7 @@ func (t *BaseToolItem) RenderBody(width int) string {
 
 	maxLines := ToolBodyMaxLines
 	if t.noTruncate || t.expanded {
-		maxLines = 0 // 0 = unlimited
+		maxLines = 0
 	}
 	body, _ := FormatBody(t.result, width, maxLines)
 	return t.styles.ToolBody.Render(body)
@@ -266,7 +243,6 @@ func (t *BaseToolItem) RenderBody(width int) string {
 func (t *BaseToolItem) renderFileLineCount() string {
 	var lines int
 
-	// For multi_file_write, count lines from files[].content in rawArgs
 	if t.rawArgs != "" {
 		var multiArgs struct {
 			Files []struct {
@@ -295,7 +271,6 @@ func (t *BaseToolItem) renderFileLineCount() string {
 		}
 	}
 
-	// For write_file, count lines from content arg in rawArgs
 	if t.rawArgs != "" {
 		var args struct {
 			Content string `json:"content"`
@@ -315,14 +290,12 @@ func (t *BaseToolItem) renderFileLineCount() string {
 		}
 	}
 
-	// For read_file, extract actual line count from numbered lines in result
-	// Result has lines like "     1    content"
 	re := regexp.MustCompile(`(?m)^\s+\d+\s`)
 	matches := re.FindAllString(t.result, -1)
 	lines = len(matches)
 
 	if lines == 0 {
-		// No numbered lines — likely an error result (file not found, etc.)
+
 		return ""
 	}
 
@@ -354,7 +327,7 @@ func (t *BaseToolItem) renderEditDiff() string {
 
 	var added, removed int
 	if len(args.Files) > 0 {
-		// multi_file_edit: files[].edits[]
+
 		for _, f := range args.Files {
 			for _, e := range f.Edits {
 				if e.OldText != "" {
@@ -389,7 +362,7 @@ func (t *BaseToolItem) renderEditDiff() string {
 }
 
 func (t *BaseToolItem) renderSearchCount() string {
-	// "Found N matches" or "Showing X of Y matches"
+
 	re := regexp.MustCompile(`Showing \d+ of (\d+) matches?|Found (\d+) matches?|(?:Showing|Found|Listed|Returned) \d+ of (\d+) results?`)
 	m := re.FindStringSubmatch(t.result)
 	n := ""
@@ -402,7 +375,7 @@ func (t *BaseToolItem) renderSearchCount() string {
 			n = m[3]
 		}
 	}
-	// Fallback: count non-empty lines (e.g. glob returns plain file paths)
+
 	if n == "" && t.result != "" {
 		lines := 0
 		for _, l := range strings.Split(t.result, "\n") {
@@ -447,14 +420,13 @@ func (t *BaseToolItem) renderGitStatus() string {
 		case '?':
 			untracked++
 		case 'R':
-			// #1697 case 6: renames count as modified (content differs);
-			// previously a fully-renamed tree rendered an empty body.
+
 			modified++
 		case 'C':
-			// #1697 case 6: copies count as added.
+
 			added++
 		case 'U':
-			// #1697 case 6: unmerged conflicts count as modified.
+
 			modified++
 		}
 	}
@@ -490,7 +462,7 @@ func (t *BaseToolItem) renderGitDiff() string {
 		if len(line) == 0 {
 			continue
 		}
-		// Skip diff header lines (+++, ---, @@, etc.)
+
 		if line[0] == '+' && !strings.HasPrefix(line, "+++") {
 			added++
 		} else if line[0] == '-' && !strings.HasPrefix(line, "---") {
@@ -507,10 +479,7 @@ func (t *BaseToolItem) renderGitLog(width int) string {
 		return ""
 	}
 	green := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
-	// Show first 3 commit lines (one-line format). Each line is wrapped to
-	// the body width so Height() (measureHeightWidth) and Render
-	// (splitVisualLines, physical \n) agree — unwrapped long commit
-	// subjects made scrolling skip/repeat lines (#183).
+
 	lines := []string{}
 	for _, line := range strings.Split(t.result, "\n") {
 		line = strings.TrimSpace(line)
@@ -592,7 +561,7 @@ func (t *BaseToolItem) renderCronBody(width int) string {
 // This is the base implementation. Concrete types should call renderCore
 // with their own params/body overrides.
 func (t *BaseToolItem) Render(width int) string {
-	// Bypass cache for running tools so the live elapsed timer updates.
+
 	if t.status != StatusRunning {
 		if cached, _, ok := t.GetCached(width); ok {
 			return cached
@@ -616,7 +585,7 @@ func (t *BaseToolItem) Render(width int) string {
 // renderCore builds the full tool output string from header params and body.
 func (t *BaseToolItem) renderCore(width int, params string, body string) string {
 	var sb strings.Builder
-	// Append elapsed timer to params for both running and completed tools.
+
 	if elapsed := t.elapsedString(); elapsed != "" {
 		if params != "" {
 			params = params + "  " + elapsed
@@ -642,8 +611,6 @@ func (t *BaseToolItem) Height(width int) int {
 	}
 	return measureHeightWidth(t.Render(width), width)
 }
-
-// --- Specific Tool Types ---
 
 // BashToolItem renders bash command execution.
 // BashToolItem renders bash command execution.
@@ -684,7 +651,7 @@ func GetToolBodyBehavior(toolName string) ToolBodyBehavior {
 	case "teammate_results", "wait_agent":
 		return BodyMarkdown
 	default:
-		// MCP dynamic tools (mcp__server__tool) → header only
+
 		if strings.HasPrefix(toolName, "mcp__") {
 			return BodySuppress
 		}
@@ -723,7 +690,7 @@ func PrettifyToolName(name string) string {
 	if pretty, ok := m[name]; ok {
 		return pretty
 	}
-	// Fallback: capitalize first letter
+
 	if len(name) > 0 {
 		runes := []rune(name)
 		runes[0] = unicode.ToUpper(runes[0])
@@ -737,8 +704,6 @@ func NewBashToolItem(id, displayName, command string, status ToolStatus, styles 
 	return &BashToolItem{BaseToolItem: *b}
 }
 
-// RenderBody uses BashBody style for command output.
-
 // FileToolItem renders file read/write/edit operations.
 type FileToolItem struct {
 	BaseToolItem
@@ -749,7 +714,7 @@ func NewFileToolItem(id, displayName, filePath string, status ToolStatus, styles
 	b := NewBaseToolItem(id, displayName, status, filePath, styles)
 	b.lang = lang
 	b.rawArgs = rawArgs
-	// Determine body mode based on tool name (not displayName, which may be a description string)
+
 	switch toolName {
 	case "edit_file", "multi_edit_file", "multi_file_edit":
 		b.fileBodyMode = "editdiff"
@@ -771,8 +736,6 @@ func NewSearchToolItem(id, displayName, pattern string, status ToolStatus, style
 	return &SearchToolItem{BaseToolItem: *b}
 }
 
-// --- ListToolItem (list_directory) ---
-
 // ListToolItem renders directory listing operations.
 type ListToolItem struct {
 	BaseToolItem
@@ -784,8 +747,6 @@ func newListToolItem(id, displayName, path string, status ToolStatus, styles Sty
 	return &ListToolItem{BaseToolItem: *b}
 }
 
-// --- WebToolItem (web_fetch, web_search) ---
-
 // WebToolItem renders web fetch/search operations.
 type WebToolItem struct {
 	BaseToolItem
@@ -796,8 +757,6 @@ func newWebToolItem(id, displayName, url string, status ToolStatus, styles Style
 	return &WebToolItem{BaseToolItem: *b}
 }
 
-// --- GitToolItem (git_status, git_diff, git_log) ---
-
 // GitToolItem renders git operations with command-output body.
 type GitToolItem struct {
 	BaseToolItem
@@ -807,10 +766,6 @@ func newGitToolItem(id, displayName, subCmd string, status ToolStatus, styles St
 	b := NewBaseToolItem(id, displayName, status, subCmd, styles)
 	return &GitToolItem{BaseToolItem: *b}
 }
-
-// RenderBody uses BashBody style for git output (same dark background).
-
-// --- CmdToolItem (background command management) ---
 
 // CmdToolItem renders background command lifecycle operations.
 // The detail string comes pre-formatted from describeTool, e.g.:
@@ -828,8 +783,6 @@ func newCmdToolItem(id, displayName, detail string, status ToolStatus, styles St
 	b := NewBaseToolItem(id, displayName, status, detail, styles)
 	return &CmdToolItem{BaseToolItem: *b}
 }
-
-// --- LspToolItem (language server protocol) ---
 
 // LspToolItem renders LSP operations (hover, definition, references, etc.)
 type LspToolItem struct {
@@ -919,7 +872,7 @@ func classifyTool(name string) toolCategory {
 		"a2a_get_task", "a2a_list_tasks", "a2a_cancel_task":
 		return catGeneric
 	default:
-		// LSP tools (lsp_hover, lsp_definition, etc.)
+
 		if strings.HasPrefix(name, "lsp_") {
 			return catLSP
 		}
@@ -1004,15 +957,13 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 		}
 		if ctx.ToolName == "lanchat" {
 			item.noTruncate = true
-			// Only render as markdown for send/broadcast actions;
-			// list/history/pending use pre-formatted plain text.
+
 			if action := lanchatAction(ctx.RawArgs); action == "send" ||
 				action == "broadcast" || action == "broadcast_all" || action == "send_team" {
 				item.markdownBody = true
 			}
 		}
-		// Named agent tools: header label already carries the key info,
-		// suppress verbose multi-line result body.
+
 		switch ctx.ToolName {
 		case "create_namedagent", "delete_namedagent", "use_namedagent":
 			item.suppressBody = true
@@ -1074,7 +1025,6 @@ func (t *TodoToolItem) Render(width int) string {
 		}
 	}
 
-	// Header: ratio + active task
 	total := len(t.tasks)
 	var active string
 	for _, task := range t.tasks {
@@ -1095,10 +1045,7 @@ func (t *TodoToolItem) Render(width int) string {
 	header := t.styles.ToolHeader(icon, label, width)
 	if active != "" {
 		maxActive := width - lipgloss.Width(header) - 5
-		// #1507: clamp to 1, not 10 - the 10 floor re-inflated past width
-		// in narrow terminals (width=35, header tail 25 -> 35-25-5=5 clamped
-		// to 10 -> line 38 > 35), the exact pattern wrapHeaderParams
-		// eliminated (see styles.go critique).
+
 		if maxActive < 1 {
 			maxActive = 1
 		}
@@ -1122,8 +1069,6 @@ func (t *TodoToolItem) Height(width int) int {
 	}
 	return measureHeight(t.Render(width))
 }
-
-// --- AgentToolItem ---
 
 // AgentToolItem renders a subagent with nested tool calls.
 // AgentToolItem displays a sub-agent's lifecycle in the main chat.
@@ -1180,7 +1125,6 @@ func (a *AgentToolItem) Render(width int) string {
 		return cached
 	}
 
-	// Header: use label (sub-agent name)
 	labelDisplay := a.label
 	if labelDisplay == "" {
 		labelDisplay = "sub-agent"
@@ -1193,14 +1137,12 @@ func (a *AgentToolItem) Render(width int) string {
 		return rendered
 	}
 
-	// Build tree with nested tool calls
 	innerWidth := width - 4
 	t := tree.Root(header)
 	for _, item := range a.nestedItems {
 		t.Child(item.Render(innerWidth))
 	}
 
-	// Style the tree with rounded enumerator
 	enumStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	t.EnumeratorStyle(enumStyle)
 
@@ -1223,11 +1165,10 @@ func FormatJSONResult(raw string) string {
 		return raw
 	}
 
-	// Determine which keys to show based on what's present
 	keyOrder := []string{
-		// Cron
+
 		"ID", "CronExpr", "Recurring", "Prompt", "NextFire", "CreatedAt",
-		// Swarm task
+
 		"Subject", "Description", "Status", "Owner", "ActiveForm",
 	}
 	shown := make(map[string]bool)
@@ -1241,7 +1182,7 @@ func FormatJSONResult(raw string) string {
 		pairs = append(pairs, formatKVPair(label, val))
 		shown[key] = true
 	}
-	// Append any remaining keys not in the predefined order
+
 	for key, val := range data {
 		if shown[key] {
 			continue

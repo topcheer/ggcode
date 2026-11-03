@@ -6,15 +6,10 @@ import (
 	"testing"
 )
 
-// zz_issue4918_test.go pins the fix for #4918: sharedWorkspacePeers compared
-// workspace paths with filepath.Clean only - symlink spellings of the SAME
-// physical directory (macOS /var vs /private/var, or a user symlink) never
-// matched, so the collision alert silently missed peers.
-
 // TestCanonicalWorkspaceComparableSymlink: a symlink to a real dir must
 // compare EQUAL to its target spelling.
 func TestCanonicalWorkspaceComparableSymlink(t *testing.T) {
-	dir := t.TempDir() // already absolute + resolved
+	dir := t.TempDir()
 	link := filepath.Join(t.TempDir(), "wslink")
 	if err := os.Symlink(dir, link); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
@@ -45,7 +40,7 @@ func TestSharedWorkspacePeersSeesSymlinkPeer(t *testing.T) {
 	if err := os.Symlink(real, link); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	// Participants() = self (always online) + h.peers map; inject via peers.
+
 	h2 := &Hub{peers: map[string]*Participant{
 		"peer":    {NodeID: "peer", Online: true, Workspace: link},
 		"other":   {NodeID: "other", Online: true, Workspace: t.TempDir()},

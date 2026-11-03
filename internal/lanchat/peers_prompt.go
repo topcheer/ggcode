@@ -64,7 +64,6 @@ func FormatPeersInfo(hub *Hub, workspace string) string {
 		return ""
 	}
 
-	// Sort: same-workspace first, then by name.
 	sort.Slice(peers, func(i, j int) bool {
 		if peers[i].sameWS != peers[j].sameWS {
 			return peers[i].sameWS
@@ -81,9 +80,7 @@ func FormatPeersInfo(hub *Hub, workspace string) string {
 		if p.busy {
 			status = "busy"
 		}
-		// Model health: degraded nodes are still reachable (status is
-		// advisory), but orchestrating agents should prefer healthy peers
-		// for time-critical delegation.
+
 		if p.health != "" {
 			status = fmt.Sprintf("%s, MODEL DEGRADED:%s since %s (may recover; prefer healthy peers for urgent tasks)",
 				status, p.health, time.Unix(p.since, 0).Format("15:04"))
@@ -139,7 +136,6 @@ func FormatPeersInfo(hub *Hub, workspace string) string {
 		}
 	}
 
-	// Collaboration rules — only shown when peers exist.
 	sb.WriteString("\nCollaboration rules:\n")
 	if len(sameWSBusy) > 0 || len(sameWSIdle) > 0 {
 		sb.WriteString("- Before git commit/push: lanchat action='list' to check no teammate is mid-commit — concurrent commits cause ref lock failures.\n")

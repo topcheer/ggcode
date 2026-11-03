@@ -9,9 +9,9 @@ import "strings"
 // into API request max_output_tokens on the server-side-tools Responses path.
 func TestDeepSeekV4SiblingMaxOutputSynced(t *testing.T) {
 	cases := map[string]int{
-		// Vendor-twin mirror: @cf mirrors deepseek-ai/ which 1d41be032 set to 393216.
+
 		"@cf/deepseek-ai/deepseek-v4-flash-0731": 393216,
-		// Bare-family spellings standardized on 384000 (matches L397/L404/L405).
+
 		"deepseek-v4-flash:0731":          384000,
 		"deepseek-v4-pro:0813":            384000,
 		"deepseek-v4-pro@eu":              384000,
@@ -49,11 +49,10 @@ func TestDeepSeekV4NoEntryExceedsOfficialCap(t *testing.T) {
 // Guard: any ~-prefixed alias naming deepseek (any generation) must not exceed
 // the official 393216 output cap; GLM aliases must not exceed 131072.
 func TestRouterAliasCapsMirrorOfficial(t *testing.T) {
-	pins := map[string][2]int{ // model -> {ContextWindow, MaxOutputTokens}
+	pins := map[string][2]int{
 		"~z-ai/glm-latest":       {1048576, 131072},
 		"~z-ai/glm-flash-latest": {1048576, 131072},
-		// Kimi K3 official: 1M window, max_completion_tokens up to 1048576
-		// (platform.kimi.ai quickstart, "Important limits").
+
 		"~moonshotai/kimi-latest":         {1048576, 1048576},
 		"~deepseek/deepseek-flash-latest": {1048576, 393216},
 		"~deepseek/deepseek-pro-latest":   {1048576, 393216},
@@ -68,7 +67,7 @@ func TestRouterAliasCapsMirrorOfficial(t *testing.T) {
 			t.Errorf("knownModelCapabilities[%q] = {win %d, out %d}, want {win %d, out %d} (#4946: router alias must mirror official caps)", model, cap.ContextWindow, cap.MaxOutputTokens, want[0], want[1])
 		}
 	}
-	// Sweep: no router alias for deepseek (any spelling) above the 384K cap.
+
 	for model, cap := range knownModelCapabilities {
 		if strings.HasPrefix(model, "~") && strings.Contains(model, "deepseek") && cap.MaxOutputTokens > 393216 {
 			t.Errorf("router alias %q MaxOutputTokens=%d exceeds deepseek official cap (#4946)", model, cap.MaxOutputTokens)

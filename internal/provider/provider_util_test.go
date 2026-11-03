@@ -35,7 +35,7 @@ func TestUserFacingError_AuthError(t *testing.T) {
 func TestUserFacingError_GenericError(t *testing.T) {
 	err := errors.New("something unexpected")
 	result := UserFacingError(err)
-	// Should return something, even if just the original message
+
 	t.Logf("UserFacingError(generic) = %q", result)
 }
 
@@ -47,7 +47,7 @@ func TestUserFacingError_WrappedError(t *testing.T) {
 }
 
 func TestUserFacingError_KimiAccessTerminated(t *testing.T) {
-	// Scenario 1: Original *openai.APIError with HTTP status chain intact
+
 	apiErr := &openai.APIError{
 		HTTPStatusCode: 403,
 		Message:        "You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/code/#pricing",
@@ -62,16 +62,12 @@ func TestUserFacingError_KimiAccessTerminated(t *testing.T) {
 		t.Errorf("expected '额度' in Chinese result, got %q", resultZh)
 	}
 
-	// Scenario 2: Error chain destroyed — agent converts to FriendlyError string,
-	// then TUI calls UserFacingErrorLang on the string-only error
 	stringErr := fmt.Errorf("%s", FriendlyError(apiErr))
 	result2 := UserFacingErrorLang(stringErr, "en")
 	if !strings.Contains(strings.ToLower(result2), "quota") {
 		t.Errorf("expected 'quota' in string-only error result, got %q", result2)
 	}
 
-	// Scenario 3: Raw Kimi error string without HTTP status (simulating
-	// stream mid-error where SDK may not wrap into APIError)
 	rawErr := errors.New("access_terminated_error: usage limit reached for billing cycle")
 	result3 := UserFacingErrorLang(rawErr, "en")
 	if !strings.Contains(strings.ToLower(result3), "quota") {
@@ -80,7 +76,7 @@ func TestUserFacingError_KimiAccessTerminated(t *testing.T) {
 }
 
 func TestUserFacingError_ZAICodingPlan(t *testing.T) {
-	// ZAI/GLM coding plan returns 429 with business code 1308 (5h limit)
+
 	t.Run("1308_5h_limit", func(t *testing.T) {
 		err := &openai.APIError{
 			HTTPStatusCode: 429,
@@ -92,7 +88,6 @@ func TestUserFacingError_ZAICodingPlan(t *testing.T) {
 		}
 	})
 
-	// ZAI code 1309: coding plan expired
 	t.Run("1309_plan_expired", func(t *testing.T) {
 		err := &openai.APIError{
 			HTTPStatusCode: 429,
@@ -104,7 +99,6 @@ func TestUserFacingError_ZAICodingPlan(t *testing.T) {
 		}
 	})
 
-	// ZAI code 1113: insufficient balance
 	t.Run("1113_insufficient_balance", func(t *testing.T) {
 		err := &openai.APIError{
 			HTTPStatusCode: 429,
@@ -116,13 +110,6 @@ func TestUserFacingError_ZAICodingPlan(t *testing.T) {
 		}
 	})
 
-	// ZAI English variant. #1000: this wording ("usage limit ... limit will
-	// reset") is indistinguishable from Anthropic's recoverable 5-hour
-	// window and the behavior layer (#528) already classifies it as a
-	// transient rate limit; the display layer now follows the same ruling
-	// instead of contradicting it. Users still get the /retry hint; the
-	// ZAI-specific 1308-1321 code forms (Chinese subtests above) keep the
-	// quota guidance.
 	t.Run("english_coding_plan", func(t *testing.T) {
 		err := &openai.APIError{
 			HTTPStatusCode: 429,
@@ -134,7 +121,6 @@ func TestUserFacingError_ZAICodingPlan(t *testing.T) {
 		}
 	})
 
-	// Standard transient rate limit should NOT be treated as quota
 	t.Run("transient_rate_limit", func(t *testing.T) {
 		err := &openai.APIError{
 			HTTPStatusCode: 429,
@@ -243,7 +229,7 @@ func TestDefaultImpersonationPresets(t *testing.T) {
 	if len(presets) == 0 {
 		t.Error("expected non-empty presets")
 	}
-	// Each preset should have an ID and name
+
 	for _, p := range presets {
 		if p.ID == "" {
 			t.Error("preset missing ID")
@@ -264,7 +250,6 @@ func TestFindPresetByID(t *testing.T) {
 		t.Errorf("found wrong preset: %q", found.ID)
 	}
 
-	// Not found
 	missing := FindPresetByID("nonexistent-preset-id-xyz")
 	if missing != nil {
 		t.Error("expected nil for unknown ID")
@@ -289,7 +274,6 @@ func TestSetActiveAndGetImpersonation(t *testing.T) {
 		t.Errorf("expected nil headers, got %v", gotHeaders)
 	}
 
-	// Clear
 	SetActiveImpersonation(nil, "", nil)
 	gotPreset, _, _ = GetActiveImpersonation()
 	if gotPreset != nil {
@@ -298,11 +282,10 @@ func TestSetActiveAndGetImpersonation(t *testing.T) {
 }
 
 func TestResolveImpersonationHeaders(t *testing.T) {
-	// No active impersonation
+
 	headers := ResolveImpersonationHeaders()
 	t.Logf("headers without impersonation: %v", headers)
 
-	// With active impersonation
 	presets := DefaultImpersonationPresets()
 	if len(presets) > 0 {
 		SetActiveImpersonation(&presets[0], "1.0", map[string]string{"X-Custom": "test"})
@@ -331,19 +314,19 @@ func TestAdaptiveCapFor(t *testing.T) {
 }
 
 func TestIsRetryable_DefaultTrue(t *testing.T) {
-	// isRetryable defaults to true for unknown errors
+
 	if !isRetryable(errors.New("unknown error")) {
 		t.Error("expected retryable for unknown errors (default=true)")
 	}
-	// nil is not retryable
+
 	if isRetryable(nil) {
 		t.Error("expected not retryable for nil")
 	}
-	// 401 is not retryable (matches " 401 " pattern)
+
 	if isRetryable(errors.New("error 401 unauthorized")) {
 		t.Error("expected not retryable for 401")
 	}
-	// 500 is retryable
+
 	if !isRetryable(errors.New("status: 500")) {
 		t.Error("expected retryable for 500")
 	}
@@ -355,7 +338,7 @@ func TestIsRetryable_DefaultTrue(t *testing.T) {
 // expired") that didn't match typed SDK error types fell through to the
 // default `return true`, wasting 20 retry attempts.
 func TestIsRetryable_QuotaAndAuthFailFast(t *testing.T) {
-	// Quota errors — must not retry regardless of packaging.
+
 	quotaErrs := []error{
 		errors.New("coding plan usage limit reached"),
 		errors.New("HTTP 429: insufficient_quota"),
@@ -369,7 +352,6 @@ func TestIsRetryable_QuotaAndAuthFailFast(t *testing.T) {
 		}
 	}
 
-	// Auth errors — must not retry.
 	authErrs := []error{
 		errors.New("401 unauthorized"),
 		errors.New("invalid api key"),
@@ -381,14 +363,13 @@ func TestIsRetryable_QuotaAndAuthFailFast(t *testing.T) {
 		}
 	}
 
-	// Transient rate limit (no quota keywords) MUST still be retryable.
 	if !isRetryable(errors.New("429 too many requests")) {
 		t.Error("transient 429 without quota keywords should be retryable")
 	}
 	if !isRetryable(errors.New("rate limit exceeded, retry after 30s")) {
 		t.Error("transient rate limit should be retryable")
 	}
-	// Server errors and network errors must still be retryable.
+
 	if !isRetryable(errors.New("503 service unavailable")) {
 		t.Error("503 should be retryable")
 	}

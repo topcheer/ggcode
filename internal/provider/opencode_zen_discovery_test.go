@@ -1,10 +1,5 @@
 package provider
 
-// Real-network discovery test against the public OpenCode Zen model listing
-// (https://opencode.ai/zen/v1/models is unauthenticated). Skipped under
-// -short (CI hermeticity); exercises the full candidate-resolution +
-// impersonation-header path a configured zen-openai endpoint takes.
-
 import (
 	"context"
 	"net"
@@ -23,11 +18,7 @@ func TestDiscoverModelsOpenCodeZenPublicListing(t *testing.T) {
 	if os.Getenv("GGCODE_SKIP_NET") != "" {
 		t.Skip("GGCODE_SKIP_NET set")
 	}
-	// Reachability guard: CI runners intermittently fail DNS for this host
-	// ("lookup opencode.ai: no such host" - 3 consecutive CI reds across two
-	// unrelated PRs while local runs pass). A live-network smoke test must
-	// not block unrelated changes on transient DNS; skip WITH A REASON when
-	// the host is unreachable, keep the full assertion path when it is not.
+
 	if err := probeHostReachable("opencode.ai"); err != nil {
 		t.Skipf("opencode.ai unreachable (transient DNS or egress block): %v", err)
 	}
@@ -38,26 +29,15 @@ func TestDiscoverModelsOpenCodeZenPublicListing(t *testing.T) {
 		EndpointName: "Zen (OpenAI)",
 		Protocol:     "openai",
 		BaseURL:      "https://opencode.ai/zen/v1",
-		// The listing is public; any non-placeholder key satisfies the
-		// discovery gate (hasUsableAPIKey rejects only empty/${VAR} values).
+
 		APIKey: "public-listing",
 	})
 	if err != nil {
-		// The listing was public at implementation time, but upstream auth
-		// policy can change (CI red 38162326220: "status 401 Invalid API key"
-		// across unrelated PRs). Same rule as the DNS guard above: a live
-		// smoke test must not block unrelated changes on upstream-side auth
-		// shifts - skip WITH A REASON, keep failing on real regressions.
+
 		if strings.Contains(err.Error(), "401") {
 			t.Skipf("opencode.ai now rejects the public listing key (upstream auth change): %v", err)
 		}
-		// Transient upstream latency: the reachability probe (DNS/TCP)
-		// passed but the listing GET timed out awaiting headers (run
-		// 39049486644: 8.03s "Client.Timeout exceeded while awaiting
-		// headers" on a PR that touches internal/agent only). Same rule as
-		// the guards above: a live smoke test must not block unrelated
-		// changes on upstream-side slowness - skip WITH A REASON; real
-		// regressions still fail the listing assertions below.
+
 		if strings.Contains(err.Error(), "context deadline exceeded") || strings.Contains(err.Error(), "Client.Timeout exceeded") {
 			t.Skipf("opencode.ai listing timed out awaiting headers (transient upstream latency): %v", err)
 		}
@@ -73,11 +53,7 @@ func TestDiscoverModelsOpenCodeZenPublicListing(t *testing.T) {
 		"ling-3.0-flash-fin-free": false,
 		"nemotron-3-ultra-free":   false,
 	}
-	// The free-model ROSTER is upstream marketing content, not a contract:
-	// entries get delisted without notice (deepseek-v4-flash-free vanished
-	// between runs). Structural assertions (listing size, discovery path)
-	// stay hard; roster membership is advisory so upstream churn cannot
-	// reddten the suite.
+
 	for _, m := range models {
 		if _, ok := wantFree[m]; ok {
 			wantFree[m] = true

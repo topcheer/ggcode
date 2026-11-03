@@ -35,17 +35,17 @@ func benchList(b *testing.B, n int) *List {
 // the "user scrolls through history for the first time" path.
 func BenchmarkScrollCold(b *testing.B) {
 	l := benchList(b, 2000)
-	l.ScrollUp(20000) // jump to top; most items below never rendered
+	l.ScrollUp(20000)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		l.ScrollDown(3) // wheel tick
+		l.ScrollDown(3)
 	}
 }
 
 // BenchmarkRenderViewport measures per-frame render cost mid-scroll.
 func BenchmarkRenderViewport(b *testing.B) {
 	l := benchList(b, 2000)
-	l.ScrollUp(5000) // mid-history
+	l.ScrollUp(5000)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		l.ScrollUp(1)
@@ -77,10 +77,9 @@ func BenchmarkStreamUpdateText(b *testing.B) {
 	l := NewList(120, 40)
 	a := NewAssistantItem("a0", styles)
 	l.Append(a)
-	// Simulate an item that has accumulated ~30KB of streamed markdown
-	// (a long agent reply after many minutes of streaming).
+
 	a.SetText(strings.Repeat("Long markdown **paragraph** with `code` and lists\n\n- a\n- b\n", 700))
-	l.Render() // warm
+	l.Render()
 	chunk := "more streamed text "
 	buf := strings.Repeat("Long markdown **paragraph** with `code` and lists\n\n- a\n- b\n", 700)
 	b.ResetTimer()

@@ -8,15 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/auth"
 )
 
-// #2622 pin tests (reviewer-requested on reopen): the fix in 7b466b45 added
-// IsExpired() rejections to the two OAuth else branches, but the existing
-// TestRefreshClaudeOAuthTokenExpiredNoRefreshToken exercises the refresh
-// HELPER - the commit message itself notes the helper guard was unreachable
-// dead code behind the caller's condition. These tests pin the CALLER path
-// (ResolveEndpointSelection): expired + no refresh token + non-empty access
-// token must fail loudly with the re-login hint instead of silently
-// resolving to the stale token. Before 7b466b45 both resolved "successfully".
-
 func TestResolveEndpointSelectionClaudeOAuthExpiredNoRefresh(t *testing.T) {
 	withTestHome(t)
 	t.Setenv("HOME", t.TempDir())
@@ -24,9 +15,8 @@ func TestResolveEndpointSelectionClaudeOAuthExpiredNoRefresh(t *testing.T) {
 	if err := store.Save(&auth.Info{
 		ProviderID:  auth.ProviderAnthropic,
 		Type:        "oauth",
-		AccessToken: "stale-at", // non-empty: the exact state that slipped through
+		AccessToken: "stale-at",
 		ExpiresAt:   time.Now().Add(-time.Hour),
-		// RefreshToken intentionally empty
 	}); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -60,9 +50,7 @@ func TestResolveEndpointSelectionOpenCodeOAuthExpiredNoRefresh(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.Vendor = "opencode"
-	// The opencode vendor ships zen-anthropic/zen-openai (api-key) endpoints;
-	// its OAuth entry arrives as a user-configured endpoint with
-	// auth_type: oauth, so inject exactly that shape.
+
 	cfg.Vendors["opencode"].Endpoints["opencode-oauth"] = EndpointConfig{
 		DisplayName:  "OpenCode OAuth",
 		Protocol:     "anthropic",

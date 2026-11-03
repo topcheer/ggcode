@@ -22,14 +22,14 @@ import (
 // smallest. Models below 64K are not worth probing — they won't work
 // well for a coding agent anyway.
 var probeTiers = []int{
-	1_000_000, // 1M  — Gemini 2.5, etc.
-	512_000,   // 512K
-	256_000,   // 256K
-	200_000,   // 200K — Claude
-	168_000,   // 168K
-	128_000,   // 128K — GPT-4 class
-	100_000,   // 100K
-	64_000,    // 64K — minimum viable
+	1_000_000,
+	512_000,
+	256_000,
+	200_000,
+	168_000,
+	128_000,
+	100_000,
+	64_000,
 }
 
 // probeTokenBudget caps the total billed input tokens one tiered probe
@@ -60,8 +60,6 @@ type ProbeResult struct {
 	FromCache     bool   // true if value came from persistent cache
 }
 
-// ─── persistent cache ──────────────────────────────────────────────────────
-
 var (
 	probeCacheMu sync.RWMutex
 	probeCache   = map[string]int{} // key → context window
@@ -90,7 +88,7 @@ func loadProbeCache() {
 	// Try to unmarshal as versioned cache format
 	var cache probeCacheData
 	if err := json.Unmarshal(data, &cache); err == nil && cache.Version > 0 {
-		// New format: check version and apply migration if needed
+
 		if cache.Version < probeCacheVersion {
 			debug.Log("probe", "cache migration: v%d → v%d", cache.Version, probeCacheVersion)
 			dropped := applyCacheMigration(cache.Version, &cache)
@@ -103,7 +101,7 @@ func loadProbeCache() {
 				len(cache.Entries), path, dropped)
 			return
 		}
-		// Current version: use as-is
+
 		probeCacheMu.Lock()
 		probeCache = cache.Entries
 		probeCacheMu.Unlock()
@@ -111,14 +109,13 @@ func loadProbeCache() {
 		return
 	}
 
-	// Legacy format (plain map[string]int) - migrate
 	debug.Log("probe", "legacy cache format detected, migrating to v%d", probeCacheVersion)
 	var legacyMap map[string]int
 	if err := json.Unmarshal(data, &legacyMap); err != nil {
 		debug.Log("probe", "cache parse error: %v", err)
 		return
 	}
-	// Build new cache structure from legacy map (pre-allocate to avoid rehashes)
+
 	entries := make(map[string]int, len(legacyMap))
 	for k, v := range legacyMap {
 		entries[k] = v
@@ -127,7 +124,7 @@ func loadProbeCache() {
 		Version: probeCacheVersion,
 		Entries: entries,
 	}
-	dropped := applyCacheMigration(0, &cache) // legacy: run every migration step
+	dropped := applyCacheMigration(0, &cache)
 	saveProbeCacheData(cache)
 	probeCacheMu.Lock()
 	probeCache = cache.Entries
@@ -141,7 +138,7 @@ func loadProbeCache() {
 func applyCacheMigration(fromVersion int, cache *probeCacheData) int {
 	dropped := 0
 	if fromVersion < 2 {
-		minTier := contextOverflowTiers[len(contextOverflowTiers)-1] // 128K
+		minTier := contextOverflowTiers[len(contextOverflowTiers)-1]
 		for k, v := range cache.Entries {
 			if v < minTier {
 				delete(cache.Entries, k)
@@ -150,14 +147,7 @@ func applyCacheMigration(fromVersion int, cache *probeCacheData) int {
 		}
 	}
 	if fromVersion < 3 {
-		// #1287: entries poisoned by the old over-broad prefix table (Phase 1b
-		// sync-wrote the family legacy window for unlisted variants, e.g.
-		// qwen3-coder-plus -> 131072 instead of 256K+). The lookup fix stops
-		// NEW poisoning but Phase 1 (cache HIT) runs first and serves stale
-		// poison forever. Drop entries whose model part belongs to a narrowed
-		// family and no longer matches the table — the background probe
-		// re-measures and re-caches. Deleting a genuinely-probed value costs
-		// one re-probe; keeping poison costs a 2x-underestimated window.
+
 		for k := range cache.Entries {
 			model := k
 			if idx := strings.LastIndex(k, "|"); idx >= 0 {
@@ -180,7 +170,7 @@ func applyCacheMigration(fromVersion int, cache *probeCacheData) int {
 // (which the lookup already honors — returning 0 here means it did not).
 func lookupKnownRetiredFamilyHijack(model string) bool {
 	if LookupKnownModelContextWindow(model) != 0 {
-		return false // still covered by the table (exact or legitimate prefix)
+		return false
 	}
 	for _, fam := range []string{"gpt-4", "qwen3", "glm-4", "deepseek-chat", "deepseek-v3"} {
 		if strings.HasPrefix(strings.ToLower(model), fam) {
@@ -218,11 +208,7 @@ func saveProbeCacheData(cache probeCacheData) {
 	} else {
 		debug.Log("probe", "cache lock unavailable: %v", err)
 	}
-	// #1309 P2: this cache is shared across processes (TUI + desktop +
-	// daemon over one ~/.ggcode) but loaded once per process. Writing the
-	// in-memory snapshot verbatim erased entries another process had
-	// probed and saved since our load - probes then repeated (real API
-	// cost). Re-read the file and keep disk-only entries before writing.
+
 	if data, err := os.ReadFile(probeCachePath()); err == nil {
 		var onDisk probeCacheData
 		if json.Unmarshal(data, &onDisk) == nil {
@@ -231,7 +217,7 @@ func saveProbeCacheData(cache probeCacheData) {
 				merged[k] = v
 			}
 			for k, v := range cache.Entries {
-				merged[k] = v // ours win for keys we know
+				merged[k] = v
 			}
 			cache.Entries = merged
 		}
@@ -276,21 +262,17 @@ func SetProbeCache(key string, window int) {
 	debug.Log("probe", "cached context_window=%d for key=%s", window, key)
 }
 
-// ─── error-based context window inference ───────────────────────────────────
-
 // contextOverflowTiers are used when inferring context window from an overflow
 // error. Ordered from largest to smallest. We pick the largest tier that does
 // not exceed the estimated token count.
 var contextOverflowTiers = []int{
-	2_000_000, // 2M  — Gemini 2.5, etc.
-	1_000_000, // 1M
-	512_000,   // 512K
-	256_000,   // 256K
-	200_000,   // 200K — Claude 3.5/4
-	168_000,   // 168K
-	128_000,   // 128K — MINIMUM tier. Sub-128K windows are never inferred
-	//        by tier matching; only exact provider-reported
-	//        numbers may set them (see InferContextWindowFromError).
+	2_000_000,
+	1_000_000,
+	512_000,
+	256_000,
+	200_000,
+	168_000,
+	128_000,
 }
 
 // matchOverflowTier returns the largest contextOverflowTiers entry that is <=
@@ -334,9 +316,6 @@ func InferContextWindowFromError(
 		return 0
 	}
 
-	// Step 1: extract the exact limit from the error message. Without a
-	// precise number we refuse to update — guessing is what caused permanent
-	// 64K window shrinkage before.
 	exactWindow := parseContextWindowFromError(err)
 	if exactWindow <= 0 {
 		debug.Log("probe", "overflow inference: no exact window in error, refusing to guess (tokens=%d, current=%d, key=%s)",
@@ -344,22 +323,17 @@ func InferContextWindowFromError(
 		return 0
 	}
 
-	// Step 2: normalize to a tier (e.g. 200019 → 200000). Values below the
-	// smallest tier keep their exact value — they are precise provider
-	// numbers, not tier guesses.
 	tier := matchOverflowTier(exactWindow)
 	if tier == 0 {
 		tier = exactWindow
 	}
 
-	// Step 3: only update if we'd be reducing the context window.
 	if tier >= currentMaxTokens {
 		debug.Log("probe", "overflow inference: tier=%d >= current=%d, no update needed",
 			tier, currentMaxTokens)
 		return 0
 	}
 
-	// Step 4: apply and persist.
 	debug.Log("probe", "overflow inference: parsed=%d tier=%d (was %d, key=%s)",
 		exactWindow, tier, currentMaxTokens, probeKey)
 	setMaxTokens(tier)
@@ -367,28 +341,25 @@ func InferContextWindowFromError(
 	return tier
 }
 
-// ─── error message parsing ─────────────────────────────────────────────────
-
 // parseContextWindowFromError tries to extract the actual context window
 // limit from an API error message. Many providers include the limit in
 // their error responses.
 var contextLimitPatterns = []*regexp.Regexp{
-	// "maximum context length is N" / "max context length: N" / "max context length N"
+
 	regexp.MustCompile(`(?i)maximum context length\D+(\d+)`),
-	// "N tokens > M maximum" / "N tokens > M tokens maximum" (Anthropic style — we want M)
+
 	regexp.MustCompile(`(?i)(\d+)\s*tokens?\s*>\s*(\d+)(?:\s*tokens?)?\s*maximum`),
-	// "requested N tokens, maximum is M" (Anthropic #303 style — we want M)
+
 	regexp.MustCompile(`(?i)maximum is\s+(\d+)`),
-	// "exceeds ... (N tokens)" / "exceeds ... (N)" (Gemini style)
+
 	regexp.MustCompile(`(?i)exceeds.*?\((\d+)[^)]*\)`),
-	// "token limit: N" / "context limit N" — the token-context prefix keeps
-	// rate-limit errors ("rate limit: 60000/min") from parsing.
+
 	regexp.MustCompile(`(?i)(?:token|context|prompt|input)\s+limit\W+(\d+)`),
-	// "limit of N tokens" / "limit: N tokens" — requires the tokens suffix
+
 	regexp.MustCompile(`(?i)limit\W+(?:of\s+)?(\d+)\s*tokens?`),
-	// "maximum of N tokens"
+
 	regexp.MustCompile(`(?i)maximum of\s+(\d+)\s*tokens?`),
-	// "model ... max ... N tokens" (generic; requires the tokens suffix)
+
 	regexp.MustCompile(`(?i)model.*?max\w*\W+(\d+)\s*tokens?`),
 }
 
@@ -400,7 +371,7 @@ func parseContextWindowFromError(err error) int {
 	for i, re := range contextLimitPatterns {
 		m := re.FindStringSubmatch(msg)
 		if len(m) >= 2 {
-			// For patterns with multiple captures, take the last number
+
 			n, err := strconv.Atoi(m[len(m)-1])
 			if err == nil && n >= 1000 {
 				debug.Log("probe", "parsed context_window=%d from error (pattern #%d): %s", n, i, msg)
@@ -412,8 +383,6 @@ func parseContextWindowFromError(err error) int {
 	return 0
 }
 
-// ─── key helpers ────────────────────────────────────────────────────────────
-
 // MakeProbeKey builds the cache key for a vendor+baseURL+model combination.
 // Matches adaptiveCap's capKey convention.
 func MakeProbeKey(vendor, baseURL, model string) string {
@@ -423,8 +392,6 @@ func MakeProbeKey(vendor, baseURL, model string) string {
 		strings.TrimSpace(model),
 	}, "|")
 }
-
-// ─── probe logic ────────────────────────────────────────────────────────────
 
 // ProbeContextWindow probes the actual context window limit for the given
 // provider. It runs asynchronously and calls onResult when done.
@@ -449,14 +416,12 @@ func ProbeContextWindow(ctx context.Context, p Provider, vendor, baseURL, model 
 	key := MakeProbeKey(vendor, baseURL, model)
 	debug.Log("probe", "starting probe for key=%s", key)
 
-	// Phase 1: check cache
 	if cached := LookupProbeCache(key); cached > 0 {
 		debug.Log("probe", "cache HIT: key=%s window=%d — applying synchronously", key, cached)
 		onResult(ProbeResult{Key: key, ContextWindow: cached, FromCache: true})
 		return
 	}
 
-	// Phase 1b: check known model table (instant, no API call)
 	if known := LookupKnownModelContextWindow(model); known > 0 {
 		debug.Log("probe", "known model: %s → context_window=%d — applying synchronously (caching)", model, known)
 		SetProbeCache(key, known)
@@ -464,10 +429,6 @@ func ProbeContextWindow(ctx context.Context, p Provider, vendor, baseURL, model 
 		return
 	}
 
-	// #1789 case 1: five trigger points can fire while a tiered probe is
-	// still in flight (minutes for the 1M tier - ~2MB padding per request)
-	// - each miss launched ANOTHER full paid tier sequence, doubling real
-	// billing. Single-flight per key: a running probe suppresses new ones.
 	probeInflightMu.Lock()
 	if probeInflight[key] {
 		probeInflightMu.Unlock()
@@ -479,7 +440,6 @@ func ProbeContextWindow(ctx context.Context, p Provider, vendor, baseURL, model 
 
 	debug.Log("probe", "cache MISS: key=%s — launching background goroutine", key)
 
-	// Phase 2: fire background probe
 	safego.Go("provider.contextProbe", func() {
 		defer func() {
 			probeInflightMu.Lock()
@@ -512,7 +472,7 @@ func ProbeContextWindow(ctx context.Context, p Provider, vendor, baseURL, model 
 // No artificial timeout — this runs in a background goroutine and will
 // complete at its own pace without blocking the user.
 func probeInBackground(ctx context.Context, p Provider, key string) int {
-	// Phase 1: Try models API (Gemini only)
+
 	if window := tryModelsAPI(ctx, p); window > 0 {
 		debug.Log("probe", "models API returned context_window=%d", window)
 		SetProbeCache(key, window)
@@ -524,14 +484,13 @@ func probeInBackground(ctx context.Context, p Provider, key string) int {
 		return 0
 	}
 
-	// Phase 2: Try simple probe
 	simpleResult := trySimpleProbe(ctx, p)
 	if simpleResult > 0 {
 		SetProbeCache(key, simpleResult)
 		return simpleResult
 	}
 	if simpleResult < 0 {
-		// Provider not probeable or non-context error (auth, network) — stop
+
 		debug.Log("probe", "simple probe signalled abort, stopping all probing")
 		return 0
 	}
@@ -543,10 +502,6 @@ func probeInBackground(ctx context.Context, p Provider, key string) int {
 
 	debug.Log("probe", "simple probe inconclusive, starting tiered probing with %d tiers", len(probeTiers))
 
-	// Phase 3: Tiered probing
-	// #2116: every tier attempt bills ~tier tokens of real input; cap the
-	// descent so gateway models whose errors carry no exact window number
-	// cannot silently burn an unbounded ladder.
 	spent := 0
 	for i, tier := range probeTiers {
 		if ctx.Err() != nil {
@@ -563,12 +518,7 @@ func probeInBackground(ctx context.Context, p Provider, key string) int {
 			SetProbeCache(key, w)
 			return w
 		}
-		// #1608: tryTierProbe's own contract says -1 = abort (auth error -
-		// "aborting all probing"). The loop only consumed w > 0, so a -1
-		// fell through and the remaining tiers each fired ANOTHER real
-		// billed request against a dead token - hundreds of KB of padding
-		// wasted per tier. Phase 2's simple-probe path already treats a
-		// negative result as terminal; align here.
+
 		if w < 0 {
 			debug.Log("probe", "tiered probe aborting at tier[%d]=%d (auth failure)", i, tier)
 			return 0
@@ -596,8 +546,6 @@ func tryModelsAPI(ctx context.Context, p Provider) int {
 	return gp.probeModelsAPI(ctx, gp.model)
 }
 
-// ─── prober interface ──────────────────────────────────────────────────────
-
 // prober is implemented by all provider types (OpenAI, Anthropic, Gemini).
 // It sends a single chat request without retry, adaptive cap tracking,
 // or token counting.
@@ -614,8 +562,6 @@ func chatNoRetry(ctx context.Context, p Provider, msgs []Message) error {
 	return pp.probeChat(ctx, msgs)
 }
 
-// ─── probe phases ──────────────────────────────────────────────────────────
-
 // trySimpleProbe sends "hi" to verify the API is working.
 // Returns: >0 = found context limit in error, 0 = continue probing, -1 = abort.
 func trySimpleProbe(ctx context.Context, p Provider) int {
@@ -626,19 +572,11 @@ func trySimpleProbe(ctx context.Context, p Provider) int {
 	debug.Log("probe", "sending simple probe (no-retry)")
 	err := chatNoRetry(ctx, p, msgs)
 	if err != nil {
-		// Check if error contains context limit info
+
 		if w := parseContextWindowFromError(err); w > 0 {
 			return w
 		}
 
-		// #1788: this used to abort the ENTIRE probe on any non-context
-		// error (only context/token-limit/too-long/exceeds continued to
-		// tiered probing). A transient 429 or network blip at probe start
-		// therefore returned -1, the caller fell back to estimation, and
-		// under the #1198 persistent cache a momentary rate limit could
-		// harden into a low window. Align with the tier classifier below:
-		// only AUTH aborts; rate-limit/network/5xx/timeout/unknown are
-		// inconclusive and fall through to tiered probing.
 		errMsg := strings.ToLower(err.Error())
 		isContextError := strings.Contains(errMsg, "context") ||
 			strings.Contains(errMsg, "token limit") ||
@@ -646,7 +584,7 @@ func trySimpleProbe(ctx context.Context, p Provider) int {
 			strings.Contains(errMsg, "exceeds")
 
 		if isContextError {
-			// Context error but couldn't parse the limit — tiered probing
+
 			debug.Log("probe", "simple probe hit context limit but couldn't parse exact value")
 			return 0
 		}
@@ -690,42 +628,34 @@ func tryTierProbe(ctx context.Context, p Provider, tier int) int {
 		return 0
 	}
 
-	// Check if error contains context limit info first
 	if w := parseContextWindowFromError(err); w > 0 {
 		debug.Log("probe", "tier %dK overflow — extracted exact limit=%dK from error", tier/1000, w/1000)
 		return w
 	}
 
-	// Classify the error to distinguish transient failures from overflow
 	errMsg := strings.ToLower(err.Error())
 
-	// Check for genuine context overflow indicators first
 	if IsContextOverflowError(err) {
-		// Context overflow but couldn't parse exact value — try next lower tier
+
 		debug.Log("probe", "tier %dK FAILED in %s: context overflow (no exact value) — trying next tier", tier/1000, elapsed)
 		return 0
 	}
 
-	// Non-context errors: classify using existing errclass helpers
-	// Auth errors → abort probing entirely
 	if containsAny(errMsg, authKeywords) || containsAnyAnchored(errMsg, authStatusPatterns) {
 		debug.Log("probe", "tier %dK FAILED in %s: auth error (aborting all probing): %v", tier/1000, elapsed, err)
 		return -1
 	}
 
-	// Rate limit errors → inconclusive, may retry this tier
 	if containsAny(errMsg, rateLimitKeywords) || isRateLimitStatusHit(errMsg) {
 		debug.Log("probe", "tier %dK FAILED in %s: rate limit (inconclusive, may retry): %v", tier/1000, elapsed, err)
 		return 0
 	}
 
-	// Network errors → inconclusive, may retry this tier
 	if containsAny(errMsg, networkKeywords) {
 		debug.Log("probe", "tier %dK FAILED in %s: network error (inconclusive, may retry): %v", tier/1000, elapsed, err)
 		return 0
 	}
 
-	// 5xx errors → inconclusive, may retry this tier
 	if strings.Contains(errMsg, " 5") && (containsAny(errMsg, []string{"500", "502", "503", "504", "529"}) ||
 		containsAnyAnchored(errMsg, []string{" 500 ", " 500,", " 500\n", " 502 ", " 502,", " 502\n",
 			" 503 ", " 503,", " 503\n", " 504 ", " 504,", " 504\n", " 529 ", " 529,", " 529\n"})) {
@@ -733,15 +663,11 @@ func tryTierProbe(ctx context.Context, p Provider, tier int) int {
 		return 0
 	}
 
-	// Timeout errors → inconclusive, may retry this tier
 	if strings.Contains(errMsg, "timeout") || strings.Contains(errMsg, "deadline") {
 		debug.Log("probe", "tier %dK FAILED in %s: timeout (inconclusive, may retry): %v", tier/1000, elapsed, err)
 		return 0
 	}
 
-	// Unknown error — log and treat as inconclusive to avoid permanent shrinkage
 	debug.Log("probe", "tier %dK FAILED in %s: unknown error (inconclusive, may retry): %v", tier/1000, elapsed, err)
 	return 0
 }
-
-// formatWindow formats a context window size for display.

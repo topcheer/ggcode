@@ -1,10 +1,5 @@
 package provider
 
-// #3938 probe: the tapeEvent projection must round-trip the five business
-// fields it used to drop (Confidence, Block, Tool.ServerTool,
-// Tool.ThoughtSignature, Tool.Caller); a projection missing them silently
-// diverges replayed trajectories from recorded ones.
-
 import (
 	"encoding/json"
 	"testing"
@@ -28,7 +23,7 @@ func TestIssue3938_ProjectionRoundTripsFiveFields(t *testing.T) {
 		},
 	}
 	te := fromStreamEvent(in)
-	// JSON round-trip (the tape file representation).
+
 	b, err := json.Marshal(te)
 	if err != nil {
 		t.Fatal(err)

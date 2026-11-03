@@ -26,7 +26,6 @@ func TestBindingWatcher_AutoMutesStaleOwnership(t *testing.T) {
 	mgr.SetBindingStore(store)
 	mgr.BindSession(SessionBinding{Workspace: "/ws1", SessionID: "session-A"})
 
-	// Add a binding owned by session-A.
 	binding := ChannelBinding{
 		Workspace: "/ws1",
 		Adapter:   "test-adapter",
@@ -39,22 +38,17 @@ func TestBindingWatcher_AutoMutesStaleOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Start the watcher.
 	mgr.StartBindingWatcher()
 	defer mgr.StopBindingWatcher()
 
-	// Verify the binding is active (not muted).
 	if mgr.IsMuted("test-adapter") {
 		t.Fatal("binding should not be muted initially")
 	}
 
-	// Simulate another instance claiming the binding.
 	if err := store.UpdateSessionID("/ws1", "test-adapter", "session-B"); err != nil {
 		t.Fatal(err)
 	}
 
-	// Wait for the watcher to detect the change (poll interval is 3s, but
-	// the file path check triggers immediately since mtime changed).
 	deadline := time.After(10 * time.Second)
 	for {
 		select {
@@ -67,7 +61,6 @@ func TestBindingWatcher_AutoMutesStaleOwnership(t *testing.T) {
 		}
 	}
 
-	// Verify it's muted.
 	if !mgr.IsMuted("test-adapter") {
 		t.Fatal("binding should be muted after session ownership changed")
 	}
@@ -104,8 +97,6 @@ func TestBindingWatcher_NoMuteWhenSameSession(t *testing.T) {
 	mgr.StartBindingWatcher()
 	defer mgr.StopBindingWatcher()
 
-	// Save the binding again with the same session ID (simulates a harmless
-	// re-write by our own UnmuteBinding).
 	store.Save(binding)
 
 	time.Sleep(500 * time.Millisecond)
@@ -139,7 +130,6 @@ func TestBindingWatcher_SkipsAlreadyMuted(t *testing.T) {
 	binding.LastSessionID = "session-A"
 	mgr.BindChannel(binding)
 
-	// Mute it manually first.
 	mgr.MuteBinding("test-adapter")
 
 	origInterval := bindingWatcherInterval
@@ -149,12 +139,10 @@ func TestBindingWatcher_SkipsAlreadyMuted(t *testing.T) {
 	mgr.StartBindingWatcher()
 	defer mgr.StopBindingWatcher()
 
-	// Change session ID externally.
 	store.UpdateSessionID("/ws1", "test-adapter", "session-B")
 
 	time.Sleep(500 * time.Millisecond)
 
-	// Should still be muted (no error, no panic).
 	if !mgr.IsMuted("test-adapter") {
 		t.Fatal("binding should still be muted")
 	}
@@ -177,10 +165,8 @@ func TestCheckBindingOwnership_MemoryStore(t *testing.T) {
 	binding.LastSessionID = "session-A"
 	mgr.BindChannel(binding)
 
-	// Simulate another instance claiming it.
 	store.UpdateSessionID("/ws1", "adapter1", "session-B")
 
-	// Run the check directly (no polling needed).
 	mgr.checkBindingOwnership(store, "/ws1", "session-A")
 
 	if !mgr.IsMuted("adapter1") {
@@ -207,7 +193,6 @@ func TestBindingWatcher_RemovesOnCrossWorkspaceTakeover(t *testing.T) {
 	binding.LastSessionID = "session-A"
 	mgr.BindChannel(binding)
 
-	// Verify binding exists in memory.
 	mgr.mu.RLock()
 	_, exists := mgr.currentBindings["adapter1"]
 	mgr.mu.RUnlock()
@@ -215,15 +200,12 @@ func TestBindingWatcher_RemovesOnCrossWorkspaceTakeover(t *testing.T) {
 		t.Fatal("adapter1 should exist in currentBindings before takeover")
 	}
 
-	// Simulate cross-workspace takeover: delete binding from our store.
 	if err := store.Delete("/ws1", "adapter1"); err != nil {
 		t.Fatal(err)
 	}
 
-	// Run the check directly.
 	mgr.checkBindingOwnership(store, "/ws1", "session-A")
 
-	// Verify binding was removed from memory.
 	mgr.mu.RLock()
 	_, exists = mgr.currentBindings["adapter1"]
 	mgr.mu.RUnlock()
@@ -264,15 +246,13 @@ func TestBindingWatcher_RestartOnBindSession(t *testing.T) {
 	mgr.BindSession(SessionBinding{Workspace: "/ws1", SessionID: "session-A2"})
 	wg.Wait()
 
-	// The old watcher context should be cancelled.
 	select {
 	case <-firstCtx.Done():
-		// Good — old watcher was cancelled.
+
 	case <-time.After(2 * time.Second):
 		t.Fatal("old watcher context was not cancelled")
 	}
 
-	// A new watcher should be running.
 	mgr.mu.RLock()
 	secondCancel := mgr.bindingWatcherCancel
 	mgr.mu.RUnlock()
@@ -282,6 +262,6 @@ func TestBindingWatcher_RestartOnBindSession(t *testing.T) {
 
 	mgr.StopBindingWatcher()
 
-	mgr.SetOnUpdate(nil)     // cleanup
-	_ = context.Background() // keep import
+	mgr.SetOnUpdate(nil)
+	_ = context.Background()
 }

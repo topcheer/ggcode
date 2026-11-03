@@ -14,9 +14,9 @@ import (
 // exceed maxBytes inside the re-sync loop.
 func TestSplitMessageBytesInnerFlushReachable1736(t *testing.T) {
 	var sb strings.Builder
-	sb.WriteString("a\n") // early newline -> preferred split returns 1
+	sb.WriteString("a\n")
 	for i := 0; i < 30; i++ {
-		sb.WriteString("中文段落") // 12B runes; re-sync span crosses maxBytes inside the inner loop
+		sb.WriteString("中文段落")
 	}
 	const maxBytes = 50
 	chunks := splitMessageBytes(sb.String(), maxBytes, true)

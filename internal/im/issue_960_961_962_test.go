@@ -14,26 +14,21 @@ import (
 	"time"
 )
 
-// ---------------------------------------------------------------------------
-// Issue #962: IsPrimary must skip crashed-leftover PID files
-// ---------------------------------------------------------------------------
-
 // TestInstanceDetectIsPrimarySkipsDeadPID verifies that a stale PID file from a
 // crashed earlier-started instance no longer demotes the sole surviving
 // instance to non-primary (issue #962).
 func TestInstanceDetectIsPrimarySkipsDeadPID(t *testing.T) {
 	tmp := t.TempDir()
 	d := NewInstanceDetect(tmp)
-	d.checkAlive = func(pid int) bool { return pid == d.info.PID } // only self alive
+	d.checkAlive = func(pid int) bool { return pid == d.info.PID }
 
 	if _, err := d.Register(); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	t.Cleanup(d.Unregister)
 
-	// Simulate a crashed instance that started EARLIER and left its PID file.
 	stale := InstanceInfo{
-		PID:       999999, // dead
+		PID:       999999,
 		UUID:      "crashed-instance-uuid-0001",
 		StartedAt: d.info.StartedAt.Add(-time.Hour),
 	}
@@ -83,10 +78,6 @@ func TestInstanceDetectIsPrimaryStillDemotedByLivePeer(t *testing.T) {
 		t.Fatal("after peer dies, instance should become primary")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Issue #960: IRC sendRaw concurrent-write serialization + mention case
-// ---------------------------------------------------------------------------
 
 // TestIRCSendRawConcurrentNoInterleave fires concurrent sendRaw writes from
 // multiple goroutines (mirroring the read-loop / keepalive / send-path writers)
@@ -162,8 +153,7 @@ func TestIRCSendRawConcurrentNoInterleave(t *testing.T) {
 	if len(res.lines) != total {
 		t.Fatalf("expected %d lines, got %d (lost/merged lines)", total, len(res.lines))
 	}
-	// Strict format check: every line must match the exact shape
-	// "PRIVMSG #chan<N> :writer-<N>-message-<8 digits>" with no corruption.
+
 	lineRe := regexp.MustCompile(`^PRIVMSG #chan[01] :writer-\d-message-\d{8}$`)
 	for _, line := range res.lines {
 		if !lineRe.MatchString(line) {
@@ -190,9 +180,7 @@ func TestIRCMentionCaseInsensitive(t *testing.T) {
 	if strings.Contains(strings.ToLower(got), "bot") {
 		t.Fatalf("mention should be stripped case-insensitively, got %q", got)
 	}
-	// #1221: word-based removal drops the mention token together with its
-	// attached punctuation ("BOT:" goes as a whole) instead of leaving a
-	// dangling colon behind.
+
 	if strings.Join(strings.Fields(got), " ") != "hey check this" {
 		t.Fatalf("unexpected remainder %q", got)
 	}
@@ -205,10 +193,6 @@ func TestIRCNoMentionDropped(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Issue #961: matrix 2-member room must not be permanently cached as DM
-// ---------------------------------------------------------------------------
-
 // TestMatrixCheckIsDMViaAPINoPermanentCache asserts that checkIsDMViaAPI does
 // NOT write the 2-member heuristic result into a.dmRooms (the permanent cache
 // that bypasses the mention gate). Cache entries must only come from
@@ -217,11 +201,6 @@ func TestMatrixCheckIsDMViaAPINoPermanentCache(t *testing.T) {
 	a := &matrixAdapter{name: "test"}
 	a.dmRooms = make(map[string]bool)
 
-	// call on a client-less adapter: must fail OPEN (#4645 - failing closed
-	// sent real DM traffic into the mention gate and silently dropped
-	// mention-less DMs) and must not populate the cache. The #961 security
-	// intent is the cache assertion below: no heuristic path may write the
-	// permanent dmRooms map.
 	if !a.checkIsDMViaAPI(context.Background(), "!two:example.org") {
 		t.Fatal("nil client must fail open, not silently drop DM traffic (#4645)")
 	}

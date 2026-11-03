@@ -31,7 +31,6 @@ func TestStartPCAdapterOnly(t *testing.T) {
 		t.Fatalf("expected 0 sessions, got %d", len(sessions))
 	}
 
-	// Verify adapter shows up in snapshot
 	snap := mgr.Snapshot()
 	found := false
 	for _, state := range snap.Adapters {

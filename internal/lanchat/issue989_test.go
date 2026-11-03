@@ -57,7 +57,7 @@ func TestIssue989UDPAuthMirrorsHTTPGate(t *testing.T) {
 
 	env := udpEnvelope{
 		Type:     "message",
-		APIKey:   communityKey, // well-known key must NOT pass a custom-key gate
+		APIKey:   communityKey,
 		FromNode: "attacker",
 	}
 	payload, _ := json.Marshal(Message{ID: "m-evil", FromNodeID: "attacker", Content: "inject"})
@@ -79,7 +79,7 @@ func TestIssue989UDPAuthMirrorsHTTPGate(t *testing.T) {
 	case id := <-got:
 		t.Fatalf("community-key envelope accepted by custom-key UDP gate; message %q dispatched", id)
 	case <-time.After(300 * time.Millisecond):
-		// dropped as required
+
 	}
 }
 

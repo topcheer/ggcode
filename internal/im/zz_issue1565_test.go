@@ -1,12 +1,5 @@
 package im
 
-// #1565 case B: PRIVMSG pacing is per-connection - two concurrent
-// pacePrivMsg acquisitions must be spaced at least ~the inter-message
-// delay apart (the old per-call `sent` flags let concurrent Sends
-// interleave freely and Twitch drops over-budget messages silently).
-// Case C: exit_plan_mode falls back to tr.Detail DIRECTLY (it is the
-// display string, never JSON) instead of the dead extractArgValue call.
-
 import (
 	"context"
 	"sync"
@@ -16,7 +9,7 @@ import (
 
 func TestIssue1565PacePrivMsgSpacesConcurrentSends(t *testing.T) {
 	a := &twitchAdapter{nick: "bot"}
-	a.lastPrivMsgAt = time.Now().Add(-time.Minute) // cold
+	a.lastPrivMsgAt = time.Now().Add(-time.Minute)
 	var wg sync.WaitGroup
 	got := make([]time.Time, 2)
 	for i := 0; i < 2; i++ {
@@ -47,7 +40,7 @@ func TestIssue1565ExitPlanDetailFallback(t *testing.T) {
 	if got := formatToolResultText(tr); got != "Plan: refactor the adapter layer" {
 		t.Fatalf("plan notification must surface Detail directly, got %q", got)
 	}
-	// Args still wins when present.
+
 	tr2 := &ToolResultInfo{
 		ToolName: "exit_plan_mode",
 		Args:     `{"plan":"from-args"}`,

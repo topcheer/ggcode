@@ -1,9 +1,5 @@
 package provider
 
-// sa-73 tests for OpenAI Responses background mode: create with
-// background=true, poll GET /responses/{id} to a terminal state, cancel on
-// context cancellation.
-
 import (
 	"context"
 	"encoding/json"
@@ -23,7 +19,7 @@ func newBackgroundTestServer(t *testing.T, handler http.HandlerFunc) *OpenAIResp
 	t.Cleanup(srv.Close)
 	p := NewOpenAIResponsesProvider("test-key", "gpt-5.2", 1024, srv.URL+"/responses")
 	p.SetBackgroundMode(true)
-	p.pollDelay = time.Millisecond // fast polls in tests
+	p.pollDelay = time.Millisecond
 	return p
 }
 
@@ -46,7 +42,6 @@ func TestBackgroundRequestFlag(t *testing.T) {
 		t.Fatalf("want store:false (stateless replay), got %s", body)
 	}
 
-	// Without SetBackgroundMode the flag must stay absent.
 	p2 := NewOpenAIResponsesProvider("k", "gpt-5.2", 100, "https://example.com/v1/responses")
 	req2, _ := p2.buildRequest([]Message{{Role: "user", Content: []ContentBlock{TextBlock("hi")}}}, nil, true)
 	body2, _ := json.Marshal(req2)
@@ -175,7 +170,7 @@ func TestBackgroundChatCancelOnContextCancel(t *testing.T) {
 			cancels.Add(1)
 			fmt.Fprint(w, `{"id":"resp_1","status":"cancelled"}`)
 		case r.Method == http.MethodGet:
-			// Stay queued until the client gives up.
+
 			fmt.Fprint(w, `{"id":"resp_1","status":"queued"}`)
 		default:
 			fmt.Fprint(w, `{"id":"resp_1","status":"queued"}`)
@@ -277,7 +272,7 @@ func TestBackgroundChatIncompleteStopsAsMaxTokens(t *testing.T) {
 }
 
 func TestBackgroundConfigWiring(t *testing.T) {
-	// Registry must propagate ResponsesBackground into the provider.
+
 	p := NewOpenAIResponsesProvider("k", "m", 10, "https://example.com/v1/responses")
 	if p.background {
 		t.Fatal("background must default to off")

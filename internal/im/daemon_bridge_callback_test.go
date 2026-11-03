@@ -7,10 +7,6 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// ============================================================
-// handleInteractiveCallback — message ID correlation (issue #326)
-// ============================================================
-
 func newCallbackTestBridge(msgIDs map[string]string, multi bool) (*DaemonBridge, chan toolpkg.AskUserResponse) {
 	req := toolpkg.AskUserRequest{
 		Title: "Choose",
@@ -29,9 +25,7 @@ func newCallbackTestBridge(msgIDs map[string]string, multi bool) (*DaemonBridge,
 			request:     req,
 			response:    ch,
 			multiSelect: multi,
-			// #2134: registration writes the emitted IDs onto the question
-			// itself (ownership) as well as the bridge-level last-emitted
-			// map - mirror both so the harness matches production state.
+
 			msgIDs: msgIDs,
 		},
 		interactiveMsgIDs: msgIDs,
@@ -73,7 +67,7 @@ func TestHandleInteractiveCallback_StaleMessageIDDropped(t *testing.T) {
 	b, ch := newCallbackTestBridge(map[string]string{"tg": "tg_msg_2"}, false)
 
 	b.handleInteractiveCallback(InteractiveCallback{
-		MessageID: "tg_msg_1", // old card from a previous question
+		MessageID: "tg_msg_1",
 		Values:    []string{"yes"},
 		Adapter:   "tg",
 	})
@@ -102,7 +96,7 @@ func TestHandleInteractiveCallback_StaleMultiSelectToggleDropped(t *testing.T) {
 	b, _ := newCallbackTestBridge(map[string]string{"tg": "tg_msg_5"}, true)
 
 	b.handleInteractiveCallback(InteractiveCallback{
-		MessageID: "tg_msg_1", // stale
+		MessageID: "tg_msg_1",
 		Values:    []string{"opt1"},
 		Adapter:   "tg",
 	})
@@ -147,7 +141,7 @@ func TestHandleInteractiveCallback_NoPendingDropped(t *testing.T) {
 		Values:    []string{"yes"},
 		Adapter:   "tg",
 	})
-	// Reached without panic; nothing to assert beyond no panic and no pending set.
+
 	b.mu.Lock()
 	pending := b.pendingAsk
 	b.mu.Unlock()

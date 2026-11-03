@@ -107,12 +107,12 @@ func TestSA142_UserFacingErrorLang(t *testing.T) {
 	if got := UserFacingErrorLang(nil, "zh-CN"); got != "" {
 		t.Fatalf("nil error must map to empty string, got %q", got)
 	}
-	// Wrapped errors unwrap once and still classify.
+
 	wrapped := fmt.Errorf("outer: %w", &openai.APIError{HTTPStatusCode: http.StatusUnauthorized, Message: "k"})
 	if got := UserFacingErrorLang(wrapped, "en"); !strings.Contains(got, "Invalid or missing API key") {
 		t.Fatalf("wrapped 401 misclassified: %q", got)
 	}
-	// Duck-typed HTTPStatusCode carriers classify too.
+
 	duck := &sa142StatusErr{code: http.StatusUnauthorized, msg: "custom wrapper"}
 	if got := UserFacingErrorLang(duck, "en"); !strings.Contains(got, "Invalid or missing API key") {
 		t.Fatalf("duck-typed status error misclassified: %q", got)
@@ -180,27 +180,26 @@ func TestSA142_TokenCalibrator(t *testing.T) {
 	if got := c.currentRatio(); got != 1.0 {
 		t.Fatalf("initial ratio = %v, want 1.0", got)
 	}
-	// Invalid samples are ignored entirely.
+
 	c.applyResult(0, 100)
 	c.applyResult(100, 0)
 	c.applyResult(-5, -5)
 	if got := c.currentRatio(); got != 1.0 {
 		t.Fatalf("invalid samples moved the ratio to %v", got)
 	}
-	// First valid sample is accepted directly (clamped).
+
 	c.applyResult(100, 130)
 	first := c.currentRatio()
 	if first != clampRatio(1.3) {
 		t.Fatalf("first calibration ratio = %v, want clamp(1.3)", first)
 	}
-	// Incremental average: 70% old + 30% new.
+
 	c.applyResult(100, 100)
 	want := clampRatio(first*0.7 + 1.0*0.3)
 	if got := c.currentRatio(); got != want {
 		t.Fatalf("incremental ratio = %v, want %v", got, want)
 	}
 
-	// recordSkip advances the cadence clock without counting a failure.
 	c2 := newTokenCountCalibrator()
 	c2.recordSkip()
 	c2.mu.Lock()
@@ -210,7 +209,6 @@ func TestSA142_TokenCalibrator(t *testing.T) {
 		t.Fatal("recordSkip did not advance lastCalibrate")
 	}
 
-	// recordFailure backs off, then disables after the threshold.
 	c3 := newTokenCountCalibrator()
 	c3.recordFailure()
 	c3.mu.Lock()
@@ -225,18 +223,16 @@ func TestSA142_TokenCalibrator(t *testing.T) {
 	if c3.enabled || c3.currentRatio() != 1.0 {
 		t.Fatal("calibrator must disable and reset ratio after consecutive failures")
 	}
-	c3.recordSkip() // no-op on a disabled calibrator
+	c3.recordSkip()
 	c3.recordFailure()
 
-	// disable() is permanent and resets to the raw local ratio.
 	c4 := newTokenCountCalibrator()
 	c4.disable()
 	if c4.enabled || c4.currentRatio() != 1.0 {
 		t.Fatal("disable() must turn calibration off")
 	}
-	c4.disable() // second call is a no-op
+	c4.disable()
 
-	// clampRatio bounds.
 	if clampRatio(-1) != ratioClampMin || clampRatio(1e9) != ratioClampMax || clampRatio(0.5) != 0.5 {
 		t.Fatalf("clampRatio bounds wrong: %v %v %v", clampRatio(-1), clampRatio(1e9), clampRatio(0.5))
 	}
@@ -273,15 +269,13 @@ func TestSA142_CopilotHelpers(t *testing.T) {
 		t.Fatalf("malformed body: agent=%v vision=%v, want false/false", isAgent, isVision)
 	}
 
-	// SetImpersonatedUA reaches the copilot round-tripper; a bare provider
-	// must not panic.
 	p := NewCopilotProvider("k", "m", 10, "http://127.0.0.1:9")
 	p.SetImpersonatedUA("sa142-ua")
 	if rt, ok := p.OpenAIProvider.transport.base.(*copilotHeaderRoundTripper); !ok || rt.impersonatedUA != "sa142-ua" {
 		t.Fatalf("impersonated UA not installed: ok=%v ua=%q", ok, rt.impersonatedUA)
 	}
 	bare := &CopilotProvider{}
-	bare.SetImpersonatedUA("x") // nil inner provider/transport: no panic
+	bare.SetImpersonatedUA("x")
 }
 
 // TestSA142_MakeProbeKey: components are trimmed and pipe-joined.
@@ -294,13 +288,13 @@ func TestSA142_MakeProbeKey(t *testing.T) {
 // TestSA142_ProbeContextWindow: guard rails, cache hit, known-model hit, and
 // the background probe failing closed on a dead provider.
 func TestSA142_ProbeContextWindow(t *testing.T) {
-	// nil provider: no panic, no callback.
+
 	called := false
 	ProbeContextWindow(context.Background(), nil, "vendor", "url", "model", func(ProbeResult) { called = true })
 	if called {
 		t.Fatal("nil provider must not invoke onResult")
 	}
-	// Empty vendor/model: rejected before any lookup.
+
 	p := &mockProvider{name: "mock", chatErr: errors.New("down")}
 	ProbeContextWindow(context.Background(), p, "  ", "url", "model", func(ProbeResult) { called = true })
 	if called {
@@ -311,7 +305,6 @@ func TestSA142_ProbeContextWindow(t *testing.T) {
 		t.Fatal("empty model must not invoke onResult")
 	}
 
-	// Cache hit: synchronous, FromCache=true.
 	cacheKey := MakeProbeKey("sa142-cache-vendor", "url", "model")
 	SetProbeCache(cacheKey, 555000)
 	resCh := make(chan ProbeResult, 1)
@@ -325,7 +318,6 @@ func TestSA142_ProbeContextWindow(t *testing.T) {
 		t.Fatal("cache-hit probe did not call back synchronously")
 	}
 
-	// Known model table: instant, no API call, cached for next time.
 	resCh = make(chan ProbeResult, 1)
 	ProbeContextWindow(context.Background(), p, "sa142-known-vendor", "url", "claude-sonnet-4", func(r ProbeResult) { resCh <- r })
 	select {
@@ -337,8 +329,6 @@ func TestSA142_ProbeContextWindow(t *testing.T) {
 		t.Fatal("known-model probe did not call back")
 	}
 
-	// Unknown model + failing provider: the background probe completes with
-	// zero (failure closed) instead of hanging.
 	resCh = make(chan ProbeResult, 1)
 	ProbeContextWindow(context.Background(), p, "sa142-bg-vendor", "url", "unknown-sa142-model", func(r ProbeResult) { resCh <- r })
 	select {

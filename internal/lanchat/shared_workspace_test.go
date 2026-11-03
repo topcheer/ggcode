@@ -48,9 +48,9 @@ func TestSharedWorkspaceAlert(t *testing.T) {
 		}
 	})
 	t.Run("self and offline peers excluded, other workspaces excluded", func(t *testing.T) {
-		addPeer("self-node", "/ws", true)        // self must not count
-		addPeer("peer-off", "/ws", false)        // offline ignored
-		addPeer("peer-other", "/other/ws", true) // different workspace ignored
+		addPeer("self-node", "/ws", true)
+		addPeer("peer-off", "/ws", false)
+		addPeer("peer-other", "/other/ws", true)
 		got := SharedWorkspaceAlert(h, "self-node", "/ws", true, "")
 		if strings.Contains(got, "self-node") || strings.Contains(got, "peer-off") || strings.Contains(got, "peer-other") {
 			t.Fatalf("alert must only name live same-workspace peers, got:\n%s", got)

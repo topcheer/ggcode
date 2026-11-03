@@ -56,7 +56,7 @@ func TestDiscordSplitMessage(t *testing.T) {
 func TestDiscordSendExtractedImage_KindURL(t *testing.T) {
 	adapter := &discordAdapter{}
 	img := ExtractedImage{Kind: "url", Data: "https://example.com/img.png"}
-	// Can't actually send without a server, but verify it doesn't panic on routing
+
 	_ = adapter
 	_ = img
 }
@@ -71,7 +71,7 @@ func TestDiscordSendExtractedImage_DataURL(t *testing.T) {
 func TestDiscordSendExtractedImage_UnknownKind(t *testing.T) {
 	adapter := &discordAdapter{}
 	img := ExtractedImage{Kind: "unknown", Data: "test"}
-	// Should return error
+
 	err := adapter.sendExtractedImage(nil, "123", img)
 	if err == nil {
 		t.Error("expected error for unknown kind")

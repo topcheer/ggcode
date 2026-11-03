@@ -13,10 +13,10 @@ func BenchmarkStreamUpdateTextLongDoc(b *testing.B) {
 	l := NewList(120, 40)
 	a := NewAssistantItem("a0", styles)
 	l.Append(a)
-	// ~35,000 lines: 7000 reps x 5 lines each - well past the 600-line window.
+
 	base := strings.Repeat("Long markdown **paragraph** with `code` and lists\n\n- a\n- b\n", 7000)
 	a.SetText(base)
-	l.Render() // warm, past first drop
+	l.Render()
 	buf := base
 	chunk := "more streamed text "
 	b.ResetTimer()

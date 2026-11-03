@@ -1,12 +1,5 @@
 package im
 
-// Issue #942: tryQueueOrBeginRun cleared pendingInterruptions when beginning a
-// new run. Messages queued in the race window where the previous run was
-// finishing (queued while cancelFunc was still set, then a new message began
-// the next run) were silently discarded — the webhook had already ACKed them,
-// so the loss was unrecoverable. The fix keeps the queue intact; the new
-// run's interruption handler / runQueuedLoop drains it in FIFO order.
-
 import (
 	"testing"
 
@@ -29,7 +22,6 @@ func TestTryQueueOrBeginRunPreservesQueuedInterruptions(t *testing.T) {
 	mgr := NewManager()
 	b := NewDaemonBridge(mgr, ag, nil, store, ses)
 
-	// First message begins a run.
 	ctx1, queued := b.tryQueueOrBeginRun([]provider.ContentBlock{{Type: "text", Text: "first run"}}, "test: ")
 	if queued {
 		t.Fatal("first call should begin a run, not queue")
@@ -38,16 +30,12 @@ func TestTryQueueOrBeginRunPreservesQueuedInterruptions(t *testing.T) {
 		t.Fatal("begin-run must return a non-nil context")
 	}
 
-	// Second message arrives while the run is active → queued.
 	if _, queued = b.tryQueueOrBeginRun([]provider.ContentBlock{{Type: "text", Text: "queued during run"}}, "test: "); !queued {
 		t.Fatal("second call should queue while a run is active")
 	}
 
-	// Run finishes.
 	b.finishRunSlot()
 
-	// Third message begins a new run. Previously this wiped the queued
-	// message (#942); now it must survive for the new run to drain.
 	if _, queued = b.tryQueueOrBeginRun([]provider.ContentBlock{{Type: "text", Text: "second run"}}, "test: "); queued {
 		t.Fatal("third call should begin a new run")
 	}
@@ -59,6 +47,5 @@ func TestTryQueueOrBeginRunPreservesQueuedInterruptions(t *testing.T) {
 		t.Fatalf("pendingInterruptions len = %d after begin-run, want 1 (queued message must survive, #942)", pending)
 	}
 
-	// Cleanup: release the run slot.
 	b.finishRunSlot()
 }

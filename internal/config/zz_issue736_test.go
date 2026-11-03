@@ -111,7 +111,7 @@ func TestIssue736_UnknownPlatformLeftUntouched(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	cfgPath := issue736WriteConfig(t, cfgDir, "telegarm") // typo, not a known platform
+	cfgPath := issue736WriteConfig(t, cfgDir, "telegarm")
 
 	cfg, err := Load(cfgPath)
 	if err != nil {

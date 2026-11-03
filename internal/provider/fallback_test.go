@@ -116,7 +116,6 @@ func TestFallback_NoFailover_BelowTransientThreshold(t *testing.T) {
 	fallback := &mockProvider{name: "fallback"}
 	fp := NewFallbackProvider(primary, fallback, "primary -> fallback")
 
-	// First transient failure — should NOT trigger failover yet.
 	_, err := fp.Chat(context.Background(), nil, nil)
 	if err == nil {
 		t.Fatal("expected error from primary (no failover yet)")
@@ -139,11 +138,10 @@ func TestFallback_Failover_AfterRepeatedTransient(t *testing.T) {
 		notifyTrigger = trigger
 	})
 
-	// Call enough times to exceed the threshold.
 	for i := 0; i < failoverThreshold; i++ {
 		_, _ = fp.Chat(context.Background(), nil, nil)
 	}
-	// The call that crosses the threshold triggers failover and retries on fallback.
+
 	if !fp.HasFailedOver() {
 		t.Fatal("should have failed over after repeated transient errors")
 	}
@@ -180,13 +178,11 @@ func TestFallback_Reset(t *testing.T) {
 	fallback := &mockProvider{name: "fallback"}
 	fp := NewFallbackProvider(primary, fallback, "primary -> fallback")
 
-	// Trigger failover
 	_, _ = fp.Chat(context.Background(), nil, nil)
 	if !fp.HasFailedOver() {
 		t.Fatal("should have failed over")
 	}
 
-	// Reset
 	fp.Reset()
 	if fp.HasFailedOver() {
 		t.Fatal("should not be failed over after reset")
@@ -205,7 +201,6 @@ func TestFallback_NameReflectsActiveProvider(t *testing.T) {
 		t.Fatalf("expected 'primary', got %s", fp.Name())
 	}
 
-	// Trigger failover
 	_, _ = fp.Chat(context.Background(), nil, nil)
 
 	if fp.Name() != "fallback" {
@@ -214,7 +209,7 @@ func TestFallback_NameReflectsActiveProvider(t *testing.T) {
 }
 
 func TestFallbackConfig_IsConfigured(t *testing.T) {
-	// Test via the config package would be ideal, but we test the logic here.
+
 	tests := []struct {
 		enabled  bool
 		vendor   string
@@ -227,7 +222,7 @@ func TestFallbackConfig_IsConfigured(t *testing.T) {
 		{false, "zai", "glm-4.6", false},
 	}
 	for _, tt := range tests {
-		// Inline check matching FallbackConfig.IsConfigured logic
+
 		result := tt.enabled && tt.vendor != "" && tt.model != ""
 		if result != tt.expected {
 			t.Errorf("enabled=%v vendor=%q model=%q: expected %v, got %v", tt.enabled, tt.vendor, tt.model, tt.expected, result)
@@ -244,10 +239,6 @@ func TestFallback_StalePrimaryRetriesOnFallbackAfterConcurrentFailover(t *testin
 	fallback := &mockProvider{name: "fallback"}
 	fp := NewFallbackProvider(primary, fallback, "primary -> fallback")
 
-	// Reproduce the exact interleaving from #164: the caller already read
-	// active=primary and its Chat call failed; only afterwards does another
-	// goroutine activate failover. Test maybeFailover directly with the
-	// provider the caller actually called (the primary).
 	fp.activeIdx.Store(1)
 	err := errors.New("insufficient_quota: quota exceeded")
 	_, canRetry := fp.maybeFailover(err, 0)
@@ -255,11 +246,6 @@ func TestFallback_StalePrimaryRetriesOnFallbackAfterConcurrentFailover(t *testin
 		t.Fatal("stale-primary caller (failed call was against primary) must be granted a fallback retry")
 	}
 
-	// Conversely, a request that failed against the fallback itself (read
-	// active after failover) now switches BACK to the primary (#936): a
-	// fallback hitting its own quota/auth limit must not strand the session.
-	// The old single-direction semantics denied this retry, leaving the app
-	// unusable once the fallback's quota ran out.
 	_, canRetry = fp.maybeFailover(err, 1)
 	if !canRetry {
 		t.Fatal("failed call against fallback must switch back to primary and grant a retry")
@@ -268,9 +254,6 @@ func TestFallback_StalePrimaryRetriesOnFallbackAfterConcurrentFailover(t *testin
 		t.Fatal("failedOver must be cleared when switching back to the primary")
 	}
 
-	// The ping-pong is bounded per call, not unbounded: after switching back
-	// to primary, a subsequent hard primary failure fails over to fallback
-	// again — but each individual Chat call performs at most one switch.
 	_, canRetry = fp.maybeFailover(err, 0)
 	if !canRetry {
 		t.Fatal("primary failure after switch-back must fail over to fallback again")
@@ -288,7 +271,6 @@ func TestFallback_FallbackQuotaFailsBackToPrimary(t *testing.T) {
 	fallback := &mockProvider{name: "fallback", chatErr: errors.New("insufficient_quota: quota exceeded")}
 	fp := NewFallbackProvider(primary, fallback, "primary -> fallback")
 
-	// Simulate an earlier failover: active side is the fallback.
 	fp.activeIdx.Store(1)
 
 	resp, err := fp.Chat(context.Background(), nil, nil)
@@ -328,7 +310,7 @@ func TestIssue2570_CancelDrainsProviderStream(t *testing.T) {
 			n := 0
 			defer func() { produced <- n }()
 			close(ready)
-			for i := 0; i < 200; i++ { // >64 backlog: parks without a drainer
+			for i := 0; i < 200; i++ {
 				ch <- StreamEvent{Type: StreamEventText, Text: "x"}
 				n++
 			}
@@ -353,6 +335,6 @@ func TestIssue2570_CancelDrainsProviderStream(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("#2570: producer goroutine stranded - cancel path did not drain the provider stream")
 	}
-	for range stream { // let the watcher goroutine exit
+	for range stream {
 	}
 }

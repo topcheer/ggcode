@@ -61,8 +61,7 @@ func TestBlindSpotRawTruncated(t *testing.T) {
 }
 
 func TestSDKPrefixBranchNotBlindSpot(t *testing.T) {
-	// Errors with a strippable SDK prefix hit the "Request failed: <msg>"
-	// branch, which is a recognized shape — not a blind spot.
+
 	err := fmt.Errorf("openai chat: weird proxy failure")
 	if IsBlindSpotError(err) {
 		t.Errorf("SDK-prefixed error should not be a blind spot")

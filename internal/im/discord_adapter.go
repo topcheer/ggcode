@@ -123,17 +123,14 @@ func (a *discordAdapter) run(ctx context.Context) {
 		if err != nil {
 			select {
 			case <-ctx.Done():
-				// Don't publish late errors after context cancellation
-				// They would override the "stopped" state set below
+
 				return
 			default:
 			}
 			a.publishState(false, "error", err.Error())
 			debug.Log("discord", "adapter=%s error: %v", a.name, err)
 		}
-		// Successful return (nil error) means the connection served until a
-		// clean disconnect — reset the backoff counter so the NEXT first retry
-		// uses the short delay instead of the capped 60s (#389).
+
 		if err == nil {
 			attempt = 0
 		}
@@ -156,7 +153,7 @@ func (a *discordAdapter) connectAndServe(ctx context.Context) error {
 	debug.Log("discord", "adapter=%s gateway URL=%s", a.name, gatewayURL)
 
 	wsURL := gatewayURL + "?v=10&encoding=json"
-	// 30s dial timeout prevents indefinite hang on unreachable Discord gateway
+
 	dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
 	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, wsURL, nil)
 	dialCancel()
@@ -173,9 +170,7 @@ func (a *discordAdapter) connectAndServe(ctx context.Context) error {
 
 	a.mu.Lock()
 	a.ws = conn
-	// Keep sequence across reconnects so RESUME (op 6) can replay from the
-	// last processed event; it is only cleared for a brand-new session with
-	// no stored session ID (#947).
+
 	if a.sessionID == "" {
 		a.sequence = 0
 	}
@@ -218,9 +213,7 @@ func (a *discordAdapter) connectAndServe(ctx context.Context) error {
 				}
 			}
 			safego.Go("im.discord.heartbeat", func() { a.heartbeatLoop(heartbeatCtx, conn, interval) })
-			// Resume the previous session when possible so Discord replays events
-			// missed during the disconnect window; otherwise IDENTIFY a new
-			// session (#947, Gateway v10 semantics).
+
 			a.mu.RLock()
 			sid, seq := a.sessionID, a.sequence
 			a.mu.RUnlock()
@@ -232,7 +225,6 @@ func (a *discordAdapter) connectAndServe(ctx context.Context) error {
 			}
 
 		case discordOpHeartbeatACK:
-			// acknowledged
 
 		case discordOpDispatch:
 			t, _ := payload["t"].(string)
@@ -244,10 +236,7 @@ func (a *discordAdapter) connectAndServe(ctx context.Context) error {
 			return fmt.Errorf("gateway requested reconnect")
 
 		case discordOpInvalidSession:
-			// d is a bool: true → the session is still resumable, keep
-			// sessionID/sequence and retry RESUME on the next connection;
-			// false → the session is dead, drop them so the next connection
-			// falls back to a fresh IDENTIFY (#947).
+
 			resumable, _ := payload["d"].(bool)
 			a.mu.Lock()
 			if !resumable {
@@ -280,8 +269,7 @@ func (a *discordAdapter) handleGatewayDispatch(ctx context.Context, t string, d 
 		a.publishState(true, "connected", "")
 		debug.Log("discord", "adapter=%s connected", a.name)
 	case "RESUMED":
-		// Resume accepted: the server replays missed dispatches after
-		// this event. Mirror the READY handling (#947).
+
 		a.mu.Lock()
 		a.connected = true
 		a.mu.Unlock()
@@ -355,7 +343,7 @@ func (a *discordAdapter) heartbeatLoop(ctx context.Context, conn *websocket.Conn
 			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 				a.writeMu.Unlock()
 				debug.Log("discord", "adapter=%s heartbeat write error: %v", a.name, err)
-				conn.Close() // Force ReadMessage to unblock → triggers reconnect
+				conn.Close()
 				return
 			}
 			a.writeMu.Unlock()
@@ -380,7 +368,6 @@ func (a *discordAdapter) handleMessage(ctx context.Context, d map[string]any) {
 
 	content = strings.TrimSpace(content)
 
-	// Process attachments (images, files, audio)
 	attachments, voiceText := a.processDiscordAttachments(ctx, d)
 	if voiceText != "" {
 		if content != "" {
@@ -391,9 +378,7 @@ func (a *discordAdapter) handleMessage(ctx context.Context, d map[string]any) {
 	}
 
 	if content == "" && len(attachments) == 0 {
-		// Observability for server-side filtering: e.g. a missing/unverified
-		// MESSAGE_CONTENT intent makes Discord strip guild message content,
-		// which previously vanished here with zero trace (#945).
+
 		debug.Log("discord", "adapter=%s drop contentless message channel=%s sender=%s msg=%s (empty content+attachments; check MESSAGE_CONTENT intent for guild messages)", a.name, channelID, senderID, messageID)
 		return
 	}
@@ -461,7 +446,7 @@ func (a *discordAdapter) processDiscordAttachments(ctx context.Context, d map[st
 		}
 
 		if strings.HasPrefix(contentType, "image/") {
-			// Download image data
+
 			data, mimeType, err := a.downloadDiscordAttachment(ctx, url)
 			if err != nil {
 				debug.Log("discord", "adapter=%s download image failed: %v", a.name, err)
@@ -477,7 +462,7 @@ func (a *discordAdapter) processDiscordAttachments(ctx context.Context, d map[st
 				DataBase64: base64.StdEncoding.EncodeToString(data),
 			})
 		} else if strings.HasPrefix(contentType, "audio/") {
-			// Audio/voice attachment — transcribe if STT is available
+
 			transcript := ""
 			if a.stt != nil {
 				transcript = a.transcribeDiscordAudio(ctx, url, filename, contentType)
@@ -496,7 +481,7 @@ func (a *discordAdapter) processDiscordAttachments(ctx context.Context, d map[st
 				}
 			}
 		} else {
-			// Non-image/non-audio file: download and cache locally
+
 			data, mimeType, err := a.downloadDiscordAttachment(ctx, url)
 			if err != nil {
 				debug.Log("discord", "adapter=%s download file failed: %v", a.name, err)
@@ -591,7 +576,6 @@ func (a *discordAdapter) Send(ctx context.Context, binding ChannelBinding, event
 		return nil
 	}
 
-	// Extract images from text and send them first
 	images, remainingText := ExtractImagesFromText(content)
 	sentImages := 0
 	for _, img := range images {
@@ -602,12 +586,10 @@ func (a *discordAdapter) Send(ctx context.Context, binding ChannelBinding, event
 		sentImages++
 	}
 
-	// Send remaining text
 	remainingText = strings.TrimSpace(remainingText)
 	if remainingText == "" {
 		if len(images) > 0 && sentImages == 0 {
-			// #4464: an image-only message whose sends all failed must not
-			// be silently dropped - fall back to the original markdown text.
+
 			remainingText = content
 		} else {
 			return nil
@@ -615,8 +597,7 @@ func (a *discordAdapter) Send(ctx context.Context, binding ChannelBinding, event
 	}
 	chunks := splitDiscordMessage(remainingText, discordMaxTextLen)
 	for i, chunk := range chunks {
-		// Discord allows 5 messages per 5 seconds per channel.
-		// Adding a brief delay between chunks prevents hitting the rate limit.
+
 		if i > 0 {
 			select {
 			case <-time.After(discordInterMsgDelay):
@@ -695,7 +676,6 @@ func (a *discordAdapter) sendChannelMessageFlags(ctx context.Context, channelID,
 			return err
 		}
 
-		// Handle HTTP 429 (Too Many Requests) with Retry-After backoff.
 		if resp.StatusCode == http.StatusTooManyRequests {
 			resp.Body.Close()
 			if attempt < maxRateLimitRetries {
@@ -834,7 +814,7 @@ func (a *discordAdapter) sendExtractedImage(ctx context.Context, channelID strin
 	switch img.Kind {
 	case "url":
 		if IsLocalFilePath(img.Data) {
-			// #1739: bound the local-path read (the #1557 qq fix, all adapters).
+
 			f, err := os.Open(img.Data)
 			if err != nil {
 				return fmt.Errorf("read local image: %w", err)
@@ -846,9 +826,7 @@ func (a *discordAdapter) sendExtractedImage(ctx context.Context, channelID strin
 			}
 			return a.sendFileMessage(ctx, channelID, filepath.Base(img.Data), data, "")
 		}
-		// For remote URLs, send as plain message content WITHOUT
-		// SUPPRESS_EMBEDS (#4519) - suppressing embeds killed the image
-		// preview and left the user with bare URL text.
+
 		return a.sendChannelMessageFlags(ctx, channelID, img.Data, false)
 	case "data_url":
 		parts := strings.SplitN(img.Data, ",", 2)
@@ -880,7 +858,6 @@ func (a *discordAdapter) sendFileMessage(ctx context.Context, channelID, filenam
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 
-	// Build the payload_json field
 	payload := map[string]any{}
 	if caption != "" {
 		payload["content"] = caption
@@ -890,7 +867,6 @@ func (a *discordAdapter) sendFileMessage(ctx context.Context, channelID, filenam
 		return fmt.Errorf("write payload_json: %w", err)
 	}
 
-	// Add file
 	part, err := writer.CreateFormFile("files[0]", filename)
 	if err != nil {
 		return fmt.Errorf("create form file: %w", err)
@@ -952,13 +928,11 @@ func (a *discordAdapter) transcribeDiscordAudio(ctx context.Context, url, filena
 		return ""
 	}
 
-	// Determine extension
 	ext := filepath.Ext(filename)
 	if ext == "" {
 		ext = audioExtFromMIME(contentType)
 	}
 
-	// Write to temp file
 	src, err := os.CreateTemp("", "ggcode-discord-audio-*"+ext)
 	if err != nil {
 		return ""
@@ -972,7 +946,6 @@ func (a *discordAdapter) transcribeDiscordAudio(ctx context.Context, url, filena
 	audioPath := src.Name()
 	cleanup := func() { _ = os.Remove(audioPath) }
 
-	// Convert to wav if needed
 	if ext != ".wav" {
 		dst, err := os.CreateTemp("", "ggcode-discord-audio-*.wav")
 		if err != nil {
@@ -1037,12 +1010,12 @@ func (a *discordAdapter) SendInteractive(ctx context.Context, binding ChannelBin
 	// Build action row with buttons
 	var buttons []map[string]any
 	for _, btn := range msg.Buttons {
-		style := 2 // Secondary (default)
+		style := 2
 		switch btn.Style {
 		case "primary":
-			style = 1 // Primary (blurple)
+			style = 1
 		case "danger":
-			style = 4 // Danger (red)
+			style = 4
 		}
 		buttons = append(buttons, map[string]any{
 			"type":      2,
@@ -1054,7 +1027,7 @@ func (a *discordAdapter) SendInteractive(ctx context.Context, binding ChannelBin
 	if msg.MultiSelect {
 		buttons = append(buttons, map[string]any{
 			"type":      2,
-			"style":     3, // Success (green)
+			"style":     3,
 			"label":     "✅ Done",
 			"custom_id": "__done__",
 		})
@@ -1063,10 +1036,10 @@ func (a *discordAdapter) SendInteractive(ctx context.Context, binding ChannelBin
 	url := a.apiBase + "/channels/" + channelID + "/messages"
 	body := map[string]any{
 		"content": msg.Text,
-		"flags":   discordSuppressEmbeds, // Suppress link preview embeds for cleaner UX
+		"flags":   discordSuppressEmbeds,
 		"components": []map[string]any{
 			{
-				"type":       1, // ActionRow
+				"type":       1,
 				"components": buttons,
 			},
 		},
@@ -1104,12 +1077,7 @@ func (a *discordAdapter) SendInteractive(ctx context.Context, binding ChannelBin
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 			return "", err
 		}
-		// #1548: error bodies are valid JSON - Decode succeeded, the "id"
-		// field was absent, and the old path returned ("", nil). The caller
-		// believed the send succeeded, the empty msgID disabled stale-card
-		// correlation, and the agent hung on select until timeout. Every
-		// sibling path checks the status (sendChannelMessage below, TG's
-		// apiRequest); check here too.
+
 		if resp.StatusCode >= 400 {
 			msg := ""
 			if s, ok := result["message"].(string); ok {
@@ -1127,23 +1095,21 @@ func (a *discordAdapter) SendInteractive(ctx context.Context, binding ChannelBin
 
 // handleInteraction processes Discord INTERACTION_CREATE events (button clicks).
 func (a *discordAdapter) handleInteraction(ctx context.Context, d map[string]any) {
-	// Acknowledge the interaction (required by Discord)
+
 	interactionID, _ := d["id"].(string)
 	interactionToken, _ := d["token"].(string)
 	if interactionID == "" || interactionToken == "" {
 		return
 	}
 
-	// Respond with a deferred update (no visible change to the message)
 	safego.Go("im.discord.ackInteraction", func() {
 		if a.httpClient == nil {
 			return
 		}
 		url := fmt.Sprintf("%s/interactions/%s/%s/callback", a.apiBase, interactionID, interactionToken)
-		body := map[string]any{"type": 6} // UPDATE_MESSAGE (deferred)
+		body := map[string]any{"type": 6}
 		bodyBytes, _ := json.Marshal(body)
-		// Use a timeout context instead of context.Background() to prevent
-		// the HTTP request from hanging indefinitely if the connection stalls.
+
 		ackCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		req, _ := http.NewRequestWithContext(ackCtx, http.MethodPost, url, bytes.NewReader(bodyBytes))
@@ -1155,7 +1121,6 @@ func (a *discordAdapter) handleInteraction(ctx context.Context, d map[string]any
 		}
 	})
 
-	// Extract button click data
 	data, _ := d["data"].(map[string]any)
 	if data == nil {
 		return
@@ -1165,7 +1130,6 @@ func (a *discordAdapter) handleInteraction(ctx context.Context, d map[string]any
 		return
 	}
 
-	// Extract sender
 	member, _ := d["member"].(map[string]any)
 	senderID, _ := member["user"].(map[string]any)
 	senderIDStr := ""

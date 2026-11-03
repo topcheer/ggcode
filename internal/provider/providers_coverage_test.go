@@ -151,7 +151,7 @@ func TestNewProviderHTTPTransportUsesLLMHeaderTimeout(t *testing.T) {
 }
 
 func TestMaxTokensRejection_Comprehensive(t *testing.T) {
-	// Already tested but add more edge cases
+
 	rejected, limit := maxTokensRejection(errors.New("context window exceeded"))
 	if rejected {
 		t.Error("expected false for context window")
@@ -170,7 +170,7 @@ func TestAdaptiveCapOnTruncated(t *testing.T) {
 	c.hi = 4096
 	c.cur.Store(2000)
 	c.OnTruncated()
-	// OnTruncated increases cap
+
 	if c.cur.Load() <= 2000 {
 		t.Errorf("expected cap > 2000 after truncate, got %d", c.cur.Load())
 	}
@@ -183,7 +183,7 @@ func TestAdaptiveCapOnTruncated_MinClamp(t *testing.T) {
 	c.hi = 4096
 	c.cur.Store(60)
 	c.OnTruncated()
-	// Should not go below lo
+
 	if c.cur.Load() < int64(c.lo) {
 		t.Errorf("cur %d below lo %d", c.cur.Load(), c.lo)
 	}
@@ -196,7 +196,7 @@ func TestAdaptiveCapOnRejected(t *testing.T) {
 	c.hi = 4096
 	c.cur.Store(2000)
 	c.OnRejected(1500)
-	// OnRejected steps down toward parsed limit
+
 	if c.cur.Load() >= 2000 {
 		t.Errorf("expected cap < 2000 after reject, got %d", c.cur.Load())
 	}
@@ -208,8 +208,8 @@ func TestAdaptiveCapOnRejected_ClampLo(t *testing.T) {
 	c.lo = 100
 	c.hi = 4096
 	c.cur.Store(2000)
-	c.OnRejected(50) // below lo
-	// Should clamp to lo
+	c.OnRejected(50)
+
 	if c.cur.Load() != int64(c.lo) {
 		t.Errorf("expected %d, got %d", c.lo, c.cur.Load())
 	}

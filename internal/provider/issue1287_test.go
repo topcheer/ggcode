@@ -1,12 +1,5 @@
 package provider
 
-// Regression tests for GitHub issue #1287: over-broad known-model prefixes
-// (same family as #782's gpt-4 hijack) adopted wrong legacy windows for
-// newer variants, and context_probe Phase 1b short-circuits on known>0 so
-// the wrong value was also written into the probe cache (sticky across
-// sessions). Bare family names are now exact-only; qwen3-coder gets a
-// 0-window blocker entry forcing the probe.
-
 import (
 	"os"
 	"path/filepath"
@@ -24,7 +17,7 @@ func TestIssue1287_GLM4ExactOnly(t *testing.T) {
 			t.Fatalf("#1287: %s hijacked into legacy glm-4 window %d - must fall through to probe (0)", victim, got)
 		}
 	}
-	// Listed glm-4 variants keep their entries (prefix entries unchanged).
+
 	if got := LookupKnownModelContextWindow("glm-4-plus"); got != 128_000 {
 		t.Fatalf("glm-4-plus lost its entry: %d", got)
 	}
@@ -34,11 +27,11 @@ func TestIssue1287_GLM4ExactOnly(t *testing.T) {
 }
 
 func TestIssue1287_QwenCoderProbed(t *testing.T) {
-	// Blocker entry: qwen3-coder-* is 256K+ in reality.
+
 	if got := LookupKnownModelContextWindow("qwen3-coder-plus"); got != 0 {
 		t.Fatalf("#1287: qwen3-coder-plus adopted %d - must be probed, not pinned to the 131K family entry", got)
 	}
-	// Non-coder qwen3 variants legitimately share the 131K family window.
+
 	if got := LookupKnownModelContextWindow("qwen3-235b-a22b"); got != 131_072 {
 		t.Fatalf("qwen3-235b-a22b must keep the family window, got %d", got)
 	}
@@ -55,15 +48,14 @@ func TestIssue1287_DeepSeekExactOnly(t *testing.T) {
 			t.Fatalf("#1287: %s hijacked into the 64K legacy window %d - must fall through to probe", victim, got)
 		}
 	}
-	// deepseek-r1/coder prefixes unchanged.
+
 	if got := LookupKnownModelContextWindow("deepseek-r1-0528"); got != 64_000 {
 		t.Fatalf("deepseek-r1-0528 lost its family window: %d", got)
 	}
 }
 
 func TestIssue1287_GPT4ExactMigration(t *testing.T) {
-	// #782's in-code special case moved into the table's exact mechanism;
-	// behavior must be identical.
+
 	if got := LookupKnownModelContextWindow("gpt-4"); got != 8_192 {
 		t.Fatalf("bare gpt-4 exact window changed: %d", got)
 	}
@@ -77,7 +69,7 @@ func TestIssue1287_GPT4ExactMigration(t *testing.T) {
 // migration — Phase 1 (cache HIT) runs before every other check, so stale
 // poison would otherwise shadow the fix forever.
 func TestIssue1287_ProbeCachePoisonPurged(t *testing.T) {
-	// Direct unit check of the predicate.
+
 	for _, poisoned := range []string{"qwen3-coder-plus", "deepseek-chat-v3.2", "glm-4.6", "gpt-4-32k"} {
 		if !lookupKnownRetiredFamilyHijack(poisoned) {
 			t.Fatalf("%s must be treated as a retired-family hijack victim", poisoned)
@@ -88,8 +80,7 @@ func TestIssue1287_ProbeCachePoisonPurged(t *testing.T) {
 			t.Fatalf("%s must NOT be dropped (table-covered or unrelated)", keep)
 		}
 	}
-	// End-to-end: a v2 cache file with poisoned + good entries migrates to
-	// v3 dropping only the poisoned ones.
+
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	_ = dir

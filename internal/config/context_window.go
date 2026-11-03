@@ -1814,17 +1814,15 @@ func inferContextWindow(model, protocol string) int {
 
 	m := strings.ToLower(strings.TrimSpace(model))
 	switch {
-	// ─── Anthropic Claude ─────────────────────────────────────────
+
 	case strings.Contains(m, "claude"):
 		return 200000
 
-	// ─── Google Gemini ────────────────────────────────────────────
 	case strings.Contains(m, "gemini-1.5-pro"):
 		return 2_000_000
 	case strings.Contains(m, "gemini"):
 		return 1_000_000
 
-	// ─── OpenAI ───────────────────────────────────────────────────
 	case strings.Contains(m, "gpt-5"),
 		strings.Contains(m, "gpt-4.1"):
 		return 1_000_000
@@ -1835,15 +1833,12 @@ func inferContextWindow(model, protocol string) int {
 		strings.Contains(m, "o4-mini"):
 		return 200000
 
-	// ─── xAI Grok ────────────────────────────────────────────────
 	case strings.Contains(m, "grok"):
 		return 200000
 
-	// ─── DeepSeek ─────────────────────────────────────────────────
 	case strings.Contains(m, "deepseek"):
 		return 128000
 
-	// ─── Mistral ──────────────────────────────────────────────────
 	case strings.Contains(m, "codestral"):
 		return 256000
 	case strings.Contains(m, "mistral-large"):
@@ -1851,13 +1846,11 @@ func inferContextWindow(model, protocol string) int {
 	case strings.Contains(m, "mistral"):
 		return 32000
 
-	// ─── Zhipu GLM ───────────────────────────────────────────────
 	case strings.Contains(m, "glm-4-long"):
 		return 1_000_000
 	case strings.Contains(m, "glm-"):
 		return 128000
 
-	// ─── Moonshot / Kimi ─────────────────────────────────────────
 	case strings.Contains(m, "kimi-k2"),
 		strings.Contains(m, "kimi-k2.5"):
 		return 262144
@@ -1867,7 +1860,6 @@ func inferContextWindow(model, protocol string) int {
 	case strings.Contains(m, "moonshot"):
 		return 32768
 
-	// ─── MiniMax ──────────────────────────────────────────────────
 	case strings.Contains(m, "minimax-m1"),
 		strings.Contains(m, "minimax-m2"),
 		strings.Contains(m, "minimax-01"):
@@ -1875,33 +1867,28 @@ func inferContextWindow(model, protocol string) int {
 	case strings.Contains(m, "minimax"):
 		return 204800
 
-	// ─── Doubao / Ark ─────────────────────────────────────────────
 	case strings.Contains(m, "doubao"),
 		strings.Contains(m, "ark-code"):
 		return 200000
 
-	// ─── Perplexity ──────────────────────────────────────────────
 	case strings.Contains(m, "sonar-pro"):
 		return 200000
 	case strings.Contains(m, "sonar"):
 		return 128000
 
-	// ─── Meta Llama 4 ────────────────────────────────────────────
 	case strings.Contains(m, "llama-4-scout"):
 		return 10_000_000
 	case strings.Contains(m, "llama-4"):
 		return 1_000_000
-	// ─── Meta Llama 3.x ─────────────────────────────────────────
+
 	case strings.Contains(m, "llama-3"):
 		return 128000
 
-	// ─── Qwen ────────────────────────────────────────────────────
 	case strings.Contains(m, "qwen-long"):
 		return 1_000_000
 	case strings.Contains(m, "qwen"):
 		return 131072
 
-	// ─── Groq hosted models ──────────────────────────────────────
 	case strings.Contains(m, "mixtral-8x7b"):
 		return 32768
 	case strings.Contains(m, "gemma"):

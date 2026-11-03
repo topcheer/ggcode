@@ -56,11 +56,6 @@ func (s *Store) Append(sessionID string, msg Message) error {
 	}
 	defer f.Close()
 
-	// Self-heal a torn tail: if a previous writer crashed mid-line, the
-	// file does not end with '\n' and this message would be glued onto the
-	// unparseable fragment (losing BOTH lines on read). Terminate the
-	// fragment first; a concurrent healer writing a duplicate '\n' only
-	// produces a blank line, which readLocked skips.
 	if fi, err := f.Stat(); err == nil && fi.Size() > 0 {
 		var last [1]byte
 		if _, err := f.ReadAt(last[:], fi.Size()-1); err == nil && last[0] != '\n' {
@@ -115,7 +110,7 @@ func (s *Store) readLocked(path string) ([]Message, error) {
 		}
 		var m Message
 		if err := json.Unmarshal(line, &m); err != nil {
-			continue // skip malformed lines
+			continue
 		}
 		msgs = append(msgs, m)
 	}
@@ -230,7 +225,7 @@ func LoadTrustedPeers(dir string) (map[string]string, error) {
 			peers[id] = fp
 			continue
 		}
-		peers[id] = "" // legacy bool endorsement
+		peers[id] = ""
 	}
 	return peers, nil
 }

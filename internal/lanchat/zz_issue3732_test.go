@@ -1,10 +1,5 @@
 package lanchat
 
-// #3732 probes: fragment reassembly must sanity-bound packet-declared
-// totals and per-assembly bytes. An authenticated hostile LAN peer could
-// declare FragmentTotal=1000000 (map growth for the full timeout window),
-// send seq beyond the declared total, or flood an assembly past any bound.
-
 import (
 	"encoding/json"
 	"testing"
@@ -37,7 +32,7 @@ func TestIssue3732_AbsurdTotalRejected(t *testing.T) {
 	if len(tr.fragments) != 0 {
 		t.Fatalf("absurd FragmentTotal must not create an assembly, got %d", len(tr.fragments))
 	}
-	// Zero/negative totals are equally invalid.
+
 	tr.handleFragment(issue3732FragEnv("zero", 0, 0, "x"), nil, "multicast")
 	if len(tr.fragments) != 0 {
 		t.Fatal("zero FragmentTotal must be rejected")
@@ -55,7 +50,7 @@ func TestIssue3732_SeqOutOfBoundsDropped(t *testing.T) {
 
 func TestIssue3732_ByteCapEvictsAssembly(t *testing.T) {
 	tr := issue3732Transport(t)
-	big := string(make([]byte, 1024*1024)) // 1MB chunks
+	big := string(make([]byte, 1024*1024))
 	tr.handleFragment(issue3732FragEnv("flood", maxFragmentTotal, 0, big), nil, "multicast")
 	for i := 1; i < maxAssemblyBytes/(1024*1024)+2 && tr.fragments["flood"] != nil; i++ {
 		tr.handleFragment(issue3732FragEnv("flood", maxFragmentTotal, i, big), nil, "multicast")

@@ -13,19 +13,16 @@ import (
 // broadcastEvent - which sits on the agent's synchronous emit path.
 // Now: detach+close under lock, drain outside it with a timeout.
 func TestDaemonBridgeUnsubscribeDoesNotBlockBroadcast(t *testing.T) {
-	// Subscribe/broadcastEvent only touch the sub registry - a bare
-	// DaemonBridge suffices (same-package test).
+
 	b := &DaemonBridge{}
 
 	var entered atomic.Int32
 	release := make(chan struct{})
 	unsub := b.Subscribe(func(ev provider.StreamEvent) {
 		entered.Add(1)
-		<-release // simulate a slow consumer callback
+		<-release
 	})
 
-	// Queue an event; wait until the forwarder is INSIDE the callback
-	// (deterministic - no sleep race), then start unsubscribing.
 	b.broadcastEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "x"})
 	deadline := time.Now().Add(2 * time.Second)
 	for entered.Load() == 0 && time.Now().Before(deadline) {
@@ -41,9 +38,6 @@ func TestDaemonBridgeUnsubscribeDoesNotBlockBroadcast(t *testing.T) {
 		close(done)
 	}()
 
-	// While the subscriber callback is still blocked, a fresh broadcast
-	// must complete promptly (it only needs RLock, which the detached
-	// unsubscribe no longer holds while draining).
 	broadcastDone := make(chan struct{})
 	go func() {
 		b.broadcastEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "y"})

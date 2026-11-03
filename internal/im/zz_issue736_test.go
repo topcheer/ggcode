@@ -1,11 +1,5 @@
 package im
 
-// Regression tests for GitHub issue #736: the IM adapter startup switch
-// (startConfiguredAdapter) matched platform IDs exactly with no default
-// branch — an unknown or legacy non-canonical platform (e.g. "Telegram"
-// persisted before #648) returned nil silently: no error, no log, the
-// adapter just never started. The default branch now logs via debug.Log.
-
 import (
 	"context"
 	"strings"
@@ -30,22 +24,17 @@ func TestIssue736_UnknownPlatformLogsAndSkips(t *testing.T) {
 		Adapters: map[string]config.IMAdapterConfig{
 			"bad": {
 				Enabled:  true,
-				Platform: "telegarm", // typo — matches no case
+				Platform: "telegarm",
 			},
 		},
 	}
 
-	// Must not error: the other adapters still start.
 	if err := startConfiguredAdapter(ctx, cfg, "bad", cfg.Adapters["bad"], mgr); err != nil {
 		t.Fatalf("#736: unknown platform must skip without error, got %v", err)
 	}
 
-	// The default branch must have logged — the diagnostic trail that was
-	// previously missing entirely.
 	found := false
-	// Full-suite runs flood the ring with "im" entries from other adapter
-	// tests; the 50-entry RingHistory window can evict ours. Use the wide
-	// RingHistoryMax window instead.
+
 	for _, entry := range debug.RingHistoryMax(2000, "im") {
 		if strings.Contains(entry.Message, "unknown platform") && strings.Contains(entry.Message, "telegarm") {
 			found = true
@@ -73,7 +62,7 @@ func TestIssue736_LegacyCasingPlatformLogsAndSkips(t *testing.T) {
 		Adapters: map[string]config.IMAdapterConfig{
 			"tg": {
 				Enabled:  true,
-				Platform: "Telegram", // pre-#648 casing — not matched by PlatformTelegram
+				Platform: "Telegram",
 			},
 		},
 	}
@@ -111,8 +100,7 @@ func TestIssue736_DisabledAdapterStillNoop(t *testing.T) {
 	if err := startConfiguredAdapter(ctx, cfg, "off", cfg.Adapters["off"], mgr); err != nil {
 		t.Fatalf("disabled adapter must be a silent noop, got %v", err)
 	}
-	// The ring buffer is package-global and not reset per test, so scope the
-	// assertion to this adapter's name: the early return must not log about "off".
+
 	for _, entry := range debug.RingHistoryMax(2000, "im") {
 		if strings.Contains(entry.Message, "unknown platform") && strings.Contains(entry.Message, `"off"`) {
 			t.Fatalf("disabled adapter must not hit the default branch log, got: %s", entry.Message)

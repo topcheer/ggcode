@@ -28,13 +28,7 @@ var instanceResetManagedKeys = []string{
 	"default_mode",
 	"max_iterations",
 	"allowed_dirs",
-	// #4315: hooks is managed as one unit by diffHooks, whose
-	// len(current)>0 guards drop a cleared (empty) hooks section from the
-	// delta entirely - the same resurrection hole as the scalars above,
-	// minus the reset-table backstop. Registering it here makes
-	// applyInstanceResets delete the whole on-disk hooks key when the
-	// user cleared it, so reload falls back to global inheritance
-	// (mergeHookConfig replace-per-kind: empty instance = global).
+
 	"hooks",
 }
 
@@ -51,11 +45,7 @@ var instanceResetNestedKeys = map[string][]string{
 	"knight":    {"trust_level", "daily_token_budget", "idle_delay_sec"},
 	"subagents": {"max_concurrent", "timeout"},
 	"swarm":     {"max_teammates_per_team", "teammate_timeout", "inbox_size", "poll_interval"},
-	// #4411: diffA2A only records fields where current != global. A field
-	// edited back to the global default disappears from the delta while the
-	// stale on-disk value survives the deep-merge and resurrects on reload -
-	// the same #2936 hole one level down. Known boundary: a2a.auth.* is a
-	// second nesting level this one-level table does not reach.
+
 	"a2a": {"disabled", "port", "host", "max_tasks", "task_timeout"},
 }
 
@@ -74,36 +64,28 @@ func applyInstanceResets(existingRaw, delta map[string]interface{}, instanceFiel
 	}
 	for _, key := range instanceResetManagedKeys {
 		if !instanceFields[key] {
-			continue // not governed by this session's delta
+			continue
 		}
 		if _, onDisk := existingRaw[key]; !onDisk {
 			continue
 		}
 		if _, inDelta := delta[key]; inDelta {
-			continue // still overridden - normal write path
+			continue
 		}
-		delta[key] = nil // reset back to global - delete from disk
+		delta[key] = nil
 	}
 
-	// Nested sections (#2936): a sub-key reset to the global default is
-	// absent from the section delta (current == global), so the deep-merge
-	// would keep the stale on-disk sub-key and MergeInstance resurrect it.
-	// Mark such sub-keys nil INSIDE the section delta map - the recursive
-	// deepMerge honors the deletion marker at that level. Sub-keys still in
-	// the delta are explicit overrides (including explicit zeros written by
-	// the no-suppression diff when global != 0) and are left untouched.
 	for key, subKeys := range instanceResetNestedKeys {
 		if !instanceFields[key] {
-			continue // section not governed by this session's delta
+			continue
 		}
 		diskSection, ok := existingRaw[key].(map[string]interface{})
 		if !ok || len(diskSection) == 0 {
-			continue // nothing on disk to reset
+			continue
 		}
 		deltaSection, inDelta := delta[key].(map[string]interface{})
 		if !inDelta {
-			// Whole section back at global defaults but stale sub-keys
-			// remain on disk - create the section delta to carry deletions.
+
 			deltaSection = map[string]interface{}{}
 			delta[key] = deltaSection
 		}
@@ -112,34 +94,25 @@ func applyInstanceResets(existingRaw, delta map[string]interface{}, instanceFiel
 				continue
 			}
 			if _, inDeltaSub := deltaSection[sk]; inDeltaSub {
-				continue // explicit override (possibly an explicit zero)
+				continue
 			}
-			deltaSection[sk] = nil // nested reset - delete from disk
+			deltaSection[sk] = nil
 		}
 	}
 
-	// vendors (#4411): dynamic key-level deletion. diffVendors only
-	// records vendors that still override global (added or changed); a
-	// vendor deleted outright - or edited back to equal global - leaves
-	// no delta trace, and its len(current)==0 early return drops the
-	// whole section. Every on-disk vendor key absent from the section
-	// delta is therefore a stale override and gets a nil marker, so the
-	// deep-merge deletes it per-key instead of resurrecting a zombie
-	// vendor whose keys.env secret was already cleared by RemoveVendor.
 	if instanceFields["vendors"] {
 		if diskSection, ok := existingRaw["vendors"].(map[string]interface{}); ok && len(diskSection) > 0 {
 			deltaSection, inDelta := delta["vendors"].(map[string]interface{})
 			if !inDelta {
-				// All overrides gone but stale keys remain on disk -
-				// create the section delta to carry the deletions.
+
 				deltaSection = map[string]interface{}{}
 				delta["vendors"] = deltaSection
 			}
 			for k := range diskSection {
 				if _, kept := deltaSection[k]; kept {
-					continue // still an explicit override
+					continue
 				}
-				deltaSection[k] = nil // stale override - delete from disk
+				deltaSection[k] = nil
 			}
 		}
 	}

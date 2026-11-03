@@ -11,13 +11,6 @@ import (
 	"time"
 )
 
-// zz_issue2809_test.go guards against the unbounded blocking flock recurrence
-// (#2809): the four JSONFileBindingStore writers take this lock while holding
-// s.mu, so a bare blocking LOCK_EX with a live-but-suspended holder cascaded
-// into every List* call wedging - the IM adapter silently stopped responding.
-
-// TestIssue2809BindingsLockIsBounded: acquisition under a held lock must fail
-// within bounded time (util.FileLock retry budget), not hang forever.
 func TestIssue2809BindingsLockIsBounded(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "im-bindings.json")
@@ -48,7 +41,6 @@ func TestIssue2809BindingsLockIsBounded(t *testing.T) {
 	}
 }
 
-// TestIssue2809BindingsLockUncontended: normal acquire/release cycle works.
 func TestIssue2809BindingsLockUncontended(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "im-bindings.json")
@@ -64,8 +56,6 @@ func TestIssue2809BindingsLockUncontended(t *testing.T) {
 	unlock2()
 }
 
-// TestIssue2809NoBareBlockingFlock pins the source-level invariant: both
-// lock files delegate to util.FileLock with no hand-rolled blocking flock.
 func TestIssue2809NoBareBlockingFlock(t *testing.T) {
 	for _, name := range []string{"bindings_lock_unix.go", "bindings_lock_windows.go"} {
 		src, err := os.ReadFile(name)

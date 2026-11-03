@@ -161,34 +161,21 @@ func shouldFailover(err error) (bool, FailoverTrigger) {
 // Must NOT be called under f.mu - this function acquires the write lock.
 func (f *FallbackProvider) maybeFailover(err error, failedIdx int) (error, bool) {
 	if err == nil {
-		// Success - reset consecutive failure counter.
+
 		f.consecutiveFail.Store(0)
 		return nil, false
 	}
 
-	// Single-level chains cannot fail over anywhere.
 	if len(f.chain) < 2 {
 		return err, false
 	}
 
-	// #722: retry-budget exhaustion means the inner retry loop already gave
-	// this provider a best-effort chance (the full 20-attempt backoff budget
-	// sleeps ~7.5min; demanding failoverThreshold such calls blocks headless
-	// callers ~23min). Treat it as sustained failure and switch NOW.
-	// Checked before the FailureNone gate below because the sentinel wraps a
-	// genuine provider failure that was already classified retryable.
 	budgetExhausted := errors.Is(err, errRetryBudgetExhausted)
 
-	// #304: user cancellation is not a provider failure. ClassifyLLMError
-	// already returns FailureNone for context.Canceled ("non-model failure"),
-	// but the counter below consumed every non-quota/auth error - 3
-	// consecutive cancels on the non-streaming path would sticky-failover a
-	// healthy primary for the rest of the session.
 	if !budgetExhausted && ClassifyLLMError(err) == FailureNone {
 		return err, false
 	}
-	// #303: context overflow is a request-size problem handled by agent-side
-	// compaction, not provider health - don't count it toward failover either.
+
 	if IsContextOverflowError(err) {
 		return err, false
 	}
@@ -199,18 +186,11 @@ func (f *FallbackProvider) maybeFailover(err error, failedIdx int) (error, bool)
 	}
 
 	if !immediate {
-		// R250: stale fast-path BEFORE counting - the caller grabbed the OLD
-		// active before an earlier failure advanced the chain (#164 shape).
-		// Checking via the atomic load (no lock) and returning early keeps a
-		// stale call from inflating consecutiveFail - the old order ran
-		// Add(1) first, so a burst of stale calls pushed the counter to the
-		// threshold and a LATER single real failure advanced the chain early.
-		// The authoritative re-check under the lock below stays: the fast
-		// path can pass and still go stale before L210 acquires the mutex.
+
 		if failedIdx != int(f.activeIdx.Load()) {
 			return err, true
 		}
-		// Transient error - increment counter and check threshold.
+
 		count := f.consecutiveFail.Add(1)
 		if count < int32(failoverThreshold) {
 			return err, false
@@ -221,16 +201,11 @@ func (f *FallbackProvider) maybeFailover(err error, failedIdx int) (error, bool)
 	f.mu.Lock()
 	cur := int(f.activeIdx.Load())
 
-	// Stale read (#164): the caller grabbed the OLD active before an earlier
-	// failure already advanced the chain. It has never touched the current
-	// active and still deserves one retry - without switching again.
 	if failedIdx != cur {
 		f.mu.Unlock()
 		return err, true
 	}
 
-	// The failed call was on the current active - advance one step (wrapping
-	// back to the primary after the last level, #936).
 	next := (cur + 1) % len(f.chain)
 	f.activeIdx.Store(int32(next))
 	if next != 0 {
@@ -239,7 +214,7 @@ func (f *FallbackProvider) maybeFailover(err error, failedIdx int) (error, bool)
 		f.stopRecoveryProberLocked()
 	}
 	if next == 0 && cur != 0 {
-		// Wrapped from the last level back to the primary.
+
 		trigger = FailoverTriggerBack
 	}
 	f.consecutiveFail.Store(0)
@@ -247,7 +222,7 @@ func (f *FallbackProvider) maybeFailover(err error, failedIdx int) (error, bool)
 		f.description, cur, next, trigger, err)
 	var notify func(FailoverTrigger, error)
 	if f.notify != nil {
-		// Copy callback under lock to avoid race with SetFailoverNotify.
+
 		notify = f.notify
 	}
 	f.mu.Unlock()
@@ -295,9 +270,7 @@ func (f *FallbackProvider) startRecoveryProberLocked() {
 		interval = defaultProbeInterval
 	}
 	go func() {
-		// The prober autonomously drives a full provider Chat call every
-		// interval against a known-degraded endpoint; malformed relay
-		// responses must degrade the probe, not kill the process.
+
 		defer safego.Recover("provider.fallback.recoveryProber")
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -309,12 +282,11 @@ func (f *FallbackProvider) startRecoveryProberLocked() {
 			}
 			active := int(f.activeIdx.Load())
 			if active == 0 {
-				// Someone else already returned to the primary (manual Reset,
-				// failure wrap-around) - retire this prober.
+
 				f.stopRecoveryProber()
 				return
 			}
-			// Probe from the primary downward; first healthy level wins.
+
 			target := -1
 			for i := 0; i < active; i++ {
 				if f.probeLevel(ctx, i) {
@@ -334,7 +306,7 @@ func (f *FallbackProvider) startRecoveryProberLocked() {
 			f.mu.Lock()
 			cur := int(f.activeIdx.Load())
 			if cur == target {
-				// Someone else already switched here.
+
 				f.stopRecoveryProberLocked()
 				f.mu.Unlock()
 				return
@@ -400,13 +372,11 @@ func (f *FallbackProvider) Chat(ctx context.Context, messages []Message, tools [
 		return resp, nil
 	}
 
-	// Check if we should failover.
 	_, canRetry := f.maybeFailover(err, activeIdx)
 	if !canRetry {
 		return nil, err
 	}
 
-	// Retry on the (possibly advanced) active provider.
 	f.mu.RLock()
 	other := f.activeLocked()
 	f.mu.RUnlock()
@@ -417,10 +387,7 @@ func (f *FallbackProvider) Chat(ctx context.Context, messages []Message, tools [
 		f.consecutiveFail.Store(0)
 		return resp2, nil
 	}
-	// #454: preserve BOTH root causes. Returning only err2 let the
-	// fallback's network error mask a primary quota/auth failure in
-	// ClassifyLLMError (keyword-ordered: quota hits first when present),
-	// skewing health reporting and retry decisions when both sides fail.
+
 	return nil, errors.Join(err, err2)
 }
 
@@ -447,13 +414,11 @@ func (f *FallbackProvider) ChatStream(ctx context.Context, messages []Message, t
 		return f.watchStreamForFailover(ctx, activeIdx, stream, messages, tools), nil
 	}
 
-	// Check if we should failover.
 	_, canRetry := f.maybeFailover(err, activeIdx)
 	if !canRetry {
 		return nil, err
 	}
 
-	// Retry on the (possibly advanced) active provider (#936 wrap-around).
 	f.mu.RLock()
 	newIdx := int(f.activeIdx.Load())
 	other := f.activeLocked()
@@ -462,17 +427,10 @@ func (f *FallbackProvider) ChatStream(ctx context.Context, messages []Message, t
 	debug.Log("provider", "ChatStream failover retry on %s", other.Name())
 	stream2, err2 := other.ChatStream(ctx, messages, tools)
 	if err2 == nil {
-		// #1164: watch the retried stream exactly like the primary path above.
-		// Bundled providers return their channel immediately and surface
-		// quota/auth failures as async error events - a bare return here
-		// dropped chained failover for the entire retry (a failed-over call
-		// stuck on an async-broken second provider never reached the next
-		// one). The watcher's resetOnSuccess carries the success-time counter
-		// reset instead of an eager Store(0), keeping primary-path semantics.
+
 		return f.watchStreamForFailover(ctx, newIdx, stream2, messages, tools), nil
 	}
-	// #454: same root-cause preservation as Chat - join both errors so the
-	// primary's quota/auth cause is not masked by the fallback's network error.
+
 	return nil, errors.Join(err, err2)
 }
 
@@ -493,44 +451,24 @@ func (f *FallbackProvider) watchStreamForFailover(ctx context.Context, failedIdx
 func (f *FallbackProvider) watchStreamForFailoverHops(ctx context.Context, failedIdx int, stream <-chan StreamEvent, messages []Message, tools []ToolDefinition, hopsLeft int) <-chan StreamEvent {
 	out := make(chan StreamEvent)
 	go func() {
-		// defer order (LIFO): Recover is registered after the close defer,
-		// so on panic it runs first and out is still closed - the consumer
-		// sees a terminated stream instead of a hung channel.
+
 		defer close(out)
 		defer safego.Recover("provider.fallback.streamWatcher")
 		sawOutput := false
 		resetOnSuccess := func() {
 			if sawOutput {
-				// A stream that delivered output and ended cleanly proves the
-				// provider works - reset the transient-failure streak, same
-				// semantics the sync path's success return used to carry
-				// (#376). Without this, two stale transient errors plus any
-				// later error would stickily fail over a healthy primary.
+
 				f.consecutiveFail.Store(0)
 			}
 		}
-		// #602(R2): every channel operation below watches ctx. `out` is
-		// unbuffered and consumers stop reading the moment they cancel;
-		// before this, a cancelled turn parked this goroutine on `out <-`,
-		// which parked the drain goroutine, which let the provider's own
-		// #2570: ABANDONING the provider stream on cancel strands its
-		// producer goroutine: the provider's streamRead loop sends with a
-		// bare `ch <- StreamEvent` (36 sites across gemini/anthropic/
-		// openai/openai_responses) - with a 64-slot backlog and no
-		// receiver, it parks FOREVER (#602 fixed the middle layers only;
-		// the async-failover branch drained, every other exit did not).
-		// Deferred so ALL abandon paths drain - the plain ctx.Done return
-		// AND the four send-false returns (send() only fails on cancel).
-		// Context-independent on purpose, bounded by the stream's own
-		// end-of-stream close; on the normal close path the channel is
-		// already drained and this is a no-op.
+
 		drainOnAbandon := func() {
 			go safego.Run("provider.fallback.drainOnAbandon", func() {
 				for range stream {
 				}
 			})
 		}
-		_ = drainOnAbandon // via defer below
+		_ = drainOnAbandon
 		defer drainOnAbandon()
 		send := func(ev StreamEvent) bool {
 			select {
@@ -554,16 +492,7 @@ func (f *FallbackProvider) watchStreamForFailoverHops(ctx context.Context, faile
 			}
 			if !sawOutput && ev.Type == StreamEventError && ev.Error != nil {
 				_, canRetry := f.maybeFailover(ev.Error, failedIdx)
-				// canRetry alone decides, matching the sync Chat/ChatStream
-				// paths: maybeFailover returns true both when it JUST
-				// advanced the chain and when the failed call raced an
-				// earlier advancement (#164 retry-once). The old
-				// `&& !f.failedOver.Load()` gate made this branch dead code -
-				// canRetry=true always co-occurs with an advancement (#390).
-				// #1244: hopsLeft bounds the chain (see wrapper). Before this, the
-				// replacement stream was relayed bare — a second provider failing
-				// async pre-output terminated the chain here, so P→B both
-				// async-broken never reached C even though the chain had it.
+
 				if canRetry && hopsLeft > 0 {
 					f.mu.RLock()
 					newIdx2 := int(f.activeIdx.Load())
@@ -572,11 +501,7 @@ func (f *FallbackProvider) watchStreamForFailoverHops(ctx context.Context, faile
 					debug.Log("provider", "ChatStream async-error failover on %s", other.Name())
 					stream2, err2 := other.ChatStream(ctx, messages, tools)
 					if err2 == nil {
-						// Drain the failed stream and relay the next one.
-						// #602(R2): the drain must be cancellable too - a
-						// plain `for range stream` lived until the producer
-						// closed, adding one parked goroutine per cancelled
-						// turn.
+
 						go safego.Run("provider.fallback.drain", func() {
 							for {
 								select {
@@ -595,9 +520,7 @@ func (f *FallbackProvider) watchStreamForFailoverHops(ctx context.Context, faile
 						}) {
 							return
 						}
-						// #1244: the replacement stream gets the SAME async-error
-						// failover treatment (recursively, one hop cheaper) instead
-						// of the bare relay loop this used to be.
+
 						watched := f.watchStreamForFailoverHops(ctx, newIdx2, stream2, messages, tools, hopsLeft-1)
 						for {
 							select {
@@ -606,15 +529,7 @@ func (f *FallbackProvider) watchStreamForFailoverHops(ctx context.Context, faile
 									resetOnSuccess()
 									return
 								}
-								// #577(D): ANY content event (text, reasoning,
-								// tool-call, done) proves the fallback delivered -
-								// not just text. Counting text alone left pure
-								// tool-call/reasoning successes from clearing
-								// consecutiveFail, so stale counts prematurely
-								// failed over a healthy primary (#376 semantics).
-								// Mirrors the primary-stream rule at the bottom of
-								// this loop. System notices from deeper hops still
-								// count as non-output.
+
 								if ev2.Type != StreamEventError {
 									sawOutput = sawOutput || ev2.Type != StreamEventSystem
 								}
@@ -626,12 +541,7 @@ func (f *FallbackProvider) watchStreamForFailoverHops(ctx context.Context, faile
 							}
 						}
 					}
-					// Fallback stream could not even start. #1163: preserve
-					// BOTH root causes like the sync Chat/ChatStream paths do
-					// with errors.Join - silently dropping the fallback's own
-					// sync-start failure misreported the root cause (the
-					// consumer saw the primary's stale error) and skewed
-					// failover accounting for a call whose replacement never ran.
+
 					evOut := ev
 					if err2 != nil {
 						evOut.Error = errors.Join(ev.Error, err2)
@@ -666,8 +576,6 @@ func (f *FallbackProvider) forEach(fn func(p Provider)) {
 		fn(p)
 	}
 }
-
-// --- Interface delegation ---
 
 // ModelName returns the active provider's model name if it implements ModelNameProvider.
 func (f *FallbackProvider) ModelName() string {
@@ -751,14 +659,6 @@ func (f *FallbackProvider) SetSessionID(sessionID string) {
 	})
 }
 
-// --- Optional interface forwarding (#372) ---
-//
-// The agent (and subagent runner) probe the provider for these optional
-// capabilities via type assertions. Without forwarding them, wrapping a
-// provider in FallbackProvider silently disabled tool_choice, adaptive
-// sampling, rate-limit warnings, and - most damaging - named-subagent model
-// overrides (CloneWithModel fell back to "keep the original provider").
-
 // SetToolChoice forwards to all chain providers (per-call state that must
 // stay in sync regardless of which one is active).
 func (f *FallbackProvider) SetToolChoice(choice string) {
@@ -824,17 +724,12 @@ func (f *FallbackProvider) TopP() float64 {
 // returns a new FallbackProvider preserving the failover configuration.
 // Named subagents rely on this for their fast/strong model split (#372).
 func (f *FallbackProvider) CloneWithModel(model string) Provider {
-	// Require EVERY provider to support cloning. Partial support (some
-	// implement ClonableWithModel, some don't) used to build a wrapper that
-	// SHARED the un-cloned instance - the clone's forwarded setters
-	// (SetSessionID/SetTemperature/...) then mutated the parent's provider
-	// state (#391). Silently keeping the parent (no model override) is the
-	// safer degradation.
+
 	clones := make([]Provider, 0, len(f.chain))
 	for _, p := range f.chain {
 		c, ok := p.(ClonableWithModel)
 		if !ok {
-			return f // cannot clone every level - keep the wrapper as-is
+			return f
 		}
 		clones = append(clones, c.CloneWithModel(model))
 	}
@@ -843,9 +738,7 @@ func (f *FallbackProvider) CloneWithModel(model string) Provider {
 	clone.probeInterval = f.probeInterval
 	if cur := f.activeIdx.Load(); cur != 0 {
 		clone.activeIdx.Store(cur)
-		// The clone inherits the advanced state, so it must also inherit the
-		// recovery prober - otherwise a subagent's clone would never
-		// proactively return to higher-priority levels when they recover.
+
 		clone.mu.Lock()
 		clone.startRecoveryProberLocked()
 		clone.mu.Unlock()

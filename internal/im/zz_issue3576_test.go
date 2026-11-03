@@ -1,10 +1,5 @@
 package im
 
-// #3576 probe: both PASSIVE close paths (app session_close frame, relay
-// closed notification) must persist the removal like the active
-// CloseSession path does - a memory-only Delete leaves the session in the
-// store and a restart revives it as a ghost.
-
 import (
 	"testing"
 	"time"

@@ -17,13 +17,12 @@ func TestCalibratorFailureBackoffSuppressesRecalibration(t *testing.T) {
 		t.Fatal("fresh calibrator should calibrate (first call)")
 	}
 
-	c.recordFailure() // failCount=1, backoff 5s
+	c.recordFailure()
 
 	if c.shouldCalibrate() {
 		t.Fatal("shouldCalibrate must be false during the backoff window")
 	}
 
-	// Simulate the backoff window elapsing: 6s > 5s base backoff.
 	c.mu.Lock()
 	c.lastFailure = time.Now().Add(-6 * time.Second)
 	c.mu.Unlock()
@@ -40,7 +39,7 @@ func TestCalibratorBackoffEscalatesExponentially(t *testing.T) {
 	for i := 1; i <= 3; i++ {
 		c.recordFailure()
 	}
-	// failCount=3 → backoff = 5s<<2 = 20s.
+
 	c.mu.Lock()
 	c.lastFailure = time.Now().Add(-10 * time.Second)
 	inBackoff := c.shouldCalibrate()
@@ -88,7 +87,7 @@ func TestCalibratorSuccessResetsFailureState(t *testing.T) {
 	c.recordFailure()
 	c.recordFailure()
 
-	c.applyResult(1000, 1500) // success
+	c.applyResult(1000, 1500)
 
 	c.mu.Lock()
 	failCount := c.failCount
@@ -98,11 +97,9 @@ func TestCalibratorSuccessResetsFailureState(t *testing.T) {
 		t.Fatalf("success must reset failure state, got failCount=%d lastFailure=%v", failCount, lastFailure)
 	}
 
-	// After a success no residual backoff may survive: with the interval and
-	// min-calls gates satisfied, the next call must calibrate again.
 	c.mu.Lock()
 	c.lastCalibrate = time.Now().Add(-calibrateInterval - time.Second)
-	c.callCount = calibrateMinCalls + 1 // force past the min-calls gate
+	c.callCount = calibrateMinCalls + 1
 	c.mu.Unlock()
 	if !c.shouldCalibrate() {
 		t.Fatal("no residual backoff may survive a successful calibration")
@@ -134,13 +131,12 @@ func TestIsAnthropicWindowLimitChineseQuotaVeto(t *testing.T) {
 		msg  string
 		want bool
 	}{
-		// Genuine Anthropic recoverable window — still a window limit.
+
 		{"would exceed your usage limit for the 5-hour window (limit will reset at 9pm)", true},
 		{"your weekly limit will reset on monday", true},
-		// Non-Anthropic English quota codes — already vetoed.
+
 		{"insufficient_quota: your limit will reset at ...", false},
-		// Non-Anthropic vendor with Anthropic-style phrasing + Chinese quota
-		// wording — must be vetoed (quota, not window limit).
+
 		{"rate limit exceeded: limit will reset at 2026-01-01, 使用上限已达", false},
 		{"429: your limit will reset soon; 配额超限，请升级套餐", false},
 		{"limit will reset; 额度已用完", false},

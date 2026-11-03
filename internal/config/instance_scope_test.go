@@ -35,8 +35,6 @@ func TestSaveInstanceScopedDoesNotChangeStickyScope(t *testing.T) {
 		t.Fatal("fresh config should not start in instance scope")
 	}
 
-	// Simulate a SetEndpointLimits-style mutation: vendors differ from the
-	// global snapshot, then a non-sticky instance save.
 	cfg.Vendors = map[string]VendorConfig{
 		"testv": {Endpoints: map[string]EndpointConfig{
 			"main": {ContextWindow: 100000, MaxTokens: 8192},
@@ -46,12 +44,10 @@ func TestSaveInstanceScopedDoesNotChangeStickyScope(t *testing.T) {
 		t.Fatalf("SaveInstanceScoped: %v", err)
 	}
 
-	// Sticky scope must be unchanged...
 	if got := cfg.GetSaveScope(); got == "instance" {
 		t.Errorf("SaveInstanceScoped changed sticky saveScope to %q; subsequent preference saves would be redirected to the instance file", got)
 	}
 
-	// ...and the limits delta must have landed in the instance file.
 	instData, err := os.ReadFile(filepath.Join(InstanceDir(workspace), "ggcode.yaml"))
 	if err != nil {
 		t.Fatalf("reading instance config: %v", err)
@@ -60,7 +56,6 @@ func TestSaveInstanceScopedDoesNotChangeStickyScope(t *testing.T) {
 		t.Errorf("instance config missing vendors limits delta; got:\n%s", instData)
 	}
 
-	// A preference save after the limits save must go to the GLOBAL file.
 	if err := cfg.SaveDefaultModePreference("bypass"); err != nil {
 		t.Fatalf("SaveDefaultModePreference: %v", err)
 	}

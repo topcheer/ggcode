@@ -10,9 +10,9 @@ import (
 // must account for UTF-8 multi-byte encoding (e.g. Chinese characters are
 // 3 bytes each).
 var ByteLimitPlatforms = map[Platform]bool{
-	PlatformWeCom:  true, // 2048 bytes
-	PlatformWechat: true, // 2048 bytes
-	PlatformFeishu: true, // interactive card limit is ~30KB of JSON bytes, not chars (#757)
+	PlatformWeCom:  true,
+	PlatformWechat: true,
+	PlatformFeishu: true,
 }
 
 // PlatformLimits defines the maximum message length for each IM platform.
@@ -74,7 +74,7 @@ func SplitMessage(text string, maxLen int) []string {
 func SplitMessageForPlatform(text string, p Platform) []string {
 	maxLen, ok := PlatformLimits[p]
 	if !ok {
-		maxLen = 4000 // safe default
+		maxLen = 4000
 	}
 	if ByteLimitPlatforms[p] {
 		return splitMessageBytes(text, maxLen, true)
@@ -137,27 +137,20 @@ func splitMessageBytes(text string, maxBytes int, trim bool) []string {
 	for i, r := range runes {
 		runeBytes := utf8.RuneLen(r)
 		if byteCount+runeBytes > maxBytes {
-			// Find the best split point in runes[start:i]
+
 			end := preferredByteSplit(runes[start:i], maxBytes)
 			chunks = append(chunks, string(runes[start:start+end]))
 			start += end
 			byteCount = 0
-			// Re-sync byte count from start
+
 			for j := start; j <= i; j++ {
 				byteCount += utf8.RuneLen(runes[j])
 				if byteCount > maxBytes {
-					// Current rune pushes over; flush and restart
+
 					end2 := preferredByteSplit(runes[start:j], maxBytes)
 					chunks = append(chunks, string(runes[start:start+end2]))
 					start += end2
-					// #1553-C: re-account the WHOLE remaining span
-					// start..i - the old single-rune assignment dropped
-					// runes[start+1..i] from the ledger, so later chunks
-					// could exceed maxBytes (WeCom's strict 2048-byte
-					// check then 400s). Overflows here are impossible by
-					// construction (end2 is a <=maxBytes prefix); if the
-					// span still overflows, the OUTER loop re-flushes on
-					// the next rune.
+
 					byteCount = 0
 					for k := start; k <= i; k++ {
 						byteCount += utf8.RuneLen(runes[k])
@@ -177,7 +170,7 @@ func splitMessageBytes(text string, maxBytes int, trim bool) []string {
 	if start < len(runes) {
 		remaining := string(runes[start:])
 		if len(remaining) > maxBytes {
-			// Recursively split the tail in case of very large remaining text
+
 			chunks = append(chunks, splitMessageBytes(remaining, maxBytes, trim)...)
 		} else {
 			chunks = append(chunks, remaining)
@@ -214,7 +207,7 @@ func preferredByteSplit(runes []rune, maxBytes int) int {
 		return lastSpace
 	}
 	if best == 0 {
-		best = 1 // at least one rune
+		best = 1
 	}
 	return best
 }
@@ -273,14 +266,7 @@ func truncateRunes(text string, maxLen int, suffix string) string {
 // so that syntax highlighting is maintained on platforms that support it
 // (Discord, Slack, Matrix).
 func SplitMarkdown(text string, maxLen int) []string {
-	// Reserve space for code block markers that SplitMarkdown adds to chunks
-	// crossing fenced code block boundaries: "```<lang>\n" prefix + "\n```"
-	// suffix. The prefix is 3 + len(lang) + 1 runes; the suffix is 4 runes.
-	// Common language tags are 0-10 chars (go, python, javascript), so 20 runes
-	// of reserve (8 for bare markers + 12 for language tag) covers all practical
-	// cases. Without this, a chunk that fills maxLen and then gets both markers
-	// could exceed the platform's hard limit (e.g. Discord rejects messages >
-	// 2000 chars with HTTP 400).
+
 	splitLen := maxLen
 	if strings.Contains(text, "```") {
 		splitLen = maxLen - 20
@@ -295,34 +281,24 @@ func SplitMarkdown(text string, maxLen int) []string {
 
 	var result []string
 	inCodeBlock := false
-	codeLang := "" // language tag from the most recent opening fence
+	codeLang := ""
 
 	for _, chunk := range chunks {
-		// Capture the language tag for the prefix BEFORE scanning this chunk.
-		// The scan below may update codeLang to a different language if the chunk
-		// contains a close+reopen transition (e.g. end of go block, start of python
-		// block), but the prefix needs the language that was active when entering
-		// this chunk, not what it transitions to later.
+
 		prefixLang := codeLang
 
-		// Scan the original chunk for code fences to track the active language
-		// for FUTURE chunks. We update codeLang each time we encounter an opening
-		// fence (transition from outside to inside a code block).
 		scanInBlock := inCodeBlock
 		for _, line := range strings.Split(chunk, "\n") {
 			trimmed := strings.TrimLeft(line, " \t")
 			if strings.HasPrefix(trimmed, "```") {
 				if !scanInBlock {
-					// Opening fence — capture language tag
+
 					codeLang = strings.TrimSpace(trimmed[3:])
 				}
 				scanInBlock = !scanInBlock
 			}
 		}
 
-		// If continuing a code block from the previous chunk, reopen it with
-		// the original language tag (captured before scan) to preserve syntax
-		// highlighting
 		if inCodeBlock {
 			if prefixLang != "" {
 				chunk = "```" + prefixLang + "\n" + chunk
@@ -331,11 +307,9 @@ func SplitMarkdown(text string, maxLen int) []string {
 			}
 		}
 
-		// Count triple-backtick fences to determine if we end inside a code block
 		fenceCount := strings.Count(chunk, "```")
 		inCodeBlock = (fenceCount % 2) == 1
 
-		// If ending inside a code block, close it
 		if inCodeBlock {
 			chunk += "\n```"
 		}

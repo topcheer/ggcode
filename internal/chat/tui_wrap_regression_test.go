@@ -17,17 +17,10 @@ func TestRenderStreamingMarkdownFenceCacheHit(t *testing.T) {
 		t.Fatal("expected non-empty render for chunk1")
 	}
 
-	// The next chunk extends the SAME unclosed block: prefix comparison must
-	// use the raw (pre-fence-close) source, so at least the stable prefix
-	// blocks are reused. With a single growing block nothing before the tail
-	// is reusable, but the cache source itself must be prefix-compatible:
-	// rendering chunk2 with the cache must not be treated as a full miss on
-	// the fenced content (previously cache.source held a "\n```" suffix that
-	// broke HasPrefix for every subsequent chunk).
 	_, cache2 := renderStreamingMarkdown(chunk2, 80, &cache)
 
 	if !strings.HasPrefix(chunk2, strings.TrimSuffix(cache.source, "")) {
-		// sanity: cache.source must be a prefix of chunk2's raw text
+
 		t.Fatalf("cache source %q is not a compatible prefix of chunk2 %q", cache.source, chunk2)
 	}
 	if cache2.width != 80 {
@@ -49,8 +42,7 @@ func TestRenderStreamingMarkdownClosedBlockReusedWhileFenceGrows(t *testing.T) {
 	if out2 == "" {
 		t.Fatal("expected non-empty render for chunk2")
 	}
-	// The first block ("# Title") is identical across chunks and must be
-	// reused from the cache: cache2.rendered[0] should be carried over.
+
 	if cache2.rendered[0] != cache.rendered[0] {
 		t.Fatalf("stable first block was not reused from cache")
 	}
@@ -68,7 +60,7 @@ func TestRenderGitLogWrapsLongLines(t *testing.T) {
 	const width = 60
 	body := item.RenderBody(width)
 	for _, line := range strings.Split(body, "\n") {
-		// lipgloss styles may add ANSI escapes; strip for measurement.
+
 		plain := stripANSI(line)
 		if plain != "" && len([]rune(plain)) > width {
 			t.Fatalf("renderGitLog produced a %d-rune line exceeding width %d: %q", len([]rune(plain)), width, plain)

@@ -54,7 +54,7 @@ func newFakeWeComServer(t *testing.T) *fakeWeComServer {
 			}
 			switch cmd {
 			case "ping":
-				// subscribe-style frames: ack with empty body
+
 			case wecomCmdUploadInit:
 				if f.initFail {
 					ack["errcode"] = 44001
@@ -70,7 +70,7 @@ func newFakeWeComServer(t *testing.T) *fakeWeComServer {
 				}
 				f.mu.Unlock()
 				if drop {
-					continue // no ack: simulates a lost chunk ack
+					continue
 				}
 			case wecomCmdUploadFinish:
 				ack["body"] = map[string]any{"type": "image", "media_id": f.mediaID, "created_at": "1700000000"}
@@ -112,7 +112,7 @@ func newWecomMediaAdapter(t *testing.T, f *fakeWeComServer) *wecomAdapter {
 		replyReqIDs: map[string]string{},
 		ackTimeout:  2 * time.Second,
 	}
-	// Drain server acks into dispatchPayload like the real read loop does.
+
 	go func() {
 		for {
 			var payload map[string]any
@@ -132,7 +132,6 @@ func TestWecomUploadAndSendImage(t *testing.T) {
 	defer f.srv.Close()
 	a := newWecomMediaAdapter(t, f)
 
-	// 600KB → 2 chunks of 512KB + 88KB
 	data := make([]byte, 600<<10)
 	mediaID, err := a.wecomUploadMedia(t.Context(), data, "shot.png")
 	if err != nil {
@@ -142,14 +141,10 @@ func TestWecomUploadAndSendImage(t *testing.T) {
 		t.Fatalf("media_id = %q, want MEDIA123", mediaID)
 	}
 
-	// Send outside the f.mu critical section below: the fake server's
-	// handler also takes f.mu when recording frames, so holding it here would
-	// deadlock the ack path.
 	if err := a.sendWecomImageMsg("chat-1", mediaID); err != nil {
 		t.Fatalf("sendWecomImageMsg: %v", err)
 	}
 
-	// Chunk contents must round-trip: reconstruct from the recorded frames.
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var chunks [][]byte
@@ -236,13 +231,9 @@ func TestWecomUploadFileTypedAndSend(t *testing.T) {
 	f := newFakeWeComServer(t)
 	defer f.srv.Close()
 	a := newWecomMediaAdapter(t, f)
-	// #3444: 22 chunk round-trips over 11MB on a loaded CI runner can stall
-	// past the default 2s ack wait; a healthy run acks instantly and pays
-	// nothing, so raise only this test's wait budget. The end-to-end path
-	// under test (#3325) is unchanged.
+
 	a.ackTimeout = 15 * time.Second
 
-	// 11MB: would be rejected by the image cap, must pass the file cap.
 	data := make([]byte, 11<<20)
 	mediaID, err := a.wecomUploadMediaTyped(t.Context(), data, "report.pdf", "file", wecomMaxFileBytes)
 	if err != nil {
@@ -302,8 +293,8 @@ func TestWechatImageURL(t *testing.T) {
 	}{
 		{ExtractedImage{Kind: "url", Data: "https://cdn.example.com/a.png"}, "https://cdn.example.com/a.png"},
 		{ExtractedImage{Kind: "url", Data: "http://cdn.example.com/a.jpg"}, "http://cdn.example.com/a.jpg"},
-		{ExtractedImage{Kind: "url", Data: "/tmp/local.png"}, ""},                  // local: undeliverable
-		{ExtractedImage{Kind: "data_url", Data: "data:image/png;base64,AAA="}, ""}, // data URL: undeliverable
+		{ExtractedImage{Kind: "url", Data: "/tmp/local.png"}, ""},
+		{ExtractedImage{Kind: "data_url", Data: "data:image/png;base64,AAA="}, ""},
 	}
 	for i, tc := range cases {
 		if got := wechatImageURL(tc.img); got != tc.want {

@@ -1,10 +1,5 @@
 package im
 
-// Issue #974 companion tests — WhatsApp adapter:
-//   - high: handleInbound must drop IsFromMe messages (self-echo ghost replies)
-//   - medium: a.client lock asymmetry (all reads via currentClient snapshot)
-//   - attached: inbound msgid dedup, Send during disconnect window
-
 import (
 	"context"
 	"errors"
@@ -114,7 +109,7 @@ func TestWhatsAppClientSnapshotRace(t *testing.T) {
 	var wg sync.WaitGroup
 	for g := 0; g < 4; g++ {
 		wg.Add(3)
-		go func() { // publisher (connectAndServe-like swap under lock)
+		go func() {
 			defer wg.Done()
 			for j := 0; j < 200; j++ {
 				a.mu.Lock()
@@ -125,7 +120,7 @@ func TestWhatsAppClientSnapshotRace(t *testing.T) {
 				a.mu.Unlock()
 			}
 		}()
-		go func(g int) { // readers: snapshot reads + inbound handling
+		go func(g int) {
 			defer wg.Done()
 			for j := 0; j < 200; j++ {
 				if c := a.currentClient(); c != nil && c.Store == nil {
@@ -135,7 +130,7 @@ func TestWhatsAppClientSnapshotRace(t *testing.T) {
 				a.handleInbound(waInboundEvent(false, fmt.Sprintf("m-%d-%d", g, j), "x"))
 			}
 		}(g)
-		go func() { // markLoggedOut contender (LoggedOut event handler path)
+		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
 				a.markLoggedOut()

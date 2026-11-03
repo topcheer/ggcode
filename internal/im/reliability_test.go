@@ -34,7 +34,6 @@ func TestBindingPersistBeforeMutate_ChannelID(t *testing.T) {
 	store := &mockChannelBindingStore{persistErr: errors.New("disk full")}
 	binding := ChannelBinding{Adapter: "test", ChannelID: ""}
 
-	// Simulate: persist fails, binding should NOT be mutated
 	probe := binding
 	probe.ChannelID = "new-channel"
 	err := store.Save(probe)
@@ -42,7 +41,6 @@ func TestBindingPersistBeforeMutate_ChannelID(t *testing.T) {
 		t.Fatal("expected persist error")
 	}
 
-	// Verify original binding was NOT modified
 	if binding.ChannelID != "" {
 		t.Error("binding.ChannelID should still be empty after persist failure")
 	}
@@ -52,7 +50,6 @@ func TestBindingPersistBeforeMutate_Success(t *testing.T) {
 	store := &mockChannelBindingStore{}
 	binding := ChannelBinding{Adapter: "test", ChannelID: ""}
 
-	// Simulate: persist succeeds, then mutate
 	probe := binding
 	probe.ChannelID = "new-channel"
 	if err := store.Save(probe); err != nil {
@@ -72,8 +69,7 @@ func TestBindingPersistBeforeMutate_Success(t *testing.T) {
 }
 
 func TestApprovalChannelDoesNotBlock(t *testing.T) {
-	// Verify that sending to an unbuffered channel with no receiver
-	// does not block when using select+default pattern.
+
 	ch := make(chan bool)
 	done := make(chan bool, 1)
 
@@ -87,7 +83,7 @@ func TestApprovalChannelDoesNotBlock(t *testing.T) {
 
 	select {
 	case <-done:
-		// Success: did not block
+
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("send should not have blocked")
 	}

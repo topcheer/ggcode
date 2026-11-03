@@ -63,15 +63,11 @@ vendors:
 		t.Fatal(err)
 	}
 
-	// The issue trigger sequence: partial overlap loaded, then a NEW vendor C
-	// is added at runtime (what AddCustomEndpoint does) and Save() runs while
-	// the instance write-back path (gated on InstanceFields) executes.
 	cfg, err := LoadWithInstance(cfgPath, ws)
 	if err != nil {
 		t.Fatalf("LoadWithInstance: %v", err)
 	}
 
-	// The gate condition itself: partial overlap must register "vendors".
 	found := false
 	for _, k := range cfg.InstanceFields() {
 		if k == "vendors" {
@@ -82,7 +78,6 @@ vendors:
 		t.Fatalf("partial vendor overlap must register 'vendors' in InstanceFields() (#731); got %v", cfg.InstanceFields())
 	}
 
-	// Runtime addition of vendor C (AddCustomEndpoint effect).
 	if cfg.Vendors == nil {
 		cfg.Vendors = map[string]VendorConfig{}
 	}
@@ -90,7 +85,6 @@ vendors:
 		"main": {Protocol: "openai", BaseURL: "https://c.example.com/v1"},
 	}}
 
-	// saveWithInstanceWriteback equivalent: Save() then instance write-back.
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -99,7 +93,6 @@ vendors:
 	}
 	cfg.SyncVendorToGlobalSnapshot("c")
 
-	// instance.yaml must contain both B (pre-existing) and C (just added).
 	inst, err := os.ReadFile(instPath)
 	if err != nil {
 		t.Fatalf("reading instance config: %v", err)
@@ -110,8 +103,6 @@ vendors:
 		}
 	}
 
-	// Global vendors.yaml must NOT gain B or C on this Save (they are
-	// instance-sourced; C is synced into the snapshot only for future saves).
 	vp := VendorsPath(cfgDir)
 	if data, err := os.ReadFile(vp); err == nil {
 		if strings.Contains(string(data), "https://b.example.com") {
@@ -119,8 +110,6 @@ vendors:
 		}
 	}
 
-	// Restart semantics: a fresh load of the same global+instance pair must
-	// still see C (the data-loss symptom is C disappearing after restart).
 	cfg2, err := LoadWithInstance(cfgPath, ws)
 	if err != nil {
 		t.Fatalf("reload LoadWithInstance: %v", err)
@@ -159,9 +148,7 @@ func TestIssue731MergeInstanceVendorsFlagMatrix(t *testing.T) {
 			wantMerged: []string{"a", "b"},
 		},
 		{
-			// #2289: same key with a DIFFERENT value now wins and flags
-			// (instance-wins, aligned with #524 ToolPerms); identical
-			// values stay unflagged.
+
 			name:       "same key different value now overrides",
 			global:     map[string]VendorConfig{"a": vend("https://a.example.com")},
 			instance:   map[string]VendorConfig{"a": vend("https://other.example.com")},

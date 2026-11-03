@@ -16,9 +16,9 @@ func TestIsInboundShellCommand(t *testing.T) {
 		{"$ ls -la", true},
 		{"! go build ./...", true},
 		{"  $ echo hi  ", true},
-		{"$", false},        // bare prefix, no command
-		{"! ", false},       // whitespace-only command
-		{"/restart", false}, // slash route, not shell
+		{"$", false},
+		{"! ", false},
+		{"/restart", false},
 		{"hello $world", false},
 		{"plain message", false},
 		{"", false},
@@ -41,8 +41,7 @@ func TestSplitInboundShellCommand(t *testing.T) {
 }
 
 func TestRouteInboundText_ShellRoute(t *testing.T) {
-	// Shell passthrough must route BEFORE approval/ask/message so it runs
-	// immediately even while the agent is mid-turn (TUI-parity UX).
+
 	r := RouteInboundText("$ go test ./...", true, true)
 	if r.Kind != InboundRouteShell {
 		t.Fatalf("busy-agent route: got %q, want shell (immediate execution, not queued)", r.Kind)
@@ -51,14 +50,12 @@ func TestRouteInboundText_ShellRoute(t *testing.T) {
 	if r.Kind != InboundRouteShell {
 		t.Fatalf("idle route: got %q, want shell", r.Kind)
 	}
-	// Slash still wins over shell prefixes (slash checked first).
+
 	r = RouteInboundText("/model", true, true)
 	if r.Kind != InboundRouteSlash {
 		t.Fatalf("slash priority: got %q, want slash", r.Kind)
 	}
-	// Approval reply with a $ in it must NOT hijack the approval channel…
-	// wait: "$ y" would be treated as shell. That is the documented trade-off:
-	// approval replies are y/n/a - they never start with $ or !.
+
 }
 
 func TestHandleShellInbound_ExecutesAndPushesResult(t *testing.T) {
@@ -66,14 +63,13 @@ func TestHandleShellInbound_ExecutesAndPushesResult(t *testing.T) {
 	b := &DaemonBridge{emitTextOverride: em.EmitText}
 	b.handleShellInbound("$ printf imshell-ok")
 
-	// handleShellInbound runs async; poll briefly for the result message.
 	for i := 0; i < 100; i++ {
 		em.mu.Lock()
 		texts := append([]string(nil), em.texts...)
 		em.mu.Unlock()
 		for _, tx := range texts {
 			if strings.Contains(tx, "imshell-ok") {
-				return // pass
+				return
 			}
 		}
 		sleepMs(20)
@@ -110,9 +106,7 @@ func TestHandleShellInbound_UsageHintOnBarePrefix(t *testing.T) {
 // waitForShellResult polls until predicate matches an emitted text or fails.
 func waitForShellResult(t *testing.T, em *captureEmitter, pred func(string) bool, what string) string {
 	t.Helper()
-	// Windows cold-start shell spawn (process creation + pipe warmup) can
-	// exceed the original 3s budget; 400x20ms = 8s keeps the assertions
-	// intact while tolerating slower spawn latency. Predicate is unchanged.
+
 	for i := 0; i < 400; i++ {
 		em.mu.Lock()
 		texts := append([]string(nil), em.texts...)
@@ -134,7 +128,7 @@ func waitForShellResult(t *testing.T, em *captureEmitter, pred func(string) bool
 func TestHandleShellInbound_TruncationPreservesUTF8(t *testing.T) {
 	em := &captureEmitter{}
 	b := &DaemonBridge{emitTextOverride: em.EmitText}
-	// 1200 CJK chars = ~3600 bytes > 3500 cap; cap lands mid-rune.
+
 	body := strings.Repeat("中", 1200)
 	b.handleShellInbound("$ printf '%s' '" + body + "'")
 
@@ -183,7 +177,7 @@ func TestHandleShellInbound_NonzeroExitPushesOutput(t *testing.T) {
 		em.mu.Unlock()
 		for _, tx := range texts {
 			if strings.Contains(tx, "boom") && strings.Contains(tx, "exit 3") {
-				return // pass: stderr captured + exit code surfaced
+				return
 			}
 		}
 		sleepMs(20)

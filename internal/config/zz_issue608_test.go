@@ -33,8 +33,6 @@ model: m1
 		t.Fatal(err)
 	}
 
-	// vendors.yaml with a ${VAR} reference in base_url (the probe form from
-	// the issue: base_url: ${VER96_FOO_URL}).
 	vendorsPath := filepath.Join(cfgDir, "vendors.yaml")
 	vendorsYAML := `
 verfoov:
@@ -48,13 +46,11 @@ verfoov:
 		t.Fatal(err)
 	}
 
-	// Load() expands ${VER96_FOO_URL} in memory and auto-saves.
 	cfg, err := Load(cfgPath)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 
-	// Sanity: the in-memory config carries the EXPANDED value.
 	ep, ok := cfg.Vendors["verfoov"].Endpoints["main"]
 	if !ok {
 		t.Fatal("endpoint main missing after load")
@@ -63,7 +59,6 @@ verfoov:
 		t.Fatalf("in-memory base_url should be expanded, got %q", ep.BaseURL)
 	}
 
-	// Explicit Save() too (callers other than the auto-save path).
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -79,7 +74,6 @@ verfoov:
 		t.Errorf("vendor verfoov should still be persisted. file:\n%s", out)
 	}
 
-	// Reload must still yield the expanded value (round-trip stability).
 	cfg2, err := Load(cfgPath)
 	if err != nil {
 		t.Fatalf("re-Load: %v", err)
@@ -116,7 +110,6 @@ verbarv:
 		t.Fatal(err)
 	}
 
-	// Save a vendor whose base_url differs from the env expansion.
 	changed := map[string]VendorConfig{
 		"verbarv": {
 			Endpoints: map[string]EndpointConfig{

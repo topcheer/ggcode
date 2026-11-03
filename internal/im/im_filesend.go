@@ -1,11 +1,5 @@
 package im
 
-// #3316 batch-1: FileSender implementations for Telegram and QQ - the two
-// platforms the operator drives today. Telegram: photos keep preview
-// semantics, everything else rides sendDocument (50MB API cap). QQ: images
-// keep file_type 1, everything else uploads as rich-media file (file_type 4)
-// and a non-empty caption follows as a text message.
-
 import (
 	"bytes"
 	"context"
@@ -21,8 +15,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// --- Telegram ---
-
 func (a *tgAdapter) SendFile(ctx context.Context, binding ChannelBinding, file OutboundFile, caption string) error {
 	chatID := strings.TrimSpace(binding.ChannelID)
 	if chatID == "" {
@@ -32,7 +24,7 @@ func (a *tgAdapter) SendFile(ctx context.Context, binding ChannelBinding, file O
 		return fmt.Errorf("telegram adapter %q is not connected", a.name)
 	}
 	if strings.HasPrefix(file.MIME, "image/") {
-		// Preview semantics: reuse the photo path (caption rides along).
+
 		return a.sendPhotoByUpload(ctx, chatID, file.Data, file.Filename, caption, "")
 	}
 	const maxDocBytes = 50 << 20
@@ -113,8 +105,6 @@ func (a *tgAdapter) sendDocumentByUpload(ctx context.Context, chatID string, fil
 	return rateLimitExhausted("Telegram")
 }
 
-// --- QQ ---
-
 const qqFileTypeFile = 4 // QQ rich-media file_type: 1=image, 4=generic file
 
 func (a *qqAdapter) SendFile(ctx context.Context, binding ChannelBinding, file OutboundFile, caption string) error {
@@ -151,16 +141,14 @@ func (a *qqAdapter) SendFile(ctx context.Context, binding ChannelBinding, file O
 	if fileInfo == "" {
 		return fmt.Errorf("QQ file upload returned no file_info")
 	}
-	// #3317 discipline: the media message consumes a passive-reply slot -
-	// record it like every other send.
+
 	replyTo, replySeq := a.resolveReplyMode(binding)
 	if err := a.sendMediaMessage(ctx, path, chatType, fileInfo, replyTo, replySeq); err != nil {
 		return err
 	}
 	a.recordPassiveReplies(binding, replyTo, 1)
 	if c := strings.TrimSpace(caption); c != "" {
-		// QQ media messages carry no caption field; deliver it as a
-		// follow-up text message on the next seq slot.
+
 		nextSeq := replySeq + 1
 		if replyTo == "" {
 			nextSeq = 0

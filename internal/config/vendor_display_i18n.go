@@ -20,34 +20,34 @@ var builtinVendorDisplayZh = map[string]string{
 // builtinEndpointDisplayZh maps "vendorID/endpointID" to Chinese display names.
 // The key format is "vendor/endpoint" to avoid collisions across vendors.
 var builtinEndpointDisplayZh = map[string]string{
-	// ZAI
+
 	"zai/cn-coding-openai":        "国内编程套餐",
 	"zai/cn-coding-anthropic":     "国内编程套餐 (Anthropic)",
 	"zai/global-coding-openai":    "国际编程套餐",
 	"zai/global-coding-anthropic": "国际编程套餐 (Anthropic)",
 	"zai/cn-api-openai":           "国内标准 API",
 	"zai/global-api-openai":       "国际标准 API",
-	// Aliyun
+
 	"aliyun/coding-openai":    "百炼编程套餐",
 	"aliyun/coding-anthropic": "百炼编程套餐 (Anthropic)",
-	// Kimi
+
 	"kimi/coding-openai":    "Kimi 编程套餐",
 	"kimi/coding-anthropic": "Kimi 编程套餐 (Anthropic)",
-	// MiniMax
+
 	"minimax/token-plan-openai":    "MiniMax 套餐",
 	"minimax/token-plan-anthropic": "MiniMax 套餐 (Anthropic)",
 	"minimax/global-openai":        "MiniMax 国际",
 	"minimax/global-anthropic":     "MiniMax 国际 (Anthropic)",
-	// Ark
+
 	"ark/coding-openai":    "方舟编程套餐",
 	"ark/coding-anthropic": "方舟编程套餐 (Anthropic)",
-	// XiaoMi
+
 	"xiaomi-mimo/cn-openai":    "小米 MiMo API",
 	"xiaomi-mimo/cn-anthropic": "小米 MiMo API (Anthropic)",
-	// GitHub Copilot
+
 	"github-copilot/github.com": "GitHub.com",
 	"github-copilot/enterprise": "GitHub 企业版",
-	// AI Gateway
+
 	"ai-gateway/aihubmix":   "AIHubMix",
 	"ai-gateway/getgoapi":   "GetGoAPI",
 	"ai-gateway/novita":     "Novita AI",

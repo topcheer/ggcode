@@ -13,7 +13,7 @@ func TestResponsesHostedToolRecognizesApplyPatch(t *testing.T) {
 	if tl.Type != "apply_patch" {
 		t.Fatalf("type: %q", tl.Type)
 	}
-	// Fail closed for garbage.
+
 	if _, ok := responsesHostedTool(ServerToolConfig{Type: "code_interpreter"}); ok {
 		t.Fatal("unknown server tool must be rejected")
 	}
@@ -29,16 +29,16 @@ func TestDecodeResponsesApplyPatchCall(t *testing.T) {
 	if len(op) == 0 || string(op) == "null" {
 		t.Fatalf("operation lost: %s", op)
 	}
-	// id fallback when call_id missing.
+
 	raw2 := json.RawMessage(`{"type":"apply_patch_call","id":"ap_2","operation":null}`)
 	if id, _, ok := decodeResponsesApplyPatchCall(raw2); !ok || id != "ap_2" {
 		t.Fatalf("id fallback: ok=%v id=%q", ok, id)
 	}
-	// Non-apply items rejected.
+
 	for _, bad := range []json.RawMessage{
 		json.RawMessage(`{"type":"function_call","call_id":"c"}`),
 		json.RawMessage(`{"type":"web_search_call"}`),
-		json.RawMessage(`{"type":"apply_patch_call"}`), // no id at all
+		json.RawMessage(`{"type":"apply_patch_call"}`),
 		nil,
 	} {
 		if _, _, ok := decodeResponsesApplyPatchCall(bad); ok {
@@ -64,7 +64,7 @@ func TestResponsesApplyPatchReplays(t *testing.T) {
 	if err := json.Unmarshal(call, &withOp); err != nil || string(withOp.Operation) != string(op) {
 		t.Fatalf("operation not embedded: %s err=%v", call, err)
 	}
-	// Corrupt input degrades to no operation, valid JSON still.
+
 	if err := json.Unmarshal(responsesApplyPatchCallReplay("c", json.RawMessage("{bad")), &m); err != nil {
 		t.Fatalf("corrupt replay not JSON: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestBuildResponsesInputApplyPatchRoundTrip(t *testing.T) {
 		{Role: "tool", Content: []ContentBlock{
 			{Type: "tool_result", ToolID: "call_ap", Output: "Created a.txt (1 lines)"},
 		}},
-		// Ordinary function call must be untouched.
+
 		{Role: "assistant", Content: []ContentBlock{
 			ToolUseBlock("call_fn", "read_file", json.RawMessage(`{"path":"a.txt"}`)),
 		}},

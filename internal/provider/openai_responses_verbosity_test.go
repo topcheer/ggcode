@@ -1,10 +1,5 @@
 package provider
 
-// sa-72: GPT-5 text.verbosity support in the OpenAI Responses adapter.
-// The verbosity hint must ride the request's `text` object, survive config
-// resolution, and degrade gracefully when an OpenAI-compatible gateway
-// predates the parameter.
-
 import (
 	"context"
 	"encoding/json"
@@ -61,7 +56,7 @@ func TestOpenAIResponsesVerbosityInRequest(t *testing.T) {
 	if textObj["verbosity"] != "low" {
 		t.Errorf("text.verbosity = %v, want low", textObj["verbosity"])
 	}
-	// Verbosity must not clobber the reasoning object.
+
 	reasoning, _ := reqBody["reasoning"].(map[string]any)
 	if reasoning == nil || reasoning["effort"] != "medium" {
 		t.Errorf("reasoning = %v, want effort medium", reqBody["reasoning"])
@@ -156,7 +151,7 @@ func TestResponsesRejectsVerbosityMatcher(t *testing.T) {
 		{`Unrecognized request argument supplied: text.verbosity`, true},
 		{`Unknown parameter: 'text.verbosity'`, true},
 		{`Unsupported parameter: verbosity`, true},
-		{`verbosity must be one of low, medium, high`, false}, // validation errors mean it IS supported
+		{`verbosity must be one of low, medium, high`, false},
 		{`model not found`, false},
 	}
 	for _, tc := range cases {

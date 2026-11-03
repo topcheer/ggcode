@@ -21,11 +21,11 @@ func TestCapStreamingBlockBounded(t *testing.T) {
 	if !strings.Contains(got, "250 earlier lines hidden while streaming") {
 		t.Fatalf("expected truncation marker, got prefix %q", firstLine(got))
 	}
-	// Output must be bounded: marker(1) + blank(1) + kept(maxStreamingBlockLines).
+
 	if n := strings.Count(got, "\n"); n > maxStreamingBlockLines+2 {
 		t.Fatalf("capped block too tall: %d lines", n+1)
 	}
-	// The NEWEST lines survive; the oldest are dropped.
+
 	if !strings.HasSuffix(got, "paragraph line") {
 		t.Fatal("expected kept tail to end with the newest line")
 	}
@@ -45,8 +45,7 @@ func TestCapStreamingBlockRestoresFenceBalance(t *testing.T) {
 	if missingOpenFence(strings.Split(got, "\n")) != "" {
 		t.Fatal("capped fenced block must be fence-balanced")
 	}
-	// The re-opened fence must appear right after the marker so the kept
-	// code content renders as code, not as loose paragraphs.
+
 	markerEnd := strings.Index(got, "\n\n")
 	if markerEnd < 0 || !strings.HasPrefix(got[markerEnd+2:], "```") {
 		t.Fatalf("expected reopened fence after marker, got %q", firstLine(got[markerEnd+3:]))
@@ -54,8 +53,7 @@ func TestCapStreamingBlockRestoresFenceBalance(t *testing.T) {
 }
 
 func TestRenderStreamingMarkdownCappedTailStillReusesEarlierBlocks(t *testing.T) {
-	// Earlier (non-tail) blocks must still hit the block cache when only
-	// the tail grows — the cap must not break incremental reuse.
+
 	base := "first paragraph\n\nsecond paragraph\n\n"
 	cache := streamRenderCache{}
 	_, cache = renderStreamingMarkdown(base+"short tail", 80, &cache)
@@ -91,8 +89,7 @@ func TestCapStreamingBlockFourBacktickFence(t *testing.T) {
 	if missingOpenFence(strings.Split(got, "\n")) != "" {
 		t.Fatal("capped 4-tick fenced block must be parity-balanced")
 	}
-	// A ``` prepend is valid here: CommonMark allows a longer fence to close
-	// a shorter opener, so ```...```` still renders as one code block.
+
 	markerEnd := strings.Index(got, "\n\n")
 	if markerEnd < 0 || !strings.HasPrefix(got[markerEnd+2:], "```") {
 		t.Fatal("expected a reopened fence after the truncation marker")

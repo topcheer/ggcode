@@ -1,11 +1,5 @@
 package stt
 
-// #2055 regression: STT audio reads were bounded by the IMAGE attachment
-// ceiling (imagepkg.MaxSize, 20MB) since #1893 - a 25MB voice message
-// failed deterministically with an opaque "read STT audio file" error.
-// Audio now has its own 100MB bound and the failure message names the
-// size and the limit.
-
 import (
 	"context"
 	"fmt"

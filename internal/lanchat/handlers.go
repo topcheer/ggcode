@@ -22,16 +22,12 @@ func MountHandlers(mux *http.ServeMux, hub *Hub, tcpPort int) {
 	mux.HandleFunc("/lanchat/presence", auth(hub.handlePresence))
 	mux.HandleFunc("/lanchat/participants", auth(hub.handleParticipantQuery))
 	if hub.attachments != nil {
-		// #768: every other /lanchat/* endpoint is behind auth(); the raw
-		// registration here let any LAN host fetch an attachment by UUID.
+
 		mux.HandleFunc("/lanchat/attach/", auth(hub.attachments.HandleAttachmentDownload))
 	}
 
-	// Start UDP transport on the same port as TCP for fallback delivery.
 	if tcpPort > 0 {
-		// #989: pass the hub's EFFECTIVE key (hub.APIKey()), not the hardcoded
-		// community key - a custom-key node's UDP fallback envelopes must carry
-		// the custom key or peers running the same key reject them (#988 sibling).
+
 		udp, err := NewUDPTransport(tcpPort, udpMulticastAddr, hub, hub.NodeID(), hub.APIKey())
 		if err != nil {
 			debug.Log("lanchat", "UDP transport not started (port %d): %v", tcpPort, err)
@@ -64,7 +60,7 @@ func AuthMiddleware(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if apiKey == "" || apiKey == communityKey {
-			// Zero-config mode: the hub runs on the community key.
+
 			if key != communityKey {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
@@ -87,10 +83,7 @@ func (h *Hub) handleReceiveMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// #1583-A: authenticated-but-unbounded bodies - a single oversized
-	// message entered memory AND hit persistMessage's synchronous disk
-	// write (message count caps did not bound per-message SIZE). Auth is
-	// orthogonal; resource ceilings apply after auth too.
+
 	r.Body = http.MaxBytesReader(w, r.Body, lanchatMaxBodyBytes)
 
 	var msg Message
@@ -104,7 +97,6 @@ func (h *Hub) handleReceiveMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ignore messages from self (loop prevention)
 	if msg.FromNodeID == h.nodeID {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -126,7 +118,7 @@ func (h *Hub) handleReceiveReceipt(w http.ResponseWriter, r *http.Request) {
 	var receipt Receipt
 	if err := json.NewDecoder(r.Body).Decode(&receipt); err != nil {
 		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) { // #1627-B: 413, matching the message endpoint
+		if errors.As(err, &mbe) {
 			http.Error(w, "receipt body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
@@ -150,7 +142,7 @@ func (h *Hub) handleNickChange(w http.ResponseWriter, r *http.Request) {
 	var change NickChange
 	if err := json.NewDecoder(r.Body).Decode(&change); err != nil {
 		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) { // #1627-B: 413, matching the message endpoint
+		if errors.As(err, &mbe) {
 			http.Error(w, "nick body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
@@ -173,11 +165,7 @@ func (h *Hub) handleParticipantQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Hub) handlePresence(w http.ResponseWriter, r *http.Request) {
-	// #1627-A: the fourth receive endpoint missed the #1583-A sweep (its
-	// commit said "all three" - there are four). Zero-config mode accepts
-	// the well-known community key, so any LAN host could POST an
-	// unbounded body; json.Decoder buffers the whole value before
-	// parsing (multi-GB RSS). Presence payloads are tiny - cap hard.
+
 	defer func() { _ = r.Body.Close() }()
 	r.Body = http.MaxBytesReader(w, r.Body, lanchatMaxBodyBytes)
 
@@ -203,7 +191,6 @@ func (h *Hub) handlePresence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Respond with our own presence so both sides learn each other
 	h.HandlePresence(p)
 	json.NewEncoder(w).Encode(h.SelfParticipant())
 }

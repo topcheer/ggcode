@@ -190,16 +190,12 @@ func (m *Manager) RegisterInstance(workspace string, sessionID string) (*Instanc
 	m.instanceDetect = detect
 	m.mu.Unlock()
 
-	// Claim unclaimed bindings for this session (LastSessionID empty → mine).
-	// Skip disabled adapters.
 	m.claimUnclaimedBindings(sessionID)
 
-	// Sync HasActiveChannels based on current bindings
 	m.syncInstanceActiveChannels()
 
 	if len(others) > 0 {
-		// Mute bindings that belong to other sessions or have no session owner.
-		// Bindings whose LastSessionID == sessionID stay active.
+
 		count := m.muteNonOwnedBindings(sessionID)
 		if count > 0 {
 			debug.Log("im", "auto-muted %d channel(s) not owned by session=%s, primary PID=%d started=%s",
@@ -218,10 +214,7 @@ func (m *Manager) claimUnclaimedBindings(sessionID string) {
 	if sessionID == "" {
 		return
 	}
-	// #1235: snapshot the session pointer and store under the lock. Reading
-	// them unlocked raced concurrent BindSession/SetBindingStore writers on
-	// desktop's parallel Wails events (a real data race even though the
-	// mainstream call sites are sequential).
+
 	m.mu.Lock()
 	store := m.bindingStore
 	var workspace string
@@ -239,29 +232,25 @@ func (m *Manager) claimUnclaimedBindings(sessionID string) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// #3581: the ListByWorkspace call above runs UNLOCKED; a concurrent
-	// UnbindSession may have set m.session (or swapped m.bindingStore) to
-	// nil in that window. Re-check the live pointer and reuse the snapshot
-	// taken under the first lock - never dereference m.session here.
+
 	if m.session == nil {
 		return
 	}
 	for _, b := range bindings {
 		if b.LastSessionID != "" {
-			continue // already claimed
+			continue
 		}
-		// Skip disabled adapters
+
 		if _, disabled := m.disabledBindings[b.Adapter]; disabled {
 			continue
 		}
-		// Claim it for this session in the persistent store
+
 		if err := store.UpdateSessionID(workspace, b.Adapter, sessionID); err != nil {
 			debug.Log("im", "claimUnclaimedBindings: UpdateSessionID error for %s: %v", b.Adapter, err)
 		} else {
 			debug.Log("im", "claimed binding %s for session=%s (was unclaimed)", b.Adapter, sessionID)
 		}
-		// Sync the in-memory currentBindings so muteNonOwnedBindings
-		// (which runs right after this) sees the updated LastSessionID.
+
 		if cb, ok := m.currentBindings[b.Adapter]; ok {
 			cb.LastSessionID = sessionID
 		}
@@ -281,14 +270,12 @@ func (m *Manager) StartUnstartedOwnedAdapters() {
 		if binding.Muted || strings.TrimSpace(name) == "" {
 			continue
 		}
-		// Skip bindings owned by another session. Only start adapters
-		// whose LastSessionID is empty (old logic: first process claims)
-		// or matches our session.
+
 		if binding.LastSessionID != "" && sessionID != "" && binding.LastSessionID != sessionID {
 			continue
 		}
 		if _, hasSink := m.adapterCancels[name]; hasSink {
-			continue // already running
+			continue
 		}
 		toStart = append(toStart, name)
 	}
@@ -316,8 +303,7 @@ func (m *Manager) muteNonOwnedBindings(sessionID string) int {
 	m.mu.Lock()
 	count := 0
 	for name, binding := range m.currentBindings {
-		// Skip bindings that already have a session owner — they are handled
-		// by reloadBindingLocked and the binding watcher, not by PID detection.
+
 		if binding.LastSessionID != "" {
 			continue
 		}
@@ -441,10 +427,7 @@ func (m *Manager) SetPairingStore(store PairingStateStore) error {
 func (m *Manager) SetBridge(bridge Bridge) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// #4587: detaching the outgoing bridge unblocks any adapter goroutine
-	// still parked in SubmitInboundMessage on the OLD program (already quit
-	// or replaced). Bridges opt in by implementing detach(); unknown
-	// implementations are left alone.
+
 	if old, ok := m.bridge.(interface{ detach() }); ok {
 		old.detach()
 	}
@@ -485,11 +468,8 @@ func (m *Manager) BindSession(binding SessionBinding) {
 	copy := binding
 	m.session = &copy
 
-	// If the session ID changed, transfer persisted ownership from old→new.
-	// This must happen BEFORE reloadBindingLocked so that the reload sees the
-	// correct LastSessionID and doesn't mark our own bindings as foreign.
 	if migrateOldSessionID != "" && m.bindingStore != nil {
-		m.mu.Unlock() // unlock during disk I/O
+		m.mu.Unlock()
 		persisted, _ := m.bindingStore.ListByWorkspace(migrateWorkspace)
 		m.mu.Lock()
 		for _, b := range persisted {
@@ -506,8 +486,7 @@ func (m *Manager) BindSession(binding SessionBinding) {
 	if err := m.reloadBindingLocked(); err != nil {
 		debug.Log("im", "BindSession: reloadBindingLocked failed: %v", err)
 	}
-	// Stop any previous watcher and start a new one with the updated session.
-	// This ensures the watcher has the correct sessionID for ownership checks.
+
 	prevCancel := m.bindingWatcherCancel
 	m.bindingWatcherCancel = nil
 	m.bindingWatcherCtx = nil
@@ -519,7 +498,7 @@ func (m *Manager) BindSession(binding SessionBinding) {
 	if cb != nil {
 		cb(snapshot)
 	}
-	// Start a fresh watcher with the new session ID.
+
 	m.StartBindingWatcher()
 }
 
@@ -528,15 +507,13 @@ func (m *Manager) UnbindSession() {
 	m.session = nil
 	m.currentBindings = make(map[string]*ChannelBinding)
 	m.disabledBindings = make(map[string]*ChannelBinding)
-	// #719: resetting the adapterCancels map without invoking each cancel
-	// leaked the adapters' goroutines and open connections (their sink
-	// Close() was skipped entirely). Stop every registered adapter first.
+
 	for name := range m.adapterCancels {
 		m.stopAdapter(name)
 	}
 	m.adapterCancels = make(map[string]context.CancelFunc)
 	m.pendingPairing = nil
-	// Stop the binding watcher since we no longer have a session.
+
 	watcherCancel := m.bindingWatcherCancel
 	m.bindingWatcherCancel = nil
 	m.bindingWatcherCtx = nil
@@ -641,7 +618,7 @@ func (m *Manager) CurrentBindings() []ChannelBinding {
 	for _, b := range m.currentBindings {
 		out = append(out, *b)
 	}
-	// Sort by AdapterName for stable display order (map iteration is random).
+
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Adapter < out[j].Adapter
 	})
@@ -669,7 +646,7 @@ func (m *Manager) HasNonInteractiveBindings(sentAdapters map[string]string) bool
 		if _, sent := sentAdapters[b.Adapter]; sent {
 			continue
 		}
-		// This binding was not covered by interactive — needs fallback
+
 		return true
 	}
 	return false
@@ -683,7 +660,7 @@ func (m *Manager) ListBindings() ([]ChannelBinding, error) {
 		currentSnapshot = append(currentSnapshot, *b)
 	}
 	m.mu.RUnlock()
-	// Sort for stable display order.
+
 	sort.Slice(currentSnapshot, func(i, j int) bool {
 		return currentSnapshot[i].Adapter < currentSnapshot[j].Adapter
 	})
@@ -706,12 +683,6 @@ func (m *Manager) ListBindings() ([]ChannelBinding, error) {
 func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	m.mu.Lock()
 
-	// Dedup: skip if we've already processed this message recently.
-	// The mark is recorded BEFORE processing so concurrent redeliveries are
-	// deduplicated. Every failure return below rolls the mark back via
-	// rollbackDedup so the platform's redelivery of the SAME MessageID — the
-	// very case this dedup exists to handle (e.g. Feishu SDK retries) — is
-	// reprocessed instead of being silently swallowed (#540).
 	dedupKey := ""
 	if msgID := strings.TrimSpace(msg.Envelope.MessageID); msgID != "" {
 		dedupKey = msg.Envelope.Adapter + ":" + msgID
@@ -720,8 +691,7 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 			return nil
 		}
 		m.seenMessages[dedupKey] = time.Now()
-		// Prune entries older than 5 minutes to bound memory.
-		// Only prune every 100 messages to avoid O(n) on every inbound.
+
 		m.seenMessageCount++
 		if m.seenMessageCount%100 == 0 {
 			now := time.Now()
@@ -732,9 +702,7 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 			}
 		}
 	}
-	// rollbackDedup removes the seen-mark so a failed message is retried on
-	// redelivery. Must be called while m.mu is held; a no-op when the
-	// message had no MessageID (dedupKey == "").
+
 	rollbackDedup := func() {
 		if dedupKey != "" {
 			delete(m.seenMessages, dedupKey)
@@ -744,7 +712,6 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	bridge := m.bridge
 	sessionBound := m.session != nil
 
-	// Check mute: silently drop inbound for muted adapters.
 	if b, ok := m.currentBindings[msg.Envelope.Adapter]; ok && b.Muted {
 		m.mu.Unlock()
 		return nil
@@ -770,11 +737,7 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	if msg.Envelope.ReceivedAt.IsZero() {
 		msg.Envelope.ReceivedAt = time.Now()
 	}
-	// Defer binding persistence to a single call at the end, instead of
-	// persisting twice (once for ChannelID, once for LastInboundMessageID).
-	// #967: keep a pre-mutation snapshot so a persist failure can roll the
-	// in-memory binding back to match the store (mutation-before-persist used
-	// to leave memory ahead of disk with no recovery).
+
 	orig := *binding
 	needPersist := false
 	if binding.ChannelID == "" && strings.TrimSpace(msg.Envelope.ChannelID) != "" {
@@ -783,11 +746,7 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 		changed = true
 		needPersist = true
 	}
-	// #967: the write above persists a TRIMMED ChannelID; this check must
-	// compare the trimmed inbound value too, otherwise a platform channel ID
-	// with surrounding whitespace is permanently denied after the first
-	// message (binding fixed to the trimmed value, comparison uses the raw
-	// envelope value) - only ClearChannel could recover.
+
 	if binding.ChannelID != "" && strings.TrimSpace(msg.Envelope.ChannelID) != binding.ChannelID {
 		rollbackDedup()
 		m.mu.Unlock()
@@ -801,11 +760,10 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 		changed = true
 		needPersist = true
 	}
-	// Single persist call covering both ChannelID and LastInboundMessageID changes.
+
 	if needPersist && m.bindingStore != nil {
 		if err := m.persistBinding(*binding); err != nil {
-			// #967: roll back the in-memory mutations above so memory matches
-			// the unchanged store entry.
+
 			binding.ChannelID = orig.ChannelID
 			binding.LastInboundMessageID = orig.LastInboundMessageID
 			binding.LastInboundAt = orig.LastInboundAt
@@ -826,8 +784,7 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 		cb(snapshot)
 	}
 	if err := bridge.SubmitInboundMessage(ctx, msg); err != nil {
-		// Roll the dedup mark back so the platform's retry of the same
-		// MessageID is reprocessed rather than silently dropped (#540).
+
 		m.mu.Lock()
 		rollbackDedup()
 		m.mu.Unlock()
@@ -846,7 +803,7 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 		m.mu.Unlock()
 		return PairingResult{}, ErrNoSessionBound
 	}
-	// Silently ignore pairing for muted adapters
+
 	if b, ok := m.currentBindings[msg.Envelope.Adapter]; ok && b.Muted {
 		m.mu.Unlock()
 		return PairingResult{}, nil
@@ -881,10 +838,7 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 		pending := *m.pendingPairing
 		pending.ExistingBinding = cloneBinding(m.pendingPairing.ExistingBinding)
 		sameChannel := pending.Adapter == msg.Envelope.Adapter && pending.ChannelID == channelID
-		// #719 self-healing: the single pairing slot must not be held hostage.
-		// Drop a challenge older than pairingChallengeTTL, or idle longer than
-		// pairingPreemptIdleAfter when a different channel asks, then fall
-		// through so this message creates a fresh challenge.
+
 		now := time.Now()
 		age := now.Sub(pending.RequestedAt)
 		lastActive := pending.RequestedAt
@@ -932,7 +886,7 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 					NewBinding:      &copy,
 				}, nil
 			}
-			// #719: bound the brute-force surface of the 4-digit code.
+
 			if result, handled, err := m.recordWrongCodeLocked(key, pending, msg.Envelope.ReceivedAt); handled {
 				m.mu.Unlock()
 				return result, err
@@ -986,8 +940,7 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 	if kind == PairingKindRebind {
 		reply = "该 bot 当前已绑定其他渠道。请在 ggcode 屏幕上查看 4 位绑定码，并在这里输入完成切换。"
 	}
-	// For rebind: also push the pairing code to the old channel so the user
-	// can see it there without having to watch the ggcode screen.
+
 	if kind == PairingKindRebind && current != nil && strings.TrimSpace(current.ChannelID) != "" {
 		notice := fmt.Sprintf("⚠ 有新渠道正在请求绑定到当前工作空间。配对码：%s\n如非本人操作请忽略，本人操作请在 ggcode 屏幕确认。", code)
 		go func(b ChannelBinding) {
@@ -1041,7 +994,7 @@ func (m *Manager) recordWrongCodeLocked(key string, pending PairingChallenge, re
 	if cb != nil {
 		cb(snapshot)
 	}
-	// Re-acquire so the caller's unconditional Unlock stays correct.
+
 	m.mu.Lock()
 	return PairingResult{
 		Consumed:  true,
@@ -1134,10 +1087,7 @@ func fanOutSend(ctx context.Context, targets []emitTarget, event OutboundEvent) 
 		sink := t.sink
 		safego.Go("im.runtime.fanOut", func() {
 			defer wg.Done()
-			// Check if context is already cancelled before sending.
-			// #967: record the drop instead of returning silently - Emit must
-			// not report success when every send was discarded by cancellation
-			// (semantics parity with SendDirect's missing-sink error).
+
 			select {
 			case <-ctx.Done():
 				errsMu.Lock()
@@ -1225,15 +1175,10 @@ func (m *Manager) SendDirect(ctx context.Context, binding ChannelBinding, event 
 		event.CreatedAt = time.Now()
 	}
 	if sink == nil {
-		// A directed send is not a broadcast: dropping it silently would
-		// report success for a message that was never delivered (fix #165 —
-		// SyncSessionHistory would sync nothing while claiming success).
-		// Mirror GenerateShareLink's explicit not-running error.
+
 		return fmt.Errorf("IM adapter %q is not running", binding.Adapter)
 	}
-	// #719: route through sendWithTimeout so direct sends get the same
-	// per-attempt timeout and bounded retry as fan-out sends, instead of
-	// inheriting an unbounded caller context.
+
 	return sendWithTimeout(ctx, sink, binding, event)
 }
 
@@ -1319,7 +1264,7 @@ func (m *Manager) EmitToNonInteractive(ctx context.Context, event OutboundEvent)
 		if sink == nil {
 			continue
 		}
-		// Skip adapters that support interactive messages
+
 		if _, ok := sink.(InteractiveSender); ok {
 			continue
 		}
@@ -1327,7 +1272,7 @@ func (m *Manager) EmitToNonInteractive(ctx context.Context, event OutboundEvent)
 	}
 	m.mu.RUnlock()
 	if len(targets) == 0 {
-		return nil // no non-interactive adapters, that's fine
+		return nil
 	}
 	return fanOutSend(ctx, targets, event)
 }
@@ -1345,11 +1290,9 @@ func (m *Manager) RegisterApproval(req ApprovalRequest) (ApprovalRequest, <-chan
 		state:    ApprovalState{Request: req},
 		response: resp,
 	}
-	// Prune stale entries to bound memory. Resolved entries older than
-	// 5 minutes and unresolved entries older than 1 hour are removed.
+
 	m.pruneApprovalsLocked()
-	// Ensure the time-driven pruner is running so abandoned approvals are
-	// denied even if no further approval is ever registered (#603).
+
 	m.startApprovalPrunerLocked()
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
@@ -1470,11 +1413,7 @@ func (m *Manager) pruneApprovalsLocked() {
 		if ap.state.Resolved {
 			delete(m.approvals, id)
 		} else if now.Sub(ap.state.Request.RequestedAt) > time.Hour {
-			// Abandoned approval — send Deny before closing so any consumer
-			// blocked on `decision := <-ch` reads an explicit denial instead
-			// of the zero value (permission.Allow), which would fail open
-			// (#259). The channel is buffered with capacity 1, so this send
-			// never blocks.
+
 			ap.response <- permission.Deny
 			close(ap.response)
 			delete(m.approvals, id)
@@ -1516,9 +1455,7 @@ func (m *Manager) startApprovalPrunerLocked() {
 }
 
 func (m *Manager) reloadBindingLocked() error {
-	// Preserve runtime-only state (muted) from existing bindings before reload.
-	// Without this, calling BindSession after RegisterInstance+MuteAll would
-	// wipe the auto-mute state, causing all instances to show active IM channels.
+
 	prevMuted := make(map[string]bool)
 	for name, b := range m.currentBindings {
 		if b.Muted {
@@ -1526,11 +1463,6 @@ func (m *Manager) reloadBindingLocked() error {
 		}
 	}
 
-	// #689: check preconditions BEFORE clearing currentBindings. BindAdapterToWorkspace
-	// has no session precondition (unlike BindChannel) and the desktop entry point
-	// (BindIMAdapter) calls it before a session exists, so this early-return path is
-	// reachable — clearing first wiped all in-memory bindings and discarded the
-	// prevMuted state the comment above promises to preserve.
 	if m.bindingStore == nil || m.session == nil {
 		return nil
 	}
@@ -1540,17 +1472,12 @@ func (m *Manager) reloadBindingLocked() error {
 		return err
 	}
 
-	// Determine the session ID for ownership filtering.
 	sessionID := m.session.SessionID
 
 	for i := range bindings {
 		copy := bindings[i]
-		copy.Muted = false // Muted is in-memory only, never restored from store
+		copy.Muted = false
 
-		// Session-based ownership — this takes PRECEDENCE over prevMuted.
-		// Session ownership is determined from the persisted LastSessionID
-		// and our current session. prevMuted only applies to bindings where
-		// session ownership is inconclusive (empty LastSessionID or empty sessionID).
 		isOwned := false
 		isForeign := false
 		if copy.LastSessionID != "" {
@@ -1562,17 +1489,16 @@ func (m *Manager) reloadBindingLocked() error {
 		}
 
 		if isOwned {
-			// We own this binding — always active, ignore prevMuted.
+
 			copy.Muted = false
 		} else if isForeign {
-			// Belongs to another session — always muted.
+
 			copy.Muted = true
 		} else if prevMuted[copy.Adapter] {
-			// No session ownership info — preserve previous muted state.
+
 			copy.Muted = true
 		}
 
-		// Skip adapters that were explicitly disabled via ApplyAdapterConfig
 		if _, disabled := m.disabledBindings[copy.Adapter]; disabled {
 			continue
 		}
@@ -1590,12 +1516,12 @@ func (m *Manager) bindChannelLocked(binding ChannelBinding) (ChannelBinding, err
 	if binding.BoundAt.IsZero() {
 		binding.BoundAt = time.Now()
 	}
-	// Claim the binding for this session.
+
 	if m.session != nil && binding.LastSessionID == "" {
 		binding.LastSessionID = m.session.SessionID
 	}
 	if m.bindingStore != nil {
-		// Auto-unbind: if adapter is bound to another workspace, remove old binding
+
 		existing, err := m.bindingStore.ListByAdapter(binding.Adapter)
 		if err != nil {
 			return ChannelBinding{}, err
@@ -1730,8 +1656,7 @@ func (m *Manager) ResolveOutputMode(adapterName, globalMode string) string {
 	}
 	switch state.Platform {
 	case PlatformWechat:
-		// WeChat iLink: context_token expires in ~5s, max 5 passive replies.
-		// Force summary mode to ensure only one combined reply per inbound.
+
 		if globalMode == "" || globalMode == "verbose" {
 			return WechatDefaultOutputMode
 		}

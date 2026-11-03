@@ -194,8 +194,6 @@ func TestBuildSystemPrompt_WithProjectProfile(t *testing.T) {
 	}
 }
 
-// --- helpers ---
-
 func mustWriteFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
@@ -221,8 +219,7 @@ func TestProjectProfile_NpmFillsOnlyEmpty(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, dir, "go.mod", "module example.com/x\n\ngo 1.27\n")
 	mustWriteFile(t, dir, "package.json", `{"name":"x","scripts":{"build":"webpack","test":"jest"}}`)
-	// A Makefile with goolm tags decides the commands FIRST (go build/test);
-	// the npm probe must fill nothing over them.
+
 	mustWriteFile(t, dir, "Makefile", "TAGS := goolm\nbuild:\n\tgo build -tags $(TAGS) ./...\n")
 	profile := DetectProjectProfile(dir)
 	if profile == nil {

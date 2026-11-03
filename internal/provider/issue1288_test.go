@@ -1,10 +1,5 @@
 package provider
 
-// Regression test for GitHub issue #1288: Gemini model discovery ignored
-// pagination - the API defaults to pageSize=50 while the registry holds
-// far more entries, so discovery silently truncated and the 6h cache
-// solidified the truncated list.
-
 import (
 	"context"
 	"net/http"
@@ -63,8 +58,7 @@ func TestIssue1288_GeminiPaginationFollowed(t *testing.T) {
 }
 
 func TestIssue1288_GeminiRepeatedTokenTerminates(t *testing.T) {
-	// A broken relay echoing the same nextPageToken forever must not spin
-	// the pagination loop.
+
 	resetModelDiscoveryCacheForTests(t)
 	var calls int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +80,7 @@ func TestIssue1288_GeminiRepeatedTokenTerminates(t *testing.T) {
 	if len(models) != 1 {
 		t.Fatalf("want deduplicated single model, got %v", models)
 	}
-	if calls != 2 { // first request + one repeat detection
+	if calls != 2 {
 		t.Fatalf("repeated-token circuit breaker failed: %d requests", calls)
 	}
 }

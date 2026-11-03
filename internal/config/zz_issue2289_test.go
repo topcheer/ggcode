@@ -10,9 +10,7 @@ func TestIssue2289VendorInPlaceEditSurvivesReload(t *testing.T) {
 	global := &Config{Vendors: map[string]VendorConfig{
 		"foo": {Endpoints: map[string]EndpointConfig{"main": {BaseURL: "https://m1"}}},
 	}}
-	// build the instance side INDEPENDENTLY (no map aliasing with global -
-	// a shallow copy would share the Endpoints backing map and the edit
-	// would leak into global, making the delta invisible)
+
 	instance := &Config{Vendors: map[string]VendorConfig{
 		"foo": {Endpoints: map[string]EndpointConfig{"main": {BaseURL: "https://m1", ContextWindow: 200000}}},
 	}}

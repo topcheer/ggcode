@@ -1,13 +1,5 @@
 package provider
 
-// Characteristic tests for issue #561 (provider batch):
-//   A: OpenAI Chat/ChatStream never sent req.MaxTokens (adaptive cap write-only)
-//   F: containsHTTPStatus missed terminator-anchored statuses ("status 401.")
-//   C: Gemini streaming emitted all-zero usage when UsageMetadata missing
-//   E: streaming hardcoded Choices[0], ignoring Index
-//   G: replacing config.HTTPClient dropped Timeout/Jar/CheckRedirect
-// Probes use real httptest round trips, mirroring the issue's ver-49 probes.
-
 import (
 	"context"
 	"encoding/json"
@@ -23,8 +15,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// ---- Bug A: OpenAI must send max_tokens derived from cap.Get() ----
-
 func TestIssue561A_ChatSendsMaxTokensFromAdaptiveCap(t *testing.T) {
 	var gotMaxTokens any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -39,7 +29,7 @@ func TestIssue561A_ChatSendsMaxTokensFromAdaptiveCap(t *testing.T) {
 	defer server.Close()
 
 	p := NewOpenAIProviderWithBaseURL("test-key", "test-model", 12345, server.URL+"/v1")
-	// Active adaptive cap at 4096; Get() must be consumed on the request path.
+
 	p.SetAdaptiveCap(&adaptiveCap{key: "issue561-test-a", userHint: 4096})
 	p.cap.cur.Store(4096)
 
@@ -109,8 +99,6 @@ func TestIssue561A_ChatSendsMaxTokensWithoutCap(t *testing.T) {
 	}
 }
 
-// ---- Bug F: terminator-anchored status codes must be recognized ----
-
 func TestIssue561F_Status401WithPeriodIsNotRetryable(t *testing.T) {
 	if isRetryable(fmt.Errorf("request failed with status 401.")) {
 		t.Fatalf("BUG F: 'status 401.' (period-terminated) must be non-retryable")
@@ -127,8 +115,8 @@ func TestIssue561F_StatusTerminatorAnchors(t *testing.T) {
 		{"request failed with status 403)", "403", true},
 		{"error (status 404;", "404", true},
 		{"failed with status 500:", "500", true},
-		{"failed with status 429, retry later", "429", true}, // pre-existing comma anchor
-		{"requested 40123 tokens", "401", false},             // digit coincidence must NOT match
+		{"failed with status 429, retry later", "429", true},
+		{"requested 40123 tokens", "401", false},
 		{"id=4019x", "401", false},
 	}
 	for _, c := range cases {
@@ -138,12 +126,10 @@ func TestIssue561F_StatusTerminatorAnchors(t *testing.T) {
 	}
 }
 
-// ---- Bug E: stream must not drop choices with index > 0 ----
-
 func TestIssue561E_StreamRoutesChoiceByIndex(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		// vLLM/OpenRouter-style numbering: single candidate at index 1.
+
 		fmt.Fprint(w, "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":1,\"delta\":{\"role\":\"assistant\",\"content\":\"hello from index 1\"},\"finish_reason\":null}]}\n\n")
 		fmt.Fprint(w, "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":1,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
 		fmt.Fprint(w, "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4,\"total_tokens\":7}}\n\n")
@@ -176,8 +162,6 @@ func TestIssue561E_StreamRoutesChoiceByIndex(t *testing.T) {
 	}
 }
 
-// ---- Bug G: config.HTTPClient non-Transport fields must survive ----
-
 func TestIssue561G_HTTPClientTimeoutPreserved(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -187,22 +171,13 @@ func TestIssue561G_HTTPClientTimeoutPreserved(t *testing.T) {
 
 	cfg := openai.DefaultConfig("test-key")
 	cfg.BaseURL = server.URL + "/v1"
-	// A 1ns client timeout must be honored: if preserved, every request
-	// fails (Client.Timeout exceeded); pre-fix the provider replaced the
-	// client wholesale, dropped the timeout, and requests succeeded.
+
 	cfg.HTTPClient = &http.Client{
 		Timeout:   1 * time.Nanosecond,
 		Transport: http.DefaultTransport,
 	}
 	p := NewOpenAIProviderWithConfig(cfg, "test-key", "test-model", 128, "issue561-g")
 
-	// #4729 changed the contract: timeout-class failures on the default path
-	// (no configured request_timeout) now retry IN PLACE, honoring only
-	// caller-context cancellation. The test proves BOTH properties:
-	// (a) the 1ns caller HTTPClient.Timeout is still honored — every attempt
-	//     keeps failing (>=3 backoffs observed; pre-#561G-fix a dropped
-	//     timeout made attempt 1 SUCCEED, returning nil long before 3);
-	// (b) the in-place loop terminates on caller-context cancellation (#4729).
 	origSleep := retrySleep
 	defer func() { retrySleep = origSleep }()
 	var sleeps int32
@@ -210,8 +185,8 @@ func TestIssue561G_HTTPClientTimeoutPreserved(t *testing.T) {
 	defer cancel()
 	retrySleep = func(sctx context.Context, d time.Duration) error {
 		if atomic.AddInt32(&sleeps, 1) >= 3 {
-			cancel()          // third backoff reached: (a) proven, stop via (b)
-			return sctx.Err() // propagate cancellation immediately
+			cancel()
+			return sctx.Err()
 		}
 		return nil
 	}
@@ -234,12 +209,9 @@ func TestIssue561G_HTTPClientTimeoutPreserved(t *testing.T) {
 	}
 }
 
-// ---- Bug C: Gemini stream usage fallback when UsageMetadata missing ----
-
 func TestIssue561C_GeminiStreamUsageFallback(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Stream chunks WITHOUT usageMetadata — the exact condition from
-		// the issue probe. Pre-fix the provider emitted all-zero usage.
+
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"a sufficiently long streamed reply\"}]}}]}\n\n")
 		fmt.Fprint(w, "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[]},\"finishReason\":\"STOP\"}]}\n\n")

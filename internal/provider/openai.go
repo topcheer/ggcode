@@ -62,9 +62,7 @@ func (p *OpenAIProvider) CloneWithModel(model string) Provider {
 		client:    p.client,
 		model:     model,
 		maxTokens: p.maxTokens,
-		// #1603: re-key the adaptive cap for the NEW model - sharing the
-		// parent's learned cap pointer mixed per-model state across the
-		// registry's carefully-partitioned keys.
+
 		cap:             AdaptiveCapForModelSwap(p.cap, model, p.maxTokens),
 		policy:          p.policy,
 		reasoningEffort: p.reasoningEffort,
@@ -77,10 +75,7 @@ func (p *OpenAIProvider) CloneWithModel(model string) Provider {
 		baseURL:         p.baseURL,
 		transport:       p.transport,
 		logprobs:        p.logprobs,
-		// #4419: same trap as #3066 (anthropic) - a struct literal silently
-		// dropped these two. responseSchema zero-value = structured-output
-		// constraint silently lost on model-override subagents; the
-		// atomic.Pointer literal copy carries only zero state.
+
 		responseSchema: append(json.RawMessage(nil), p.responseSchema...),
 	}
 	if ov := p.samplingOverride.Load(); ov != nil {
@@ -219,9 +214,6 @@ func (p *OpenAIProvider) SetLogprobsRequest(on bool) { p.logprobs = on }
 // LogprobsRequested reports whether logprobs were requested.
 func (p *OpenAIProvider) LogprobsRequested() bool { return p.logprobs }
 
-// #2271 follow-up: StopSequenceSetter (Set/Get) removed - per-call stop
-// sequences ride the sampling override exclusively; no production caller.
-
 // SetSamplingOverride implements provider.SamplingOverrideSetter (#2248).
 func (p *OpenAIProvider) SetSamplingOverride(o *SamplingOverride) { p.samplingOverride.Store(o) }
 
@@ -240,7 +232,7 @@ func (p *OpenAIProvider) TopP() float64        { return p.topP }
 func (p *OpenAIProvider) applySampling(req *openai.ChatCompletionRequest) {
 	temp := p.temperature
 	if o := p.samplingOverride.Load(); o != nil && o.Temperature > 0 {
-		temp = o.Temperature // #1592-A family: server's temperature hint wins
+		temp = o.Temperature
 	}
 	if temp > 0 {
 		req.Temperature = float32(temp)
@@ -248,9 +240,7 @@ func (p *OpenAIProvider) applySampling(req *openai.ChatCompletionRequest) {
 	if p.topP > 0 {
 		req.TopP = float32(p.topP)
 	}
-	// #2239: per-call stop sequences (MCP sampling contract). #2271
-	// follow-up: the p.stopSequences field had no writer left - the
-	// override is the sole source.
+
 	if o := p.samplingOverride.Load(); o != nil && len(o.StopSequences) > 0 {
 		req.Stop = o.StopSequences
 	}
@@ -264,7 +254,7 @@ func (p *OpenAIProvider) applySampling(req *openai.ChatCompletionRequest) {
 // them into a finish_reason=length continue-loop).
 func (p *OpenAIProvider) effectiveMaxTokens() int {
 	if o := p.samplingOverride.Load(); o != nil && o.MaxTokens > 0 {
-		return o.MaxTokens // #2248: active sampling window wins
+		return o.MaxTokens
 	}
 	if p.cap != nil {
 		if v := p.cap.Get(); v > 0 {
@@ -404,7 +394,7 @@ func NewOpenAIProviderWithBaseURL(apiKey string, model string, maxTokens int, ba
 }
 
 func NewOpenAIProviderWithConfig(config openai.ClientConfig, apiKey, model string, maxTokens int, name string) *OpenAIProvider {
-	// Build identity headers from impersonation state or defaults.
+
 	protocol := "openai"
 	extraHeaders := BuildHeadersForProvider(protocol)
 	for key, values := range vendorSpecificAuthHeaders(config.BaseURL, apiKey) {
@@ -412,7 +402,7 @@ func NewOpenAIProviderWithConfig(config openai.ClientConfig, apiKey, model strin
 			extraHeaders.Set(key, value)
 		}
 	}
-	// OpenRouter-specific headers for attribution and ranking.
+
 	if isOpenRouterEndpoint(config.BaseURL) {
 		extraHeaders.Set("HTTP-Referer", "https://ggcode.dev")
 		extraHeaders.Set("X-Title", "GGCode")
@@ -433,9 +423,7 @@ func NewOpenAIProviderWithConfig(config openai.ClientConfig, apiKey, model strin
 		headers:    extraHeaders,
 		rateLimits: newRateLimitTracker(),
 	}
-	// #561(G): preserve the original client's Timeout/Jar/CheckRedirect -
-	// replacing the whole client dropped them (a 1ns-timeout caller config was
-	// silently ignored). Shallow-copy and swap only the Transport.
+
 	newClient := &http.Client{
 		Transport: transport,
 	}
@@ -516,8 +504,7 @@ func normalizeOpenAIFinishReason(reason string) string {
 	case "":
 		return ""
 	default:
-		// tool_calls, function_call and relay-specific values: pass through
-		// lowercase so callers keep the information.
+
 		return strings.ToLower(strings.TrimSpace(reason))
 	}
 }
@@ -550,8 +537,7 @@ func meanLogprob(ps []float64) *float64 {
 }
 
 func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
-	// sa-78 + #4729: single-wrap deadline when configured (fail-fast, zz_issue2573_test.go);
-	// in-place timeout retry only on the default path.
+
 	ctx, cancel := p.policy.withTimeout(ctx)
 	defer cancel()
 	chatMsgs := p.convertMessages(messages)
@@ -589,26 +575,14 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	}
 
 	choice := resp.Choices[0]
-	// #455: non-streaming path must feed the adaptive cap on truncation -
-	// anthropic/gemini and this file's own streaming path all report
-	// finish_reason=length via OnTruncated; without it the cap never lowers
-	// and requests stay truncated.
-	// #788: relay backends (vLLM, gateways) report finish_reason
-	// max_tokens/max_output_tokens on non-streaming completions too; the
-	// streaming path already normalizes via isLengthFinishReason.
+
 	if isLengthFinishReason(string(choice.FinishReason)) && p.cap != nil {
 		p.cap.OnTruncated()
 	}
 	content := p.convertResponseContent(choice.Message)
 
-	// #722: minimal relays omit `usage` on non-streaming completions; the
-	// only caller today is the compaction summarizer, where a zero Usage
-	// silently understates cost/budget. Mirror the streaming path's
-	// CountTokens + chars-based estimate fallback (ChatStream tail).
 	usage := openAIUsage(resp.Usage)
-	// #4664: estimation base mirrors the streaming path (which accumulates
-	// tool-call Name+Arguments into outputChars, openai.go:959) - content-only
-	// would undercount tool-call-heavy responses.
+
 	outputChars := len(choice.Message.Content)
 	for _, tc := range choice.Message.ToolCalls {
 		outputChars += len(tc.Function.Name) + len(tc.Function.Arguments)
@@ -624,18 +598,10 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 			PromptTokensTotal: inputTokens,
 		}
 	} else if usage.OutputTokens == 0 && outputChars > 0 {
-		// #4563: prompt-only usage (PromptTokens>0, CompletionTokens==0) from
-		// relays that report usage before generating - the non-streaming
-		// counterpart of the streaming #4472 backfill. Without this the
-		// compaction summarizer's cost/budget accounting understates output.
+
 		usage.OutputTokens = estimateTokensFromChars(outputChars)
 	} else if usage.InputTokens == 0 {
-		// #4664: completion-only usage (CompletionTokens>0, PromptTokens==0,
-		// common with vLLM/gateway relays) - the mirror gap of the streaming
-		// #4563 backfill (openai.go:1008-1018). Neither earlier branch fires:
-		// not double-zero, not zero-output - so InputTokens stayed
-		// permanently 0 and the compaction summarizer (the only caller)
-		// understated the prompt side of cost/budget accounting.
+
 		if it, err := p.CountTokens(ctx, messages); err == nil {
 			usage.InputTokens = it
 			usage.PromptTokensTotal = it
@@ -668,10 +634,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 // no-fallback production path. Every send in the ChatStream producer
 // goroutine must go through here.
 func (p *OpenAIProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
-	// #4295 family: same fix as openai_responses (#4293) / gemini - see
-	// the GeminiProvider.sendEvent comment. Non-blocking fast path keeps
-	// the terminal error deterministic; full-buffer falls through to the
-	// racing select (#3071 leak guard preserved).
+
 	select {
 	case ch <- ev:
 		return true
@@ -711,11 +674,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 	safego.Go("provider.openai.streamRead", func() {
 		defer close(ch)
-		// #4729: per-ATTEMPT deadline (was one withTimeout around the whole
-		// retry loop - see Chat above). Parent ctx stays live for retry checks.
+
 		parentCtx := ctx
 		var cancelAttempt context.CancelFunc
-		defer func() { cancelAttempt() }() // idempotent; covers mid-loop returns
+		defer func() { cancelAttempt() }()
 
 		var usage *TokenUsage
 		var outputChars int
@@ -723,30 +685,23 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		var truncated bool
 		var logprobSum float64 // sa-74: confidence telemetry accumulators
 		var logprobN int
-		streamError := false       // set when a non-retryable error was sent to ch
-		budget := newRetryBudget() // #722: cap cumulative retry backoff sleep per stream call
+		streamError := false
+		budget := newRetryBudget()
 
 		attempts := p.policy.attempts()
 		for attempt := 0; attempt < attempts; attempt++ {
 			if attempt > 0 {
-				cancelAttempt() // release the previous attempt's deadline timer
+				cancelAttempt()
 				debug.Log("openai", "Stream retry attempt %d/%d model=%s baseURL=%s", attempt+1, p.policy.attempts(), p.model, p.baseURL)
 			}
-			// #4729: renewal is a no-op on the default path (parent stays live);
-			// with a configured deadline only attempt 0 derives one (#2573).
+
 			if attempt == 0 || p.policy.requestTimeout <= 0 {
 				ctx, cancelAttempt = p.policy.withTimeout(parentCtx)
 			}
 
-			// Reset per-attempt state to avoid leaking failed-attempt usage
-			// into the next (successful) attempt. Same fix as gemini.go.
 			usage = nil
-			logprobSum, logprobN = 0, 0 // sa-74: reset per attempt with usage
-			// #577(B): truncated must reset per attempt too. Attempt 1 could hit
-			// finish_reason=length and then die to a retryable transport error
-			// (emitted=false → retry); a fully-complete attempt 2 then shipped
-			// Done{Truncated:true}, making the agent inject a needless
-			// "continue" prompt on a complete response (up to 3 wasted calls).
+			logprobSum, logprobN = 0, 0
+
 			truncated = false
 
 			// (Re-)establish the stream for each attempt
@@ -768,14 +723,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						}
 						return
 					}
-					if isTimeoutClassError(err) && p.policy.timeoutRetryInPlace() { // #4729: keep retrying timeouts in place
+					if isTimeoutClassError(err) && p.policy.timeoutRetryInPlace() {
 						attempts = retryAlwaysAttempts
 					}
-					// Retry the connection on the next attempt instead of
-					// falling through to the CONNECT FATAL path. Without
-					// this, the sleep above runs but the goroutine then
-					// returns a fatal error - the retry loop is dead code
-					// and every transient 502/503/504/429 kills the run.
+
 					continue
 				}
 				debug.Log("openai", "CONNECT FATAL model=%s baseURL=%s attempt=%d/%d: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), err, err)
@@ -794,16 +745,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			func() {
 				defer localStreamer.Close()
 				defer func() {
-					// Flush any tool_calls that accumulated but never received
-					// a chunk with a non-empty finish_reason. Some
-					// OpenAI-compatible backends (LiteLLM, vLLM, ZAI compat,
-					// some Azure deployments) terminate the SSE without ever
-					// emitting finish_reason; without this flush the agent
-					// silently drops the tool call and hangs in "thinking".
-					// Flush on clean EOF or context cancellation (the latter
-					// may carry complete tool call data from a prior stream).
-					// Never flush on retry (would double-execute) or hard
-					// error (broken conversation, can't trust partial args).
+
 					flushChars, flushEmitted, _ := p.flushResidualToolCalls(ctx, ch, toolCalls, normalEnd, retry)
 					outputChars += flushChars
 					if flushEmitted {
@@ -813,10 +755,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 				for {
 					resp, recvErr := localStreamer.Recv()
 					if recvErr != nil {
-						// #302: context cancellation must surface as an error event
-						// (anthropic.go parity), NOT as a normal end - treating it as
-						// "ended normally" finalized partial output as a complete
-						// assistant message and repaired+flushed unfinished tool calls.
+
 						if errors.Is(recvErr, context.Canceled) {
 							debug.Log("openai", "stream cancelled: %v emitted=%v", recvErr, emitted)
 							if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: recvErr}) {
@@ -825,17 +764,17 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							streamError = true
 							return
 						}
-						// Stream ended normally
+
 						if errors.Is(recvErr, io.EOF) {
 							debug.Log("openai", "Stream ended normally: %v reasoning_total=%d emitted=%v", recvErr, reasoningBuf.Len(), emitted)
 							normalEnd = true
 							return
 						}
 						debug.Log("openai", "STREAM ERROR model=%s baseURL=%s attempt=%d/%d emitted=%v reasoning=%d output=%d: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), emitted, reasoningBuf.Len(), outputChars, recvErr, recvErr)
-						// Retry if no content emitted yet and error is retryable
+
 						if !emitted && isRetryableForContext(ctx, recvErr) && attempt < attempts-1 {
 							slept, sErr := p.sleepBeforeRetry(ctx, ch, budget, recvErr, attempt)
-							if isTimeoutClassError(recvErr) && p.policy.timeoutRetryInPlace() { // #4729: keep retrying timeouts in place
+							if isTimeoutClassError(recvErr) && p.policy.timeoutRetryInPlace() {
 								attempts = retryAlwaysAttempts
 							}
 							if !slept {
@@ -843,10 +782,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 									if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sErr}) {
 										return
 									}
-									// Mark the stream as errored so the tail does
-									// not emit a usage-bearing Done after the
-									// terminal Error (mirrors the connect-phase
-									// branch above and anthropic.go).
+
 									streamError = true
 								}
 								return
@@ -862,14 +798,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					}
 
 					if resp.Usage != nil {
-						// #1286: relays (one-api/new-api compat layers) may send a
-						// protocol-legal all-zero usage chunk at end of stream. A bare
-						// overwrite cleared previously accumulated usage AND suppressed
-						// the estimation fallback (usage non-nil but zero), silently
-						// zeroing cost/budget/compaction stats. Mirror anthropic.go's
-						// #722/#1168 guard: zero fields never clobber accumulated
-						// values, and an all-zero chunk never materializes a usage
-						// (fallback estimation stays available).
+
 						usage = applyOpenAIUsage(usage, *resp.Usage)
 					}
 
@@ -877,10 +806,6 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						continue
 					}
 
-					// #561(E): vLLM/OpenRouter compat layers may number choices
-					// starting at an index > 0. Prefer the choice with Index==0;
-					// if no choice carries Index 0, fall back to the first one
-					// so index>0 deltas are not silently dropped.
 					choice := resp.Choices[0]
 					for i := range resp.Choices {
 						if resp.Choices[i].Index == 0 {
@@ -890,7 +815,6 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					}
 					delta := choice.Delta
 
-					// Reasoning content (DeepSeek v4, etc.)
 					if delta.ReasoningContent != "" {
 						reasoningBuf.WriteString(delta.ReasoningContent)
 						emitted = true
@@ -899,7 +823,6 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						}
 					}
 
-					// Text content
 					if delta.Content != "" {
 						outputChars += len(delta.Content)
 						emitted = true
@@ -908,10 +831,6 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						}
 					}
 
-					// Confidence telemetry (sa-74): accumulate per-token logprobs
-					// from the stream chunk. Relay chunks often repeat the full
-					// logprobs array; here Content is per-token delta (openai
-					// protocol), so plain accumulation is correct.
 					if p.logprobs && choice.Logprobs != nil {
 						for _, t := range choice.Logprobs.Content {
 							logprobSum += t.Logprob
@@ -919,32 +838,20 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						}
 					}
 
-					// Tool call deltas
 					for _, tc := range delta.ToolCalls {
 						idx := -1
 						if tc.Index != nil {
 							idx = int(*tc.Index)
 						} else if len(delta.ToolCalls) == 1 {
-							// #722: the official API and mainstream relays always send
-							// index, but minimal relays omit it. A single call in the
-							// delta has nothing to disambiguate - default to 0 instead
-							// of silently discarding the whole turn's tool call.
+
 							idx = 0
-							// #4471: those same relays may stream parallel tool calls
-							// one chunk each; collapsing every chunk into slot 0 silently
-							// merges distinct calls (ID last-write-wins, arguments
-							// byte-concatenated into invalid JSON). When the delta
-							// carries an ID, keep distinct IDs in distinct slots.
+
 							idx = resolveNoIndexToolCallSlot(toolCalls, tc.ID)
 						} else if tc.ID != "" {
-							// #4535: relays that batch several parallel tool calls
-							// into one delta while omitting index previously lost
-							// every one of them. A delta carrying an ID can still
-							// be located - resolve it to a slot the same way the
-							// single-delta path does (#4471).
+
 							idx = resolveNoIndexToolCallSlot(toolCalls, tc.ID)
 						} else {
-							// Multiple calls without index or ID cannot be located safely.
+
 							debug.Log("openai", "dropping tool-call delta without index (multi-call delta, id=%s name=%s)", tc.ID, tc.Function.Name)
 							continue
 						}
@@ -964,7 +871,6 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						}
 					}
 
-					// Check for finish reason to emit completed tool calls
 					finishReason := string(choice.FinishReason)
 					if finishReason != "" {
 						if debug.IsVerbose("openai") {
@@ -973,16 +879,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 								debug.Log("openai", "tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
 							}
 						}
-						// #4244: Go map iteration is randomized - emitting the parallel
-						// tool calls in map order lost the model's idx-expressed intent
-						// (mkdir→write, add→commit pairs executed in random order, and
-						// replay transcripts differed run-to-run). Emit sorted by idx.
+
 						for _, idx := range slices.Sorted(maps.Keys(toolCalls)) {
 							tc := toolCalls[idx]
-							// Attempt JSON repair for truncated/malformed args.
-							// This is especially important when finish_reason is
-							// "length" (max_tokens truncation) - the args may be
-							// cut off mid-object.
+
 							if len(tc.Arguments) > 0 && !json.Valid(tc.Arguments) {
 								if repaired, ok := RepairJSON(tc.Arguments); ok {
 									debug.Log("openai", "finish_reason tool_call id=%s name=%s: JSON repaired %d→%d bytes", tc.ID, tc.Name, len(tc.Arguments), len(repaired))
@@ -997,8 +897,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							delete(toolCalls, idx)
 						}
 						if isLengthFinishReason(finishReason) {
-							// Output was truncated by max_tokens limit - this is NOT an
-							// error. We keep the partial content already streamed.
+
 							if p.cap != nil {
 								p.cap.OnTruncated()
 							}
@@ -1031,19 +930,11 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					}
 				} else {
 					if usage.OutputTokens == 0 && outputChars > 0 {
-						// #4472: the #1286 zero guard only rejects chunks where every
-						// field is zero, so a prompt-only usage chunk (two-phase relays)
-						// materializes usage with OutputTokens==0 and suppresses this
-						// estimation fallback - silently zeroing cost/budget/compaction
-						// accounting while real output streamed. Backfill the estimate.
+
 						usage.OutputTokens = estimateTokensFromChars(outputChars)
 					}
 					if usage.InputTokens == 0 {
-						// #4563: the mirror gap - a completion-only usage chunk
-						// (Output>0, Input==0) materializes usage, which skips the
-						// usage==nil estimation fallback above and leaves
-						// InputTokens permanently 0. Backfill via CountTokens so
-						// cost/budget accounting does not understate the prompt side.
+
 						if it, err := p.CountTokens(ctx, messages); err == nil {
 							usage.InputTokens = it
 							usage.PromptTokensTotal = it
@@ -1061,7 +952,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			}
 			return
 		}
-		// All retry attempts exhausted without success.
+
 		if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %d retry attempts exhausted", p.policy.attempts())}) {
 			return
 		}
@@ -1125,7 +1016,7 @@ func applyOpenAIUsage(cur *TokenUsage, u openai.Usage) *TokenUsage {
 	parsed := openAIUsage(u)
 	if parsed.InputTokens == 0 && parsed.OutputTokens == 0 && parsed.CacheRead == 0 {
 		if cur == nil {
-			return nil // all-zero: do not materialize, keep fallback available
+			return nil
 		}
 		return cur
 	}
@@ -1172,8 +1063,7 @@ func estimateTokensFromChars(chars int) int {
 	if chars <= 0 {
 		return 0
 	}
-	// Conservative estimate: ~3 chars/token on average (mixed ASCII/CJK/code).
-	// errs on the side of overcounting to trigger compaction early enough.
+
 	estimate := chars / 3
 	if estimate < 1 {
 		return 1
@@ -1238,7 +1128,6 @@ func foldInjectedUserMessages(messages []Message, fold func([]ContentBlock, stri
 		return messages
 	}
 
-	// Detect if there are any problematic patterns before copying.
 	hasProblem := false
 	for i := 0; i < len(messages)-2; i++ {
 		if messages[i].Role != "assistant" {
@@ -1254,7 +1143,7 @@ func foldInjectedUserMessages(messages []Message, fold func([]ContentBlock, stri
 		if !hasToolUse {
 			continue
 		}
-		// Scan forward: are there 1+ text-only user messages followed by a tool_result?
+
 		j := i + 1
 		foundTextOnly := false
 		for j < len(messages) && messages[j].Role == "user" && isTextOnly(messages[j].Content) {
@@ -1275,7 +1164,7 @@ func foldInjectedUserMessages(messages []Message, fold func([]ContentBlock, stri
 	result := make([]Message, 0, len(messages))
 	i := 0
 	for i < len(messages) {
-		// Check if this is an assistant message with tool_use, followed by text-only user messages
+
 		if messages[i].Role == "assistant" && hasToolUseBlock(messages[i].Content) &&
 			i+1 < len(messages) && messages[i+1].Role == "user" && isTextOnly(messages[i+1].Content) {
 
@@ -1291,11 +1180,10 @@ func foldInjectedUserMessages(messages []Message, fold func([]ContentBlock, stri
 				j++
 			}
 
-			// j now points to the tool_result message (or end)
-			result = append(result, messages[i]) // assistant
+			result = append(result, messages[i])
 
 			if j < len(messages) && messages[j].Role == "user" && hasToolResultBlock(messages[j].Content) {
-				// Merge guidance texts into the tool_result message
+
 				merged := messages[j]
 				if len(guidanceTexts) > 0 {
 					prefix := strings.Join(guidanceTexts, "\n\n") + "\n\n"
@@ -1304,12 +1192,7 @@ func foldInjectedUserMessages(messages []Message, fold func([]ContentBlock, stri
 				result = append(result, merged)
 				i = j + 1
 			} else {
-				// No tool_result found - keep messages as-is. #3071: the
-				// scan advanced j past EVERY consecutive text-only user, so
-				// all of messages[i+1..j-1] must be preserved - the old
-				// `append(i+1); i += 2` silently dropped i+2..j-1 (their
-				// texts were collected into guidanceTexts but never used on
-				// this path), deleting guidance from the conversation.
+
 				for k := i + 1; k < j; k++ {
 					result = append(result, messages[k])
 				}
@@ -1363,7 +1246,7 @@ func prependToToolResultContent(blocks []ContentBlock, prefix string) []ContentB
 			result = append(result, ContentBlock{Type: "text", Text: prefix + b.Text})
 			inserted = true
 		} else if !inserted && b.Type == "tool_result" {
-			// Prepend guidance as a separate text block before tool results
+
 			result = append(result, ContentBlock{Type: "text", Text: prefix})
 			inserted = true
 			result = append(result, b)
@@ -1378,12 +1261,9 @@ func prependToToolResultContent(blocks []ContentBlock, prefix string) []ContentB
 }
 
 func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatCompletionMessage {
-	// Merge all system messages into one to avoid interspersed system messages
-	// in the OpenAI messages array.
+
 	messages = MergeSystemMessages(messages)
 
-	// Fold injected text-only user messages between assistant tool_calls and
-	// tool_result messages to satisfy strict OpenAI-compatible APIs (Kimi K3).
 	messages = mergeInjectedUserMessages(messages)
 
 	result := make([]openai.ChatCompletionMessage, 0, len(messages))
@@ -1408,7 +1288,7 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 				Content: text,
 			})
 		case "user":
-			// Check for tool_result blocks (agent stores tool results as role="user")
+
 			hasToolResult := false
 			if debug.IsVerbose("openai") {
 				debug.Log("openai", "convert user msg: content_blocks=%d", len(m.Content))
@@ -1447,7 +1327,7 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 				result = appendToolResultMessages(result, m.Content, guidancePrefix)
 				break
 			}
-			// Check if any content block is an image
+
 			hasImage := false
 			for _, b := range m.Content {
 				if b.Type == "image" {
@@ -1516,31 +1396,26 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 						},
 					})
 				}
-				// Collect reasoning content from any block that has it
+
 				if b.ReasoningContent != "" {
 					reasoningContent = b.ReasoningContent
 				}
 			}
 			msg.ToolCalls = toolCalls
-			// DeepSeek reasoning models require reasoning_content when tool_calls
-			// are present in a message. If the previous model (e.g. GLM-5.1) did not
-			// generate reasoning content, supply an empty string to avoid 400 errors
-			// when switching to DeepSeek V4 mid-session.
+
 			if reasoningContent != "" {
 				msg.ReasoningContent = reasoningContent
 			} else if len(toolCalls) > 0 {
 				msg.ReasoningContent = ""
 			}
-			// DeepSeek V4 strictly requires assistant messages to have content or
-			// tool_calls. If both are empty (e.g. from a previous model that produced
-			// an empty response), skip the message entirely.
+
 			if msg.Content == "" && len(msg.ToolCalls) == 0 {
 				debug.Log("openai", "WARNING: skipping empty assistant message (idx=%d, content_blocks=%d)", idx, len(m.Content))
 				continue
 			}
 			result = append(result, msg)
 		case "tool":
-			// Tool results - each tool_result block becomes a separate message
+
 			result = appendToolResultMessages(result, m.Content, "")
 		}
 	}
@@ -1600,26 +1475,16 @@ func (p *OpenAIProvider) convertTools(tools []ToolDefinition) []openai.Tool {
 	result := make([]openai.Tool, 0, len(tools))
 	for _, t := range tools {
 		params := t.Parameters
-		// Validate the schema is well-formed JSON. MCP servers and plugins
-		// may return invalid JSON schemas that crash the entire request
-		// serialization (json.RawMessage.MarshalJSON panics on invalid content).
-		// Fall back to an empty object schema instead of failing all 191 tools.
+
 		if len(bytes.TrimSpace(params)) == 0 || !json.Valid(params) {
 			debug.Log("openai", "WARNING: tool %q has invalid JSON schema (%d bytes), using empty object fallback", t.Name, len(params))
 			params = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
-		// #4276: moonshot-flavored endpoints reject free-form object
-		// schema nodes ({"type":"object"} with no properties and no
-		// additionalProperties) as "infinite recursion without termination
-		// condition". Normalize vendor-gated so every other endpoint is
-		// byte-identical.
+
 		if moonshotSchemaGateActive(p.baseURL, p.model) {
 			params = normalizeMoonshotSchema(params)
 		}
-		// Strict tool use (structured outputs): only allowlisted tools get
-		// `strict: true`, and only when their schema is strict-compatible.
-		// go-openai serializes Strict with omitempty, so a plain false never
-		// reaches the wire - unchanged payloads for every other tool.
+
 		strict := t.Strict || p.strictTools[t.Name]
 		if strict {
 			prepared, ok := PrepareStrictToolSchema(t.Name, params)

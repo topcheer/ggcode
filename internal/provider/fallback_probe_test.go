@@ -37,16 +37,13 @@ func (m *failingNProvider) CountTokens(ctx context.Context, messages []Message) 
 // active, a background prober checks the primary and switches back as soon
 // as it responds successfully - without waiting for the fallback to fail.
 func TestFallback_ProactivePrimaryRecovery(t *testing.T) {
-	// Primary fails twice (quota), then recovers: 1 call from the initial
-	// failed attempt + 1 failed probe, subsequent probes succeed.
+
 	primary := &failingNProvider{name: "primary", err: errors.New("insufficient_quota: quota exceeded")}
 	primary.failN.Store(2)
 	fallback := &mockProvider{name: "fallback"}
 	fp := NewFallbackProvider(primary, fallback, "primary -> fallback")
 	fp.probeInterval = 10 * time.Millisecond
 
-	// Trigger failover via a real Chat call on the primary. The call itself
-	// SUCCEEDS - the fallback serves the retry - but failover activates.
 	resp, err := fp.Chat(context.Background(), nil, nil)
 	if err != nil || resp == nil {
 		t.Fatalf("triggering call must succeed via the fallback retry: %v", err)
@@ -55,7 +52,6 @@ func TestFallback_ProactivePrimaryRecovery(t *testing.T) {
 		t.Fatal("quota failure must activate failover")
 	}
 
-	// Wait for the prober to notice the recovered primary and switch back.
 	deadline := time.Now().Add(3 * time.Second)
 	for fp.activeIdx.Load() != 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
@@ -64,7 +60,6 @@ func TestFallback_ProactivePrimaryRecovery(t *testing.T) {
 		t.Fatal("prober must switch back to the recovered primary")
 	}
 
-	// Subsequent traffic flows through the primary again.
 	resp, err = fp.Chat(context.Background(), nil, nil)
 	if err != nil || resp == nil {
 		t.Fatalf("expected primary to serve traffic after recovery: %v", err)
@@ -83,7 +78,6 @@ func TestFallback_ProberStopsWhenNotFailedOver(t *testing.T) {
 	fp := NewFallbackProvider(primary, fallback, "primary -> fallback")
 	fp.probeInterval = 10 * time.Millisecond
 
-	// Manual Reset() after activation must also retire the prober.
 	fp.mu.Lock()
 	fp.activeIdx.Store(1)
 	fp.startRecoveryProberLocked()

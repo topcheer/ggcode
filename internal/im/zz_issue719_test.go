@@ -1,11 +1,5 @@
 package im
 
-// Issue #719: pairing challenge hardening tests.
-// 1. Challenge TTL expiry (stale slot discarded, new request creates fresh challenge).
-// 2. Cross-channel preemption after idle.
-// 3. Wrong-code attempt limit (slot cleared at 5 wrong attempts, RejectCount
-//    advances the existing blacklist mechanism).
-
 import (
 	"strings"
 	"testing"
@@ -166,8 +160,6 @@ func TestPairingWrongCodeAttemptLimitClearsSlot(t *testing.T) {
 	}
 	correctCode := challenge.Code
 
-	// Submit wrong codes; each must be rejected but keep the slot, except the
-	// final attempt which must clear the slot.
 	for i := 1; i <= maxPairingWrongCodeAttempts; i++ {
 		wrong := "9999"
 		if wrong == correctCode {
@@ -198,8 +190,6 @@ func TestPairingWrongCodeAttemptLimitClearsSlot(t *testing.T) {
 		}
 	}
 
-	// A new request from the same channel must be able to create a fresh
-	// challenge (slot self-healed).
 	fresh, err := mgr.HandlePairingInbound(pairingMsg("qq", "group-1", "msg-fresh", "start", now.Add(2*time.Minute)))
 	if err != nil {
 		t.Fatalf("fresh HandlePairingInbound: %v", err)
@@ -224,8 +214,6 @@ func TestPairingWrongCodeExhaustionAdvancesBlacklist(t *testing.T) {
 	}
 	now := time.Now()
 
-	// Exhaust wrong-code attempts pairingBlacklistAfterRejects times. Each
-	// exhaustion advances RejectCount by 1; the third must blacklist.
 	for round := 1; round <= pairingBlacklistAfterRejects; round++ {
 		if _, err := mgr.HandlePairingInbound(pairingMsg("qq", "group-1", "msg-start", "start", now)); err != nil {
 			t.Fatalf("round %d start: %v", round, err)
@@ -237,8 +225,6 @@ func TestPairingWrongCodeExhaustionAdvancesBlacklist(t *testing.T) {
 		}
 	}
 
-	// After the third exhaustion the channel must be blacklisted: further
-	// pairing requests get the blacklist reply and never create a challenge.
 	res, err := mgr.HandlePairingInbound(pairingMsg("qq", "group-1", "msg-after", "start", now))
 	if err != nil {
 		t.Fatalf("post-blacklist HandlePairingInbound: %v", err)

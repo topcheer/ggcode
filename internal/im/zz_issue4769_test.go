@@ -10,7 +10,7 @@ import (
 // 60K-rune chunk is ~180KB and M_TOO_LARGE fell through to a hard error
 // after partial delivery.
 func TestIssue4769_MatrixChunkMarkdownByteBudget(t *testing.T) {
-	// CJK-heavy: every rune is 3 bytes.
+
 	cjk := strings.Repeat("中", 90000)
 	chunks := matrixChunkMarkdown(cjk)
 	if len(chunks) < 2 {

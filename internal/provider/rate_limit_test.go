@@ -66,7 +66,7 @@ func TestParseRateLimitHeaders_Anthropic(t *testing.T) {
 }
 
 func TestParseRateLimitHeaders_AnthropicNewPrefix(t *testing.T) {
-	// Newer Anthropic API uses "reratelimit-" prefix.
+
 	h := http.Header{}
 	h.Set("reratelimit-requests-limit", "2000")
 	h.Set("reratelimit-requests-remaining", "1999")
@@ -98,7 +98,7 @@ func TestParseRateLimitHeaders_Empty(t *testing.T) {
 }
 
 func TestParseRateLimitHeaders_FloatValue(t *testing.T) {
-	// Some providers return floats like "100.0".
+
 	h := http.Header{}
 	h.Set("x-ratelimit-remaining-requests", "100.0")
 	h.Set("x-ratelimit-limit-requests", "500.0")
@@ -168,13 +168,11 @@ func TestRateLimitInfo_Fractions(t *testing.T) {
 func TestRateLimitTracker_Update(t *testing.T) {
 	tracker := newRateLimitTracker()
 
-	// Initially empty
 	info := tracker.Snapshot()
 	if !info.IsEmpty() {
 		t.Error("expected empty initially")
 	}
 
-	// Update with OpenAI headers
 	h := http.Header{}
 	h.Set("x-ratelimit-remaining-requests", "100")
 	h.Set("x-ratelimit-limit-requests", "1000")
@@ -195,7 +193,6 @@ func TestRateLimitTracker_Update(t *testing.T) {
 func TestRateLimitTracker_UpdateEmptyIgnored(t *testing.T) {
 	tracker := newRateLimitTracker()
 
-	// Set valid data first
 	h := http.Header{}
 	h.Set("x-ratelimit-remaining-requests", "50")
 	tracker.Update(h)
@@ -203,7 +200,6 @@ func TestRateLimitTracker_UpdateEmptyIgnored(t *testing.T) {
 		t.Fatal("expected 50 after first update")
 	}
 
-	// Update with empty headers should be ignored (preserve previous)
 	tracker.Update(http.Header{})
 	if tracker.Snapshot().RemainingRequests != 50 {
 		t.Error("expected 50 preserved after empty update")
@@ -218,7 +214,7 @@ func TestParseDurationSafe(t *testing.T) {
 		{"120ms", 120 * time.Millisecond},
 		{"6h0m0s", 6 * time.Hour},
 		{"1h30m", 90 * time.Minute},
-		{"86400000", 86400 * time.Second}, // raw ms
+		{"86400000", 86400 * time.Second},
 		{"", 0},
 		{"invalid", 0},
 	}
@@ -237,7 +233,6 @@ func TestRateLimitTracker_Concurrent(t *testing.T) {
 	tracker := newRateLimitTracker()
 	done := make(chan struct{})
 
-	// Writer goroutine
 	go func() {
 		defer close(done)
 		for i := 0; i < 100; i++ {
@@ -247,7 +242,6 @@ func TestRateLimitTracker_Concurrent(t *testing.T) {
 		}
 	}()
 
-	// Reader goroutines
 	for i := 0; i < 5; i++ {
 		go func() {
 			for j := 0; j < 100; j++ {
@@ -257,5 +251,5 @@ func TestRateLimitTracker_Concurrent(t *testing.T) {
 	}
 
 	<-done
-	// If we get here without deadlock or panic, the test passes.
+
 }

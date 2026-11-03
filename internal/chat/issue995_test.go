@@ -39,7 +39,7 @@ func simulateTerminalTabExpand(s string) string {
 // FormatBody before wrapping, so tab-indented compiler errors and CRLF
 // command output no longer render past the width invariant (scroll desync).
 func TestIssue995ErrorBodyTabAndCRNormalized(t *testing.T) {
-	// Go compiler error with tab-indicated caret lines, plus a CRLF line.
+
 	raw := "./foo.go:12:3: undefined: x\r\n\tif x != nil {\n\t^\n"
 	item := &BaseToolItem{}
 	item.SetResult(raw, true)
@@ -48,7 +48,6 @@ func TestIssue995ErrorBodyTabAndCRNormalized(t *testing.T) {
 	const width = 40
 	rendered := item.RenderBody(width)
 
-	// Strip ANSI styling to inspect the visible text.
 	plain := stripANSI(rendered)
 	for _, line := range strings.Split(plain, "\n") {
 		if strings.ContainsRune(line, '\t') {
@@ -57,10 +56,7 @@ func TestIssue995ErrorBodyTabAndCRNormalized(t *testing.T) {
 		if strings.ContainsRune(line, '\r') {
 			t.Errorf("raw CR survived error-body render: %q", line)
 		}
-		// The decisive invariant: expand tabs the way a TERMINAL would and
-		// assert the line still fits. Width libraries (lipgloss.Width /
-		// ansi.StringWidth) count '\t' as 0-1 cols - using them here would
-		// reproduce the production blind spot this test exists to pin.
+
 		expanded := simulateTerminalTabExpand(line)
 		if n := utf8Len(expanded); n > width {
 			t.Errorf("terminal-expanded error line = %d cols, exceeds width %d: %q", n, width, expanded)

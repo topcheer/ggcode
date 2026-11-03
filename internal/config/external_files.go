@@ -80,13 +80,6 @@ func loadExternalSections(cfg *Config, mainConfigPath string) {
 	imPath := IMPath(configDir)
 	mcpPath := MCPServersPath(configDir)
 
-	// --- Vendors ---
-	// #559 (Bug E): the external file merges FIELD-LEVEL into the in-memory
-	// set (which mergeDefaultEndpoints already seeded with built-in vendors),
-	// instead of replacing same-name vendors wholesale — so a user overriding
-	// one field of a built-in vendor no longer deletes the other built-in
-	// endpoints (probe: zai 6 endpoints collapsed to 1, switching back to a
-	// deleted endpoint then failed Validate()).
 	if fileExists(vendorsPath) {
 		if v := loadVendorsFile(vendorsPath); v != nil {
 			cfg.Vendors = mergeVendors(cfg.Vendors, v)
@@ -95,22 +88,15 @@ func loadExternalSections(cfg *Config, mainConfigPath string) {
 		migrateSectionToExternal(mainConfigPath, configDir, "vendors")
 	}
 
-	// --- IM ---
 	if fileExists(imPath) {
 		if im := loadIMFile(imPath); im != nil {
-			// #981: field-level merge, mirroring mergeVendors (#559). Previously a
-			// whole-replace (`cfg.IM = *im`) let an empty or comment-only im.yaml
-			// (which parses to a non-nil zero-value IMConfig) silently wipe an im
-			// section still present in the main config (pre-migration layouts),
-			// disabling IM with no log. Non-zero external fields win; zero-value
-			// external fields keep the base value.
+
 			cfg.IM = mergeIMExternal(cfg.IM, *im)
 		}
 	} else if hasMainSection(mainConfigPath, "im") {
 		migrateSectionToExternal(mainConfigPath, configDir, "im")
 	}
 
-	// --- MCP Servers ---
 	if fileExists(mcpPath) {
 		if servers := loadMCPServersFile(mcpPath); servers != nil {
 			cfg.MCPServers = servers
@@ -119,9 +105,6 @@ func loadExternalSections(cfg *Config, mainConfigPath string) {
 		migrateSectionToExternal(mainConfigPath, configDir, "mcp_servers")
 	}
 
-	// --- MCP deletion tombstones ---
-	// Deleted names must survive config reloads so a Claude source file
-	// rewritten behind our back cannot resurrect them via the merge.
 	cfg.DeletedMCPServers = LoadMCPDeleted(configDir)
 }
 
@@ -158,7 +141,6 @@ func saveExternalSections(cfg *Config, configDir string, vendors map[string]Vend
 func SaveVendors(configDir string, vendors map[string]VendorConfig) error {
 	path := VendorsPath(configDir)
 
-	// Marshal vendors to raw map
 	data, err := yaml.Marshal(vendors)
 	if err != nil {
 		return fmt.Errorf("marshaling vendors: %w", err)
@@ -168,7 +150,6 @@ func SaveVendors(configDir string, vendors map[string]VendorConfig) error {
 		return fmt.Errorf("parsing vendors: %w", err)
 	}
 
-	// Strip default vendors (don't bloat the file with 22 built-ins)
 	defaults := DefaultConfig()
 	defaultsData, _ := yaml.Marshal(defaults)
 	defaultsRaw := map[string]interface{}{}
@@ -182,7 +163,7 @@ func SaveVendors(configDir string, vendors map[string]VendorConfig) error {
 			}
 		}
 		if len(raw) == 0 {
-			// All vendors are defaults — remove the file
+
 			if fileExists(path) {
 				os.Remove(path)
 			}
@@ -190,13 +171,6 @@ func SaveVendors(configDir string, vendors map[string]VendorConfig) error {
 		}
 	}
 
-	// #608: Load() expands ${VAR} references in vendors.yaml into memory and
-	// then auto-saves, which previously rewrote the file with the materialized
-	// literal values — destroying the env references (data loss for anyone
-	// managing secrets/URLs via environment variables). Before writing, restore
-	// any ${VAR} leaf from the current on-disk file whose expansion equals the
-	// in-memory value about to be written. If the in-memory value differs from
-	// the expansion (user actually changed it), the new value is kept.
 	if existingData, readErr := os.ReadFile(path); readErr == nil {
 		existingRaw := map[string]interface{}{}
 		if yaml.Unmarshal(existingData, &existingRaw) == nil {
@@ -210,11 +184,10 @@ func SaveVendors(configDir string, vendors map[string]VendorConfig) error {
 	if err != nil {
 		return err
 	}
-	// Wrap in {vendors: ...} so compactArraysInYAML finds the vendors key,
-	// then strip the wrapper key from the output.
+
 	wrappedData, _ := yaml.Marshal(map[string]interface{}{"vendors": raw})
 	compacted := compactArraysInYAML(wrappedData)
-	// Remove the first two lines ("vendors:\n") to unwrap.
+
 	out = stripFirstYAMLKey(compacted)
 	return writeSecureConfigFile(path, out)
 }
@@ -238,10 +211,7 @@ func SaveIMConfig(configDir string, im *IMConfig) error {
 		}
 		return nil
 	}
-	// #3528: same #608 protection as SaveVendors - Load expands ${VAR} refs
-	// into memory; an unguarded save rewrote im.yaml with the materialized
-	// literals, destroying the env references. Restore any on-disk ${VAR}
-	// leaf whose expansion equals the in-memory value before writing.
+
 	if existingData, readErr := os.ReadFile(path); readErr == nil {
 		existingRaw := map[string]interface{}{}
 		if yaml.Unmarshal(existingData, &existingRaw) == nil {
@@ -301,24 +271,13 @@ func SaveMCPServers(configDir string, servers []MCPServerConfig) error {
 	if err != nil {
 		return fmt.Errorf("marshaling mcp servers: %w", err)
 	}
-	// #3528: same #608 protection as SaveVendors - loadMCPServersFile expands
-	// ${VAR} env/header refs into memory; an unguarded save rewrote
-	// mcp_servers.yaml with the materialized secrets, destroying the
-	// references (and persisting plaintext). Restore on-disk ${VAR} leaves
-	// whose expansion equals the in-memory value before writing.
+
 	if existingData, readErr := os.ReadFile(path); readErr == nil {
 		existingList := []interface{}{}
 		if yaml.Unmarshal(existingData, &existingList) == nil {
 			outList := []interface{}{}
 			if yaml.Unmarshal(out, &outList) == nil {
-				// #3533: restoreEnvRefs aligns array elements BY INDEX,
-				// but removing or reordering a server shifts indices - the
-				// equality test would then compare two DIFFERENT servers
-				// and never restore, silently persisting expanded
-				// plaintext. Re-align the existing list by the servers'
-				// stable identity (name) into the OUT order first;
-				// anonymous elements (or non-server arrays) fall back to
-				// index alignment, which is correct within one server.
+
 				aligned := alignByName(existingList, outList)
 				lookup := runtimeEnvLookup(nil)
 				restored := restoreEnvRefs(aligned, outList, lookup)
@@ -377,8 +336,7 @@ func alignByName(existing, out []interface{}) []interface{} {
 				used[fallback] = true
 				fallback++
 			}
-			// existing shorter than out (new server): nothing to align -
-			// restoreEnvRefs skips beyond the existing length.
+
 		}
 	}
 	return aligned
@@ -427,7 +385,7 @@ func loadVendorsFile(path string) map[string]VendorConfig {
 	if err != nil {
 		return nil
 	}
-	// Expand env vars before unmarshaling
+
 	lookup := runtimeEnvLookup(nil)
 	raw := map[string]interface{}{}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
@@ -532,15 +490,14 @@ func mergeVendors(base, external map[string]VendorConfig) map[string]VendorConfi
 			base[name] = ext
 			continue
 		}
-		// Vendor-level scalar merge: external non-zero fields win.
+
 		if ext.DisplayName != "" {
 			cur.DisplayName = ext.DisplayName
 		}
 		if ext.APIKey != "" {
 			cur.APIKey = ext.APIKey
 		}
-		// Endpoint merge: external endpoints are merged into the built-in set;
-		// built-in endpoints not mentioned by the external file are preserved.
+
 		if cur.Endpoints == nil {
 			cur.Endpoints = make(map[string]EndpointConfig)
 		}
@@ -729,15 +686,7 @@ func mergeIMAdapterConfig(base, ext IMAdapterConfig) IMAdapterConfig {
 // migrateSectionToExternal extracts a section from the main config file
 // and writes it to a standalone external file, then removes it from the main file.
 func migrateSectionToExternal(mainConfigPath, configDir, section string) {
-	// #981: hold the config file lock across the whole sequence (read main →
-	// write external file → rewrite main), matching the system_prompt removal
-	// in Load() (config.go). Critically the raw map must be read WHILE holding
-	// the lock: previously both writes ran unlocked against a raw snapshot
-	// taken before, so with multi-process first-run migrations the later
-	// writer rewrote the main file from a stale snapshot and silently
-	// dropped the earlier process's other field changes. Locking the full
-	// read-merge-delete-write window means only our section key is deleted
-	// from a fresh read and concurrent field edits survive.
+
 	unlock := lockConfigFile(mainConfigPath)
 	defer unlock()
 
@@ -762,7 +711,7 @@ func migrateSectionToExternal(mainConfigPath, configDir, section string) {
 	switch section {
 	case "vendors":
 		extPath = VendorsPath(configDir)
-		// Strip default vendors before writing
+
 		if vMap, ok := sectionData.(map[string]interface{}); ok {
 			defaults := DefaultConfig()
 			defaultsData, _ := yaml.Marshal(defaults)
@@ -777,7 +726,7 @@ func migrateSectionToExternal(mainConfigPath, configDir, section string) {
 					}
 				}
 				if len(vMap) == 0 {
-					// All defaults — skip writing, just clean main file
+
 					delete(raw, section)
 					rewriteYAML(mainConfigPath, raw)
 					return
@@ -790,8 +739,7 @@ func migrateSectionToExternal(mainConfigPath, configDir, section string) {
 			return
 		}
 		_ = out
-		// Wrap in {vendors: ...} so compactArraysInYAML finds the vendors key,
-		// then strip wrapper.
+
 		wrappedData, _ := yaml.Marshal(map[string]interface{}{"vendors": sectionData})
 		compacted := compactArraysInYAML(wrappedData)
 		outData = stripFirstYAMLKey(compacted)
@@ -818,7 +766,6 @@ func migrateSectionToExternal(mainConfigPath, configDir, section string) {
 		return
 	}
 
-	// Remove section from main config file
 	delete(raw, section)
 	if err := rewriteYAML(mainConfigPath, raw); err != nil {
 		debug.Log("config", "failed to clean main config after migrating %s: %v", section, err)
@@ -847,7 +794,7 @@ func stripFirstYAMLKey(data []byte) []byte {
 	if len(lines) == 0 {
 		return data
 	}
-	// Find the first non-empty, non-comment line (the key line)
+
 	keyIdx := -1
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -860,16 +807,16 @@ func stripFirstYAMLKey(data []byte) []byte {
 	if keyIdx < 0 {
 		return data
 	}
-	// Check if this line ends with ":" (it's a YAML key)
+
 	if !strings.HasSuffix(strings.TrimSpace(lines[keyIdx]), ":") {
 		return data
 	}
-	// Remove the key line and dedent all subsequent lines by 4 spaces
+
 	result := make([]string, 0, len(lines))
 	result = append(result, lines[:keyIdx]...)
 	for i := keyIdx + 1; i < len(lines); i++ {
 		line := lines[i]
-		// Remove exactly 4 leading spaces (common YAML indent)
+
 		if strings.HasPrefix(line, "    ") {
 			result = append(result, line[4:])
 		} else if strings.HasPrefix(line, "\t\t\t\t") {

@@ -1,8 +1,5 @@
 package config
 
-// Exported wrappers for functions needed by config tool in agentruntime package.
-// These delegate to the unexported implementations in api_keys.go.
-
 // IsEnvReference returns true if the value is an environment variable reference like ${VAR}.
 func IsEnvReference(value string) (envVarName string, ok bool) {
 	return envReferenceVarName(value)

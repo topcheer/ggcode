@@ -31,13 +31,13 @@ func TestChunkWARunes(t *testing.T) {
 			if len(chunks) != tt.count {
 				t.Errorf("got %d chunks, want %d: %v", len(chunks), tt.count, chunks)
 			}
-			// Verify each chunk fits in runes
+
 			for i, c := range chunks {
 				if len([]rune(c)) > tt.maxLen {
 					t.Errorf("chunk %d exceeds maxLen: %d runes > %d", i, len([]rune(c)), tt.maxLen)
 				}
 			}
-			// Verify reassembly (newline at split boundary)
+
 			if tt.name != "newline boundary" && tt.input != "" {
 				got := strings.Join(chunks, "")
 				if got != tt.input {
@@ -49,8 +49,8 @@ func TestChunkWARunes(t *testing.T) {
 }
 
 func TestChunkWARunes_MultiByte(t *testing.T) {
-	// Chinese characters — each rune is 3 bytes but 1 rune
-	text := strings.Repeat("你好世界", 1500) // 6000 runes, well over 4096
+
+	text := strings.Repeat("你好世界", 1500)
 	chunks := chunkWARunes(text, 4096)
 	if len(chunks) < 2 {
 		t.Errorf("expected multiple chunks, got %d", len(chunks))
@@ -61,7 +61,7 @@ func TestChunkWARunes_MultiByte(t *testing.T) {
 			t.Errorf("chunk %d: %d runes exceeds 4096", i, runeCount)
 		}
 	}
-	// Verify reassembly preserves all characters
+
 	got := strings.Join(chunks, "")
 	if got != text {
 		t.Error("reassembly mismatch for multi-byte text")
@@ -123,8 +123,7 @@ func TestWhatsAppStartReturnsImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Force connectAndServe to fail quickly in the background so the test does
-	// not depend on network availability.
+
 	blockingPath := filepath.Join(t.TempDir(), "not-a-dir")
 	if err := os.WriteFile(blockingPath, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)

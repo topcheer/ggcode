@@ -26,14 +26,13 @@ func TestFormatSleepDuration(t *testing.T) {
 }
 
 func TestFormatIMSleepResult(t *testing.T) {
-	// Success — should be suppressed
+
 	tr := &ToolResultInfo{ToolName: "sleep", Result: "Sleep for 5s ... Done"}
 	got := formatIMSleepResult(tr)
 	if got != "" {
 		t.Errorf("success sleep result should be suppressed, got %q", got)
 	}
 
-	// Error — should show
 	trErr := &ToolResultInfo{ToolName: "sleep", Result: "sleep interrupted", IsError: true}
 	got = formatIMSleepResult(trErr)
 	if got == "" {
@@ -50,7 +49,7 @@ func TestFormatToolCallText_Sleep(t *testing.T) {
 }
 
 func TestFormatToolResultText_Sleep_Suppressed(t *testing.T) {
-	// Sleep success result should return empty (suppressed)
+
 	tr := &ToolResultInfo{ToolName: "sleep", Result: "Sleep for 5s ... Done"}
 	got := formatToolResultText(tr)
 	if got != "" {

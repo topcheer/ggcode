@@ -1,15 +1,5 @@
 package im
 
-// Issue #693 (follow-up to #689): UnmuteBinding's ownership check had no
-// dead-owner takeover path, and UnmuteAll bypassed the check entirely.
-//
-// Part 1: a foreign-owned muted binding must be reclaimable when the owning
-// session's instance is dead (crash/kill -9 never runs exit cleanup, so
-// LastSessionID stays set and the binding would otherwise be muted forever).
-//
-// Part 2: UnmuteAll must apply the same ownership rule as UnmuteBinding —
-// live foreign owners are skipped; dead owners' bindings are taken over.
-
 import (
 	"encoding/json"
 	"fmt"
@@ -34,7 +24,7 @@ func fakeInstanceDetect(t *testing.T, mgr *Manager, otherPIDs []int, alive func(
 	if _, err := d.Register(); err != nil {
 		t.Fatalf("register instance: %v", err)
 	}
-	// Seed other instances' PID files so ListInstances sees them.
+
 	instancesPath := filepath.Join(dir, ".ggcode", instancesDir)
 	for i, pid := range otherPIDs {
 		data, err := json.Marshal(InstanceInfo{PID: pid, UUID: fakeUUID(pid), StartedAt: time.Now().Add(time.Duration(i) * time.Minute)})
@@ -75,12 +65,11 @@ func TestIssue693_UnmuteTakesOverDeadOwnersBinding(t *testing.T) {
 	mgr.currentBindings["tg"] = &ChannelBinding{
 		Adapter:       "tg",
 		Workspace:     "/tmp/test-workspace",
-		LastSessionID: "dead-session", // orphan: owner crashed, never cleaned up
+		LastSessionID: "dead-session",
 		Muted:         true,
 	}
 	mgr.mu.Unlock()
 
-	// No other live instance: only self is registered → owner must be dead.
 	fakeInstanceDetect(t, mgr, nil, func(pid int) bool { return true })
 
 	if err := mgr.UnmuteBinding("tg"); err != nil {
@@ -108,7 +97,6 @@ func TestIssue693_UnmuteStillRejectsLiveForeignOwner(t *testing.T) {
 	}
 	mgr.mu.Unlock()
 
-	// Another live instance besides self.
 	fakeInstanceDetect(t, mgr, []int{424242}, func(pid int) bool { return true })
 
 	if err := mgr.UnmuteBinding("tg"); err == nil {
@@ -168,7 +156,6 @@ func TestIssue693_UnmuteAllTakesOverDeadOwnersBinding(t *testing.T) {
 	}
 	mgr.mu.Unlock()
 
-	// Only a stale PID file exists (other instance crashed) → not alive.
 	fakeInstanceDetect(t, mgr, []int{999999}, func(pid int) bool { return pid != 999999 })
 
 	count, err := mgr.UnmuteAll()

@@ -1,8 +1,5 @@
 package im
 
-// #2399: the IM /usage path picks the probe BY URL (owner ruling), 15s
-// outer budget (#2400).
-
 import (
 	"os"
 	"strings"

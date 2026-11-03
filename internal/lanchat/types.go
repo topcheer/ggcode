@@ -258,12 +258,10 @@ func DetectWorkspaceMeta(dir string) WorkspaceMeta {
 		ProjectName: filepath.Base(dir),
 	}
 
-	// Check for .git
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 		meta.HasGit = true
 	}
 
-	// Quick scan for languages (max depth 3, max 5000 entries)
 	rootDepth := strings.Count(filepath.Clean(dir), string(filepath.Separator))
 	langSet := make(map[string]bool)
 	visited := 0
@@ -280,7 +278,7 @@ func DetectWorkspaceMeta(dir string) WorkspaceMeta {
 		}
 		if d.IsDir() {
 			base := strings.ToLower(d.Name())
-			// Skip common noise directories
+
 			switch base {
 			case "node_modules", ".git", "vendor", ".next", "dist", "build",
 				"target", "__pycache__", ".cache", ".venv", "venv":
@@ -317,7 +315,7 @@ func DetectWorkspaceMeta(dir string) WorkspaceMeta {
 		case "_test.go", ".test.ts", ".test.js", ".test.dart":
 			meta.HasTests = true
 		}
-		// Check for test file patterns
+
 		name := strings.ToLower(d.Name())
 		if strings.Contains(name, "_test.go") || strings.Contains(name, ".test.") ||
 			strings.Contains(name, ".spec.") || strings.Contains(name, "_test.") {
@@ -330,7 +328,6 @@ func DetectWorkspaceMeta(dir string) WorkspaceMeta {
 		meta.Languages = append(meta.Languages, lang)
 	}
 
-	// Detect frameworks from config files
 	if _, err := os.Stat(filepath.Join(dir, "package.json")); err == nil {
 		meta.Frameworks = append(meta.Frameworks, "npm")
 	}

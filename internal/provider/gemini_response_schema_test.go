@@ -1,9 +1,5 @@
 package provider
 
-// Gemini structured outputs probes (sa-229): schema conversion fidelity
-// (type mapping, nesting, enum, required, unsupported-type skip) and
-// config arming (no-op without schema, responseMimeType pairing).
-
 import (
 	"encoding/json"
 	"testing"
@@ -75,7 +71,7 @@ func TestGeminiApplyResponseSchemaArming(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &genai.GenerateContentConfig{}
-	p.applyResponseSchema(cfg) // no schema: no-op
+	p.applyResponseSchema(cfg)
 	if cfg.ResponseSchema != nil || cfg.ResponseMIMEType != "" {
 		t.Fatalf("arming without schema must be a no-op")
 	}
@@ -94,8 +90,6 @@ func TestGeminiApplyResponseSchemaArming(t *testing.T) {
 		t.Errorf("responseMimeType = %q, want application/json", cfg.ResponseMIMEType)
 	}
 
-	// Non-object root (JSON Schema allows it, Gemini responseSchema does
-	// not) must be ignored rather than sent as a malformed config.
 	p.SetResponseSchema(json.RawMessage(`[1,2,3]`))
 	cfg = &genai.GenerateContentConfig{}
 	p.applyResponseSchema(cfg)

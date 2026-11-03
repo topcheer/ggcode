@@ -89,7 +89,7 @@ vendors:
 	if err := os.MkdirAll(instDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	// The #734 trigger shape: instance config WITHOUT a vendors section.
+
 	instPath := filepath.Join(instDir, "ggcode.yaml")
 	if err := os.WriteFile(instPath, []byte("language: zh\ndefault_mode: auto\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -100,9 +100,6 @@ vendors:
 		t.Fatalf("LoadWithInstance: %v", err)
 	}
 
-	// Confirm the trigger condition: attached instance, but the vendors flag
-	// is NOT set (nothing was adopted from a vendors section that doesn't
-	// exist). This documents why the old flag-based gate missed this shape.
 	if !cfg.HasInstanceConfigAttached() {
 		t.Fatal("instance config must be attached")
 	}
@@ -112,8 +109,6 @@ vendors:
 		}
 	}
 
-	// Runtime addition of vendor C (AddCustomEndpoint effect) and the #734
-	// gate: provenance must be detected regardless of the flag.
 	cfg.Vendors["c"] = VendorConfig{Endpoints: map[string]EndpointConfig{
 		"main": {Protocol: "openai", BaseURL: "https://c734.example.com/v1"},
 	}}
@@ -124,8 +119,6 @@ vendors:
 		t.Fatal("global vendor A must not be flagged (write-back not needed)")
 	}
 
-	// saveWithInstanceWriteback equivalent (desktop/wailskit/config.go):
-	// Save(), then instance write-back + snapshot sync when the gate opens.
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -136,8 +129,6 @@ vendors:
 		cfg.SyncVendorToGlobalSnapshot("c")
 	}
 
-	// instance.yaml must now carry C even though it originally had no vendors
-	// section (SaveInstanceScoped merges the vendors delta onto the file).
 	inst, err := os.ReadFile(instPath)
 	if err != nil {
 		t.Fatalf("reading instance config: %v", err)
@@ -148,8 +139,6 @@ vendors:
 		}
 	}
 
-	// Global vendors.yaml must NOT gain C on this Save (instance-sourced; the
-	// snapshot sync only affects future saves, matching #293 leak semantics).
 	if data, err := os.ReadFile(VendorsPath(cfgDir)); err == nil {
 		if strings.Contains(string(data), "https://c734.example.com") {
 			t.Errorf("runtime vendor C leaked into global vendors.yaml on first save (#293). file:\n%s", data)
@@ -158,8 +147,6 @@ vendors:
 		t.Fatalf("reading global vendors.yaml: %v", err)
 	}
 
-	// Restart semantics: a fresh load of the same global+instance pair must
-	// still see C - the data-loss symptom is C disappearing after restart.
 	cfg2, err := LoadWithInstance(cfgPath, ws)
 	if err != nil {
 		t.Fatalf("reload LoadWithInstance: %v", err)

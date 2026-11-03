@@ -172,19 +172,18 @@ func TestRenderSignalMentions(t *testing.T) {
 }
 
 func TestSplitSignalMessage(t *testing.T) {
-	// Short message
+
 	chunks := splitSignalMessage("hello", 10)
 	if len(chunks) != 1 || chunks[0] != "hello" {
 		t.Errorf("short message: %v", chunks)
 	}
 
-	// Long message, split at newline
 	long := "line1\nline2\nline3\nline4\nline5"
 	chunks = splitSignalMessage(long, 12)
 	if len(chunks) < 2 {
 		t.Errorf("expected multiple chunks, got %d", len(chunks))
 	}
-	// Verify reassembly
+
 	rejoined := strings.Join(chunks, "")
 	if rejoined != long {
 		t.Errorf("rejoined = %q, want %q", rejoined, long)
@@ -270,8 +269,7 @@ func TestNewSignalAdapter_TriggerTyping(t *testing.T) {
 		},
 	}
 	a, _ := newSignalAdapter("test", config.IMConfig{}, adapterCfg, nil)
-	// TriggerTyping must not error without a relay connection: delivery is
-	// advisory, failures only surface in debug logs (#1239).
+
 	_ = a.TriggerTyping(nil, ChannelBinding{ChannelID: "+0987654321"})
 }
 
@@ -303,7 +301,6 @@ func TestSignalEchoSuppression(t *testing.T) {
 	}
 	a, _ := newSignalAdapter("test", config.IMConfig{}, adapterCfg, nil)
 
-	// Add sent timestamp
 	a.addSentTimestamp(1000)
 	if !a.isSentTimestamp(1000) {
 		t.Error("should find sent timestamp 1000")
@@ -312,13 +309,11 @@ func TestSignalEchoSuppression(t *testing.T) {
 		t.Error("should not find unsent timestamp 2000")
 	}
 
-	// Remove it
 	a.removeSentTimestamp(1000)
 	if a.isSentTimestamp(1000) {
 		t.Error("should not find removed timestamp")
 	}
 
-	// Max limit
 	for i := int64(0); i < signalMaxSentTimestamps+10; i++ {
 		a.addSentTimestamp(i)
 	}
@@ -337,7 +332,6 @@ func TestSignalProcessEnvelope_SelfMessage(t *testing.T) {
 	}
 	a, _ := newSignalAdapter("test", config.IMConfig{}, adapterCfg, nil)
 
-	// Self-message should be ignored (no syncMessage, sourceNumber == account)
 	envelope := map[string]any{
 		"sourceNumber": "+1234567890",
 		"dataMessage": map[string]any{
@@ -345,7 +339,7 @@ func TestSignalProcessEnvelope_SelfMessage(t *testing.T) {
 			"timestamp": float64(1000),
 		},
 	}
-	// processEnvelope won't call HandleInbound without a manager, so just verify it doesn't panic
+
 	a.processEnvelope(nil, envelope)
 }
 
@@ -359,13 +353,11 @@ func TestSignalProcessEnvelope_EmptyDataMessage(t *testing.T) {
 	}
 	a, _ := newSignalAdapter("test", config.IMConfig{}, adapterCfg, nil)
 
-	// No dataMessage — should be ignored
 	envelope := map[string]any{
 		"sourceNumber": "+1111111111",
 	}
 	a.processEnvelope(nil, envelope)
 
-	// Empty text
 	envelope = map[string]any{
 		"sourceNumber": "+1111111111",
 		"dataMessage": map[string]any{
@@ -386,7 +378,6 @@ func TestSignalProcessEnvelope_GroupNoAllowlist(t *testing.T) {
 	}
 	a, _ := newSignalAdapter("test", config.IMConfig{}, adapterCfg, nil)
 
-	// Group message with no group_allowlist — should be ignored
 	envelope := map[string]any{
 		"sourceNumber": "+1111111111",
 		"dataMessage": map[string]any{
@@ -412,7 +403,6 @@ func TestSignalProcessEnvelope_GroupWithAllowlist(t *testing.T) {
 	}
 	a, _ := newSignalAdapter("test", config.IMConfig{}, adapterCfg, nil)
 
-	// Group message with matching allowlist
 	envelope := map[string]any{
 		"sourceNumber": "+1111111111",
 		"dataMessage": map[string]any{
@@ -425,7 +415,6 @@ func TestSignalProcessEnvelope_GroupWithAllowlist(t *testing.T) {
 	}
 	a.processEnvelope(nil, envelope)
 
-	// Group not in allowlist
 	envelope2 := map[string]any{
 		"sourceNumber": "+1111111111",
 		"dataMessage": map[string]any{
@@ -450,7 +439,6 @@ func TestSignalProcessEnvelope_UserNotAllowed(t *testing.T) {
 	}
 	a, _ := newSignalAdapter("test", config.IMConfig{}, adapterCfg, nil)
 
-	// User not in allowed list
 	envelope := map[string]any{
 		"sourceNumber": "+9999999999",
 		"dataMessage": map[string]any{
@@ -471,7 +459,6 @@ func TestSignalDedup(t *testing.T) {
 	}
 	a, _ := newSignalAdapter("test", config.IMConfig{}, adapterCfg, nil)
 
-	// Same timestamp twice — second should be deduped
 	envelope := map[string]any{
 		"sourceNumber": "+1111111111",
 		"dataMessage": map[string]any{
@@ -480,5 +467,5 @@ func TestSignalDedup(t *testing.T) {
 		},
 	}
 	a.processEnvelope(nil, envelope)
-	a.processEnvelope(nil, envelope) // should be deduped
+	a.processEnvelope(nil, envelope)
 }

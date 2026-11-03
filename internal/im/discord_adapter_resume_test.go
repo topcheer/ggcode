@@ -108,7 +108,7 @@ func newFakeDiscordGateway(t *testing.T) *fakeDiscordGateway {
 			return op, d
 		}
 
-		send(10, map[string]any{"heartbeat_interval": 41250}, 0, "") // Hello
+		send(10, map[string]any{"heartbeat_interval": 41250}, 0, "")
 
 		switch n {
 		case 1:
@@ -119,8 +119,8 @@ func newFakeDiscordGateway(t *testing.T) *fakeDiscordGateway {
 			}
 			g.ops <- fmt.Sprintf("conn1:IDENTIFY:%v", d["intents"])
 			send(0, map[string]any{"session_id": "sess-123", "user": map[string]any{"id": "42"}}, 1, "READY")
-			send(0, map[string]any{"id": "g1"}, 7, "GUILD_CREATE") // bump sequence
-			// abrupt close → client must reconnect with RESUME
+			send(0, map[string]any{"id": "g1"}, 7, "GUILD_CREATE")
+
 		case 2:
 			op, d := readOp()
 			if op != 6 {
@@ -129,7 +129,7 @@ func newFakeDiscordGateway(t *testing.T) *fakeDiscordGateway {
 			}
 			g.ops <- fmt.Sprintf("conn2:RESUME:%v:%v", d["session_id"], d["seq"])
 			send(0, map[string]any{"_trace": nil}, 8, "RESUMED")
-			send(9, true, 0, "") // Invalid Session, resumable
+			send(9, true, 0, "")
 		case 3:
 			op, d := readOp()
 			if op != 6 {
@@ -137,7 +137,7 @@ func newFakeDiscordGateway(t *testing.T) *fakeDiscordGateway {
 				return
 			}
 			g.ops <- fmt.Sprintf("conn3:RESUME:%v:%v", d["session_id"], d["seq"])
-			send(9, false, 0, "") // Invalid Session, NOT resumable
+			send(9, false, 0, "")
 		case 4:
 			op, _ := readOp()
 			if op != 2 {
@@ -180,7 +180,6 @@ func TestDiscordResumeStateMachine(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// conn 1: fresh IDENTIFY, READY stores session, abrupt close.
 	if err := a.connectAndServe(ctx); err == nil {
 		t.Fatalf("conn1: expected read error from abrupt close, got nil")
 	}
@@ -192,7 +191,6 @@ func TestDiscordResumeStateMachine(t *testing.T) {
 		t.Fatalf("after conn1: sessionID=%q sequence=%d, want sess-123/7", sid, seq)
 	}
 
-	// conn 2: RESUME with stored session+seq, RESUMED, then op 9 d=true.
 	if err := a.connectAndServe(ctx); err == nil {
 		t.Fatalf("conn2: expected invalid-session error, got nil")
 	}
@@ -207,7 +205,6 @@ func TestDiscordResumeStateMachine(t *testing.T) {
 		t.Fatalf("after op 9 d=true: sequence=%d, want 8 (RESUMED dispatch seq)", seq)
 	}
 
-	// conn 3: RESUME retried, then op 9 d=false clears session state.
 	if err := a.connectAndServe(ctx); err == nil {
 		t.Fatalf("conn3: expected invalid-session error, got nil")
 	}
@@ -219,7 +216,6 @@ func TestDiscordResumeStateMachine(t *testing.T) {
 		t.Fatalf("after op 9 d=false: sessionID=%q sequence=%d, want cleared", sid, seq)
 	}
 
-	// conn 4: fresh IDENTIFY fallback.
 	if err := a.connectAndServe(ctx); err == nil {
 		t.Fatalf("conn4: expected read error after server close, got nil")
 	}

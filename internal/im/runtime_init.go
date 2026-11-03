@@ -56,8 +56,6 @@ func InitRuntime(opts RuntimeInitOptions) (*RuntimeInitResult, error) {
 		PairingStore: pairingStore,
 	}
 
-	// Start the binding watcher so we detect when another instance claims
-	// a binding that we currently own.
 	mgr.StartBindingWatcher()
 
 	if opts.RegisterInstance && opts.Workspace != "" {

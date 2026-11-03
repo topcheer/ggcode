@@ -227,10 +227,6 @@ a2a:
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Scenario 9: Legacy a2a.api_key auto-migrates to auth.api_key
-// ---------------------------------------------------------------------------
-
 func TestOAuth2Scenario_LegacyA2AAPIKeyMigration(t *testing.T) {
 	yaml := `
 a2a:
@@ -238,7 +234,6 @@ a2a:
 `
 	cfg := parseTestConfig(t, yaml)
 
-	// Legacy key should be migrated to auth.api_key
 	if cfg.A2A.Auth.APIKey != "my-old-key" {
 		t.Errorf("expected auth.api_key=my-old-key after migration, got %q", cfg.A2A.Auth.APIKey)
 	}
@@ -256,7 +251,6 @@ a2a:
 `
 	cfg := parseTestConfig(t, yaml)
 
-	// New format takes priority; legacy key is discarded
 	if cfg.A2A.Auth.APIKey != "new-key" {
 		t.Errorf("expected auth.api_key=new-key, got %q", cfg.A2A.Auth.APIKey)
 	}
@@ -279,13 +273,11 @@ auth:
 `
 	os.WriteFile(filepath.Join(ggcodeDir, "a2a.yaml"), []byte(overrideYaml), 0644)
 
-	// Load override
 	override := LoadA2AOverride(tmpDir)
 	if override == nil {
 		t.Fatal("expected override")
 	}
 
-	// Merge into base config
 	base := A2AConfig{
 		Auth: A2AAuthConfig{APIKey: "global-key"},
 	}
@@ -304,8 +296,7 @@ auth:
 // ---------------------------------------------------------------------------
 func parseTestConfig(t *testing.T, yamlContent string) *Config {
 	t.Helper()
-	// Load() resolves ConfigDir() for external sections; isolate HOME so the
-	// guard does not (correctly) fail fast on the real user home.
+
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
@@ -355,7 +346,7 @@ func TestA2AHostDefault(t *testing.T) {
 		{"with oauth2 → 0.0.0.0", "a2a:\n  auth:\n    oauth2:\n      provider: github\n", "0.0.0.0"},
 		{"explicit host override", "a2a:\n  host: 192.168.1.1\n  auth:\n    api_key: key\n", "192.168.1.1"},
 		{"empty explicit host with auth → 0.0.0.0", "a2a:\n  host: \"\"\n  auth:\n    api_key: key\n", "0.0.0.0"},
-		// Loopback addresses are overridden to 0.0.0.0 so mDNS + lanchat work.
+
 		{"legacy 127.0.0.1 → overridden to 0.0.0.0", "a2a:\n  host: 127.0.0.1\n", "0.0.0.0"},
 		{"legacy localhost → overridden to 0.0.0.0", "a2a:\n  host: localhost\n", "0.0.0.0"},
 		{"legacy ::1 → overridden to 0.0.0.0", "a2a:\n  host: \"::1\"\n", "0.0.0.0"},

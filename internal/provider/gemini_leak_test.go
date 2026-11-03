@@ -53,23 +53,19 @@ func TestGeminiChatStream_ProducerExitsAfterConsumerCancel(t *testing.T) {
 		t.Fatalf("ChatStream error: %v", err)
 	}
 
-	// Consume a couple of events, then cancel and STOP reading - the exact
-	// leak condition from #3068 (agent interrupt/timeout path).
 	for i := 0; i < 2; i++ {
 		<-ch
 	}
 	cancel()
 
-	// The producer must hit ctx.Done on its next blocked send, return, and
-	// run defer close(ch). Before the fix the channel never closed.
 	deadline := time.After(3 * time.Second)
 	for {
 		select {
 		case _, ok := <-ch:
 			if !ok {
-				return // channel closed: producer exited cleanly
+				return
 			}
-			// drain any events that raced in before cancel took effect
+
 		case <-deadline:
 			t.Fatal("producer goroutine leaked: channel not closed within 3s after consumer cancel")
 		}

@@ -165,7 +165,7 @@ func TestMattermostSendHandlesAllEventTypes(t *testing.T) {
 					Lang:     "en",
 				},
 			},
-			want: "", // non-empty formatted text — just verify it's not silently dropped
+			want: "",
 		},
 		{
 			name: "tool result event",
@@ -173,18 +173,18 @@ func TestMattermostSendHandlesAllEventTypes(t *testing.T) {
 				Kind:    OutboundEventToolResult,
 				ToolRes: &ToolResultInfo{ToolName: "run_command", Result: "OK"},
 			},
-			want: "", // non-empty formatted text
+			want: "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// defaultOutboundText should produce output for all event types
+
 			got := defaultOutboundText(tt.event)
 			if tt.want != "" && got != tt.want {
 				t.Errorf("defaultOutboundText() = %q, want %q", got, tt.want)
 			}
-			// For tool call/result, just verify non-empty (exact format may change)
+
 			if tt.want == "" && (tt.event.Kind == OutboundEventToolCall || tt.event.Kind == OutboundEventToolResult) {
 				if got == "" {
 					t.Errorf("defaultOutboundText() returned empty for %s — event type would be silently dropped", tt.name)
@@ -219,10 +219,9 @@ func TestMattermostWSEventParsing(t *testing.T) {
 		botUserID:   "bot123",
 		botUsername: "testbot",
 		seen:        make(map[string]time.Time),
-		manager:     nil, // will crash if we try to handle inbound
+		manager:     nil,
 	}
 
-	// Test that own messages are ignored
 	event := map[string]any{
 		"event": "posted",
 		"data": map[string]any{
@@ -230,9 +229,9 @@ func TestMattermostWSEventParsing(t *testing.T) {
 			"channel_type": "D",
 		},
 	}
-	// This should silently return without error (ignoring own message)
+
 	a.handleWSEvent(nil, event)
-	// No panic = success
+
 }
 
 func TestMattermostRequireMentionPolicy(t *testing.T) {
@@ -262,7 +261,7 @@ func TestMattermostRequireMentionPolicy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Reset seen
+
 			a.seen = make(map[string]time.Time)
 
 			event := map[string]any{
@@ -274,8 +273,6 @@ func TestMattermostRequireMentionPolicy(t *testing.T) {
 				},
 			}
 
-			// We can't fully test this since manager is nil,
-			// but we can verify no panic occurs
 			a.handleWSEvent(nil, event)
 		})
 	}

@@ -13,22 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// Inbound shell passthrough.
-//
-// The TUI has long supported `$ cmd` / `! cmd` as a direct shell escape
-// (update_keys.go). The IM daemon bridge had no equivalent: a `$ ls` message
-// fell through to InboundRouteMessage and was sent to the LLM as a prompt —
-// the model might run it via run_command, but the raw output never reached
-// the IM client through the deterministic emit path (only the model's
-// summarized reply did).
-//
-// This file routes `$ cmd` / `! cmd` inbound messages to a direct shell
-// execution and pushes the captured output back over the emitter, mirroring
-// the TUI behavior. Security posture is identical to the TUI escape: the IM
-// binding is an authenticated control channel (same trust level as the
-// terminal user), and slash commands like /restart already execute
-// privileged actions from IM.
-
 const (
 	// inboundShellTimeout bounds a passthrough shell command. Generous
 	// enough for builds, short enough that a forgotten IM command cannot
@@ -83,8 +67,7 @@ func RunInboundShellAsync(text string, emit func(string) error) {
 		defer cancel()
 
 		start := time.Now()
-		// sh -c, not bash: matches the TUI escape semantics and keeps the
-		// dependency footprint identical across platforms.
+
 		cmd := exec.CommandContext(ctx, "sh", "-c", cmdText)
 		out, err := cmd.CombinedOutput()
 		elapsed := time.Since(start)
@@ -98,8 +81,7 @@ func RunInboundShellAsync(text string, emit func(string) error) {
 			sb.WriteString(fmt.Sprintf("(no output, exit error: %v)", err))
 		} else if body != "" {
 			if len(body) > inboundShellMaxOutput {
-				// Snap to a rune boundary: byte-slicing mid-rune produces invalid
-				// UTF-8, which Telegram's API rejects with a 400.
+
 				cut := util.SnapToRuneStart(body, inboundShellMaxOutput)
 				body = body[:cut] + fmt.Sprintf("\n… (truncated, %d more chars)", len(body)-cut)
 			}

@@ -47,13 +47,13 @@ func pcResolveRelayWSURL(baseURL string) string {
 	if baseURL == "" {
 		return fmt.Sprintf("%s://%s%s", pcDefaultRelayWSScheme, pcDefaultRelayHost, pcDefaultRelayPath)
 	}
-	// If already a ws:// or wss:// URL, use as-is
+
 	if strings.HasPrefix(baseURL, "ws://") || strings.HasPrefix(baseURL, "wss://") {
 		return baseURL
 	}
-	// Strip trailing slash
+
 	baseURL = strings.TrimRight(baseURL, "/")
-	// Convert https:// to wss://, http:// to ws://
+
 	if strings.HasPrefix(baseURL, "https://") {
 		return fmt.Sprintf("wss://%s%s", baseURL[8:], pcDefaultRelayPath)
 	}
@@ -167,8 +167,6 @@ func (a *pcAdapter) getHTTPClient() *http.Client {
 	return a.httpClient
 }
 
-// Sink interface
-
 func (a *pcAdapter) Name() string { return a.name }
 
 func (a *pcAdapter) Start(ctx context.Context) {
@@ -177,10 +175,7 @@ func (a *pcAdapter) Start(ctx context.Context) {
 	a.ctx = ctx
 	a.mu.Unlock()
 	a.loadSessionsFromStore()
-	// "idle", not "disconnected": PublishAdapterState treats disconnected
-	// as a terminal state and would drop every later "connecting"/"connected"
-	// update, freezing the UI at disconnected. Lazy adapters are idle until
-	// the first connection attempt.
+
 	a.publishState(false, "idle", "")
 }
 
@@ -306,7 +301,6 @@ func (a *pcAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 			return nil
 		}
 
-		// Extract images and build attachments
 		images, remainingText := ExtractImagesFromText(text)
 		var attachments []map[string]interface{}
 		for i, img := range images {
@@ -355,7 +349,6 @@ func (a *pcAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 		return fmt.Errorf("send frame: %w", err)
 	}
 
-	// Record in history
 	pcSess.AppendHistory(pcConversationTurn{
 		MessageID: payload["messageId"].(string),
 		Role:      payloadKindToRole(pcPayloadKind(payload)),
@@ -366,8 +359,6 @@ func (a *pcAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 	debug.Log("pc", "adapter=%s outbound kind=%s session=%s", a.name, event.Kind, sessionID)
 	return nil
 }
-
-// Internal methods
 
 // ensureConnected connects to the relay if not already connected and
 // returns the live client. #1555: callers previously re-read a.client
@@ -380,13 +371,9 @@ func (a *pcAdapter) ensureConnected(ctx context.Context) (*pcRelayClient, error)
 		return client, nil
 	}
 
-	// Serialize connection attempts (see connectMu comment). A second
-	// caller blocks here instead of racing to dial its own connection.
 	a.connectMu.Lock()
 	defer a.connectMu.Unlock()
 
-	// Re-check after acquiring connectMu: another goroutine may have
-	// finished connecting while we were waiting.
 	if client := a.currentClient(); client != nil && client.isAlive() {
 		return client, nil
 	}
@@ -412,8 +399,7 @@ func (a *pcAdapter) ensureConnected(ctx context.Context) (*pcRelayClient, error)
 	}
 
 	a.mu.Lock()
-	// Defensive: if a stale client somehow survived, dispose it rather than
-	// leaking its goroutines.
+
 	if old := a.client; old != nil && old != client {
 		old.Dispose()
 	}
@@ -439,8 +425,7 @@ func (a *pcAdapter) currentClient() *pcRelayClient {
 func (a *pcAdapter) handleRelayDisconnected(client *pcRelayClient, reason string) {
 	a.mu.Lock()
 	if a.client != client {
-		// A newer client already took over (or this one was never installed
-		// because its Connect failed) — nothing to clean up.
+
 		a.mu.Unlock()
 		return
 	}
@@ -449,10 +434,7 @@ func (a *pcAdapter) handleRelayDisconnected(client *pcRelayClient, reason string
 	a.mu.Unlock()
 
 	debug.Log("pc", "adapter=%s relay disconnected: %s", a.name, reason)
-	// Healthy=false + reason in LastError, but status "reconnecting" rather
-	// than "disconnected": Manager.PublishAdapterState treats disconnected
-	// as terminal and would drop the eventual "connected" update, freezing
-	// the UI at disconnected forever even after a successful reconnect.
+
 	a.publishState(false, "reconnecting", reason)
 
 	if ctx != nil && ctx.Err() != nil {
@@ -561,7 +543,6 @@ func (a *pcAdapter) handleClientHello(sessionID string, payload pcPayload) {
 
 	debug.Log("pc", "client_hello session=%s appId=%s name=%s", sessionID, appID, displayName)
 
-	// Send server_welcome
 	a.sendPayload(sessionID, pcSess, pcPayload{
 		"kind":         pcKindServerWelcome,
 		"messageId":    pcBuildMessageID("welcome"),
@@ -570,7 +551,6 @@ func (a *pcAdapter) handleClientHello(sessionID string, payload pcPayload) {
 		"sentAt":       pcNowISO(),
 	})
 
-	// Send provider_capabilities
 	a.sendPayload(sessionID, pcSess, pcPayload{
 		"kind":      pcKindProvCapabilities,
 		"messageId": pcBuildMessageID("cap"),
@@ -595,7 +575,6 @@ func (a *pcAdapter) handleUserMessage(sessionID string, payload pcPayload) {
 	appID := pcPayloadString(payload, "appId")
 	displayName := pcPayloadString(payload, "displayName")
 
-	// Record in history
 	pcSess.AppendHistory(pcConversationTurn{
 		MessageID: clientMessageID,
 		Role:      "user",
@@ -604,7 +583,6 @@ func (a *pcAdapter) handleUserMessage(sessionID string, payload pcPayload) {
 		AppID:     appID,
 	})
 
-	// Build inbound message
 	msg := InboundMessage{
 		Envelope: Envelope{
 			Adapter:    a.name,
@@ -622,15 +600,11 @@ func (a *pcAdapter) handleUserMessage(sessionID string, payload pcPayload) {
 		},
 	}
 
-	// Try pairing first, then regular inbound
 	if a.manager != nil {
 		result, err := a.manager.HandlePairingInbound(msg)
 		if err == nil && result.Consumed {
 			debug.Log("pc", "pairing handled message session=%s", sessionID)
-			// #1226: surface the pairing outcome to the user, matching the
-			// other adapters (nostr pattern). Without this, a wrong code
-			// looked like a swallowed message, users retried blindly, and the
-			// 5-strike blacklist (#719) fired with zero feedback.
+
 			if strings.TrimSpace(result.ReplyText) != "" {
 				a.sendPayload(sessionID, pcSess, pcPayload{
 					"kind":      pcKindSystemMessage,
@@ -654,16 +628,14 @@ func (a *pcAdapter) handleSessionCloseFromApp(sessionID string, payload pcPayloa
 	reason := pcPayloadString(payload, "reason")
 	debug.Log("pc", "session close from app session=%s reason=%s", sessionID, reason)
 	a.sessions.Delete(sessionID)
-	// #3576: passive close must persist like the active CloseSession path -
-	// a memory-only Delete leaves the session in the store, and a restart
-	// revives it as a ghost.
+
 	a.saveSessionsToStore()
 }
 
 func (a *pcAdapter) handleSessionClosed(sessionID, reason string) {
 	debug.Log("pc", "session closed by relay session=%s reason=%s", sessionID, reason)
 	a.sessions.Delete(sessionID)
-	// #3576: same persist-on-close contract as above (relay-side close).
+
 	a.saveSessionsToStore()
 }
 
@@ -803,8 +775,7 @@ func (a *pcAdapter) RenewSession(ctx context.Context, sessionID string) error {
 	if ok {
 		expiresAt, _ := time.Parse(time.RFC3339, resp.ExpiresAt)
 		if expiresAt.IsZero() {
-			// Guard against zero-value overwrites that would expire the
-			// session immediately (mirrors CreateSession). #965
+
 			expiresAt = time.Now().Add(time.Duration(a.sessionTTLMs) * time.Millisecond)
 		}
 		sess.mu.Lock()
@@ -834,7 +805,7 @@ func (a *pcAdapter) resolvePCAttachment(ctx context.Context, img ExtractedImage,
 	switch img.Kind {
 	case "url":
 		if IsLocalFilePath(img.Data) {
-			// #1739: bound the local-path read (the #1557 qq fix, all adapters).
+
 			f, err := os.Open(img.Data)
 			if err != nil {
 				return nil, fmt.Errorf("read local image: %w", err)
@@ -859,7 +830,7 @@ func (a *pcAdapter) resolvePCAttachment(ctx context.Context, img ExtractedImage,
 			att["dataBase64"] = base64.StdEncoding.EncodeToString(data)
 			att["name"] = filepath.Base(img.Data)
 		} else {
-			// Download the image
+
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, img.Data, nil)
 			if err != nil {
 				return nil, err
