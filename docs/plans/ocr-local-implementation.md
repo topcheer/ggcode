@@ -35,7 +35,7 @@ internal/ocr/
   ocr_unsupported.go   // 其余平台（linux 由 tesseract 覆盖，此文件兜底）
 ```
 
-**关键构建约束**（来自 GGCODE.md）：CI 跑 `CGO_ENABLED=0 go build -tags goolm ./...`。因此 darwin 的 Vision 实现必须用 `//go:build darwin && cgo` 标签，并配一个 `//go:build darwin && !cgo` 的空实现——与 `internal/image` 的 clipboard/screenshot 平台拆分模式一致。
+**关键构建约束**（来自 AGENTS.md；GGCODE.md 现为指向 AGENTS.md 的 stub）：CI 跑 `CGO_ENABLED=0 go build -tags goolm ./...`。因此 darwin 的 Vision 实现必须用 `//go:build darwin && cgo` 标签，并配一个 `//go:build darwin && !cgo` 的空实现——与 `internal/image` 的 clipboard/screenshot 平台拆分模式一致。
 
 ### 2.2 核心接口
 
