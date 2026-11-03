@@ -41,8 +41,13 @@ appended after primary files so ggcode-native conventions take precedence.
 ### What This Is Not
 
 - Not a conversion tool — we don't translate between formats
-- Not a parent-directory walk — still only current directory + global config dir
+- Not a whole-tree scan — the cascade collects only the nearest AGENTS.md layers
+  from an accessed path's directory upward to the repository root; it is not a
+  recursive discovery of every AGENTS.md in the monorepo
 - Not a replacement for `GGCODE.md` — just a fallback for cross-tool repos
+- Not auto-injected instructions — collected layers surface as index-style
+  references (oversized or taint-matching files degrade to index lines), never
+  as silently trusted directives
 
 ## Implementation
 
