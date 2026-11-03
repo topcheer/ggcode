@@ -19,6 +19,17 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
+// imSupportedPlatforms is the CLI-side platform registry used to validate
+// and canonicalize the platform field before it is persisted (#2417).
+// Desktop already guards this at save time (#637 unknown-platform reject +
+// #648 canonical-ID normalize, desktop/wailskit/im.go); the CLI's add/set/
+// wizard accepted any string, a typo like "telegarm" or "Telegram" saved
+// fine and the runtime startConfiguredAdapter switch then skipped it in
+// its default branch with only a debug-level log - the adapter silently
+// never started. Kept as a name-only set (validated + normalized via
+// im.AdapterPlatformCanonical) rather than a duplicated wailskit-style
+// field registry: the CLI wizard keeps its own extras prompts.
+
 var imSupportedPlatforms = []string{
 	"qq", "telegram", "feishu", "dingtalk", "discord", "slack", "privateclaw",
 }

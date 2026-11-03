@@ -95,6 +95,17 @@ func (am *AutoMemory) saveUsage(idx usageIndex) error {
 	return nil
 }
 
+// RecordProvenance registers the ORIGIN of a memory key. Called from the
+// save paths; the first registration wins and later overwrites of the
+// same key keep the original source (provenance traces creation, not
+// the latest edit).
+//
+// #3120 lock contract: callers must hold the am.dir cross-process file
+// lock (the auto.go SaveMemory path does - it acquires util.FileLock
+// before calling this). That is what serializes this read-modify-write
+// against cross-process RecordUse writers; do NOT call this from an
+// unlocked path.
+
 func (am *AutoMemory) RecordProvenance(key, source string) {
 	am.RecordProvenanceActor(key, source, "")
 }
@@ -130,6 +141,11 @@ func (am *AutoMemory) RecordOutcome(key, outcome string) {
 		return
 	}
 	safe := disambiguateKey(key, sanitizeKey(key))
+
+	// #3882: full read-modify-write of .usage.json under only am.mu loses a
+	// concurrent writer's entry to last-writer-wins across processes. Every
+	// sibling sidecar writer holds the #3120 cross-process lock
+	// (FileLock outer, am.mu inner) - RecordOutcome was the lone exception.
 
 	unlock, lockErr := util.FileLock(am.dir + ".lock")
 	if lockErr != nil {
@@ -176,6 +192,14 @@ func (am *AutoMemory) RecordConflictLoss(keys []string) {
 	if len(fresh) == 0 {
 		return
 	}
+
+	// #3602 / #3120: cross-process serialization for the sidecar
+	// read-modify-write, same lock file and lock order (FileLock outer,
+	// am.mu inner) as RecordUse/RecordConsumption. ForgetUsage used to hold
+	// only am.mu while doing loadUsage -> delete -> saveUsage full
+	// overwrite: a concurrent writer in another process could interleave
+	// and either lose its update or resurrect the deleted ghost entry.
+	// Fail-open with a log - same degradation contract as RecordUse.
 
 	if unlock, err := util.FileLock(am.dir + ".lock"); err == nil {
 		defer unlock()

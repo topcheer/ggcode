@@ -18,6 +18,11 @@ import (
 	"regexp"
 )
 
+// tgTokenForm matches the structural shape of a Telegram bot token
+// (#2215): "<numeric id>:<secret>" - digits, colon, then the
+// alphanumeric-secret alphabet BotFather issues. Form validation, not
+// secrecy validation.
+
 var tgTokenForm = regexp.MustCompile(`^[0-9]+:[A-Za-z0-9_-]{8,}$`)
 
 type tgPanelState struct {

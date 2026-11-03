@@ -38,6 +38,17 @@ type knightPanelState struct {
 	message       string
 	messageTime   time.Time
 
+	// pendingGlobalApprovePath (#3391, #3408): staging skill PATH awaiting
+	// the SECOND confirming keypress for a global-scope promote. "" = none.
+	// A single [a] on a global staging skill must not take immediate effect -
+	// the command path enforces --confirm-global for the same reason
+	// (knight_commands.go: "a warning that is followed by immediate effect
+	// in the same keypress is not a confirmation gate").
+	// #3408: keyed by skill Path, NOT index - the staging list is re-read on
+	// every keypress, so a stored index can silently point at a different
+	// skill after reject/promote by another surface; a Path match only
+	// confirms the exact skill the user saw when arming.
+
 	pendingGlobalApprovePath string
 }
 
@@ -535,6 +546,14 @@ func (m *Model) renderKnightStaging(w int) string {
 	}
 	return sb.String()
 }
+
+// shortProposalID returns the display form of a proposal ID: the first
+// 8 bytes when longer, otherwise the ID unchanged. #2799: the panel's
+// approve/reject success path used to slice id[:8] unguarded while the
+// render path guarded - a short ID from a corrupted/hand-edited
+// project-proposals jsonl panicked the Update loop and killed the TUI
+// after the status write had already succeeded. Both paths share this
+// helper now.
 
 func shortProposalID(id string) string {
 	if len(id) > 8 {

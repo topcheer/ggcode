@@ -624,12 +624,17 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 			}
 		}
 		return agentruntime.BuildSubAgentSystemPrompt(agentruntime.SubAgentPromptContext{
-			Cfg:              cfg,
-			WorkingDir:       workingDir,
-			Registry:         registry,
-			CommandMgr:       commandMgr,
-			GlobalAutoMem:    autoMem,
-			ProjectAutoMem:   projectAutoMem,
+			Cfg:            cfg,
+			WorkingDir:     workingDir,
+			Registry:       registry,
+			CommandMgr:     commandMgr,
+			GlobalAutoMem:  autoMem,
+			ProjectAutoMem: projectAutoMem,
+			// #4570: lazy per-build detection, identical to the skillTool
+			// sub-agent builder (#4502) - the old closure returned the startup
+			// snapshot, so repl-created sub-agents carried a stale branch name
+			// and dirty count after any mid-session commit/checkout/worktree.
+
 			GitStatus:        func() string { return detectGitStatus(workingDir) },
 			RemoteAgentsInfo: func() string { return remoteAgentsInfo },
 		}, task, agentType)
@@ -741,6 +746,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass, plain bool) error
 	var replPendingSessionLock *session.SessionLock
 
 	if resumeID == "picker" {
+
+		// #2245: mirror the conflict branch - without this reset the
+		// path silently resumed with no lock held (double-writer window).
 
 		resumeID = ""
 	} else if resumeID == "__new__" {
@@ -1477,6 +1485,16 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 			srv.Stop()
 			return nil, nil, nil, func() {}, fmt.Errorf("a2a oauth2: no issuer available for provider %q (preset has no OIDC discovery URL); set issuer_url explicitly", oc.Provider)
 		}
+
+		// #2781: the same preset-placeholder fail-fast as the OAuth2 block
+		// (#1503) - without it an auth0/azure preset without a filled
+		// tenant starts the server clean and every JWKS fetch hits an
+		// NXDOMAIN placeholder host: silent per-request 401s.
+
+		// #1503: preset placeholders (AUTH0_TENANT/AZURE_TENANT) pass the
+		// non-empty checks and the server starts fine - then every JWKS
+		// fetch hits a NXDOMAIN and every request 401s silently. Fail fast
+		// at startup instead, matching the #1174/#1175 spirit.
 
 		if strings.Contains(issuerURL, "AUTH0_TENANT") || strings.Contains(issuerURL, "AZURE_TENANT") {
 			srv.Stop()

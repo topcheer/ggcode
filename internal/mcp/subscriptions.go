@@ -265,6 +265,16 @@ func (c *Client) ListenSubscriptions(ctx context.Context, filter SubscriptionFil
 	}
 	sub.cancelCtx, sub.cancelFunc = context.WithCancel(context.Background())
 
+	// Register the subscription BEFORE the write (#3817): the stdio
+	// server is an independent process and can flush its
+	// `notifications/subscriptions/acknowledged` ack the instant the write
+	// returns; the read loop correlates acks via c.subs[key], so with
+	// addSubscription AFTER the write the ack hit "unknown subscription
+	// dropped" (unreplayable) and ackCh hung until the 15s timeout, or the
+	// caller's own deadline (2s in mcp_loader) fired first. Same
+	// register-before-write ordering guarantee as the waiter above (#994);
+	// a failed write rolls the registration back.
+
 	c.addSubscription(subscriptionIDKey(reqID), sub)
 
 	var waiter chan *Response

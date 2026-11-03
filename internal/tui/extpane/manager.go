@@ -117,6 +117,12 @@ func isHookBackupUsable(showErr error) bool {
 	return showErr == nil
 }
 
+// EnsurePane creates a tab + log file for the given agent if one doesn't exist yet.
+// Uses a `creating` set to prevent duplicate tab creation during the
+// backend call. #1722 case 3: the call is SYNCHRONOUS on the Update
+// goroutine, but bounded by a 5s CreateTab timeout (not the unbounded
+// "async" the old comment claimed).
+
 func (m *Manager) EnsurePane(agentID, name, kind string) {
 	if !m.Available() {
 		return

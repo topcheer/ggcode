@@ -99,6 +99,12 @@ func (m *Model) getEventHooks(eventIdx int) []hooks.Hook {
 
 func (m *Model) saveHooksConfig(cfg hooks.HookConfig) {
 
+	// #4491: persist FIRST, apply to the live agent second. The old order
+	// (SetHookConfig -> Save) left the agent running the new hooks after a
+	// Save failure (disk full/permissions, #1371) with no disk record -
+	// an in-memory/disk split that vanished on restart. Save-first keeps
+	// the failure path side-effect free.
+
 	if m.config != nil {
 
 		oldHooks := m.config.Hooks

@@ -42,6 +42,13 @@ func runTeammateLoop(
 			}
 		}
 
+		// #4367: record CurrentTaskID IMMEDIATELY after the claim succeeds,
+		// before any code that can panic (probe consumption, onEvent external
+		// callback, prompt building). The deferred rollbackClaimedTask reads
+		// this field; with the old late write, a panic in that window rolled
+		// back a no-op (ID still "" from the previous terminal clear) and the
+		// task leaked in_progress forever (#1688 regression).
+
 		tm.mu.Lock()
 		if tm.done != nil {
 			select {
@@ -296,6 +303,10 @@ func tryClaimPendingTask(
 				meta = attachAttribution(meta, buildFailureAttribution(tm, claimed.ID, taskErr))
 				if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{
 
+					// #4672: CAS guard - an external terminal write (team review
+					// approve, manual /task, RestoreJSON) during execution must not
+					// be overwritten; mirrors rollbackClaimedTask (#2579).
+
 					ExpectedStatus: &inProgress,
 					Status:         &completed,
 					Metadata:       meta,
@@ -421,6 +432,10 @@ func rollbackClaimedTask(mgr *Manager, team *Team, tm *Teammate) {
 		return
 	}
 
+	// #2579: guard both updates with ExpectedStatus=in_progress — the
+	// rollback must only ever act on a task THIS teammate is still running.
+	// A completed (or otherwise terminal) task fails the guard and the
+	// rollback is a no-op, mirroring the claim's guard semantics.
 	inProgress := task.StatusInProgress
 	attempts := 0
 	if v, ok := current.Metadata["retry_attempts"]; ok {

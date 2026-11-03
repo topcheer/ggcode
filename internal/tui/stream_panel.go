@@ -89,6 +89,12 @@ func (m *Model) updateStreamPanel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if p.editingField != "" {
 				p.editingField = ""
 
+				// #2800: aborting an edit must also leave custom-add mode.
+				// Otherwise customMode lingers with residual name/url input,
+				// and a later `e` key-edit hijacks handleStreamPanelEnter into
+				// the custom "key" branch: appending a bogus target instead of
+				// editing the selected one (or failing "All fields required").
+
 				p.customMode = false
 				p.nameInput.SetValue("")
 				p.urlInput.SetValue("")

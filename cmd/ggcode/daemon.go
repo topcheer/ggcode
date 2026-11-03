@@ -158,6 +158,12 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		return err
 	}
 
+	// #2868: `resolved` is reassigned by the provider-switch hook (IM
+	// goroutine) and read by the keyboard 't' tunnel path and the snapshot
+	// goroutine — guard the pointer with a mutex. ActivateCurrentSelection
+	// returns a FRESH pointer on every activation and never mutates an old
+	// one, so a lock-copied pointer is safe to read without holding the lock.
+
 	resolvedMu := &sync.Mutex{}
 	currentResolved := func() *config.ResolvedEndpoint {
 		resolvedMu.Lock()
@@ -835,6 +841,14 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		if lanchatHub != nil {
 			lanchatHub.SetModel(r.Model)
 		}
+
+		// #3994: every read below uses the LOCAL r (the fresh pointer
+		// ActivateCurrentSelection just returned), never the outer resolved -
+		// multiple IM adapters can enter this hook concurrently, and the outer
+		// pointer is reassigned under resolvedMu by the other goroutine between
+		// L937's unlock and any later read (data race; #2868's own discipline:
+		// reads go through currentResolved() or a held-lock copy - r is even
+		// stronger, it is this call's immutable snapshot).
 
 		agentruntime.StartAsyncRelayModelLimitRefresh(cfg, r, ag, nil)
 		if ses != nil {

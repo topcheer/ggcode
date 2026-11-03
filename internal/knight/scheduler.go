@@ -146,6 +146,13 @@ func (k *Knight) Start(ctx context.Context) error {
 		}
 	}
 
+	// #1644-2: the five raw !EqualFold(TrustLevel, "readonly") checks here
+	// were fail-open - a typo'd trust_level (e.g. "read-only", "HIGH") read
+	// as writable by the scheduler while auto_policy's trustCanWrite
+	// whitelist reported every write policy disabled: the audit panel said
+	// "no writes" while the scheduler kept writing. Route through the same
+	// whitelist (normalized like the auto_policy call site).
+
 	if k.canWrite() {
 		if migrated, err := k.normalizeActiveSkillLayout(); err != nil {
 			debug.Log("knight", "normalize active skill layout failed: %v", err)

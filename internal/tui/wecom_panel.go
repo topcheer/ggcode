@@ -322,6 +322,9 @@ func (m *Model) createWeComAdapterCmd(spec string) tea.Cmd {
 				return func() tea.Msg {
 					if err := m.ensureWeComRuntime(); err != nil {
 
+						// #2232: roll back the just-persisted adapter - the dirty
+						// Enabled:true credentials retried forever (#2215 tg pattern).
+
 						return m.rollbackWecomCreate(name, err, imEnabledBefore)
 					}
 					if err := m.startWeComAdapterIfNeeded(name); err != nil {
@@ -347,6 +350,11 @@ func (m *Model) wecomEnableRollback(name string, imEnabledBefore bool) func(m *M
 		return m.rollbackWecomCreate(name, fmt.Errorf("wecom enable-restart failed for %s", name), imEnabledBefore)
 	}
 }
+
+// rollbackWecomCreate removes a just-persisted wecom adapter whose
+// runtime start failed (#2232) - mirrors rollbackTGCreate (#2215):
+// map REMOVE rides configMutationMsg (#1370 pattern), the original
+// error still surfaces, and a failed rollback is appended to it.
 
 func (m *Model) rollbackWecomCreate(name string, origErr error, imEnabledBefore bool) tea.Msg {
 	return configMutationMsg{
@@ -441,6 +449,12 @@ func (m *Model) bindWeComEntry(entry wecomBindingEntry) tea.Cmd {
 		return m.wecomBindTail(entry, ws)
 	}
 }
+
+// wecomBindTail is the bind flow after the guards: start the adapter
+// (auto-enabling on the #1792 sentinel - the CREATE flow intercepted
+// errWecomEnableNeeded and ran wecomEnableMutation, but the BIND flow
+// passed it through raw, so the user saw the bare internal sentinel
+// string and the bind never ran; #2333), then bind the channel.
 
 func (m *Model) wecomBindTail(entry wecomBindingEntry, ws string) tea.Msg {
 	if err := m.startWeComAdapterIfNeeded(entry.Adapter); err != nil {

@@ -311,6 +311,13 @@ func (m *MCPPlugin) setupNotificationHandler(client *mcp.Client) {
 	})
 }
 
+// refreshTools re-fetches the tool list from the MCP server and updates the
+// adapter and registry. Called when the server signals tools/list_changed.
+// #4042: the error is returned explicitly - callers must distinguish
+// "ListTools errored" from "succeeded with zero tools" (a legal
+// resources/prompts-only server), which the old (false, 0) collapsed into
+// one ambiguous value.
+
 func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -341,6 +348,9 @@ func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int, e
 	m.mu.Unlock()
 
 	if oldAdapter != nil && registry != nil {
+
+		// #4071: only the names this adapter actually owns (#1594-A) -
+		// ToolNames() includes collision-skipped names owned by siblings.
 
 		for _, tn := range oldAdapter.RegisteredNames() {
 			registry.Unregister(tn)

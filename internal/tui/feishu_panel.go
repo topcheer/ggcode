@@ -361,6 +361,12 @@ func (m *Model) createFeishuAdapterCmd(spec string) tea.Cmd {
 					if err := m.startFeishuAdapterIfNeeded(name); err != nil {
 						if errors.Is(err, errFeishuEnableNeeded) {
 
+							// #4486 (a #1719/#1794 case-1 recurrence): enable on the
+							// Update loop, then retry - never write config here.
+							// #4724: pass the success callback so the auto-enable
+							// path ALSO surfaces the added_bot confirmation
+							// (#4580 mirrored to dingtalk/discord, missed here).
+
 							return m.feishuEnableMutation(name, func(m *Model) tea.Msg {
 								return feishuBindResultMsg{message: m.t("panel.feishu.message.added_bot", name)}
 							})
