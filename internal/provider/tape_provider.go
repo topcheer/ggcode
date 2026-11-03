@@ -18,55 +18,46 @@ import (
 
 const llmTapeEnv = "GGCODE_LLM_TAPE"
 
-// tapeEvent is the serializable projection of a StreamEvent. Error events
-// store the message; replay reconstructs them with errors.New.
 type tapeEvent struct {
-	Type              int         `json:"t"`
-	Text              string      `json:"tx,omitempty"`
-	ThinkingSignature string      `json:"ts,omitempty"`
-	ToolID            string      `json:"ti,omitempty"`
-	ToolIndex         int         `json:"tn,omitempty"`
-	ToolName          string      `json:"tm,omitempty"`
-	ToolArgs          string      `json:"ta,omitempty"`
-	Result            string      `json:"tr,omitempty"`
-	IsError           bool        `json:"e,omitempty"`
-	Usage             *TokenUsage `json:"u,omitempty"`
-	Err               string      `json:"er,omitempty"`
-	Truncated         bool        `json:"cut,omitempty"`
-	PolicyBlocked     bool        `json:"pb,omitempty"`
-	// #3938: the five business fields the projection used to drop on
-	// record (and zero-fill on replay). All optional so OLD tapes load
-	// unchanged; new tapes round-trip the full StreamEvent.
-	Confidence     *float64      `json:"cf,omitempty"`  // Done: logprob confidence (low-confidence alert)
-	Block          *ContentBlock `json:"blk,omitempty"` // ServerTool verbatim echo-back block
-	ToolServerTool bool          `json:"tsv,omitempty"` // server-tool flag (diagnostics attribution)
-	ToolThoughtSig string        `json:"tts,omitempty"` // #1610-A Gemini functionRe response echo-back
-	ToolCallerRaw  string        `json:"tcr,omitempty"` // PTC caller (anthropic code_execution)
-	Extra          string        `json:"x,omitempty"`   // reserved
+	Type              int           `json:"t"`
+	Text              string        `json:"tx,omitempty"`
+	ThinkingSignature string        `json:"ts,omitempty"`
+	ToolID            string        `json:"ti,omitempty"`
+	ToolIndex         int           `json:"tn,omitempty"`
+	ToolName          string        `json:"tm,omitempty"`
+	ToolArgs          string        `json:"ta,omitempty"`
+	Result            string        `json:"tr,omitempty"`
+	IsError           bool          `json:"e,omitempty"`
+	Usage             *TokenUsage   `json:"u,omitempty"`
+	Err               string        `json:"er,omitempty"`
+	Truncated         bool          `json:"cut,omitempty"`
+	PolicyBlocked     bool          `json:"pb,omitempty"`
+	Confidence        *float64      `json:"cf,omitempty"`
+	Block             *ContentBlock `json:"blk,omitempty"`
+	ToolServerTool    bool          `json:"tsv,omitempty"`
+	ToolThoughtSig    string        `json:"tts,omitempty"`
+	ToolCallerRaw     string        `json:"tcr,omitempty"`
+	Extra             string        `json:"x,omitempty"`
 }
 
 type llmTapeEntry struct {
 	Key      string        `json:"k"`
-	Kind     string        `json:"kind"` // "chat" | "stream"
+	Kind     string        `json:"kind"`
 	Response *ChatResponse `json:"resp,omitempty"`
 	Events   []tapeEvent   `json:"ev,omitempty"`
 }
 
-// TapeProvider wraps a Provider and records or replays LLM responses.
 type TapeProvider struct {
 	inner Provider
-	mode  string // "record" | "replay"
+	mode  string
 	path  string
 
 	mu     sync.Mutex
 	file   *os.File
-	cursor int             // replay position in order (strict FIFO exhaustion)
-	order  []*llmTapeEntry // global FIFO fallback (replay)
+	cursor int
+	order  []*llmTapeEntry
 }
 
-// WrapLLMTapeFromEnv wraps p per GGCODE_LLM_TAPE=record:<path>|replay:<path>.
-// Unset or malformed values return p unchanged (fail-open to live calls,
-// symmetric with tool tape); replay of a missing file is a hard error.
 func WrapLLMTapeFromEnv(p Provider) Provider {
 	spec := os.Getenv(llmTapeEnv)
 	if spec == "" || p == nil {
@@ -101,9 +92,6 @@ func (t *TapeProvider) CountTokens(ctx context.Context, messages []Message) (int
 	return t.inner.CountTokens(ctx, messages)
 }
 
-// requestKey fingerprints the request: messages (IDs stripped for
-// cross-run stability) + tool names. Replay matches this key first; the
-// global FIFO queue is the fallback for ID-drifted runs.
 func requestKey(messages []Message, tools []ToolDefinition) string {
 	type stripMsg struct {
 		Role    string         `json:"r"`
@@ -189,10 +177,6 @@ func (t *TapeProvider) ChatStream(ctx context.Context, messages []Message, tools
 	return out, nil
 }
 
-// take pops the next entry for key, falling back to the next unconsumed
-// entry in trajectory order (tool-tape semantics). A single advancing
-// cursor enforces exhaustion: once the tape is fully consumed, later calls
-// fail closed instead of re-serving earlier entries.
 func (t *TapeProvider) take(key string) *llmTapeEntry {
 	t.mu.Lock()
 	defer t.mu.Unlock()

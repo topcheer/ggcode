@@ -156,7 +156,6 @@ func TestFriendlyError_422(t *testing.T) {
 	}
 }
 
-// Helper
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
 }
@@ -170,7 +169,6 @@ func containsStr(s, substr string) bool {
 	return false
 }
 
-// timeoutError implements net.Error
 type timeoutError struct {
 	msg string
 }
@@ -179,5 +177,4 @@ func (e *timeoutError) Error() string   { return e.msg }
 func (e *timeoutError) Timeout() bool   { return true }
 func (e *timeoutError) Temporary() bool { return true }
 
-// Ensure net.Error is satisfied
 var _ net.Error = (*timeoutError)(nil)

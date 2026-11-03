@@ -8,22 +8,12 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// newIssue655Bridge builds a DaemonBridge with only the fields the pendingAsk
-// lifecycle touches. The IMEmitter is safe to use bare (all its methods are
-// nil-manager safe), so no adapter stack is required.
 func newIssue655Bridge() *DaemonBridge {
 	return &DaemonBridge{
 		emitter: &IMEmitter{},
 	}
 }
 
-// TestIssue655SingleRegistrationChoice tests defect 1: for a choice question,
-// pendingAsk must be registered exactly once, BEFORE the buttons are sent.
-// Pre-fix, a second registration with a fresh channel unconditionally
-// overwrote the first right after EmitAskUserInteractive returned — any
-// answer landing in that window resolved the first (orphaned, buffered)
-// channel and was silently dropped, so HandleAskUser hung until ctx timeout
-// and the user had to click twice.
 func TestIssue655SingleRegistrationChoice(t *testing.T) {
 	b := newIssue655Bridge()
 
@@ -51,8 +41,6 @@ func TestIssue655SingleRegistrationChoice(t *testing.T) {
 		done <- res{r, e}
 	}()
 
-	// Wait for the registration, then race: answer immediately, the way an
-	// early button click would land right after the buttons go out.
 	var pending *pendingAskUser
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -91,11 +79,6 @@ func TestIssue655SingleRegistrationChoice(t *testing.T) {
 	}
 }
 
-// TestIssue655AnswerDoesNotClearNextRegistration tests defect 2: answering a
-// question must clear pendingAsk via compare-then-clear, not a blind wipe.
-// Deterministic production-path coverage: (a) an answered registration is
-// cleared, and (b) a stale late duplicate callback for the OLD message is
-// dropped by correlation and must not disturb the NEXT registration.
 func TestIssue655AnswerDoesNotClearNextRegistration(t *testing.T) {
 	b := newIssue655Bridge()
 

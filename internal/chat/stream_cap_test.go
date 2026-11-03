@@ -32,8 +32,6 @@ func TestCapStreamingBlockBounded(t *testing.T) {
 }
 
 func TestCapStreamingBlockRestoresFenceBalance(t *testing.T) {
-	// A long fenced code block: truncation must not leave an orphan closing
-	// fence that would open a never-closed block downstream.
 	var sb strings.Builder
 	sb.WriteString("```go\n")
 	for i := 0; i < maxStreamingBlockLines+100; i++ {
@@ -73,11 +71,6 @@ func TestRenderStreamingMarkdownCappedTailStillReusesEarlierBlocks(t *testing.T)
 }
 
 func TestCapStreamingBlockFourBacktickFence(t *testing.T) {
-	// 4-backtick fence (used to embed ``` examples inside code blocks).
-	// capStreamingBlock/missingOpenFence deliberately share closeOpenFences'
-	// prefix-parity counting (not full CommonMark), so the 4-tick closer
-	// toggles the same ``` state. This test pins that behavior: the capped
-	// output must be fence-balanced per the same parity rule.
 	var sb strings.Builder
 	sb.WriteString("````go\n")
 	for i := 0; i < maxStreamingBlockLines+100; i++ {

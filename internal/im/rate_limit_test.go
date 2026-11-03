@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// withNoopSleep overrides sleepRetryFn to return immediately, restoring it
-// after the test. This eliminates real sleeping in rate-limit retry tests.
 func withNoopSleep(t *testing.T) {
 	t.Helper()
 	orig := sleepRetryFn
@@ -205,7 +203,6 @@ func TestJitterDuration_ProducesVariedOutput(t *testing.T) {
 	}
 }
 
-// TestRetryOn429_SlackResponse simulates a Slack-style 429 then 200.
 func TestRetryOn429_SlackResponse(t *testing.T) {
 	withNoopSleep(t)
 	var callCount int
@@ -243,7 +240,6 @@ func TestRetryOn429_SlackResponse(t *testing.T) {
 	}
 }
 
-// TestRetryOn429_SlackExhausted simulates Slack always returning 429.
 func TestRetryOn429_SlackExhausted(t *testing.T) {
 	withNoopSleep(t)
 	var callCount int
@@ -275,7 +271,6 @@ func TestRetryOn429_SlackExhausted(t *testing.T) {
 	}
 }
 
-// TestRetryOn429_DiscordResponse simulates Discord 429 then 200.
 func TestRetryOn429_DiscordResponse(t *testing.T) {
 	withNoopSleep(t)
 	var callCount int
@@ -306,7 +301,6 @@ func TestRetryOn429_DiscordResponse(t *testing.T) {
 	}
 }
 
-// TestRetryOn429_MattermostResponse simulates Mattermost 429 then 200.
 func TestRetryOn429_MattermostResponse(t *testing.T) {
 	withNoopSleep(t)
 	var callCount int
@@ -348,7 +342,6 @@ func TestRetryOn429_MattermostResponse(t *testing.T) {
 	}
 }
 
-// TestNoRetryOn429_DiscordExhausted verifies error message after max retries.
 func TestNoRetryOn429_DiscordExhausted(t *testing.T) {
 	withNoopSleep(t)
 	var callCount int
@@ -375,7 +368,6 @@ func TestNoRetryOn429_DiscordExhausted(t *testing.T) {
 	}
 }
 
-// TestSlackRatelimitedInBody tests Slack's application-level ratelimited error.
 func TestSlackRatelimitedInBody(t *testing.T) {
 	withNoopSleep(t)
 	var callCount int

@@ -45,9 +45,6 @@ func TestConfigDir_RespectsHomeOverride(t *testing.T) {
 	}
 }
 
-// TestExpandShellEnvCrossReference pins #1803 case 2: rc-file variables
-// referencing each other (A=1 / B=${A}) must resolve regardless of map
-// iteration order - the old lookup kept the literal "${A}" half the runs.
 func TestExpandShellEnvCrossReference(t *testing.T) {
 
 	env := map[string]string{"PATH": "/usr/bin"}

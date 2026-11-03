@@ -11,30 +11,15 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Store persists chat messages per session to JSONL files.
-// Each message is one line appended with O_APPEND (safe across multiple
-// processes sharing the same session directory — see #990). The on-disk
-// file is not trimmed on write; LoadRecent enforces maxHistoryPerSession
-// on the read side instead.
 type Store struct {
 	mu  sync.Mutex
-	dir string // ~/.ggcode/lanchat/
+	dir string
 }
 
-// NewStore creates a message store rooted at the given directory.
 func NewStore(dir string) *Store {
 	return &Store{dir: dir}
 }
 
-// Append writes a message to the session's history file.
-//
-// The message is written as a single O_APPEND line instead of the old
-// read-modify-write rewrite (#990): s.mu only serializes within one
-// process, but TUI + daemon instances routinely share the same session
-// directory, and two concurrent RMW rewrites silently lose the earlier
-// write. A single O_APPEND write of one line is effectively atomic on
-// local filesystems, so concurrent appenders can no longer clobber each
-// other. History is capped by LoadRecent on read, not on disk.
 func (s *Store) Append(sessionID string, msg Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -69,8 +54,6 @@ func (s *Store) Append(sessionID string, msg Message) error {
 	return err
 }
 
-// LoadRecent returns up to limit most recent messages for a session.
-// If limit <= 0, returns maxHistoryPerSession.
 func (s *Store) LoadRecent(sessionID string, limit int) ([]Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -117,7 +100,6 @@ func (s *Store) readLocked(path string) ([]Message, error) {
 	return msgs, nil
 }
 
-// splitLines splits byte data into newline-delimited chunks.
 func splitLines(data []byte) [][]byte {
 	var lines [][]byte
 	start := 0
@@ -133,8 +115,6 @@ func splitLines(data []byte) [][]byte {
 	return lines
 }
 
-// SaveNick persists the nickname to <dir>/lanchat-nick.
-// The directory is created if it does not exist.
 func SaveNick(dir, nick string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create nick dir %s: %w", dir, err)
@@ -142,8 +122,6 @@ func SaveNick(dir, nick string) error {
 	return os.WriteFile(filepath.Join(dir, "lanchat-nick"), []byte(nick), 0o644)
 }
 
-// LoadNick reads the nickname from <dir>/lanchat-nick.
-// Returns "" and no error if the file does not exist.
 func LoadNick(dir string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "lanchat-nick"))
 	if err != nil {
@@ -155,7 +133,6 @@ func LoadNick(dir string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// SaveRole persists the role to <dir>/lanchat-role.
 func SaveRole(dir, role string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create role dir %s: %w", dir, err)
@@ -163,8 +140,6 @@ func SaveRole(dir, role string) error {
 	return os.WriteFile(filepath.Join(dir, "lanchat-role"), []byte(role), 0o644)
 }
 
-// LoadRole reads the role from <dir>/lanchat-role.
-// Returns "" and no error if the file does not exist.
 func LoadRole(dir string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "lanchat-role"))
 	if err != nil {
@@ -176,7 +151,6 @@ func LoadRole(dir string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// SaveTeam persists the team to <dir>/lanchat-team.
 func SaveTeam(dir, team string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create team dir %s: %w", dir, err)
@@ -184,8 +158,6 @@ func SaveTeam(dir, team string) error {
 	return os.WriteFile(filepath.Join(dir, "lanchat-team"), []byte(team), 0o644)
 }
 
-// LoadTeam reads the team from <dir>/lanchat-team.
-// Returns "" and no error if the file does not exist.
 func LoadTeam(dir string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "lanchat-team"))
 	if err != nil {
@@ -197,14 +169,6 @@ func LoadTeam(dir string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// LoadTrustedPeers reads the persisted web-of-trust peer list from
-// <dir>/trusted-peers.json. Missing file returns an empty map + nil error;
-// a corrupt file returns the parse error so callers can block write-back
-// (same discipline as approval-policies.json, #990).
-//
-// #3402 (TUFU): values are key fingerprints ("fp:<hex>"). Legacy bool
-// entries deserialize as "" - endorsed, but not key-bound (the strict-mode
-// exemption requires re-endorsement).
 func LoadTrustedPeers(dir string) (map[string]string, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "trusted-peers.json"))
 	if err != nil {
@@ -230,8 +194,6 @@ func LoadTrustedPeers(dir string) (map[string]string, error) {
 	return peers, nil
 }
 
-// LoadKeyPins reads the TUFU first-sight identity pins from
-// <dir>/node-key-pins.json (node_id -> key fingerprint).
 func LoadKeyPins(dir string) (map[string]string, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "node-key-pins.json"))
 	if err != nil {
@@ -248,8 +210,6 @@ func LoadKeyPins(dir string) (map[string]string, error) {
 	return pins, nil
 }
 
-// SaveKeyPins persists the identity-pin table with a tmp+rename write
-// (same atomicity as SaveTrustedPeers).
 func SaveKeyPins(dir string, pins map[string]string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -270,8 +230,6 @@ func SaveKeyPins(dir string, pins map[string]string) error {
 	return nil
 }
 
-// SaveTrustedPeers persists the trusted-peer set to <dir>/trusted-peers.json
-// with a tmp+rename atomic write (crash-safe, mirrors SaveApprovalPolicies).
 func SaveTrustedPeers(dir string, peers map[string]string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -303,11 +261,6 @@ func SaveTrustedPeers(dir string, peers map[string]string) error {
 	return os.Rename(tmpPath, path)
 }
 
-// LoadApprovalPolicies reads persisted approval policies from <dir>/approval-policies.json.
-// Returns map[peerNodeID]policy. Missing file returns empty map + nil error.
-// A corrupt file returns the parse error so callers can distinguish "no
-// policies yet" from "policies exist but could not be read" (#990); the
-// returned map is nil in that case.
 func LoadApprovalPolicies(dir string) (map[string]string, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "approval-policies.json"))
 	if err != nil {
@@ -324,9 +277,6 @@ func LoadApprovalPolicies(dir string) (map[string]string, error) {
 	return policies, nil
 }
 
-// SaveApprovalPolicies persists approval policies to <dir>/approval-policies.json
-// using a tmp+rename atomic write, mirroring the Store write pattern: a
-// crash mid-write must never leave a half-written JSON file behind (#990).
 func SaveApprovalPolicies(dir string, policies map[string]string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err

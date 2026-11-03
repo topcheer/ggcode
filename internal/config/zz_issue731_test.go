@@ -7,15 +7,6 @@ import (
 	"testing"
 )
 
-// TestIssue731PartialOverlapVendorWriteback is the regression test for #731:
-// MergeInstance set instanceFields["vendors"] only when global.Vendors was
-// nil. With a partial overlap (global vendors.yaml has A, instance config has
-// B), B was merged into memory but the "vendors" key was never registered in
-// instanceFields, so the desktop write-back gate (InstanceFields() contains
-// "vendors" - saveWithInstanceWriteback in desktop/wailskit/config.go) never
-// opened: SaveInstanceScoped was not called and AddCustomEndpoint/SaveAPIKey
-// changes silently vanished on restart. The fix registers the flag per adopted
-// vendor KEY, matching the key-level semantics of ToolPerms.
 func TestIssue731PartialOverlapVendorWriteback(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")
@@ -121,12 +112,6 @@ vendors:
 	}
 }
 
-// TestIssue731MergeInstanceVendorsFlagMatrix covers the instanceFields
-// registration for all four vendor overlap shapes:
-//   - partial overlap (global has A, instance has B) -> flag set (#731 fix)
-//   - fully global (identical keys)                  -> flag NOT set
-//   - fully instance (global nil)                    -> flag set (existing branch)
-//   - global nil + instance nil                      -> flag NOT set
 func TestIssue731MergeInstanceVendorsFlagMatrix(t *testing.T) {
 	vend := func(url string) VendorConfig {
 		return VendorConfig{Endpoints: map[string]EndpointConfig{

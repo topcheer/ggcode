@@ -8,9 +8,6 @@ import (
 	"time"
 )
 
-// #4811: uploadFile must retry on 429 (and on ok=false "ratelimited" in a
-// 200 body) like every sibling sender - a mixed text+image message used to
-// silently lose the image on the first 429.
 func TestIssue4811_UploadFileRetriesOn429(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -34,8 +31,6 @@ func TestIssue4811_UploadFileRetriesOn429(t *testing.T) {
 	}
 }
 
-// #4811: exhausting the retry budget surfaces rateLimitExhausted instead of
-// a generic ok=false error.
 func TestIssue4811_UploadFileRateLimitExhausted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "0")

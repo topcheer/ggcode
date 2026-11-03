@@ -8,13 +8,10 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// ToolManagerAdapter wraps *Manager to satisfy tool.IMManager.
-// This bridges the IM runtime to the tool layer without creating an import cycle.
 type ToolManagerAdapter struct {
 	Mgr *Manager
 }
 
-// NewToolManagerAdapter creates an adapter that satisfies tool.IMManager.
 func NewToolManagerAdapter(mgr *Manager) *ToolManagerAdapter {
 	return &ToolManagerAdapter{Mgr: mgr}
 }
@@ -84,9 +81,6 @@ func (a *ToolManagerAdapter) SendDirect(ctx context.Context, adapter string, eve
 	return ErrNoChannelBound
 }
 
-// SendFileDirect (#3316) routes an arbitrary-file upload to the adapter's
-// optional FileSender capability. supported=false tells the tool layer to
-// fall back to path-as-text delivery.
 func (a *ToolManagerAdapter) SendFileDirect(ctx context.Context, adapter string, file tool.IMOutboundFile, caption string) (bool, error) {
 	if a == nil || a.Mgr == nil {
 		return false, ErrNoChannelBound
@@ -109,8 +103,6 @@ func (a *ToolManagerAdapter) SendFileDirect(ctx context.Context, adapter string,
 	return false, ErrNoChannelBound
 }
 
-// OtherInstancesHaveActiveChannels returns true if other instances in the
-// same workspace have active (non-muted) IM channel bindings.
 func (a *ToolManagerAdapter) OtherInstancesHaveActiveChannels() bool {
 	d := a.Mgr.InstanceDetect()
 	if d == nil {

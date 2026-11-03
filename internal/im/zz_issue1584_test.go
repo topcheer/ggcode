@@ -6,10 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// TestIssue1584_ImageOnlyNotDropped pins #1584-A: the two content-losing
-// gates of the daemon first-submission path. Extracted as pure predicates
-// because the full handler needs a wired bridge; the gates themselves are
-// what the fix changed and what a regression would reinstate.
 func TestIssue1584_ImageOnlyNotDropped(t *testing.T) {
 
 	textLessContent := []provider.ContentBlock{provider.ImageBlock("image/png", "x")}

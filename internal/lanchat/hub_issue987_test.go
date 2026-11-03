@@ -10,14 +10,12 @@ import (
 	"time"
 )
 
-// newIssue987Hub builds a Hub for the #987 regression tests.
 func newIssue987Hub(t *testing.T) *Hub {
 	t.Helper()
 	store := NewStore(filepath.Join(t.TempDir(), "store"))
 	return NewHub("self-node", "tui", "http://127.0.0.1:1", "", store, WorkspaceMeta{})
 }
 
-// receiptRecorder captures receipts posted to a fake peer endpoint.
 type receiptRecorder struct {
 	mu       sync.Mutex
 	receipts []Receipt
@@ -51,7 +49,6 @@ func (r *receiptRecorder) find(messageID, status string) *Receipt {
 	return nil
 }
 
-// agentDirectMsg builds an @agent direct message from a peer to this node.
 func agentDirectMsg(id, fromRole string) Message {
 	return Message{
 		ID:         id,
@@ -65,7 +62,6 @@ func agentDirectMsg(id, fromRole string) Message {
 	}
 }
 
-// registerPeer registers the fake peer endpoint so sendReceipt can route.
 func registerPeer(h *Hub, srv *httptest.Server) {
 	h.HandlePresence(Participant{
 		NodeID:    "peer-987",
@@ -77,12 +73,6 @@ func registerPeer(h *Hub, srv *httptest.Server) {
 	})
 }
 
-// TestIssue987ManualApprovalCompletedReceipt pins problem 1: a
-// manually-approved @agent message (which is intentionally excluded from
-// h.messages) must still be resolvable by NotifyAgentComplete so the
-// "completed" receipt reaches the sender. Before the fix, the linear search
-// over h.messages always missed it and the remote DM stayed "processing"
-// forever.
 func TestIssue987ManualApprovalCompletedReceipt(t *testing.T) {
 	rec := &receiptRecorder{}
 	srv := httptest.NewServer(rec)
@@ -115,11 +105,6 @@ func TestIssue987ManualApprovalCompletedReceipt(t *testing.T) {
 	}
 }
 
-// TestIssue987DuplicateMessageDeduped pins problem 2: the same message ID
-// delivered twice (TCP retry + TCP->UDP fallback both converge on
-// HandleIncomingMessage) must only be processed once. With agent-to-agent
-// auto-approve, the pre-fix double delivery injected the same instruction
-// into the agent loop twice.
 func TestIssue987DuplicateMessageDeduped(t *testing.T) {
 	h := newIssue987Hub(t)
 
@@ -163,9 +148,6 @@ func TestIssue987DuplicateMessageDeduped(t *testing.T) {
 	}
 }
 
-// TestIssue987PendingApprovalTTLCleanup pins problem 3 (TTL): pending
-// approvals older than the TTL are evicted when a new @agent DM queues, and
-// their senders get a rejected receipt instead of waiting forever.
 func TestIssue987PendingApprovalTTLCleanup(t *testing.T) {
 	rec := &receiptRecorder{}
 	srv := httptest.NewServer(rec)
@@ -198,10 +180,6 @@ func TestIssue987PendingApprovalTTLCleanup(t *testing.T) {
 	}
 }
 
-// TestIssue987PendingApprovalCapacityCap pins problem 3 (capacity): the
-// pending approval queue never exceeds maxPendingApprovals; when full, the
-// oldest entry is dropped (with a receipt) instead of growing unboundedly in
-// unattended daemon hubs.
 func TestIssue987PendingApprovalCapacityCap(t *testing.T) {
 	rec := &receiptRecorder{}
 	srv := httptest.NewServer(rec)

@@ -6,8 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// #1743 case 2: feishu must honor the sibling strong-validation contract -
-// all three fields set, else skip the primary so the local fallback builds.
 func Test1743FeishuSTTStrongValidation(t *testing.T) {
 	full := config.IMSTTConfig{Provider: "openai", BaseURL: "https://x", APIKey: "k", Model: "m"}
 

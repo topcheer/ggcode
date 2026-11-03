@@ -9,17 +9,15 @@ import (
 	"github.com/topcheer/ggcode/internal/markdown"
 )
 
-// UserItem renders a user message with a prefix icon.
 type UserItem struct {
 	CachedItem
 	id       string
 	text     string
 	prefix   string
 	styles   Styles
-	markdown bool // render text as markdown instead of plain text
+	markdown bool
 }
 
-// NewUserItem creates a new user message item.
 func NewUserItem(id, text string, styles Styles) *UserItem {
 	return &UserItem{
 		id:     id,
@@ -29,9 +27,6 @@ func NewUserItem(id, text string, styles Styles) *UserItem {
 	}
 }
 
-// NewMarkdownUserItem creates a user message item that renders its content as
-// markdown. Used for messages that may contain structured text (e.g. LAN Chat
-// agent-to-agent messages with markdown formatting).
 func NewMarkdownUserItem(id, text string, styles Styles) *UserItem {
 	return &UserItem{
 		id:       id,
@@ -98,18 +93,6 @@ func (u *UserItem) Height(width int) int {
 	return measureHeightWidth(u.Render(width), width)
 }
 
-// wrapLines does simple word wrapping at the given width.
-//
-// Choke-point normalization: measurement libraries (runewidth/lipgloss)
-// count '\t' as 0-1 columns and '\r' as zero-width, but a terminal advances
-// tabs to their stop column and a bare CR returns the cursor to column 0.
-// Any producer reaching this function with raw control characters would
-// measure lines as fitting the width while the terminal wraps or mangles
-// them - desynchronizing Height() from displayed lines (#995 class: ghost
-// blank rows, lost panel borders). Normalizing here makes every caller
-// (UserItem, SystemItem, agent plan/field renderers, FormatBody) safe by
-// construction; producers with their own pipeline (FormatBody) normalize
-// first and re-normalization is an idempotent no-op.
 func wrapLines(text string, width int) []string {
 	if strings.ContainsRune(text, '\r') {
 		text = strings.ReplaceAll(text, "\r\n", "\n")
@@ -156,13 +139,12 @@ func wrapLines(text string, width int) []string {
 	return result
 }
 
-// AssistantItem renders an assistant message (supports streaming).
 type AssistantItem struct {
 	CachedItem
 	id             string
 	text           string
-	reasoning      string // accumulated thinking/reasoning content
-	reasoningOk    bool   // true once reasoning is complete (collapsed)
+	reasoning      string
+	reasoningOk    bool
 	prefix         string
 	styles         Styles
 	streaming      bool
@@ -170,7 +152,6 @@ type AssistantItem struct {
 	reasoningCache streamRenderCache
 }
 
-// NewAssistantItem creates a new assistant message item.
 func NewAssistantItem(id string, styles Styles) *AssistantItem {
 	return &AssistantItem{
 		id:        id,
@@ -184,7 +165,6 @@ func (a *AssistantItem) ID() string { return a.id }
 
 func (a *AssistantItem) Text() string { return a.text }
 
-// SetText updates the assistant content (for streaming).
 func (a *AssistantItem) SetText(text string) {
 	if a.text != text {
 		a.text = text
@@ -192,7 +172,6 @@ func (a *AssistantItem) SetText(text string) {
 	}
 }
 
-// SetFinished marks the assistant as done streaming.
 func (a *AssistantItem) SetFinished() {
 	a.streaming = false
 	a.textCache = streamRenderCache{}
@@ -200,12 +179,10 @@ func (a *AssistantItem) SetFinished() {
 	a.Invalidate()
 }
 
-// Reasoning returns the current reasoning content.
 func (a *AssistantItem) Reasoning() string {
 	return a.reasoning
 }
 
-// SetReasoning updates the reasoning/thinking content.
 func (a *AssistantItem) SetReasoning(text string) {
 	if a.reasoning != text {
 		a.reasoning = text
@@ -214,7 +191,6 @@ func (a *AssistantItem) SetReasoning(text string) {
 	}
 }
 
-// SetReasoningFinished collapses reasoning into a one-line summary.
 func (a *AssistantItem) SetReasoningFinished() {
 	a.reasoningOk = true
 	a.reasoningCache = streamRenderCache{}
@@ -308,7 +284,6 @@ func (a *AssistantItem) Height(width int) int {
 	return measureHeightWidth(a.Render(width), width)
 }
 
-// SystemItem renders a system/status/info message.
 type SystemItem struct {
 	CachedItem
 	id     string
@@ -316,7 +291,6 @@ type SystemItem struct {
 	styles Styles
 }
 
-// NewSystemItem creates a new system message item.
 func NewSystemItem(id, text string, styles Styles) *SystemItem {
 	return &SystemItem{
 		id:     id,

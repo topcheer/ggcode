@@ -11,21 +11,8 @@ import (
 	"strings"
 )
 
-// vendorsWriteMu serializes every runtime mutation of Config.Vendors maps
-// (#2911). The map writes inside SetEndpointAPIKey/SetVendorAPIKey are
-// invoked under the caller's configAccess.cfgMu, but other writers - most
-// notably the model-switch hook's SyncVendorEndpointToGlobal - run with no
-// configAccess instance in reach at all (cmd daemon + desktop ChatBridge).
-// A lock-free write racing any concurrent reader or these writes is a Go
-// runtime fatal (concurrent map read/write), not a recoverable panic, so
-// all runtime writers must share this lock regardless of who holds them.
-// Lock order: configAccess.cfgMu → vendorsWriteMu (never reversed).
 var vendorsWriteMu sync.Mutex
 
-// SetEndpointAPIKey updates the active endpoint or vendor-level API key.
-// The key is stored as an environment variable reference (e.g. ${ZAI_API_KEY})
-// rather than plaintext, and the caller should set the actual value in the
-// shell environment (os.Setenv) so the current session can use it immediately.
 func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped bool) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -69,7 +56,6 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 		return nil
 	}
 
-	// Plaintext key: resolve the preferred env var name and store the reference.
 	var envVarName string
 	if vendorScoped {
 		envVarName = preferredVendorAPIKeyEnvVar(vendor)
@@ -104,14 +90,6 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 	return nil
 }
 
-// syncVendorKeyEnv keeps the TWO historic vendor-level env var names in
-// lockstep (#2105). SetEndpointAPIKey(vendorScoped) writes
-// preferredVendorAPIKeyEnvVar (ZAI_API_KEY) while SetVendorAPIKey/
-// AddVendor write preferredEndpointAPIKeyEnvVar(vendor,"default")
-// (ZAI_DEFAULT_API_KEY): one logical object, two physical names. A set
-// via one path and a clear via the other left the sibling entry in
-// keys.env forever - the "cleared" secret was re-injected into every
-// startup's environment. Sets now write BOTH names; clears purge BOTH.
 func syncVendorKeyEnv(vendor, apiKey string) {
 	primary := preferredVendorAPIKeyEnvVar(vendor)
 	sibling := preferredEndpointAPIKeyEnvVar(vendor, "default")
@@ -137,9 +115,6 @@ func syncVendorKeyEnv(vendor, apiKey string) {
 	}
 }
 
-// clearAPIKeyRefEnv removes the keys.env entry backing a ${VAR} ref (if
-// any) so a cleared key does not leave stale plaintext behind (#1706
-// case 3).
 func clearAPIKeyRefEnv(ref string) {
 	if name, ok := envReferenceVarName(ref); ok {
 		if err := removeKeysEnv([]string{name}); err != nil {
@@ -149,7 +124,6 @@ func clearAPIKeyRefEnv(ref string) {
 	}
 }
 
-// SetVendorAPIKey sets the vendor-level API key.
 func (c *Config) SetVendorAPIKey(vendor, apiKey string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -184,15 +158,6 @@ func (c *Config) SetVendorAPIKey(vendor, apiKey string) error {
 	return nil
 }
 
-// UpsertVendorEndpoint ensures a vendor/endpoint definition exists in the
-// config so new sessions can discover it (#2911). It reports whether
-// anything was added; the caller decides whether to persist (SaveScoped).
-// Callers WITHOUT a configAccess instance (model-switch hooks in the cmd
-// daemon and desktop ChatBridge) previously mutated the Vendors map
-// lock-free via SyncVendorEndpointToGlobal, racing the cfgMu-guarded
-// writers above into a runtime-fatal concurrent map write. This method
-// takes vendorsWriteMu so all runtime writers are serialized no matter
-// which side of the configAccess boundary they live on.
 func (c *Config) UpsertVendorEndpoint(vendor, endpoint string) (changed bool) {
 	if c == nil || vendor == "" || endpoint == "" {
 		return false
@@ -216,11 +181,6 @@ func (c *Config) UpsertVendorEndpoint(vendor, endpoint string) (changed bool) {
 	return changed
 }
 
-// resolveEffectiveAPIKeyRef returns the raw API key reference string.
-// Endpoint key takes priority, but if it's an unresolvable ${VAR} reference
-// (the environment variable is not set), falls back to the vendor key.
-// The returned value may still contain ${VAR} references — expansion is the
-// caller's responsibility.
 func resolveEffectiveAPIKeyRef(epKey, vcKey string) string {
 	epKey = strings.TrimSpace(epKey)
 	vcKey = strings.TrimSpace(vcKey)

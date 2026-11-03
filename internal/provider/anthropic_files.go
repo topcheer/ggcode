@@ -18,48 +18,27 @@ import (
 )
 
 const (
-	// filesUploadThresholdBytes is the minimum decoded image size (2 MiB)
-	// worth an upload round-trip. Smaller images inline as base64 exactly
-	// as before, so short conversations see no behavior change.
 	filesUploadThresholdBytes = 2 << 20
 )
 
-// fileUploader resolves image content to Anthropic file_ids, uploading on
-// first sight and caching by content hash. All methods are nil-receiver safe:
-// a nil *fileUploader means "feature disabled", and callers get a false ok.
 type fileUploader struct {
 	client  *anthropic.Client
 	enabled bool
 
 	mu             sync.Mutex
-	cache          map[string]filesCacheEntry // sha256 hex -> uploaded file_id + upload time
-	failed         map[string]time.Time       // sha256 hex -> transient failure time; retried after filesRetryTTL
-	endpointBroken bool                       // endpoint answered non-retryably: stop trying entirely
+	cache          map[string]filesCacheEntry
+	failed         map[string]time.Time
+	endpointBroken bool
 	uploads        int
 }
 
-// filesCacheEntry pairs a cached file_id with its upload time so entries
-// can expire (#3066).
 type filesCacheEntry struct {
 	fileID     string
 	uploadedAt time.Time
 }
 
-// filesRetryTTL is how long a transient upload failure (429/5xx/network)
-// suppresses further upload attempts for that one content hash (#2568).
-// After it elapses the next turn retries with a fresh attempt, matching the
-// documented "may retry later" contract. Package-level var so tests can
-// shorten it.
 var filesRetryTTL = 2 * time.Minute
 
-// filesCacheTTL bounds how long a cached file_id is trusted before it is
-// re-uploaded (#3066). Anthropic deletes stored files after a retention
-// window; an expired file_id hard-fails /v1/messages with a 400 that the
-// upload-side noteFailure classifier never sees, so the cache must not be
-// forever. 24h is deliberately conservative (well below any plausible
-// retention), trading one duplicate upload per long-lived session for the
-// elimination of unattributable persistent 400s. Package-level var so
-// tests can shorten it.
 var filesCacheTTL = 24 * time.Hour
 
 func newFileUploader(client *anthropic.Client, baseURL string) *fileUploader {
@@ -71,11 +50,6 @@ func newFileUploader(client *anthropic.Client, baseURL string) *fileUploader {
 	}
 }
 
-// filesAPIAllowed decides whether the Files API may be attempted. It is on by
-// default for api.anthropic.com (the SDK default when baseURL is empty) and
-// for any *.anthropic.com gateway, and off for third-party base URLs that
-// typically proxy only /v1/messages. GGCODE_FILES_API=1 force-enables it for
-// gateways known to forward /v1/files; GGCODE_FILES_API=0 disables everywhere.
 func filesAPIAllowed(baseURL string) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("GGCODE_FILES_API"))) {
 	case "0", "false", "off", "no":
@@ -94,8 +68,6 @@ func filesAPIAllowed(baseURL string) bool {
 	return host == "api.anthropic.com" || strings.HasSuffix(host, ".anthropic.com")
 }
 
-// resolve returns the file_id for the given image bytes, uploading them on
-// first sight. ok=false means the caller should fall back to inline base64.
 func (u *fileUploader) resolve(ctx context.Context, mime string, data []byte) (fileID string, ok bool) {
 
 	if u == nil || u.client == nil || !u.enabled || len(data) == 0 {
@@ -155,15 +127,6 @@ func (u *fileUploader) upload(ctx context.Context, mime string, data []byte, key
 	return up.ID, nil
 }
 
-// noteFailure classifies an upload error (#3066 narrowed the permanent
-// set). Permanent (disable for provider lifetime) is reserved for signals
-// that the ENDPOINT will never serve /v1/files: 404/403
-// (capability/permission) or a 400 on the very first upload (gateway that
-// does not implement the route - once any upload has succeeded, later 400s
-// are content-level). Per-image problems - 413 payload too large,
-// content-level 400s - poison only this content hash for filesRetryTTL
-// (#2568), so one oversized image never disables Files API for every
-// subsequent image.
 func (u *fileUploader) noteFailure(key string, err error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -189,8 +152,6 @@ func (u *fileUploader) noteFailure(key string, err error) {
 	debug.Log("anthropic-files", "Files upload failed (transient): %v; falling back to base64 for this image (retry in %s)", err, filesRetryTTL)
 }
 
-// filesExtForMIME maps the image MIME types Anthropic accepts to file
-// extensions for the upload part filename (purely cosmetic in the part name).
 func filesExtForMIME(mime string) string {
 	switch mime {
 	case "image/jpeg", "image/jpg":
@@ -204,10 +165,6 @@ func filesExtForMIME(mime string) string {
 	}
 }
 
-// filesImageSource converts a base64 image into a file_id-referenced image
-// source when the payload is large enough to be worth the upload, falling
-// back to inline base64 otherwise. Malformed base64 never blocks: the caller
-// keeps the original string.
 func (p *AnthropicProvider) filesImageSource(ctx context.Context, mime, b64 string) (anthropic.ImageBlockParamSourceUnion, bool) {
 
 	if p.files == nil || len(b64) < filesUploadThresholdBytes {
@@ -226,8 +183,6 @@ func (p *AnthropicProvider) filesImageSource(ctx context.Context, mime, b64 stri
 	}, true
 }
 
-// imageContentBlock renders an image content block, preferring a file_id
-// reference for large payloads and always falling back to inline base64.
 func (p *AnthropicProvider) imageContentBlock(ctx context.Context, mime, b64 string) anthropic.ContentBlockParamUnion {
 	if src, ok := p.filesImageSource(ctx, mime, b64); ok {
 		return anthropic.ContentBlockParamUnion{OfImage: &anthropic.ImageBlockParam{Source: src}}

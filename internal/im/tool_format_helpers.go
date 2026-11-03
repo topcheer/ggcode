@@ -13,16 +13,10 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// redactResult sanitizes terminal control sequences and masks secrets in
-// tool result text for safe display in IM.
 func redactResult(s string) string {
 	return security.RedactForDisplay(security.SanitizeTerminalForDisplay(s))
 }
 
-// imFenceLen returns the number of backticks needed to safely fence content:
-// one more than the longest backtick run inside the content (minimum 3), so
-// an inner ``` can never close the outer fence early (CommonMark rule: a
-// fence is only closed by a fence of at least the same length).
 func imFenceLen(content string) int {
 	maxRun, run := 0, 0
 	for _, r := range content {
@@ -41,14 +35,11 @@ func imFenceLen(content string) int {
 	return maxRun + 1
 }
 
-// imCodeBlock wraps content in a markdown code fence long enough that no
-// backtick run inside the content can prematurely close it (#971).
 func imCodeBlock(content string) string {
 	fence := strings.Repeat("`", imFenceLen(content))
 	return fence + "\n" + content + "\n" + fence
 }
 
-// imLabel returns a localized label string for IM tool display.
 func imLabel(lang ToolLanguage, key string) string {
 	switch lang {
 	case ToolLangEn:
@@ -567,17 +558,14 @@ func imLabel(lang ToolLanguage, key string) string {
 	return key
 }
 
-// formatIMAskUserResult renders ask_user result.
 func formatIMAskUserResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("💬 %s", imLabel(toolLang(tr.Lang), "reply_received"))
 }
 
-// formatIMStartCommandResult renders start_command result.
 func formatIMStartCommandResult(tr *ToolResultInfo) string {
 	return "⚡ " + tool.StartCommandResultText(redactResult(tr.Result), tr.IsError)
 }
 
-// formatIMStopCommandResult renders stop_command result.
 func formatIMStopCommandResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(redactResult(tr.Result))
@@ -590,7 +578,6 @@ func formatIMStopCommandResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🛑\n%s", imCodeBlock(output))
 }
 
-// formatIMReadCmdOutputResult renders read_command_output result.
 func formatIMReadCmdOutputResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(redactResult(tr.Result))
@@ -603,7 +590,6 @@ func formatIMReadCmdOutputResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("📄\n%s", imCodeBlock(output))
 }
 
-// formatIMWaitCommandResult renders wait_command result.
 func formatIMWaitCommandResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(redactResult(tr.Result))
@@ -616,7 +602,6 @@ func formatIMWaitCommandResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("⏳\n%s", imCodeBlock(output))
 }
 
-// formatIMWriteCmdInputResult renders write_command_input result.
 func formatIMWriteCmdInputResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(redactResult(tr.Result))
@@ -629,7 +614,6 @@ func formatIMWriteCmdInputResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("⌨\n%s", imCodeBlock(output))
 }
 
-// formatIMListCommandsResult renders list_commands result.
 func formatIMListCommandsResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(redactResult(tr.Result))
@@ -642,7 +626,6 @@ func formatIMListCommandsResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("📋\n%s", imCodeBlock(output))
 }
 
-// formatIMSpawnAgentResult renders spawn_agent result.
 func formatIMSpawnAgentResult(tr *ToolResultInfo) string {
 	name := extractArgValue(tr.Args, "description")
 	if name == "" {
@@ -655,7 +638,6 @@ func formatIMSpawnAgentResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🤖 %s", name)
 }
 
-// formatIMWaitAgentResult renders wait_agent result.
 func formatIMWaitAgentResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(redactResult(tr.Result))
@@ -668,7 +650,6 @@ func formatIMWaitAgentResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🤖\n%s", imCodeBlock(output))
 }
 
-// formatIMListAgentsResult renders list_agents result.
 func formatIMListAgentsResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(redactResult(tr.Result))
@@ -681,7 +662,6 @@ func formatIMListAgentsResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🤖\n%s", imCodeBlock(output))
 }
 
-// formatIMMCPCapabilitiesResult renders list_mcp_capabilities result.
 func formatIMMCPCapabilitiesResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(redactResult(tr.Result))
@@ -694,7 +674,6 @@ func formatIMMCPCapabilitiesResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🔗\n%s", imCodeBlock(output))
 }
 
-// formatIMMCPPromptResult renders get_mcp_prompt result.
 func formatIMMCPPromptResult(tr *ToolResultInfo) string {
 	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
@@ -706,7 +685,6 @@ func formatIMMCPPromptResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🔗\n%s", imCodeBlock(output))
 }
 
-// formatIMMCPResourceResult renders read_mcp_resource result.
 func formatIMMCPResourceResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(redactResult(tr.Result))
@@ -719,7 +697,6 @@ func formatIMMCPResourceResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🔗\n%s", imCodeBlock(output))
 }
 
-// formatIMSkillResult renders skill result.
 func formatIMSkillResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(redactResult(tr.Result))
@@ -732,7 +709,6 @@ func formatIMSkillResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🔧\n%s", imCodeBlock(output))
 }
 
-// formatIMSaveMemoryResult renders save_memory result.
 func formatIMSaveMemoryResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(redactResult(tr.Result))
@@ -745,7 +721,6 @@ func formatIMSaveMemoryResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("💾\n%s", imCodeBlock(output))
 }
 
-// formatIMDeleteMemoryResult renders delete_memory result.
 func formatIMDeleteMemoryResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(redactResult(tr.Result))
@@ -758,8 +733,6 @@ func formatIMDeleteMemoryResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🗑️\n%s", imCodeBlock(output))
 }
 
-// formatIMSleepResult renders sleep result — suppressed on success
-// because the user already saw "⏳ Sleep for Xs" at ToolCall time.
 func formatIMSleepResult(tr *ToolResultInfo) string {
 	if tr.IsError {
 		return fmt.Sprintf("⏳ Sleep\n%s", imCodeBlock(strings.TrimSpace(redactResult(tr.Result))))
@@ -768,12 +741,10 @@ func formatIMSleepResult(tr *ToolResultInfo) string {
 	return ""
 }
 
-// formatIMCronCreateResult renders cron_create result.
 func formatIMCronCreateResult(tr *ToolResultInfo) string {
 	if tr.IsError {
 		return fmt.Sprintf("⏰ Cron\n%s", imCodeBlock(strings.TrimSpace(redactResult(tr.Result))))
 	}
-	// Result is JSON: {"ID":"cron-1","CronExpr":"*/5 * * * *",...}
 	var job struct {
 		ID        string `json:"ID"`
 		CronExpr  string `json:"CronExpr"`
@@ -786,7 +757,6 @@ func formatIMCronCreateResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("⏰ Cron job created: `%s` → %q", job.CronExpr, truncateRunes(job.Prompt, 50, "..."))
 }
 
-// formatIMCronDeleteResult renders cron_delete result.
 func formatIMCronDeleteResult(tr *ToolResultInfo) string {
 	if tr.IsError {
 		return fmt.Sprintf("⏰ Cron\n%s", imCodeBlock(strings.TrimSpace(redactResult(tr.Result))))
@@ -794,7 +764,6 @@ func formatIMCronDeleteResult(tr *ToolResultInfo) string {
 	return "⏰ Cron job deleted"
 }
 
-// formatIMCronListResult renders cron_list result.
 func formatIMCronListResult(tr *ToolResultInfo) string {
 	if tr.IsError {
 		return fmt.Sprintf("⏰ Cron\n%s", imCodeBlock(strings.TrimSpace(redactResult(tr.Result))))
@@ -806,7 +775,6 @@ func formatIMCronListResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("⏰\n%s", imCodeBlock(output))
 }
 
-// formatIMTeammateResultsResult renders teammate_results result with body markdown.
 func formatIMTeammateResultsResult(tr *ToolResultInfo) string {
 	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
@@ -818,7 +786,6 @@ func formatIMTeammateResultsResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("📋\n%s", imCodeBlock(output))
 }
 
-// formatIMWorktreeResult renders enter_worktree/exit_worktree results.
 func formatIMWorktreeResult(icon string, tr *ToolResultInfo) string {
 	if tr.IsError {
 		return fmt.Sprintf("%s Worktree\n%s", icon, imCodeBlock(strings.TrimSpace(redactResult(tr.Result))))
@@ -830,8 +797,6 @@ func formatIMWorktreeResult(icon string, tr *ToolResultInfo) string {
 	return fmt.Sprintf("%s %s", icon, output)
 }
 
-// formatSleepDuration parses sleep tool args and returns a human-readable duration.
-// e.g. {"seconds":5,"milliseconds":500} → "5.5s"
 func formatSleepDuration(args string) string {
 	var a struct {
 		Seconds      int `json:"seconds"`
@@ -847,7 +812,6 @@ func formatSleepDuration(args string) string {
 	return d.String()
 }
 
-// formatIMErrorResult formats error results for any tool.
 func formatIMErrorResult(tr *ToolResultInfo) string {
 	pretty := prettifyToolName(tr.ToolName)
 	output := strings.TrimSpace(redactResult(tr.Result))
@@ -857,7 +821,6 @@ func formatIMErrorResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🔧 %s", pretty)
 }
 
-// formatIMCommandResult renders command execution result as success/failure.
 func formatIMCommandResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	cmd := extractCommand(tr.Args)
@@ -877,7 +840,6 @@ func formatIMCommandResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("✅ %s", imLabel(lang, "command_done"))
 }
 
-// formatIMTodoResult renders todo_write as a visual checklist.
 func formatIMTodoResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	var args struct {
@@ -905,7 +867,6 @@ func formatIMTodoResult(tr *ToolResultInfo) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// formatIMReadFileResult renders read_file result with format-aware summary.
 func formatIMReadFileResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	path := extractFilePathFromArgs(tr.Args)
@@ -986,7 +947,6 @@ func formatIMReadFileResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("%s %s", icon, baseName)
 }
 
-// formatIMListDirResult renders list_directory result with full output in code block.
 func formatIMListDirResult(tr *ToolResultInfo) string {
 	path := firstNonEmptyStr(extractArgValue(tr.Args, "path"), extractArgValue(tr.Args, "directory"))
 	if path == "" {
@@ -1006,7 +966,6 @@ func formatIMListDirResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("📂 List (%d items)", count)
 }
 
-// formatIMGlobResult renders glob result with full output in code block.
 func formatIMGlobResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	pattern := extractArgValue(tr.Args, "pattern")
@@ -1027,7 +986,6 @@ func formatIMGlobResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🔍 %d %s", matches, imLabel(lang, "matches"))
 }
 
-// formatIMEditResult renders edit_file result — show emoji icon + path + diff stats.
 func formatIMEditResult(tr *ToolResultInfo) string {
 	path := extractFilePathFromArgs(tr.Args)
 	if path == "" {
@@ -1049,7 +1007,6 @@ func formatIMEditResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("%s %s (+%d -%d)", icon, baseName, added, removed)
 }
 
-// formatIMWriteResult renders write_file result.
 func formatIMWriteResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	path := extractFilePathFromArgs(tr.Args)
@@ -1072,8 +1029,6 @@ func formatIMWriteResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("%s %s (%d %s)", icon, baseName, lines, imLabel(lang, "lines"))
 }
 
-// formatIMMultiEditResult renders multi_file_edit result as a concise summary.
-// The result JSON has: {"summary": "...", "results": [{"path": "...", "status": "success", "applied_edit_count": N}, ...]}
 func formatIMMultiEditResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	if tr.IsError {
@@ -1115,7 +1070,6 @@ func formatIMMultiEditResult(tr *ToolResultInfo) string {
 		successCount, imLabel(lang, "files_edited"), totalEdits, imLabel(lang, "edits"))
 }
 
-// formatIMMultiWriteResult renders multi_file_write result as a concise summary.
 func formatIMMultiWriteResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	if tr.IsError {
@@ -1126,7 +1080,6 @@ func formatIMMultiWriteResult(tr *ToolResultInfo) string {
 	if output == "" {
 		return fmt.Sprintf("📝 %s", imLabel(lang, "write_multi"))
 	}
-	// Try to parse JSON result
 	var raw struct {
 		Results []struct {
 			Path   string `json:"path"`
@@ -1153,7 +1106,6 @@ func formatIMMultiWriteResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("📝 %s", output)
 }
 
-// formatIMNotebookEditResult renders notebook_edit result similar to edit_file.
 func formatIMNotebookEditResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	path := extractFilePathFromArgs(tr.Args)
@@ -1174,7 +1126,6 @@ func formatIMNotebookEditResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("%s %s", icon, baseName)
 }
 
-// formatIMGitShowResult renders git_show result as a commit summary.
 func formatIMGitShowResult(tr *ToolResultInfo) string {
 	if tr.IsError {
 		return formatIMErrorResult(tr)
@@ -1199,7 +1150,6 @@ func formatIMGitShowResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🔍 git show\n%s", imCodeBlock(summary))
 }
 
-// formatIMSearchResult renders search/grep result with full output in code block.
 func formatIMSearchResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	pattern := firstNonEmptyStr(extractArgValue(tr.Args, "pattern"), extractArgValue(tr.Args, "query"))
@@ -1220,7 +1170,6 @@ func formatIMSearchResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🔍 %d %s", matches, imLabel(lang, "matches"))
 }
 
-// formatIMWebResult renders web fetch/search result with full output in code block.
 func formatIMWebFetchResult(tr *ToolResultInfo) string {
 	url := extractArgValue(tr.Args, "url")
 	if url == "" {
@@ -1249,7 +1198,6 @@ func formatIMWebSearchResult(tr *ToolResultInfo) string {
 	return "🔍 Search"
 }
 
-// formatIMGitResult renders git tool results with concise summary.
 func formatIMGitResult(tr *ToolResultInfo) string {
 	output := strings.TrimSpace(redactResult(tr.Result))
 	if tr.IsError {
@@ -1270,7 +1218,6 @@ func formatIMGitResult(tr *ToolResultInfo) string {
 	}
 }
 
-// formatIMMCPToolResult renders MCP tool results — header only (result consumed by LLM).
 func formatIMMCPToolResult(tr *ToolResultInfo) string {
 	pretty := prettifyToolName(tr.ToolName)
 	argSummary := summarizeMCPArgs(tr.Args, 50)
@@ -1281,7 +1228,6 @@ func formatIMMCPToolResult(tr *ToolResultInfo) string {
 	return "🔧 " + pretty
 }
 
-// summarizeIMResult extracts a brief summary from a tool result string.
 func summarizeIMResult(result string, maxLen int) string {
 	result = strings.TrimSpace(result)
 	if result == "" {
@@ -1300,7 +1246,6 @@ func summarizeIMResult(result string, maxLen int) string {
 	return ""
 }
 
-// summarizeMCPArgs produces a brief summary of MCP tool arguments.
 func summarizeMCPArgs(rawArgs string, maxLen int) string {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil || len(args) == 0 {
@@ -1353,7 +1298,6 @@ func extractArgValue(args, key string) string {
 	return stringFromAny(a[key])
 }
 
-// imFileExt returns the file extension, supporting double extensions like .tar.gz.
 func imFileExt(path string) string {
 	name := strings.ToLower(filepath.Base(path))
 	for _, double := range []string{".tar.gz", ".tar.bz2", ".tar.xz"} {
@@ -1364,7 +1308,6 @@ func imFileExt(path string) string {
 	return strings.ToLower(filepath.Ext(path))
 }
 
-// imFileExtIcon returns an emoji icon based on file extension.
 func imFileExtIcon(path string) string {
 	ext := imFileExt(path)
 	switch ext {
@@ -1393,7 +1336,6 @@ func imFileExtIcon(path string) string {
 	}
 }
 
-// imFileTypeLabel returns a short type label for the file extension.
 func imFileTypeLabel(path string) string {
 	ext := imFileExt(path)
 	switch ext {
@@ -1436,7 +1378,6 @@ func imFileTypeLabel(path string) string {
 	}
 }
 
-// imIsArchiveExt checks if the extension is an archive format.
 func imIsArchiveExt(ext string) bool {
 	switch ext {
 	case ".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz":
@@ -1445,7 +1386,6 @@ func imIsArchiveExt(ext string) bool {
 	return false
 }
 
-// firstLineOf returns the first non-empty line from text.
 func firstLineOf(text string) string {
 	for _, line := range strings.Split(text, "\n") {
 		if strings.TrimSpace(line) != "" {
@@ -1455,8 +1395,6 @@ func firstLineOf(text string) string {
 	return ""
 }
 
-// parseExtractedInfo parses "[Extracted from pdf, 3 pages]" header.
-// Returns (format, pageCount). pageCount is 0 if not present.
 func parseExtractedInfo(header string) (format string, pages int) {
 
 	s := strings.TrimPrefix(header, "[Extracted from ")
@@ -1475,8 +1413,6 @@ func parseExtractedInfo(header string) (format string, pages int) {
 	return
 }
 
-// parseArchiveInfo parses "[Archive: zip format, 15 files]" header.
-// Returns (format, fileCount).
 func parseArchiveInfo(header string) (format string, files int) {
 
 	s := strings.TrimPrefix(header, "[Archive: ")
@@ -1498,8 +1434,6 @@ func parseArchiveInfo(header string) (format string, files int) {
 	return
 }
 
-// parseArchiveTruncation parses "[Showing first 500 of 1000 files]".
-// Returns (shown, total). Both 0 if not found.
 func parseArchiveTruncation(line string) (shown, total int) {
 	s := strings.TrimPrefix(line, "[Showing first ")
 	s = strings.TrimSuffix(s, "]")
@@ -1516,7 +1450,6 @@ func parseArchiveTruncation(line string) (shown, total int) {
 	return n1, n2
 }
 
-// countResultLines counts non-empty lines in the result text (skipping header lines).
 func countResultLines(result string) int {
 	lines := 0
 	for _, line := range strings.Split(result, "\n") {
@@ -1528,8 +1461,6 @@ func countResultLines(result string) int {
 	return lines
 }
 
-// countEditLines counts added/removed lines from edit_file rawArgs JSON.
-// Same logic as TUI renderEditDiff.
 func countEditLines(rawArgs string) (added, removed int) {
 	var args struct {
 		OldText string `json:"old_text"`
@@ -1554,8 +1485,6 @@ func countEditLines(rawArgs string) (added, removed int) {
 	return
 }
 
-// countWriteLines counts lines from write_file rawArgs JSON content.
-// Same logic as TUI renderFileLineCount.
 func countWriteLines(rawArgs string) int {
 	var args struct {
 		Content string `json:"content"`
@@ -1570,7 +1499,6 @@ func countWriteLines(rawArgs string) int {
 	return lines
 }
 
-// countDiffLines counts added (+) and deleted (-) lines in unified diff output.
 func countDiffLines(result string) (added, deleted int) {
 	for _, line := range strings.Split(result, "\n") {
 		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
@@ -1582,7 +1510,6 @@ func countDiffLines(result string) (added, deleted int) {
 	return
 }
 
-// formatIMGitStatusSummary renders a concise git status summary for IM.
 func formatIMGitStatusSummary(output string) string {
 	modified, added, deleted, untracked, renamed := 0, 0, 0, 0, 0
 	for _, line := range strings.Split(output, "\n") {
@@ -1632,7 +1559,6 @@ func formatIMGitStatusSummary(output string) string {
 	return strings.Join(parts, ", ")
 }
 
-// formatIMGitLogSummary renders up to 3 recent commits for IM.
 func formatIMGitLogSummary(output string) string {
 	var lines []string
 	for _, line := range strings.Split(output, "\n") {
@@ -1648,7 +1574,6 @@ func formatIMGitLogSummary(output string) string {
 	return strings.Join(lines, "\n")
 }
 
-// Returns empty string if no offset/limit specified.
 func imFormatReadRange(lang ToolLanguage, rawArgs string) string {
 	offset := extractArgIntValue(rawArgs, "offset")
 	limit := extractArgIntValue(rawArgs, "limit")
@@ -1673,7 +1598,6 @@ func imFormatReadRange(lang ToolLanguage, rawArgs string) string {
 	return fmt.Sprintf("[前 %d 行]", limit)
 }
 
-// imDocSummary returns a localized document summary string (pages + lines).
 func imDocSummary(lang ToolLanguage, pages, lines int) string {
 	if lang == ToolLangEn {
 		return fmt.Sprintf("%d %s, %d %s", pages, imLabel(lang, "pages"), lines, imLabel(lang, "lines"))
@@ -1681,12 +1605,10 @@ func imDocSummary(lang ToolLanguage, pages, lines int) string {
 	return fmt.Sprintf("%d %s, %d %s", pages, imLabel(lang, "pages"), lines, imLabel(lang, "lines_extracted"))
 }
 
-// imPagesSummary returns a localized pages-only summary.
 func imPagesSummary(lang ToolLanguage, pages int) string {
 	return fmt.Sprintf("%d %s", pages, imLabel(lang, "pages"))
 }
 
-// imLinesSummary returns a localized lines-only summary.
 func imLinesSummary(lang ToolLanguage, lines int) string {
 	if lang == ToolLangEn {
 		return fmt.Sprintf("%d %s", lines, imLabel(lang, "lines_extracted"))
@@ -1694,7 +1616,6 @@ func imLinesSummary(lang ToolLanguage, lines int) string {
 	return fmt.Sprintf("%s %d %s", imLabel(lang, "read"), lines, imLabel(lang, "lines_extracted"))
 }
 
-// extractArgIntValue extracts an integer argument from raw JSON args.
 func extractArgIntValue(rawArgs, key string) int {
 	var a map[string]any
 	if err := json.Unmarshal([]byte(rawArgs), &a); err != nil {

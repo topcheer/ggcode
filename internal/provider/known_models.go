@@ -4,27 +4,10 @@ import (
 	"strings"
 )
 
-// knownModelContextWindows maps model name patterns (lowercased, prefix match)
-// to their known context window sizes in tokens.
-//
-// This table allows instant context window detection for well-known models,
-// avoiding expensive API probing that sends padded messages to discover the
-// limit empirically.
-//
-// Entries are checked in order; the first match wins. More specific patterns
-// should come before less specific ones.
-//
-// Sources: official model documentation as of 2025-2026.
 var knownModelContextWindows = []struct {
 	pattern string
 	window  int
-	// exact marks bare family-name entries that must match the FULL model
-	// name (#782/#1287). As prefixes they hijacked every unlisted newer
-	// variant into the legacy window (glm-4.5+/qwen3-coder/deepseek-v3.2
-	// got 2x-underestimated), and context_probe Phase 1b short-circuits on
-	// known>0 — the wrong value also got cached. Unlisted variants fall
-	// through to the background probe, which measures the real window.
-	exact bool
+	exact   bool
 }{
 
 	{"claude-opus-4", 200_000, false},
@@ -95,15 +78,6 @@ var knownModelContextWindows = []struct {
 	{"command-r", 128_000, false},
 }
 
-// LookupKnownModelContextWindow checks if the model name matches a known
-// model and returns its documented context window size.
-// Returns 0 if the model is not in the known table.
-//
-// Matching is case-insensitive. Prefix entries match "gpt-4o-2024-08-06"
-// against "gpt-4o"; entries marked exact match the full name only — bare
-// family names whose newer suffix variants have different windows (#782,
-// #1287) so unlisted variants reach the probe path instead of inheriting
-// a stale legacy window.
 func LookupKnownModelContextWindow(model string) int {
 	if model == "" {
 		return 0

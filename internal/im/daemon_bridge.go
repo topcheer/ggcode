@@ -23,38 +23,22 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// pendingAskUser tracks an in-flight ask_user request waiting for an IM reply.
 type pendingAskUser struct {
 	request     toolpkg.AskUserRequest
 	response    chan toolpkg.AskUserResponse
-	multiSelect bool // if true, accumulate selections until __done__
-	// msgIDs are the interactive-button message IDs THIS question emitted
-	// (adapter → platform ID). Correlation reads these, not the bridge-level
-	// map, so an old card can never submit as a successor question's answer
-	// (#2134).
-	msgIDs map[string]string
+	multiSelect bool
+	msgIDs      map[string]string
 }
 
-// DaemonBridge implements the Bridge interface for headless (daemon) mode.
-// IM inbound messages are submitted directly to the agent without a TUI.
-// pendingInterruption wraps a queued user message with all its content blocks.
 type pendingInterruption struct {
 	Content []provider.ContentBlock
 }
 
-// approvalReply carries an approval decision plus the always-allow flag
-// computed by RouteInboundText for "a"/"always"/"总是允许" replies (#943).
 type approvalReply struct {
 	Decision permission.Decision
 	Always   bool
 }
 
-// staleReplySuppressWindow is how long after a pending approval/ask_user
-// expires that reply-shaped inbound text is dropped (#2111): text replies
-// carry no question correlation, so a late reply to the expired prompt is
-// indistinguishable from a reply to a successor registered seconds later.
-// 5s covers the human reaction window without annoying legitimate replies
-// to questions asked later in the conversation.
 const staleReplySuppressWindow = 5 * time.Second
 
 type DaemonBridge struct {
@@ -69,37 +53,30 @@ type DaemonBridge struct {
 	metricCollector *metrics.Collector
 	metricCancel    context.CancelFunc
 
-	mu              sync.Mutex
-	cancelFunc      context.CancelFunc
-	pendingAsk      *pendingAskUser
-	pendingApproval chan approvalReply // non-nil when waiting for IM approval reply
-	// staleReplySuppressUntil is the deadline after a pending approval or
-	// ask_user expires during which inbound text that PARSES as a reply
-	// (y/n/a or questionnaire answer) is dropped instead of delivered to
-	// the NEXT registered question (#2111): text replies carry no question
-	// correlation, so a late reply to the expired prompt is indistinguishable
-	// from a reply to its successor and auto-approved/answered it.
+	mu                      sync.Mutex
+	cancelFunc              context.CancelFunc
+	pendingAsk              *pendingAskUser
+	pendingApproval         chan approvalReply
 	staleReplySuppressUntil time.Time
 	pendingInterruptions    []pendingInterruption
-	interactiveMsgIDs       map[string]string // adapter → platform msg ID (for callback correlation)
-	multiSelectChosen       map[string]bool   // accumulated multi-select choices (choice value → selected)
+	interactiveMsgIDs       map[string]string
+	multiSelectChosen       map[string]bool
 	followSink              daemon.FollowSink
 	onActivity              func()
 	onRunStateChange        func(bool)
 	onUserMessage           func([]provider.ContentBlock)
-	onRestart               func()                                               // trigger daemon self-restart
-	onProviderSwitch        func(vendor, endpoint, model string) (string, error) // switch provider/model, returns summary
-	visionTurnSelect        func() string                                        // returns turn-scoped vision model or "" (no comparable candidate)
-	visionTurnSwitch        func(model string) error                             // in-memory model switch, no session persistence
-	restartDebug            bool                                                 // set by /restart debug to enable debug logging on next launch
+	onRestart               func()
+	onProviderSwitch        func(vendor, endpoint, model string) (string, error)
+	visionTurnSelect        func() string
+	visionTurnSwitch        func(model string) error
+	restartDebug            bool
 	eventSubs               []*daemonBridgeSub
 	eventSubMu              sync.RWMutex
-	cascadeCancel           func()             // called to cascade-cancel sub-agents/delegates on interrupt
-	emitTextOverride        func(string) error // test hook: when set, replaces emitter.EmitText for shell passthrough
-	remoteDangerousOverride *bool              // test hook (#2205): when non-nil, replaces the config lookup for the im.remote_dangerous_commands gate
+	cascadeCancel           func()
+	emitTextOverride        func(string) error
+	remoteDangerousOverride *bool
 }
 
-// NewDaemonBridge creates a bridge that submits IM messages directly to the agent.
 func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store session.Store, sess *session.Session) *DaemonBridge {
 	b := &DaemonBridge{
 		manager:  mgr,
@@ -135,8 +112,6 @@ func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store se
 	return b
 }
 
-// It translates the selected values into a text reply and feeds it through
-// the same pendingAsk mechanism as text replies.
 func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
 	b.mu.Lock()
 	pending := b.pendingAsk
@@ -183,7 +158,6 @@ func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
 		return
 	}
 
-	// Submit: single-select sends immediately; multi-select sends accumulated on Done
 	var values []string
 	if pending.multiSelect {
 
@@ -216,15 +190,12 @@ func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
 	b.mu.Unlock()
 }
 
-// SetFollowSink sets or clears the follow-mode display sink.
 func (b *DaemonBridge) SetFollowSink(sink daemon.FollowSink) {
 	b.mu.Lock()
 	b.followSink = sink
 	b.mu.Unlock()
 }
 
-// SetActivityHook installs a callback fired when an inbound IM message counts as
-// real user activity. Daemon mode uses this to keep Knight's idle timer honest.
 func (b *DaemonBridge) SetActivityHook(fn func()) {
 	b.mu.Lock()
 	b.onActivity = fn
@@ -243,18 +214,12 @@ func (b *DaemonBridge) SetUserMessageHook(fn func([]provider.ContentBlock)) {
 	b.mu.Unlock()
 }
 
-// SetRestartHook installs a callback to trigger daemon process restart.
 func (b *DaemonBridge) SetRestartHook(fn func()) {
 	b.mu.Lock()
 	b.onRestart = fn
 	b.mu.Unlock()
 }
 
-// SetVisionTurnHook installs the turn-scoped vision fallback hooks.
-// selectFn returns a comparable vision model name ("" = none); switchFn
-// switches models in memory WITHOUT persisting to the session. When unset,
-// image-bearing turns on non-vision models keep current behavior (images
-// are stripped by the agent's SupportsVision gate).
 func (b *DaemonBridge) SetVisionTurnHook(selectFn func() string, switchFn func(model string) error) {
 	b.mu.Lock()
 	b.visionTurnSelect = selectFn
@@ -262,13 +227,6 @@ func (b *DaemonBridge) SetVisionTurnHook(selectFn func() string, switchFn func(m
 	b.mu.Unlock()
 }
 
-// beginVisionTurn switches to a vision model for THIS inbound turn when the
-// content carries images, the active model has no vision, and a comparable
-// vision model exists on the endpoint. Returns (restore, switched):
-// switched=true means the turn will run on the vision model and restore MUST
-// be deferred; switched=false means no vision channel was available and the
-// caller should degrade to text-only instead of sending image blocks to a
-// text-only endpoint (which 400s and feeds the auto-retry loop).
 func (b *DaemonBridge) beginVisionTurn(content []provider.ContentBlock) (func(), bool) {
 	hasImage := false
 	for _, c := range content {
@@ -324,8 +282,6 @@ func (b *DaemonBridge) beginVisionTurn(content []provider.ContentBlock) (func(),
 	}, true
 }
 
-// stripImageBlocks removes image blocks, keeping text and attachment hints,
-// mirroring the TUI/desktop 400-fallback so IM turns degrade identically.
 func stripImageBlocks(content []provider.ContentBlock) []provider.ContentBlock {
 	out := make([]provider.ContentBlock, 0, len(content))
 	for _, c := range content {
@@ -336,9 +292,6 @@ func stripImageBlocks(content []provider.ContentBlock) []provider.ContentBlock {
 	return out
 }
 
-// contentEffectivelyEmpty reports whether every block is a blank text
-// block - the #1628-C ProviderContent fallback emits one empty text block
-// for truly-empty messages, so the #2140 inbound gate must look through it.
 func contentEffectivelyEmpty(content []provider.ContentBlock) bool {
 	if len(content) == 0 {
 		return true
@@ -351,7 +304,6 @@ func contentEffectivelyEmpty(content []provider.ContentBlock) bool {
 	return true
 }
 
-// contentHasImageBlocks reports whether any block is an image.
 func contentHasImageBlocks(content []provider.ContentBlock) bool {
 	for _, c := range content {
 		if c.Type == "image" {
@@ -361,15 +313,12 @@ func contentHasImageBlocks(content []provider.ContentBlock) bool {
 	return false
 }
 
-// The callback receives (vendor, endpoint, model) — any may be empty to mean "keep current".
-// It returns a human-readable summary string.
 func (b *DaemonBridge) SetProviderSwitchHook(fn func(vendor, endpoint, model string) (string, error)) {
 	b.mu.Lock()
 	b.onProviderSwitch = fn
 	b.mu.Unlock()
 }
 
-// ConsumeRestartDebug returns whether /restart debug was requested and resets the flag.
 func (b *DaemonBridge) ConsumeRestartDebug() bool {
 	b.mu.Lock()
 	v := b.restartDebug
@@ -400,9 +349,6 @@ func (b *DaemonBridge) InterruptActiveRun() bool {
 	return true
 }
 
-// SetCascadeCancel registers a callback invoked when a run is interrupted,
-// so the daemon can cascade-cancel sub-agents and delegates (mirroring TUI's
-// cancelActiveRun which calls subAgentMgr.CancelAll() + swarmMgr.CancelAll()).
 func (b *DaemonBridge) SetCascadeCancel(fn func()) {
 	b.mu.Lock()
 	b.cascadeCancel = fn
@@ -427,10 +373,6 @@ func (b *DaemonBridge) notifyUserMessage(content []provider.ContentBlock) {
 	}
 }
 
-// tryQueueOrBeginRun atomically checks if the agent is busy and either
-// queues the interruption or begins a new run slot. This eliminates the
-// TOCTOU window between tryQueueInterruption and beginRunSlot.
-// Returns (nil, true) if queued, (ctx, false) if a new run was begun.
 func (b *DaemonBridge) tryQueueOrBeginRun(content []provider.ContentBlock, logPrefix string) (context.Context, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -508,7 +450,6 @@ func (b *DaemonBridge) runQueuedLoop(ctx context.Context, content []provider.Con
 	}
 }
 
-// SubmitInboundMessage handles an inbound IM message by submitting it to the agent.
 func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMessage) error {
 	if b == nil {
 		return fmt.Errorf("daemon bridge not initialized")
@@ -665,12 +606,6 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	return nil
 }
 
-// HandleAskUser is the AskUserHandler for daemon mode — sends questions to IM
-// one at a time and collects answers interactively.
-// For single-choice questions, it first attempts to send native interactive
-// buttons. If the adapter supports it, the user clicks a button instead of
-// typing a number. The answer is routed back through the same pendingAsk
-// mechanism — either from a text reply or a button callback.
 func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserRequest) (toolpkg.AskUserResponse, error) {
 	answers := make([]toolpkg.AskUserAnswer, len(req.Questions))
 	answeredCount := 0
@@ -687,16 +622,6 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 			text = strings.TrimSpace(q.Title)
 		}
 
-		// Try interactive buttons for choice questions; fallback to text for
-		// adapters that don't support InteractiveSender (e.g. QQ, DingDing).
-		// #655: pendingAsk is registered EXACTLY ONCE per question, BEFORE the
-		// prompt/buttons go out. The old code registered a second, fresh-channel
-		// pending unconditionally after sending the buttons — answers landing in
-		// the race window resolved into the overwritten first channel (buffered,
-		// nobody listening) and were silently dropped, forcing the user to click
-		// again; the duplicate multiSelectChosen reset also wiped selections
-		// accumulated inside that window.
-		// Send buttons AFTER registering pendingAsk so callbacks can't race.
 		var msgIDs map[string]string
 		isMulti := q.Kind == toolpkg.AskUserKindMulti
 		pending := &pendingAskUser{
@@ -771,8 +696,6 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 	}, nil
 }
 
-// handleApproval is the ApprovalHandler for daemon mode — pushes tool permission
-// requests to IM and waits for a y/a/n reply.
 func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, input string) permission.Decision {
 	lang := b.language
 	var prompt string
@@ -798,7 +721,6 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 		if reply.Always && decision == permission.Allow {
 			persistAlwaysAllowGrant(b.agent, toolName, input)
 		}
-		// Send result confirmation back to IM
 		var resultMsg string
 		decisionStr := "deny"
 		if decision == permission.Allow {
@@ -838,11 +760,6 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 	}
 }
 
-// persistAlwaysAllowGrant establishes a persistent always-allow grant on the
-// agent's ConfigPolicy after an "a"/"always" IM reply (#943). Mirrors the TUI
-// and desktop ChatBridge paths: fine-grained command pattern for command
-// tools, tool-level override otherwise. No-op when no agent or a non-Config
-// policy is attached.
 func persistAlwaysAllowGrant(ag *agent.Agent, toolName, input string) {
 	if ag == nil {
 		return
@@ -860,12 +777,10 @@ func persistAlwaysAllowGrant(ag *agent.Agent, toolName, input string) {
 	p.SetOverride(toolName, permission.Allow)
 }
 
-// formatToolInline renders a concise one-line tool summary for approval prompts.
 func formatToolInline(toolName, input string) string {
 	if input == "" {
 		return toolName
 	}
-	// Try to extract a short description from JSON input
 	var m map[string]any
 	if err := json.Unmarshal([]byte(input), &m); err == nil {
 		for _, key := range []string{"command", "path", "file_path", "query", "url", "message"} {
@@ -877,9 +792,6 @@ func formatToolInline(toolName, input string) string {
 	return fmt.Sprintf("%s: %s", toolName, truncate(input, 60))
 }
 
-// runAgentStream executes the agent with streaming output sent to IM.
-// IM messages mirror TUI behavior exactly: text is only emitted on
-// StreamEventDone (not per-token), tool status is emitted as it happens.
 func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.ContentBlock) error {
 	round := &daemonRoundState{}
 	b.mu.Lock()
@@ -1013,7 +925,6 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 	return err
 }
 
-// truncate shortens s to maxLen for logging.
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -1021,7 +932,6 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// appendUserMessage adds the user message to the session store.
 func (b *DaemonBridge) appendUserMessage(content []provider.ContentBlock) {
 	if b.store == nil || b.sess == nil {
 		return
@@ -1042,9 +952,6 @@ func (b *DaemonBridge) appendUserMessage(content []provider.ContentBlock) {
 	b.sess.Messages = append(b.sess.Messages, msg)
 }
 
-// appendAssistantMessages updates in-memory session state after agent run.
-// Per-message persistence is handled by onPersist (SetPersistHandler),
-// so this function only syncs ses.Messages for rendering.
 func (b *DaemonBridge) appendAssistantMessages() {
 	if b.store == nil || b.sess == nil || b.agent == nil {
 		return
@@ -1119,8 +1026,6 @@ func daemonSessionTurnIndex(ses *session.Session) int {
 
 type daemonRoundState = SummaryRoundState
 
-// isDaemonSkippedTool returns true for sub-agent lifecycle tools that
-// should not be counted as visible tool calls in the daemon IM status.
 func isDaemonSkippedTool(name string) bool {
 	switch name {
 	case "spawn_agent", "wait_agent", "list_agents":
@@ -1129,7 +1034,6 @@ func isDaemonSkippedTool(name string) bool {
 	return false
 }
 
-// contentToText extracts plain text from content blocks.
 func contentToText(blocks []provider.ContentBlock) string {
 	var parts []string
 	for _, b := range blocks {
@@ -1148,7 +1052,6 @@ func jsonMarshalArgs(v any) (string, error) {
 	return string(data), nil
 }
 
-// formatToolSummary renders an aggregated tool execution summary for quiet/summary IM modes.
 func formatToolSummary(lang string, tools []ToolResultInfo, total, successes, failures int) string {
 	if len(tools) == 0 {
 		return ""
@@ -1169,7 +1072,6 @@ func formatToolSummary(lang string, tools []ToolResultInfo, total, successes, fa
 	}
 	sb.WriteString("\n")
 
-	// Aggregate tool names with counts and failure tracking
 	type toolStat struct {
 		count    int
 		failures int
@@ -1188,7 +1090,6 @@ func formatToolSummary(lang string, tools []ToolResultInfo, total, successes, fa
 		}
 	}
 
-	// Sort by count descending
 	type kv struct {
 		name     string
 		count    int
@@ -1221,7 +1122,6 @@ func formatToolSummary(lang string, tools []ToolResultInfo, total, successes, fa
 	return sb.String()
 }
 
-// formatIMToolDisplayName returns a short display name for a tool.
 func formatIMToolDisplayName(toolName string) string {
 	lang := ToolLanguage("")
 	pres := DescribeTool(lang, toolName, "")
@@ -1231,7 +1131,6 @@ func formatIMToolDisplayName(toolName string) string {
 	return toolName
 }
 
-// handleSlashCommand processes IM slash commands.
 func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg InboundMessage) error {
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(text)), "/restart") {
 		b.mu.Lock()
@@ -1319,9 +1218,6 @@ func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg 
 	return nil
 }
 
-// resolveEffectiveOutputMode returns the output mode considering the
-// platform-specific defaults. If any bound adapter's platform requires
-// a different mode (e.g. WeChat -> summary), that overrides the global mode.
 func (b *DaemonBridge) resolveEffectiveOutputMode() string {
 	globalMode := b.emitter.OutputMode()
 	if b.manager == nil {
@@ -1343,7 +1239,6 @@ func (b *DaemonBridge) resolveEffectiveOutputMode() string {
 	return globalMode
 }
 
-// extractText returns the concatenated text from content blocks.
 func extractText(blocks []provider.ContentBlock) string {
 	var text string
 	for _, b := range blocks {
@@ -1354,15 +1249,10 @@ func extractText(blocks []provider.ContentBlock) string {
 	return text
 }
 
-// Messages returns the current agent conversation history.
 func (b *DaemonBridge) Messages() []provider.Message {
 	return b.agent.Messages()
 }
 
-// SendUserMessage injects a user message into the agent conversation.
-// If the agent is currently running, the message is queued as an interruption
-// (same mechanism as IM mid-run messages). If the agent is idle, a new run
-// is started.
 func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
 	text := extractText(content)
 	if text == "" && len(content) == 0 {
@@ -1400,10 +1290,6 @@ type daemonBridgeSub struct {
 	done chan struct{}
 }
 
-// Subscribe registers a callback for agent streaming events.
-// All events from the agent loop are forwarded to all subscribers
-// via buffered channels to avoid blocking the agent.
-// Returns an unsubscribe function.
 func (b *DaemonBridge) Subscribe(fn func(provider.StreamEvent)) func() {
 	sub := &daemonBridgeSub{
 		fn:   fn,
@@ -1444,7 +1330,6 @@ func (b *DaemonBridge) Subscribe(fn func(provider.StreamEvent)) func() {
 	}
 }
 
-// broadcastEvent sends an event to all registered webchat subscribers.
 func (b *DaemonBridge) broadcastEvent(event provider.StreamEvent) {
 	b.eventSubMu.RLock()
 	defer b.eventSubMu.RUnlock()

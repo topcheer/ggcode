@@ -5,12 +5,6 @@ import (
 	"time"
 )
 
-// TestCalibratorFailureBackoffSuppressesRecalibration (#708): after a failed
-// calibration attempt, shouldCalibrate must return false for the duration of
-// the exponential backoff window so CountTokens serves the local estimate
-// without a remote call (previously a persistently 429/5xx count_tokens
-// endpoint turned every call into a synchronous 2s-blocked remote attempt
-// competing for the same rate-limit quota).
 func TestCalibratorFailureBackoffSuppressesRecalibration(t *testing.T) {
 	c := newTokenCountCalibrator()
 	if !c.shouldCalibrate() {
@@ -31,8 +25,6 @@ func TestCalibratorFailureBackoffSuppressesRecalibration(t *testing.T) {
 	}
 }
 
-// TestCalibratorBackoffEscalatesExponentially (#708): consecutive failures
-// double the backoff (5s, 10s, 20s, 40s, capped at 60s).
 func TestCalibratorBackoffEscalatesExponentially(t *testing.T) {
 	c := newTokenCountCalibrator()
 
@@ -57,9 +49,6 @@ func TestCalibratorBackoffEscalatesExponentially(t *testing.T) {
 	}
 }
 
-// TestCalibratorDisablesAfterMaxConsecutiveFailures (#708): after
-// calibrateMaxConsecutiveFailures consecutive failures the calibrator
-// disables permanently and falls back to the raw local estimate.
 func TestCalibratorDisablesAfterMaxConsecutiveFailures(t *testing.T) {
 	c := newTokenCountCalibrator()
 	for i := 0; i < calibrateMaxConsecutiveFailures; i++ {
@@ -80,8 +69,6 @@ func TestCalibratorDisablesAfterMaxConsecutiveFailures(t *testing.T) {
 	}
 }
 
-// TestCalibratorSuccessResetsFailureState (#708): a successful calibration
-// clears the failure memory so the next window follows the normal interval.
 func TestCalibratorSuccessResetsFailureState(t *testing.T) {
 	c := newTokenCountCalibrator()
 	c.recordFailure()
@@ -106,9 +93,6 @@ func TestCalibratorSuccessResetsFailureState(t *testing.T) {
 	}
 }
 
-// TestCalibratorFailureFewerThanMaxKeepsEnabled (#708): a failure run shorter
-// than the disable threshold must NOT permanently disable the calibrator —
-// transient 429 windows recover, unlike the permanent 404/403 disable path.
 func TestCalibratorFailureFewerThanMaxKeepsEnabled(t *testing.T) {
 	c := newTokenCountCalibrator()
 	for i := 0; i < calibrateMaxConsecutiveFailures-1; i++ {
@@ -122,10 +106,6 @@ func TestCalibratorFailureFewerThanMaxKeepsEnabled(t *testing.T) {
 	}
 }
 
-// TestIsAnthropicWindowLimitChineseQuotaVeto (#708 folded LOW): a
-// non-Anthropic vendor emitting an Anthropic-style message with "limit will
-// reset" plus strong Chinese quota wording must NOT be classified as a
-// recoverable window limit — it is a permanent quota failure.
 func TestIsAnthropicWindowLimitChineseQuotaVeto(t *testing.T) {
 	cases := []struct {
 		msg  string
@@ -148,7 +128,6 @@ func TestIsAnthropicWindowLimitChineseQuotaVeto(t *testing.T) {
 	}
 }
 
-// lowercase mirrors how callers normalize error strings before classification.
 func lowercase(s string) string {
 	b := []byte(s)
 	for i := range b {

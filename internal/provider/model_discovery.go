@@ -22,7 +22,7 @@ import (
 type modelDiscoveryResponse struct {
 	Data          []modelDiscoveryEntry `json:"data"`
 	Models        []modelDiscoveryEntry `json:"models"`
-	NextPageToken string                `json:"nextPageToken"` // gemini pagination (#1288)
+	NextPageToken string                `json:"nextPageToken"`
 }
 
 type modelDiscoveryEntry struct {
@@ -47,15 +47,10 @@ type modelDiscoveryCacheFile struct {
 	Entries map[string]modelDiscoveryCacheEntry `json:"entries"`
 }
 
-// DiscoverModels fetches the latest model list for a resolved endpoint when the remote API exposes it.
 func DiscoverModels(ctx context.Context, resolved *config.ResolvedEndpoint) ([]string, error) {
 	return discoverModels(ctx, resolved, false)
 }
 
-// ForceDiscoverModels refetches the model list, bypassing the TTL cache -
-// the refresh path for users who know the registry changed server-side
-// (linear frontend /endpoint --refresh-models). The fresh list is cached
-// like a normal discovery.
 func ForceDiscoverModels(ctx context.Context, resolved *config.ResolvedEndpoint) ([]string, error) {
 	return discoverModels(ctx, resolved, true)
 }
@@ -288,8 +283,6 @@ func hasUsableAPIKey(value string) bool {
 	return !(strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}"))
 }
 
-// isLocalBaseURL returns true for localhost/127.0.0.1 base URLs that don't
-// require an API key (e.g., Ollama, LM Studio, vLLM local deployments).
 func isLocalBaseURL(baseURL string) bool {
 	u := strings.TrimSpace(baseURL)
 	u = strings.TrimPrefix(u, "http://")
@@ -366,9 +359,6 @@ func normalizedDiscoveryHost(baseURL string) string {
 	return strings.ToLower(strings.TrimSpace(hostPort))
 }
 
-// normalizedDiscoveryPath returns the base path component of the discovery
-// URL for cache keying (#4665): trimmed, trailing slashes collapsed, empty
-// path normalized to "/". NOT lowercased - paths are case-sensitive.
 func normalizedDiscoveryPath(baseURL string) string {
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil {
@@ -384,8 +374,6 @@ func normalizedDiscoveryPath(baseURL string) string {
 	return p
 }
 
-// invalidateCachedDiscoveredModels drops the cache entry for cacheKey so the
-// next load refetches from the remote API (force-refresh path).
 func invalidateCachedDiscoveredModels(cacheKey string) {
 	if cacheKey == "" {
 		return

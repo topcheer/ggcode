@@ -8,7 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// sa-78: attempts() falls back to the provider-wide budget when unset.
 func TestCallPolicyAttempts(t *testing.T) {
 	if got := (callPolicy{}).attempts(); got != providerRetryAttempts {
 		t.Errorf("unset policy: attempts() = %d, want %d", got, providerRetryAttempts)
@@ -18,7 +17,6 @@ func TestCallPolicyAttempts(t *testing.T) {
 	}
 }
 
-// sa-78: withTimeout is a no-op without a deadline and enforces one when set.
 func TestCallPolicyWithTimeout(t *testing.T) {
 	baseCtx := context.Background()
 	ctx, cancel := (callPolicy{}).withTimeout(baseCtx)
@@ -46,7 +44,6 @@ func TestCallPolicyWithTimeout(t *testing.T) {
 	}
 }
 
-// sa-78: NewProvider injects the resolved policy into protocol adapters.
 func TestNewProviderAppliesCallPolicy(t *testing.T) {
 	resolved := &config.ResolvedEndpoint{
 		VendorID:       "acme",
@@ -88,7 +85,6 @@ func TestNewProviderAppliesCallPolicy(t *testing.T) {
 	}
 }
 
-// sa-78: CloneWithModel carries the endpoint's policy to the model clone.
 func TestCloneWithModelKeepsPolicy(t *testing.T) {
 	src := &OpenAIProvider{model: "a", policy: callPolicy{requestTimeout: time.Minute, maxRetries: 2}}
 	clone, ok := src.CloneWithModel("b").(*OpenAIProvider)

@@ -34,8 +34,6 @@ func (a *tgAdapter) SendFile(ctx context.Context, binding ChannelBinding, file O
 	return a.sendDocumentByUpload(ctx, chatID, file, caption)
 }
 
-// sendDocumentByUpload mirrors sendPhotoByUpload's multipart + 429 retry
-// discipline (#1242) for the document field.
 func (a *tgAdapter) sendDocumentByUpload(ctx context.Context, chatID string, file OutboundFile, caption string) error {
 	u := a.apiBase + fmt.Sprintf("/bot%s/sendDocument", a.botToken)
 	filename := file.Filename
@@ -105,7 +103,7 @@ func (a *tgAdapter) sendDocumentByUpload(ctx context.Context, chatID string, fil
 	return rateLimitExhausted("Telegram")
 }
 
-const qqFileTypeFile = 4 // QQ rich-media file_type: 1=image, 4=generic file
+const qqFileTypeFile = 4
 
 func (a *qqAdapter) SendFile(ctx context.Context, binding ChannelBinding, file OutboundFile, caption string) error {
 	channelID := strings.TrimSpace(binding.ChannelID)

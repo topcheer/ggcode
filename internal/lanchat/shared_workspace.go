@@ -7,17 +7,6 @@ import (
 	"strings"
 )
 
-// SharedWorkspaceAlert returns a system-prompt section warning that other
-// online ggcode agents are working in the SAME workspace directory on this
-// machine, together with the iron rules that keep concurrent agents from
-// clobbering each other. Returns "" when no collision exists (single-agent
-// workspace, empty hub, or no lanchat at all) so the common case pays nothing.
-//
-// hasVCS selects the rule set: version-controlled workspaces get the
-// worktree+PR discipline; non-VCS workspaces get coordinate-first rules
-// because nothing there can be reverted.
-//
-// lang follows the runtime language ("zh-CN"/"en"; empty = English).
 func SharedWorkspaceAlert(h *Hub, selfNodeID, workspace string, hasVCS bool, lang string) string {
 	if h == nil || workspace == "" {
 		return ""
@@ -72,9 +61,6 @@ func SharedWorkspaceAlert(h *Hub, selfNodeID, workspace string, hasVCS bool, lan
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// DirHasVCS reports whether dir (or its nearest ancestor up to the volume
-// root) is under git or svn version control — used by shared-workspace
-// alerting to pick the iron-rule set (worktree+PR vs coordinate-first).
 func DirHasVCS(dir string) bool {
 	for d := dir; ; {
 		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
@@ -91,17 +77,6 @@ func DirHasVCS(dir string) bool {
 	}
 }
 
-// sharedWorkspacePeers returns online participants whose workspace path
-// resolves to the same directory as ours, excluding ourselves. Path
-// equality on the local filesystem implies the same machine (a remote node
-// cannot mount the identical absolute path in practice; the alert is
-// advisory anyway).
-// canonicalWorkspaceComparable returns a filesystem-canonical spelling of
-// dir for workspace-identity comparison (#4918): Abs + EvalSymlinks + Clean,
-// falling back to lexical Clean when the path cannot be resolved (deleted
-// tree, permissions). filepath.Clean alone left /var/... vs
-// /private/var/... (or any user symlink) spelling the SAME directory
-// unequal, so the shared-workspace collision alert silently missed peers.
 func canonicalWorkspaceComparable(dir string) string {
 	abs, err := filepath.Abs(dir)
 	if err != nil {

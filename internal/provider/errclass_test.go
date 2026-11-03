@@ -58,8 +58,6 @@ func TestFailureClassString(t *testing.T) {
 	}
 }
 
-// TestIsQuotaExhaustedErrorConsistency guards the shared keyword list used by
-// both the retry path (provider) and the agent retry path.
 func TestIsQuotaExhaustedErrorConsistency(t *testing.T) {
 	quotaErrs := []error{
 		errors.New("coding plan usage limit"),

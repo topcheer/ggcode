@@ -28,56 +28,35 @@ var (
 )
 
 type Manager struct {
-	mu              sync.RWMutex
-	bridge          Bridge
-	session         *SessionBinding
-	currentBindings map[string]*ChannelBinding // adapter name -> binding
-	bindingStore    BindingStore
-	pairingStore    PairingStateStore
-	pairingStates   map[string]PairingChannelState
-	pendingPairing  *PairingChallenge
-	sinks           map[string]Sink
-	adapters        map[string]AdapterState
-	approvals       map[string]*pendingApproval
-	// approvalPrunerActive guards the lazy time-driven approval pruner
-	// goroutine (see startApprovalPrunerLocked, #603).
+	mu                   sync.RWMutex
+	bridge               Bridge
+	session              *SessionBinding
+	currentBindings      map[string]*ChannelBinding
+	bindingStore         BindingStore
+	pairingStore         PairingStateStore
+	pairingStates        map[string]PairingChannelState
+	pendingPairing       *PairingChallenge
+	sinks                map[string]Sink
+	adapters             map[string]AdapterState
+	approvals            map[string]*pendingApproval
 	approvalPrunerActive bool
 	onUpdate             func(StatusSnapshot)
 
-	// Dedup inbound messages by adapter+messageID to prevent platforms
-	// from delivering the same event twice (e.g. Feishu SDK retries).
 	seenMessages     map[string]time.Time
 	seenMessageCount int
 
-	// disabledBindings stores adapters that have been temporarily disabled.
-	// The binding is moved out of currentBindings so Emit/HandleInbound skip it,
-	// but the persistent binding is retained so EnableBinding can restore it.
-	disabledBindings map[string]*ChannelBinding // adapter name -> binding
+	disabledBindings map[string]*ChannelBinding
 
-	// adapterCancels stores per-adapter cancel functions so that
-	// mute/disable can stop the adapter's goroutine and drop its connection.
 	adapterCancels map[string]context.CancelFunc
 
-	// onRestart is called by UnmuteBinding/EnableBinding to restart an
-	// adapter after it was previously stopped. Set by the TUI/daemon layer
-	// which has access to the IM config.
 	onRestart func(adapterName string) error
 
-	// instanceDetect tracks this process's registration in .ggcode/instances/
-	// for multi-instance detection. Set via RegisterInstance.
 	instanceDetect *InstanceDetect
 
-	// onInteractiveCallback is called when an adapter receives an interactive
-	// button/menu callback. Set via SetInteractiveCallback.
 	onInteractiveCallback func(InteractiveCallback)
 
-	// language stores the UI language ("zh-CN" or "en") so adapters can
-	// localize messages. Set via SetLanguage, typically from NewIMEmitter.
 	language string
 
-	// bindingWatcher monitors im-bindings.json for LastSessionID changes
-	// by other ggcode instances. When another instance claims a binding,
-	// this watcher auto-mutes the affected adapter so it doesn't conflict.
 	bindingWatcherCtx    context.Context
 	bindingWatcherCancel context.CancelFunc
 }
@@ -96,8 +75,6 @@ type PairingResult struct {
 	NewBinding      *ChannelBinding
 }
 
-// SetLanguage sets the UI language for adapter message localization.
-// Typically called once during initialization from NewIMEmitter.
 func (m *Manager) SetLanguage(lang string) {
 	if m == nil {
 		return
@@ -107,7 +84,6 @@ func (m *Manager) SetLanguage(lang string) {
 	m.mu.Unlock()
 }
 
-// Language returns the configured UI language ("zh-CN" or "en").
 func (m *Manager) Language() string {
 	if m == nil {
 		return "en"
@@ -121,8 +97,6 @@ func (m *Manager) Language() string {
 	return lang
 }
 
-// UnauthorizedMessage returns the localized "unauthorized user" message
-// for use by IM adapters when HandleInbound returns ErrInboundChannelDenied.
 func UnauthorizedMessage(lang string) string {
 	if lang == "zh-CN" {
 		return "你是未授权用户"
@@ -143,9 +117,6 @@ func NewManager() *Manager {
 	}
 }
 
-// SetOnRestart sets a callback invoked by UnmuteBinding/EnableBinding to
-// restart a previously stopped adapter. The caller (TUI/daemon) provides
-// this because it has access to the IM config needed to start adapters.
 func (m *Manager) SetOnRestart(fn func(adapterName string) error) {
 	debug.Log("im", "SetOnRestart: callback registered")
 	m.mu.Lock()
@@ -153,17 +124,12 @@ func (m *Manager) SetOnRestart(fn func(adapterName string) error) {
 	m.mu.Unlock()
 }
 
-// SetInteractiveCallback registers a handler for interactive button/menu callbacks
-// from adapters. When a user clicks a button, the adapter calls
-// Manager.HandleInteractiveCallback which dispatches to this handler.
 func (m *Manager) SetInteractiveCallback(fn func(InteractiveCallback)) {
 	m.mu.Lock()
 	m.onInteractiveCallback = fn
 	m.mu.Unlock()
 }
 
-// HandleInteractiveCallback is called by adapters when a user clicks an
-// interactive button. It dispatches to the registered callback handler.
 func (m *Manager) HandleInteractiveCallback(cb InteractiveCallback) {
 	m.mu.RLock()
 	fn := m.onInteractiveCallback
@@ -173,12 +139,6 @@ func (m *Manager) HandleInteractiveCallback(cb InteractiveCallback) {
 	}
 }
 
-// RegisterInstance creates an InstanceDetect for the given workspace, registers
-// this process as a running instance, and stores it on the Manager.
-// If other instances are already running in the same workspace, this instance
-// is auto-muted (non-primary) — UNLESS bindings have LastSessionID matching
-// this session, in which case those bindings are activated regardless.
-// Returns the detector and any other live instances.
 func (m *Manager) RegisterInstance(workspace string, sessionID string) (*InstanceDetect, []InstanceInfo, error) {
 	detect := NewInstanceDetect(workspace)
 	others, err := detect.Register()
@@ -206,10 +166,6 @@ func (m *Manager) RegisterInstance(workspace string, sessionID string) (*Instanc
 	return detect, others, nil
 }
 
-// claimUnclaimedBindings sets LastSessionID = sessionID for all workspace
-// bindings that have an empty LastSessionID. Disabled adapters are skipped.
-// This implements the "first launch claims all" behavior: after one round of
-// launches, every adapter is assigned to a session.
 func (m *Manager) claimUnclaimedBindings(sessionID string) {
 	if sessionID == "" {
 		return
@@ -257,8 +213,6 @@ func (m *Manager) claimUnclaimedBindings(sessionID string) {
 	}
 }
 
-// StartUnstartedOwnedAdapters starts adapters for non-muted bindings that
-// don't have an active sink yet. Called after session ownership is resolved.
 func (m *Manager) StartUnstartedOwnedAdapters() {
 	m.mu.Lock()
 	var toStart []string
@@ -291,14 +245,6 @@ func (m *Manager) StartUnstartedOwnedAdapters() {
 	}
 }
 
-// muteNonOwnedBindings mutes current bindings that have no session owner
-// (empty LastSessionID) when other instances are running in the same workspace.
-//
-// Bindings that already have a LastSessionID (owned by any session) are
-// completely ignored here — their muted state is already correctly set by
-// reloadBindingLocked (isForeign → muted, isOwned → not muted) and monitored
-// by the binding watcher. This function only handles the legacy case of
-// unclaimed bindings when multiple instances are running.
 func (m *Manager) muteNonOwnedBindings(sessionID string) int {
 	m.mu.Lock()
 	count := 0
@@ -325,8 +271,6 @@ func (m *Manager) muteNonOwnedBindings(sessionID string) int {
 	return count
 }
 
-// UnregisterInstance removes this process's instance registration (PID file).
-// Call on graceful shutdown.
 func (m *Manager) UnregisterInstance() {
 	m.mu.Lock()
 	d := m.instanceDetect
@@ -337,15 +281,12 @@ func (m *Manager) UnregisterInstance() {
 	}
 }
 
-// InstanceDetect returns the instance detector (nil if not registered).
 func (m *Manager) InstanceDetect() *InstanceDetect {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.instanceDetect
 }
 
-// IsPrimary returns true if this instance is the oldest running instance
-// in the workspace (or no detector is set).
 func (m *Manager) IsPrimary() bool {
 	m.mu.RLock()
 	d := m.instanceDetect
@@ -356,8 +297,6 @@ func (m *Manager) IsPrimary() bool {
 	return d.IsPrimary()
 }
 
-// syncInstanceActiveChannels updates the HasActiveChannels flag in the
-// instance PID file based on current non-muted bindings with valid channel IDs.
 func (m *Manager) syncInstanceActiveChannels() {
 	m.mu.Lock()
 	d := m.instanceDetect
@@ -386,8 +325,6 @@ func (m *Manager) SetBindingStore(store BindingStore) error {
 	return err
 }
 
-// AllPersistedBindings returns all persisted bindings from the store,
-// including bindings for other workspaces not currently active.
 func (m *Manager) AllPersistedBindings() []ChannelBinding {
 	if m.bindingStore == nil {
 		return nil
@@ -440,7 +377,6 @@ func (m *Manager) SetOnUpdate(cb func(StatusSnapshot)) {
 	m.onUpdate = cb
 }
 
-// IsMuted returns the runtime muted state for an adapter.
 func (m *Manager) IsMuted(adapterName string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -454,11 +390,6 @@ func (m *Manager) BindSession(binding SessionBinding) {
 		binding.BoundAt = time.Now()
 	}
 
-	// Detect session ID change within the same workspace (e.g. /clear, /branch).
-	// When the session ID changes, we must migrate ownership of bindings from
-	// the old session to the new one. Without this, reloadBindingLocked sees
-	// the old LastSessionID as "foreign" and mutes everything, and the binding
-	// watcher keeps re-muting every 3 seconds.
 	var migrateOldSessionID, migrateWorkspace string
 	if m.session != nil && m.session.Workspace == binding.Workspace && m.session.SessionID != binding.SessionID {
 		migrateOldSessionID = m.session.SessionID
@@ -527,11 +458,6 @@ func (m *Manager) UnbindSession() {
 	}
 }
 
-// ClearSessionBindings removes the LastSessionID from all bindings that
-// reference the given sessionID. This is used during exit cleanup when a
-// session is deleted (e.g. empty session after /clear) to prevent orphaned
-// IM adapter bindings — without this, the binding's LastSessionID points
-// to a deleted session and no new ggcode instance will auto-claim it.
 func (m *Manager) ClearSessionBindings(sessionID string) {
 	if sessionID == "" {
 		return
@@ -543,9 +469,6 @@ func (m *Manager) ClearSessionBindings(sessionID string) {
 	clearSessionBindingsFromStore(store, sessionID)
 }
 
-// ClearSessionBindingsGlobal is a standalone helper that operates directly
-// on the default binding store file. Used by codepaths that don't hold a
-// reference to im.Manager (e.g. desktop ChatBridge.Close).
 func ClearSessionBindingsGlobal(sessionID string) {
 	if sessionID == "" {
 		return
@@ -590,8 +513,6 @@ func (m *Manager) ActiveSession() *SessionBinding {
 	return &copy
 }
 
-// CurrentSessionID returns the session ID of the active session, or "" if no
-// session is bound. Used by StartCurrentBindingAdapter to check binding ownership.
 func (m *Manager) CurrentSessionID() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -625,17 +546,12 @@ func (m *Manager) CurrentBindings() []ChannelBinding {
 	return out
 }
 
-// HasActiveBindings returns true if there is at least one active channel binding.
-// Lighter than ListBindings — no allocation or copying.
 func (m *Manager) HasActiveBindings() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.currentBindings) > 0
 }
 
-// HasNonInteractiveBindings returns true if there is at least one bound adapter
-// that did NOT receive an interactive message (i.e. doesn't implement InteractiveSender
-// or wasn't in the sentAdapters set). Used to decide whether to send text fallback.
 func (m *Manager) HasNonInteractiveBindings(sentAdapters map[string]string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -793,10 +709,6 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	return nil
 }
 
-// HandlePairingInbound processes an inbound IM message for pairing.
-// If the adapter has no binding with a ChannelID, it creates a pairing challenge
-// (4-digit code displayed on screen). The user must enter the code in the IM channel
-// to complete binding and obtain the ChannelID/TargetID.
 func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error) {
 	m.mu.Lock()
 	if m.session == nil {
@@ -958,14 +870,6 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 	}, nil
 }
 
-// recordWrongCodeLocked counts one wrong-code submission against the pending
-// challenge (issue #719). Caller must hold m.mu and is responsible for
-// unlocking. When the attempt budget (maxPairingWrongCodeAttempts) is
-// exhausted it discards the challenge, advances the channel's RejectCount
-// through the existing blacklist mechanism, persists pairing state, and
-// returns (cancelResult, true, nil), or (zero, true, err) if persistence
-// fails. Otherwise it returns (zero, false, nil) and the caller replies with
-// the standard wrong-code message.
 func (m *Manager) recordWrongCodeLocked(key string, pending PairingChallenge, receivedAt time.Time) (PairingResult, bool, error) {
 	if m.pendingPairing == nil {
 		return PairingResult{}, false, nil
@@ -1130,9 +1034,6 @@ func (m *Manager) Emit(ctx context.Context, event OutboundEvent) error {
 	return fanOutSend(ctx, targets, event)
 }
 
-// EmitExcept sends an event to all bound channels except those matching excludeAdapter.
-// This is used to suppress user mirror echo on the originating IM channel while still
-// delivering it to other bound channels.
 func (m *Manager) EmitExcept(ctx context.Context, event OutboundEvent, excludeAdapter string) error {
 	if excludeAdapter == "" {
 		return m.Emit(ctx, event)
@@ -1140,7 +1041,6 @@ func (m *Manager) EmitExcept(ctx context.Context, event OutboundEvent, excludeAd
 	return m.EmitExceptAdapters(ctx, event, map[string]bool{excludeAdapter: true})
 }
 
-// EmitExceptAdapters sends an event to all bound channels except those in excludeSet.
 func (m *Manager) EmitExceptAdapters(ctx context.Context, event OutboundEvent, excludeSet map[string]bool) error {
 	m.mu.RLock()
 	var targets []emitTarget
@@ -1182,15 +1082,8 @@ func (m *Manager) SendDirect(ctx context.Context, binding ChannelBinding, event 
 	return sendWithTimeout(ctx, sink, binding, event)
 }
 
-// ErrFileUploadUnsupported is returned by SendFileDirect when the adapter
-// does not implement FileSender - callers fall back to the legacy
-// path-as-text delivery (#3316).
 var ErrFileUploadUnsupported = errors.New("adapter does not support file upload")
 
-// SendFileDirect (#3316) delivers one arbitrary file to the adapter's bound
-// channel via the optional FileSender interface. Mirrors SendDirect's
-// binding/running checks; unsupported adapters return
-// ErrFileUploadUnsupported so the tool layer can fall back.
 func (m *Manager) SendFileDirect(ctx context.Context, binding ChannelBinding, file OutboundFile, caption string) error {
 	m.mu.RLock()
 	sink := m.sinks[binding.Adapter]
@@ -1208,10 +1101,6 @@ func (m *Manager) SendFileDirect(ctx context.Context, binding ChannelBinding, fi
 	return fs.SendFile(ctx, binding, file, caption)
 }
 
-// SendInteractive sends an interactive message to all bound adapters that
-// support it. Returns a map of adapter name → platform message ID for
-// callback correlation. Adapters that don't support interactive messages
-// are skipped (caller should fall back to text).
 func (m *Manager) SendInteractive(ctx context.Context, msg InteractiveMessage) map[string]string {
 	type interactiveTarget struct {
 		binding ChannelBinding
@@ -1250,9 +1139,6 @@ func (m *Manager) SendInteractive(ctx context.Context, msg InteractiveMessage) m
 	return result
 }
 
-// EmitToNonInteractive sends an event only to adapters that do NOT implement
-// InteractiveSender. Used for ask_user text fallback — adapters that already
-// received interactive buttons should not get the duplicate text version.
 func (m *Manager) EmitToNonInteractive(ctx context.Context, event OutboundEvent) error {
 	m.mu.RLock()
 	var targets []emitTarget
@@ -1390,20 +1276,8 @@ func (m *Manager) snapshotLocked() StatusSnapshot {
 	return snapshot
 }
 
-// approvalPruneInterval is how often the time-driven approval pruner runs.
-// It's a var (not const) so tests can override it for faster execution.
 var approvalPruneInterval = time.Minute
 
-// pruneApprovalsLocked removes stale entries from the approvals map to bound
-// memory. Resolved entries are removed immediately (the snapshot was already
-// taken at resolution time). Unresolved entries older than 1 hour are removed
-// (the user likely abandoned them). Must be called with m.mu held.
-//
-// There is deliberately no minimum-size gate: the #259 Deny-before-close
-// guarantee must hold even for a single abandoned approval. The previous
-// len<32 early-return left small maps permanently unpruned, so abandoned
-// approvals accumulated with zero cleanup and their waiters blocked on
-// <-resp forever (#603).
 func (m *Manager) pruneApprovalsLocked() {
 	if len(m.approvals) == 0 {
 		return
@@ -1421,12 +1295,6 @@ func (m *Manager) pruneApprovalsLocked() {
 	}
 }
 
-// startApprovalPrunerLocked lazily starts a time-driven pruner goroutine so
-// abandoned approvals (>1h unresolved) are denied and removed even if no new
-// approval is ever registered — RegisterApproval is otherwise the only prune
-// trigger, which left waiters hanging forever once registrations stopped
-// (#603). The goroutine self-terminates once the approvals map is empty; the
-// next RegisterApproval restarts it. Must be called with m.mu held.
 func (m *Manager) startApprovalPrunerLocked() {
 	if m.approvalPrunerActive {
 		return
@@ -1629,7 +1497,6 @@ func newID() string {
 	return hex.EncodeToString(raw[:])
 }
 
-// PCAdapter returns the first registered PrivateClaw adapter, or nil.
 func (m *Manager) PCAdapter() PCAdapterAPI {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -1641,9 +1508,6 @@ func (m *Manager) PCAdapter() PCAdapterAPI {
 	return nil
 }
 
-// ResolveOutputMode returns the effective output mode for the given adapter.
-// If the adapter's platform has a recommended default (e.g. WeChat → summary),
-// and the global mode is "verbose" (the default), the platform default is used.
 func (m *Manager) ResolveOutputMode(adapterName, globalMode string) string {
 	if m == nil {
 		return globalMode

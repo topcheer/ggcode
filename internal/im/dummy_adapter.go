@@ -10,9 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// dummyAdapter implements Sink and startableSink for automated evaluation.
-// It starts a localhost HTTP server and auto-binds a ChannelBinding so that
-// an external orchestrator can drive multi-turn conversations via HTTP+SSE.
 type dummyAdapter struct {
 	name    string
 	manager *Manager
@@ -37,7 +34,6 @@ func newDummyAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAda
 
 func (a *dummyAdapter) Name() string { return a.name }
 
-// Send implements Sink. It records metrics and pushes the event to the SSE broker.
 func (a *dummyAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	a.metrics.RecordEvent(event)
 	if a.server != nil {
@@ -46,7 +42,6 @@ func (a *dummyAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	return nil
 }
 
-// Start implements startableSink. It auto-binds a channel and starts the HTTP server.
 func (a *dummyAdapter) Start(ctx context.Context) {
 	if err := a.autoBind(); err != nil {
 		debug.Log("dummy", "auto-bind failed: %v", err)
@@ -66,10 +61,8 @@ func (a *dummyAdapter) Start(ctx context.Context) {
 	}
 }
 
-// Close is a no-op for the dummy adapter.
 func (a *dummyAdapter) Close() error { return nil }
 
-// autoBind creates a ChannelBinding for the dummy adapter.
 func (a *dummyAdapter) autoBind() error {
 	session := a.manager.ActiveSession()
 	if session == nil {

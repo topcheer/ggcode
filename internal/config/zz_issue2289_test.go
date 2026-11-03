@@ -2,10 +2,6 @@ package config
 
 import "testing"
 
-// #2289: an instance-scoped in-place edit of a globally configured vendor
-// must survive reload. diffVendors deliberately persists such deltas
-// (marshal-compare branch), but MergeInstance only adopted keys ABSENT
-// from global - the persisted change vanished on reload.
 func TestIssue2289VendorInPlaceEditSurvivesReload(t *testing.T) {
 	global := &Config{Vendors: map[string]VendorConfig{
 		"foo": {Endpoints: map[string]EndpointConfig{"main": {BaseURL: "https://m1"}}},
@@ -31,7 +27,6 @@ func TestIssue2289VendorInPlaceEditSurvivesReload(t *testing.T) {
 	}
 }
 
-// unchanged instance vendors must not flag (no spurious instance sourcing)
 func TestIssue2289UnchangedVendorNotFlagged(t *testing.T) {
 	v := VendorConfig{Endpoints: map[string]EndpointConfig{"main": {BaseURL: "https://m1"}}}
 	global := &Config{Vendors: map[string]VendorConfig{"foo": v}}

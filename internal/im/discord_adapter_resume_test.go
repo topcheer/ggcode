@@ -13,14 +13,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// TestDiscordIdentifyIntentsBitValue pins the intents bitmask (#945).
-//
-// Guilds=1<<0, GuildMessages=1<<9, GuildMessageReactions=1<<10,
-// DirectMessages=1<<12, MessageContent=1<<15 → 1+512+1024+4096+32768 = 38401.
-//
-// Note: issue #945 / the fix request cite 38913 as the expected sum, but that
-// arithmetic double-counts GuildMessages (38913 - 38401 = 512). The bitwise
-// expression specified in the issue is authoritative and equals 38401.
 func TestDiscordIdentifyIntentsBitValue(t *testing.T) {
 	if discordIdentifyIntents != 38401 {
 		t.Fatalf("discordIdentifyIntents = %d, want 38401 ((1<<0)|(1<<9)|(1<<10)|(1<<12)|(1<<15))", discordIdentifyIntents)
@@ -44,16 +36,9 @@ func TestDiscordIdentifyIntentsBitValue(t *testing.T) {
 	}
 }
 
-// fakeDiscordGateway is a minimal Discord Gateway v10 server that scripts a
-// reconnect + RESUME flow across four connections:
-//
-//	conn 1: Hello → IDENTIFY → READY(session) → dispatch(s=7) → abrupt close
-//	conn 2: Hello → RESUME(sess, seq=7) → RESUMED(s=8) → op 9 d=true
-//	conn 3: Hello → RESUME(sess, ...)   → op 9 d=false (session dead)
-//	conn 4: Hello → IDENTIFY (fresh session fallback)
 type fakeDiscordGateway struct {
 	srv *httptest.Server
-	ops chan string // observed client ops, e.g. "IDENTIFY:38401", "RESUME:sess:7"
+	ops chan string
 }
 
 func newFakeDiscordGateway(t *testing.T) *fakeDiscordGateway {
@@ -165,9 +150,6 @@ func expectOp(t *testing.T, ops <-chan string, want string) {
 	}
 }
 
-// TestDiscordResumeStateMachine drives connectAndServe through a disconnect,
-// a successful RESUME, an op 9 d=true (retry RESUME), and an op 9 d=false
-// (fall back to IDENTIFY) - the full #947 state machine.
 func TestDiscordResumeStateMachine(t *testing.T) {
 	g := newFakeDiscordGateway(t)
 	a := &discordAdapter{

@@ -306,10 +306,6 @@ func TestMatrixAdapter_DMRoomDetection(t *testing.T) {
 	}
 }
 
-// TestMatrixGetHistoryVisibilityFailsClosed pins #1355: a state-fetch error
-// must propagate (mautrix-aligned fail-closed), never fall back to "shared" -
-// the SharedHistory flag rides room keys/key backup for the whole outbound
-// session lifetime with no correction path.
 func TestMatrixGetHistoryVisibilityFailsClosed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
@@ -327,9 +323,6 @@ func TestMatrixGetHistoryVisibilityFailsClosed(t *testing.T) {
 	}
 }
 
-// TestMatrixGetHistoryVisibilityDefaultsToShared pins the OTHER half of
-// #1355: a successful fetch with no visibility event content returns
-// Matrix's documented default ("shared") - a default, not an error.
 func TestMatrixGetHistoryVisibilityDefaultsToShared(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
@@ -353,9 +346,6 @@ func TestMatrixGetHistoryVisibilityDefaultsToShared(t *testing.T) {
 	}
 }
 
-// TestSanitizeFileToken pins #1404-A: the persistent crypto store path is
-// derived from the adapter name - unsafe characters must reduce to '-'
-// (never escape the matrix-crypto dir) and names must map deterministically.
 func TestSanitizeFileToken(t *testing.T) {
 	cases := map[string]string{
 		"main":         "main",
@@ -371,9 +361,6 @@ func TestSanitizeFileToken(t *testing.T) {
 	}
 }
 
-// TestOpenPersistentCryptoStorePathIsolation: two adapters (different
-// names or homeservers) must never share one device identity - the file
-// path is name-keyed and the account ID is homeserver|name.
 func TestOpenPersistentCryptoStorePathIsolation(t *testing.T) {
 	a := &matrixAdapter{name: "bot one", homeserver: "https://matrix.org"}
 	if got := sanitizeFileToken(a.name); got != "bot-one" {
@@ -387,9 +374,6 @@ func TestOpenPersistentCryptoStorePathIsolation(t *testing.T) {
 	}
 }
 
-// TestIssue1553_FileSyncStorePersistsToken pins #1553-A: the next_batch
-// token survives process restarts via the file store (absent file ->
-// empty token = fresh initial sync; saved token round-trips).
 func TestIssue1553_FileSyncStorePersistsToken(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sync.json")
 	s := &fileSyncStore{path: path}
@@ -416,8 +400,6 @@ func TestIssue1553_FileSyncStorePersistsToken(t *testing.T) {
 	}
 }
 
-// TestIssue1553B_ShortEventIDNoPanic pins #1553-B: hostile short IDs from
-// a malicious relay must not panic (which killed the relay loop).
 func TestIssue1553B_ShortEventIDNoPanic(t *testing.T) {
 	for _, s := range []string{"", "abc", "exact12byte", "0123456789abcdef0123456789"} {
 		if got := nostrShortID(s); len(got) > 12 || len(got) > len(s) {

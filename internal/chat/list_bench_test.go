@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// benchList builds a list resembling a long-running session: mostly tool
-// items with sizable bodies plus assistant messages.
 func benchList(b *testing.B, n int) *List {
 	styles := DefaultStyles()
 	l := NewList(120, 40)
@@ -31,8 +29,6 @@ func benchList(b *testing.B, n int) *List {
 	return l
 }
 
-// BenchmarkScrollCold measures ScrollDown over never-rendered items —
-// the "user scrolls through history for the first time" path.
 func BenchmarkScrollCold(b *testing.B) {
 	l := benchList(b, 2000)
 	l.ScrollUp(20000)
@@ -42,7 +38,6 @@ func BenchmarkScrollCold(b *testing.B) {
 	}
 }
 
-// BenchmarkRenderViewport measures per-frame render cost mid-scroll.
 func BenchmarkRenderViewport(b *testing.B) {
 	l := benchList(b, 2000)
 	l.ScrollUp(5000)
@@ -53,7 +48,6 @@ func BenchmarkRenderViewport(b *testing.B) {
 	}
 }
 
-// BenchmarkScrollWarm measures scroll over already-rendered items.
 func BenchmarkScrollWarm(b *testing.B) {
 	l := benchList(b, 2000)
 	l.Render()
@@ -69,9 +63,6 @@ func BenchmarkScrollWarm(b *testing.B) {
 	}
 }
 
-// BenchmarkStreamUpdateText measures the per-chunk cost of updating a long
-// streaming assistant item (the hot path while the agent is busy): SetText
-// invalidates the cache, so each chunk re-renders the FULL accumulated text.
 func BenchmarkStreamUpdateText(b *testing.B) {
 	styles := DefaultStyles()
 	l := NewList(120, 40)

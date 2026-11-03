@@ -23,10 +23,9 @@ var faultKinds = map[string]bool{
 
 type faultDirective struct {
 	kind string
-	call int // 1-based
+	call int
 }
 
-// FaultProvider wraps a Provider and injects faults per GGCODE_LLM_FAULT.
 type FaultProvider struct {
 	inner Provider
 	plan  []faultDirective
@@ -36,9 +35,6 @@ type FaultProvider struct {
 	fired []string
 }
 
-// WrapLLMFaultFromEnv wraps p per GGCODE_LLM_FAULT. Unset, empty, or
-// entirely-invalid specs return p unchanged (fail-open, symmetric with
-// the tape); individual invalid directives are skipped with a log.
 func WrapLLMFaultFromEnv(p Provider) Provider {
 	spec := os.Getenv(llmFaultEnv)
 	if spec == "" || p == nil {
@@ -70,8 +66,6 @@ func WrapLLMFaultFromEnv(p Provider) Provider {
 	return &FaultProvider{inner: p, plan: plan}
 }
 
-// beginCall advances the shared call counter (Chat and ChatStream are
-// numbered together) and returns the directive scheduled for this call.
 func (f *FaultProvider) beginCall() (faultDirective, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -84,7 +78,6 @@ func (f *FaultProvider) beginCall() (faultDirective, bool) {
 	return faultDirective{}, false
 }
 
-// fire records an OBSERVED fault (verify-triggered semantics).
 func (f *FaultProvider) fire(d faultDirective) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -92,9 +85,6 @@ func (f *FaultProvider) fire(d faultDirective) {
 	debug.Log("provider", "%s fired: %s@%d", llmFaultEnv, d.kind, d.call)
 }
 
-// Fired returns the directives whose effect was observable in agent
-// input, in firing order. Chaos tests assert on this instead of
-// trusting that a planned fault actually landed.
 func (f *FaultProvider) Fired() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -105,8 +95,6 @@ func (f *FaultProvider) Fired() []string {
 
 func (f *FaultProvider) Name() string { return f.inner.Name() }
 
-// InnerProvider exposes the wrapped provider (composition/introspection
-// in tests: assert fault layer sits outside the tape layer).
 func (f *FaultProvider) InnerProvider() Provider { return f.inner }
 
 func (f *FaultProvider) CountTokens(ctx context.Context, messages []Message) (int, error) {
@@ -181,8 +169,6 @@ func (f *FaultProvider) ChatStream(ctx context.Context, messages []Message, tool
 	return out, nil
 }
 
-// perturbChatResponse returns a copied, perturbed response. The original
-// (which may be a shared replay-tape entry) is never mutated.
 func perturbChatResponse(resp *ChatResponse, kind string) (*ChatResponse, bool) {
 	cp := *resp
 	msg := resp.Message
@@ -225,8 +211,6 @@ func isToolEvent(ev StreamEvent) bool {
 	return ev.Tool.Name != "" || ev.Tool.ID != "" || len(ev.Tool.Arguments) > 0
 }
 
-// perturbStreamEvent applies one fault kind to a single stream event.
-// Returns (event, drop, mutated); the input event is never modified.
 func perturbStreamEvent(ev StreamEvent, kind string) (StreamEvent, bool, bool) {
 	tool := isToolEvent(ev)
 	text := ev.Text != "" && !tool
@@ -253,9 +237,6 @@ func perturbStreamEvent(ev StreamEvent, kind string) (StreamEvent, bool, bool) {
 	return ev, false, false
 }
 
-// corruptJSON truncates a JSON payload to an invalid prefix (half the
-// bytes, rune-boundary safe, never closed). Empty input gets a broken
-// sentinel so value-args still corrupts argument-less tool calls.
 func corruptJSON(raw json.RawMessage) json.RawMessage {
 	s := string(raw)
 	if s == "" {
@@ -268,7 +249,6 @@ func corruptJSON(raw json.RawMessage) json.RawMessage {
 	return json.RawMessage(half)
 }
 
-// halveRuneSafe cuts s to half its length without splitting a rune.
 func halveRuneSafe(s string) string {
 	half := len(s) / 2
 	for half > 0 && !utf8.RuneStart(s[half]) {

@@ -16,39 +16,21 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// adaptiveCap learns a working max-output-tokens value for a single
-// (vendor, endpoint, model) triple by observing two server signals:
-//
-//   - finish_reason == length / max_tokens / MAX_TOKENS  → output truncated,
-//     cap was too SMALL → ratchet up by capStep on the next call.
-//   - HTTP 400 referencing max_tokens                    → server refused the
-//     value, cap was too BIG → ratchet down by capStep (or to the parsed
-//     server limit) on the next call.
-//
-// Invariants (guarantee no jitter / drift):
-//   - lo only ever grows (highest cap that has been observed safe)
-//   - hi only ever shrinks (lowest cap that has been observed rejected)
-//   - cur always lies in [lo, hi] (clamped on every adjustment)
-//   - once hi-lo <= capStep, further adjustments stop (converged)
-//
-// Persisted to ~/.ggcode/state/maxtokens.json across sessions.
 type adaptiveCap struct {
 	key string
 
 	mu       sync.Mutex
-	lo       int64 // highest known-safe cap (monotonic ↑)
-	hi       int64 // lowest known-rejected cap (monotonic ↓), 0 means "unknown"
+	lo       int64
+	hi       int64
 	cur      atomic.Int64
-	userHint int64 // initial value from config; used for first-time bounds
+	userHint int64
 }
 
 const (
 	capStep    = 4096
-	capCeiling = 1 << 20 // sanity ceiling: 1M tokens
+	capCeiling = 1 << 20
 )
 
-// Get returns the current cap to send on the next request. Always > 0 if the
-// user configured a non-zero value; returns 0 to mean "don't send".
 func (c *adaptiveCap) Get() int {
 	if c == nil {
 		return 0
@@ -56,9 +38,6 @@ func (c *adaptiveCap) Get() int {
 	return int(c.cur.Load())
 }
 
-// OnTruncated is called by a provider after observing a truncation finish
-// reason. It bumps the cap upward (within [lo, hi]), persists the new state,
-// and emits a debug log. Safe to call concurrently.
 func (c *adaptiveCap) OnTruncated() {
 	if c == nil {
 		return
@@ -88,10 +67,6 @@ func (c *adaptiveCap) OnTruncated() {
 	saveAdaptiveCaps()
 }
 
-// OnRejected is called when the server returns an error indicating the
-// configured max_tokens is too large. parsedLimit may be 0 if the server's
-// upper bound could not be parsed from the error message; in that case the
-// cap is simply backed off by capStep.
 func (c *adaptiveCap) OnRejected(parsedLimit int) {
 	if c == nil {
 		return
@@ -108,7 +83,6 @@ func (c *adaptiveCap) OnRejected(parsedLimit int) {
 		}
 		c.hi = newHi
 	}
-	// Step the cap down. Prefer the parsed server limit when known.
 	var next int64
 	if parsedLimit > 0 {
 		next = int64(parsedLimit)
@@ -137,13 +111,6 @@ var (
 	capLoadOnce   sync.Once
 )
 
-// AdaptiveCapFor returns the singleton adaptiveCap for the given identity.
-// Identity is keyed on (vendor, baseURL, model) to avoid mixing learned values
-// across distinct endpoints that share a model name.
-//
-// userHint is the value the user (or default) configured. It is used as the
-// initial `cur` only on first creation; subsequent calls return the existing
-// learned cap (which has already been clamped by lo/hi from disk).
 func AdaptiveCapFor(vendor, baseURL, model string, userHint int) *adaptiveCap {
 	capLoadOnce.Do(loadAdaptiveCaps)
 
@@ -195,14 +162,6 @@ func AdaptiveCapFor(vendor, baseURL, model string, userHint int) *adaptiveCap {
 	return c
 }
 
-// AdaptiveCapForModelSwap returns the cap registered for the SAME
-// (vendor, baseURL) identity but a DIFFERENT model - used by
-// CloneWithModel (#1603). The registry is keyed on the full triple
-// precisely so learned values do not mix across models; the four clone
-// sites used to copy the OLD model's cap pointer, so a subagent cloned
-// onto a smaller-limit model inherited the parent's learned 8000 cap
-// (max_tokens rejections on the clone also wrote back through the shared
-// pointer, dragging the parent session's live cap down).
 func AdaptiveCapForModelSwap(old *adaptiveCap, newModel string, userHint int) *adaptiveCap {
 	if old == nil {
 		return nil
@@ -254,9 +213,6 @@ func loadAdaptiveCaps() {
 	persistedCaps = m
 }
 
-// saveAdaptiveCaps snapshots the live registry (lo/hi/cur) and atomically
-// writes it. Caller may hold an individual cap's mu; we briefly take the
-// registry mu to enumerate.
 func saveAdaptiveCaps() {
 
 	capRegistryMu.Lock()
@@ -289,10 +245,6 @@ func saveAdaptiveCaps() {
 	}
 }
 
-// maxTokensRejection inspects an error returned by a provider's HTTP/SDK call
-// and reports whether it indicates the max_tokens parameter exceeded the
-// model's allowed range. parsedLimit is non-zero if the upstream message
-// contained an explicit ceiling like "must be <= 8192".
 func maxTokensRejection(err error) (rejected bool, parsedLimit int) {
 	if err == nil {
 		return false, 0
@@ -339,7 +291,6 @@ func parseLimitFromMessage(msg string) int {
 	return n
 }
 
-// String is a debug helper.
 func (c *adaptiveCap) String() string {
 	if c == nil {
 		return "<nil>"

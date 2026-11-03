@@ -8,9 +8,6 @@ import (
 	"time"
 )
 
-// asyncBrokenStreamProvider models a bundled provider whose ChatStream
-// starts fine (nil sync error) but surfaces a quota failure as an async
-// StreamEventError before any output.
 type asyncBrokenStreamProvider struct {
 	name  string
 	calls atomic.Int32
@@ -31,7 +28,6 @@ func (p *asyncBrokenStreamProvider) CountTokens(ctx context.Context, messages []
 	return 0, nil
 }
 
-// okStreamProvider delivers one text event and closes.
 type okStreamProvider struct {
 	name  string
 	calls atomic.Int32
@@ -76,9 +72,6 @@ func collectStream1244(t *testing.T, stream <-chan StreamEvent) (texts []string,
 	}
 }
 
-// TestFallback_AsyncDoubleFailureChainsToThirdProvider: A and B both fail
-// async pre-output; C must still be reached. Before #1244 the inner relay
-// passed B's async error straight to the consumer and C was never tried.
 func TestFallback_AsyncDoubleFailureChainsToThirdProvider(t *testing.T) {
 	a := &asyncBrokenStreamProvider{name: "A"}
 	b := &asyncBrokenStreamProvider{name: "B"}
@@ -104,9 +97,6 @@ func TestFallback_AsyncDoubleFailureChainsToThirdProvider(t *testing.T) {
 	}
 }
 
-// TestFallback_FullyBrokenAsyncChainTerminates: when every provider fails
-// async, the hop budget must relay the error instead of looping through the
-// chain forever.
 func TestFallback_FullyBrokenAsyncChainTerminates(t *testing.T) {
 	a := &asyncBrokenStreamProvider{name: "A"}
 	b := &asyncBrokenStreamProvider{name: "B"}

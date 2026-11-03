@@ -10,7 +10,6 @@ import (
 	"sync"
 )
 
-// pcPersistedSession contains the minimal data needed to restore a PC session after restart.
 type pcPersistedSession struct {
 	SessionID  string `json:"sessionId"`
 	SessionKey string `json:"sessionKey"`
@@ -21,13 +20,11 @@ type pcPersistedSession struct {
 	CreatedAt  string `json:"createdAt"`
 }
 
-// PCSessionStore persists PC session data across restarts.
 type PCSessionStore interface {
 	LoadAll() ([]pcPersistedSession, error)
 	SaveAll(sessions []pcPersistedSession) error
 }
 
-// MemoryPCSessionStore is an in-memory PC session store for testing.
 type MemoryPCSessionStore struct {
 	mu       sync.RWMutex
 	sessions []pcPersistedSession
@@ -53,7 +50,6 @@ func (s *MemoryPCSessionStore) SaveAll(sessions []pcPersistedSession) error {
 	return nil
 }
 
-// JSONFilePCSessionStore persists PC sessions to a JSON file.
 type JSONFilePCSessionStore struct {
 	path string
 	mu   sync.Mutex

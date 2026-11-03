@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// TestLoadPlaintextMigrationKeepsLegacyA2AKey: a config carrying BOTH a legacy
-// a2a.api_key and a plaintext vendor key (the exact trigger — the vendor key
-// makes MigratePlaintextAPIKeys rewrite the file, activating the reload path)
-// must still yield a populated A2A auth key after Load.
 func TestLoadPlaintextMigrationKeepsLegacyA2AKey(t *testing.T) {
 	withTestHome(t)
 	dir := t.TempDir()
@@ -50,10 +46,6 @@ vendors:
 	}
 }
 
-// TestMigrateLegacyA2AKeySurvivesReloadShape: unit-pins the reload shape
-// itself — a freshly disk-read raw map (legacy a2a.api_key present, no
-// auth block) passed through the fix's re-run must come out with the key
-// under a2a.auth.api_key and the legacy top-level key gone.
 func TestMigrateLegacyA2AKeySurvivesReloadShape(t *testing.T) {
 	raw := map[string]interface{}{
 		"a2a": map[string]interface{}{

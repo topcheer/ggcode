@@ -8,11 +8,6 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// ParseRemoteQuestionnaireAnswer parses a raw IM text reply against a single
-// question definition. It returns the selected choice IDs (for single/multi),
-// a freeform text (for text or unmatched input), and whether parsing succeeded.
-//
-// This is the shared implementation used by both TUI and daemon modes.
 func ParseRemoteQuestionnaireAnswer(raw string, question toolpkg.AskUserQuestion) (selected map[string]struct{}, freeform string, err error) {
 	text := strings.TrimSpace(raw)
 	switch question.Kind {
@@ -38,12 +33,6 @@ func ParseRemoteQuestionnaireAnswer(raw string, question toolpkg.AskUserQuestion
 	}
 }
 
-// ParseMultiQuestionReply splits a multi-line IM reply into per-question
-// answers and parses each one. It returns a slice of results in the same
-// order as the questions slice. If there are fewer lines than questions,
-// remaining questions are left unanswered (empty results).
-//
-// This is the shared implementation used by both TUI and daemon modes.
 func ParseMultiQuestionReply(raw string, questions []toolpkg.AskUserQuestion) []ParsedQuestionAnswer {
 	lines := SplitNonEmptyLines(raw)
 	results := make([]ParsedQuestionAnswer, len(questions))
@@ -63,7 +52,6 @@ func ParseMultiQuestionReply(raw string, questions []toolpkg.AskUserQuestion) []
 	return results
 }
 
-// ParsedQuestionAnswer holds the result of parsing a single question's reply.
 type ParsedQuestionAnswer struct {
 	QuestionIndex int
 	Selected      map[string]struct{}
@@ -71,7 +59,6 @@ type ParsedQuestionAnswer struct {
 	Error         error
 }
 
-// SplitNonEmptyLines splits text into non-empty trimmed lines.
 func SplitNonEmptyLines(text string) []string {
 	var lines []string
 	for _, line := range strings.Split(text, "\n") {
@@ -119,8 +106,6 @@ func BuildAskUserAnswer(question toolpkg.AskUserQuestion, selected map[string]st
 	return answer
 }
 
-// BuildAskUserResponse builds an AskUserResponse from parsed per-question answers.
-// This is the shared implementation used by daemon (and can be used by TUI).
 func BuildAskUserResponse(req toolpkg.AskUserRequest, parsed []ParsedQuestionAnswer) toolpkg.AskUserResponse {
 	return BuildAskUserResponseWithStatus(req, parsed, toolpkg.AskUserStatusSubmitted)
 }

@@ -22,9 +22,6 @@ func TestSanitizeSignalAttachmentName(t *testing.T) {
 	}
 }
 
-// TestSignalAttachmentURLDelimiters asserts the emitted attachment entry
-// has no raw ';' or ',' inside the filename segment — the invariant the
-// server-side parser relies on.
 func TestSignalAttachmentURLDelimiters(t *testing.T) {
 	name := sanitizeSignalAttachmentName("report;final,v2.pdf")
 	entry := "data:application/pdf;filename=" + name + ";base64,QUJD"

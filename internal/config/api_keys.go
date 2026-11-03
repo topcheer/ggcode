@@ -17,10 +17,10 @@ import (
 )
 
 type APIKeyFinding struct {
-	Vendor   string // vendor name (for section="vendor")
-	Endpoint string // endpoint name (for section="vendor")
-	Section  string // "vendor", "im", "mcp_env", "mcp_headers"
-	KeyPath  string // dot-separated path for non-vendor findings (e.g. "im.adapters.ggcode.extra.token")
+	Vendor   string
+	Endpoint string
+	Section  string
+	KeyPath  string
 	EnvVar   string
 }
 
@@ -184,24 +184,19 @@ func detectPlaintextAPIKeysFromRaw(raw map[string]interface{}) []APIKeyFinding {
 	return findings
 }
 
-// looksLikeSecretField returns true if the key name suggests it holds a secret.
-// Matches: secret, token, password, credential (case-insensitive, as substring).
 func looksLikeSecretField(key string) bool {
 
 	return secretfield.LooksLikeSecretField(key)
 }
 
-// secretFieldEnvVar builds an env var name for an IM adapter secret field.
 func secretFieldEnvVar(adapterName, key string) string {
 	return "GGCODE_IM_" + sanitizeEnvVarSegment(adapterName) + "_" + sanitizeEnvVarSegment(key)
 }
 
-// mcpEnvVar builds an env var name for an MCP server env entry.
 func mcpEnvVar(srvName, key string) string {
 	return "GGCODE_MCP_" + sanitizeEnvVarSegment(srvName) + "_" + sanitizeEnvVarSegment(key)
 }
 
-// mcpHeaderEnvVar builds an env var name for an MCP server header entry.
 func mcpHeaderEnvVar(srvName, key string) string {
 	return "GGCODE_MCP_" + sanitizeEnvVarSegment(srvName) + "_HEADER_" + sanitizeEnvVarSegment(key)
 }
@@ -371,21 +366,10 @@ func normalizeWarningConfigPath(path string) string {
 	return filepath.Clean(path)
 }
 
-// MigratePlaintextAPIKeys detects plaintext API keys in the config file,
-// sets them as environment variables for the current process, persists them
-// to ~/.ggcode/keys.env for future sessions, and rewrites the YAML to use
-// ${VAR} references. Returns the list of migrated keys so callers can log
-// the migration. If no plaintext keys are found, it returns an empty slice
-// and nil error without touching any file.
 func MigratePlaintextAPIKeys(path string) ([]APIKeyFinding, error) {
 	return migratePlaintextAPIKeysTo(path, "", "")
 }
 
-// MigrateInstancePlaintextAPIKeys is the instance-level version of
-// MigratePlaintextAPIKeys. It writes keys to the instance directory's
-// keys.env and uses instance-prefixed env var names (GGCODE_I_{hash}_*)
-// to avoid collisions with global keys.
-// instanceHash is the short SHA256 hash of the workspace path.
 func MigrateInstancePlaintextAPIKeys(path, instanceHash string) ([]APIKeyFinding, error) {
 	prefix := "GGCODE_I_" + instanceHash + "_"
 	return migratePlaintextAPIKeysTo(path, prefix, filepath.Join(filepath.Dir(path), "keys.env"))
@@ -443,7 +427,6 @@ func migratePlaintextAPIKeysTo(path, envPrefix, keysPath string) ([]APIKeyFindin
 	return findings, nil
 }
 
-// KeysEnvPath returns the path to the managed env file for API keys.
 func KeysEnvPath() string {
 	if keysEnvPathOverride != "" {
 		return keysEnvPathOverride
@@ -451,12 +434,8 @@ func KeysEnvPath() string {
 	return filepath.Join(ConfigDir(), "keys.env")
 }
 
-// keysEnvPathOverride is set by tests to redirect keys.env to a temp directory.
 var keysEnvPathOverride string
 
-// LoadKeysEnv loads API keys from ~/.ggcode/keys.env into the current
-// process environment. Keys that are already set in the environment take
-// precedence and are not overwritten.
 func LoadKeysEnv() error {
 
 	return loadKeysEnvInto(func(key, val string) error {
@@ -465,22 +444,8 @@ func LoadKeysEnv() error {
 	}, KeysEnvPath())
 }
 
-// instanceKeysEnv holds the instance-scope keys.env contents loaded by
-// LoadWithInstance. It feeds the runtime ${VAR} resolver (loadRuntimeEnv)
-// instead of the process environment - #2293: the wholesale os.Setenv
-// leg leaked every instance key to any child command (`env` dumped them
-// all) and to MCP server subprocesses, same shape #2284-A phase 1 (#2285)
-// removed for the global keys.env.
-// #2308: stored behind an atomic pointer - writers (9 wailskit bridge
-// goroutines) swap a COW map; resident pollers read it from
-// loadRuntimeEnv, so a plain package-level map variable was a word-size
-// data race (non-fatal - COW, never mutated in place - but -race flaky
-// and a reader could see the previous instance's keys for one Load).
 var instanceKeysEnvPointer atomic.Pointer[map[string]string]
 
-// LoadInstanceKeysEnv loads API keys from an instance directory's keys.env
-// into the in-process resolver map (NOT the process environment). Instance
-// keys override global keys at lookup time.
 func LoadInstanceKeysEnv(instanceDir string) error {
 	if instanceDir == "" {
 		return nil
@@ -524,9 +489,6 @@ func writeKeysEnv(newEntries map[string]string) error {
 	return writeKeysEnvTo(newEntries, KeysEnvPath())
 }
 
-// removeKeysEnv deletes the named variables from keys.env (#1706 case 3:
-// clearing a key used to leave the stale plaintext entry behind forever -
-// writeKeysEnv only ever adds/updates, so the secret outlived its config).
 func removeKeysEnv(names []string) error {
 	if len(names) == 0 {
 		return nil
@@ -583,7 +545,6 @@ func removeKeysEnv(names []string) error {
 	return nil
 }
 
-// writeKeysEnvTo merges new entries into the keys.env file at the given path.
 func writeKeysEnvTo(newEntries map[string]string, path string) error {
 
 	unlock := lockConfigFile(path)
@@ -627,13 +588,6 @@ func writeKeysEnvTo(newEntries map[string]string, path string) error {
 	return nil
 }
 
-// MigrateVendorsFilePlaintextAPIKeys detects plaintext API keys in a
-// standalone vendors.yaml (external section file), persists them to keys.env,
-// and rewrites the YAML to use ${VAR} references. Vendors.yaml has vendor IDs
-// as top-level keys (no "vendors:" wrapper), so the raw map is wrapped before
-// reuse of the vendor detection/migration helpers and unwrapped before the
-// file is rewritten. Returns findings so callers can log the migration; when
-// no plaintext keys are found no file is touched.
 func MigrateVendorsFilePlaintextAPIKeys(vendorsPath, keysPath string) ([]APIKeyFinding, error) {
 	raw, err := loadRawConfigMap(vendorsPath)
 	if err != nil {
@@ -681,8 +635,6 @@ func MigrateVendorsFilePlaintextAPIKeys(vendorsPath, keysPath string) ([]APIKeyF
 	return findings, nil
 }
 
-// migrateVendorFinding handles migration for vendors.{name}.api_key and
-// vendors.{name}.endpoints.{ep}.api_key.
 func migrateVendorFinding(raw map[string]interface{}, f APIKeyFinding, envEntries map[string]string) {
 	vendors, ok := raw["vendors"].(map[string]interface{})
 	if !ok {
@@ -720,7 +672,6 @@ func migrateVendorFinding(raw map[string]interface{}, f APIKeyFinding, envEntrie
 	vendors[f.Vendor] = vendorMap
 }
 
-// migrateIMFinding handles migration for im.adapters.{name}.extra.{field}.
 func migrateIMFinding(raw map[string]interface{}, f APIKeyFinding, envEntries map[string]string) {
 	im, _ := raw["im"].(map[string]interface{})
 	adapters, _ := im["adapters"].(map[string]interface{})
@@ -748,7 +699,6 @@ func migrateIMFinding(raw map[string]interface{}, f APIKeyFinding, envEntries ma
 	adapters[adapterName] = adapterMap
 }
 
-// migrateMCPFinding handles migration for mcp_servers[].env.* and mcp_servers[].headers.*.
 func migrateMCPFinding(raw map[string]interface{}, f APIKeyFinding, envEntries map[string]string) {
 	mcpServers, _ := raw["mcp_servers"].([]interface{})
 

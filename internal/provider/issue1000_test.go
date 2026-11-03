@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// TestIssue1000AnthropicWindowLimitNotQuotaExhausted pins the fix: the
-// recoverable Anthropic 5-hour window 429 must show the transient /retry
-// hint in BOTH the 429 branch and the string-fallback quota section, not
-// the permanent quota-exhausted message.
 func TestIssue1000AnthropicWindowLimitNotQuotaExhausted(t *testing.T) {
 	msg := "This request would exceed your usage limit for the 5-hour window. Your limit will reset at 5pm"
 	cases := []struct {
@@ -33,9 +29,6 @@ func TestIssue1000AnthropicWindowLimitNotQuotaExhausted(t *testing.T) {
 	}
 }
 
-// TestIssue1000MiniMaxPermanentQuotaStillMatched guards the fail-closed
-// direction: truly permanent quota messages (no window markers) must keep
-// showing the quota-exhausted guidance.
 func TestIssue1000MiniMaxPermanentQuotaStillMatched(t *testing.T) {
 	err := fmt.Errorf("status 429: usage limit exceeded, your 5-hour usage limit has been reached (code: 1028)")
 	zh := UserFacingErrorLang(err, "zh-CN")

@@ -14,9 +14,9 @@ import (
 func TestIssue722_RetryBudgetSleep(t *testing.T) {
 	cases := []struct {
 		name       string
-		deadlineIn time.Duration // relative deadline for the budget
-		delay      time.Duration // requested backoff sleep
-		wantErr    error         // nil or errRetryBudgetExhausted
+		deadlineIn time.Duration
+		delay      time.Duration
+		wantErr    error
 		wantDone   bool
 		minElapsed time.Duration
 		maxElapsed time.Duration
@@ -179,7 +179,7 @@ func TestIssue722_ChatUsageFallbackWhenOmitted(t *testing.T) {
 		body           string
 		wantInput      int
 		wantOutput     int
-		wantFromServer bool // usage taken verbatim from response
+		wantFromServer bool
 	}{
 		{
 			name: "usage omitted by relay falls back to estimates",

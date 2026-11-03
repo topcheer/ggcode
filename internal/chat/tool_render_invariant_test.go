@@ -88,8 +88,6 @@ func TestFormatBodyWideLinesInvariant(t *testing.T) {
 	}
 }
 
-// FormatBodyPlain is FormatBody without truncation marker noise for direct
-// string comparison.
 func FormatBodyPlain(s string, width, maxLines int) string {
 	out, _ := FormatBody(s, width, maxLines)
 	return out
@@ -124,9 +122,6 @@ func itoa(n int) string {
 	return string(b[i:])
 }
 
-// TestBashItemStreamedRenderInvariant: the full composed bash tool item
-// (header + indented wrapped body) must satisfy both invariants at every
-// streaming update, not just the final render.
 func TestBashItemStreamedRenderInvariant(t *testing.T) {
 	styles := DefaultStyles()
 	item := NewBashToolItem("t1", "run_command", "", StatusRunning, styles)

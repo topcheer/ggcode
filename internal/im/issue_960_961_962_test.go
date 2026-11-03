@@ -14,9 +14,6 @@ import (
 	"time"
 )
 
-// TestInstanceDetectIsPrimarySkipsDeadPID verifies that a stale PID file from a
-// crashed earlier-started instance no longer demotes the sole surviving
-// instance to non-primary (issue #962).
 func TestInstanceDetectIsPrimarySkipsDeadPID(t *testing.T) {
 	tmp := t.TempDir()
 	d := NewInstanceDetect(tmp)
@@ -45,8 +42,6 @@ func TestInstanceDetectIsPrimarySkipsDeadPID(t *testing.T) {
 	}
 }
 
-// TestInstanceDetectIsPrimaryStillDemotedByLivePeer guards the fix: a LIVE
-// earlier instance must still demote us (regression guard).
 func TestInstanceDetectIsPrimaryStillDemotedByLivePeer(t *testing.T) {
 	tmp := t.TempDir()
 	d := NewInstanceDetect(tmp)
@@ -79,10 +74,6 @@ func TestInstanceDetectIsPrimaryStillDemotedByLivePeer(t *testing.T) {
 	}
 }
 
-// TestIRCSendRawConcurrentNoInterleave fires concurrent sendRaw writes from
-// multiple goroutines (mirroring the read-loop / keepalive / send-path writers)
-// and asserts every line received by the fake server is intact - no partial
-// interleaving. Must pass under -race.
 func TestIRCSendRawConcurrentNoInterleave(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -162,9 +153,6 @@ func TestIRCSendRawConcurrentNoInterleave(t *testing.T) {
 	}
 }
 
-// TestIRCMentionCaseInsensitive verifies the channel mention gate matches the
-// nick case-insensitively per RFC 2812 casemapping (issue #960) and that the
-// mention is stripped regardless of case.
 func TestIRCMentionCaseInsensitive(t *testing.T) {
 	if !ircTextContainsNick("hey Bot: check this", "bot") {
 		t.Fatal("mention with different case should match")
@@ -186,17 +174,12 @@ func TestIRCMentionCaseInsensitive(t *testing.T) {
 	}
 }
 
-// TestIRCNoMentionDropped sanity: without a mention (any case) the gate drops.
 func TestIRCNoMentionDropped(t *testing.T) {
 	if ircTextContainsNick("hello everyone", "bot") {
 		t.Fatal("text without mention must not pass gate")
 	}
 }
 
-// TestMatrixCheckIsDMViaAPINoPermanentCache asserts that checkIsDMViaAPI does
-// NOT write the 2-member heuristic result into a.dmRooms (the permanent cache
-// that bypasses the mention gate). Cache entries must only come from
-// fetchDMRooms / m.direct account data (issue #961).
 func TestMatrixCheckIsDMViaAPINoPermanentCache(t *testing.T) {
 	a := &matrixAdapter{name: "test"}
 	a.dmRooms = make(map[string]bool)
@@ -209,8 +192,6 @@ func TestMatrixCheckIsDMViaAPINoPermanentCache(t *testing.T) {
 	}
 }
 
-// TestMatrixDMRoomDeterminationSemantics documents/verifies the m.direct
-// membership helper semantics used for authoritative DM determination.
 func TestMatrixDMRoomDeterminationSemantics(t *testing.T) {
 	var dmMap map[string][]string
 	payload := `{"@alice:example.org": ["!realDM:example.org"], "@bob:example.org": ["!other:example.org", "!another:example.org"]}`

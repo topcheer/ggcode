@@ -262,10 +262,6 @@ func TestDiscoverModelsUsesPersistentCacheWithinTTL(t *testing.T) {
 	}
 }
 
-// TestForceDiscoverModelsBypassesLiveCache verifies the force path evicts a
-// still-fresh (within-TTL) cache entry and refetches from the remote API -
-// the semantics the linear frontend's --refresh-models depends on. The fresh
-// list is then served from cache like a normal discovery.
 func TestForceDiscoverModelsBypassesLiveCache(t *testing.T) {
 	resetModelDiscoveryCacheForTests(t)
 	var hits atomic.Int32
@@ -386,11 +382,6 @@ func resetInMemoryModelDiscoveryCache() {
 	modelDiscoveryCache = map[string]modelDiscoveryCacheEntry{}
 }
 
-// TestDiscoverModelsExpandsEnvRefKey reproduces the bug where a freshly-added
-// endpoint's API key is stored as an env reference (e.g. ${ZAI_TEEE_API_KEY})
-// and DiscoverModels rejected it with "no API key configured" because the
-// reference was never expanded. DiscoverModels must expand ${VAR} references
-// against the process environment before validating the key.
 func TestDiscoverModelsExpandsEnvRefKey(t *testing.T) {
 	resetModelDiscoveryCacheForTests(t)
 	const envVar = "ZAI_TEEE_API_KEY"
@@ -422,11 +413,6 @@ func TestDiscoverModelsExpandsEnvRefKey(t *testing.T) {
 	}
 }
 
-// #1338: pagination pages 2+ did not check the HTTP status. A 429/500 there
-// returns a JSON error body that decodes cleanly into an empty payload, so
-// the loop "succeeded" with page-1 models only - silent truncation that then
-// got cached to disk for 6h. Page 2 must now surface the error and cache
-// nothing.
 func TestDiscoverModelsGeminiPaginationPage2Error(t *testing.T) {
 	resetModelDiscoveryCacheForTests(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

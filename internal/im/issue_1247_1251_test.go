@@ -10,9 +10,6 @@ import (
 	"time"
 )
 
-// TestTwitchInboundWhisperRoutedAsDM pins #1247: Twitch delivers DMs as
-// WHISPER commands (not PRIVMSG-to-nick); without a WHISPER case every
-// inbound DM — pairing included — was silently dropped.
 func TestTwitchInboundWhisperRoutedAsDM(t *testing.T) {
 	srv := newTwitchFakeIRCServer(t)
 
@@ -60,9 +57,6 @@ func TestTwitchInboundWhisperRoutedAsDM(t *testing.T) {
 	t.Fatal("#1247: inbound WHISPER never reached the bridge (still silently dropped?)")
 }
 
-// TestTwitchInboundWhisperTriggersPairing pins the DM pairing half of #1247:
-// /bind sent as a whisper must reach HandlePairingInbound and produce a
-// pairing reply (previously it vanished without even a debug log).
 func TestTwitchInboundWhisperTriggersPairing(t *testing.T) {
 	srv := newTwitchFakeIRCServer(t)
 
@@ -101,9 +95,6 @@ func TestTwitchInboundWhisperTriggersPairing(t *testing.T) {
 	}
 }
 
-// TestTwitchSendRawConcurrentLinesIntact pins #1249: read-loop PONGs,
-// keepalive PINGs, Sends and the Close QUIT all call sendRaw concurrently;
-// writes must be serialized so lines never interleave.
 func TestTwitchSendRawConcurrentLinesIntact(t *testing.T) {
 	srv := newTwitchFakeIRCServer(t)
 	adapter := newTestTwitchAdapter(srv.dialTo())
@@ -208,9 +199,6 @@ func TestWechatVideoMessageRepliesUnsupportedNotice(t *testing.T) {
 	}
 }
 
-// TestWechatSendImageAllFailedHonestError pins #1250's misleading placeholder:
-// when every image fails, Send must return an error instead of emitting
-// "[image sent above]" as a success notice.
 func TestWechatSendImageAllFailedHonestError(t *testing.T) {
 	mgr, _ := newWechatTestManager(t, "u1")
 	adapter, _ := newWechatTestAdapter(t, mgr, func(w http.ResponseWriter, r *http.Request) {
@@ -234,9 +222,6 @@ func TestWechatSendImageAllFailedHonestError(t *testing.T) {
 	}
 }
 
-// TestWechatSendImageNotDeliverableHonestError: local/data-URL images are
-// undeliverable via iLink — that path must fail honestly too (it used to
-// emit the same misleading placeholder).
 func TestWechatSendImageNotDeliverableHonestError(t *testing.T) {
 	mgr, _ := newWechatTestManager(t, "u1")
 	adapter, _ := newWechatTestAdapter(t, mgr, nil)
@@ -256,9 +241,6 @@ func TestWechatSendImageNotDeliverableHonestError(t *testing.T) {
 	}
 }
 
-// TestWechatSendMultiImageSpacing pins #1250's rate-limit alignment: every
-// delivered image is followed by the same 500ms spacing the text-chunk path
-// uses (2 images -> >= ~1s).
 func TestWechatSendMultiImageSpacing(t *testing.T) {
 	mgr, _ := newWechatTestManager(t, "u1")
 	adapter, sent := newWechatTestAdapter(t, mgr, nil)
@@ -282,11 +264,6 @@ func TestWechatSendMultiImageSpacing(t *testing.T) {
 	}
 }
 
-// TestWechatVoiceWithTextRoutesText pins the #1251 quality-review correction:
-// a mixed message (voice item + text item, e.g. voice-with-transcription)
-// must route its usable text normally — the unsupported notice only fires
-// when the message carries no text at all. The first fix attempt
-// intercepted these and dropped the text behind the notice.
 func TestWechatVoiceWithTextRoutesText(t *testing.T) {
 	mgr, bridge := newWechatTestManager(t, "u1")
 	adapter, sent := newWechatTestAdapter(t, mgr, nil)

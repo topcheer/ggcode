@@ -15,9 +15,6 @@ import (
 	"time"
 )
 
-// resolveProxy returns the proxy URL from adapter config or env fallback.
-// Only checks the adapter's own config value, then a platform-specific env var.
-// Returns "" if no proxy is configured (direct connection).
 func resolveProxy(configValue, envKey string) string {
 	if v := strings.TrimSpace(configValue); v != "" {
 		return v
@@ -30,22 +27,13 @@ func resolveProxy(configValue, envKey string) string {
 	return ""
 }
 
-// hostProxyRoutes maps destination hosts to the proxy they must use,
-// overriding the environment default. Populated by adapters whose relays
-// need a proxy (nostr), consulted by nostrTransportProxy.
 var hostProxyRoutes = struct {
 	sync.RWMutex
 	m map[string]*url.URL
 }{m: make(map[string]*url.URL)}
 
-// proxyInterceptorOnce guards the one-time wrap of http.DefaultTransport's
-// Proxy func. Wrapping is idempotent and behavior-preserving for hosts that
-// are not registered: they fall through to http.ProxyFromEnvironment.
 var proxyInterceptorOnce sync.Once
 
-// RegisterHostProxy pins proxyURL for all requests to host (host:port form
-// as it appears in request URLs). Call UnregisterHostProxy when the adapter
-// stops using the host.
 func RegisterHostProxy(host, proxyURL string) error {
 	u, err := url.Parse(proxyURL)
 	if err != nil {
@@ -58,15 +46,12 @@ func RegisterHostProxy(host, proxyURL string) error {
 	return nil
 }
 
-// UnregisterHostProxy removes a host's pinned proxy.
 func UnregisterHostProxy(host string) {
 	hostProxyRoutes.Lock()
 	delete(hostProxyRoutes.m, host)
 	hostProxyRoutes.Unlock()
 }
 
-// pinnedProxyFor returns the registered proxy for the request's host, or
-// (nil, false) when the host has no pinned proxy.
 func pinnedProxyFor(req *http.Request) (*url.URL, bool) {
 	hostProxyRoutes.RLock()
 	u, hit := hostProxyRoutes.m[req.URL.Host]
@@ -74,11 +59,6 @@ func pinnedProxyFor(req *http.Request) (*url.URL, bool) {
 	return u, hit
 }
 
-// installProxyInterceptor wraps http.DefaultTransport.Proxy so registered
-// hosts are routed through their pinned proxy while every other request
-// keeps the standard env behavior. Unlike the old HTTPS_PROXY env hack this
-// is deterministic (no sync.Once env caching) and scoped (no process-wide
-// pollution of unrelated traffic).
 func installProxyInterceptor() {
 	proxyInterceptorOnce.Do(func() {
 		t, ok := http.DefaultTransport.(*http.Transport)
@@ -98,8 +78,6 @@ func installProxyInterceptor() {
 	})
 }
 
-// proxyDial creates a TCP connection through an HTTP CONNECT or SOCKS5 proxy.
-// Returns a raw net.Conn ready for TLS wrapping if needed.
 func proxyDial(proxyURL, targetAddr string) (net.Conn, error) {
 	parsed, err := url.Parse(proxyURL)
 	if err != nil {
@@ -117,7 +95,6 @@ func proxyDial(proxyURL, targetAddr string) (net.Conn, error) {
 	}
 }
 
-// httpConnectDial connects through an HTTP CONNECT proxy tunnel.
 func httpConnectDial(proxy *url.URL, targetAddr string) (net.Conn, error) {
 	proxyAddr := proxy.Host
 	if !strings.Contains(proxyAddr, ":") {
@@ -175,7 +152,6 @@ func httpConnectDial(proxy *url.URL, targetAddr string) (net.Conn, error) {
 	return conn, nil
 }
 
-// socks5Dial connects through a SOCKS5 proxy.
 func socks5Dial(proxy *url.URL, targetAddr string) (net.Conn, error) {
 	proxyAddr := proxy.Host
 	if !strings.Contains(proxyAddr, ":") {
@@ -237,7 +213,6 @@ func socks5Dial(proxy *url.URL, targetAddr string) (net.Conn, error) {
 		return nil, fmt.Errorf("socks5 connect failed: status %d", head[1])
 	}
 
-	// Drain BND.ADDR + BND.PORT based on ATYP so the connection is clean.
 	var boundLen int
 	switch head[3] {
 	case 0x01:

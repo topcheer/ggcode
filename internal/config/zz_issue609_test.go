@@ -7,12 +7,6 @@ import (
 	"testing"
 )
 
-// TestIssue609InstanceSubconfigsDoNotLeakToGlobal is the regression test for
-// #609: mergeKnightConfig / mergeA2AConfigFields / mergeSubAgentConfig /
-// mergeSwarmConfig did not register their top-level YAML keys (knight, a2a,
-// subagents, swarm) in instanceFields, so instance-only values leaked into
-// the global ggcode.yaml on Save(). The tracked-map mechanism is the same one
-// that fixed the hook leak (mergeHookConfig).
 func TestIssue609InstanceSubconfigsDoNotLeakToGlobal(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")
@@ -105,9 +99,6 @@ a2a:
 	}
 }
 
-// TestIssue609InstanceFieldsRegistered: MergeInstance must register knight /
-// a2a / subagents / swarm in instanceFields whenever instance values fill
-// global gaps (the tracking is what Save() strips from the global write).
 func TestIssue609InstanceFieldsRegistered(t *testing.T) {
 	global := &Config{}
 	instance := &Config{

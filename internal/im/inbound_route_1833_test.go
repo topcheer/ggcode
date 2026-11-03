@@ -2,8 +2,6 @@ package im
 
 import "testing"
 
-// #1833 case 2 pin: when both are pending, a confirm word routes to the
-// questionnaire, not the approval.
 func Test1833QuestionnaireWinsWhenBothPending(t *testing.T) {
 	r := RouteInboundText("y", true, true)
 	if r.Kind != InboundRouteAskUser {

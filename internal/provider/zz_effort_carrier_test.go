@@ -8,8 +8,6 @@ import (
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 )
 
-// newCarrierProvider returns a provider with the carrier enabled and no
-// stability history.
 func newCarrierProvider() *AnthropicProvider {
 	p := &AnthropicProvider{maxTokens: 64000}
 	p.SetReasoningEffort("high")

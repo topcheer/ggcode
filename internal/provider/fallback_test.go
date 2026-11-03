@@ -10,13 +10,12 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// mockProvider is a minimal Provider for testing failover.
 type mockProvider struct {
 	name       string
 	chatErr    error
 	streamErr  error
 	chatCalls  atomic.Int32
-	streamErrs atomic.Int32 // number of errors to return before succeeding
+	streamErrs atomic.Int32
 }
 
 func (m *mockProvider) Name() string { return m.name }
@@ -230,10 +229,6 @@ func TestFallbackConfig_IsConfigured(t *testing.T) {
 	}
 }
 
-// TestFallback_StalePrimaryRetriesOnFallbackAfterConcurrentFailover verifies
-// fix #164: a request that read active=primary *before* failover was activated
-// (e.g., by a concurrent goroutine) still gets exactly one retry on the
-// fallback instead of failing outright.
 func TestFallback_StalePrimaryRetriesOnFallbackAfterConcurrentFailover(t *testing.T) {
 	primary := &mockProvider{name: "primary", chatErr: errors.New("insufficient_quota: quota exceeded")}
 	fallback := &mockProvider{name: "fallback"}
@@ -263,9 +258,6 @@ func TestFallback_StalePrimaryRetriesOnFallbackAfterConcurrentFailover(t *testin
 	}
 }
 
-// TestFallback_FallbackQuotaFailsBackToPrimary verifies the full Chat-path
-// behavior (#936): once failed over, a fallback quota failure transparently
-// retries on the primary instead of returning an error.
 func TestFallback_FallbackQuotaFailsBackToPrimary(t *testing.T) {
 	primary := &mockProvider{name: "primary"}
 	fallback := &mockProvider{name: "fallback", chatErr: errors.New("insufficient_quota: quota exceeded")}
@@ -285,8 +277,6 @@ func TestFallback_FallbackQuotaFailsBackToPrimary(t *testing.T) {
 	}
 }
 
-// streamProducerProvider is a mock whose ChatStream returns a
-// controllable producer channel - pins the #2570 cancel-drain contract.
 type streamProducerProvider struct {
 	mockProvider
 	streamFn func(ctx context.Context) (<-chan StreamEvent, error)
@@ -296,11 +286,6 @@ func (m *streamProducerProvider) ChatStream(ctx context.Context, messages []Mess
 	return m.streamFn(ctx)
 }
 
-// TestIssue2570_CancelDrainsProviderStream pins #2570: when the fallback
-// watcher abandons the provider stream on ctx cancel, it must drain the
-// provider channel to close - otherwise the provider's streamRead
-// goroutine (bare `ch <-` sends, 64-slot buffer) parks forever once the
-// backlog fills. The producer here would block forever without a drainer.
 func TestIssue2570_CancelDrainsProviderStream(t *testing.T) {
 	ready := make(chan struct{})
 	produced := make(chan int, 1)

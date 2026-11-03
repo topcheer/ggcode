@@ -2,12 +2,6 @@ package provider
 
 import "testing"
 
-// TestSetServerToolsEmptyDisables (#3073): setting tools then an empty set
-// must CLEAR the stored server tools - the disable path previously did not
-// exist because `len(kept) > 0` skipped the empty assignment, leaving
-// web_search/code_interpreter active on provider reuse after the user
-// removed server_tools from the config. Also pins the fail-closed contract:
-// an unrecognized-only set keeps the previous value.
 func TestSetServerToolsEmptyDisables(t *testing.T) {
 	p := &OpenAIResponsesProvider{}
 

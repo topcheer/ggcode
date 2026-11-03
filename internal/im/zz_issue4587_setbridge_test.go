@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// #4587: SetBridge must detach the outgoing bridge so adapter goroutines
-// parked in SubmitInboundMessage on the OLD program unblock immediately.
 type detachableFakeBridge struct {
 	detached int
 }
@@ -35,7 +33,6 @@ func TestIssue4587_SetBridgeDetachesOld(t *testing.T) {
 	}
 }
 
-// Plain bridges without detach() must keep working (interface assertion path).
 type plainFakeBridge struct{}
 
 func (b *plainFakeBridge) SubmitInboundMessage(ctx context.Context, msg InboundMessage) error {

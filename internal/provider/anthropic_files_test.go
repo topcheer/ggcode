@@ -12,8 +12,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
-// 1x1 PNG (67 bytes) below the upload threshold; a padded variant is used
-// for above-threshold cases.
 var testTinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
 func TestFilesAPIAllowed(t *testing.T) {

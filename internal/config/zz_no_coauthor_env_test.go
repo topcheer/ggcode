@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// GGCODE_NO_COAUTHOR must strip the prompt-side Co-Authored-By directive,
-// otherwise the model keeps hand-writing the trailer and the env opt-out
-// for the automatic injection (internal/tool) is meaningless.
 func TestBuildSystemPromptNoCoAuthorEnv(t *testing.T) {
 	prompt := BuildSystemPrompt("", "/tmp/w", "en", nil, "", nil, nil)
 	if !strings.Contains(prompt, "Co-Authored-By") {

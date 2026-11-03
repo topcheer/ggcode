@@ -8,8 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
-// Within the suppression window, a reply-shaped text must NOT be delivered
-// to a newly registered pending question.
 func TestStaleReplyWindowDropsReplyToSuccessor(t *testing.T) {
 	ch := make(chan approvalReply, 1)
 	b := &DaemonBridge{
@@ -29,7 +27,6 @@ func TestStaleReplyWindowDropsReplyToSuccessor(t *testing.T) {
 	}
 }
 
-// After the window passes, replies flow normally to the pending question.
 func TestReplyDeliveredOnceWindowPassed(t *testing.T) {
 	ch := make(chan approvalReply, 1)
 	b := &DaemonBridge{
@@ -51,7 +48,6 @@ func TestReplyDeliveredOnceWindowPassed(t *testing.T) {
 	}
 }
 
-// No expiry ever happened: the window is zero and normal replies are unaffected.
 func TestReplyUnaffectedWithoutExpiry(t *testing.T) {
 	ch := make(chan approvalReply, 1)
 	b := &DaemonBridge{pendingApproval: ch}
@@ -65,9 +61,6 @@ func TestReplyUnaffectedWithoutExpiry(t *testing.T) {
 	}
 }
 
-// #2127 (ProbeB2, the empty-window half): after expiry with NO successor
-// registered, a bare approval-shaped token routes as an ordinary Message
-// and must NOT be submitted to the agent as a fresh prompt.
 func TestStaleWindowDropsBareApprovalTokenAsNewPrompt(t *testing.T) {
 	b := &DaemonBridge{
 

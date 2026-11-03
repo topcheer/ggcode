@@ -8,17 +8,12 @@ import (
 	"google.golang.org/genai"
 )
 
-// SetResponseSchema installs a JSON Schema constraining the final
-// assistant response (Gemini responseSchema). nil/empty disables.
 func (p *GeminiProvider) SetResponseSchema(schema json.RawMessage) {
 	p.responseSchema = schema
 }
 
-// ResponseSchema returns the installed response schema (nil = none).
 func (p *GeminiProvider) ResponseSchema() json.RawMessage { return p.responseSchema }
 
-// applyResponseSchema arms responseMimeType+responseSchema on the
-// generateContent config. No-op without an installed schema.
 func (p *GeminiProvider) applyResponseSchema(config *genai.GenerateContentConfig) {
 	if len(p.responseSchema) == 0 {
 		return
@@ -37,8 +32,6 @@ func (p *GeminiProvider) applyResponseSchema(config *genai.GenerateContentConfig
 	config.ResponseSchema = schema
 }
 
-// jsonSchemaToGenai converts a JSON-Schema object (as decoded raw map)
-// into a genai.Schema. Returns nil when the node's type is unsupported.
 func jsonSchemaToGenai(raw map[string]json.RawMessage) *genai.Schema {
 	out := &genai.Schema{}
 	var t string

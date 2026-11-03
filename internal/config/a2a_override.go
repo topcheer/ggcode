@@ -9,9 +9,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// LoadA2AOverride loads instance-level A2A config from .ggcode/a2a.yaml
-// in the given workspace directory. Returns nil if no override file exists.
-// Fields set here override the corresponding fields from the global config.
 func LoadA2AOverride(workspace string) *A2AConfig {
 	path := filepath.Join(workspace, ".ggcode", "a2a.yaml")
 	data, err := os.ReadFile(path)
@@ -57,8 +54,6 @@ func LoadA2AOverride(workspace string) *A2AConfig {
 	return &override
 }
 
-// MergeA2AConfig applies instance-level overrides on top of global A2A config.
-// Only non-zero fields from override are applied.
 func MergeA2AConfig(base *A2AConfig, override *A2AConfig) {
 	if override == nil {
 		return

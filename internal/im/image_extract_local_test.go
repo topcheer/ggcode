@@ -2,9 +2,6 @@ package im
 
 import "testing"
 
-// Local-path extraction (4th source). Paths are emitted as Kind "url":
-// every adapter's sendExtractedImage branches on IsLocalFilePath inside
-// the "url" case, so local files route to upload with zero adapter changes.
 func TestExtractImagesFromText_LocalPaths(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -42,7 +39,6 @@ func TestExtractImagesFromText_LocalPaths(t *testing.T) {
 	}
 }
 
-// False-positive guards: prose mentions that must NOT be extracted.
 func TestExtractImagesFromText_LocalPathFalsePositives(t *testing.T) {
 	cases := []struct {
 		name string

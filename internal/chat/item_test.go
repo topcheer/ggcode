@@ -56,7 +56,7 @@ func TestWrapLines(t *testing.T) {
 	tests := []struct {
 		text  string
 		width int
-		want  int // expected number of lines
+		want  int
 	}{
 		{"short", 80, 1},
 		{"short", 3, 2},
@@ -486,9 +486,6 @@ func TestNewToolItemDetailFlowsToRender(t *testing.T) {
 	}
 }
 
-// TestCmdToolHeadersVisible verifies that command management tools (read_command_output,
-// stop_command, etc.) render their headers in the chat area. Previously these were
-// fully suppressed (suppressHeader=true), making them invisible.
 func TestCmdToolHeadersVisible(t *testing.T) {
 	styles := DefaultStyles()
 
@@ -497,7 +494,7 @@ func TestCmdToolHeadersVisible(t *testing.T) {
 		toolName string
 		display  string
 		detail   string
-		wantIn   string // must appear in rendered output
+		wantIn   string
 	}{
 		{
 			name:     "read_command_output shows header",
@@ -575,8 +572,6 @@ func TestCmdToolHeadersVisible(t *testing.T) {
 	}
 }
 
-// TestExitPlanModeHeaderVisible verifies that exit_plan_mode renders its header.
-// Previously suppressHeader=true caused the header to be hidden.
 func TestExitPlanModeHeaderVisible(t *testing.T) {
 	styles := DefaultStyles()
 	ctx := ToolContext{
@@ -733,11 +728,6 @@ func TestToolHeaderShowsParams(t *testing.T) {
 	}
 }
 
-// TestVisualWidthDoesNotExceedViewport verifies that every rendered line
-// (after adding prefix padding) does not exceed the available width.
-// If a line's visual width exceeds the viewport width, the terminal will
-// auto-wrap it, creating extra visual lines that measureHeight() doesn't
-// count - causing scroll-position miscalculation and content overflow.
 func TestVisualWidthDoesNotExceedViewport(t *testing.T) {
 	styles := DefaultStyles()
 
@@ -829,9 +819,6 @@ func TestMeasureHeightWidth(t *testing.T) {
 	}
 }
 
-// Height() must equal the number of lines List.Render actually emits for
-// the same rendered string, at every width. This is the invariant that
-// prevents ghost-height blank regions in the viewport.
 func TestMeasureHeightWidthEqualsSplitVisualLines(t *testing.T) {
 	cases := []string{
 		"hello",

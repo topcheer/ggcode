@@ -8,9 +8,6 @@ import (
 	"google.golang.org/genai"
 )
 
-// TestGeminiServerToolsDeclaration verifies configured built-in tools render
-// as separate genai.Tool entries, disjoint from FunctionDeclarations, and
-// unknown declarations are ignored (fail closed).
 func TestGeminiServerToolsDeclaration(t *testing.T) {
 	p := &GeminiProvider{}
 	p.SetServerTools([]config.ServerToolConfig{
@@ -41,8 +38,6 @@ func TestGeminiServerToolsDeclaration(t *testing.T) {
 	}
 }
 
-// TestGeminiServerToolsMixedWithFunctions verifies function declarations and
-// built-in tools coexist in separate Tool entries (Gemini API contract).
 func TestGeminiServerToolsMixedWithFunctions(t *testing.T) {
 	p := &GeminiProvider{}
 	p.SetServerTools([]config.ServerToolConfig{{Type: "google_search"}})
@@ -61,9 +56,6 @@ func TestGeminiServerToolsMixedWithFunctions(t *testing.T) {
 	}
 }
 
-// TestGeminiToolChoiceAnyDowngrade verifies FunctionCallingConfigMode=ANY is
-// degraded to AUTO when built-in tools are configured (Gemini API rejects
-// the combination).
 func TestGeminiToolChoiceAnyDowngrade(t *testing.T) {
 	p := &GeminiProvider{}
 	p.SetToolChoice("required")
@@ -87,7 +79,6 @@ func TestGeminiToolChoiceAnyDowngrade(t *testing.T) {
 	}
 }
 
-// TestGeminiGroundingAccum verifies query/source dedup across stream chunks.
 func TestGeminiGroundingAccum(t *testing.T) {
 	a := newGeminiGroundingAccum()
 	a.add(&genai.GroundingMetadata{
@@ -119,8 +110,6 @@ func TestGeminiGroundingAccum(t *testing.T) {
 	}
 }
 
-// TestGeminiConvertResponseGroundingBlock verifies Chat responses carry a
-// grounding sources text block when GroundingMetadata is present.
 func TestGeminiConvertResponseGroundingBlock(t *testing.T) {
 	p := &GeminiProvider{}
 	resp := &genai.GenerateContentResponse{
@@ -151,9 +140,6 @@ func TestGeminiConvertResponseGroundingBlock(t *testing.T) {
 	}
 }
 
-// TestGeminiRegistryInjectsServerTools verifies the registry gemini leg wires
-// resolved.ServerTools into the provider end-to-end, dropping unsupported
-// declarations along the way.
 func TestGeminiRegistryInjectsServerTools(t *testing.T) {
 	prov, err := NewProvider(&config.ResolvedEndpoint{
 		Protocol:    "gemini",

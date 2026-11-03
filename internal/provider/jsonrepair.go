@@ -9,19 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// RepairJSON attempts to fix common JSON malformations in LLM tool-call
-// arguments. Many OpenAI-compatible backends (LiteLLM, vLLM, ZAI compat)
-// and weaker reasoning models produce arguments that are *almost* valid JSON
-// but fail json.Valid due to:
-//
-//   - Stream truncation: missing closing braces/brackets
-//   - Trailing commas before } or ]
-//   - Markdown code fences wrapping the JSON
-//   - Extra prose before/after the JSON object
-//   - Smart quotes (curly) instead of straight quotes
-//
-// Returns (repaired, true) if repair was applied and the result is valid JSON.
-// Returns (original, false) if the input was already valid or repair failed.
 func RepairJSON(raw []byte) ([]byte, bool) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
@@ -80,7 +67,6 @@ func RepairJSON(raw []byte) ([]byte, bool) {
 	return raw, false
 }
 
-// stripCodeFences removes markdown code fence wrappers.
 func stripCodeFences(s string) string {
 	s = strings.TrimSpace(s)
 
@@ -99,7 +85,6 @@ func stripCodeFences(s string) string {
 	return s
 }
 
-// normalizeQuotes replaces smart/curly quotes with straight ASCII quotes.
 func normalizeQuotes(s string) string {
 	r := make([]byte, 0, len(s))
 	for _, b := range []byte(s) {
@@ -122,9 +107,6 @@ func normalizeQuotes(s string) string {
 	return result
 }
 
-// extractJSONObject finds the first '{' and the last '}' and returns
-// the substring between them (inclusive). This strips surrounding prose
-// that some models emit around tool-call JSON.
 func extractJSONObject(s string) string {
 	first := strings.IndexByte(s, '{')
 	if first < 0 {
@@ -138,8 +120,6 @@ func extractJSONObject(s string) string {
 	return s[first : last+1]
 }
 
-// removeTrailingCommas removes commas that appear immediately before
-// a closing '}' or ']' (with optional whitespace between).
 func removeTrailingCommas(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -166,14 +146,6 @@ func removeTrailingCommas(s string) string {
 	return b.String()
 }
 
-// closeUnclosed balances unclosed '{' and '[' delimiters by appending the
-// appropriate closing characters. This is the primary fix for
-// stream-truncated JSON where the model's output was cut off mid-argument.
-//
-// Returns (repaired, false) when the input ends inside an unterminated
-// string: there is no way to know how much of the value was lost, and
-// closing the quote would fabricate a semantically truncated-but-valid
-// value (#3069). The caller must treat that as unrepairable and retry.
 func closeUnclosed(s string) (string, bool) {
 	var stack []byte
 	inString := false
@@ -222,7 +194,6 @@ func closeUnclosed(s string) (string, bool) {
 	return s, true
 }
 
-// truncateForLog truncates a string for debug logging (avoids huge log lines).
 func truncateForLog(s string) string {
 	const max = 200
 	if utf8.RuneCountInString(s) <= max {
@@ -232,10 +203,6 @@ func truncateForLog(s string) string {
 	return string(runes[:max]) + "...(truncated)"
 }
 
-// normalizePythonLiterals replaces bare Python-style literals (True, False,
-// None) with their JSON equivalents (true, false, null) outside of strings.
-// Only exact standalone words are replaced; occurrences inside string values
-// are preserved.
 func normalizePythonLiterals(s string) string {
 	if !strings.ContainsAny(s, "TFN") {
 		return s
@@ -282,8 +249,6 @@ func normalizePythonLiterals(s string) string {
 	return b.String()
 }
 
-// matchBareWord reports whether the exact word starts at index i and is not
-// part of a longer identifier (word boundaries on both sides).
 func matchBareWord(s string, i int, word string) bool {
 	if i+len(word) > len(s) || s[i:i+len(word)] != word {
 		return false
@@ -297,10 +262,6 @@ func matchBareWord(s string, i int, word string) bool {
 	return true
 }
 
-// quoteUnquotedKeys wraps bare object keys in double quotes. JavaScript
-// object literal style (e.g. {path: "x.go"}) is invalid JSON but a common
-// LLM output. Only identifiers directly in a key position (after '{' or
-// ',' and followed by ':') are quoted; values are never touched.
 func quoteUnquotedKeys(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -371,11 +332,6 @@ func quoteUnquotedKeys(s string) string {
 	return b.String()
 }
 
-// normalizeSingleQuotedStrings converts single-quoted string values to
-// double-quoted JSON strings. Surgical by design: content containing a
-// backslash or an embedded apostrophe is ambiguous and left untouched;
-// embedded double quotes are escaped. A single-quoted run is bounded within
-// one line to avoid pairing quotes across statements.
 func normalizeSingleQuotedStrings(s string) string {
 	if !strings.ContainsRune(s, '\'') {
 		return s

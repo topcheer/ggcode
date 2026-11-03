@@ -10,10 +10,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// TestMigrateSectionToExternalHoldsLock verifies that migrateSectionToExternal
-// acquires lockConfigFile(mainConfigPath) before reading the file. While the
-// test holds the lock, the migration goroutine must not complete (it blocks on
-// the same in-process mutex).
 func TestMigrateSectionToExternalHoldsLock(t *testing.T) {
 	dir := t.TempDir()
 	mainPath := filepath.Join(dir, "config.yaml")
@@ -45,12 +41,6 @@ func TestMigrateSectionToExternalHoldsLock(t *testing.T) {
 	}
 }
 
-// TestMigrateSectionToExternalFreshReadPreservesConcurrentWrites verifies the
-// read-merge-delete-write behavior: modifications written to the main file
-// while the migration waits on the lock must survive the migration's rewrite
-// of the main file. With the old behavior (read the raw map first, then write
-// twice without locking), a concurrent addition was lost because the later
-// rewrite used the stale snapshot taken before the lock window.
 func TestMigrateSectionToExternalFreshReadPreservesConcurrentWrites(t *testing.T) {
 	dir := t.TempDir()
 	mainPath := filepath.Join(dir, "config.yaml")
@@ -102,8 +92,6 @@ func TestMigrateSectionToExternalFreshReadPreservesConcurrentWrites(t *testing.T
 	}
 }
 
-// TestMigrateSectionToExternalPreservesOtherFields is the basic non-concurrent
-// regression check: migration removes only its own section key.
 func TestMigrateSectionToExternalPreservesOtherFields(t *testing.T) {
 	dir := t.TempDir()
 	mainPath := filepath.Join(dir, "config.yaml")
@@ -120,11 +108,6 @@ func TestMigrateSectionToExternalPreservesOtherFields(t *testing.T) {
 	assertYAMLNotHasKey(t, data, "im", "")
 }
 
-// TestLoadExternalSectionsEmptyIMFilePreservesIM verifies the reported scenario:
-// the main config still has an im section (old layout) and the user manually
-// touched an empty im.yaml. Previously cfg.IM = *im replaced the populated
-// IMConfig with the zero value parsed from the empty file, silently disabling
-// IM with no log.
 func TestLoadExternalSectionsEmptyIMFilePreservesIM(t *testing.T) {
 	dir := t.TempDir()
 	mainPath := filepath.Join(dir, "config.yaml")
@@ -163,8 +146,6 @@ func TestLoadExternalSectionsEmptyIMFilePreservesIM(t *testing.T) {
 	}
 }
 
-// TestMergeIMConfigFieldPrecedence locks in the field-level precedence rules:
-// non-zero external fields win, zero-value external fields keep the base value.
 func TestMergeIMConfigFieldPrecedence(t *testing.T) {
 	requireLocal := true
 	base := IMConfig{
@@ -228,8 +209,6 @@ func TestMergeIMConfigFieldPrecedence(t *testing.T) {
 	}
 }
 
-// TestMergeIMConfigZeroExternalKeepsBase verifies that a fully zero external
-// value (what an empty im.yaml parses to) leaves the base untouched.
 func TestMergeIMConfigZeroExternalKeepsBase(t *testing.T) {
 	base := IMConfig{
 		Enabled:    true,

@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// #4858: mcp_servers.<name>.skip_osv_check yaml surface - the OSV malware
-// gate escape hatch must parse through to MCPServerConfig.SkipOSVCheck.
 func TestLoad_MCPSkipOSVCheck(t *testing.T) {
 	withTestHome(t)
 	path := filepath.Join(t.TempDir(), "ggcode.yaml")

@@ -20,51 +20,39 @@ import (
 	"time"
 )
 
-// AnthropicProvider implements Provider using the Anthropic SDK.
 type AnthropicProvider struct {
 	client           anthropic.Client
 	model            string
 	maxTokens        int
-	samplingOverride atomic.Pointer[SamplingOverride] // #2248: reader-side race-free override
+	samplingOverride atomic.Pointer[SamplingOverride]
 	cap              *adaptiveCap
-	transport        *headerInjectingTransport            // kept for runtime header updates
-	calibrator       *tokenCountCalibrator                // periodic real-API token calibration
-	files            *fileUploader                        // Anthropic Files API (large-image file_id referencing)
-	reasoningEffort  string                               // "", "low", "medium", "high", "xhigh", "max" - maps to thinking budget
-	toolChoice       string                               // "", "auto", "required", "none" - maps to Anthropic tool_choice
-	temperature      float64                              // 0 = provider default
-	topP             float64                              // 0 = provider default
-	serverTools      []ServerToolConfig                   // Anthropic server-side tools (web_search/web_fetch), executed in-API
-	memoryTool       bool                                 // Anthropic Memory Tool (memory_20250818): declared here, executed agent-side
-	thinkingMode     string                               // "", "manual", "adaptive" - thinking carrier override ("" = auto-detect from model)
-	contextEditing   atomic.Pointer[ContextEditingConfig] // server-side context editing (beta)
-	strictTools      map[string]bool                      // strict tool use allowlist (empty = disabled)
-	toolSearchBeta   bool                                 // a tool_search_tool_* declaration is configured (beta header + defer_loading)
+	transport        *headerInjectingTransport
+	calibrator       *tokenCountCalibrator
+	files            *fileUploader
+	reasoningEffort  string
+	toolChoice       string
+	temperature      float64
+	topP             float64
+	serverTools      []ServerToolConfig
+	memoryTool       bool
+	thinkingMode     string
+	contextEditing   atomic.Pointer[ContextEditingConfig]
+	strictTools      map[string]bool
+	toolSearchBeta   bool
 
-	// Programmatic tool calling (code execution) container reuse. Every
-	// response of a PTC exchange carries {container: {id, expires_at}}; the
-	// continuation request (client tool_results answering programmatic
-	// tool_use blocks) must send the same container ID or it is rejected.
 	ptcMu               sync.Mutex
 	ptcContainerID      string
 	ptcContainerExpires time.Time
 
-	// Top-level effort carrier (output_config.effort, GA effort parameter).
-	// Cache-aware per Anthropic's 2026 effort guidance: a top-level effort
-	// change does not preserve cached prefixes, so the carrier is attached
-	// only once a level stabilizes across consecutive requests - per-turn
-	// adaptive-effort oscillation never touches it (see beginEffortTracking).
-	effortCarrier       atomic.Bool // true until the endpoint rejects output_config
-	lastCallEffort      string      // effort level observed on the previous request
-	conversationEffort  string      // effort level established for the cached prefix
-	adaptiveEffortLatch string      // first effort latched for the adaptive bypass; held constant so the top-level value never flaps (cache-flap guard)
-	policy              callPolicy  // sa-78: per-call deadline + retry budget
+	effortCarrier       atomic.Bool
+	lastCallEffort      string
+	conversationEffort  string
+	adaptiveEffortLatch string
+	policy              callPolicy
 }
 
-// ModelName returns the current model name used by this provider.
 func (p *AnthropicProvider) ModelName() string { return p.model }
 
-// CloneWithModel returns a shallow copy of this provider with a different model.
 func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 	clone := &AnthropicProvider{
 		client:    p.client,
@@ -100,11 +88,6 @@ func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 	return clone
 }
 
-// SetReasoningEffort sets the reasoning effort. It maps to Anthropic's
-// extended thinking budget_tokens parameter ("low" ~5K, "medium" ~16K,
-// "high" ~32K) and, once the level stabilizes, to the top-level
-// output_config.effort carrier ("xhigh"/"max" are carrier-only). Empty
-// string disables both.
 func (p *AnthropicProvider) SetReasoningEffort(effort string) {
 	effort = strings.ToLower(strings.TrimSpace(effort))
 	switch effort {
@@ -115,10 +98,6 @@ func (p *AnthropicProvider) SetReasoningEffort(effort string) {
 
 func (p *AnthropicProvider) ReasoningEffort() string { return p.reasoningEffort }
 
-// SetThinkingMode overrides the extended-thinking carrier: "manual" forces
-// budget_tokens, "adaptive" forces thinking:{type:"adaptive"} (Claude 4.6+/
-// 5.x only - older models reject it with 400), "" (default) auto-detects
-// per model. Opt in per endpoint via config (`thinking_mode: adaptive`).
 func (p *AnthropicProvider) SetThinkingMode(mode string) {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "manual":
@@ -130,25 +109,14 @@ func (p *AnthropicProvider) SetThinkingMode(mode string) {
 	}
 }
 
-// ThinkingMode returns the configured thinking-mode override ("" = auto).
 func (p *AnthropicProvider) ThinkingMode() string { return p.thinkingMode }
 
-// adaptiveThinkingModels matches Claude generations that support adaptive
-// thinking (thinking:{type:"adaptive"}): 4.6+ and the 5.x families. The
-// extended-thinking-only generation (Sonnet/Opus/Haiku 4.5 and earlier)
-// rejects it with 400. Unknown future families fall back to manual mode;
-// users can override per endpoint with thinking_mode: adaptive.
-// https://platform.claude.com/docs/en/build-with-claude/extended-thinking
 var adaptiveThinkingModels = regexp.MustCompile(`(?i)claude-(?:opus|sonnet|haiku)-4-[6-9]|claude-(?:opus|sonnet|haiku|fable|mythos)-[5-9]|claude-[5-9]`)
 
-// adaptiveThinkingForModel reports whether the model natively supports
-// adaptive thinking.
 func adaptiveThinkingForModel(model string) bool {
 	return adaptiveThinkingModels.MatchString(strings.ToLower(strings.TrimSpace(model)))
 }
 
-// useAdaptiveThinking selects the thinking carrier for this provider:
-// explicit override wins, otherwise auto-detect from the model name.
 func (p *AnthropicProvider) useAdaptiveThinking() bool {
 	switch p.thinkingMode {
 	case "manual":
@@ -160,9 +128,6 @@ func (p *AnthropicProvider) useAdaptiveThinking() bool {
 	}
 }
 
-// adaptiveEffort maps a reasoning effort level to the output_config.effort
-// value used by adaptive-thinking models (their only depth control -
-// budget_tokens is forbidden there). Returns "" for empty/unknown levels.
 func adaptiveEffort(effort string) string {
 	effort = strings.ToLower(strings.TrimSpace(effort))
 	switch effort {
@@ -173,11 +138,6 @@ func adaptiveEffort(effort string) string {
 	}
 }
 
-// anthropicBetaHeader returns the anthropic-beta header value to attach to
-// tool-using manual-mode requests. budget_tokens thinking does not interleave
-// with tool use unless this beta is set; the API ignores the header on models
-// where it does not apply. Adaptive models interleave natively (no header).
-// https://platform.claude.com/docs/en/build-with-claude/extended-thinking#interleaved-thinking
 func (p *AnthropicProvider) anthropicBetaHeader(hasTools bool) string {
 	if !hasTools || p.useAdaptiveThinking() {
 		return ""
@@ -188,15 +148,6 @@ func (p *AnthropicProvider) anthropicBetaHeader(hasTools bool) string {
 	return ""
 }
 
-// betaHeaderValue aggregates every enabled anthropic-beta token into one
-// comma-separated value (#2774): interleaved-thinking (manual thinking +
-// tools), programmatic-tool-calling (PTC server tool), and
-// advanced-tool-use (tool search). Multiple WithHeader calls on the same
-// key are Header.Set - the last one wins - so the pre-fix split emitters
-// silently dropped the interleaved token whenever PTC was enabled, and
-// the thinking/effort retry paths rebuilt options without the PTC header
-// while params still declared the code_execution tool; both hard-failed
-// with 400.
 func (p *AnthropicProvider) betaHeaderValue(hasTools bool) string {
 	var tokens []string
 	if h := p.anthropicBetaHeader(hasTools); h != "" {
@@ -211,10 +162,6 @@ func (p *AnthropicProvider) betaHeaderValue(hasTools bool) string {
 	return strings.Join(tokens, ",")
 }
 
-// betaHeaderOpts wraps the aggregated beta header into a SINGLE SDK
-// request option for the per-call sites (Messages.New /
-// Messages.NewStreaming). Call sites must not append further
-// anthropic-beta emitters - a second Set would overwrite this one.
 func (p *AnthropicProvider) betaHeaderOpts(hasTools bool) []option.RequestOption {
 	if h := p.betaHeaderValue(hasTools); h != "" {
 		return []option.RequestOption{option.WithHeader("anthropic-beta", h)}
@@ -222,26 +169,12 @@ func (p *AnthropicProvider) betaHeaderOpts(hasTools bool) []option.RequestOption
 	return nil
 }
 
-// SetMaxTokens implements provider.MaxTokensSetter (#1592-A).
 func (p *AnthropicProvider) SetMaxTokens(n int) {
 	if n > 0 {
 		p.maxTokens = n
 	}
 }
 
-// beginEffortTracking updates the cache-aware effort-carrier bookkeeping
-// for this request. Returns whether buildParams should attach
-// output_config.effort.
-//
-// Hysteresis (Anthropic effort guidance, 2026): hold the top-level effort
-// constant within a conversation. A level is adopted as the carrier only
-// after TWO consecutive requests at the same level - the adaptive-effort
-// adapter sets a level before each call and restores the previous level
-// right after, so its oscillation never stabilizes and never reaches the
-// carrier (budget_tokens alone modulates per-turn thinking, which is
-// cache-neutral). A user switch (/effort, config) persists across calls
-// and re-establishes the carrier on the second call: one deliberate,
-// one-time cache rewrite instead of a storm.
 func (p *AnthropicProvider) beginEffortTracking() bool {
 	if !p.effortCarrier.Load() {
 		return false
@@ -263,26 +196,16 @@ func (p *AnthropicProvider) beginEffortTracking() bool {
 	return true
 }
 
-// SetToolChoice sets the tool_choice parameter: "auto" (model decides),
-// "required" (force tool use), "none" (disable tools), or "" (API default).
 func (p *AnthropicProvider) SetToolChoice(choice string) {
 	p.toolChoice = strings.ToLower(strings.TrimSpace(choice))
 }
 
-// SetStrictTools implements StrictToolsSetter: allowlisted tools are sent with
-// Anthropic's structured-outputs `strict: true` (grammar-constrained tool
-// input). Non-allowlisted tools keep today's serialization (ToolParam.Strict
-// is omitzero, so nothing changes on the wire).
 func (p *AnthropicProvider) SetStrictTools(allow map[string]bool) {
 	p.strictTools = allow
 }
 
 func (p *AnthropicProvider) ToolChoice() string { return p.toolChoice }
 
-// SetServerTools implements provider.ServerToolsSetter: declarative Anthropic
-// server-side tools (web_search/web_fetch) executed inside the API. Results
-// arrive in-band as server_tool_use/web_search_tool_result blocks and are
-// echoed back verbatim on subsequent requests.
 func (p *AnthropicProvider) SetServerTools(tools []ServerToolConfig) {
 	p.serverTools = tools
 	p.toolSearchBeta = false
@@ -293,31 +216,14 @@ func (p *AnthropicProvider) SetServerTools(tools []ServerToolConfig) {
 	}
 }
 
-// ServerToolSearchActive reports whether the Anthropic server-side Tool
-// Search Tool (tool_search_tool_regex/bm25, advanced-tool-use-2025-11-20)
-// is configured. The agent layer checks this to hand MCP schema discovery
-// to the provider (defer_loading) instead of its client-side meta-tool -
-// the two mechanisms are mutually exclusive: the client meta-tool strips
-// deferred schemas from the request, which the server-side search needs.
 func (p *AnthropicProvider) ServerToolSearchActive() bool { return p.toolSearchBeta }
 
-// advancedToolUseBeta is the beta header the API requires for the server
-// Tool Search Tool declarations.
 const advancedToolUseBeta = "advanced-tool-use-2025-11-20"
 
-// SetMemoryTool enables the Anthropic Memory Tool declaration
-// (memory_20250818). Unlike server tools, memory is client-executed: the
-// agent's handler (internal/agent/memory_tool.go) fulfills the model's
-// tool_use calls against a local /memories store. Opt in per endpoint via
-// config (`memory_tool: true`).
 func (p *AnthropicProvider) SetMemoryTool(enabled bool) { p.memoryTool = enabled }
 
-// MemoryToolEnabled reports whether requests carry the memory tool
-// declaration; the agent probes this to install its client-side handler.
 func (p *AnthropicProvider) MemoryToolEnabled() bool { return p.memoryTool }
 
-// ptcCodeExecutionEnabled reports whether the code execution server tool
-// (programmatic tool calling) is declared for this provider.
 func (p *AnthropicProvider) ptcCodeExecutionEnabled() bool {
 	for _, st := range p.serverTools {
 		if st.Type == "code_execution_20260120" {
@@ -327,8 +233,6 @@ func (p *AnthropicProvider) ptcCodeExecutionEnabled() bool {
 	return false
 }
 
-// storePTCContainer remembers the container issued by the most recent
-// response so a continuation request can reuse it.
 func (p *AnthropicProvider) storePTCContainer(id string, expires time.Time) {
 	p.ptcMu.Lock()
 	defer p.ptcMu.Unlock()
@@ -336,10 +240,6 @@ func (p *AnthropicProvider) storePTCContainer(id string, expires time.Time) {
 	p.ptcContainerExpires = expires
 }
 
-// freshPTCContainer returns the remembered container ID while it is still
-// live (with a 30s safety margin). An expired ID must NOT be sent: the API
-// rejects unknown/expired containers instead of provisioning a new one, so
-// the caller omits the field and lets the API start a fresh container.
 func (p *AnthropicProvider) freshPTCContainer() (string, bool) {
 	p.ptcMu.Lock()
 	defer p.ptcMu.Unlock()
@@ -353,30 +253,20 @@ func (p *AnthropicProvider) freshPTCContainer() (string, bool) {
 	return p.ptcContainerID, true
 }
 
-// ptcBetaHeader is the anthropic-beta token gating programmatic tool
-// calling (the code execution server tool). Aggregated into the single
-// betaHeaderValue emission (#2774) - never sent as a standalone header.
 const ptcBetaHeader = "programmatic-tool-calling-2026-01-20"
 
-// SetTemperature sets the sampling temperature. 0 means "use provider default".
 func (p *AnthropicProvider) SetTemperature(temp float64) { p.temperature = temp }
 
-// SetSamplingOverride implements provider.SamplingOverrideSetter (#2248).
 func (p *AnthropicProvider) SetSamplingOverride(o *SamplingOverride) { p.samplingOverride.Store(o) }
 
-// SamplingOverride implements provider.SamplingOverrideSetter (#2248).
 func (p *AnthropicProvider) SamplingOverride() *SamplingOverride { return p.samplingOverride.Load() }
 func (p *AnthropicProvider) Temperature() float64                { return p.temperature }
 
-// SetTopP sets the nucleus sampling parameter. 0 means "use provider default".
 func (p *AnthropicProvider) SetTopP(topP float64) { p.topP = topP }
 func (p *AnthropicProvider) TopP() float64        { return p.topP }
 
-// SetAdaptiveCap installs the adaptive max-output-tokens cap.
 func (p *AnthropicProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
 
-// probeChat sends a single messages request without retry or adaptive
-// cap tracking. Used by context window probing.
 func (p *AnthropicProvider) probeChat(ctx context.Context, messages []Message) error {
 	params := p.buildParams(ctx, messages, nil)
 	_, err := p.client.Messages.New(ctx, params, p.betaHeaderOpts(false)...)
@@ -395,9 +285,6 @@ func (p *AnthropicProvider) effectiveMaxTokens() int {
 	return p.maxTokens
 }
 
-// thinkingBudgetForEffort converts a reasoning effort level to an Anthropic
-// thinking budget_tokens value. Returns 0 if thinking should be disabled.
-// Anthropic API requires budget_tokens >= 1024 and max_tokens > budget_tokens.
 func (p *AnthropicProvider) thinkingBudgetForEffort(effort string) int64 {
 	effort = strings.ToLower(strings.TrimSpace(effort))
 	if effort == "" {
@@ -434,19 +321,6 @@ func (p *AnthropicProvider) thinkingBudgetForEffort(effort string) int64 {
 	return budget
 }
 
-// isThinkingError reports whether an API error is a genuine "model does
-// not support / misconfigured extended thinking" parameter error.
-// #2115: this used to be a bare substring match on "thinking"/
-// "budget_tokens" over the WHOLE message, so unrelated errors mentioning
-// the words anywhere - upstream 5xx "error while streaming thinking
-// blocks", a gateway error whose MODEL NAME contains "thinking", or
-// "429 quota exceeded for budget_tokens plan" - were misjudged, stripped
-// thinking, and retried; the retry often succeeded and the session silently
-// ran without reasoning from then on. Now:
-//   - when a status code is extractable (anthropic SDK apierror) it must
-//     be a 4xx parameter class (400/404/422);
-//   - the message must contain an ANCHORED phrase from real
-//     thinking-rejection errors, not the bare word anywhere in the text.
 func isThinkingError(err error) bool {
 	if err == nil {
 		return false
@@ -465,8 +339,6 @@ func isThinkingError(err error) bool {
 	return false
 }
 
-// thinkingErrorAnchors are phrases from real API thinking-rejection
-// errors (Anthropic direct and gateway-stringified variants).
 var thinkingErrorAnchors = []string{
 	"does not support thinking",
 	"thinking is not supported",
@@ -480,8 +352,6 @@ var thinkingErrorAnchors = []string{
 	"max_tokens must be greater than budget_tokens",
 }
 
-// effortErrorAnchors are phrases from real output_config/effort rejection
-// errors (Anthropic direct and gateway-stringified variants).
 var effortErrorAnchors = []string{
 	"output_config",
 	"per-turn effort",
@@ -490,10 +360,6 @@ var effortErrorAnchors = []string{
 	"effort is not supported",
 }
 
-// isEffortError reports whether an API error is a genuine rejection of the
-// top-level output_config effort carrier - e.g. an Anthropic-compatible
-// gateway that predates the parameter. Mirrors isThinkingError: status must
-// be a 4xx parameter class and the message must contain an anchored phrase.
 func isEffortError(err error) bool {
 	if err == nil {
 		return false
@@ -512,8 +378,6 @@ func isEffortError(err error) bool {
 	return false
 }
 
-// asStatusCode extracts an HTTP status code from a provider error when
-// the concrete type exposes one (the anthropic SDK's apierror.Error does).
 func asStatusCode(err error) (int, bool) {
 	var sc interface{ StatusCode() int }
 	if errors.As(err, &sc) {
@@ -522,12 +386,10 @@ func asStatusCode(err error) (int, bool) {
 	return 0, false
 }
 
-// NewAnthropicProvider creates a new Anthropic provider.
 func NewAnthropicProvider(apiKey string, model string, maxTokens int) *AnthropicProvider {
 	return newAnthropicProvider(apiKey, model, maxTokens, "")
 }
 
-// NewAnthropicProviderWithBaseURL creates a new Anthropic provider with a custom base URL.
 func NewAnthropicProviderWithBaseURL(apiKey string, model string, maxTokens int, baseURL string) *AnthropicProvider {
 	return newAnthropicProvider(apiKey, model, maxTokens, baseURL)
 }
@@ -593,10 +455,6 @@ func (p *AnthropicProvider) Name() string {
 	return "anthropic"
 }
 
-// UpdateRuntimeHeaders updates the injected headers at runtime.
-// GGCode-SessionID is session-lifecycle state owned by SetSessionID -
-// callers that replace the whole header set (e.g. the impersonation
-// panel) must not silently drop it, so it is carried over (#sa-142).
 func (p *AnthropicProvider) UpdateRuntimeHeaders(headers http.Header) {
 	if p.transport != nil {
 		if sid := p.transport.snapshotHeaders().Get("GGCode-SessionID"); sid != "" && headers.Get("GGCode-SessionID") == "" {
@@ -608,7 +466,6 @@ func (p *AnthropicProvider) UpdateRuntimeHeaders(headers http.Header) {
 	}
 }
 
-// RateLimitInfo returns the latest rate-limit status parsed from response headers.
 func (p *AnthropicProvider) RateLimitInfo() RateLimitInfo {
 	if p.transport != nil && p.transport.rateLimits != nil {
 		return p.transport.rateLimits.Snapshot()
@@ -616,8 +473,6 @@ func (p *AnthropicProvider) RateLimitInfo() RateLimitInfo {
 	return RateLimitInfo{RemainingRequests: -1, RemainingTokens: -1, LimitRequests: -1, LimitTokens: -1}
 }
 
-// SetSessionID injects the session ID into outgoing requests via a custom
-// HTTP header (GGCode-SessionID).
 func (p *AnthropicProvider) SetSessionID(sessionID string) {
 	if sessionID == "" || p.transport == nil {
 		return
@@ -983,10 +838,6 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message)
 	return result, nil
 }
 
-// messagesContainNonTextBlocks reports whether any message carries blocks the
-// local estimator does not count (image data, tool_result attachments,
-// thinking/redacted_thinking) - such samples are asymmetric against the
-// remote truth and must not feed the calibration ratio (#1618-A).
 func messagesContainNonTextBlocks(messages []Message) bool {
 	for _, m := range messages {
 		for _, b := range m.Content {
@@ -1000,7 +851,6 @@ func messagesContainNonTextBlocks(messages []Message) bool {
 	return false
 }
 
-// remoteCountTokens calls the Anthropic count_tokens API for accurate token counts.
 func (p *AnthropicProvider) remoteCountTokens(ctx context.Context, messages []Message) (int, error) {
 	params := p.buildCountTokensParams(messages)
 	resp, err := p.client.Messages.CountTokens(ctx, params)
@@ -1015,13 +865,6 @@ func (p *AnthropicProvider) remoteCountTokens(ctx context.Context, messages []Me
 	return int(resp.InputTokens), nil
 }
 
-// buildCountTokensParams converts internal messages to the Anthropic
-// MessageCountTokensParams format, reusing the same block-conversion logic
-// as buildParams but without tool definitions or max_tokens.
-// appendToToolResultContent inserts the folded guidance text AFTER the last
-// tool_result block (or at the end when none exists). Anthropic requires
-// tool_result blocks to be the first content of the user turn that answers
-// tool_use, so the OpenAI-style prepend-before ordering is invalid here (#2819).
 func appendToToolResultContent(blocks []ContentBlock, prefix string) []ContentBlock {
 	lastToolResult := -1
 	for i, b := range blocks {
@@ -1140,19 +983,10 @@ func (p *AnthropicProvider) buildCountTokensParams(messages []Message) anthropic
 	}
 }
 
-// buildParams converts internal messages to MessageNewParams. ctx is used to
-// resolve large images into Files API file_ids (the upload happens inline here,
-// at most once per unique image, and is cancellable with the request).
 func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message, tools []ToolDefinition) anthropic.MessageNewParams {
 
 	messages = foldInjectedUserMessages(messages, appendToToolResultContent)
 	var msgParams []anthropic.MessageParam
-	// Collect system content blocks preserving cache hints so we can emit
-	// separate Anthropic text blocks with selective cache_control breakpoints.
-	// This follows "Don't Break the Cache" (arXiv:2601.06007): static system
-	// prompt content gets its own cache breakpoint, so dynamic layers (ratchet
-	// rules, playbook) changing between runs doesn't invalidate the cache for
-	// the much larger static prefix.
 	type sysBlock struct {
 		text  string
 		cache bool
@@ -1465,8 +1299,6 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 	return params
 }
 
-// serverToolUseRaw rebuilds the verbatim JSON for a completed server_tool_use
-// block from the streamed fields (content_block_stop carries no payload).
 func serverToolUseRaw(id, name string, input json.RawMessage) json.RawMessage {
 	if len(input) == 0 {
 		input = json.RawMessage(`{}`)
@@ -1483,10 +1315,6 @@ func serverToolUseRaw(id, name string, input json.RawMessage) json.RawMessage {
 	return raw
 }
 
-// serverToolBlockParam converts a stored verbatim server-tool block back into
-// a request-side param union for echo-back. The API requires the full
-// server_tool_use + result pair on subsequent requests; a dropped result makes
-// it treat the call as deferred and re-run the search (wasted tokens).
 func serverToolBlockParam(raw json.RawMessage) (*anthropic.ContentBlockParamUnion, error) {
 	var probe struct {
 		Type string `json:"type"`
@@ -1510,9 +1338,6 @@ func serverToolBlockParam(raw json.RawMessage) (*anthropic.ContentBlockParamUnio
 		param := b.ToParam()
 		return &anthropic.ContentBlockParamUnion{OfWebSearchToolResult: &param}, nil
 	case "tool_search_tool_result":
-		// No response-block ToParam for this shape in SDK v1.68; the param
-		// struct is JSON-identical and apijson registers its discriminator
-		// for decoding.
 		var ts anthropic.ToolSearchToolResultBlockParam
 		if err := json.Unmarshal(raw, &ts); err != nil {
 			return nil, err
@@ -1526,8 +1351,6 @@ func serverToolBlockParam(raw json.RawMessage) (*anthropic.ContentBlockParamUnio
 		param := b.ToParam()
 		return &anthropic.ContentBlockParamUnion{OfWebFetchToolResult: &param}, nil
 	case "code_execution_tool_result":
-		// PTC: code execution result blocks round-trip exactly like the web
-		// server-tool results (output lives inside the container exchange).
 		var b anthropic.CodeExecutionToolResultBlock
 		if err := json.Unmarshal(raw, &b); err != nil {
 			return nil, err
@@ -1538,7 +1361,6 @@ func serverToolBlockParam(raw json.RawMessage) (*anthropic.ContentBlockParamUnio
 	return nil, fmt.Errorf("unknown server tool block type %q", probe.Type)
 }
 
-// setToolUnionCacheControl attaches a cache breakpoint to a server-tool union.
 func setToolUnionCacheControl(u *anthropic.ToolUnionParam) {
 	switch {
 	case u.OfWebSearchTool20250305 != nil:
@@ -1590,8 +1412,6 @@ func convertAnthropicResponse(blocks []anthropic.ContentBlockUnion) []ContentBlo
 	return result
 }
 
-// anthropicStopReasonError returns an error for stop reasons that indicate
-// truncation or policy issues. Returns nil for normal completion reasons.
 func anthropicStopReasonError(reason string) error {
 	switch reason {
 	case "end_turn", "tool_use", "stop_sequence", "pause_turn":
@@ -1605,11 +1425,6 @@ func anthropicStopReasonError(reason string) error {
 	}
 }
 
-// SetContextEditing opts this endpoint into Anthropic server-side context
-// management. nil disables the feature and strips the beta flag from the
-// request header. The flag is toggled on the transport (the same injection
-// point SetSessionID uses) so the value merges with any configured
-// anthropic-beta header instead of clobbering it.
 func (p *AnthropicProvider) SetContextEditing(cfg *ContextEditingConfig) {
 	p.contextEditing.Store(cfg)
 	if p.transport == nil {
@@ -1625,9 +1440,6 @@ func (p *AnthropicProvider) SetContextEditing(cfg *ContextEditingConfig) {
 	p.transport.UpdateHeaders(hdrs)
 }
 
-// toggleBetaToken adds or removes a comma-separated token from an
-// anthropic-beta header value. Idempotent in both directions; preserves
-// unrelated tokens (including their original order).
 func toggleBetaToken(header, token string, add bool) string {
 	var kept []string
 	for _, part := range strings.Split(header, ",") {
@@ -1641,9 +1453,6 @@ func toggleBetaToken(header, token string, add bool) string {
 	return strings.Join(kept, ",")
 }
 
-// contextEditingOptions returns the per-call request options attaching the
-// context_management field. Nil when the feature is off, so the spread at
-// the call sites is a no-op.
 func (p *AnthropicProvider) contextEditingOptions() []option.RequestOption {
 	payload := contextManagementPayload(p.contextEditing.Load())
 	if payload == nil {
@@ -1652,8 +1461,6 @@ func (p *AnthropicProvider) contextEditingOptions() []option.RequestOption {
 	return []option.RequestOption{option.WithJSONSet("context_management", payload)}
 }
 
-// callerRawOf extracts the verbatim caller JSON from a tool_use block's
-// caller union, or nil when absent (plain tool_use has no caller field).
 func callerRawOf(caller anthropic.ToolUseBlockCallerUnion) json.RawMessage {
 	raw := caller.RawJSON()
 	if raw == "" || raw == "null" {
@@ -1662,8 +1469,6 @@ func callerRawOf(caller anthropic.ToolUseBlockCallerUnion) json.RawMessage {
 	return json.RawMessage(raw)
 }
 
-// isProgrammaticCaller reports whether a verbatim caller field denotes a
-// programmatic (code execution) invocation rather than a direct model call.
 func isProgrammaticCaller(callerRaw json.RawMessage) bool {
 	if len(callerRaw) == 0 {
 		return false
@@ -1677,10 +1482,6 @@ func isProgrammaticCaller(callerRaw json.RawMessage) bool {
 	return strings.HasPrefix(probe.Type, "code_execution")
 }
 
-// toolUseBlockParam builds a tool_use request block, restoring the verbatim
-// caller field when present (programmatic tool calling). A dropped caller
-// prevents the API from matching the client tool_result to the pending
-// programmatic call inside the code execution container.
 func toolUseBlockParam(id string, input any, name string, callerRaw json.RawMessage) anthropic.ContentBlockParamUnion {
 	if len(callerRaw) == 0 {
 		return anthropic.NewToolUseBlock(id, input, name)
@@ -1707,9 +1508,6 @@ func toolUseBlockParam(id string, input any, name string, callerRaw json.RawMess
 	return anthropic.ContentBlockParamUnion{OfToolUse: &p}
 }
 
-// hasPendingProgrammaticToolCalls reports whether the conversation tail ends
-// with unanswered programmatic (code execution) tool_use blocks - i.e. this
-// request is the container continuation.
 func hasPendingProgrammaticToolCalls(messages []Message) bool {
 	for i := len(messages) - 1; i >= 0; i-- {
 		m := messages[i]
@@ -1732,7 +1530,6 @@ func hasPendingProgrammaticToolCalls(messages []Message) bool {
 	return false
 }
 
-// countToolResultBlocks counts request-side tool_result blocks in a message.
 func countToolResultBlocks(blocks []anthropic.ContentBlockParamUnion) int {
 	n := 0
 	for _, blk := range blocks {

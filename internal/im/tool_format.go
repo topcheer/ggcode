@@ -10,7 +10,6 @@ func (a *tgAdapter) outboundText(event OutboundEvent) string {
 	return defaultOutboundText(event)
 }
 
-// toolLang returns the ToolLanguage from a struct's Lang field, defaulting to zh-CN.
 func toolLang(lang string) ToolLanguage {
 	if lang == "en" {
 		return ToolLangEn
@@ -18,7 +17,6 @@ func toolLang(lang string) ToolLanguage {
 	return ToolLangZhCN
 }
 
-// formatToolCallText formats a tool call event into markdown text for IM delivery.
 func formatToolCallText(tc *ToolCallInfo) string {
 	lang := toolLang(tc.Lang)
 	name := tc.ToolName
@@ -362,9 +360,6 @@ func formatToolCallText(tc *ToolCallInfo) string {
 	}
 }
 
-// formatToolResultText formats a tool result event into concise IM text,
-// mirroring the terminal follow display style: icon + tool name + brief summary.
-// Returns empty string if the tool result should be silently suppressed (e.g. read_file success).
 func formatToolResultText(tr *ToolResultInfo) string {
 
 	handled, special := formatSpecialIMToolResult(tr)
@@ -388,9 +383,6 @@ func formatToolResultText(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🔧 %s", pretty)
 }
 
-// stripToolHeader removes the tool name/icon prefix from a formatted result
-// string when the tool-call start notification was already sent to IM.
-// For example, "⚡ Run command\n```\noutput\n```" becomes "```\noutput\n```".
 func stripToolHeader(toolName, formatted string) string {
 
 	lines := strings.SplitN(formatted, "\n", 2)
@@ -404,9 +396,6 @@ func stripToolHeader(toolName, formatted string) string {
 	return rest
 }
 
-// formatSpecialIMToolResult returns (handled, formatted) for special tool types.
-// handled=true means this function has dealt with the tool (either producing output
-// or intentionally suppressing it); handled=false means "use default formatting".
 func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	switch tr.ToolName {
 	case "run_command", "bash", "powershell":
@@ -643,8 +632,6 @@ func (a *dingtalkAdapter) outboundText(event OutboundEvent) string {
 	return defaultOutboundText(event)
 }
 
-// defaultOutboundText is the shared outboundText implementation used by adapters
-// that do not need custom per-adapter formatting.
 func defaultOutboundText(event OutboundEvent) string {
 	switch event.Kind {
 	case OutboundEventText:

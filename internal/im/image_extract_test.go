@@ -127,9 +127,6 @@ func TestIsLocalFilePath(t *testing.T) {
 	}
 }
 
-// TestExtractImagesFromText_QueryStringExtension (issue #729): a ".png" that
-// lives inside a query string is NOT a bare image URL and must not be
-// extracted (it would trigger a pointless 60s download attempt).
 func TestExtractImagesFromText_QueryStringExtension(t *testing.T) {
 	cases := []struct {
 		name string
@@ -149,8 +146,6 @@ func TestExtractImagesFromText_QueryStringExtension(t *testing.T) {
 	}
 }
 
-// TestExtractImagesFromText_LegitQueryImageURL: URLs whose real path ends in
-// an image extension must still be extracted, with or without a query string.
 func TestExtractImagesFromText_LegitQueryImageURL(t *testing.T) {
 	images, _ := ExtractImagesFromText("check https://cdn.x/img.png?v=2 pls")
 	if len(images) != 1 || images[0].Data != "https://cdn.x/img.png?v=2" {

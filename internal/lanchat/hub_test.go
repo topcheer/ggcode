@@ -225,10 +225,6 @@ func TestMessageIsBroadcast(t *testing.T) {
 	}
 }
 
-// TestPresenceNoDuplicateJoinAfterRecovery verifies that when a peer goes
-// offline and recovers within peerDeleteAfter, no duplicate "is online"
-// notification is fired. The notifiedJoin flag must persist across the
-// offline→online transition.
 func TestPresenceNoDuplicateJoinAfterRecovery(t *testing.T) {
 	tmp := t.TempDir()
 	store := NewStore(tmp)
@@ -290,9 +286,6 @@ func TestPresenceNoDuplicateJoinAfterRecovery(t *testing.T) {
 	}
 }
 
-// TestPresenceLeaveNotificationDelayed verifies that the leave notification
-// is delayed by offlineNotifyDelay. A peer that goes offline and stays
-// offline should only fire leave after the delay period.
 func TestPresenceLeaveNotificationDelayed(t *testing.T) {
 
 	origDelay := offlineNotifyDelay
@@ -350,9 +343,6 @@ func TestPresenceLeaveNotificationDelayed(t *testing.T) {
 	}
 }
 
-// TestPresenceLeaveSuppressedOnQuickRecovery verifies that if a peer
-// goes offline and recovers within offlineNotifyDelay, NO leave
-// notification is fired at all.
 func TestPresenceLeaveSuppressedOnQuickRecovery(t *testing.T) {
 	origDelay := offlineNotifyDelay
 	origOffline := ageOffline
@@ -402,9 +392,6 @@ func TestPresenceLeaveSuppressedOnQuickRecovery(t *testing.T) {
 	}
 }
 
-// TestPresencePeerDeletedAfterLongAbsence verifies that a peer is only
-// deleted from the map after peerDeleteAfter, and that deletion clears
-// notifiedNicks so a future re-appearance gets a fresh join notification.
 func TestPresencePeerDeletedAfterLongAbsence(t *testing.T) {
 	origDelete := peerDeleteAfter
 	origOffline := ageOffline
@@ -461,9 +448,6 @@ func TestPresencePeerDeletedAfterLongAbsence(t *testing.T) {
 	}
 }
 
-// TestPresenceNoMDNSBasedDeletion verifies that a peer is NOT deleted
-// just because mDNS didn't see it in the current discovery results,
-// even if it's offline.
 func TestPresenceNoMDNSBasedDeletion(t *testing.T) {
 	origOffline := ageOffline
 	ageOffline = 2 * time.Second
@@ -494,11 +478,6 @@ func TestPresenceNoMDNSBasedDeletion(t *testing.T) {
 	}
 }
 
-// TestPresenceHeartbeatProbesAllPeers verifies that UpdatePeers probes
-// ALL known peers whose LastSeen is stale — even peers that are NOT in
-// the current mDNS discovery results. This ensures liveness checking is
-// decoupled from mDNS: a peer missed by mDNS but alive on HTTP still
-// gets probed and stays online.
 func TestPresenceHeartbeatProbesAllPeers(t *testing.T) {
 	origHeartbeat := presenceHeartbeat
 	presenceHeartbeat = 50 * time.Millisecond
@@ -846,16 +825,12 @@ func TestParseNickRoleTeamEmptyParts(t *testing.T) {
 	}
 }
 
-// TestHandleIncomingMessage_FiresOnInboundDM verifies that HandleIncomingMessage
-// (the HTTP transport path) fires the onInboundDM callback for non-broadcast DMs.
-// Previously this callback was only fired from handleReceiveMessageData (UDP path),
-// causing the rate limiter to never reset when messages arrived via HTTP.
 func TestHandleIncomingMessage_FiresOnInboundDM(t *testing.T) {
 	tmp := t.TempDir()
 	store := NewStore(tmp)
 	hub := NewHub("node-self", "tui", "http://localhost:1", "", store, WorkspaceMeta{Workspace: "/tmp/test"})
 
-	var gotInbound atomic.Value // string
+	var gotInbound atomic.Value
 	hub.SetOnInboundDM(func(fromNodeID string) {
 		gotInbound.Store(fromNodeID)
 	})
@@ -888,17 +863,12 @@ func TestHandleIncomingMessage_FiresOnInboundDM(t *testing.T) {
 	}
 }
 
-// TestHandleIncomingMessage_ReplayWindowDropsStaleSigned verifies the r20
-// replay-freshness gate (#3402 follow-up): a signed message whose timestamp
-// is outside the ±15min window is dropped BEFORE dedup marking, so it never
-// reaches history and never poisons the seenMsgIDs FIFO. Unsigned messages
-// bypass the gate entirely.
 func TestHandleIncomingMessage_ReplayWindowDropsStaleSigned(t *testing.T) {
 	tmp := t.TempDir()
 	store := NewStore(tmp)
 	hub := NewHub("node-self", "tui", "http://localhost:1", "", store, WorkspaceMeta{Workspace: "/tmp/test"})
 
-	var gotInbound atomic.Value // string
+	var gotInbound atomic.Value
 	hub.SetOnInboundDM(func(fromNodeID string) { gotInbound.Store(fromNodeID) })
 
 	stale := Message{
@@ -961,8 +931,6 @@ func TestHandleIncomingMessage_ReplayWindowDropsStaleSigned(t *testing.T) {
 	}
 }
 
-// TestHandleIncomingMessage_BroadcastDoesNotFireOnInboundDM verifies that
-// broadcast messages do NOT trigger the onInboundDM callback.
 func TestHandleIncomingMessage_BroadcastDoesNotFireOnInboundDM(t *testing.T) {
 	tmp := t.TempDir()
 	store := NewStore(tmp)

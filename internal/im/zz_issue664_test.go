@@ -6,11 +6,6 @@ import (
 	"time"
 )
 
-// TestMatrixRetryAfterClamp verifies #664: the server-controlled
-// retry_after_ms value must be clamped to a sane maximum BEFORE the
-// float64→Duration multiplication. Values above ~9.22e12 ms (or +Inf) used
-// to wrap to a large negative Duration, making time.After(negative) fire
-// immediately and bypass the homeserver's backoff signal.
 func TestMatrixRetryAfterClamp(t *testing.T) {
 	tests := []struct {
 		name string
@@ -38,9 +33,6 @@ func TestMatrixRetryAfterClamp(t *testing.T) {
 	}
 }
 
-// TestMatrixRetryAfterOverflowRegression is the concrete regression from the
-// issue: the raw conversion of 9.3e12 ms wraps negative, while the clamped
-// helper returns a positive, bounded duration.
 func TestMatrixRetryAfterOverflowRegression(t *testing.T) {
 
 	ms := float64(9.3e12)

@@ -24,21 +24,16 @@ import (
 )
 
 const (
-	mattermostDefaultMaxPostLen = 16383 // Official hard limit: https://docs.mattermost.com/administration-guide/manage/product-limits.html
+	mattermostDefaultMaxPostLen = 16383
 	mattermostAPIVersion        = "api/v4"
-	// mattermostHealthySession is how long a connection must stay up
-	// before a disconnect is treated as a fresh transient (backoff reset)
-	// - same threshold family as matrix #432 / irc #3562.
-	mattermostHealthySession  = 60 * time.Second
-	mattermostConnectTimeout  = 20 * time.Second
-	mattermostHeartbeatPeriod = 30 * time.Second
-	mattermostDedupMaxSize    = 1000
-	mattermostRequestTimeout  = 30 * time.Second
-	mattermostInterMsgDelay   = 200 * time.Millisecond // Small delay between multi-chunk sends to avoid overwhelming self-hosted servers
+	mattermostHealthySession    = 60 * time.Second
+	mattermostConnectTimeout    = 20 * time.Second
+	mattermostHeartbeatPeriod   = 30 * time.Second
+	mattermostDedupMaxSize      = 1000
+	mattermostRequestTimeout    = 30 * time.Second
+	mattermostInterMsgDelay     = 200 * time.Millisecond
 )
 
-// mattermostWSReadTimeout is a var so tests can shorten it (deadline
-// renewal can then be exercised in milliseconds instead of 60s).
 var mattermostWSReadTimeout = mattermostHeartbeatPeriod + 30*time.Second
 
 type mattermostAdapter struct {
@@ -47,26 +42,21 @@ type mattermostAdapter struct {
 	baseURL string
 	token   string
 
-	// Bot identity (fetched after connect)
 	botUserID   string
 	botUsername string
-	teamName    string // first team slug, for ContactURI
+	teamName    string
 
-	// Policies
 	requireMention bool
 	freeChannels   []string
-	replyMode      string // "thread" or "off"
+	replyMode      string
 	allowedUsers   []string
 
-	mu        sync.RWMutex
-	ws        *websocket.Conn
-	writeMu   sync.Mutex // protects websocket writes (gorilla/websocket not concurrent-safe)
-	conn      *http.Client
-	connected bool
-	closed    bool
-	// healthyAt marks when the current websocket connection was
-	// established (#3565); run() uses it to reset the backoff ladder after
-	// a healthy session. Only the run-loop goroutine reads and writes it.
+	mu          sync.RWMutex
+	ws          *websocket.Conn
+	writeMu     sync.Mutex
+	conn        *http.Client
+	connected   bool
+	closed      bool
 	healthyAt   time.Time
 	seen        map[string]time.Time
 	reactionAck reactionAckState
@@ -442,25 +432,12 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 	}
 }
 
-// mattermostUsernameContChars are the characters that may legally continue
-// a Mattermost username after a prefix (#4322): server charset is
-// ^[a-z0-9.\-_]+$ (mattermost/server validUsernameChars), so if the byte
-// following a candidate match is one of these, the match is a strict PREFIX
-// of a longer username and must not count.
 const mattermostUsernameContChars = "abcdefghijklmnopqrstuvwxyz0123456789._-"
 
-// mattermostIsUsernameContByte reports whether b may continue a username.
 func mattermostIsUsernameContByte(b byte) bool {
 	return strings.IndexByte(mattermostUsernameContChars, b) >= 0
 }
 
-// mentionsMattermostHandle reports whether text contains "@handle" NOT
-// followed by a legal username continuation character. RE2's \b is an
-// ASCII word boundary that can never match when the handle ends with "-"
-// or "." (legal username endings like "dev-", "ops1."), so the boundary is
-// a post-match check instead (#4322, same fix shape as Matrix #2749).
-// The short-name guard from #963 is preserved: "al" does not match "@alex"
-// because "e" is a continuation byte.
 func mentionsMattermostHandle(lower, handle string) bool {
 	needle := "@" + strings.ToLower(handle)
 	for start := 0; ; {
@@ -477,11 +454,6 @@ func mentionsMattermostHandle(lower, handle string) bool {
 	}
 }
 
-// stripMattermostHandle removes "@handle" occurrences that are not
-// prefixes of a longer username (same boundary rule as
-// mentionsMattermostHandle). Case-insensitive matching happens in the
-// ORIGINAL text's coordinate system via the package-wide ASCII fold
-// (#3572 lesson: never locate in ToLower and consume in the original).
 func stripMattermostHandle(text, handle string) string {
 	needle := "@" + strings.ToLower(handle)
 	var b strings.Builder
@@ -574,8 +546,6 @@ func (a *mattermostAdapter) sendText(ctx context.Context, channelID, rootID, tex
 	return a.sendTextWithFiles(ctx, channelID, rootID, text, nil)
 }
 
-// sendTextWithFiles sends text (optionally with file attachments) to a Mattermost channel.
-// File attachments are only attached to the first chunk; subsequent chunks are plain text.
 func (a *mattermostAdapter) sendTextWithFiles(ctx context.Context, channelID, rootID, text string, fileIDs []string) error {
 	if text == "" && len(fileIDs) == 0 {
 		return nil
@@ -624,9 +594,6 @@ func (a *mattermostAdapter) sendTextWithFiles(ctx context.Context, channelID, ro
 	return nil
 }
 
-// TriggerTyping adds a reaction acknowledgement to the latest real user post
-// when possible, and falls back to the native "user is typing" WebSocket
-// broadcast when there is no target post yet.
 func (a *mattermostAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 	channelID := strings.TrimSpace(binding.ChannelID)
 	if channelID == "" {
@@ -711,7 +678,6 @@ func (a *mattermostAdapter) apiPost(path string, payload map[string]any) (map[st
 	return a.apiPostCtx(context.Background(), path, payload)
 }
 
-// apiPostCtx sends a POST request with context and 429 rate-limit retry.
 func (a *mattermostAdapter) apiPostCtx(ctx context.Context, path string, payload map[string]any) (map[string]any, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -779,8 +745,6 @@ func (a *mattermostAdapter) publishState(healthy bool, status, lastErr string) {
 	})
 }
 
-// fetchTeamInfo gets the bot's first team slug for building a ContactURI deep link.
-// GET /api/v4/users/me/teams → [{"name":"team-slug", ...}, ...]
 func (a *mattermostAdapter) fetchTeamInfo(ctx context.Context) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.apiURL("users/me/teams"), nil)
 	if err != nil {
@@ -810,7 +774,6 @@ func (a *mattermostAdapter) fetchTeamInfo(ctx context.Context) {
 	}
 }
 
-// resolveImageToBytes resolves an ExtractedImage to raw bytes and MIME type.
 func (a *mattermostAdapter) resolveImageToBytes(ctx context.Context, img ExtractedImage) ([]byte, string, error) {
 	switch img.Kind {
 	case "data":
@@ -878,8 +841,6 @@ func (a *mattermostAdapter) resolveImageToBytes(ctx context.Context, img Extract
 	}
 }
 
-// uploadFile uploads a file to Mattermost via multipart form POST and returns the file ID.
-// API: POST /api/v4/files?channel_id=<channel_id>
 func (a *mattermostAdapter) uploadFile(ctx context.Context, channelID string, data []byte, mimeType string) (string, error) {
 
 	ext := ".png"
@@ -928,7 +889,6 @@ func (a *mattermostAdapter) uploadFile(ctx context.Context, channelID string, da
 		return "", fmt.Errorf("upload file → %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	// Mattermost API v4 returns an array of FileInfo objects
 	var fileInfos []map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&fileInfos); err != nil {
 		return "", fmt.Errorf("decode upload response: %w", err)

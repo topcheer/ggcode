@@ -41,8 +41,6 @@ func pairingMsg(adapter, channelID, messageID, text string, at time.Time) Inboun
 	}
 }
 
-// agePendingPairing rewinds the pending challenge's timestamps by d so tests
-// can simulate elapsed time without waiting.
 func agePendingPairing(mgr *Manager, d time.Duration) {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
@@ -59,10 +57,10 @@ func TestPairingChallengeTTLExpiry(t *testing.T) {
 	tests := []struct {
 		name         string
 		age          time.Duration
-		otherChan    bool   // request comes from a different channel
-		wantStale    bool   // true = stale slot must be dropped, new challenge created
-		wantHeld     bool   // true = old slot must be kept ("other channel waiting" reply)
-		wantReplyHas string // substring expected in reply
+		otherChan    bool
+		wantStale    bool
+		wantHeld     bool
+		wantReplyHas string
 	}{
 		{
 			name:         "same channel within TTL keeps challenge",

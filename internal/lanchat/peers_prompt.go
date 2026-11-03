@@ -7,10 +7,6 @@ import (
 	"time"
 )
 
-// lanchatPeersInfo builds a dynamic system prompt section listing all online
-// lanchat peers. It shows both busy and idle agents, and specially marks peers
-// in the same workspace to highlight collaboration opportunities and
-// file-edit conflict risks.
 func FormatPeersInfo(hub *Hub, workspace string) string {
 	if hub == nil || workspace == "" {
 		return ""
@@ -28,8 +24,8 @@ func FormatPeersInfo(hub *Hub, workspace string) string {
 		languages string
 		busy      bool
 		sameWS    bool
-		health    string // "" healthy; "quota"/"rate_limited"/"auth" degraded
-		since     int64  // unix; degraded since
+		health    string
+		since     int64
 		model     string
 	}
 

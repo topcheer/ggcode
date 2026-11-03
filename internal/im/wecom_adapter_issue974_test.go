@@ -14,11 +14,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// wecomIssue974Gateway runs an httptest server that upgrades to WebSocket and
-// answers every outbound frame with an ack echoing its req_id, using the
-// (errcode, errmsg) produced by respond. The adapter is wired to the server
-// side directly (no dial), so Send() exercises the full
-// writeAndAwaitAck -> dispatchPayload ack routing path deterministically.
 func wecomIssue974Gateway(t *testing.T, respond func(cmd string, frame map[string]any) (int, string, bool)) (*wecomAdapter, func()) {
 	t.Helper()
 	upgrader := websocket.Upgrader{}
@@ -93,9 +88,6 @@ func wecomIssue974Gateway(t *testing.T, respond func(cmd string, frame map[strin
 	return a, cleanup
 }
 
-// TestWeComSendErrcodeRejected is the #974 medium fix: an async server
-// rejection (here: 45009 rate limit) must surface as a Send error instead of
-// being silently dropped after a successful WriteJSON.
 func TestWeComSendErrcodeRejected(t *testing.T) {
 	a, cleanup := wecomIssue974Gateway(t, func(cmd string, frame map[string]any) (int, string, bool) {
 		if cmd == wecomCmdSend {
@@ -115,8 +107,6 @@ func TestWeComSendErrcodeRejected(t *testing.T) {
 	}
 }
 
-// TestWeComSendAckSuccess verifies the happy path still succeeds: errcode 0
-// ack resolves the pending waiter with nil.
 func TestWeComSendAckSuccess(t *testing.T) {
 	a, cleanup := wecomIssue974Gateway(t, func(cmd string, frame map[string]any) (int, string, bool) {
 		if cmd == wecomCmdSend {
@@ -132,8 +122,6 @@ func TestWeComSendAckSuccess(t *testing.T) {
 	}
 }
 
-// TestWeComSendNoAckTimesOut: when the server never answers, the pending
-// waiter must time out and return an error instead of blocking forever.
 func TestWeComSendNoAckTimesOut(t *testing.T) {
 	a, cleanup := wecomIssue974Gateway(t, func(string, map[string]any) (int, string, bool) {
 		return 0, "", false
@@ -154,9 +142,6 @@ func TestWeComSendNoAckTimesOut(t *testing.T) {
 	}
 }
 
-// TestWeComRespondFallsBackOnErrcode: a rejected respond_msg (reply quota
-// exhausted) must fall back to send_msg, and the fallback's own ack is
-// verified - the caller still gets delivery confirmation.
 func TestWeComRespondFallsBackOnErrcode(t *testing.T) {
 	var mu sync.Mutex
 	var cmds []string
@@ -191,8 +176,6 @@ func TestWeComRespondFallsBackOnErrcode(t *testing.T) {
 	}
 }
 
-// TestWeComRespondAckSuccess: an acked respond_msg completes without a
-// proactive fallback.
 func TestWeComRespondAckSuccess(t *testing.T) {
 	var mu sync.Mutex
 	var cmds []string
@@ -220,8 +203,6 @@ func TestWeComRespondAckSuccess(t *testing.T) {
 	}
 }
 
-// TestWeComDispatchPayloadResolvesPendingAck verifies the ack-routing branch
-// directly, including the errcode!=0 conversion.
 func TestWeComDispatchPayloadResolvesPendingAck(t *testing.T) {
 	a := &wecomAdapter{}
 	ch := make(chan error, 1)
@@ -243,9 +224,6 @@ func TestWeComDispatchPayloadResolvesPendingAck(t *testing.T) {
 	}
 }
 
-// TestWeComReplyReqIDOldestEviction drives handleMessage with more inbound
-// msgids than wecomDedupMaxSize: eviction must drop the OLDEST req_id (the
-// random map-entry eviction could drop exactly the req_id a reply needs).
 func TestWeComReplyReqIDOldestEviction(t *testing.T) {
 	a := &wecomAdapter{name: "t", seen: map[string]time.Time{}, replyReqIDs: map[string]string{}}
 
@@ -275,8 +253,6 @@ func TestWeComReplyReqIDOldestEviction(t *testing.T) {
 	}
 }
 
-// TestWeComReqIDUniqueness: req_ids key the pending-ack table, so two sends
-// in the same nanosecond must still produce distinct ids.
 func TestWeComReqIDUniqueness(t *testing.T) {
 	const n = 1000
 	ids := make(map[string]bool, n)

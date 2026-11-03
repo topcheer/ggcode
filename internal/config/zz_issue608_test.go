@@ -7,12 +7,6 @@ import (
 	"testing"
 )
 
-// TestIssue608VendorsEnvRefsPreservedOnSave is the regression test for #608:
-// vendors.yaml may reference environment variables (${VAR}) in fields like
-// base_url / display_name / models / tags. Load() expands them into memory and
-// auto-saves — before the fix, SaveVendors rewrote the file with the
-// materialized literal values, destroying the env references. After the fix,
-// a ${VAR} leaf whose expansion equals the in-memory value is kept verbatim.
 func TestIssue608VendorsEnvRefsPreservedOnSave(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")
@@ -84,10 +78,6 @@ verfoov:
 	}
 }
 
-// TestIssue608ChangedValueStillOverwritesEnvRef: if the in-memory value no
-// longer matches the expansion of the on-disk ${VAR} reference (the user
-// actually changed it), the new literal value must be written — the #608 fix
-// must not pin stale references.
 func TestIssue608ChangedValueStillOverwritesEnvRef(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")

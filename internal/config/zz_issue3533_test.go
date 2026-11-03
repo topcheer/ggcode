@@ -14,8 +14,6 @@ const shiftYAML = "" +
 	"  headers:\n" +
 	"    Authorization: Bearer ${TESTVAR_3533}\n"
 
-// The issue's headline case: remove the leading server; the trailing
-// server's ${VAR} header must survive the save with zero value edits.
 func TestIssue3533_RemoveLeadingServerKeepsTrailingRef(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TESTVAR_3533", "shifted-secret")
@@ -49,7 +47,6 @@ func TestIssue3533_RemoveLeadingServerKeepsTrailingRef(t *testing.T) {
 	}
 }
 
-// Reorder: both servers keep their own ${VAR} refs after the swap.
 func TestIssue3533_ReorderKeepsRefsOnOwnServers(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TESTVAR_3533", "reordered-secret")
@@ -89,8 +86,6 @@ func TestIssue3533_ReorderKeepsRefsOnOwnServers(t *testing.T) {
 	}
 }
 
-// Alignment unit: names drive matching; anonymous entries fall back to
-// positional order; duplicates consume distinct existing entries.
 func TestIssue3533_AlignByName(t *testing.T) {
 	existing := []interface{}{
 		map[string]interface{}{"name": "a", "v": "1"},

@@ -10,8 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// resetProbeCacheForTest isolates the probe cache for the test: no auto-load
-// from the real config dir, and writes go to a temp HOME (set via t.Setenv).
 func resetProbeCacheForTest(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())

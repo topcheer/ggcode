@@ -2,8 +2,6 @@ package provider
 
 import "testing"
 
-// Regression for #1618-A: non-text blocks make calibration samples
-// asymmetric - the helper is the gate that keeps them out.
 func TestMessagesContainNonTextBlocks(t *testing.T) {
 	pure := []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}}
 	if messagesContainNonTextBlocks(pure) {

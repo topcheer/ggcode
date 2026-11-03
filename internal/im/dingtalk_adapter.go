@@ -24,11 +24,9 @@ import (
 const (
 	dingtalkAPIBase = "https://api.dingtalk.com"
 
-	// DataFrame types (from official SDK payload/data_frame.go)
 	dingtalkSubCallback = "CALLBACK"
 	dingtalkSubEvent    = "EVENT"
 
-	// DataFrame header keys
 	dfHeaderTopic       = "topic"
 	dfHeaderContentType = "contentType"
 	dfHeaderMessageID   = "messageId"
@@ -38,30 +36,23 @@ const (
 
 	dfStatusOK = 200
 
-	// Callback topics (from official SDK payload/utils.go)
 	dingtalkBotCallbackTopic      = "/v1.0/im/bot/messages/get"
 	dingtalkCardCallbackTopic     = "/v1.0/card/instances/callback"
 	dingtalkSystemPingTopic       = "ping"
 	dingtalkSystemDisconnectTopic = "disconnect"
 
-	// Heartbeat and reconnect intervals (from official SDK)
 	wsPingInterval = 120 * time.Second
 	wsPongWait     = 5 * time.Second
-	wsReadTimeout  = wsPingInterval + 30*time.Second // must exceed ping interval
+	wsReadTimeout  = wsPingInterval + 30*time.Second
 	reconnectDelay = 3 * time.Second
 
-	// DingTalk limits each robot to 20 messages per minute. Sending multi-chunk
-	// messages without delay can trigger rate limiting and get blocked for 10 min.
-	// Source: https://help.dingtalk.io/open/development/call-frequency-limit
 	dingtalkInterMsgDelay = 3 * time.Second
 )
 
 var (
 	dingtalkMarkdownLinkRe      = regexp.MustCompile(`\[(.*?)\]\((.*?)\)`)
 	dingtalkOrderedListPrefixRe = regexp.MustCompile(`^\d+[.)]\s+`)
-	// dingtalkImageToLinkRe converts ![alt](url) → [alt](url) for platforms
-	// that don't render inline markdown images reliably.
-	dingtalkImageToLinkRe = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
+	dingtalkImageToLinkRe       = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
 )
 
 type dingtalkDataFrame struct {
@@ -109,25 +100,19 @@ type dingtalkAdapter struct {
 	httpClient *http.Client
 
 	mu          sync.RWMutex
-	writeMu     sync.Mutex // protects websocket writes
+	writeMu     sync.Mutex
 	accessToken string
 	tokenExpire time.Time
 	ws          *websocket.Conn
 	connected   bool
 	cancel      context.CancelFunc
 
-	// callbacks caches per-user (staffId-keyed) callback routing context so
-	// Send/TriggerTyping always address the binding's user instead of a global
-	// "most recent callback" that any unbound user could hijack (#948).
-	// Guarded by cacheMu. Lazily initialized; nil map reads are safe.
 	cacheMu   sync.RWMutex
 	callbacks map[string]dingtalkCallbackContext
 
-	reactedMsgs map[string]bool // Dedup: messages already reacted to
+	reactedMsgs map[string]bool
 }
 
-// dingtalkCallbackContext captures routing info from one inbound bot callback,
-// keyed by the sender's staffId (== binding.ChannelID).
 type dingtalkCallbackContext struct {
 	webhook   string
 	robotCode string
@@ -135,9 +120,6 @@ type dingtalkCallbackContext struct {
 	msgID     string
 }
 
-// recordCallbackContext stores the callback context under the sender's
-// channel (staffId). Writing before binding validation is safe because the
-// cache is only ever read back keyed by a bound user's ChannelID (#948).
 func (a *dingtalkAdapter) recordCallbackContext(channelID string, c dingtalkCallbackContext) {
 	if channelID == "" {
 		return
@@ -157,7 +139,6 @@ func (a *dingtalkAdapter) recordCallbackContext(channelID string, c dingtalkCall
 	a.cacheMu.Unlock()
 }
 
-// callbackContext returns the cached routing context for a user, if any.
 func (a *dingtalkAdapter) callbackContext(channelID string) (dingtalkCallbackContext, bool) {
 	a.cacheMu.RLock()
 	c, ok := a.callbacks[channelID]
@@ -182,8 +163,6 @@ func newDingtalkAdapter(name string, mgr *Manager, adapterCfg config.IMAdapterCo
 	}, nil
 }
 
-// client returns the adapter's HTTP client, initializing one on first use
-// if the constructor didn't set it (e.g. in tests).
 func (a *dingtalkAdapter) client() *http.Client {
 	if a.httpClient == nil {
 		a.httpClient = util.NewInsecureAwareClient(30 * time.Second)
@@ -215,7 +194,6 @@ func (a *dingtalkAdapter) Stop() {
 	a.mu.Unlock()
 }
 
-// Close implements io.Closer for adapter lifecycle.
 func (a *dingtalkAdapter) Close() error {
 	a.Stop()
 	return nil
@@ -269,10 +247,6 @@ func (a *dingtalkAdapter) run(ctx context.Context) {
 	}
 }
 
-// backoffFor returns the reconnect delay and the next attempt counter for a
-// serve result. A nil err means the connection served until a clean
-// disconnect — the counter is reset so the NEXT first retry uses the short
-// delay instead of the capped one (#389; parity with discord_adapter.run).
 func backoffFor(err error, attempt int, backoffs []time.Duration) (time.Duration, int) {
 	if err == nil {
 		attempt = 0
@@ -481,7 +455,6 @@ func (a *dingtalkAdapter) processBotCallback(ctx context.Context, frame dingtalk
 	}
 }
 
-// sendFrameResponse sends a DataFrame ACK back to the server.
 func (a *dingtalkAdapter) sendFrameResponse(conn *websocket.Conn, reqFrame dingtalkDataFrame, code int, data string) {
 	resp := dingtalkDataFrameResponse{
 		Code: code,
@@ -696,15 +669,6 @@ func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, even
 	return nil
 }
 
-// sendMarkdownViaWebhook sends a reply using the sessionWebhook URL from the callback.
-// This is the official SDK's method for replying to bot messages.
-// dingTalkRateLimitErrcodes contains errcodes that indicate DingTalk rate limiting.
-// When these codes appear, the send should retry with backoff rather than failing.
-// Sources:
-//   - 90002: Global rate limit triggered (all orgs/apps on the platform).
-//     https://help.dingtalk.io/open/development/call-frequency-limit
-//   - 130101: Custom robot webhook frequency limit (20 messages/minute per robot).
-//     https://open.dingtalk.com/document/orgapp/custom-robot-access
 var dingTalkRateLimitErrcodes = map[int]bool{90002: true, 130101: true}
 
 func (a *dingtalkAdapter) sendMarkdownViaWebhook(ctx context.Context, webhookURL, text, robotCode string) error {
@@ -743,8 +707,6 @@ func (a *dingtalkAdapter) sendMarkdownViaWebhook(ctx context.Context, webhookURL
 		if resp.StatusCode != http.StatusOK {
 			return fmt.Errorf("webhook send HTTP %d: %s", resp.StatusCode, redactDingTalkResponse(string(respBody)))
 		}
-		// DingTalk returns HTTP 200 with errcode in JSON body on failure
-		// (rate limits, content too long, etc.). Must check errcode.
 		var wresp struct {
 			ErrCode int    `json:"errcode"`
 			ErrMsg  string `json:"errmsg"`
@@ -766,8 +728,6 @@ func (a *dingtalkAdapter) sendMarkdownViaWebhook(ctx context.Context, webhookURL
 	return rateLimitExhausted("DingTalk webhook")
 }
 
-// sendMarkdownViaAPI sends a message via the DingTalk REST API (for outbound messages
-// not triggered by a callback, e.g. proactive messages).
 func (a *dingtalkAdapter) sendMarkdownViaAPI(ctx context.Context, binding ChannelBinding, text string) error {
 	a.mu.RLock()
 	token := a.accessToken
@@ -973,9 +933,6 @@ func redactSecret(value string) string {
 	return string([]rune(value)[:4]) + "..." + string([]rune(value)[len([]rune(value))-4:])
 }
 
-// TriggerTyping adds a thumbs-up reaction to the latest inbound message,
-// providing visual feedback that the bot received the message and is processing.
-// Uses DingTalk's robot messageReactions API.
 func (a *dingtalkAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 
 	convID := ""

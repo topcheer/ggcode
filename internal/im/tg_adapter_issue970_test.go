@@ -13,8 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// newTGTestAdapter builds a tgAdapter pointed at the given fake API base with
-// the connection flag already set so SendInteractive does not short-circuit.
 func newTGTestAdapter(apiBase, parseMode string) *tgAdapter {
 	a := &tgAdapter{
 		name:       "test",
@@ -30,10 +28,6 @@ func newTGTestAdapter(apiBase, parseMode string) *tgAdapter {
 	return a
 }
 
-// TestTGSendInteractiveReturnsMessageID verifies that SendInteractive extracts
-// a non-empty message_id from the sendMessage response. Previously it decoded
-// the already-consumed resp.Body (apiRequest reads and closes it), hit EOF and
-// silently returned "" (issue #970, high).
 func TestTGSendInteractiveReturnsMessageID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/botTESTTOKEN/sendMessage") {
@@ -69,9 +63,6 @@ func TestTGSendInteractiveReturnsMessageID(t *testing.T) {
 	}
 }
 
-// TestTGDownloadFileUsesAPIBase verifies downloadTGFile builds the download
-// URL from the configured api_root (a.apiBase) instead of the hardcoded
-// api.telegram.org host (issue #970, medium).
 func TestTGDownloadFileUsesAPIBase(t *testing.T) {
 	getFileHit := false
 	downloadHit := false
@@ -111,10 +102,6 @@ func TestTGDownloadFileUsesAPIBase(t *testing.T) {
 	}
 }
 
-// TestTGFormatMessagesEscapeBeforeSplit verifies legacy MarkdownV2 mode
-// escapes BEFORE splitting, so no chunk can exceed tgMaxTextLen (4096) even
-// when every character is a special char that gains a backslash (issue #970,
-// medium). Previously 4096 '*' runes split first became 8192 after escaping.
 func TestTGFormatMessagesEscapeBeforeSplit(t *testing.T) {
 	a := newTGTestAdapter("", "MarkdownV2")
 
@@ -139,8 +126,6 @@ func TestTGFormatMessagesEscapeBeforeSplit(t *testing.T) {
 	}
 }
 
-// TestTGTruncateRunesDanglingEscape verifies caption truncation drops a
-// trailing MarkdownV2 escape backslash at the cut point.
 func TestTGTruncateRunesDanglingEscape(t *testing.T) {
 	if got := truncateTGRunes("abc\\", 10); got != "abc\\" {
 		t.Fatalf("no-truncation case changed input: %q", got)
@@ -151,7 +136,6 @@ func TestTGTruncateRunesDanglingEscape(t *testing.T) {
 	}
 }
 
-// TestTGParseIntOverflow verifies parseInt rejects values overflowing int64.
 func TestTGParseIntOverflow(t *testing.T) {
 	if _, err := parseInt("9223372036854775808"); err == nil {
 		t.Fatal("parseInt accepted int64 overflow value 2^63")

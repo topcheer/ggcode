@@ -6,9 +6,6 @@ import (
 	"google.golang.org/genai"
 )
 
-// #2282: Gemini must consume the sampling override's MaxTokens like the
-// other two providers - MCP sampling budgets used to run to the model
-// default on this backend.
 func TestIssue2282GeminiConsumesOverrideMaxTokens(t *testing.T) {
 	g := &GeminiProvider{temperature: 0.7}
 	so := SamplingOverrideSetter(g)

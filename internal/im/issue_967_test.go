@@ -16,7 +16,6 @@ type okBridge967 struct{}
 
 func (okBridge967) SubmitInboundMessage(context.Context, InboundMessage) error { return nil }
 
-// countingSink967 is a Sink+Closer that records Close calls (stopAdapter cascade).
 type countingSink967 struct {
 	mu     sync.Mutex
 	closed int
@@ -38,9 +37,6 @@ func (s *countingSink967) closeCount() int {
 	return s.closed
 }
 
-// newManager967 builds a Manager with a live session and (optionally) a live
-// peer instance registered in the instance-detect dir, so
-// foreignOwnerPossiblyAliveLocked returns true.
 func newManager967(t *testing.T, withLivePeer bool) (*Manager, *MemoryBindingStore) {
 	t.Helper()
 	dir := t.TempDir()

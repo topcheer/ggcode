@@ -6,14 +6,11 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// FallbackTranscriber tries the primary transcriber first, then falls back to the secondary.
 type FallbackTranscriber struct {
 	primary   Transcriber
 	secondary Transcriber
 }
 
-// NewFallback creates a transcriber that tries primary first, then secondary on failure.
-// Either can be nil and will be skipped.
 func NewFallback(primary, secondary Transcriber) *FallbackTranscriber {
 	return &FallbackTranscriber{primary: primary, secondary: secondary}
 }

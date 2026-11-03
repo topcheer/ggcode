@@ -6,16 +6,6 @@ import (
 	"testing"
 )
 
-// TestIssue2774BetaHeaderAggregation pins #2774: every enabled
-// anthropic-beta token (interleaved-thinking for manual thinking + tools,
-// programmatic-tool-calling for the PTC server tool, advanced-tool-use for
-// tool search) must aggregate into ONE comma-separated anthropic-beta
-// header value. The pre-fix code emitted multiple option.WithHeader calls
-// on the same key - SDK WithHeader is Header.Set (last one wins), so the
-// PTC token silently dropped the interleaved-thinking token (hard 400 when
-// both features are configured), and the thinking/effort retry paths
-// rebuilt options without the PTC header while params still declared the
-// code_execution tool.
 func TestIssue2774BetaHeaderAggregation(t *testing.T) {
 	p := NewAnthropicProvider("k", "claude-x", 8192)
 	p.SetThinkingMode("manual")
@@ -54,11 +44,6 @@ func TestIssue2774BetaHeaderAggregation(t *testing.T) {
 	}
 }
 
-// TestIssue2774RetryPathsKeepFullBetaSet pins Bug B at the source level:
-// after the fix no call site may rebuild beta options from a subset (the
-// thinking/effort retries used to drop the PTC token while params still
-// declared the code_execution tool). The single aggregator is the only
-// emitter of the anthropic-beta header key.
 func TestIssue2774RetryPathsKeepFullBetaSet(t *testing.T) {
 	src, err := readFileForIssue2774("anthropic.go")
 	if err != nil {
@@ -74,7 +59,6 @@ func TestIssue2774RetryPathsKeepFullBetaSet(t *testing.T) {
 	}
 }
 
-// readFileForIssue2774 loads a source file from the package directory.
 func readFileForIssue2774(name string) (string, error) {
 	data, err := os.ReadFile(name)
 	return string(data), err

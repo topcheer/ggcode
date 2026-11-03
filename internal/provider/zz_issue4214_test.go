@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// #4214: --llm-retry-always must not retry a context overflow. The request
-// body is deterministic - resending the same bytes can never fit - so the
-// old ordering (retryAlways checked before the overflow classifier) spun
-// unattended pipes through 2^30 attempts on a zero-probability retry.
 func TestRetryAlwaysDoesNotRetryContextOverflow(t *testing.T) {
 	SetRetryAlways(true)
 	t.Cleanup(func() { SetRetryAlways(false) })
@@ -23,8 +19,6 @@ func TestRetryAlwaysDoesNotRetryContextOverflow(t *testing.T) {
 	}
 }
 
-// Control: retry-always still lifts caps for ordinary permanent-looking
-// gateway errors (the flag's actual rationale).
 func TestRetryAlwaysStillRetriesGatewayErrors(t *testing.T) {
 	SetRetryAlways(true)
 	t.Cleanup(func() { SetRetryAlways(false) })

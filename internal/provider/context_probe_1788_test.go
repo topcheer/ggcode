@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// fakeProber1788 lets trySimpleProbe see a chosen error without network.
 type fakeProber1788 struct {
 	*mockProvider
 	err error
@@ -14,11 +13,6 @@ type fakeProber1788 struct {
 
 func (f *fakeProber1788) probeChat(_ context.Context, _ []Message) error { return f.err }
 
-// #1788: the simple probe used to return -1 (abort the ENTIRE probe,
-// caller falls back to estimation, #1198 persists it) for ANY
-// non-context error - a transient 429 at probe start could harden into
-// a low cached window. Only AUTH may abort; everything else defers to
-// tiered probing (returns 0).
 func TestSimpleProbeClassification1788(t *testing.T) {
 	cases := []struct {
 		name string

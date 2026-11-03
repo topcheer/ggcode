@@ -22,7 +22,6 @@ import (
 
 const PlatformPrivateClaw Platform = "privateclaw"
 
-// PCAdapterAPI is the exported interface for PrivateClaw adapter operations (used by TUI).
 type PCAdapterAPI interface {
 	CreateSession(ctx context.Context, label string, groupMode bool) (*PCInvite, string, error)
 	ListSessions() []PCSessionInfo
@@ -33,7 +32,6 @@ type PCAdapterAPI interface {
 	KickParticipant(sessionID, appID string) error
 }
 
-// Ensure pcAdapter satisfies PCAdapterAPI at compile time.
 var _ PCAdapterAPI = (*pcAdapter)(nil)
 
 const (
@@ -88,25 +86,16 @@ type pcAdapter struct {
 
 	mu sync.RWMutex
 
-	// connectMu serializes relay connection attempts. Without it, the
-	// RLock-check / Lock-write window in ensureConnected lets concurrent
-	// Send calls each dial their own connection; the loser is overwritten
-	// and leaks its ReadLoop + Heartbeat goroutines and WS handle. #965
 	connectMu sync.Mutex
 
-	// Context
 	ctx context.Context
 
-	// Relay connection
 	client *pcRelayClient
 
-	// Sessions
-	sessions sync.Map // sessionID → *pcSession
+	sessions sync.Map
 
-	// Persistence
 	sessionStore PCSessionStore
 
-	// Config
 	relayBaseURL   string
 	providerLabel  string
 	sessionTTLMs   int
@@ -159,7 +148,6 @@ func newPCAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapte
 	return adapter, nil
 }
 
-// getHTTPClient returns the adapter's HTTP client, initializing one on first use.
 func (a *pcAdapter) getHTTPClient() *http.Client {
 	if a.httpClient == nil {
 		a.httpClient = util.NewInsecureAwareClient(30 * time.Second)
@@ -179,8 +167,6 @@ func (a *pcAdapter) Start(ctx context.Context) {
 	a.publishState(false, "idle", "")
 }
 
-// Close disposes the relay client if one is connected. The PC adapter uses
-// lazy connections, so in the common case there is nothing to tear down.
 func (a *pcAdapter) Close() error {
 	a.mu.Lock()
 	client := a.client
@@ -256,11 +242,6 @@ func (a *pcAdapter) loadSessionsFromStore() {
 	debug.Log("pc", "restored %d sessions from store (skipped %d expired)", restored, len(loaded)-restored)
 }
 
-// resolvePCSessionID picks the sessions-map key for a binding (#2967):
-// pairing-built bindings carry TargetID = appId (ReplyBinding prefers
-// SenderID), but the map is keyed by the invite SessionID (= ChannelID on
-// the same binding). Mirror the nostr adapter fallback: if TargetID misses,
-// try ChannelID. Returns "" when neither field is set.
 func resolvePCSessionID(sessions *sync.Map, binding ChannelBinding) string {
 	sessionID := strings.TrimSpace(binding.TargetID)
 	if sessionID == "" {
@@ -360,12 +341,6 @@ func (a *pcAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 	return nil
 }
 
-// ensureConnected connects to the relay if not already connected and
-// returns the live client. #1555: callers previously re-read a.client
-// AFTER the return - a disconnect racing in that window cleared the
-// field and the read handed back nil for a fresh panic. Returning the
-// verified client closes the TOCTOU window; a client that dies mid-call
-// is handled by its own onDisconnected path, same as before.
 func (a *pcAdapter) ensureConnected(ctx context.Context) (*pcRelayClient, error) {
 	if client := a.currentClient(); client != nil && client.isAlive() {
 		return client, nil
@@ -411,17 +386,12 @@ func (a *pcAdapter) ensureConnected(ctx context.Context) (*pcRelayClient, error)
 	return client, nil
 }
 
-// currentClient returns the installed relay client (may be nil).
 func (a *pcAdapter) currentClient() *pcRelayClient {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.client
 }
 
-// handleRelayDisconnected is invoked from a relay client's ReadLoop when the
-// connection dies. It clears the dead client so ensureConnected stops
-// short-circuiting on a stale pointer, publishes the disconnect, and kicks
-// off a background reconnect with backoff. #965
 func (a *pcAdapter) handleRelayDisconnected(client *pcRelayClient, reason string) {
 	a.mu.Lock()
 	if a.client != client {
@@ -443,10 +413,6 @@ func (a *pcAdapter) handleRelayDisconnected(client *pcRelayClient, reason string
 	safego.Go("im.pc.reconnect", func() { a.reconnectLoop(ctx) })
 }
 
-// reconnectLoop retries the relay connection with exponential backoff,
-// starting at pcInitialReconnectDelay and capped at pcMaxReconnectDelay.
-// It exits as soon as any caller (including itself) establishes a live
-// connection, or when the adapter context is done.
 func (a *pcAdapter) reconnectLoop(ctx context.Context) {
 	delay := pcInitialReconnectDelay
 	for attempt := 1; ; attempt++ {
@@ -654,7 +620,6 @@ func (a *pcAdapter) sendPayload(sessionID string, sess *pcSession, payload pcPay
 	return client.SendFrame(sessionID, envelope, "")
 }
 
-// CreateSession creates a new session on the relay and returns the invite.
 func (a *pcAdapter) CreateSession(ctx context.Context, label string, groupMode bool) (*PCInvite, string, error) {
 	client, err := a.ensureConnected(ctx)
 	if err != nil {
@@ -706,7 +671,6 @@ func (a *pcAdapter) CreateSession(ctx context.Context, label string, groupMode b
 	return &invite, resp.SessionID, nil
 }
 
-// ListSessions returns info about all managed sessions.
 func (a *pcAdapter) ListSessions() []PCSessionInfo {
 	var result []PCSessionInfo
 	a.sessions.Range(func(key, value interface{}) bool {
@@ -726,7 +690,6 @@ func (a *pcAdapter) ListSessions() []PCSessionInfo {
 	return result
 }
 
-// GetSession returns a session by ID.
 func (a *pcAdapter) GetSession(sessionID string) (*pcSession, bool) {
 	v, ok := a.sessions.Load(sessionID)
 	if !ok {
@@ -735,7 +698,6 @@ func (a *pcAdapter) GetSession(sessionID string) (*pcSession, bool) {
 	return v.(*pcSession), true
 }
 
-// CloseSession closes a session on the relay.
 func (a *pcAdapter) CloseSession(sessionID string) error {
 	client, err := a.ensureConnected(context.Background())
 	if err != nil {
@@ -747,7 +709,6 @@ func (a *pcAdapter) CloseSession(sessionID string) error {
 	return err
 }
 
-// KickParticipant removes a participant from a group session.
 func (a *pcAdapter) KickParticipant(sessionID, appID string) error {
 	client, err := a.ensureConnected(context.Background())
 	if err != nil {
@@ -761,7 +722,6 @@ func (a *pcAdapter) KickParticipant(sessionID, appID string) error {
 	return client.CloseApp(sessionID, appID, "participant_removed")
 }
 
-// RenewSession renews a session's TTL.
 func (a *pcAdapter) RenewSession(ctx context.Context, sessionID string) error {
 	client, err := a.ensureConnected(ctx)
 	if err != nil {
@@ -786,7 +746,6 @@ func (a *pcAdapter) RenewSession(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-// GetInviteURI generates the invite URI for a session.
 func (a *pcAdapter) GetInviteURI(sessionID string) (string, error) {
 	sess, ok := a.GetSession(sessionID)
 	if !ok {
@@ -795,7 +754,6 @@ func (a *pcAdapter) GetInviteURI(sessionID string) (string, error) {
 	return PCEncodeInviteToURI(sess.Invite)
 }
 
-// resolvePCAttachment converts an ExtractedImage to a PrivateClaw attachment map.
 func (a *pcAdapter) resolvePCAttachment(ctx context.Context, img ExtractedImage, index int) (map[string]interface{}, error) {
 	att := map[string]interface{}{
 		"id":   pcBuildMessageID(fmt.Sprintf("att%d", index)),
@@ -911,7 +869,6 @@ func (a *pcAdapter) publishState(healthy bool, status, lastErr string) {
 	})
 }
 
-// PCSessionInfo is a summary of a session for TUI display.
 type PCSessionInfo struct {
 	SessionID        string
 	State            string
@@ -934,9 +891,7 @@ func payloadKindToRole(kind string) string {
 	}
 }
 
-// Ensure pcAdapter satisfies interfaces at compile time.
 var _ startableSink = (*pcAdapter)(nil)
 var _ Sink = (*pcAdapter)(nil)
 
-// unused import guard
 var _ = websocket.CloseMessage

@@ -42,9 +42,6 @@ func newTGAdapterFor1240(t *testing.T) (*tgAdapter, *recordingBridge1240, *Manag
 	return a, bridge, m
 }
 
-// TestTGInboundCaptionMergedIntoText pins #1240: a photo message carries its
-// accompanying instruction in caption (no text field) — the caption must
-// reach the agent instead of being silently dropped.
 func TestTGInboundCaptionMergedIntoText(t *testing.T) {
 	a, bridge, _ := newTGAdapterFor1240(t)
 
@@ -74,9 +71,6 @@ func TestTGInboundCaptionMergedIntoText(t *testing.T) {
 
 }
 
-// TestTGInboundGroupCaptionMentionStripped pins #1240's group variant: the
-// caption goes through the same structured mention stripping as text, using
-// caption_entities.
 func TestTGInboundGroupCaptionMentionStripped(t *testing.T) {
 	a, bridge, _ := newTGAdapterFor1240(t)
 	a.mu.Lock()
@@ -107,8 +101,6 @@ func TestTGInboundGroupCaptionMentionStripped(t *testing.T) {
 	}
 }
 
-// TestTGFormatMessagesHTMLEscape pins #1241: legacy HTML mode must escape
-// & < > so code snippets and comparisons don't 400 the whole message.
 func TestTGFormatMessagesHTMLEscape(t *testing.T) {
 	a := newTGTestAdapter("", "HTML")
 	msgs, err := a.formatMessages("i < len(s) & a > b")
@@ -127,9 +119,6 @@ func TestTGFormatMessagesHTMLEscape(t *testing.T) {
 	}
 }
 
-// TestTGSendPhotoUploadRetries429 pins #1242: the multipart upload path must
-// honor Telegram's 429 retry_after instead of failing hard (the caller's
-// image loop drops the photo silently).
 func TestTGSendPhotoUploadRetries429(t *testing.T) {
 	var requests int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -161,9 +150,6 @@ func TestTGSendPhotoUploadRetries429(t *testing.T) {
 	}
 }
 
-// TestTGSendImageLoopDelay pins #1242: every delivered photo is followed by
-// the inter-message delay, so a 2-image reply cannot burst past ~1 msg/s
-// (and the photo->text transition is spaced too).
 func TestTGSendImageLoopDelay(t *testing.T) {
 	var sends int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -190,9 +176,6 @@ func TestTGSendImageLoopDelay(t *testing.T) {
 	}
 }
 
-// TestTGMessageLevelErrorNoWarningState pins #1243: an inbound processing
-// error (here: manager without session) must not publish a warning adapter
-// state that nothing would ever recover from.
 func TestTGMessageLevelErrorNoWarningState(t *testing.T) {
 	a, _, m := newTGAdapterFor1240(t)
 

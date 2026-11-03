@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// TestCanonicalWorkspaceComparableSymlink: a symlink to a real dir must
-// compare EQUAL to its target spelling.
 func TestCanonicalWorkspaceComparableSymlink(t *testing.T) {
 	dir := t.TempDir()
 	link := filepath.Join(t.TempDir(), "wslink")
@@ -20,8 +18,6 @@ func TestCanonicalWorkspaceComparableSymlink(t *testing.T) {
 	}
 }
 
-// TestCanonicalWorkspaceComparableFallback: an unresolvable path must fall
-// back to lexical Clean, not empty-string or panic.
 func TestCanonicalWorkspaceComparableFallback(t *testing.T) {
 	got := canonicalWorkspaceComparable("/definitely/not/here/../here")
 	if got == "" {
@@ -32,8 +28,6 @@ func TestCanonicalWorkspaceComparableFallback(t *testing.T) {
 	}
 }
 
-// TestSharedWorkspacePeersSeesSymlinkPeer: end-to-end - a peer reporting via
-// a symlink spelling must be detected for the real-path workspace.
 func TestSharedWorkspacePeersSeesSymlinkPeer(t *testing.T) {
 	real := t.TempDir()
 	link := filepath.Join(t.TempDir(), "wslink2")

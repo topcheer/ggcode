@@ -100,8 +100,6 @@ const (
 	pcKindProvCapabilities = "provider_capabilities"
 )
 
-// pcPayload is the generic encrypted payload container.
-// Each payload is a JSON object with at least a "kind" field.
 type pcPayload map[string]interface{}
 
 func pcPayloadKind(p pcPayload) string {
@@ -130,7 +128,6 @@ func pcPayloadInt(p pcPayload, key string) int {
 	}
 }
 
-// Relay message type constants
 const (
 	pcTypeCreateSession  = "provider:create_session"
 	pcTypeRenewSession   = "provider:renew_session"

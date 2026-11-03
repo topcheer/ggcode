@@ -11,8 +11,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
-// backdateFailed ages the failed entry for key by d, simulating the passage
-// of time without waiting.
 func backdateFailed(t *testing.T, u *fileUploader, key string, d time.Duration) {
 	t.Helper()
 	u.mu.Lock()
@@ -31,9 +29,6 @@ func failedAge(t *testing.T, u *fileUploader, key string) time.Duration {
 	return time.Since(ts)
 }
 
-// Transient failure whose TTL has elapsed must be retried: the second
-// resolve actually re-attempts the upload (noteFailure rewrites the
-// timestamp), proving the short-circuit was bypassed.
 func TestIssue2568_ExpiredTransientFailureRetries(t *testing.T) {
 	u := newFileUploader(&anthropic.Client{}, "")
 	data, _ := base64.StdEncoding.DecodeString(testTinyPNG)
@@ -55,8 +50,6 @@ func TestIssue2568_ExpiredTransientFailureRetries(t *testing.T) {
 	}
 }
 
-// Transient failure younger than the TTL must still short-circuit: the
-// backdated timestamp must survive the resolve call untouched.
 func TestIssue2568_FreshTransientFailureShortCircuits(t *testing.T) {
 	u := newFileUploader(&anthropic.Client{}, "")
 	data, _ := base64.StdEncoding.DecodeString(testTinyPNG)
@@ -77,8 +70,6 @@ func TestIssue2568_FreshTransientFailureShortCircuits(t *testing.T) {
 	}
 }
 
-// Permanent non-retryable 4xx must keep disabling the endpoint entirely
-// (unchanged #2568-adjacent behavior); the failed map must stay empty.
 func TestIssue2568_Permanent4xxStillBreaksEndpoint(t *testing.T) {
 	u := newFileUploader(&anthropic.Client{}, "")
 	u.noteFailure("k1", &anthropic.Error{StatusCode: 404})
@@ -99,8 +90,6 @@ func TestIssue2568_Permanent4xxStillBreaksEndpoint(t *testing.T) {
 	}
 }
 
-// Transient 429 must take the per-hash path (not endpoint-wide), keeping the
-// classification semantics the fix relies on.
 func TestIssue2568_Transient429IsPerHash(t *testing.T) {
 	u := newFileUploader(&anthropic.Client{}, "")
 	u.noteFailure("k2", &anthropic.Error{StatusCode: 429})

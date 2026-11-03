@@ -6,18 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// moonshotSchemaGateActive reports whether the request targets a moonshot
-// backend. Dual-axis OR detection (#4276 final analysis):
-//   - URL axis: base URL host contains moonshot.cn / moonshot.ai / kimi.com
-//     (covers api.moonshot.cn and the kimi.com platform migration)
-//   - model-name axis: the model id references kimi/moonshot (covers custom
-//     vendor names and gateways that proxy moonshot models under arbitrary
-//     base URLs - moonshot only serves its own models, so a moonshot model
-//     id behind any URL is a moonshot backend)
-//
-// Vendor-name matching is deliberately NOT an axis: a custom-named vendor
-// entry with a non-moonshot URL and non-moonshot model is not a moonshot
-// backend, and the URL/model axes already cover every real case.
 func moonshotSchemaGateActive(baseURL, model string) bool {
 	if moonshotHostHint(baseURL) {
 		return true
@@ -56,34 +44,6 @@ func containsASCII(s, sub string) bool {
 	return false
 }
 
-// normalizeMoonshotSchema returns params rewritten for moonshot-flavored
-// validators, in three passes (#4276 round 2, after live evidence that
-// pass 3 alone does not clear the "infinite recursion" rejection):
-//
-//  1. dereference: inline every "$ref" ("#/$defs/X" / "#/definitions/X"),
-//     depth-capped and budget-capped; a reference that would recurse forever
-//     (a cycle - exactly what walle's "detected infinite recursion without
-//     termination condition" flags), exceeds the caps, or cannot be resolved
-//     is replaced by the permissive fallback {"type":"object",
-//     "additionalProperties":true} while keeping sibling keywords.
-//  2. strip "$defs"/"definitions" - nothing references them any more, and
-//     walle requires client-side dereferencing anyway.
-//  3. every free-form object node ({"type":"object"} lacking both
-//     "properties" and "additionalProperties") gains an explicit
-//     "additionalProperties": true.
-//
-// It is idempotent and never narrows any schema: nodes that already declare
-// properties or an additionalProperties policy (including false) are left
-// untouched by pass 3, and pass 1 only removes indirection.
-//
-// Reference-graph semantics are modeled on MoonshotAI/walle (the open-source
-// implementation behind the API-side validator): cycles of $ref through
-// required hops - or array self-reference with minItems>=1 - have no finite
-// instance and are rejected. Rather than reproducing walle's exact
-// termination analysis, we cut EVERY cycle by construction (any $ref that
-// needs more than moonshotMaxRefDepth hops is replaced), which is a
-// superset defense: schemas walle would still accept are merely loosened
-// (dropped constraints on the deepest cut), never tightened.
 func normalizeMoonshotSchema(params json.RawMessage) json.RawMessage {
 	if len(params) == 0 || !json.Valid(params) {
 		return params
@@ -129,31 +89,17 @@ func normalizeMoonshotSchema(params json.RawMessage) json.RawMessage {
 	return out
 }
 
-// moonshotMaxSchemaBytes is the per-tool-parameters size cap for moonshot
-// endpoints. The walle default limit is 120000 serialized bytes; degrade
-// below that to leave serialization headroom.
 const moonshotMaxSchemaBytes = 100000
 
-// moonshotMaxRefDepth caps how many $ref hops may be inlined before the
-// fallback kicks in. Real-world schemas chain at most two or three defs;
-// anything beyond that is either a cycle or an adversarial diamond, both of
-// which must be cut for walle's termination check.
 const moonshotMaxRefDepth = 4
 
-// moonshotDerefNodeBudget caps the total number of nodes produced by pass 1
-// across the whole schema, bounding exponential diamond blow-up.
 const moonshotDerefNodeBudget = 8000
 
-// moonshotRefFallback is the permissive terminal schema substituted for
-// unresolvable, cyclic, or over-depth references.
 var moonshotRefFallback = map[string]any{
 	"type":                 "object",
 	"additionalProperties": true,
 }
 
-// containsKeyMoonshot reports whether the subtree contains any object key
-// equal to key. It is the cheap pre-pass that keeps ref-free schemas (all
-// builtin tools) on a single scan before walkMoonshotSchema.
 func containsKeyMoonshot(node any, key string) bool {
 	switch v := node.(type) {
 	case map[string]any:
@@ -175,9 +121,6 @@ func containsKeyMoonshot(node any, key string) bool {
 	return false
 }
 
-// collectMoonshotDefs gathers the root-level "$defs"/"definitions" tables
-// the $refs may point at. Nested defs tables are not supported (references
-// into them simply fail to resolve and hit the fallback).
 func collectMoonshotDefs(root map[string]any) map[string]any {
 	defs := make(map[string]any)
 	for _, table := range []string{"$defs", "definitions"} {
@@ -190,7 +133,6 @@ func collectMoonshotDefs(root map[string]any) map[string]any {
 	return defs
 }
 
-// resolveMoonshotRef parses "#/$defs/NAME" and "#/definitions/NAME".
 func resolveMoonshotRef(ref string) (string, bool) {
 	for _, prefix := range []string{"#/$defs/", "#/definitions/"} {
 		if len(ref) > len(prefix) && ref[:len(prefix)] == prefix {
@@ -200,11 +142,6 @@ func resolveMoonshotRef(ref string) (string, bool) {
 	return "", false
 }
 
-// expandMoonshotRefs returns node with every $ref inlined. depth counts
-// inlined hops; budget counts nodes produced. Cycles surface as depth
-// exhaustion; diamonds as budget exhaustion; both terminate at the
-// fallback. Siblings of a $ref survive the merge (the inlined body wins on
-// key conflicts, since the referenced definition is the semantic base).
 func expandMoonshotRefs(node any, defs map[string]any, depth int, budget *int) any {
 	*budget--
 	if *budget < 0 {
@@ -258,8 +195,6 @@ func expandMoonshotRefs(node any, defs map[string]any, depth int, budget *int) a
 	}
 }
 
-// withFallbackSiblings replaces the "$ref" of a schema node with the
-// permissive fallback, keeping every sibling keyword.
 func withFallbackSiblings(v map[string]any) map[string]any {
 	out := make(map[string]any, len(v)+2)
 	for k, sv := range v {
@@ -284,7 +219,6 @@ func cloneMoonshotFallback() map[string]any {
 	return out
 }
 
-// deepCopyMoonshotValue clones parsed-JSON values (maps, slices, scalars).
 func deepCopyMoonshotValue(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
@@ -304,12 +238,6 @@ func deepCopyMoonshotValue(v any) any {
 	}
 }
 
-// walkMoonshotSchema recursively normalizes schema nodes and reports whether
-// anything changed. It recurses into every map value and array element: in
-// JSON Schema the map values under "properties"/"$defs" are name->schema
-// containers (not schemas themselves) and the composition keys ("items",
-// "anyOf", ...) hold schemas or schema arrays, so blanket recursion reaches
-// every schema node at any depth while scalar values no-op.
 func walkMoonshotSchema(node any) bool {
 	switch v := node.(type) {
 	case map[string]any:

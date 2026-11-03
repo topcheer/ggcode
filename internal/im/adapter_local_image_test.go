@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-// 1x1 transparent PNG used to exercise local-file image resolution.
 const onePixelPNGB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
 func writeTempPNG(t *testing.T) string {
@@ -25,9 +24,6 @@ func writeTempPNG(t *testing.T) string {
 	return p
 }
 
-// #1016: ExtractImagesFromText emits bare local image paths with Kind "url".
-// The url branch must route local paths to file reads instead of HTTP GET,
-// which would fail with "unsupported protocol scheme".
 func TestMatrixResolveImageToBytesLocalPath(t *testing.T) {
 	p := writeTempPNG(t)
 	a := &matrixAdapter{}
@@ -58,8 +54,6 @@ func TestMattermostResolveImageToBytesLocalPath(t *testing.T) {
 	}
 }
 
-// Telegram caps multipart photos at 10MB; the extraction layer allows 20MB,
-// so the adapter must reject oversized photos locally before uploading.
 func TestTGSendPhotoUploadRejectsOversized(t *testing.T) {
 	a := &tgAdapter{}
 	big := make([]byte, 10<<20+1)
@@ -69,7 +63,6 @@ func TestTGSendPhotoUploadRejectsOversized(t *testing.T) {
 	}
 }
 
-// Feishu im/v1/images caps message images at 10MB; reject locally before upload.
 func TestFeishuUploadImageRejectsOversized(t *testing.T) {
 	a := &feishuAdapter{}
 	big := make([]byte, 10<<20+1)

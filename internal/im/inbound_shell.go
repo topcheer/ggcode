@@ -14,23 +14,15 @@ import (
 )
 
 const (
-	// inboundShellTimeout bounds a passthrough shell command. Generous
-	// enough for builds, short enough that a forgotten IM command cannot
-	// wedge the bridge.
-	inboundShellTimeout = 10 * time.Minute
-	// inboundShellMaxOutput caps what we push back to the IM adapter —
-	// messaging platforms reject long messages (Telegram ~4096 chars).
+	inboundShellTimeout   = 10 * time.Minute
 	inboundShellMaxOutput = 3500
 )
 
-// IsInboundShellCommand reports whether the trimmed inbound text is a shell
-// passthrough (`$ cmd` or `! cmd` with a non-empty command).
 func IsInboundShellCommand(text string) bool {
 	cmd, ok := splitInboundShellCommand(text)
 	return ok && cmd != ""
 }
 
-// splitInboundShellCommand extracts the command after the `$`/`!` prefix.
 func splitInboundShellCommand(text string) (string, bool) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
@@ -42,7 +34,6 @@ func splitInboundShellCommand(text string) (string, bool) {
 	return strings.TrimSpace(trimmed[1:]), true
 }
 
-// emitShellText pushes text back to the IM client, honoring the test hook.
 func (b *DaemonBridge) emitShellText(s string) error {
 	if b.emitTextOverride != nil {
 		return b.emitTextOverride(s)
@@ -50,11 +41,6 @@ func (b *DaemonBridge) emitShellText(s string) error {
 	return b.emitter.EmitText(s)
 }
 
-// RunInboundShellAsync executes a `$ cmd` / `! cmd` passthrough and pushes
-// the output back via emit. Package-level so both inbound paths share one
-// implementation: the daemon bridge (DaemonBridge.handleShellInbound) and
-// the TUI remote-inbound handler (im-bound sessions with an attached TUI).
-// Runs asynchronously; emit must be safe for concurrent use.
 func RunInboundShellAsync(text string, emit func(string) error) {
 	cmdText, ok := splitInboundShellCommand(text)
 	if !ok || cmdText == "" {
@@ -95,14 +81,10 @@ func RunInboundShellAsync(text string, emit func(string) error) {
 	})
 }
 
-// handleShellInbound executes the shell command and pushes the output back
-// to the IM client via the emitter. Runs the command asynchronously so the
-// inbound loop is not blocked; the emitter is safe for concurrent use.
 func (b *DaemonBridge) handleShellInbound(text string) {
 	RunInboundShellAsync(text, b.emitShellText)
 }
 
-// exitCodeOrErr renders an exec error's exit code, or a generic marker.
 func exitCodeOrErr(err error) string {
 	if err == nil {
 		return "0"

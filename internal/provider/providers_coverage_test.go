@@ -124,8 +124,6 @@ func TestNewProviderHTTPTransportUsesLLMHeaderTimeout(t *testing.T) {
 	if tr == nil {
 		t.Fatal("expected non-nil transport")
 	}
-	// The transport is wrapped by the idle-timeout stream guard; unwrap to
-	// the base *http.Transport to verify the tuned LLM timeouts survive.
 	var inner *http.Transport
 	switch v := tr.(type) {
 	case *idleTimeoutTransport:

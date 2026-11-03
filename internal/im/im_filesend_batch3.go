@@ -21,11 +21,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// SendFile (#3325): images keep the batch-0 preview semantics (im/v1/images
-// image_key message); every other file rides the im/v1/files endpoint
-// (file_type=stream covers arbitrary formats) as a msg_type=file message.
-// Feishu file messages carry no caption field, so a non-empty caption
-// follows as a text message.
 func (a *feishuAdapter) SendFile(ctx context.Context, binding ChannelBinding, file OutboundFile, caption string) error {
 	chatID := strings.TrimSpace(binding.ChannelID)
 	if chatID == "" {
@@ -70,10 +65,6 @@ func (a *feishuAdapter) SendFile(ctx context.Context, binding ChannelBinding, fi
 	return nil
 }
 
-// feishuUploadFile uploads arbitrary bytes through im/v1/files (the
-// document counterpart of uploadImage) and returns the file_key. The
-// file_type field is an enum on Feishu's side; "stream" is the generic
-// any-format entry, so no extension sniffing is needed.
 func (a *feishuAdapter) feishuUploadFile(ctx context.Context, data []byte, filename string) (string, error) {
 	a.mu.RLock()
 	token := a.token
@@ -136,8 +127,6 @@ func (a *feishuAdapter) feishuUploadFile(ctx context.Context, data []byte, filen
 	return fileKey, nil
 }
 
-// feishuSendFileMsg sends a file message by file_key (the msg_type=file
-// counterpart of sendImageMessage, including the 429 retry loop).
 func (a *feishuAdapter) feishuSendFileMsg(ctx context.Context, chatID, fileKey string) error {
 	a.mu.RLock()
 	token := a.token
@@ -194,10 +183,6 @@ func (a *feishuAdapter) feishuSendFileMsg(ctx context.Context, chatID, fileKey s
 	return nil
 }
 
-// SendFile (#3325): images keep the aibot image flow (10MB cap); other
-// files ride the same chunked upload protocol with type=file and the
-// official 20MB file cap, then a msgtype=file frame. WeCom file messages
-// carry no caption, so a non-empty caption follows as a text message.
 func (a *wecomAdapter) SendFile(ctx context.Context, binding ChannelBinding, file OutboundFile, caption string) error {
 	chatID := strings.TrimSpace(binding.ChannelID)
 	if chatID == "" {
@@ -245,8 +230,6 @@ func (a *wecomAdapter) SendFile(ctx context.Context, binding ChannelBinding, fil
 	return nil
 }
 
-// sendWecomFileMsg sends one file message via aibot_send_msg (the
-// msgtype=file counterpart of sendWecomImageMsg).
 func (a *wecomAdapter) sendWecomFileMsg(chatID, mediaID string) error {
 	frame := map[string]any{
 		"cmd":     wecomCmdSend,
@@ -260,10 +243,6 @@ func (a *wecomAdapter) sendWecomFileMsg(chatID, mediaID string) error {
 	return a.writeAndAwaitAck(payloadReqID(frame), frame)
 }
 
-// SendFile (#3325): all files ride the signal-cli /v2/send
-// base64_attachments field (the same data-URL convention
-// sendExtractedImage established) - signal renders previews per MIME on
-// the receiving side. The caption rides the message field natively.
 func (a *signalAdapter) SendFile(ctx context.Context, binding ChannelBinding, file OutboundFile, caption string) error {
 	chatID := strings.TrimSpace(binding.ChannelID)
 	if chatID == "" {
@@ -296,10 +275,6 @@ func (a *signalAdapter) SendFile(ctx context.Context, binding ChannelBinding, fi
 	return nil
 }
 
-// SendFile (#3325): Mattermost renders file previews per MIME, so images
-// and documents ride the same upload + post-with-file_ids flow (the
-// sendTextWithFiles chunking and thread routing apply unchanged). The
-// caption rides the post message natively.
 func (a *mattermostAdapter) SendFile(ctx context.Context, binding ChannelBinding, file OutboundFile, caption string) error {
 	channelID := strings.TrimSpace(binding.ChannelID)
 	if channelID == "" {
@@ -332,9 +307,6 @@ func (a *mattermostAdapter) SendFile(ctx context.Context, binding ChannelBinding
 	return nil
 }
 
-// mmUploadFileNamed is uploadFile with a caller-provided filename (the
-// image-only helper hardcodes "image<ext>"; arbitrary files must keep
-// their real name, including the extension Mattermost keys previews on).
 func (a *mattermostAdapter) mmUploadFileNamed(ctx context.Context, channelID, filename string, data []byte, mimeType string) (string, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -386,8 +358,6 @@ func (a *mattermostAdapter) mmUploadFileNamed(ctx context.Context, channelID, fi
 	return fileID, nil
 }
 
-// mattermostExtForMIME maps a MIME type to a filename extension for the
-// extensionless-filename fallback.
 func mattermostExtForMIME(mimeType string) string {
 	switch mimeType {
 	case "image/jpeg", "image/jpg":
@@ -411,10 +381,6 @@ func mattermostExtForMIME(mimeType string) string {
 	}
 }
 
-// SendFile (#3325): images keep the preview semantics via
-// sendImageByUpload; every other file uploads as whatsmeow MediaDocument
-// and rides a DocumentMessage. Both message types carry the caption
-// natively.
 func (a *whatsappAdapter) SendFile(ctx context.Context, binding ChannelBinding, file OutboundFile, caption string) error {
 	client := a.currentClient()
 	if client == nil || !a.Connected() {

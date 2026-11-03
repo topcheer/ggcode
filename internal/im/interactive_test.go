@@ -17,7 +17,6 @@ import (
 func atomicAdd(v *int64, d int64) { atomic.AddInt64(v, d) }
 func atomicLoad(v *int64) int64   { return atomic.LoadInt64(v) }
 
-// testSink implements Sink but NOT InteractiveSender.
 type testSink struct {
 	name string
 }
@@ -755,7 +754,6 @@ func TestSlackSendInteractive_MessageFormat(t *testing.T) {
 		t.Errorf("button 1 should be danger")
 	}
 
-	// Build expected Slack Block Kit elements (same logic as adapter)
 	var elements []map[string]any
 	for _, btn := range msg.Buttons {
 		style := ""
@@ -852,7 +850,6 @@ func TestHandleInteractiveCallback_ConcurrentCallbacks(t *testing.T) {
 	}
 }
 
-// trackingSink records every outbound event it receives.
 type trackingSink struct {
 	testSink
 	events []OutboundEvent

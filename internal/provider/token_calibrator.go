@@ -8,61 +8,34 @@ import (
 )
 
 const (
-	// calibrateFirstTimeout is the max wait for the first synchronous calibration.
-	// Longer than tokenCountTimeout (100ms) because it only happens once.
 	calibrateFirstTimeout = 2 * time.Second
 
-	// calibrateAsyncTimeout is the max wait for subsequent async calibrations.
 	calibrateAsyncTimeout = 5 * time.Second
 
-	// calibrateInterval is the minimum time between calibration calls.
 	calibrateInterval = 30 * time.Second
 
-	// calibrateMinCalls is the minimum number of CountTokens calls between calibrations.
 	calibrateMinCalls = 10
 
-	// ratioClampMin/Max prevent extreme ratios from destabilizing estimates.
 	ratioClampMin = 0.3
 	ratioClampMax = 3.0
 
-	// calibrateFailureBackoff is the base backoff after a failed calibration
-	// attempt (#708). Doubles per consecutive failure, capped at
-	// calibrateFailureBackoffMax. During the backoff window CountTokens uses
-	// the local estimate without touching the remote endpoint — a persistently
-	// 429/5xx count_tokens API no longer turns every call into a synchronous
-	// 2s-blocked remote attempt competing for the same rate-limit quota.
 	calibrateFailureBackoff = 5 * time.Second
 
-	// calibrateFailureBackoffMax caps the exponential backoff.
 	calibrateFailureBackoffMax = 60 * time.Second
 
-	// calibrateMaxConsecutiveFailures disables remote calibration after this
-	// many consecutive failed attempts (a fresh success resets the count).
 	calibrateMaxConsecutiveFailures = 5
 )
 
-// tokenCountCalibrator provides periodic real-API calibration for token
-// counting. Instead of calling the count_tokens API on every invocation
-// (which would add latency and risk rate limits), it periodically calls
-// the real API to learn a correction ratio, then applies that ratio to
-// fast local estimates between calibrations.
-//
-// Workflow:
-//  1. First call: synchronous API calibration (up to calibrateFirstTimeout)
-//  2. Subsequent calls: apply learned ratio locally (instant)
-//  3. Every calibrateInterval + calibrateMinCalls: async re-calibration
-//  4. On permanent API error (404/403): disable permanently, fall back to local
 type tokenCountCalibrator struct {
 	mu            sync.Mutex
-	enabled       bool      // false = permanently disabled (API doesn't support it)
-	ratio         float64   // correction factor: realTokens / estimatedTokens
-	lastCalibrate time.Time // last successful calibration time
-	callCount     int       // calls since last calibration trigger
-	lastFailure   time.Time // last failed calibration attempt (#708)
-	failCount     int       // consecutive failed calibration attempts (#708)
+	enabled       bool
+	ratio         float64
+	lastCalibrate time.Time
+	callCount     int
+	lastFailure   time.Time
+	failCount     int
 }
 
-// newTokenCountCalibrator creates a calibrator with default settings.
 func newTokenCountCalibrator() *tokenCountCalibrator {
 	return &tokenCountCalibrator{
 		enabled: true,
@@ -70,8 +43,6 @@ func newTokenCountCalibrator() *tokenCountCalibrator {
 	}
 }
 
-// shouldCalibrate reports whether a new calibration round should run.
-// Caller must hold mu.
 func (c *tokenCountCalibrator) shouldCalibrate() bool {
 	if !c.enabled {
 		return false
@@ -96,16 +67,12 @@ func (c *tokenCountCalibrator) shouldCalibrate() bool {
 	return time.Since(c.lastCalibrate) >= calibrateInterval
 }
 
-// currentRatio returns the current correction ratio (thread-safe).
 func (c *tokenCountCalibrator) currentRatio() float64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.ratio
 }
 
-// applyResult updates the ratio based on a new (estimated, real) sample.
-// Uses incremental averaging so the ratio converges over time without
-// being dominated by outliers.
 func (c *tokenCountCalibrator) applyResult(estimated, realTokens int) {
 	if estimated <= 0 || realTokens <= 0 {
 		return
@@ -132,11 +99,6 @@ func (c *tokenCountCalibrator) applyResult(estimated, realTokens int) {
 		estimated, realTokens, observedRatio, c.ratio)
 }
 
-// recordSkip marks a calibration attempt as performed-but-skipped (an
-// asymmetric sample, #1795 case 1): the cadence clock advances without
-// counting a failure or disabling - the OLD code left lastCalibrate zero
-// on every skip, so shouldCalibrate stayed true and each CountTokens paid
-// a synchronous remote call whose result was then discarded.
 func (c *tokenCountCalibrator) recordSkip() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -146,10 +108,6 @@ func (c *tokenCountCalibrator) recordSkip() {
 	c.lastCalibrate = time.Now()
 }
 
-// recordFailure records a failed calibration attempt (429/5xx/network) and
-// starts (or extends) the exponential backoff window (#708). After
-// calibrateMaxConsecutiveFailures consecutive failures the calibrator is
-// disabled permanently — the local estimate is used from then on.
 func (c *tokenCountCalibrator) recordFailure() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -171,7 +129,6 @@ func (c *tokenCountCalibrator) recordFailure() {
 	debug.Log("provider-calibrator", "calibration failed (%d consecutive), backing off %s", c.failCount, backoff)
 }
 
-// disable permanently turns off remote calibration (e.g., endpoint returns 404).
 func (c *tokenCountCalibrator) disable() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -182,7 +139,6 @@ func (c *tokenCountCalibrator) disable() {
 	}
 }
 
-// clampRatio constrains the ratio to a safe range to prevent destabilization.
 func clampRatio(r float64) float64 {
 	if r < ratioClampMin {
 		return ratioClampMin

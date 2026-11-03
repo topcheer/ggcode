@@ -1,26 +1,3 @@
-// Package im contains the Feishu adapter.
-//
-// # Feishu Developer Console Setup
-//
-// To enable interactive card callbacks (e.g. ask_user buttons), the following
-// must be configured in the Feishu Developer Console (开发者后台):
-//
-//  1. Under "Events & Callbacks" (事件与回调), set the connection mode to
-//     "Long Connection / WebSocket" (长连接).
-//
-//  2. Under "Events & Callbacks" → "Callback Configuration" (回调配置), add the
-//     callback: card.action.trigger (卡片回传交互回调).
-//
-//     IMPORTANT: This is in the "Callback Configuration" (回调配置) section,
-//     NOT in "Event Subscription" (事件订阅). Card callbacks and event
-//     subscriptions are separate sections. Without this step, card buttons will
-//     render but clicking them will produce error 200340 (card callback not
-//     configured).
-//
-// The adapter uses the official Feishu Go SDK's larkws.NewClient for the
-// WebSocket connection, which registers the callback capability with the
-// Feishu platform so card.action.trigger events are delivered over the
-// long connection.
 package im
 
 import (
@@ -60,9 +37,9 @@ import (
 
 const (
 	feishuDefaultDomain    = "feishu"
-	feishuMaxTextLen       = 28000                  // Feishu interactive card body supports ~30KB total JSON; 28000 chars leaves room for card structure
-	feishuTokenExpireDelta = 300                    // refresh 5 minutes early
-	feishuInterMsgDelay    = 300 * time.Millisecond // Feishu allows 5 QPS per user; 300ms ≈ 3.3 QPS is safe
+	feishuMaxTextLen       = 28000
+	feishuTokenExpireDelta = 300
+	feishuInterMsgDelay    = 300 * time.Millisecond
 )
 
 type feishuAdapter struct {
@@ -74,7 +51,7 @@ type feishuAdapter struct {
 	encryptKey  string
 	verifyToken string
 	domain      string
-	webhookPort int // legacy: only used when transport=webhook
+	webhookPort int
 	ctx         context.Context
 	cancel      context.CancelFunc
 
@@ -82,21 +59,14 @@ type feishuAdapter struct {
 	connected   bool
 	token       string
 	tokenExpire time.Time
-	botOpenID   string // set from bot/v3/info
+	botOpenID   string
 	httpServer  *http.Server
 	stt         imstt.Transcriber
 
-	// seenEvents deduplicates Feishu webhook redeliveries (Feishu retries up
-	// to 3x if the webhook does not respond within ~3s; we may legitimately
-	// take longer than that to respond, so dedup by event_id+message_id is
-	// required to avoid running the same agent turn 2-3x). See locks.md S1.
 	seenMu      sync.Mutex
 	seenEvents  map[string]time.Time
 	reactionAck reactionAckState
-	// seenNonces deduplicates (timestamp,nonce) pairs presented to
-	// verifySignature, defeating brute replay even within the freshness
-	// window. See locks.md S2.
-	seenNonces map[string]time.Time
+	seenNonces  map[string]time.Time
 }
 
 func newFeishuAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*feishuAdapter, error) {
@@ -216,7 +186,6 @@ func (a *feishuAdapter) run(ctx context.Context) {
 
 	safego.Go("im.feishu.tokenRefresh", func() { a.tokenRefreshLoop(ctx) })
 
-	// Start webhook server if port configured (legacy mode)
 	var wsErr error
 	if a.webhookPort > 0 {
 		a.startWebhookServer(ctx)
@@ -237,10 +206,6 @@ func (a *feishuAdapter) run(ctx context.Context) {
 	}
 }
 
-// fetchTokenWithRetry performs the startup token fetch with backoff retries.
-// It keeps retrying (at the capped delay) until success or ctx cancellation,
-// matching the other adapters' reconnect semantics; backoffs is injectable so
-// tests can use sub-millisecond delays (#540).
 func (a *feishuAdapter) fetchTokenWithRetry(ctx context.Context, backoffs []time.Duration) error {
 	if len(backoffs) == 0 {
 		backoffs = []time.Duration{time.Second}
@@ -316,9 +281,6 @@ func (a *feishuAdapter) runWebSocket(ctx context.Context) error {
 	return nil
 }
 
-// handleCardActionTrigger processes a card action callback received via
-// OnP2CardActionTrigger on the EventDispatcher. This handles button clicks
-// from Feishu Card 2.0 interactive messages sent via SendInteractive.
 func (a *feishuAdapter) handleCardActionTrigger(ctx context.Context, event *callback.CardActionTriggerEvent) {
 	if a.manager == nil || event.Event == nil {
 		return
@@ -657,10 +619,6 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// webhookTokenValid checks the Verification Token when one is configured.
-// Feishu includes the app's Verification Token as header.token on every
-// event and card callback. When no token is configured, verification is
-// disabled and all requests pass (backwards compatibility).
 func (a *feishuAdapter) webhookTokenValid(payload map[string]any) bool {
 	if a.verifyToken == "" {
 		return true
@@ -675,9 +633,6 @@ func (a *feishuAdapter) webhookTokenValid(payload map[string]any) bool {
 	return token == a.verifyToken
 }
 
-// decryptFeishuPayload implements Feishu's Encrypt Key callback scheme
-// (#2110): AES-256-CBC with key = sha256(encrypt_key), IV = the first 16
-// bytes of that key, base64-encoded ciphertext, PKCS7-padded JSON payload.
 func decryptFeishuPayload(encB64, encryptKey string) ([]byte, error) {
 	ciphertext, err := base64.StdEncoding.DecodeString(encB64)
 	if err != nil {
@@ -713,8 +668,6 @@ func (a *feishuAdapter) verifySignature(timestamp, nonce, body, signature string
 	return hmac.Equal([]byte(signature), []byte(expected))
 }
 
-// acceptTimestamp returns true if the request timestamp (unix seconds) is
-// within ±5 minutes of now.
 func (a *feishuAdapter) acceptTimestamp(timestamp string) bool {
 	if timestamp == "" {
 		return false
@@ -730,8 +683,6 @@ func (a *feishuAdapter) acceptTimestamp(timestamp string) bool {
 	return delta <= 5*time.Minute
 }
 
-// acceptNonce records (timestamp,nonce) and returns false if the pair was
-// already seen within the freshness window.
 func (a *feishuAdapter) acceptNonce(timestamp, nonce string) bool {
 	if nonce == "" {
 
@@ -753,7 +704,6 @@ func (a *feishuAdapter) acceptNonce(timestamp, nonce string) bool {
 	return true
 }
 
-// seenEvent records the event id and returns true if it was already processed.
 func (a *feishuAdapter) seenEvent(eventID string) bool {
 	a.seenMu.Lock()
 	defer a.seenMu.Unlock()
@@ -779,29 +729,6 @@ func parseUnixSeconds(ts string) (time.Time, error) {
 	return time.Unix(sec, 0), nil
 }
 
-// handleCardAction processes Feishu card action callbacks (button clicks).
-// Card action triggers arrive via the webhook with event_type "card.action.trigger".
-// Card 2.0 callback payload layout (#955):
-//
-//	{
-//	  "header": {"event_type": "card.action.trigger", ...},
-//	  "event": {
-//	    "operator": {"union_id": "...", "open_id": "..."},
-//	    "token": "...",
-//	    "action": {
-//	      "value": {"choice": "1", ...},
-//	      "tag": "button"
-//	    },
-//	    "context": {
-//	      "open_message_id": "om_...",
-//	      "open_chat_id": "oc_..."
-//	    }
-//	  }
-//	}
-//
-// Previously the code read action/operator/context from the payload top
-// level, which never matches the real envelope, so 100% of card callbacks
-// were dropped after the webhook had already replied 200 (unrecoverable).
 func (a *feishuAdapter) handleCardAction(ctx context.Context, payload map[string]any) {
 	if a.manager == nil {
 		return
@@ -881,7 +808,6 @@ func (a *feishuAdapter) handleMessageEvent(ctx context.Context, event map[string
 	// image message's {"image_key":...} JSON fell through
 	// parseMessageContent (no text key, no post structure) and the RAW
 	// JSON string reached the agent as text.
-
 	msgType, _ := message["message_type"].(string)
 
 	text := a.parseMessageContent(content)
@@ -942,8 +868,6 @@ func (a *feishuAdapter) handleMessageEvent(ctx context.Context, event map[string
 	}
 }
 
-// processAttachments handles non-text message types (image, audio, file)
-// and returns attachments plus an optional voice transcript text.
 func (a *feishuAdapter) processAttachments(ctx context.Context, msgType, content, messageID string) ([]Attachment, string) {
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
@@ -1043,15 +967,12 @@ func (a *feishuAdapter) processFileAttachment(ctx context.Context, parsed map[st
 	}}, ""
 }
 
-// downloadFeishuImage downloads an image by image_key via GET /im/v1/images/{image_key}.
 func (a *feishuAdapter) downloadFeishuImage(ctx context.Context, imageKey string) ([]byte, string, error) {
 	apiBase := a.resolveAPIBase()
 	url := apiBase + "/im/v1/images/" + imageKey
 	return a.downloadFeishuFile(ctx, url)
 }
 
-// downloadFeishuResource downloads a message resource (audio/file) via
-// GET /im/v1/messages/{message_id}/resources/{file_key}?type=file.
 func (a *feishuAdapter) downloadFeishuResource(ctx context.Context, messageID, fileKey, resourceType string) ([]byte, string, error) {
 	apiBase := a.resolveAPIBase()
 	url := apiBase + "/im/v1/messages/" + messageID + "/resources/" + fileKey + "?type=" + resourceType
@@ -1137,7 +1058,6 @@ func (a *feishuAdapter) transcribeFeishuAudio(ctx context.Context, data []byte, 
 	return strings.TrimSpace(result.Text)
 }
 
-// cacheFeishuAttachment writes attachment data to a temp file.
 func cacheFeishuAttachment(data []byte, filename, mimeType string) (string, error) {
 	ext := filepath.Ext(strings.TrimSpace(filename))
 	if ext == "" {
@@ -1194,13 +1114,6 @@ func (a *feishuAdapter) parseMessageContent(content string) string {
 	if post, ok := parsed["post"].(map[string]any); ok {
 		parsed = post
 	}
-	// #2309: a post is ONE message rendered in several languages - pick a
-	// single language's text, never join them (that would duplicate the
-	// content per language). The old loop returned the FIRST language
-	// block that had a "content" key even when its texts were empty, and
-	// map iteration order is random - multi-language posts (auto-translation
-	// / forwarded messages) randomly lost their text with no log. Preference
-	// order: zh_cn, en_us, then first non-empty.
 	var bestText string
 	bestRank := -1
 	for lang, langContent := range parsed {
@@ -1306,7 +1219,6 @@ func (a *feishuAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	return nil
 }
 
-// isConnected snapshots the connection gate under one lock read.
 func (a *feishuAdapter) isConnected() bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -1391,9 +1303,6 @@ func (a *feishuAdapter) sendTextMessage(ctx context.Context, chatID, content str
 	return "", rateLimitExhausted("Feishu")
 }
 
-// TriggerTyping adds a "Typing" emoji reaction on the latest real user message to
-// indicate the bot is processing. Feishu does not have a native typing indicator,
-// so we use a Typing reaction as a visual cue.
 func (a *feishuAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 	msgID := LastReactionTargetMessageID(binding)
 	if msgID == "" || !a.reactionAck.NeedsSend(binding, msgID) {
@@ -1461,8 +1370,6 @@ func (a *feishuAdapter) publishState(healthy bool, status, lastErr string) {
 	})
 }
 
-// fetchBotInfo calls bot/v3/info to get the bot's open_id.
-// API response: {"code":0,"bot":{"open_id":"ou_xxx","app_name":"..."}}
 func (a *feishuAdapter) fetchBotInfo(ctx context.Context) error {
 	apiBase := a.resolveAPIBase()
 	url := apiBase + "/bot/v3/info"
@@ -1504,7 +1411,6 @@ func (a *feishuAdapter) fetchBotInfo(ctx context.Context) error {
 	return nil
 }
 
-// sendExtractedImage resolves and sends an extracted image via Feishu.
 func (a *feishuAdapter) sendExtractedImage(ctx context.Context, chatID string, img ExtractedImage) error {
 	var data []byte
 	var filename string
@@ -1583,11 +1489,7 @@ func (a *feishuAdapter) sendExtractedImage(ctx context.Context, chatID string, i
 	return a.sendImageMessage(ctx, chatID, imageKey)
 }
 
-// uploadImage uploads an image to Feishu and returns the image_key.
 func (a *feishuAdapter) uploadImage(ctx context.Context, data []byte, filename string) (string, error) {
-	// Feishu im/v1/images caps message images at 10MB. The extraction layer
-	// allows up to 20MB, so reject locally with a clear message instead of
-	// getting an opaque server error after the full upload.
 	const maxImageBytes = 10 << 20
 	if len(data) > maxImageBytes {
 		return "", fmt.Errorf("image is %d bytes; Feishu image upload limit is %d bytes, use a smaller image", len(data), maxImageBytes)
@@ -1655,7 +1557,6 @@ func (a *feishuAdapter) uploadImage(ctx context.Context, data []byte, filename s
 	return imageKey, nil
 }
 
-// sendImageMessage sends an image message to a Feishu chat using image_key.
 func (a *feishuAdapter) sendImageMessage(ctx context.Context, chatID, imageKey string) error {
 	a.mu.RLock()
 	token := a.token
@@ -1698,7 +1599,6 @@ func (a *feishuAdapter) sendImageMessage(ctx context.Context, chatID, imageKey s
 			respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 			return fmt.Errorf("Feishu send image [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		}
-		// Feishu API returns HTTP 200 with code != 0 for errors.
 		var imgResult struct {
 			Code int    `json:"code"`
 			Msg  string `json:"msg"`
@@ -1732,14 +1632,8 @@ func intValueStr(s string) (int, bool) {
 	return n, true
 }
 
-// feishuSilentLogger redirects SDK log output to debug.Log instead of os.Stdout.
-// The default SDK logger writes to stdout which corrupts the TUI.
 type feishuSilentLogger struct{}
 
-// sendPostMessage sends an interactive card message with markdown rendering.
-// Uses Feishu Card JSON 2.0 structure which supports full markdown including
-// tables, headings, code blocks, and more. JSON 1.0's markdown tag does NOT
-// support tables or headings.
 func (a *feishuAdapter) sendPostMessage(ctx context.Context, chatID, content string) (string, error) {
 	a.mu.RLock()
 	token := a.token
@@ -1834,11 +1728,6 @@ func (l *feishuSilentLogger) Error(_ context.Context, args ...interface{}) {
 	debug.Log("feishu-sdk", "%v", args)
 }
 
-// SendInteractive implements InteractiveSender using Feishu Card buttons.
-// Works in both WebSocket and webhook modes. In WS mode, card callbacks
-// (card.action.trigger) are received via the SDK's primary WS client
-// when the callback capability is properly registered (see file header
-// for console configuration steps).
 func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBinding, msg InteractiveMessage) (string, error) {
 	a.mu.RLock()
 	connected := a.connected
@@ -1859,7 +1748,6 @@ func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBind
 		},
 	}
 
-	// Build buttons as a column_set
 	var columns []map[string]any
 	for _, btn := range msg.Buttons {
 		btnElem := map[string]any{
@@ -1970,7 +1858,6 @@ func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBind
 			return "", fmt.Errorf("Feishu interactive API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		}
 
-		// Extract message_id from response, checking code field for API errors.
 		var result struct {
 			Code int    `json:"code"`
 			Msg  string `json:"msg"`

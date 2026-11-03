@@ -6,15 +6,10 @@ import (
 	"time"
 )
 
-// newDedupTestAdapter builds the minimal slackAdapter surface the dedup pair
-// touches (seen map + mutex + name).
 func newDedupTestAdapter() *slackAdapter {
 	return &slackAdapter{name: "test", seen: make(map[string]time.Time)}
 }
 
-// TestSlackDedupCheckDoesNotLatch (#4655): the read-only check must not write
-// the seen key - filtering paths (empty text + no attachments, transient
-// attachment-parse failure) must survive a same-ts redelivery.
 func TestSlackDedupCheckDoesNotLatch(t *testing.T) {
 	a := newDedupTestAdapter()
 	if !a.checkSeenDedup("C1", "1.2") {
@@ -32,8 +27,6 @@ func TestSlackDedupCheckDoesNotLatch(t *testing.T) {
 	}
 }
 
-// TestSlackDedupLateLatchDropsReplay (#4655 + #968): after the latch, the
-// same (channel, ts) is dropped; a different one passes.
 func TestSlackDedupLateLatchDropsReplay(t *testing.T) {
 	a := newDedupTestAdapter()
 	if !a.markSeenDedup("C1", "1.2") {
@@ -47,9 +40,6 @@ func TestSlackDedupLateLatchDropsReplay(t *testing.T) {
 	}
 }
 
-// TestSlackInteractiveDedupOnTriggerID (#4654): a block_actions payload with
-// a trigger_id fires the callback handler once; a redelivered envelope with
-// the SAME trigger_id is dropped.
 func TestSlackInteractiveDedupOnTriggerID(t *testing.T) {
 	a := newDedupTestAdapter()
 	payload := map[string]any{

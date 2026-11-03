@@ -140,13 +140,11 @@ func TestGeminiConvertMessages_FallsBackWhenToolResultNameIsUnrecoverable(t *tes
 	}
 }
 
-// TestGeminiProvider_ReasoningEffort verifies that SetReasoningEffort sets the
-// thinking budget on the Gemini request config.
 func TestGeminiProvider_ReasoningEffort(t *testing.T) {
 	cases := []struct {
 		effort    string
 		maxTokens int
-		wantZero  bool // true if budget should be 0 (too-small maxTokens)
+		wantZero  bool
 	}{
 		{"low", 8192, false},
 		{"medium", 8192, false},
@@ -193,8 +191,6 @@ func TestGeminiProvider_ReasoningEffort(t *testing.T) {
 	}
 }
 
-// TestGeminiProvider_ToolChoice verifies that SetToolChoice maps correctly
-// to Gemini's FunctionCallingConfig.Mode.
 func TestGeminiProvider_ToolChoice(t *testing.T) {
 	cases := []struct {
 		choice string
@@ -239,8 +235,6 @@ func TestGeminiProvider_ToolChoice(t *testing.T) {
 	}
 }
 
-// TestGeminiCloneWithModel_PreservesSettings verifies that reasoning effort
-// and tool choice survive CloneWithModel (used by named subagents).
 func TestGeminiCloneWithModel_PreservesSettings(t *testing.T) {
 	p := &GeminiProvider{
 		model:           "gemini-2.5-flash",
@@ -260,10 +254,6 @@ func TestGeminiCloneWithModel_PreservesSettings(t *testing.T) {
 	}
 }
 
-// TestGeminiChatStream_PolicyBlockedDoneEvent verifies that a fatal finish
-// reason (SAFETY/RECITATION/etc.) produces a Done event with both Truncated
-// and PolicyBlocked set, so the agent does not burn continuation rounds
-// resending the full context into the same filter (#266).
 func TestGeminiChatStream_PolicyBlockedDoneEvent(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -343,9 +333,6 @@ data: {"candidates":[{"finishReason":"SAFETY"}],"usageMetadata":{"promptTokenCou
 	}
 }
 
-// TestGeminiChatStream_MaxTokensNotPolicyBlocked verifies the MAX_TOKENS path
-// still sets Truncated without PolicyBlocked, so auto-continuation keeps
-// working for genuine output-length truncation (#266).
 func TestGeminiChatStream_MaxTokensNotPolicyBlocked(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -391,9 +378,6 @@ func TestGeminiChatStream_MaxTokensNotPolicyBlocked(t *testing.T) {
 	}
 }
 
-// TestGeminiProvider_Logprobs (sa-74): SetLogprobsRequest(true) maps to
-// ResponseLogprobs=true + Logprobs=5 on the request config; disabled leaves
-// the config untouched so request payloads stay byte-identical to before.
 func TestGeminiProvider_Logprobs(t *testing.T) {
 	p := &GeminiProvider{}
 	p.SetLogprobsRequest(true)
@@ -423,9 +407,6 @@ func TestGeminiProvider_Logprobs(t *testing.T) {
 	}
 }
 
-// TestGeminiChatStream_AvgLogprobsRelay (sa-74): the candidate's avgLogprobs
-// from the stream is relayed as Confidence on the Done event. Last chunk
-// wins (Gemini reports a running aggregate per candidate).
 func TestGeminiChatStream_AvgLogprobsRelay(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

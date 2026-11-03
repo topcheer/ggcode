@@ -6,9 +6,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// TestFallbackChainOrdering: legacy single entry keeps first (highest)
-// priority, then fallbacks list entries in order; unconfigured entries
-// are skipped.
 func TestFallbackChainOrdering(t *testing.T) {
 	c := &Config{}
 	if got := len(c.FallbackChain()); got != 0 {
@@ -34,8 +31,6 @@ func TestFallbackChainOrdering(t *testing.T) {
 	}
 }
 
-// TestFallbacksYAMLRoundTrip: the fallbacks list serializes and parses
-// back through YAML (schema wiring).
 func TestFallbacksYAMLRoundTrip(t *testing.T) {
 	in := `
 fallbacks:

@@ -8,10 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// #1303: unsubscribe waited for the forwarder drain while holding the
-// write lock, so a slow (or blocked) subscriber callback stalled every
-// broadcastEvent - which sits on the agent's synchronous emit path.
-// Now: detach+close under lock, drain outside it with a timeout.
 func TestDaemonBridgeUnsubscribeDoesNotBlockBroadcast(t *testing.T) {
 
 	b := &DaemonBridge{}

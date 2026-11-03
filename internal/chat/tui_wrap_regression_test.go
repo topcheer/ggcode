@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// Regression test for #184: during streaming inside an unclosed code fence,
-// consecutive chunks must reuse cached rendered blocks instead of
-// re-rendering everything each chunk.
 func TestRenderStreamingMarkdownFenceCacheHit(t *testing.T) {
 	chunk1 := "```go\nfoo"
 	chunk2 := "```go\nfoobar"
@@ -28,8 +25,6 @@ func TestRenderStreamingMarkdownFenceCacheHit(t *testing.T) {
 	}
 }
 
-// Two-block scenario: a closed block followed by a growing unclosed fence.
-// The closed block must be reused across chunks while the fence grows.
 type reuseProbe struct{}
 
 func TestRenderStreamingMarkdownClosedBlockReusedWhileFenceGrows(t *testing.T) {
@@ -48,9 +43,6 @@ func TestRenderStreamingMarkdownClosedBlockReusedWhileFenceGrows(t *testing.T) {
 	}
 }
 
-// Regression test for #183: renderGitLog must wrap long commit subjects to
-// the body width so Height (measureHeightWidth) and Render (physical \n
-// split) agree.
 func TestRenderGitLogWrapsLongLines(t *testing.T) {
 	long := strings.Repeat("fix: very long commit subject line that exceeds the terminal width ", 3)
 	item := &BaseToolItem{fileBodyMode: "gitlog"}

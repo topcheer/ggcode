@@ -18,31 +18,26 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// httpServer provides the HTTP endpoints for the dummy adapter.
 type httpServer struct {
 	adapter       *dummyAdapter
 	sseBroker     *sseBroker
 	shutdownToken string
-	// cancel is set by start() (derived ctx) and fired by handleShutdown
-	// once the bearer token verifies (#2959) - the endpoint used to be a
-	// no-op that returned 200 without any shutdown side effect, leaving the
-	// token chain (generate -> portFile -> eval script -> POST) dead code.
-	cancel context.CancelFunc
+	cancel        context.CancelFunc
 }
 
 type sseBroker struct {
 	mu      sync.RWMutex
 	buffer  []sseEntry
 	bufSize int
-	head    int // write position (ring)
+	head    int
 	seq     int64
 	subs    map[chan sseEntry]struct{}
 }
 
 type sseEntry struct {
 	seq   int64
-	event string // SSE event type
-	data  []byte // JSON payload
+	event string
+	data  []byte
 }
 
 func newHTTPServer(a *dummyAdapter) *httpServer {
@@ -95,12 +90,6 @@ func (b *sseBroker) subscribe() (chan sseEntry, int64) {
 	return ch, b.seq
 }
 
-// replaySince returns buffered entries with seq strictly greater than
-// since, oldest first (#2973). The ring holds at most the last bufSize
-// entries: a since older than the window start still gets the full window
-// (bounded at-least-once, matching hello's last_seq contract). Callers must
-// subscribe BEFORE snapshotting so the live channel covers the gap after
-// the snapshot; overlap is deduped by seq downstream.
 func (b *sseBroker) replaySince(since int64) []sseEntry {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -129,7 +118,6 @@ func (b *sseBroker) unsubscribe(ch chan sseEntry) {
 	delete(b.subs, ch)
 }
 
-// pushEvent converts an OutboundEvent to SSE and pushes it to the broker.
 func (s *httpServer) pushEvent(event OutboundEvent) {
 	sseType, data := outboundToSSE(event)
 	if sseType == "" {
@@ -138,7 +126,6 @@ func (s *httpServer) pushEvent(event OutboundEvent) {
 	s.sseBroker.push(sseType, data)
 }
 
-// outboundToSSE converts an OutboundEvent to an SSE event type and JSON data.
 func outboundToSSE(event OutboundEvent) (string, []byte) {
 	switch event.Kind {
 	case OutboundEventText:
@@ -192,7 +179,6 @@ func outboundToSSE(event OutboundEvent) (string, []byte) {
 	return "", nil
 }
 
-// handler returns the HTTP handler for all endpoints.
 func (s *httpServer) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/send", s.handleSend)
@@ -203,7 +189,6 @@ func (s *httpServer) handler() http.Handler {
 	return mux
 }
 
-// start starts the HTTP server on the given address.
 func (s *httpServer) start(ctx context.Context, listenAddr, portFile string) {
 
 	ctx, s.cancel = context.WithCancel(ctx)
@@ -239,11 +224,6 @@ func (s *httpServer) start(ctx context.Context, listenAddr, portFile string) {
 	})
 }
 
-// handleSend processes POST /send requests.
-// Returns immediately and runs HandleInbound in a background goroutine
-// to avoid blocking the HTTP handler while the agent processes the message.
-// This prevents deadlock when the agent triggers ask_user and the SSE
-// consumer tries to reply via another /send request.
 func (s *httpServer) handleSend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -296,7 +276,6 @@ func (s *httpServer) handleSend(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleEvents serves the SSE event stream.
 func (s *httpServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -360,7 +339,6 @@ func (s *httpServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleStatus returns current state snapshot.
 func (s *httpServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -377,7 +355,6 @@ func (s *httpServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// handleHealthz returns readiness check.
 func (s *httpServer) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -387,7 +364,6 @@ func (s *httpServer) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-// handleShutdown gracefully cancels the context to trigger daemon shutdown.
 func (s *httpServer) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

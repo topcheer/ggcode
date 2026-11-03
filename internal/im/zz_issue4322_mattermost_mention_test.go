@@ -34,7 +34,6 @@ func TestIssue4322HasMentionTrailingDashOrDot(t *testing.T) {
 	}
 }
 
-// #963 regression: bot name "al" must not fire on "@alex".
 func TestIssue4322ShortNameGuardPreserved(t *testing.T) {
 	a := &mattermostAdapter{botUsername: "al"}
 

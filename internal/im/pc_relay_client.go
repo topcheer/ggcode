@@ -24,30 +24,25 @@ const (
 	pcMaxReconnectDelay     = 30 * time.Second
 )
 
-// pcRelayClient manages the WebSocket connection between Provider and Relay Server.
 type pcRelayClient struct {
 	wsURL      string
 	providerID string
 
-	// Callbacks
 	onFrame         func(sessionID string, envelope *pcEncryptedEnvelope)
 	onSessionClosed func(sessionID, reason string)
 	onError         func(message string)
 	onReady         func()
-	// onDisconnected fires when the ReadLoop exits (connection lost).
-	onDisconnected func(reason string)
+	onDisconnected  func(reason string)
 
 	mu              sync.Mutex
 	conn            *websocket.Conn
 	disposed        bool
-	lifecycleCancel context.CancelFunc // cancels the independent ReadLoop lifecycle ctx
+	lifecycleCancel context.CancelFunc
 
 	writeMu sync.Mutex
 
-	// Ready signaling
 	readyCh chan struct{}
 
-	// Request-response matching
 	pendingCreates  map[string]chan *pcCreateResult
 	pendingRenewals map[string]chan *pcRenewResult
 }
@@ -61,7 +56,6 @@ func newPCRelayClient(wsURL, providerID string) *pcRelayClient {
 	}
 }
 
-// buildProviderURL appends providerId as a query parameter.
 func (c *pcRelayClient) buildProviderURL() string {
 	if c.providerID == "" {
 		return c.wsURL
@@ -76,7 +70,6 @@ func (c *pcRelayClient) buildProviderURL() string {
 	return u.String()
 }
 
-// Connect establishes the WebSocket connection and waits for relay:provider_ready.
 func (c *pcRelayClient) Connect(ctx context.Context) error {
 	c.mu.Lock()
 	if c.disposed {
@@ -146,8 +139,6 @@ func (c *pcRelayClient) Connect(ctx context.Context) error {
 	}
 }
 
-// Dispose closes the connection, stops background goroutines and prevents
-// reconnects. Safe to call multiple times.
 func (c *pcRelayClient) Dispose() {
 	c.mu.Lock()
 	if c.disposed {
@@ -182,16 +173,12 @@ func (c *pcRelayClient) Dispose() {
 	}
 }
 
-// isAlive reports whether the client still holds a usable connection.
-// Callers use it to detect dead connections instead of trusting a non-nil
-// client pointer. #965
 func (c *pcRelayClient) isAlive() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return !c.disposed && c.conn != nil
 }
 
-// cleanupConn closes and clears the connection; used on ReadLoop exit.
 func (c *pcRelayClient) cleanupConn() {
 	c.mu.Lock()
 	conn := c.conn
@@ -202,8 +189,6 @@ func (c *pcRelayClient) cleanupConn() {
 	}
 }
 
-// ReadLoop reads messages from the WebSocket and dispatches them.
-// It blocks until the connection is closed or an error occurs.
 func (c *pcRelayClient) ReadLoop(ctx context.Context) error {
 	c.mu.Lock()
 	conn := c.conn
@@ -228,7 +213,6 @@ func (c *pcRelayClient) ReadLoop(ctx context.Context) error {
 	}
 }
 
-// HeartbeatLoop sends ping frames at regular intervals.
 func (c *pcRelayClient) HeartbeatLoop(ctx context.Context) {
 	ticker := time.NewTicker(pcHeartbeatInterval)
 	defer ticker.Stop()
@@ -252,7 +236,6 @@ func (c *pcRelayClient) HeartbeatLoop(ctx context.Context) {
 	}
 }
 
-// CreateSession sends a provider:create_session request and waits for the response.
 func (c *pcRelayClient) CreateSession(ctx context.Context, ttlMS *int, label string, groupMode *bool) (*pcRelaySessionCreated, error) {
 	requestID := pcGenerateRequestID()
 	msg := pcProviderCreateSession{
@@ -294,7 +277,6 @@ func (c *pcRelayClient) CreateSession(ctx context.Context, ttlMS *int, label str
 	}
 }
 
-// RenewSession sends a provider:renew_session request and waits for the response.
 func (c *pcRelayClient) RenewSession(ctx context.Context, sessionID string, ttlMS int) (*pcRelaySessionRenewed, error) {
 	requestID := pcGenerateRequestID()
 	msg := pcProviderRenewSession{
@@ -334,7 +316,6 @@ func (c *pcRelayClient) RenewSession(ctx context.Context, sessionID string, ttlM
 	}
 }
 
-// SendFrame sends an encrypted frame to the relay.
 func (c *pcRelayClient) SendFrame(sessionID string, envelope *pcEncryptedEnvelope, targetAppID string) error {
 	msg := pcProviderFrame{
 		Type:        pcTypeFrame,
@@ -345,7 +326,6 @@ func (c *pcRelayClient) SendFrame(sessionID string, envelope *pcEncryptedEnvelop
 	return c.writeJSON(msg)
 }
 
-// CloseSession sends a provider:close_session message.
 func (c *pcRelayClient) CloseSession(sessionID, reason string) error {
 	msg := pcProviderCloseSession{
 		Type:      pcTypeCloseSession,
@@ -355,7 +335,6 @@ func (c *pcRelayClient) CloseSession(sessionID, reason string) error {
 	return c.writeJSON(msg)
 }
 
-// CloseApp sends a provider:close_app message to kick a participant.
 func (c *pcRelayClient) CloseApp(sessionID, appID, reason string) error {
 	msg := pcProviderCloseApp{
 		Type:      pcTypeCloseApp,
@@ -366,21 +345,17 @@ func (c *pcRelayClient) CloseApp(sessionID, appID, reason string) error {
 	return c.writeJSON(msg)
 }
 
-// pcCreateResult carries a create_session reply to the waiting caller:
-// either the relay's session payload or the relay's rejection error (#1229).
 type pcCreateResult struct {
 	sess *pcRelaySessionCreated
 	err  error
 }
 
-// pcRenewResult carries a renew_session reply to the waiting caller.
 type pcRenewResult struct {
 	renewed *pcRelaySessionRenewed
 	err     error
 }
 
 func (c *pcRelayClient) handleMessage(data []byte) error {
-	// Peek at the type field
 	var peek struct {
 		Type string `json:"type"`
 	}

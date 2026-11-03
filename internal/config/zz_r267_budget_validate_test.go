@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// r267: negative sub-agent budget configs are rejected by Validate. The
-// max_concurrent guard predates this file; the max_total guard is new - both
-// are covered here symmetrically (the config package previously had zero
-// Validate() coverage).
 func TestValidateSubAgentBudgetsRejectNegative(t *testing.T) {
 	cases := []struct {
 		name string
@@ -41,7 +37,6 @@ func TestValidateSubAgentBudgetsRejectNegative(t *testing.T) {
 	}
 }
 
-// max_total = 0 (default) must stay valid: 0 means unlimited.
 func TestValidateSubAgentBudgetZeroUnlimited(t *testing.T) {
 	c := DefaultConfig()
 	if c.SubAgents.MaxTotal != 0 {

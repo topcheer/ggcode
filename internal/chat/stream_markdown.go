@@ -15,38 +15,17 @@ import (
 
 var streamMarkdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
-// maxStreamingBlockLines caps how much of the actively-growing last block
-// is rendered while streaming. The viewport shows at most ~60 lines, but
-// without this cap every chunk re-renders the ENTIRE growing block (a long
-// code fence or list can reach hundreds of lines), saturating the UI event
-// loop and making scrolling sluggish during long replies. Finished items
-// always render in full (streaming=false path).
 const maxStreamingBlockLines = 400
 
-// maxStreamingTotalLines caps the WHOLE document during streaming, not just
-// the last block. The per-block cache avoids re-PARSING stable blocks, but
-// every chunk still re-JOINED and re-MEASURED the full accumulated text
-// (join ~30KB, prefix-stitch every line, measure every line height) -
-// profile: 8.6ms/frame, 5.6MB and 150K allocs per chunk on a 30KB reply,
-// with Height+Render at ~39% of samples. Keeping only the trailing ~600
-// lines makes per-chunk cost proportional to the window, not the document.
-// Finished items render in full; scroll-up mid-stream sees the same
-// "(earlier lines hidden while streaming)" affordance the block cap uses.
 const maxStreamingTotalLines = 600
 
 type streamRenderCache struct {
-	width    int
-	source   string
-	blocks   []string
-	rendered []string
-	// trimStart is the sticky line offset where the pre-parse trim last
-	// cut the document (see renderStreamingMarkdown). Advancing the cut
-	// shifts every block and defeats the per-block cache, so it moves only
-	// in coarse hysteresis steps; between advances chunks cache-hit.
+	width     int
+	source    string
+	blocks    []string
+	rendered  []string
 	trimStart int
-	// blockCut is the sticky index of the first retained block after the
-	// document-level window drop (same hysteresis rationale).
-	blockCut int
+	blockCut  int
 }
 
 func renderStreamingMarkdown(text string, width int, cache *streamRenderCache) (string, streamRenderCache) {
@@ -104,8 +83,6 @@ func normalizeStreamingMarkdown(text string) string {
 	return mdpkg.Normalize(closeOpenFences(text))
 }
 
-// trimLeadingLines drops the first n lines of s (no-op when n <= 0).
-// Cheap byte-scan; no split of the full string.
 func trimLeadingLines(s string, n int) string {
 	if n <= 0 || s == "" {
 		return s
@@ -122,16 +99,6 @@ func trimLeadingLines(s string, n int) string {
 	return s
 }
 
-// stickyTrimStart computes the pre-parse line cut for the streaming
-// window. goldmark parses the FULL accumulated text every chunk (24% of
-// samples on a 35K-line reply) even though only the trailing window can
-// influence the display. But naively keeping the last N lines shifts the
-// cut by one line per chunk, which shifts every parsed block and zeroes
-// the per-block cache in renderStreamingMarkdown - the whole window would
-// re-render per chunk (bench-verified: no gain). So the cut advances only
-// when the overflow exceeds a quarter of the budget (same hysteresis idea
-// as List.trimLocked), keeping blocks byte-stable between advances.
-// Returns 0 (no trim) until the document exceeds the 3x budget.
 func stickyTrimStart(text string, cache *streamRenderCache, width int) int {
 	trimStart := 0
 	if cache != nil && cache.width == width {
@@ -149,14 +116,6 @@ func stickyTrimStart(text string, cache *streamRenderCache, width int) int {
 	return trimStart
 }
 
-// stickyBlockCut computes the document-level block window cut and the
-// total hidden-line count (pre-parse trim + dropped blocks), sticky like
-// stickyTrimStart: a cut that follows the tail every chunk shifts
-// blocks[0] and zeroes the per-block cache (found by
-// TestStreamingWindowStickyTrimKeepsCacheReuse: the first version
-// re-rendered the whole window per chunk). The cut advances only when the
-// overflow exceeds a quarter of the budget. hiddenLines is computed
-// BEFORE the caller slices blocks, counting lines in the dropped prefix.
 func stickyBlockCut(blocks []string, trimStart int, cache *streamRenderCache, width int) (cut, hiddenLines int) {
 	blockCut := 0
 	if cache != nil && cache.width == width {
@@ -173,9 +132,6 @@ func stickyBlockCut(blocks []string, trimStart int, cache *streamRenderCache, wi
 	return blockCut, hidden
 }
 
-// leadingBlockCut returns the smallest index into blocks such that the
-// retained suffix (blocks[idx:]) totals at most maxLines lines. Returns 0
-// when the whole slice already fits.
 func leadingBlockCut(blocks []string, maxLines int) int {
 	total := 0
 	for _, b := range blocks {
@@ -195,9 +151,6 @@ func leadingBlockCut(blocks []string, maxLines int) int {
 	return 0
 }
 
-// capStreamingBlock truncates an oversized growing block to its last
-// maxStreamingBlockLines lines, prefixed with a visible ellipsis marker.
-// Small blocks pass through unchanged.
 func capStreamingBlock(block string) string {
 	if block == "" {
 		return block
@@ -218,17 +171,6 @@ func capStreamingBlock(block string) string {
 	return sb.String()
 }
 
-// missingOpenFence mirrors closeOpenFences' parity logic: because the
-// document was fence-balanced before truncation, an odd number of fence
-// lines in the kept tail means its opening partner was dropped. Returns
-// the fence style to prepend, or "" when balanced.
-//
-// Deliberately NOT full CommonMark: like closeOpenFences, it counts any
-// ``` / ~~~ prefix line as a toggle (ignoring the "closing fence must be
-// >= opener length" rule). The two functions MUST stay mirror-identical -
-// a divergence here would desync truncation from fence-closing. Misfires
-// are benign: a longer fence closes a shorter opener per CommonMark, so a
-// spurious ``` prepend still yields balanced, valid markdown.
 func missingOpenFence(kept []string) string {
 	fence := ""
 	for _, line := range kept {

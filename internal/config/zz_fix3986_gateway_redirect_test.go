@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// #3986: when the gateway migration deletes a legacy vendor that the
-// top-level active selection points at, the selection must be redirected to
-// ai-gateway (with a deterministic endpoint fallback) - otherwise cfg.Vendor
-// dangles and the next Load fails Validate() with no self-healing path.
 func TestFix3986MigrationRedirectsActiveVendor(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Vendors["openrouter"] = VendorConfig{
@@ -46,8 +42,6 @@ func TestFix3986MigrationRedirectsActiveVendor(t *testing.T) {
 	}
 }
 
-// Control: an active vendor that is NOT a legacy gateway vendor must be left
-// untouched by the migration.
 func TestFix3986NonLegacyActiveVendorUntouched(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Vendors["openrouter"] = VendorConfig{

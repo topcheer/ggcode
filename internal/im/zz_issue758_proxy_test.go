@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// Guards for #758: the per-host proxy interceptor replaces the old
-// HTTPS_PROXY env hack (net/http sync.Once caching made it either inert or
-// permanently polluting).
 func TestHostProxyInterceptor(t *testing.T) {
 	const host = "relay.example.test:443"
 	const proxy = "socks5://127.0.0.1:1080"

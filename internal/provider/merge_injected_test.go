@@ -9,7 +9,7 @@ func TestMergeInjectedUserMessages(t *testing.T) {
 	tests := []struct {
 		name                     string
 		messages                 []Message
-		wantText                 string // text that should appear in the merged result
+		wantText                 string
 		wantNoStandaloneGuidance bool
 	}{
 		{
@@ -126,7 +126,6 @@ func TestMergeInjectedUserMessagesPreservesIDs(t *testing.T) {
 		t.Fatalf("expected 2 messages after merge, got %d", len(result))
 	}
 
-	// Tool result should preserve the ID
 	var toolResultID string
 	for _, m := range result {
 		for _, b := range m.Content {
@@ -140,10 +139,6 @@ func TestMergeInjectedUserMessagesPreservesIDs(t *testing.T) {
 	}
 }
 
-// TestFoldInjectedUserMessagesAppendOrder covers the append variant used by the
-// Anthropic and Gemini legs (#2819): folded guidance must land AFTER the
-// tool_result blocks so tool_result/functionResponse parts stay first in the
-// user turn, as both APIs require.
 func TestFoldInjectedUserMessagesAppendOrder(t *testing.T) {
 	msgs := []Message{
 		{Role: "assistant", Content: []ContentBlock{
@@ -197,8 +192,8 @@ func TestAppendToToolResultContent(t *testing.T) {
 		name      string
 		blocks    []ContentBlock
 		prefix    string
-		wantFirst string // expected type of the first block
-		wantLast  string // expected substring of the last block's text
+		wantFirst string
+		wantLast  string
 		wantLen   int
 	}{
 		{

@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// #1302: EvalMetrics had no locking - agent event goroutines (RecordEvent)
-// raced HTTP handlers (Reset/IncUserMessages) and Snapshot readers,
-// fatal-crashing on concurrent map access. Run under -race to verify.
 func TestEvalMetricsConcurrentAccess(t *testing.T) {
 	m := NewEvalMetrics()
 	var wg sync.WaitGroup

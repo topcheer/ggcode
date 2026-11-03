@@ -15,34 +15,31 @@ import (
 	"github.com/topcheer/ggcode/internal/security"
 )
 
-// BaseToolItem provides shared rendering logic for all tool items.
-// Concrete tool types embed this and override RenderBody/RenderParams.
 type BaseToolItem struct {
 	CachedItem
 	id             string
-	toolName       string // rendered header label
-	rawToolName    string // original tool name, e.g. "run_command"
-	params         string // display params for header (set at creation, never truncated)
+	toolName       string
+	rawToolName    string
+	params         string
 	status         ToolStatus
-	input          string // display detail when raw JSON input is unavailable
-	result         string // result text (may contain error)
+	input          string
+	result         string
 	isError        bool
-	markdownBody   bool // render result as markdown
-	suppressBody   bool // hide body entirely (e.g., save_memory)
-	suppressHeader bool // hide header entirely (e.g., read_command_output)
-	formatJSON     bool // parse JSON result and render as formatted key-value pairs
-	noTruncate     bool // render body without line limit (e.g., lanchat)
-	expanded       bool // sa-86: second-level disclosure - render full body (alt+e)
+	markdownBody   bool
+	suppressBody   bool
+	suppressHeader bool
+	formatJSON     bool
+	noTruncate     bool
+	expanded       bool
 	styles         Styles
-	fileBodyMode   string        // "" default, "linecount" for read/write, "editdiff" for edit
-	lang           string        // "zh-CN", "en"
-	rawArgs        string        // raw JSON args for body rendering (e.g. edit diff)
-	startedAt      time.Time     // wall-clock when the tool started running
-	finalElapsed   time.Duration // elapsed at completion (0 while running)
-	streamingBody  string        // live intermediate output shown while running
+	fileBodyMode   string
+	lang           string
+	rawArgs        string
+	startedAt      time.Time
+	finalElapsed   time.Duration
+	streamingBody  string
 }
 
-// NewBaseToolItem creates a base tool item.
 func NewBaseToolItem(id, toolName string, status ToolStatus, input string, styles Styles) *BaseToolItem {
 	t := &BaseToolItem{
 		id:       id,
@@ -60,7 +57,6 @@ func NewBaseToolItem(id, toolName string, status ToolStatus, input string, style
 
 func (t *BaseToolItem) ID() string { return t.id }
 
-// SetStatus updates the tool status and invalidates cache.
 func (t *BaseToolItem) SetStatus(s ToolStatus) {
 	if t.status != s {
 		if t.status == StatusRunning && s != StatusRunning {
@@ -74,7 +70,6 @@ func (t *BaseToolItem) SetStatus(s ToolStatus) {
 	}
 }
 
-// SetResult updates the tool result and invalidates cache.
 func (t *BaseToolItem) SetResult(result string, isError bool) {
 
 	t.result = security.RedactForDisplay(security.SanitizeTerminalForDisplay(result))
@@ -82,23 +77,17 @@ func (t *BaseToolItem) SetResult(result string, isError bool) {
 	t.Invalidate()
 }
 
-// SetStreamingBody sets live intermediate output shown while the tool is running.
-// When the tool finishes, the final result replaces this via SetResult.
 func (t *BaseToolItem) SetStreamingBody(body string) {
 
 	t.streamingBody = security.RedactForDisplay(security.SanitizeTerminalForDisplay(body))
 	t.Invalidate()
 }
 
-// SetElapsed sets the final elapsed duration explicitly (used when the
-// caller already tracked timing externally).
 func (t *BaseToolItem) SetElapsed(d time.Duration) {
 	t.finalElapsed = d
 	t.Invalidate()
 }
 
-// elapsedString returns a compact elapsed-time label for the header.
-// While running, it computes from startedAt; after completion, uses finalElapsed.
 func (t *BaseToolItem) elapsedString() string {
 	if t.status == StatusRunning {
 		if t.startedAt.IsZero() {
@@ -112,7 +101,6 @@ func (t *BaseToolItem) elapsedString() string {
 	return ""
 }
 
-// formatElapsed renders a duration as a compact timer string.
 func formatElapsed(d time.Duration) string {
 	if d < time.Second {
 		return ""
@@ -131,10 +119,8 @@ func formatElapsed(d time.Duration) string {
 	return fmt.Sprintf("%dh%02dm", h, m)
 }
 
-// Status returns the current tool status.
 func (t *BaseToolItem) Status() ToolStatus { return t.status }
 
-// ToolName returns the original tool name when available.
 func (t *BaseToolItem) ToolName() string {
 	if t.rawToolName != "" {
 		return t.rawToolName
@@ -142,7 +128,6 @@ func (t *BaseToolItem) ToolName() string {
 	return t.toolName
 }
 
-// Input returns the raw input JSON when available, otherwise the display detail.
 func (t *BaseToolItem) Input() string {
 	if t.rawArgs != "" {
 		return t.rawArgs
@@ -150,13 +135,10 @@ func (t *BaseToolItem) Input() string {
 	return t.input
 }
 
-// Result returns the current rendered tool result body.
 func (t *BaseToolItem) Result() string { return t.result }
 
-// IsError reports whether the current result is an error.
 func (t *BaseToolItem) IsError() bool { return t.isError }
 
-// RenderParams returns the display parameters for the tool header.
 func (t *BaseToolItem) RenderParams() string {
 	return t.params
 }
@@ -168,8 +150,6 @@ func (t *BaseToolItem) setToolMeta(rawToolName, rawArgs string) {
 	}
 }
 
-// RenderBody renders the tool output body.
-// Override in concrete types for specialized body rendering.
 func (t *BaseToolItem) RenderBody(width int) string {
 
 	if t.status == StatusRunning && t.streamingBody != "" {
@@ -546,8 +526,6 @@ func (t *BaseToolItem) renderCronBody(width int) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	// Wrap each field to the body width so Height and Render agree on
-	// line counts — long Prompt values otherwise break scrolling (#183).
 	var out []string
 	for _, part := range parts {
 		for _, wl := range wrapLines(part, width-4) {
@@ -557,9 +535,6 @@ func (t *BaseToolItem) renderCronBody(width int) string {
 	return strings.Join(out, "\n")
 }
 
-// Render produces the full tool output: header + optional body.
-// This is the base implementation. Concrete types should call renderCore
-// with their own params/body overrides.
 func (t *BaseToolItem) Render(width int) string {
 
 	if t.status != StatusRunning {
@@ -582,7 +557,6 @@ func (t *BaseToolItem) Render(width int) string {
 	return rendered
 }
 
-// renderCore builds the full tool output string from header params and body.
 func (t *BaseToolItem) renderCore(width int, params string, body string) string {
 	var sb strings.Builder
 
@@ -612,24 +586,19 @@ func (t *BaseToolItem) Height(width int) int {
 	return measureHeightWidth(t.Render(width), width)
 }
 
-// BashToolItem renders bash command execution.
-// BashToolItem renders bash command execution.
 type BashToolItem struct {
 	BaseToolItem
 }
 
-// NewBashToolItem creates a new bash tool item.
-// ToolBodyBehavior describes how a tool's result body should be rendered.
 type ToolBodyBehavior int
 
 const (
-	BodyDefault    ToolBodyBehavior = iota // show result as-is (truncated)
-	BodySuppress                           // hide body entirely
-	BodyFormatJSON                         // parse JSON and render as key-value pairs
-	BodyMarkdown                           // render result as markdown
+	BodyDefault ToolBodyBehavior = iota
+	BodySuppress
+	BodyFormatJSON
+	BodyMarkdown
 )
 
-// GetToolBodyBehavior returns the body rendering behavior for a given tool name.
 func GetToolBodyBehavior(toolName string) ToolBodyBehavior {
 	switch toolName {
 	case "save_memory", "delete_memory", "team_delete",
@@ -659,8 +628,6 @@ func GetToolBodyBehavior(toolName string) ToolBodyBehavior {
 	}
 }
 
-// PrettifyToolName converts internal tool names to display names.
-// e.g. "run_command" → "Bash", "read_file" → "Read", "search_files" → "Grep"
 func PrettifyToolName(name string) string {
 	m := map[string]string{
 		"run_command":             "Bash",
@@ -704,12 +671,10 @@ func NewBashToolItem(id, displayName, command string, status ToolStatus, styles 
 	return &BashToolItem{BaseToolItem: *b}
 }
 
-// FileToolItem renders file read/write/edit operations.
 type FileToolItem struct {
 	BaseToolItem
 }
 
-// NewFileToolItem creates a new file operation tool item.
 func NewFileToolItem(id, displayName, filePath string, status ToolStatus, styles Styles, lang string, rawArgs string, toolName string) *FileToolItem {
 	b := NewBaseToolItem(id, displayName, status, filePath, styles)
 	b.lang = lang
@@ -724,19 +689,16 @@ func NewFileToolItem(id, displayName, filePath string, status ToolStatus, styles
 	return &FileToolItem{BaseToolItem: *b}
 }
 
-// SearchToolItem renders grep/glob/ls operations.
 type SearchToolItem struct {
 	BaseToolItem
 }
 
-// NewSearchToolItem creates a new search tool item.
 func NewSearchToolItem(id, displayName, pattern string, status ToolStatus, styles Styles) *SearchToolItem {
 	b := NewBaseToolItem(id, displayName, status, pattern, styles)
 	b.fileBodyMode = "searchcount"
 	return &SearchToolItem{BaseToolItem: *b}
 }
 
-// ListToolItem renders directory listing operations.
 type ListToolItem struct {
 	BaseToolItem
 }
@@ -747,7 +709,6 @@ func newListToolItem(id, displayName, path string, status ToolStatus, styles Sty
 	return &ListToolItem{BaseToolItem: *b}
 }
 
-// WebToolItem renders web fetch/search operations.
 type WebToolItem struct {
 	BaseToolItem
 }
@@ -757,7 +718,6 @@ func newWebToolItem(id, displayName, url string, status ToolStatus, styles Style
 	return &WebToolItem{BaseToolItem: *b}
 }
 
-// GitToolItem renders git operations with command-output body.
 type GitToolItem struct {
 	BaseToolItem
 }
@@ -767,14 +727,6 @@ func newGitToolItem(id, displayName, subCmd string, status ToolStatus, styles St
 	return &GitToolItem{BaseToolItem: *b}
 }
 
-// CmdToolItem renders background command lifecycle operations.
-// The detail string comes pre-formatted from describeTool, e.g.:
-//   - start_command: "go build ./..."
-//   - write_command_input: "[abc12345] → y\n" (input text, most important)
-//   - read_command_output: "abc12345"
-//   - wait_command: "abc12345 (30s)"
-//   - stop_command: "abc12345"
-//   - list_commands: "" (no params)
 type CmdToolItem struct {
 	BaseToolItem
 }
@@ -784,7 +736,6 @@ func newCmdToolItem(id, displayName, detail string, status ToolStatus, styles St
 	return &CmdToolItem{BaseToolItem: *b}
 }
 
-// LspToolItem renders LSP operations (hover, definition, references, etc.)
 type LspToolItem struct {
 	BaseToolItem
 }
@@ -794,12 +745,10 @@ func newLspToolItem(id, displayName, location string, status ToolStatus, styles 
 	return &LspToolItem{BaseToolItem: *b}
 }
 
-// GenericToolItem is a fallback for unrecognized tools.
 type GenericToolItem struct {
 	BaseToolItem
 }
 
-// NewGenericToolItem creates a generic tool item.
 func NewGenericToolItem(id, displayName string, status ToolStatus, detail string, styles Styles) *GenericToolItem {
 	b := NewBaseToolItem(id, displayName, status, detail, styles)
 	return &GenericToolItem{
@@ -807,7 +756,6 @@ func NewGenericToolItem(id, displayName string, status ToolStatus, detail string
 	}
 }
 
-// NewMarkdownToolItem creates a tool item that renders its result as markdown.
 func NewMarkdownToolItem(id, displayName string, status ToolStatus, detail string, styles Styles) *GenericToolItem {
 	b := NewBaseToolItem(id, displayName, status, detail, styles)
 	b.markdownBody = true
@@ -816,34 +764,28 @@ func NewMarkdownToolItem(id, displayName string, status ToolStatus, detail strin
 	}
 }
 
-// ToolContext carries pre-resolved display information from the caller
-// (typically describeTool in the TUI layer). It is the primary data source
-// for tool rendering — the caller is responsible for extracting the right
-// detail from rawArgs, so NewToolItem no longer needs to do JSON parsing.
 type ToolContext struct {
-	ToolName    string // original tool name, e.g. "run_command"
-	DisplayName string // prettified name, e.g. "Bash"
-	Detail      string // extracted detail, e.g. "go build ./..."
-	RawArgs     string // raw JSON input (for body rendering / fallback)
-	Lang        string // language code, e.g. "zh-CN", "en"
+	ToolName    string
+	DisplayName string
+	Detail      string
+	RawArgs     string
+	Lang        string
 }
 
-// toolCategory classifies a tool for rendering purposes.
 type toolCategory int
 
 const (
-	catBash    toolCategory = iota // command execution
-	catFile                        // file read/write/edit
-	catSearch                      // grep/glob/find
-	catList                        // list_directory
-	catWeb                         // web_fetch/web_search
-	catGit                         // git_*
-	catCmd                         // background command management
-	catLSP                         // language server protocol tools
-	catGeneric                     // everything else
+	catBash toolCategory = iota
+	catFile
+	catSearch
+	catList
+	catWeb
+	catGit
+	catCmd
+	catLSP
+	catGeneric
 )
 
-// classifyTool returns the rendering category for a tool name.
 func classifyTool(name string) toolCategory {
 	switch name {
 	case "run_command", "bash", "Bash":
@@ -880,9 +822,6 @@ func classifyTool(name string) toolCategory {
 	}
 }
 
-// NewToolItem creates the appropriate tool item type based on the ToolContext.
-// The caller (chatStartTool) is responsible for filling Detail from describeTool;
-// NewToolItem uses it directly instead of re-parsing RawArgs.
 func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) Item {
 	displayName := ctx.DisplayName
 	if displayName == "" {
@@ -974,14 +913,12 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 	}
 }
 
-// TodoTask represents a single todo/task item.
 type TodoTask struct {
 	ID      string
 	Content string
-	Status  string // "done", "in_progress", "pending"
+	Status  string
 }
 
-// TodoToolItem renders a todo/task list.
 type TodoToolItem struct {
 	CachedItem
 	id     string
@@ -990,7 +927,6 @@ type TodoToolItem struct {
 	lang   string
 }
 
-// NewTodoToolItem creates a new todo list tool item.
 func NewTodoToolItem(id string, tasks []TodoTask, styles Styles, lang string) *TodoToolItem {
 	return &TodoToolItem{
 		id:     id,
@@ -1002,7 +938,6 @@ func NewTodoToolItem(id string, tasks []TodoTask, styles Styles, lang string) *T
 
 func (t *TodoToolItem) ID() string { return t.id }
 
-// SetTasks updates the task list.
 func (t *TodoToolItem) SetTasks(tasks []TodoTask) {
 	t.tasks = tasks
 	t.Invalidate()
@@ -1070,21 +1005,16 @@ func (t *TodoToolItem) Height(width int) int {
 	return measureHeight(t.Render(width))
 }
 
-// AgentToolItem renders a subagent with nested tool calls.
-// AgentToolItem displays a sub-agent's lifecycle in the main chat.
-// The label field holds the sub-agent's name (from description param).
 type AgentToolItem struct {
 	CachedItem
 	id          string
-	label       string // sub-agent name for display
+	label       string
 	status      ToolStatus
 	nestedItems []Item
 	result      string
 	styles      Styles
 }
 
-// NewAgentToolItem creates a new agent tool item.
-// The label parameter is the sub-agent name shown in the header.
 func NewAgentToolItem(id, label string, status ToolStatus, styles Styles) *AgentToolItem {
 	return &AgentToolItem{
 		id:     id,
@@ -1102,19 +1032,16 @@ func (a *AgentToolItem) Result() string { return a.result }
 
 func (a *AgentToolItem) Status() ToolStatus { return a.status }
 
-// SetStatus updates the agent status.
 func (a *AgentToolItem) SetStatus(s ToolStatus) {
 	a.status = s
 	a.Invalidate()
 }
 
-// SetResult updates the agent result.
 func (a *AgentToolItem) SetResult(result string) {
 	a.result = result
 	a.Invalidate()
 }
 
-// AppendNested adds a nested tool item.
 func (a *AgentToolItem) AppendNested(item Item) {
 	a.nestedItems = append(a.nestedItems, item)
 	a.Invalidate()
@@ -1158,7 +1085,6 @@ func (a *AgentToolItem) Height(width int) int {
 	return measureHeightWidth(a.Render(width), width)
 }
 
-// FormatJSONResult parses a JSON string and renders it as human-readable key-value pairs.
 func FormatJSONResult(raw string) string {
 	var data map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &data); err != nil {
@@ -1225,7 +1151,6 @@ func prettifyJSONKey(key string) string {
 	}
 }
 
-// lanchatAction extracts the "action" field from lanchat tool raw args.
 func lanchatAction(rawArgs string) string {
 	var v struct {
 		Action string `json:"action"`

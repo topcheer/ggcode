@@ -19,8 +19,6 @@ func newFeishu955Adapter(mgr *Manager, token string) *feishuAdapter {
 	}
 }
 
-// The real Card 2.0 callback envelope must reach HandleInteractiveCallback
-// with the correct message id, choice, sender and chat.
 func TestFeishuCardActionParsesNestedEventFields(t *testing.T) {
 	mgr := NewManager()
 	got := make(chan InteractiveCallback, 1)
@@ -65,9 +63,6 @@ func TestFeishuCardActionParsesNestedEventFields(t *testing.T) {
 	}
 }
 
-// Legacy tolerance: older envelopes with fields at the payload top level must
-// still work (this was the only layout the old parser looked at, but only for
-// fields that never appeared there in real Card 2.0 traffic).
 func TestFeishuCardActionToleratesTopLevelFallback(t *testing.T) {
 	mgr := NewManager()
 	got := make(chan InteractiveCallback, 1)
@@ -95,9 +90,6 @@ func TestFeishuCardActionToleratesTopLevelFallback(t *testing.T) {
 	}
 }
 
-// verification_token must now be enforced when configured: requests without a
-// matching header.token / top-level token are rejected with 401 before any
-// processing (previously the config was dead — never checked).
 func TestFeishuWebhookVerificationTokenEnforced(t *testing.T) {
 	mgr := NewManager()
 	calls := make(chan InteractiveCallback, 4)

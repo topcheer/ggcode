@@ -248,5 +248,4 @@ func TestIssue561C_GeminiStreamUsageFallback(t *testing.T) {
 	}
 }
 
-// Guard against accidental name collisions with existing test helpers.
 var _ = config.ResolvedEndpoint{}

@@ -20,19 +20,14 @@ const (
 	wecomCmdUploadChunk  = "aibot_upload_media_chunk"
 	wecomCmdUploadFinish = "aibot_upload_media_finish"
 
-	wecomMaxImageBytes = 10 << 20 // official image cap
-	wecomMaxFileBytes  = 20 << 20 // official file-message cap (#3325)
+	wecomMaxImageBytes = 10 << 20
+	wecomMaxFileBytes  = 20 << 20
 	wecomChunkBytes    = 512 << 10
 
-	// #1254: chunk uploads are idempotent (official docs) - retry a failed
-	// chunk ack instead of wasting the init + all previous chunks.
 	wecomChunkAckRetries = 3
 	wecomChunkRetryDelay = 500 * time.Millisecond
 )
 
-// writeAndAwaitAckFrame is writeAndAwaitAck for commands whose ack body
-// carries data (upload_id, media_id). The ack frame is returned alongside the
-// error so callers can extract response fields.
 func (a *wecomAdapter) writeAndAwaitAckFrame(reqID string, frame map[string]any) (map[string]any, error) {
 	a.mu.RLock()
 	ws := a.ws
@@ -61,15 +56,10 @@ func (a *wecomAdapter) writeAndAwaitAckFrame(reqID string, frame map[string]any)
 	}
 }
 
-// wecomUploadMedia uploads image bytes through the chunked media protocol and
-// returns the media_id.
 func (a *wecomAdapter) wecomUploadMedia(ctx context.Context, data []byte, filename string) (string, error) {
 	return a.wecomUploadMediaTyped(ctx, data, filename, "image", wecomMaxImageBytes)
 }
 
-// wecomUploadMediaTyped (#3325) is the chunked media upload parameterized by
-// body type and size cap so file-message uploads (type=file, 20MB official
-// cap) reuse the image protocol (init → chunks → finish → media_id).
 func (a *wecomAdapter) wecomUploadMediaTyped(ctx context.Context, data []byte, filename, mediaType string, maxBytes int) (string, error) {
 	if len(data) < 5 {
 		return "", fmt.Errorf("WeCom: media too small (%d bytes, minimum 5)", len(data))
@@ -116,9 +106,6 @@ func (a *wecomAdapter) wecomUploadMediaTyped(ctx context.Context, data []byte, f
 				"base64_data": base64.StdEncoding.EncodeToString(data[i*wecomChunkBytes : end]),
 			},
 		}
-		// #1254: the chunk command is idempotent per the official docs, so a
-		// single ack failure no longer aborts the whole upload (init + all
-		// prior chunks wasted). Retry a few times with spacing before giving up.
 		var ackErr error
 		for attempt := 1; attempt <= wecomChunkAckRetries; attempt++ {
 			_, ackErr = a.writeAndAwaitAckFrame(payloadReqID(chunkFrame), chunkFrame)
@@ -158,7 +145,6 @@ func (a *wecomAdapter) wecomUploadMediaTyped(ctx context.Context, data []byte, f
 	return mediaID, nil
 }
 
-// sendWecomImageMsg sends one image message via aibot_send_msg.
 func (a *wecomAdapter) sendWecomImageMsg(chatID, mediaID string) error {
 	frame := map[string]any{
 		"cmd":     wecomCmdSend,
@@ -172,8 +158,6 @@ func (a *wecomAdapter) sendWecomImageMsg(chatID, mediaID string) error {
 	return a.writeAndAwaitAck(payloadReqID(frame), frame)
 }
 
-// wecomDownloadImage fetches an http(s) image URL with bounds and
-// content-type checks; returns data and a filename from the URL.
 func wecomDownloadImage(ctx context.Context, rawURL string) ([]byte, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -202,8 +186,6 @@ func wecomDownloadImage(ctx context.Context, rawURL string) ([]byte, string, err
 	return data, name, nil
 }
 
-// wecomResolveImageBytes turns an ExtractedImage into raw bytes (WeCom needs
-// bytes for the chunked upload; URLs must be downloaded first).
 func (a *wecomAdapter) wecomResolveImageBytes(ctx context.Context, img ExtractedImage) ([]byte, string, error) {
 	switch img.Kind {
 	case "data_url":
@@ -241,7 +223,6 @@ func (a *wecomAdapter) wecomResolveImageBytes(ctx context.Context, img Extracted
 	}
 }
 
-// sendWecomImage uploads and sends one extracted image to chatID.
 func (a *wecomAdapter) sendWecomImage(ctx context.Context, chatID string, img ExtractedImage) error {
 	data, filename, err := a.wecomResolveImageBytes(ctx, img)
 	if err != nil {

@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// #1805 case 1: the resolve path must classify refresh failures so a
-// permanently dead (rotated/revoked) refresh token gets cleared while
-// transient errors keep the token for retry.
 func Test1805PermanentRefreshClassification(t *testing.T) {
 	if !isPermanentRefreshFailure(errors.New("oauth2: refresh failed: invalid_grant")) {
 		t.Fatal("invalid_grant must be permanent")

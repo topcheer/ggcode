@@ -9,10 +9,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
-// TestServerToolBlockEchoBackRoundTrip verifies the verbatim capture →
-// request-side param conversion round trip that keeps the API contract:
-// the server_tool_use + result pair must be echoed back losslessly or the
-// API treats the call as deferred and re-runs the tool.
 func TestServerToolBlockEchoBackRoundTrip(t *testing.T) {
 	useJSON := `{"type":"server_tool_use","id":"srvtoolu_01ABC","name":"web_search","input":{"query":"ggcode anthropic"}}`
 	resultJSON := `{"type":"web_search_tool_result","tool_use_id":"srvtoolu_01ABC","content":[{"type":"web_search_result","title":"Anthropic","url":"https://example.com","encrypted_index":"EI"}]}`
@@ -72,8 +68,6 @@ func TestServerToolBlockEchoBackRoundTrip(t *testing.T) {
 	}
 }
 
-// TestServerToolDeclarationInParams verifies web_search/web_fetch are declared
-// as Anthropic-native tool unions with a cache breakpoint on the last one.
 func TestServerToolDeclarationInParams(t *testing.T) {
 	p := NewAnthropicProviderWithBaseURL("test-key", "claude-sonnet-4-5", 1024, "https://api.anthropic.com")
 	p.SetServerTools([]ServerToolConfig{
@@ -107,8 +101,6 @@ func TestServerToolDeclarationInParams(t *testing.T) {
 	}
 }
 
-// TestUnknownServerToolTypeIgnored ensures an unsupported declaration is
-// skipped rather than producing an invalid request payload.
 func TestUnknownServerToolTypeIgnored(t *testing.T) {
 	p := NewAnthropicProviderWithBaseURL("test-key", "claude-sonnet-4-5", 1024, "https://api.anthropic.com")
 	p.SetServerTools([]ServerToolConfig{{Type: "definitely_not_real_20260101"}})
@@ -119,7 +111,6 @@ func TestUnknownServerToolTypeIgnored(t *testing.T) {
 	}
 }
 
-// TestServerToolBlockParamRejectsUnknown ensures echo conversion fails closed.
 func TestServerToolBlockParamRejectsUnknown(t *testing.T) {
 	if _, err := serverToolBlockParam(json.RawMessage(`{"type":"mystery_block"}`)); err == nil {
 		t.Fatal("expected error for unknown block type")
@@ -129,9 +120,6 @@ func TestServerToolBlockParamRejectsUnknown(t *testing.T) {
 	}
 }
 
-// TestToolSearchDeclarationAndBetaOpts verifies the server-side Tool Search
-// Tool declarations (tool_search_tool_regex/bm25, advanced-tool-use beta):
-// native union types, cache breakpoints, active-flag, and beta request opts.
 func TestToolSearchDeclarationAndBetaOpts(t *testing.T) {
 	p := NewAnthropicProviderWithBaseURL("test-key", "claude-sonnet-4-5", 1024, "https://api.anthropic.com")
 	if p.ServerToolSearchActive() {
@@ -179,9 +167,6 @@ func TestToolSearchDeclarationAndBetaOpts(t *testing.T) {
 	}
 }
 
-// TestToolSearchResultEchoRoundTrip verifies tool_search_tool_result blocks
-// survive capture → conversion → param echo-back so tool_reference expansions
-// the API produced are not treated as deferred on the next turn.
 func TestToolSearchResultEchoRoundTrip(t *testing.T) {
 	rawJSON := `{"type":"tool_search_tool_result","tool_use_id":"srvtoolu_01TS","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"mcp__srv__tool_01"}]}}`
 	var block anthropic.ContentBlockUnion
@@ -214,10 +199,6 @@ func TestToolSearchResultEchoRoundTrip(t *testing.T) {
 	}
 }
 
-// TestDeferLoadingToolParams verifies defer_loading serialization and the
-// cache-breakpoint guard: the API rejects defer_loading combined with a
-// cache_control breakpoint on the same definition, so the breakpoint moves
-// to the last non-deferred tool.
 func TestDeferLoadingToolParams(t *testing.T) {
 	p := NewAnthropicProviderWithBaseURL("test-key", "claude-sonnet-4-5", 1024, "https://api.anthropic.com")
 	tools := []ToolDefinition{
@@ -236,7 +217,6 @@ func TestDeferLoadingToolParams(t *testing.T) {
 	if got := strings.Count(string(raw), `"defer_loading":true`); got != 2 {
 		t.Fatalf("expected exactly 2 defer_loading flags, got %d: %s", got, raw)
 	}
-	// cache_control must sit on the last NON-deferred tool only.
 	var wire []struct {
 		Name         string           `json:"name"`
 		DeferLoading bool             `json:"defer_loading"`

@@ -10,7 +10,6 @@ import (
 
 const PCInviteURIPrefix = "privateclaw://connect?payload="
 
-// PCEncodeInviteToURI encodes an invite into a privateclaw:// URI (exported for TUI).
 func PCEncodeInviteToURI(invite PCInvite) (string, error) {
 	data, err := json.Marshal(invite)
 	if err != nil {
@@ -20,7 +19,6 @@ func PCEncodeInviteToURI(invite PCInvite) (string, error) {
 	return PCInviteURIPrefix + encoded, nil
 }
 
-// pcDecodeInviteString decodes an invite from a URI, JSON string, or raw base64url.
 func pcDecodeInviteString(input string) (*PCInvite, error) {
 	trimmed := strings.TrimSpace(input)
 
@@ -63,19 +61,16 @@ func pcDecodeInviteFromBase64(b64 string) (*PCInvite, error) {
 	return &invite, nil
 }
 
-// pcBuildMessageID generates a unique message ID.
 func pcBuildMessageID(prefix string) string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("%s-%x", prefix, b)
 }
 
-// pcNowISO returns the current time in ISO 8601 format (UTC).
 func pcNowISO() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 }
 
-// pcGenerateRequestID generates a unique request ID.
 func pcGenerateRequestID() string {
 	b := make([]byte, 12)
 	_, _ = rand.Read(b)

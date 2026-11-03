@@ -234,7 +234,6 @@ func TestEnqueue_NormalDelivery(t *testing.T) {
 	}
 }
 
-// newManagerWithBinding creates a Manager with a binding and a blockingStubSink registered.
 func newManagerWithBinding(t *testing.T) (*Manager, *blockingStubSink) {
 	t.Helper()
 	mgr := NewManager()
@@ -246,7 +245,6 @@ func newManagerWithBinding(t *testing.T) (*Manager, *blockingStubSink) {
 	return mgr, sink
 }
 
-// retrySink calls fn on each Send, for controlling retry behavior.
 type retrySink struct {
 	name string
 	fn   func() error
@@ -257,7 +255,6 @@ func (s *retrySink) Send(_ context.Context, _ ChannelBinding, _ OutboundEvent) e
 	return s.fn()
 }
 
-// callbackSink calls fn on Send, for controlling timing/ordering.
 type callbackSink struct {
 	name string
 	fn   func() error
@@ -268,7 +265,6 @@ func (s *callbackSink) Send(_ context.Context, _ ChannelBinding, _ OutboundEvent
 	return s.fn()
 }
 
-// blockSink blocks on Send until unblock channel is closed or receives.
 type blockSink struct {
 	unblock chan struct{}
 }
@@ -283,13 +279,11 @@ func (s *blockSink) Send(ctx context.Context, _ ChannelBinding, _ OutboundEvent)
 	}
 }
 
-// blockingStubSink extends stubSink with an optional sendBlock channel.
-// When sendBlock is non-nil, Send blocks on it before recording the event.
 type blockingStubSink struct {
 	name      string
 	mu        sync.Mutex
 	events    []OutboundEvent
-	sendBlock chan struct{} // if non-nil, blocks on each Send until closed/signaled
+	sendBlock chan struct{}
 }
 
 func (s *blockingStubSink) Name() string { return s.name }

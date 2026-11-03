@@ -79,10 +79,6 @@ func TestIssue2205RemoteDangerousAllowedSemantics(t *testing.T) {
 	}
 }
 
-// R82 acceptance of #2185 flagged the missing direct cases: SwitchMode
-// escalation to bypass refused (gate closed) and passed (opt-in), not
-// just the garbage-name validation path above. The refusal happens
-// before the agent lookup, so no live agent is needed.
 func TestIssue2185DaemonSwitchModeEscalationGate(t *testing.T) {
 
 	err := (&DaemonBridge{}).SwitchMode("bypass")

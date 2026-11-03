@@ -26,81 +26,48 @@ import (
 )
 
 const (
-	twitchHost             = "irc.chat.twitch.tv"
-	twitchPort             = 6697
-	twitchPingInterval     = 60 * time.Second
-	twitchPongTimeout      = 30 * time.Second
-	twitchReconnectBackoff = 5 * time.Second
-	twitchMaxBackoff       = 120 * time.Second
-	twitchMaxMessageLen    = 500
-	// twitchInterMessageDelay is the delay between consecutive PRIVMSG lines.
-	// Twitch limits non-VIP/mod accounts to 20 messages per 30 seconds
-	// (= 1500ms minimum between messages) and 1 message per second per channel.
-	// Source: https://dev.twitch.tv/docs/irc/#rate-limits
+	twitchHost              = "irc.chat.twitch.tv"
+	twitchPort              = 6697
+	twitchPingInterval      = 60 * time.Second
+	twitchPongTimeout       = 30 * time.Second
+	twitchReconnectBackoff  = 5 * time.Second
+	twitchMaxBackoff        = 120 * time.Second
+	twitchMaxMessageLen     = 500
 	twitchInterMessageDelay = 1500 * time.Millisecond
 
-	// twitchHelixBaseURL is the Twitch Helix API root used for DMs (whispers).
-	// Twitch chat IRC has no whisper channel: a PRIVMSG addressed to a nick is
-	// not a valid DM route, so outbound DMs must go through Helix (issue #972).
 	twitchHelixBaseURL = "https://api.twitch.tv"
 
-	// twitchBackoffResetAfter is how long a connection must have served before
-	// the reconnect backoff resets to its initial value. A connection that
-	// lasted this long counts as a healthy cycle, not a flapping one (aligned
-	// with the mattermost/nostr adapters).
 	twitchBackoffResetAfter = 60 * time.Second
 )
 
-// errTwitchAuthFailed is returned by the read loop when Twitch rejects our
-// credentials (NOTICE "Login authentication failed"). The run loop terminates
-// instead of retrying forever with a dead token (issue #972).
 var errTwitchAuthFailed = errors.New("twitch: login authentication failed")
 
-// twitchDefaultHelixClient is the shared HTTP client for Helix API calls.
 var twitchDefaultHelixClient = &http.Client{Timeout: 20 * time.Second}
 
 type twitchAdapter struct {
-	// #1565 case B: PRIVMSG pacing is per-CONNECTION, not per-call: the
-	// old local `sent` flags paced only within one Send while concurrent
-	// Sends (fanOutSend runs one goroutine per target) interleaved their
-	// first messages freely - Twitch's 20-msg/30s limit is global per
-	// user across channels, and over-limit PRIVMSGs are dropped by the
-	// server silently. This pair serializes the wait-then-send step.
 	privMsgMu     sync.Mutex
 	lastPrivMsgAt time.Time
 	name          string
 	manager       *Manager
 
-	// Connection
-	token    string // OAuth token (oauth:xxxxx)
-	nick     string // username (lowercase)
+	token    string
+	nick     string
 	channels []string
-	proxy    string // HTTP/SOCKS5 proxy URL
+	proxy    string
 
 	mu        sync.RWMutex
 	conn      net.Conn
 	connected bool
 	closed    bool
-	// writeMu serializes socket writes (#1249): sendRaw only held mu.RLock
-	// while writing, but four real callers (read-loop PONG/PRIVMSG, keepalive
-	// PING, Send, Close QUIT) can race. net.Conn does not guarantee line
-	// atomicity, so a long PRIVMSG crossing a PING packet interleaved into a
-	// corrupt IRC line and a server disconnect. mu stays for conn lifecycle.
-	writeMu sync.Mutex
+	writeMu   sync.Mutex
 
-	// stopCh is closed by Close() and wakes the backoff sleep, so a Close()
-	// issued during the reconnect window cannot leave the adapter running
-	// (issue #972: closed=true but conn=nil made QUIT a no-op and the sleep
-	// expired into a fresh reconnect that then served forever).
-	stopCh chan struct{}
-	// dialIRC is injectable for tests; nil means the default TLS dialer.
+	stopCh  chan struct{}
 	dialIRC func(addr string) (net.Conn, error)
 
-	// Helix API state for DMs (whispers).
-	clientID     string // optional; Helix infers it from the Bearer token when empty
-	helixBaseURL string // empty → twitchHelixBaseURL; overridable in tests
+	clientID     string
+	helixBaseURL string
 	httpClient   *http.Client
-	userIDs      map[string]string // login (lowercase) → twitch user id cache
+	userIDs      map[string]string
 	userIDsMu    sync.Mutex
 }
 
@@ -186,8 +153,6 @@ func (a *twitchAdapter) Close() error {
 	return nil
 }
 
-// stopChannel returns the close-signaled channel, creating it lazily so
-// adapters constructed directly (tests) still work.
 func (a *twitchAdapter) stopChannel() chan struct{} {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -240,10 +205,6 @@ func (a *twitchAdapter) run(ctx context.Context) {
 	}
 }
 
-// twitchNextBackoff computes the backoff for the next reconnect attempt.
-// A serve cycle that lasted at least twitchBackoffResetAfter counts as a
-// healthy connection, so the backoff resets to its initial value instead of
-// growing forever (issue #972: backoff never reset).
 func twitchNextBackoff(cur, initial, max time.Duration, served time.Duration) time.Duration {
 	if served >= twitchBackoffResetAfter {
 		return initial
@@ -309,9 +270,6 @@ func (a *twitchAdapter) connectAndServe(ctx context.Context) error {
 	return a.serveIRC(ctx, conn)
 }
 
-// serveIRC runs the keepalive and read loops on an established connection.
-// It returns when the connection drops, ctx is cancelled, or an auth-failure
-// NOTICE arrives (errTwitchAuthFailed).
 func (a *twitchAdapter) serveIRC(ctx context.Context, conn net.Conn) error {
 
 	scanner := bufio.NewScanner(conn)
@@ -376,9 +334,6 @@ func (a *twitchAdapter) serveIRC(ctx context.Context, conn net.Conn) error {
 	return nil
 }
 
-// handleIRCLine dispatches a parsed IRC message. It reports whether the
-// connection must be torn down because Twitch rejected our credentials
-// (issue #972).
 func (a *twitchAdapter) handleIRCLine(ctx context.Context, msg *ircMessage, tags map[string]string, lastPongNs *atomic.Int64) bool {
 	switch msg.Command {
 	case "PING":
@@ -458,9 +413,6 @@ func unescapeTwitchTag(val string) string {
 	return b.String()
 }
 
-// isTwitchAuthFailureNOTICE reports whether a NOTICE indicates our OAuth
-// token was rejected (issue #972: these were silently dropped and the run
-// loop reconnected forever with a dead token).
 func isTwitchAuthFailureNOTICE(msg *ircMessage) bool {
 	if msg == nil {
 		return false
@@ -539,8 +491,6 @@ func (a *twitchAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage, tags
 	}
 }
 
-// handlePairing runs the pairing flow for an inbound message and reports
-// whether the message was consumed (the caller must not forward it further).
 func (a *twitchAdapter) handlePairing(ctx context.Context, ircMsg InboundMessage, channelID string) bool {
 	if a.manager == nil {
 		return false
@@ -565,13 +515,6 @@ func (a *twitchAdapter) handlePairing(ctx context.Context, ircMsg InboundMessage
 	return true
 }
 
-// twitchNickMentioned reports whether text mentions currentNick as a
-// whole TOKEN, case-insensitively.
-// #1565: the old second condition was a bare substring Contains -
-// "ggcodex is broken" mentioned nick "ggcode" (substring INSIDE a word),
-// so messages that never addressed the bot were forwarded, and
-// stripTwitchMention then amputated the substring mid-word, corrupting
-// the text the agent received.
 func twitchNickMentioned(text, currentNick string) bool {
 	if currentNick == "" {
 		return false
@@ -648,10 +591,6 @@ func (a *twitchAdapter) sendTwitchMessage(ctx context.Context, target, text stri
 	return nil
 }
 
-// pacePrivMsg blocks until at least twitchInterMessageDelay has passed
-// since the previous PRIVMSG on THIS connection (#1565 case B): the
-// server's 20/30s budget is global per user, so pacing must be shared
-// across concurrent Sends, not per-call.
 func (a *twitchAdapter) pacePrivMsg(ctx context.Context) error {
 	a.privMsgMu.Lock()
 	wait := twitchInterMessageDelay - time.Since(a.lastPrivMsgAt)
@@ -683,8 +622,6 @@ func (a *twitchAdapter) TriggerTyping(ctx context.Context, binding ChannelBindin
 	return nil
 }
 
-// dialFunc returns the connection establishment function, allowing tests to
-// inject a fake transport. The default implements the proxy/TLS logic.
 func (a *twitchAdapter) dialFunc() func(addr string) (net.Conn, error) {
 	a.mu.RLock()
 	fn := a.dialIRC
@@ -715,12 +652,6 @@ func (a *twitchAdapter) defaultDialIRC(addr string) (net.Conn, error) {
 	return conn, nil
 }
 
-// sendWhisper delivers a DM through the Helix API. target is the recipient's
-// login (nick). Failures are returned to the caller (who logs them) — they
-// must NOT flip the adapter state: Helix hiccups are independent of the IRC
-// connection, and connected is only re-published after a reconnect, so a
-// warning was sticky forever (#1248; visibility retained from #972 via the
-// returned error + debug logs).
 func (a *twitchAdapter) sendWhisper(ctx context.Context, recipientLogin, text string) error {
 	recipientLogin = strings.TrimPrefix(strings.TrimSpace(recipientLogin), "#")
 	ids, err := a.helixResolveUserIDs(ctx, a.nick, recipientLogin)
@@ -760,8 +691,6 @@ func (a *twitchAdapter) sendWhisper(ctx context.Context, recipientLogin, text st
 	return nil
 }
 
-// helixResolveUserIDs maps logins to Twitch user ids via
-// GET /helix/users?login=...&login=..., with a small in-memory cache.
 func (a *twitchAdapter) helixResolveUserIDs(ctx context.Context, logins ...string) (map[string]string, error) {
 	out := make(map[string]string, len(logins))
 	var need []string
@@ -812,8 +741,6 @@ func (a *twitchAdapter) helixResolveUserIDs(ctx context.Context, logins ...strin
 	return out, nil
 }
 
-// helixSendWhisper posts a single whisper:
-// POST /helix/messages?user_id=<sender> with {"recipient_id","message"}.
 func (a *twitchAdapter) helixSendWhisper(ctx context.Context, fromID, toID, message string) error {
 	payload, err := json.Marshal(map[string]string{
 		"recipient_id": toID,

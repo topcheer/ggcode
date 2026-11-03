@@ -5,12 +5,6 @@ import (
 	"testing"
 )
 
-// TestMatchKnownAnthropicEndpointURLScoped verifies #1515 case C: the
-// fallback endpoint matcher must scope its table rows by baseURL, not
-// return the first row unconditionally. The entry gate
-// (isBootstrapKnownHost) only proves the URL contains SOME pattern's
-// substring; the fallback must pick the row whose substring it actually
-// contains.
 func TestMatchKnownAnthropicEndpointURLScoped(t *testing.T) {
 	cfg := func() *Config {
 		return &Config{Vendors: map[string]VendorConfig{

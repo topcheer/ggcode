@@ -104,11 +104,6 @@ func TestInferVisionSupport_XiaoMiMIMO(t *testing.T) {
 	}
 }
 
-// TestInferVisionSupportCapabilityTableOnly pins the keyword-heuristic
-// removal: vision support comes from the capability table alone. Name
-// substring matching misclassified models in both directions (glm-5.3 sent
-// images to a text-only coding endpoint; a proxy name containing "claude"
-// was flagged vision without evidence). Table misses are NOT vision.
 func TestInferVisionSupportCapabilityTableOnly(t *testing.T) {
 	cases := []struct {
 		model    string

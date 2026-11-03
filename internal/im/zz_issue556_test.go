@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// #556 D: binding an adapter that is not yet started/registered must remain
-// a SUPPORTED flow at the runtime layer (deferred activation: "bound but not
-// yet active; takes effect on next startup"). The ghost-binding validation is
-// the desktop entry point's responsibility (desktop/wailskit/im.go).
 func TestIssue556BindBeforeStartStillAllowed(t *testing.T) {
 	m := NewManager()
 
@@ -31,8 +27,6 @@ func TestIssue556BindBeforeStartStillAllowed(t *testing.T) {
 	}
 }
 
-// #556 D: the contract note documenting where ghost-binding validation lives
-// must stay attached to BindAdapterToWorkspace.
 func TestIssue556BindAdapterContractNote(t *testing.T) {
 	src := readFileString556(t, "runtime_bindings.go")
 	for _, marker := range []string{
@@ -46,7 +40,6 @@ func TestIssue556BindAdapterContractNote(t *testing.T) {
 	}
 }
 
-// readFileString556 reads a source file from the package directory.
 func readFileString556(t *testing.T, name string) string {
 	t.Helper()
 	data, err := os.ReadFile(name)

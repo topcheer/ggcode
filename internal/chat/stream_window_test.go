@@ -14,8 +14,6 @@ func longDoc(paragraphs int) string {
 	return sb.String()
 }
 
-// docLinesOverBudget returns a document whose line count exceeds the
-// pre-parse trim budget (maxStreamingTotalLines*3), forcing the window.
 func docLinesOverBudget() string {
 
 	return longDoc(2000)

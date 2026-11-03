@@ -8,12 +8,6 @@ import (
 	"testing"
 )
 
-// TestIssue1583_BodyCap pins #1583-A: authenticated-but-oversized POST
-// bodies are rejected by MaxBytesReader before entering memory or the
-// synchronous persistMessage disk write. The body is VALID JSON up to
-// the cap (a long string value) - MaxBytesReader fires only once the
-// decoder crosses the limit, so garbage bodies would fail as syntax
-// errors first.
 func TestIssue1583_BodyCap(t *testing.T) {
 	store := NewStore(t.TempDir())
 	h := NewHub("self-node", "cli", "http://127.0.0.1:1", "community", store, WorkspaceMeta{})

@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// #2293: instance keys.env must feed the resolver map, never the process
-// environment. The old wholesale os.Setenv leg leaked every instance key
-// to child commands (`env` dumped them) and MCP subprocesses.
 func TestIssue2293InstanceKeysStayOutOfProcessEnv(t *testing.T) {
 	dir := t.TempDir()
 	key := "GGCODE_I_2293_PROBE"
@@ -51,7 +48,6 @@ func TestIssue2293EmptyDirNoop(t *testing.T) {
 	}
 }
 
-// keys.env parsing shape reused: export prefix tolerated
 func TestIssue2293ExportPrefixTolerated(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "keys.env"), []byte("export GGCODE_I_2293_B=v2\n"), 0600); err != nil {

@@ -9,10 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// TestIssue736_UnknownPlatformLogsAndSkips probes the default branch: an
-// enabled adapter with an unrecognized platform must (a) not error — one bad
-// adapter must not block the others — and (b) leave a traceable debug log
-// line, replacing the previous silent nil.
 func TestIssue736_UnknownPlatformLogsAndSkips(t *testing.T) {
 	debug.EnableForTest(t, "im")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -46,11 +42,6 @@ func TestIssue736_UnknownPlatformLogsAndSkips(t *testing.T) {
 	}
 }
 
-// TestIssue736_LegacyCasingPlatformLogsAndSkips pins the exact #648/#736
-// symptom: platform "Telegram" (registry DisplayName casing persisted by
-// pre-#648 saves). With load-time canonicalization (#736 config fix) this
-// value never reaches the switch anymore, but if it somehow does (hand-edited
-// YAML, external im.yaml), the skip is now observable instead of silent.
 func TestIssue736_LegacyCasingPlatformLogsAndSkips(t *testing.T) {
 	debug.EnableForTest(t, "im")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -83,8 +74,6 @@ func TestIssue736_LegacyCasingPlatformLogsAndSkips(t *testing.T) {
 	}
 }
 
-// TestIssue736_DisabledAdapterStillNoop: the pre-existing early return for
-// disabled adapters must keep its silent behavior (not an error, no log).
 func TestIssue736_DisabledAdapterStillNoop(t *testing.T) {
 	debug.EnableForTest(t, "im")
 	ctx, cancel := context.WithCancel(context.Background())

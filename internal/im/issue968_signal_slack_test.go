@@ -10,12 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// TestSignalNoteToSelfNotDropped verifies that a syncMessage envelope whose
-// destination is the adapter's own account (Note to Self, sent from another
-// device) survives sender extraction. Observable proxy: processEnvelope marks
-// the message timestamp in the seen dedup map ONLY after the sender gate -
-// before the fix the envelope was dropped at sender extraction ("") and the
-// seen map stayed empty.
 func TestSignalNoteToSelfNotDropped(t *testing.T) {
 	adapterCfg := config.IMAdapterConfig{
 		Enabled:  true,
@@ -55,9 +49,6 @@ func TestSignalNoteToSelfNotDropped(t *testing.T) {
 	}
 }
 
-// TestSignalNoteToSelfEchoSuppressionStillWorks verifies the echo-suppression
-// path is intact: a sent-timestamp match must still return before any
-// inbound processing (the fix must not reintroduce self-echo loops).
 func TestSignalNoteToSelfEchoSuppressionStillWorks(t *testing.T) {
 	adapterCfg := config.IMAdapterConfig{
 		Enabled:  true,
@@ -89,9 +80,6 @@ func TestSignalNoteToSelfEchoSuppressionStillWorks(t *testing.T) {
 	}
 }
 
-// TestSignalGroupSyncSelfBypassAllowedUsers: a group sync message whose
-// sender is the account itself must not be killed by a restrictive
-// allowed_users list (it legitimately originates from this account).
 func TestSignalGroupSyncSelfBypassAllowedUsers(t *testing.T) {
 	adapterCfg := config.IMAdapterConfig{
 		Enabled:  true,
@@ -124,11 +112,6 @@ func TestSignalGroupSyncSelfBypassAllowedUsers(t *testing.T) {
 	}
 }
 
-// TestSlackAckForEnvelopeWithoutResponsePayload verifies an ack is produced
-// for envelopes regardless of accepts_response_payload. Slack requires an
-// ack for EVERY envelope with an envelope_id; the flag only governs whether
-// the ack may carry a payload. message/app_mention envelopes commonly carry
-// accepts_response_payload=false and previously went unacked (=> redelivery).
 func TestSlackAckForEnvelopeWithoutResponsePayload(t *testing.T) {
 
 	if _, ok := slackAckForEnvelope(""); ok {
@@ -148,8 +131,6 @@ func TestSlackAckForEnvelopeWithoutResponsePayload(t *testing.T) {
 	}
 }
 
-// TestSlackMarkSeenDedup verifies the dedup table: the same (channel, ts) is
-// processed exactly once, while other channels/ts pairs are independent.
 func TestSlackMarkSeenDedup(t *testing.T) {
 	a := &slackAdapter{name: "test", seen: make(map[string]time.Time)}
 
@@ -186,9 +167,6 @@ func TestSlackMarkSeenDedup(t *testing.T) {
 	}
 }
 
-// TestSlackMarkSeenDedup_Concurrent verifies the dedup table is race-free
-// under concurrent delivery of the same message (Socket Mode can redeliver
-// on multiple connections during reconnect).
 func TestSlackMarkSeenDedup_Concurrent(t *testing.T) {
 	a := &slackAdapter{name: "test", seen: make(map[string]time.Time)}
 	const workers = 16

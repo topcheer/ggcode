@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// Recorded [A, B, A], replayed [A, A, B]: the old take() jumped the cursor
-// past B on the second A and take(B) hit the hard exhaustion error while B
-// sat unconsumed.
 func TestIssue3933_SkippedEntryStaysReachable(t *testing.T) {
 	tp := &TapeProvider{mode: "replay", order: []*llmTapeEntry{
 		{Key: "A", Kind: "chat"},
@@ -32,8 +29,6 @@ func TestIssue3933_SkippedEntryStaysReachable(t *testing.T) {
 	}
 }
 
-// FIFO fallback order is preserved: with no key match, the earliest
-// unconsumed entry is served.
 func TestIssue3933_FIFOFallbackServesEarliest(t *testing.T) {
 	tp := &TapeProvider{mode: "replay", order: []*llmTapeEntry{
 		{Key: "A", Kind: "chat"},
@@ -44,8 +39,6 @@ func TestIssue3933_FIFOFallbackServesEarliest(t *testing.T) {
 	}
 }
 
-// zeroEventProvider's stream closes before emitting anything (the ctx
-// cancel-before-first-event shape).
 type zeroEventProvider struct{ fakeTapeProvider }
 
 func (z *zeroEventProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
@@ -54,8 +47,6 @@ func (z *zeroEventProvider) ChatStream(ctx context.Context, messages []Message, 
 	return out, nil
 }
 
-// Zero-event streams are recorded (placeholder), so a replayed zero-event
-// turn finds its key instead of misaligning onto the next turn's entry.
 func TestIssue3933_ZeroEventStreamRecorded(t *testing.T) {
 	dir := t.TempDir()
 	tape := filepath.Join(dir, "tape.jsonl")

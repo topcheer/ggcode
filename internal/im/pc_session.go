@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	pcDefaultSessionTTLMS = 7 * 24 * 60 * 60 * 1000 // 7 days
+	pcDefaultSessionTTLMS = 7 * 24 * 60 * 60 * 1000
 	pcStateAwaitingHello  = "awaiting_hello"
 	pcStateActive         = "active"
 )
@@ -21,7 +21,7 @@ type pcParticipant struct {
 
 type pcConversationTurn struct {
 	MessageID string
-	Role      string // "user", "assistant", "system", "thinking"
+	Role      string
 	Text      string
 	SentAt    string
 	AppID     string
@@ -32,7 +32,7 @@ type pcSession struct {
 	mu           sync.RWMutex
 	Invite       PCInvite
 	Label        string
-	State        string // "awaiting_hello" | "active"
+	State        string
 	GroupMode    bool
 	BotMuted     bool
 	History      []pcConversationTurn

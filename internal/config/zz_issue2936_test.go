@@ -8,11 +8,6 @@ import (
 	"time"
 )
 
-// TestIssue2936NestedZeroResetOverwritesStaleDiskValue: a nested override
-// (swarm.max_teammates_per_team: 30) followed by a reset to 0 ("use the
-// global default") must reach the instance file as an explicit 0. The old
-// zero-value suppression dropped the key from the delta, the deep merge
-// kept the stale 30 on disk, and MergeInstance resurrected it on reload.
 func TestIssue2936NestedZeroResetOverwritesStaleDiskValue(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -63,8 +58,6 @@ func TestIssue2936NestedZeroResetOverwritesStaleDiskValue(t *testing.T) {
 	}
 }
 
-// TestIssue2936NestedResetAllAffectedFields sweeps the 9 fields named in the
-// issue through the same override-then-reset cycle at delta level.
 func TestIssue2936NestedResetAllAffectedFields(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -139,9 +132,6 @@ func TestIssue2936NestedResetAllAffectedFields(t *testing.T) {
 	}
 }
 
-// TestIssue2936ImpersonationHeaderSwapAndClear: a same-length CustomHeaders
-// key swap must be detected (content compare, not length), and clearing the
-// headers must produce an empty-map delta that overwrites the stale disk map.
 func TestIssue2936ImpersonationHeaderSwapAndClear(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()

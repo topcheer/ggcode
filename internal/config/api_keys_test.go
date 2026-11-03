@@ -188,7 +188,6 @@ func TestLoadKeysEnv_DoesNotOverwrite(t *testing.T) {
 	}
 }
 
-// Helper for string containment check
 func containsString(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
 		(len(s) > 0 && len(sub) > 0 && findSubstr(s, sub)))

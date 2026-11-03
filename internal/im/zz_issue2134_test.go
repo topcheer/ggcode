@@ -8,10 +8,6 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// Entry 3 (the everyday path): the user answers a button question by
-// TYPING; the pending is consumed but the card stays on screen. A later
-// text-only question is pending when the user taps the stale card - the
-// tap must be dropped, not submitted as the new question's answer.
 func TestStaleCardRejectedByTextOnlySuccessor(t *testing.T) {
 	req := toolpkg.AskUserRequest{Title: "Q2 (text-only)"}
 	ch2 := make(chan toolpkg.AskUserResponse, 1)
@@ -44,7 +40,6 @@ func TestStaleCardRejectedByTextOnlySuccessor(t *testing.T) {
 	}
 }
 
-// Successor WITH buttons: the old card must mismatch the new expected ID.
 func TestStaleCardRejectedBySuccessorButtons(t *testing.T) {
 	req := toolpkg.AskUserRequest{Title: "Q2"}
 	ch2 := make(chan toolpkg.AskUserResponse, 1)
@@ -68,9 +63,6 @@ func TestStaleCardRejectedBySuccessorButtons(t *testing.T) {
 	}
 }
 
-// The callback-consume path (L212 area) must NOT wipe the bridge-level
-// last-emitted map: after answering Q1 via its card, a text-only Q2 still
-// needs those IDs to reject Q1's remaining cards.
 func TestCallbackConsumeKeepsLastEmitted(t *testing.T) {
 	b, ch := newCallbackTestBridge(map[string]string{"tg": "tg_msg_1"}, false)
 	b.handleInteractiveCallback(InteractiveCallback{

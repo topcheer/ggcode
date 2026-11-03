@@ -9,14 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/hooks"
 )
 
-// TestInstanceToolPermValueChangeSurvivesReload (#524 Bug A, both sides):
-// global configures `bash: allow`; the user changes it to deny at instance
-// scope (/config tool_permissions → SaveInstance). The change must land in
-// the instance file (write side: diffToolPerms records VALUE differences,
-// not only new keys) and survive a reload (read side: MergeInstance adopts
-// instance-wins for tool_permissions). Previously the delta was empty,
-// SaveInstance even deleted the instance file and returned nil, and the
-// deny silently reverted to the global allow on restart.
 func TestInstanceToolPermValueChangeSurvivesReload(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -65,10 +57,6 @@ func TestInstanceToolPermValueChangeSurvivesReload(t *testing.T) {
 	}
 }
 
-// TestInstanceToolPermMergeMatrix guards the MergeInstance read-side
-// semantics: instance keys absent from global are still added (pre-existing
-// behavior), instance values conflict with global (instance wins), and
-// global-only keys are untouched.
 func TestInstanceToolPermMergeMatrix(t *testing.T) {
 	global := &Config{ToolPerms: map[string]ToolPermission{
 		"bash": ToolPermAllow,
@@ -93,12 +81,6 @@ func TestInstanceToolPermMergeMatrix(t *testing.T) {
 	}
 }
 
-// TestInstanceHooksOverrideSurvivesReload (#524 Bug B): with the global
-// config already carrying hooks, an instance-level hook change must persist
-// through SaveInstance and reload. The old `len(global.PreToolUse)==0` guard
-// silently dropped every such change; append merge semantics would instead
-// duplicate hooks across save/reload cycles. Replace semantics keep the
-// cycle stable: exactly one instance hook after any number of cycles.
 func TestInstanceHooksOverrideSurvivesReload(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()

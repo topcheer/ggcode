@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// TestSignalResolveImageDataURLNoSemicolon pins #1018 defect 1: an RFC 2397
-// data URL without a ";" parameter (URL-encoded data, not base64) must not
-// panic in the data_url branch. It may fail cleanly (base64 decode error on
-// URL-encoded data) or succeed, but never crash.
 func TestSignalResolveImageDataURLNoSemicolon(t *testing.T) {
 	a := &signalAdapter{}
 	_, _, _, err := a.resolveImageBytes(t.Context(), ExtractedImage{
@@ -21,7 +17,6 @@ func TestSignalResolveImageDataURLNoSemicolon(t *testing.T) {
 	}
 }
 
-// TestSignalResolveImageDataURLWithParams keeps the normal path pinned.
 func TestSignalResolveImageDataURLWithParams(t *testing.T) {
 	a := &signalAdapter{}
 	data, mime, name, err := a.resolveImageBytes(t.Context(), ExtractedImage{
@@ -36,8 +31,6 @@ func TestSignalResolveImageDataURLWithParams(t *testing.T) {
 	}
 }
 
-// TestSignalMentionsAccount pins #1018 defect 2's helper: structured mention
-// arrays carry the E.164 number, which mention gating must consult.
 func TestSignalMentionsAccount(t *testing.T) {
 	mentions := []any{
 		map[string]any{"name": "Alice", "number": "+15550001111"},
@@ -60,9 +53,6 @@ func TestSignalMentionsAccount(t *testing.T) {
 	}
 }
 
-// TestSignalGateGroupMention covers the three gating paths end to end at the
-// helper level: structured mention passes, raw text number passes, and a
-// message without any mention is dropped.
 func TestSignalGateGroupMention(t *testing.T) {
 	a := &signalAdapter{account: "+15551234567"}
 

@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// V1: a gateway error with a strippable prefix and a credential pair in the
-// remainder must be redacted on the prefix-strip path.
 func TestIssue3077_PrefixStripBranchSanitizes(t *testing.T) {
 	raw := "gemini chat: 403 forbidden: https://proxy.example/v1?api_key=AIzaSyA1234567890abcdefghj"
 	got := UserFacingErrorLang(errors.New(raw), "en")
@@ -26,7 +24,6 @@ func TestIssue3077_PrefixStripBranchSanitizes(t *testing.T) {
 	}
 }
 
-// V1 companion: clean prefix-stripped messages are unchanged (no marker).
 func TestIssue3077_PrefixStripCleanMessageUnchanged(t *testing.T) {
 	got := UserFacingErrorLang(errors.New("openai chat: model overloaded"), "en")
 	if got != "Request failed: model overloaded" {
@@ -34,8 +31,6 @@ func TestIssue3077_PrefixStripCleanMessageUnchanged(t *testing.T) {
 	}
 }
 
-// V2: capitalized "Connection refused" (relay wrapper) must hit the network
-// branch, not the blind-spot fallback.
 func TestIssue3077_ConnectionRefusedCaseInsensitive(t *testing.T) {
 	got := UserFacingErrorLang(errors.New("relay upstream: Connection refused"), "en")
 	if !strings.Contains(got, "Cannot connect to the API server") {

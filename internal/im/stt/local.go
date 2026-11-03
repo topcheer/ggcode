@@ -14,26 +14,13 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// whisperFlavor identifies the CLI dialect of a whisper binary. The
-// openai-whisper (Python) CLI and whisper.cpp (C/C++) CLI accept entirely
-// different argument sets, so the flavor must be known before building the
-// command line (issue #969: passing openai-whisper args to whisper.cpp fails
-// on every invocation while the availability cache stays stale).
 type whisperFlavor int
 
 const (
-	// flavorOpenAI is the Python openai-whisper CLI: positional audio file,
-	// --model/--output_dir/--output_format/--verbose long options.
 	flavorOpenAI whisperFlavor = iota
-	// flavorCPP is the whisper.cpp CLI: -m <ggml-model> -f <audio> plus
-	// -otxt/-of short options.
 	flavorCPP
 )
 
-// flavorFromBin classifies a binary by its base name. "whisper" is the
-// openai-whisper entrypoint; whisper.cpp ships as whisper-cpp / whisper-cli /
-// whisper.cpp depending on the distribution. Unknown names (user-provided
-// wrappers) keep the legacy openai-whisper behavior.
 func flavorFromBin(binPath string) whisperFlavor {
 	base := strings.ToLower(filepath.Base(strings.TrimSpace(binPath)))
 	base = strings.TrimSuffix(base, ".exe")
@@ -47,33 +34,19 @@ func flavorFromBin(binPath string) whisperFlavor {
 	}
 }
 
-// LocalWhisper uses a local whisper CLI binary for transcription.
 type LocalWhisper struct {
-	binPath  string
-	flavor   whisperFlavor
-	cppModel string // resolved ggml-*.bin path, only set for flavorCPP
-	model    string
-	language string
-	// available/checked cache the result of the first availability probe;
-	// unavailableReason keeps the real cause so cached errors are not
-	// misleading ("no ggml model" must not surface as "binary not found").
+	binPath           string
+	flavor            whisperFlavor
+	cppModel          string
+	model             string
+	language          string
 	available         bool
 	checked           bool
 	unavailableReason string
-	// downloadedModels tracks openai-whisper models whose one-time
-	// download has already landed (#2738): once observed (successful
-	// transcription, or the model file already in ~/.cache/whisper),
-	// subsequent transcriptions fall back to the tight 10-minute bound.
-	downloadedModels map[string]bool
-	mu               sync.Mutex
+	downloadedModels  map[string]bool
+	mu                sync.Mutex
 }
 
-// NewLocalWhisper creates a local whisper transcriber.
-// binPath is the path to the whisper binary (empty = auto-detect).
-// For the openai-whisper CLI, model is the model size (empty = "turbo" for
-// speed + accuracy). For whisper.cpp binaries, model is the path to a
-// ggml-*.bin model file (empty = auto-detect from common locations).
-// language is the language code (empty = auto-detect).
 func NewLocalWhisper(binPath, model, language string) *LocalWhisper {
 	return &LocalWhisper{
 		binPath:  strings.TrimSpace(binPath),
@@ -148,11 +121,6 @@ func (w *LocalWhisper) Transcribe(ctx context.Context, req Request) (Result, err
 	}, nil
 }
 
-// modelDownloaded reports whether the openai-whisper model's one-time
-// download has already landed (#2738). First consults the in-process
-// observation set (a prior successful transcription), then falls back to
-// probing openai-whisper's default cache dir (~/.cache/whisper/<model>.pt)
-// so a daemon restart immediately gets the tight bound too.
 func (w *LocalWhisper) modelDownloaded(model string) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -171,8 +139,6 @@ func (w *LocalWhisper) modelDownloaded(model string) bool {
 	return false
 }
 
-// markModelDownloaded records that the model's download has landed, proven
-// by a successful transcription run (#2738).
 func (w *LocalWhisper) markModelDownloaded(model string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -182,7 +148,6 @@ func (w *LocalWhisper) markModelDownloaded(model string) {
 	w.downloadedModels[model] = true
 }
 
-// openaiArgs builds the Python openai-whisper CLI command line.
 func (w *LocalWhisper) openaiArgs(audioPath, outDir string) ([]string, string) {
 	model := w.model
 	if model == "" {
@@ -201,9 +166,6 @@ func (w *LocalWhisper) openaiArgs(audioPath, outDir string) ([]string, string) {
 	return args, model
 }
 
-// cppArgs builds the whisper.cpp CLI command line: the model must be a
-// ggml-*.bin file passed via -m, the audio via -f, and output goes to
-// <of-prefix>.txt when -otxt is given.
 func (w *LocalWhisper) cppArgs(audioPath, outDir, audioBase string) ([]string, string) {
 	args := []string{
 		"-m", w.cppModel,
@@ -246,9 +208,6 @@ func (w *LocalWhisper) ensureAvailable() error {
 			return w.unavailableErr()
 		}
 	}
-	// Auto-detect common whisper binaries. "whisper" (openai-whisper) is
-	// preferred because it needs no extra model setup; whisper.cpp variants
-	// are only accepted when a usable ggml model can be located.
 	var probeErr error
 	for _, candidate := range []string{"whisper", "whisper-cpp", "whisper-cli"} {
 		p, err := exec.LookPath(candidate)
@@ -275,10 +234,6 @@ func (w *LocalWhisper) ensureAvailable() error {
 	return w.unavailableErr()
 }
 
-// probeFlavor validates that the currently detected binary can actually be
-// invoked with the argument set Transcribe will build. For whisper.cpp this
-// means resolving a ggml-*.bin model; without one the binary must not be
-// marked available (issue #969).
 func (w *LocalWhisper) probeFlavor() error {
 	w.flavor = flavorFromBin(w.binPath)
 	if w.flavor != flavorCPP {
@@ -300,9 +255,6 @@ func (w *LocalWhisper) unavailableErr() error {
 	return fmt.Errorf("local whisper: %s", w.unavailableReason)
 }
 
-// cppModelSearchDirs returns the directories scanned for ggml-*.bin files
-// when no explicit model is configured. It is a variable so tests can make
-// auto-detection hermetic.
 var cppModelSearchDirs = defaultCPPModelSearchDirs
 
 func defaultCPPModelSearchDirs() []string {
@@ -321,13 +273,6 @@ func defaultCPPModelSearchDirs() []string {
 	)
 }
 
-// resolveCPPModel locates a ggml model file for whisper.cpp:
-//  1. the model value from NewLocalWhisper (wired to im.stt.local_model),
-//  2. the GGCODE_WHISPER_CPP_MODEL environment variable,
-//  3. common download/build locations (first ggml-*.bin found, sorted).
-//
-// The returned error explains what to configure; it must never surface later
-// as a generic "execution failed".
 func (w *LocalWhisper) resolveCPPModel() (string, error) {
 	if w.model != "" {
 		if isRegularFile(w.model) {
@@ -362,7 +307,6 @@ func isRegularFile(path string) bool {
 	return err == nil && !st.IsDir()
 }
 
-// Available checks if local whisper is usable without blocking.
 func (w *LocalWhisper) Available() bool {
 	return w.ensureAvailable() == nil
 }

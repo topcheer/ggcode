@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// #4769 defect 1: matrix chunking must budget BYTES (Body+FormattedBody
-// pair) against the ~100KB Synapse event ceiling, not runes - a CJK-heavy
-// 60K-rune chunk is ~180KB and M_TOO_LARGE fell through to a hard error
-// after partial delivery.
 func TestIssue4769_MatrixChunkMarkdownByteBudget(t *testing.T) {
 
 	cjk := strings.Repeat("中", 90000)
@@ -26,9 +22,6 @@ func TestIssue4769_MatrixChunkMarkdownByteBudget(t *testing.T) {
 	}
 }
 
-// Convergence: ASCII text also lands under the byte budget after the
-// proportional shrink (60K-rune chunks at 2x+2048 exceed 95KB, so the first
-// round shrinks; later rounds converge), with zero content loss.
 func TestIssue4769_MatrixChunkMarkdownAsciiConverges(t *testing.T) {
 	ascii := strings.Repeat("a", 200000)
 	chunks := matrixChunkMarkdown(ascii)
@@ -45,8 +38,6 @@ func TestIssue4769_MatrixChunkMarkdownAsciiConverges(t *testing.T) {
 	}
 }
 
-// Termination: degenerate input still yields chunks (8-round bound and the
-// 1000-rune floor guarantee no infinite loop).
 func TestIssue4769_MatrixChunkMarkdownTerminates(t *testing.T) {
 	out := matrixChunkMarkdown(strings.Repeat("中", 5))
 	if len(out) == 0 || strings.Join(out, "") == "" {

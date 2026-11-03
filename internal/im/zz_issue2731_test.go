@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// Issue #2731 probe: connectRelay appended a newly connected relay without
-// checking a.closed, so a relay connect racing with Close() re-added a
-// connection to a shut-down adapter and published a bogus "connected"
-// state. A closed adapter must refuse new relays with a clear error.
 func TestIssue2731ClosedAdapterRefusesNewRelay(t *testing.T) {
 	a := &nostrAdapter{name: "probe"}
 	a.Close()

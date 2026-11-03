@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-// alwaysAlive is a test override that treats all PIDs as alive.
 func alwaysAlive(int) bool { return true }
 
 func TestRegisterCreatesPIDFile(t *testing.T) {

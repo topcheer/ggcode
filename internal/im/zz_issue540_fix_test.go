@@ -159,7 +159,7 @@ func TestBackoffForResetsOnCleanDisconnect(t *testing.T) {
 type fakeFeishuTransport540 struct {
 	mu    sync.Mutex
 	calls int
-	fail  int // number of initial calls that fail
+	fail  int
 }
 
 func (t *fakeFeishuTransport540) RoundTrip(r *http.Request) (*http.Response, error) {

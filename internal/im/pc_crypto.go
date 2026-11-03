@@ -17,7 +17,6 @@ const (
 
 var pcB64 = base64.URLEncoding.WithPadding(base64.NoPadding)
 
-// pcGenerateSessionKey generates a base64url-encoded 32-byte random session key.
 func pcGenerateSessionKey() (string, error) {
 	key := make([]byte, pcSessionKeyBytes)
 	if _, err := rand.Read(key); err != nil {
@@ -26,7 +25,6 @@ func pcGenerateSessionKey() (string, error) {
 	return pcB64.EncodeToString(key), nil
 }
 
-// pcDecodeSessionKey decodes a base64url session key into raw bytes.
 func pcDecodeSessionKey(encoded string) ([]byte, error) {
 	key, err := pcB64.DecodeString(encoded)
 	if err != nil {
@@ -38,7 +36,6 @@ func pcDecodeSessionKey(encoded string) ([]byte, error) {
 	return key, nil
 }
 
-// pcEncryptPayload encrypts a payload and returns an EncryptedEnvelope.
 func pcEncryptPayload(sessionID, sessionKeyB64 string, payload pcPayload) (*pcEncryptedEnvelope, error) {
 	key, err := pcDecodeSessionKey(sessionKeyB64)
 	if err != nil {
@@ -82,7 +79,6 @@ func pcEncryptPayload(sessionID, sessionKeyB64 string, payload pcPayload) (*pcEn
 	}, nil
 }
 
-// pcDecryptPayload decrypts an EncryptedEnvelope and returns the payload.
 func pcDecryptPayload(sessionID, sessionKeyB64 string, envelope *pcEncryptedEnvelope) (pcPayload, error) {
 	if envelope.Version != pcEnvelopeVersion {
 		return nil, fmt.Errorf("unsupported envelope version: %d", envelope.Version)

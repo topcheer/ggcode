@@ -228,7 +228,6 @@ func TestParseDurationSafe(t *testing.T) {
 	}
 }
 
-// TestRateLimitTracker_Concurrent verifies thread-safe access.
 func TestRateLimitTracker_Concurrent(t *testing.T) {
 	tracker := newRateLimitTracker()
 	done := make(chan struct{})

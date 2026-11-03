@@ -219,7 +219,6 @@ func TestDummyAdapter_IntegrationFlow(t *testing.T) {
 	srv := newHTTPServer(a)
 	handler := srv.handler()
 
-	// Set up a mock bridge that records inbound messages
 	var submitted []InboundMessage
 	var submitMu sync.Mutex
 	mgr.SetBridge(&captureBridge{mu: &submitMu, msgs: &submitted})
@@ -309,7 +308,6 @@ func TestDummyAdapter_IntegrationFlow(t *testing.T) {
 	}
 }
 
-// captureBridge records submitted messages for test assertions.
 type captureBridge struct {
 	mu   *sync.Mutex
 	msgs *[]InboundMessage
@@ -322,7 +320,6 @@ func (b *captureBridge) SubmitInboundMessage(ctx context.Context, msg InboundMes
 	return nil
 }
 
-// testDummyManager creates a Manager with session and binding store ready for testing.
 func testDummyManager() (*Manager, *stubBridge) {
 	mgr := NewManager()
 	bridge := &stubBridge{}
@@ -336,7 +333,6 @@ func testDummyManager() (*Manager, *stubBridge) {
 	return mgr, bridge
 }
 
-// testDummyAdapterConfig creates an adapter config with isolated temp paths.
 func testDummyAdapterConfig(t *testing.T) config.IMAdapterConfig {
 	t.Helper()
 	dir := t.TempDir()

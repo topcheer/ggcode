@@ -2,8 +2,6 @@ package im
 
 import "testing"
 
-// #4322 regression: Mattermost usernames may end in "-" or "." - the old
-// ASCII \b boundary could never match there, silently dropping real mentions.
 func TestMentionBoundaryUsernameCharsetName(t *testing.T) {
 	cases := []struct {
 		bot     string

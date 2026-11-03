@@ -2,11 +2,6 @@ package config
 
 import "testing"
 
-// #1714 case 2: the moonshot/kimi alias resolution had no direct pin -
-// "moonshot" resolves through the catwalk aliases to the plain
-// api.moonshot.cn list, and the coding-plan "kimi" family stays out of
-// it (#1525 lineage). Pin both so a future generator drift that leaks
-// coding-plan models into the moonshot panel (case 3) fails here.
 func TestLookupVendorModelsMoonshotKimi1714(t *testing.T) {
 
 	mm := lookupVendorModels("moonshotai")

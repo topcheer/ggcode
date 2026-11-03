@@ -7,10 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// strictToolsAllow resolves the strict-tool allowlist for an endpoint:
-// disabled unless strict_tools is set; an empty allow list falls back to
-// DefaultStrictTools (Anthropic caps strict tools at 20/request, so this is
-// a curated set, never all ~191 registered tools).
 func strictToolsAllow(resolved *config.ResolvedEndpoint) map[string]bool {
 	if !resolved.StrictTools {
 		return nil
@@ -22,7 +18,6 @@ func strictToolsAllow(resolved *config.ResolvedEndpoint) map[string]bool {
 	return StrictToolsAllowlist(allow)
 }
 
-// NewProvider creates a protocol adapter from a resolved endpoint.
 func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 	if resolved == nil {
 		return nil, fmt.Errorf("resolved endpoint is nil")

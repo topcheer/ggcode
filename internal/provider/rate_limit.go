@@ -11,50 +11,21 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// RateLimitInfo holds parsed rate-limit metadata from provider response headers.
-// Both OpenAI and Anthropic return these on every successful response, enabling
-// proactive pacing rather than reactive 429 retry handling.
-//
-// OpenAI header format (x-ratelimit-*):
-//
-//	x-ratelimit-limit-requests, x-ratelimit-limit-tokens
-//	x-ratelimit-remaining-requests, x-ratelimit-remaining-tokens
-//	x-ratelimit-reset-requests, x-ratelimit-reset-tokens
-//
-// Anthropic header format (anthropic-ratelimit-* or reratelimit-*):
-//
-//	anthropic-ratelimit-requests-limit, anthropic-ratelimit-requests-remaining
-//	anthropic-ratelimit-tokens-limit, anthropic-ratelimit-tokens-remaining
-//	anthropic-ratelimit-requests-reset, anthropic-ratelimit-tokens-reset
-//
-// Newer Anthropic API uses the "reratelimit-" prefix (e.g. reratelimit-requests-remaining).
 type RateLimitInfo struct {
-	// RemainingRequests is the number of requests left before the rate limit resets.
-	// -1 means "unknown" (header not present).
 	RemainingRequests int
-	// RemainingTokens is the number of tokens left in the current window.
-	RemainingTokens int
-	// LimitRequests is the max requests per window.
-	LimitRequests int
-	// LimitTokens is the max tokens per window.
-	LimitTokens int
-	// ResetRequests is the duration until the request limit resets.
-	// Zero means "unknown".
-	ResetRequests time.Duration
-	// ResetTokens is the duration until the token limit resets.
-	ResetTokens time.Duration
-	// CapturedAt is when this info was captured.
-	CapturedAt time.Time
+	RemainingTokens   int
+	LimitRequests     int
+	LimitTokens       int
+	ResetRequests     time.Duration
+	ResetTokens       time.Duration
+	CapturedAt        time.Time
 }
 
-// IsEmpty returns true if no rate-limit headers were found.
 func (r RateLimitInfo) IsEmpty() bool {
 	return r.RemainingRequests < 0 && r.RemainingTokens < 0 &&
 		r.LimitRequests < 0 && r.LimitTokens < 0
 }
 
-// RequestFractionRemaining returns the fraction of request quota remaining
-// (0.0 to 1.0). Returns 1.0 if unknown.
 func (r RateLimitInfo) RequestFractionRemaining() float64 {
 	if r.LimitRequests <= 0 || r.RemainingRequests < 0 {
 		return 1.0
@@ -69,8 +40,6 @@ func (r RateLimitInfo) RequestFractionRemaining() float64 {
 	return f
 }
 
-// TokenFractionRemaining returns the fraction of token quota remaining
-// (0.0 to 1.0). Returns 1.0 if unknown.
 func (r RateLimitInfo) TokenFractionRemaining() float64 {
 	if r.LimitTokens <= 0 || r.RemainingTokens < 0 {
 		return 1.0
@@ -85,8 +54,6 @@ func (r RateLimitInfo) TokenFractionRemaining() float64 {
 	return f
 }
 
-// IsCritical returns true when either quota is below the critical threshold
-// (default 10%). The caller should consider pacing or warning the user.
 func (r RateLimitInfo) IsCritical() bool {
 	return r.RequestFractionRemaining() <= rateLimitCriticalThreshold ||
 		r.TokenFractionRemaining() <= rateLimitCriticalThreshold
@@ -94,9 +61,6 @@ func (r RateLimitInfo) IsCritical() bool {
 
 const rateLimitCriticalThreshold = 0.10
 
-// rateLimitTracker stores the latest RateLimitInfo in a thread-safe manner.
-// It is embedded in the headerInjectingTransport so that every HTTP response
-// automatically updates the tracked rate-limit state.
 type rateLimitTracker struct {
 	mu   sync.RWMutex
 	info RateLimitInfo
@@ -113,7 +77,6 @@ func newRateLimitTracker() *rateLimitTracker {
 	}
 }
 
-// Update parses rate-limit headers from an HTTP response and stores the result.
 func (t *rateLimitTracker) Update(header http.Header) {
 	if header == nil {
 		return
@@ -136,16 +99,12 @@ func (t *rateLimitTracker) Update(header http.Header) {
 	}
 }
 
-// Snapshot returns a copy of the current rate-limit info.
 func (t *rateLimitTracker) Snapshot() RateLimitInfo {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.info
 }
 
-// parseRateLimitHeaders extracts rate-limit information from HTTP response
-// headers. Supports both OpenAI (x-ratelimit-*) and Anthropic
-// (anthropic-ratelimit-* / reratelimit-*) header formats.
 func parseRateLimitHeaders(h http.Header) RateLimitInfo {
 	info := RateLimitInfo{
 		RemainingRequests: -1,
@@ -198,7 +157,6 @@ func parseRateLimitHeaders(h http.Header) RateLimitInfo {
 	return info
 }
 
-// parseIntSafe parses an integer, returning fallback on error.
 func parseIntSafe(s string, fallback int) int {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -221,8 +179,6 @@ func parseIntSafe(s string, fallback int) int {
 	return n
 }
 
-// parseDurationSafe parses a Go-style duration string (e.g., "86400000ms",
-// "24h0m0s", "1h30m"). Returns zero on failure.
 func parseDurationSafe(s string) time.Duration {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -255,8 +211,6 @@ func parseDurationSafe(s string) time.Duration {
 	return 0
 }
 
-// parseAnthropicResetDuration parses Anthropic's reset header format.
-// Anthropic sends values like "8h0m0s", "24h0m0s", or "1h30m0s".
 func parseAnthropicResetDuration(s string) time.Duration {
 	return parseDurationSafe(s)
 }

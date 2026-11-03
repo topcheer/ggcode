@@ -6,15 +6,12 @@ import (
 	"testing"
 )
 
-// instanceTestEnv isolates HOME once per test so InstanceDir stays stable
-// across multiple saves.
 func instanceTestEnv(t *testing.T, globalPath string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	_ = globalPath
 }
 
-// saveInstanceVia loads the global+instance config and saves it back.
 func saveInstanceVia(t *testing.T, globalPath, workspace string, mutate func(c *Config)) string {
 	t.Helper()
 	cfg, err := LoadWithInstance(globalPath, workspace)

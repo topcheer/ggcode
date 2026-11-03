@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// blockingBody simulates a dropped proxy tunnel: reads block forever and
-// never return bytes (the connection died without FIN/RST).
 type blockingBody struct {
 	closed chan struct{}
 }
@@ -31,7 +29,6 @@ func (b *blockingBody) Close() error {
 	return nil
 }
 
-// stubRoundTripper returns a canned response whose body is injected.
 type stubRoundTripper struct {
 	status    int
 	body      io.ReadCloser
@@ -82,8 +79,6 @@ func TestIdleTimeoutTransportCutsSilentBody(t *testing.T) {
 	}
 }
 
-// ctxBodyTransport returns a response whose body blocks until the request
-// context dies - the net/http behavior for a wedged stream connection.
 type ctxBodyTransport struct{ gotCtx context.Context }
 
 func (s *ctxBodyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -155,9 +150,6 @@ func TestIdleTimeoutTransportCutsBlockedRoundTrip(t *testing.T) {
 	}
 }
 
-// ctxBlockedRoundTripper blocks inside RoundTrip until the request context
-// is cancelled, mirroring net/http's abort-on-ctx-done behavior for wedged
-// request writes.
 type ctxBlockedRoundTripper struct{}
 
 func (s *ctxBlockedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -180,8 +172,6 @@ func TestIdleTimeoutTransportDisabled(t *testing.T) {
 	}
 }
 
-// delayedReader pauses before delegating the first Read, simulating an SSE
-// keep-alive gap shorter than the idle window.
 type delayedReader struct {
 	d      time.Duration
 	r      io.Reader

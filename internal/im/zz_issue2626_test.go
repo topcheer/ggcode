@@ -7,10 +7,6 @@ import (
 	"github.com/nbd-wtf/go-nostr/nip19"
 )
 
-// #2626: the TUI panel feeds the user-provided private key to go-nostr's
-// hex-only helpers after normalizing via this export. A valid nsec1 must
-// round-trip to 64-char hex that GetPublicKey accepts; hex input passes
-// through unchanged; garbage stays garbage (validation rejects it earlier).
 func TestNormalizeNostrPrivateKeyExport(t *testing.T) {
 
 	hexKey := strings.Repeat("ab", 32)

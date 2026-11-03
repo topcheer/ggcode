@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// issue610TestConfig writes a minimal valid global config plus overrides and
-// returns its path. The vendor block mirrors the #609 fixture (enough for
-// Validate to pass after Load).
 func issue610WriteConfig(t *testing.T, dir, extra string) string {
 	t.Helper()
 	cfgPath := filepath.Join(dir, "ggcode.yaml")
@@ -31,11 +28,6 @@ vendors:
 	return cfgPath
 }
 
-// TestIssue610ClearedStringFieldDoesNotResurrect is the #610 core probe:
-// extra_prompt set on disk -> Load -> cleared in memory ("") -> Save() ->
-// re-Load must NOT resurrect the old value. Before the fix, cleanZeroYAMLValues
-// dropped the "" key from the merge overlay and deepMergeYAMLMaps kept the
-// stale file value, so the old prompt always came back.
 func TestIssue610ClearedStringFieldDoesNotResurrect(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")
@@ -77,8 +69,6 @@ func TestIssue610ClearedStringFieldDoesNotResurrect(t *testing.T) {
 	}
 }
 
-// TestIssue610ClearIsIdempotentAcrossSaves verifies repeated Save() calls with
-// the field still cleared don't fail or re-introduce anything.
 func TestIssue610ClearIsIdempotentAcrossSaves(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")
@@ -109,10 +99,6 @@ func TestIssue610ClearIsIdempotentAcrossSaves(t *testing.T) {
 	}
 }
 
-// TestIssue610NeverOnDiskKeyNotWritten asserts the #284 semantics did not
-// regress: a key that was NOT on disk at Load time must not be written (nor
-// deleted) just because the in-memory field sits at its "" zero value, even
-// when another process has since written a value for it.
 func TestIssue610NeverOnDiskKeyNotWritten(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")
@@ -157,12 +143,6 @@ func TestIssue610NeverOnDiskKeyNotWritten(t *testing.T) {
 	}
 }
 
-// TestIssue610EnvRefNotTombstoned guards the #608 interaction at the unit
-// level: a ${VAR} env reference recorded on disk at Load time must never be
-// tombstone-deleted by a cleared field, otherwise key rotation semantics
-// (plaintext -> env var reference) could be undone. (End-to-end, Load's
-// auto-Save already expands ${VAR} refs for non-vendor fields — #608 only
-// protected vendors — so the guard is exercised against the raw maps.)
 func TestIssue610EnvRefNotTombstoned(t *testing.T) {
 	existing := map[string]interface{}{
 		"extra_prompt": "${GGCODE_ISSUE610_PROMPT}",
@@ -183,10 +163,6 @@ func TestIssue610EnvRefNotTombstoned(t *testing.T) {
 	}
 }
 
-// TestIssue610DiskValueChangedAfterLoadPreserved covers the remaining #284
-// boundary: the key WAS on disk at Load time and IS cleared in memory, but the
-// on-disk value changed since our Load (another process). The changed value
-// must be preserved, not deleted.
 func TestIssue610DiskValueChangedAfterLoadPreserved(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")
@@ -220,8 +196,6 @@ func TestIssue610DiskValueChangedAfterLoadPreserved(t *testing.T) {
 	}
 }
 
-// TestIssue610NestedStringClear verifies tombstoning works for string leaves
-// inside nested maps, not only top-level keys (knight.trust_level).
 func TestIssue610NestedStringClear(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")

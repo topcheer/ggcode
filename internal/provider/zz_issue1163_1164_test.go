@@ -9,10 +9,10 @@ import (
 
 type zz116xProvider struct {
 	name        string
-	syncErr     error // returned synchronously by ChatStream/Chat
-	asyncErr    error // emitted as an error event before any output
+	syncErr     error
+	asyncErr    error
 	text        string
-	streamCalls int32 // guarded by the provider being consumed serially; read via atomic-free helper after drain
+	streamCalls int32
 }
 
 func (p *zz116xProvider) Name() string { return p.name }
@@ -47,9 +47,6 @@ var (
 	errAuthB  = errors.New("401 Unauthorized: invalid_api_key on B")
 )
 
-// Issue #1164: a sync-path failover retry whose replacement stream later fails
-// asynchronously must still be watched so the chain advances again. Without
-// the wrapper, the retried stream's async error passes straight to the caller.
 func TestIssue1164_SyncFailoverRetryStreamIsWatched(t *testing.T) {
 	a := &zz116xProvider{name: "a", syncErr: errQuotaA}
 	b := &zz116xProvider{name: "b", asyncErr: errQuotaB}
@@ -97,9 +94,6 @@ func TestIssue1164_SyncFailoverRetryStreamIsWatched(t *testing.T) {
 	}
 }
 
-// Issue #1163: when an async-error failover's replacement provider fails to
-// even start (sync error), both root causes must reach the consumer instead of
-// only the original provider's stale error.
 func TestIssue1163_AsyncFailoverPreservesFallbackSyncError(t *testing.T) {
 	a := &zz116xProvider{name: "a", asyncErr: errQuotaA}
 	b := &zz116xProvider{name: "b", syncErr: errAuthB}

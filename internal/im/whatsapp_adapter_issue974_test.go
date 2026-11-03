@@ -29,10 +29,6 @@ func waInboundEvent(fromMe bool, id, text string) *events.Message {
 	}
 }
 
-// TestWhatsAppInboundFiltersIsFromMe verifies the #974 high fix. Processing
-// order in handleInbound is: IsFromMe filter → dedup mark → manager dispatch.
-// A self-echo that never appears in the seen map therefore provably never
-// reached the manager either (no ghost reply possible).
 func TestWhatsAppInboundFiltersIsFromMe(t *testing.T) {
 	a := &whatsappAdapter{name: "t", seen: map[string]time.Time{}}
 
@@ -47,8 +43,6 @@ func TestWhatsAppInboundFiltersIsFromMe(t *testing.T) {
 	}
 }
 
-// TestWhatsAppInboundDedup redeliveries (reconnects / offline history sync)
-// with the same msgid must be processed once.
 func TestWhatsAppInboundDedup(t *testing.T) {
 	a := &whatsappAdapter{name: "t", seen: map[string]time.Time{}}
 
@@ -60,8 +54,6 @@ func TestWhatsAppInboundDedup(t *testing.T) {
 	}
 }
 
-// TestWhatsAppSendWhenDisconnectedReturnsError: previously Send silently
-// returned nil during disconnect windows, hiding the dropped message.
 func TestWhatsAppSendWhenDisconnectedReturnsError(t *testing.T) {
 	a := &whatsappAdapter{name: "t", seen: map[string]time.Time{}}
 	err := a.Send(context.Background(),
@@ -75,10 +67,6 @@ func TestWhatsAppSendWhenDisconnectedReturnsError(t *testing.T) {
 	}
 }
 
-// TestWhatsAppSignalSessionDoneTerminalUpgrade: when Disconnected fills the
-// done buffer before LoggedOut arrives, the terminal LoggedOut error must
-// upgrade the buffered signal — otherwise the adapter reconnects forever on
-// a dead session and the store DB is never cleaned up.
 func TestWhatsAppSignalSessionDoneTerminalUpgrade(t *testing.T) {
 	done := make(chan error, 1)
 	a := &whatsappAdapter{name: "t", sessionDone: done}
@@ -96,11 +84,6 @@ func TestWhatsAppSignalSessionDoneTerminalUpgrade(t *testing.T) {
 	}
 }
 
-// TestWhatsAppClientSnapshotRace hammers concurrent client publishes
-// (connectAndServe), snapshot reads (currentClient / handleInbound /
-// publishState) and clears (markLoggedOut). Under -race the pre-#974 bare
-// `a.client` reads reported DATA RACE; all read sites now go through the
-// RLock snapshot and must stay clean.
 func TestWhatsAppClientSnapshotRace(t *testing.T) {
 	a := &whatsappAdapter{name: "race", seen: map[string]time.Time{}, storeDir: t.TempDir()}
 	c1 := whatsmeow.NewClient(&store.Device{}, nil)

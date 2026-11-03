@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// Window-focused variant: the document grows far past the streaming
-// window so per-chunk cost must stay flat (proportional to the ~600-line
-// window, not the accumulated document).
 func BenchmarkStreamUpdateTextLongDoc(b *testing.B) {
 	styles := DefaultStyles()
 	l := NewList(120, 40)

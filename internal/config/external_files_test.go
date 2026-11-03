@@ -9,8 +9,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// TestMCPServers_RoundTripThroughExternalFile verifies that MCP servers
-// survive a Load → modify → Save → Load cycle through mcp_servers.yaml.
 func TestMCPServers_RoundTripThroughExternalFile(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -66,8 +64,6 @@ func TestMCPServers_RoundTripThroughExternalFile(t *testing.T) {
 	}
 }
 
-// TestMCPServers_EmptyRemovesExternalFile verifies that when all MCP servers
-// are removed, mcp_servers.yaml is cleaned up.
 func TestMCPServers_EmptyRemovesExternalFile(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -93,7 +89,6 @@ func TestMCPServers_EmptyRemovesExternalFile(t *testing.T) {
 	}
 }
 
-// TestMCPServers_EnvExpansion verifies env vars in mcp_servers.yaml are expanded.
 func TestMCPServers_EnvExpansion(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -129,9 +124,6 @@ func TestMCPServers_EnvExpansion(t *testing.T) {
 	}
 }
 
-// TestMCPMigration_FromMainConfig verifies that MCP servers written inline
-// in the main config file (old format) get migrated to mcp_servers.yaml on
-// the first Load.
 func TestMCPMigration_FromMainConfig(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -176,8 +168,6 @@ mcp_servers:
 	}
 }
 
-// TestIMConfig_RoundTripThroughExternalFile verifies that IM config survives
-// a Save → Load cycle through im.yaml.
 func TestIMConfig_RoundTripThroughExternalFile(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -219,7 +209,6 @@ func TestIMConfig_RoundTripThroughExternalFile(t *testing.T) {
 	}
 }
 
-// TestIMConfig_EmptyRemovesExternalFile verifies that empty IM config removes im.yaml.
 func TestIMConfig_EmptyRemovesExternalFile(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -243,8 +232,6 @@ func TestIMConfig_EmptyRemovesExternalFile(t *testing.T) {
 	}
 }
 
-// TestIMMigration_FromMainConfig verifies that IM config written inline in
-// the main config file (old format) gets migrated to im.yaml on first Load.
 func TestIMMigration_FromMainConfig(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -295,8 +282,6 @@ im:
 	}
 }
 
-// TestVendorsMigration_FromMainConfig verifies that custom vendors written
-// inline in the main config get migrated to vendors.yaml on first Load.
 func TestVendorsMigration_FromMainConfig(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -351,10 +336,6 @@ func TestVendorsMigration_FromMainConfig(t *testing.T) {
 	}
 }
 
-// TestExternalFiles_FirstLaunchNoData verifies that a first launch with no
-// config files doesn't create any external files. DefaultConfig contains
-// only default vendors, so SaveVendors should strip them all and not create
-// vendors.yaml.
 func TestExternalFiles_FirstLaunchNoData(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -380,8 +361,6 @@ func TestExternalFiles_FirstLaunchNoData(t *testing.T) {
 
 }
 
-// TestExternalFiles_AllThreeTogether verifies that all three external
-// sections coexist and survive a full round-trip.
 func TestExternalFiles_AllThreeTogether(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -436,8 +415,6 @@ func TestExternalFiles_AllThreeTogether(t *testing.T) {
 	}
 }
 
-// TestExternalFiles_MultipleSavesIdempotent verifies that repeated Save calls
-// don't corrupt data.
 func TestExternalFiles_MultipleSavesIdempotent(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -467,8 +444,6 @@ func TestExternalFiles_MultipleSavesIdempotent(t *testing.T) {
 	}
 }
 
-// TestExternalFiles_OnlyDefaultsStrippedFromVendors verifies that default
-// vendors are stripped from vendors.yaml but custom ones are kept.
 func TestExternalFiles_OnlyDefaultsStrippedFromVendors(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()

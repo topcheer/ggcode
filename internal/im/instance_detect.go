@@ -20,7 +20,6 @@ const (
 	instancesDir = "instances"
 )
 
-// InstanceInfo describes a running ggcode instance in the same directory.
 type InstanceInfo struct {
 	PID               int       `json:"pid"`
 	UUID              string    `json:"uuid"`
@@ -28,21 +27,15 @@ type InstanceInfo struct {
 	HasActiveChannels bool      `json:"hasActiveChannels"`
 }
 
-// InstanceDetect manages per-directory instance registration and discovery.
-// It uses PID files under .ggcode/instances/ to track running instances.
 type InstanceDetect struct {
 	mu         sync.Mutex
 	info       InstanceInfo
-	dir        string // absolute path to .ggcode/instances/
+	dir        string
 	registered bool
 
-	// checkAlive is the function used to check if a PID is alive.
-	// Defaults to isProcessAlive; overridable for testing.
 	checkAlive func(pid int) bool
 }
 
-// NewInstanceDetect creates a new instance detector for the given workspace.
-// workspace is the project root directory (where .ggcode/ lives).
 func NewInstanceDetect(workspace string) *InstanceDetect {
 	return &InstanceDetect{
 		dir: filepath.Join(workspace, ".ggcode", instancesDir),
@@ -55,9 +48,6 @@ func NewInstanceDetect(workspace string) *InstanceDetect {
 	}
 }
 
-// Register writes this instance's PID file and cleans up stale entries.
-// Returns a list of other live instances (sorted by StartedAt ascending)
-// and an error if file operations fail.
 func (d *InstanceDetect) Register() ([]InstanceInfo, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -81,7 +71,6 @@ func (d *InstanceDetect) Register() ([]InstanceInfo, error) {
 	return others, nil
 }
 
-// Unregister removes this instance's PID file. Call on graceful shutdown.
 func (d *InstanceDetect) Unregister() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -95,22 +84,18 @@ func (d *InstanceDetect) Unregister() {
 	d.registered = false
 }
 
-// Info returns this instance's info.
 func (d *InstanceDetect) Info() InstanceInfo {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.info
 }
 
-// IsRegistered returns whether Register() has been called successfully.
 func (d *InstanceDetect) IsRegistered() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.registered
 }
 
-// IsPrimary checks if this instance is the oldest among all running instances
-// in the same directory. Must be called after Register().
 func (d *InstanceDetect) IsPrimary() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -141,8 +126,6 @@ func (d *InstanceDetect) IsPrimary() bool {
 	return true
 }
 
-// ListInstances returns all live instances in the directory, including self.
-// Sorted by StartedAt ascending (oldest first).
 func (d *InstanceDetect) ListInstances() []InstanceInfo {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -173,7 +156,6 @@ func (d *InstanceDetect) ListInstances() []InstanceInfo {
 	return result
 }
 
-// UpdateHasActiveChannels updates the hasActiveChannels flag in the PID file.
 func (d *InstanceDetect) UpdateHasActiveChannels(active bool) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -187,8 +169,6 @@ func (d *InstanceDetect) UpdateHasActiveChannels(active bool) error {
 	return os.WriteFile(pidFile, data, 0o644)
 }
 
-// cleanAndCollectLocked removes stale PID files and returns live other instances.
-// Caller must hold d.mu.
 func (d *InstanceDetect) cleanAndCollectLocked() []InstanceInfo {
 	entries, err := os.ReadDir(d.dir)
 	if err != nil {
@@ -228,12 +208,10 @@ func (d *InstanceDetect) cleanAndCollectLocked() []InstanceInfo {
 	return live
 }
 
-// pidFilePath returns the file path for a given PID + UUID pair.
 func (d *InstanceDetect) pidFilePath(pid int, id string) string {
 	return filepath.Join(d.dir, fmt.Sprintf("%d-%s.json", pid, id[:8]))
 }
 
-// readInstanceFile reads and parses an instance info file.
 func (d *InstanceDetect) readInstanceFile(path string) (InstanceInfo, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -250,13 +228,10 @@ func (d *InstanceDetect) readInstanceFile(path string) (InstanceInfo, error) {
 	return info, nil
 }
 
-// isProcessAlive checks if a process with the given PID is alive.
-// isProcessAlive checks if the process with the given PID is still running.
 func isProcessAlive(pid int) bool {
 	return util.IsProcessAlive(pid)
 }
 
-// parsePIDFromFilename extracts the PID from a filename like "12345-abc12345.json".
 func parsePIDFromFilename(name string) (int, error) {
 	base := strings.TrimSuffix(name, ".json")
 	parts := strings.SplitN(base, "-", 2)

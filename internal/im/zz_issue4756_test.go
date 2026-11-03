@@ -7,11 +7,6 @@ import (
 	"maunium.net/go/mautrix/event"
 )
 
-// #4756-A: for an edited reply (m.replace whose new_content carries the
-// m.in_reply_to relation), the strip gate must see the reply relation. The
-// outer relates_to is the replace marker, so NewContent.GetReplyTo() is the
-// only signal - pin both halves: mautrix exposes the inner reply-to, and the
-// fallback stripper removes the serialized prefix from such a body.
 func TestIssue4756_EditOfReplyStripGateSeesInnerReplyTo(t *testing.T) {
 	raw := `{
 		"msgtype": "m.text",

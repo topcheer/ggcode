@@ -6,8 +6,6 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-// B precondition: a completion-only chunk materializes usage (nil cur) with
-// InputTokens==0 - exactly the state whose input side must be backfillable.
 func TestIssue4563_CompletionOnlyChunkMaterializes(t *testing.T) {
 	got := applyOpenAIUsage(nil, openai.Usage{CompletionTokens: 42})
 	if got == nil {
@@ -22,15 +20,13 @@ func TestIssue4563_CompletionOnlyChunkMaterializes(t *testing.T) {
 	}
 }
 
-// The done-time backfill predicates: #4472 output-side and the new #4563
-// input-side. Simulates the exact states the fallback distinguishes.
 func TestIssue4563_BackfillPredicates(t *testing.T) {
 	cases := []struct {
 		name        string
 		usage       *TokenUsage
 		outputChars int
-		wantOutput  bool // #4472: Output==0 && chars>0
-		wantInput   bool // #4563: Input==0 (non-nil usage, post-materialize)
+		wantOutput  bool
+		wantInput   bool
 	}{
 		{"nil usage stays on estimation path", nil, 100, false, false},
 		{"complete usage untouched", &TokenUsage{InputTokens: 10, OutputTokens: 20}, 100, false, false},

@@ -5,26 +5,20 @@ import (
 	"sync"
 )
 
-// DefaultMaxItems bounds the display cache. The full history always
-// lives in the session JSONL on disk; the in-memory list is a rendering
-// cache only, so dropping ancient items loses nothing persistent.
 const DefaultMaxItems = 2000
 
-// List is a virtual-scrolling list of Items.
-// Only items visible in the current viewport are rendered.
 type List struct {
 	mu         sync.RWMutex
 	items      []Item
-	offsetIdx  int // index of first visible item
-	offsetLine int // line offset within the first visible item
+	offsetIdx  int
+	offsetLine int
 	width      int
 	height     int
-	follow     bool // auto-scroll to bottom
+	follow     bool
 	dirty      bool
-	maxItems   int // display-cache cap; 0 = unlimited
+	maxItems   int
 }
 
-// NewList creates a new virtual list with the given dimensions.
 func NewList(width, height int) *List {
 	return &List{
 		width:    width,
@@ -34,7 +28,6 @@ func NewList(width, height int) *List {
 	}
 }
 
-// Append adds items to the end of the list.
 func (l *List) Append(items ...Item) {
 	l.mu.Lock()
 	l.items = append(l.items, items...)
@@ -46,8 +39,6 @@ func (l *List) Append(items ...Item) {
 	l.mu.Unlock()
 }
 
-// SetMaxItems changes the display-cache cap (0 = unlimited) and trims
-// immediately if the current list exceeds it.
 func (l *List) SetMaxItems(n int) {
 	l.mu.Lock()
 	l.maxItems = n
@@ -55,11 +46,6 @@ func (l *List) SetMaxItems(n int) {
 	l.mu.Unlock()
 }
 
-// trimLocked drops the oldest items when the cache exceeds maxItems.
-// It trims down to 75% of the cap (hysteresis) so the O(n) copy happens
-// only once every cap/4 appends instead of on every append. The viewport
-// is shifted by the dropped count, keeping what the user sees in place.
-// Caller must hold the lock.
 func (l *List) trimLocked() {
 	if l.maxItems <= 0 || len(l.items) <= l.maxItems {
 		return
@@ -77,7 +63,6 @@ func (l *List) trimLocked() {
 	l.dirty = true
 }
 
-// RemoveByID removes an item by ID. No-op if not found.
 func (l *List) RemoveByID(id string) {
 	l.mu.Lock()
 	for i, item := range l.items {
@@ -90,8 +75,6 @@ func (l *List) RemoveByID(id string) {
 	l.mu.Unlock()
 }
 
-// UpdateByID finds an item by ID and applies the given mutation function.
-// If the item is not found, it is a no-op.
 func (l *List) UpdateByID(id string, fn func(Item)) {
 	l.mu.Lock()
 	for _, item := range l.items {
@@ -104,7 +87,6 @@ func (l *List) UpdateByID(id string, fn func(Item)) {
 	l.mu.Unlock()
 }
 
-// SetItems replaces all items.
 func (l *List) SetItems(items []Item) {
 	l.mu.Lock()
 	l.items = items
@@ -118,7 +100,6 @@ func (l *List) SetItems(items []Item) {
 	l.mu.Unlock()
 }
 
-// ItemAt returns the item at the given index, or nil.
 func (l *List) ItemAt(idx int) Item {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -128,7 +109,6 @@ func (l *List) ItemAt(idx int) Item {
 	return l.items[idx]
 }
 
-// UpdateItem replaces the item with the given ID.
 func (l *List) UpdateItem(id string, item Item) {
 	l.mu.Lock()
 	for i, it := range l.items {
@@ -141,7 +121,6 @@ func (l *List) UpdateItem(id string, item Item) {
 	l.mu.Unlock()
 }
 
-// FindByID returns the item with the given ID, or nil.
 func (l *List) FindByID(id string) Item {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -153,15 +132,12 @@ func (l *List) FindByID(id string) Item {
 	return nil
 }
 
-// Len returns the number of items.
 func (l *List) Len() int {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return len(l.items)
 }
 
-// LastAssistantText returns the raw text of the most recent AssistantItem,
-// or empty string if none exists.
 func (l *List) LastAssistantText() string {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -173,9 +149,6 @@ func (l *List) LastAssistantText() string {
 	return ""
 }
 
-// TruncateAfterLastUser removes all items after the last UserItem,
-// effectively discarding the agent's most recent response and any
-// interleaved system/tool items. Returns true if items were removed.
 func (l *List) TruncateAfterLastUser() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -197,14 +170,12 @@ func (l *List) TruncateAfterLastUser() bool {
 	return true
 }
 
-// Height returns the viewport height.
 func (l *List) Height() int {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.height
 }
 
-// SetSize updates the viewport dimensions.
 func (l *List) SetSize(width, height int) {
 	l.mu.Lock()
 	l.width = width
@@ -213,7 +184,6 @@ func (l *List) SetSize(width, height int) {
 	l.mu.Unlock()
 }
 
-// SetFollow enables or disables auto-scroll to bottom.
 func (l *List) SetFollow(f bool) {
 	l.mu.Lock()
 	l.follow = f
@@ -223,16 +193,12 @@ func (l *List) SetFollow(f bool) {
 	l.mu.Unlock()
 }
 
-// Follow returns whether auto-scroll is active.
 func (l *List) Follow() bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.follow
 }
 
-// ScrollDown scrolls the viewport by n lines. Scrolling down past the end
-// position re-enables follow, so wheeling back to the bottom naturally
-// resumes following new output.
 func (l *List) ScrollDown(n int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -245,9 +211,6 @@ func (l *List) ScrollDown(n int) {
 	}
 }
 
-// ScrollUp scrolls the viewport up by n lines. This pauses follow: new
-// output no longer yanks the viewport back to the bottom until the user
-// returns to the bottom (or sends an empty Enter).
 func (l *List) ScrollUp(n int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -255,7 +218,6 @@ func (l *List) ScrollUp(n int) {
 	l.scrollByLocked(-n)
 }
 
-// ScrollToEnd scrolls to the very bottom and re-enables follow.
 func (l *List) ScrollToEnd() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -263,9 +225,6 @@ func (l *List) ScrollToEnd() {
 	l.scrollToEndLocked()
 }
 
-// FollowOutput keeps the viewport pinned to the bottom while follow is
-// active. When the user has scrolled away (follow paused), it is a no-op,
-// so streaming output does not yank their reading position.
 func (l *List) FollowOutput() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -275,7 +234,6 @@ func (l *List) FollowOutput() {
 	l.scrollToEndLocked()
 }
 
-// AtBottom returns whether the viewport is at the bottom.
 func (l *List) AtBottom() bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -291,7 +249,6 @@ func (l *List) AtBottom() bool {
 	return total <= l.height
 }
 
-// YOffset returns the current scroll position as a line offset from the top.
 func (l *List) YOffset() int {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -303,9 +260,6 @@ func (l *List) YOffset() int {
 	return offset
 }
 
-// Render produces the visible portion of the list as a single string.
-// Only items within the viewport are rendered.
-// When follow is active, scroll position is re-synced automatically.
 func (l *List) Render() string {
 	l.mu.Lock()
 
@@ -369,8 +323,6 @@ func (l *List) Render() string {
 	return result
 }
 
-// scrollToEndLocked moves the viewport to show the last items.
-// Caller must hold the lock.
 func (l *List) scrollToEndLocked() {
 	if len(l.items) == 0 {
 		l.offsetIdx = 0
@@ -381,8 +333,6 @@ func (l *List) scrollToEndLocked() {
 	l.dirty = true
 }
 
-// scrollByLocked scrolls by n lines (positive = down, negative = up).
-// Caller must hold the lock.
 func (l *List) scrollByLocked(n int) {
 	if len(l.items) == 0 {
 		return
@@ -424,11 +374,6 @@ func (l *List) scrollByLocked(n int) {
 	l.dirty = true
 }
 
-// clampMaxScrollLocked ensures the scroll position doesn't go past the
-// "end" position — i.e. the last item must be at least partially visible
-// at the bottom of the viewport. This prevents blank space below content.
-// It uses the same backward-walk as scrollToEndLocked but as a maximum bound.
-// Caller must hold the lock.
 func (l *List) clampMaxScrollLocked() {
 	if len(l.items) == 0 || l.height <= 0 {
 		return
@@ -442,8 +387,6 @@ func (l *List) clampMaxScrollLocked() {
 	}
 }
 
-// calcEndPositionLocked returns the (offsetIdx, offsetLine) that places
-// the last item at the bottom of the viewport. Caller must hold the lock.
 func (l *List) calcEndPositionLocked() (idx, line int) {
 	if len(l.items) == 0 {
 		return 0, 0
@@ -485,11 +428,6 @@ func (l *List) calcEndPositionLocked() (idx, line int) {
 	return idx, line
 }
 
-// splitVisualLines splits rendered content into visual lines, trimming the
-// trailing empty element that strings.Split produces from a trailing "\n".
-// This keeps the line count consistent with measureHeight, which subtracts 1
-// for a trailing newline. Without this, Height() and Render() disagree on the
-// number of lines, causing scroll-position miscalculation.
 func splitVisualLines(s string) []string {
 	lines := strings.Split(s, "\n")
 

@@ -8,37 +8,22 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
-// SlashDeps supplies path-specific state to registry handlers. Each inbound
-// path implements it from its own live state: the daemon bridge reads the
-// agent and disk stores; the TUI adapter reads the live model/session.
 type SlashDeps interface {
-	// SessionCostSummary renders /cost (live session view when available,
-	// cross-session disk summary otherwise).
 	SessionCostSummary() (string, error)
-	// SessionUsageSummary renders /usage (token counts view).
 	SessionUsageSummary() (string, error)
-	// CurrentMode reports the current permission mode name.
 	CurrentMode() string
-	// SwitchMode applies a mode switch (name pre-validated by the handler).
 	SwitchMode(name string) error
-	// ToolList renders the registered-tool listing.
 	ToolList() (string, error)
-	// ModifiedFiles renders the checkpoint modified-file listing.
 	ModifiedFiles() (string, error)
-	// GitDiff renders `git diff <args>` output.
 	GitDiff(args []string) (string, error)
 }
 
-// SlashCommand is one registry entry.
 type SlashCommand struct {
-	Name     string // canonical name without the leading slash
-	Help     string // one-line help text (generated into /help)
-	Category string // "query" (one-shot) or "tui" (interactive, TUI-only)
-	// Interactive marks commands that need a TUI surface. IM replies with a
-	// TUI-only hint instead of executing.
+	Name        string
+	Help        string
+	Category    string
 	Interactive bool
-	// Handler executes the command. Nil for Interactive entries.
-	Handler func(d SlashDeps, args []string) (string, error)
+	Handler     func(d SlashDeps, args []string) (string, error)
 }
 
 var imSlashRegistry = []SlashCommand{
@@ -131,13 +116,10 @@ var imSlashRegistry = []SlashCommand{
 	{Name: "context", Help: "Context budget view (TUI-only)", Category: "tui", Interactive: true},
 }
 
-// IMSlashRegistry returns the shared registry (for parity tests and help
-// generation). Callers must not mutate the returned slice.
 func IMSlashRegistry() []SlashCommand {
 	return imSlashRegistry
 }
 
-// LookupIMSlashCommand finds a registry entry by bare name (without slash).
 func LookupIMSlashCommand(name string) (SlashCommand, bool) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	for _, c := range imSlashRegistry {
@@ -148,9 +130,6 @@ func LookupIMSlashCommand(name string) (SlashCommand, bool) {
 	return SlashCommand{}, false
 }
 
-// IMSlashHelpLines generates the /help lines for the registry commands.
-// Interactive entries collapse into one summary line so the help stays
-// readable on messaging platforms.
 func IMSlashHelpLines() []string {
 	var lines []string
 	var interactive []string
@@ -167,10 +146,6 @@ func IMSlashHelpLines() []string {
 	return lines
 }
 
-// ExecuteRegistrySlashCommand dispatches a slash command through the shared
-// registry. Returns (response, handled); commands absent from the registry
-// return handled=false so the caller's other handlers or unknown-command
-// path take over.
 func ExecuteRegistrySlashCommand(d SlashDeps, text string) (string, bool) {
 	parts := strings.Fields(strings.TrimSpace(text))
 	if len(parts) == 0 || !strings.HasPrefix(parts[0], "/") {

@@ -19,9 +19,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// getShellInfo returns a human-readable description of the detected shell
-// for inclusion in the system prompt. This tells the LLM which shell syntax
-// to use when generating commands.
 func getShellInfo() string {
 	spec, err := util.DetectShell()
 	if err != nil {
@@ -42,11 +39,6 @@ func getShellInfo() string {
 	}
 }
 
-// configFileLocks serializes read-modify-write operations against a given
-// config file path. Multiple goroutines (TUI Bubble Tea cmds, agent loop,
-// OAuth refresh, IM bindings) can call Save*/Add*/Remove* concurrently;
-// without this lock the read-modify-write sequence races and can drop
-// fields, and a crash mid-write can truncate the YAML.
 var (
 	configFileLocksMu sync.Mutex
 	configFileLocks   = map[string]*sync.Mutex{}
@@ -67,100 +59,57 @@ func lockConfigFile(path string) func() {
 	return mu.Unlock
 }
 
-// ModelLimitConfig holds per-model context window, max output token, and LLM
-// call policy (request timeout / retry budget) overrides. When present for a
-// given model, these values take priority over the endpoint-level
-// ContextWindow/MaxTokens/RequestTimeout/MaxRetries fields.
 type ModelLimitConfig struct {
-	ContextWindow int `yaml:"context_window,omitempty" json:"context_window,omitempty"`
-	MaxTokens     int `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
-	// RequestTimeout caps a single LLM call (connect + full stream) for this
-	// model, e.g. "45s". 0 = no deadline (pre-existing behavior).
+	ContextWindow  int           `yaml:"context_window,omitempty" json:"context_window,omitempty"`
+	MaxTokens      int           `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
 	RequestTimeout time.Duration `yaml:"request_timeout,omitempty" json:"request_timeout,omitempty"`
-	// MaxRetries overrides the provider-wide retry budget (default 20) for
-	// this model. Useful for fast/cheap models where retrying 20 times with
-	// exponential backoff just delays the inevitable fallback.
-	MaxRetries int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
+	MaxRetries     int           `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
 }
 
-// ServerToolConfig declares one server-side tool — executed inside the
-// provider API, never client-side. Supported Type values:
-//   - Anthropic: "web_search_20250305", "web_fetch_20250910" (results arrive
-//     in-band and are echoed back verbatim); "tool_search_tool_regex" or
-//     "tool_search_tool_bm25" (server-side Tool Search Tool, beta — MCP
-//     tool schemas are sent with defer_loading and expanded server-side;
-//     disables the client-side tool_search meta-tool)
-//   - Gemini:    "google_search" (alias "web_search"), "url_context"
-//     (grounding sources are surfaced as text blocks)
 type ServerToolConfig struct {
-	Type string `yaml:"type" json:"type"`
-	// Parameters for the OpenAI Responses built-in tools (sa-63). Other
-	// protocols ignore these fields.
-	VectorStoreIDs []string `yaml:"vector_store_ids,omitempty" json:"vector_store_ids,omitempty"` // file_search: vector stores to query
-	MaxNumResults  int      `yaml:"max_num_results,omitempty" json:"max_num_results,omitempty"`   // file_search: cap retrieved chunks
-	MemoryLimit    string   `yaml:"memory_limit,omitempty" json:"memory_limit,omitempty"`         // code_interpreter: container RAM tier (1g/4g/16g/64g)
-	FileIDs        []string `yaml:"file_ids,omitempty" json:"file_ids,omitempty"`                 // code_interpreter: files seeded into the auto container
+	Type           string   `yaml:"type" json:"type"`
+	VectorStoreIDs []string `yaml:"vector_store_ids,omitempty" json:"vector_store_ids,omitempty"`
+	MaxNumResults  int      `yaml:"max_num_results,omitempty" json:"max_num_results,omitempty"`
+	MemoryLimit    string   `yaml:"memory_limit,omitempty" json:"memory_limit,omitempty"`
+	FileIDs        []string `yaml:"file_ids,omitempty" json:"file_ids,omitempty"`
 }
 
-// EndpointConfig describes a concrete vendor endpoint that maps to one protocol.
 type EndpointConfig struct {
-	DisplayName   string `yaml:"display_name" json:"display_name"`
-	Protocol      string `yaml:"protocol" json:"protocol"`
-	BaseURL       string `yaml:"base_url" json:"base_url"`
-	AuthType      string `yaml:"auth_type,omitempty" json:"auth_type,omitempty"`
-	APIKey        string `yaml:"api_key,omitempty" json:"api_key,omitempty"`
-	ContextWindow int    `yaml:"context_window,omitempty" json:"context_window,omitempty"`
-	MaxTokens     int    `yaml:"max_tokens" json:"max_tokens"`
-	// RequestTimeout caps every LLM call against this endpoint ("45s" style).
-	// Endpoint-level default; a model_limits entry takes priority. 0 = none.
-	RequestTimeout time.Duration `yaml:"request_timeout,omitempty" json:"request_timeout,omitempty"`
-	// MaxRetries overrides the provider-wide retry budget for this endpoint.
-	// Endpoint-level default; a model_limits entry takes priority. 0 = default.
-	MaxRetries      int    `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
-	ReasoningEffort string `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
-	// Logprobs (sa-74) requests token logprobs from the provider for
-	// confidence telemetry. OpenAI: logprobs+top_logprobs; Gemini:
-	// responseLogprobs. Anthropic does not support logprobs. Opt-in: adds
-	// response payload and is not needed for normal operation.
-	Logprobs      bool               `yaml:"logprobs,omitempty" json:"logprobs,omitempty"`
-	TextVerbosity string             `yaml:"text_verbosity,omitempty" json:"text_verbosity,omitempty"` // GPT-5 text.verbosity: "low", "medium", "high" (empty = API default)
-	ToolChoice    string             `yaml:"tool_choice,omitempty" json:"tool_choice,omitempty"`       // "auto", "required", "none" (empty = auto/default)
-	ServerTools   []ServerToolConfig `yaml:"server_tools,omitempty" json:"server_tools,omitempty"`     // server-side tools: Anthropic web_search/web_fetch; Gemini google_search/url_context
-	MemoryTool    bool               `yaml:"memory_tool,omitempty" json:"memory_tool,omitempty"`       // Anthropic Memory Tool (memory_20250818): declared by provider, executed client-side
-	// ThinkingMode (Anthropic) selects the extended-thinking carrier:
-	// "auto" (default; adaptive thinking for Claude 4.6+/5.x, budget_tokens
-	// otherwise), "manual" (budget_tokens), "adaptive"
-	// (thinking:{type:"adaptive"} + output_config.effort).
-	ThinkingMode   string   `yaml:"thinking_mode,omitempty" json:"thinking_mode,omitempty"`
-	SupportsVision *bool    `yaml:"supports_vision,omitempty" json:"supports_vision,omitempty"`
-	DefaultModel   string   `yaml:"default_model,omitempty" json:"default_model,omitempty"`
-	SelectedModel  string   `yaml:"selected_model,omitempty" json:"selected_model,omitempty"`
-	Models         []string `yaml:"models,omitempty" json:"models,omitempty"`
-	Tags           []string `yaml:"tags,omitempty" json:"tags,omitempty"`
-	// ContextEditing (anthropic): "tool_results", "thinking", or "all"
-	// (empty = off) — server-side context-management beta.
-	ContextEditing string `yaml:"context_editing,omitempty" json:"context_editing,omitempty"`
-	// StrictTools (sa-60): grammar-constrained tool inputs (structured
-	// outputs); opt-in per endpoint. Allowlist empty = provider default set.
-	StrictTools      *bool    `yaml:"strict_tools,omitempty" json:"strict_tools,omitempty"`
-	StrictToolsAllow []string `yaml:"strict_tools_allow,omitempty" json:"strict_tools_allow,omitempty"`
-	// ServiceTier (sa-81) selects the processing tier on OpenAI-compatible
-	ServiceTier         string `yaml:"service_tier,omitempty" json:"service_tier,omitempty"`
-	ResponsesBackground bool   `yaml:"responses_background,omitempty" json:"responses_background,omitempty"` // OpenAI Responses background mode: create returns "queued", ggcode polls until terminal
-	// ModelLimits provides per-model overrides for ContextWindow and MaxTokens.
-	// When a model is resolved, per-model limits are checked first; if absent,
-	// the endpoint-level ContextWindow/MaxTokens fields are used as fallback.
-	ModelLimits map[string]ModelLimitConfig `yaml:"model_limits,omitempty" json:"model_limits,omitempty"`
+	DisplayName         string                      `yaml:"display_name" json:"display_name"`
+	Protocol            string                      `yaml:"protocol" json:"protocol"`
+	BaseURL             string                      `yaml:"base_url" json:"base_url"`
+	AuthType            string                      `yaml:"auth_type,omitempty" json:"auth_type,omitempty"`
+	APIKey              string                      `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+	ContextWindow       int                         `yaml:"context_window,omitempty" json:"context_window,omitempty"`
+	MaxTokens           int                         `yaml:"max_tokens" json:"max_tokens"`
+	RequestTimeout      time.Duration               `yaml:"request_timeout,omitempty" json:"request_timeout,omitempty"`
+	MaxRetries          int                         `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
+	ReasoningEffort     string                      `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
+	Logprobs            bool                        `yaml:"logprobs,omitempty" json:"logprobs,omitempty"`
+	TextVerbosity       string                      `yaml:"text_verbosity,omitempty" json:"text_verbosity,omitempty"`
+	ToolChoice          string                      `yaml:"tool_choice,omitempty" json:"tool_choice,omitempty"`
+	ServerTools         []ServerToolConfig          `yaml:"server_tools,omitempty" json:"server_tools,omitempty"`
+	MemoryTool          bool                        `yaml:"memory_tool,omitempty" json:"memory_tool,omitempty"`
+	ThinkingMode        string                      `yaml:"thinking_mode,omitempty" json:"thinking_mode,omitempty"`
+	SupportsVision      *bool                       `yaml:"supports_vision,omitempty" json:"supports_vision,omitempty"`
+	DefaultModel        string                      `yaml:"default_model,omitempty" json:"default_model,omitempty"`
+	SelectedModel       string                      `yaml:"selected_model,omitempty" json:"selected_model,omitempty"`
+	Models              []string                    `yaml:"models,omitempty" json:"models,omitempty"`
+	Tags                []string                    `yaml:"tags,omitempty" json:"tags,omitempty"`
+	ContextEditing      string                      `yaml:"context_editing,omitempty" json:"context_editing,omitempty"`
+	StrictTools         *bool                       `yaml:"strict_tools,omitempty" json:"strict_tools,omitempty"`
+	StrictToolsAllow    []string                    `yaml:"strict_tools_allow,omitempty" json:"strict_tools_allow,omitempty"`
+	ServiceTier         string                      `yaml:"service_tier,omitempty" json:"service_tier,omitempty"`
+	ResponsesBackground bool                        `yaml:"responses_background,omitempty" json:"responses_background,omitempty"`
+	ModelLimits         map[string]ModelLimitConfig `yaml:"model_limits,omitempty" json:"model_limits,omitempty"`
 }
 
-// VendorConfig holds a real supplier plus its available endpoints.
 type VendorConfig struct {
 	DisplayName string                    `yaml:"display_name" json:"display_name"`
 	APIKey      string                    `yaml:"api_key,omitempty" json:"api_key,omitempty"`
 	Endpoints   map[string]EndpointConfig `yaml:"endpoints" json:"endpoints"`
 }
 
-// ResolvedEndpoint is the runtime selection after config inheritance is applied.
 type ResolvedEndpoint struct {
 	VendorID            string
 	VendorName          string
@@ -193,7 +142,6 @@ type ResolvedEndpoint struct {
 	ResponsesBackground bool
 }
 
-// ToolPermission defines per-tool permission level in config.
 type ToolPermission string
 
 const (
@@ -202,7 +150,6 @@ const (
 	ToolPermDeny  ToolPermission = "deny"
 )
 
-// MCPServerConfig defines an MCP server to connect to.
 type MCPServerConfig struct {
 	Name              string            `yaml:"name" json:"name"`
 	Type              string            `yaml:"type,omitempty" json:"type,omitempty"`
@@ -214,49 +161,26 @@ type MCPServerConfig struct {
 	OAuthClientID     string            `yaml:"oauth_client_id,omitempty" json:"oauth_client_id,omitempty"`
 	OAuthClientSecret string            `yaml:"oauth_client_secret,omitempty" json:"oauth_client_secret,omitempty"`
 	ReadOnly          bool              `yaml:"read_only,omitempty" json:"read_only,omitempty"`
-	// Stateless opts the MCP client into the 2026-07-28 stateless protocol
-	// core (SEP-2575): the client probes server/discover and operates modern
-	// (per-request _meta versioning) instead of the legacy initialize
-	// handshake, falling back to the handshake on non-modern errors.
-	// Default false — legacy behavior is unchanged.
-	Stateless bool `yaml:"stateless,omitempty" json:"stateless,omitempty"`
-	// AllowToolDrift opts this server out of the anti-rug-pull tool
-	// definition drift alert (research sa-119): hash changes after the
-	// approved baseline are logged silently instead of raising the
-	// OnToolDrift callback. For servers under active development whose
-	// tool definitions legitimately churn.
-	AllowToolDrift bool `yaml:"allow_tool_drift,omitempty" json:"allow_tool_drift,omitempty"`
-	// SkipOSVCheck bypasses the pre-launch OSV malware gate (#4858) for
-	// this server: npx/uvx launches are normally gated on api.osv.dev
-	// MAL-* advisories (block on hit, fail-open on network errors,
-	// 24h verdict cache). Escape hatch for air-gapped hosts and
-	// enterprise package mirrors whose packages OSV does not index.
-	SkipOSVCheck bool `yaml:"skip_osv_check,omitempty" json:"skip_osv_check,omitempty"`
-	// #4386 form clear sentinels: Command/URL are strings, so the patch
-	// layer's "empty = not provided" semantics leave the form no way to
-	// clear them - an emptied field saved "successfully" while the old
-	// value silently resurrected. Mirrors #979's env_clear / #1434-B's
-	// args_clear (which use non-nil empties because their fields are
-	// maps/slices). Never serialized.
-	CommandClear bool   `yaml:"-" json:"-"`
-	URLClear     bool   `yaml:"-" json:"-"`
-	Source       string `yaml:"-" json:"-"`
-	OriginPath   string `yaml:"-" json:"-"`
-	Migrated     bool   `yaml:"-" json:"-"`
+	Stateless         bool              `yaml:"stateless,omitempty" json:"stateless,omitempty"`
+	AllowToolDrift    bool              `yaml:"allow_tool_drift,omitempty" json:"allow_tool_drift,omitempty"`
+	SkipOSVCheck      bool              `yaml:"skip_osv_check,omitempty" json:"skip_osv_check,omitempty"`
+	CommandClear      bool              `yaml:"-" json:"-"`
+	URLClear          bool              `yaml:"-" json:"-"`
+	Source            string            `yaml:"-" json:"-"`
+	OriginPath        string            `yaml:"-" json:"-"`
+	Migrated          bool              `yaml:"-" json:"-"`
 }
 
-// PluginConfigEntry describes a single plugin from the config file.
 type PluginConfigEntry struct {
 	Name     string                 `yaml:"name"`
 	Path     string                 `yaml:"path"`
-	Type     string                 `yaml:"type"` // "command", "so", "grpc"
+	Type     string                 `yaml:"type"`
 	Commands []PluginCommandConfig  `yaml:"commands"`
-	Command  []string               `yaml:"command"` // gRPC plugin: ["python", "-m", "my_plugin"]
-	Env      map[string]string      `yaml:"env"`     // gRPC plugin: environment variables
+	Command  []string               `yaml:"command"`
+	Env      map[string]string      `yaml:"env"`
 	Extra    map[string]interface{} `yaml:",inline"`
 }
 
-// PluginCommandConfig describes a single command tool within a plugin.
 type PluginCommandConfig struct {
 	Name        string   `yaml:"name"`
 	Description string   `yaml:"description"`
@@ -264,7 +188,6 @@ type PluginCommandConfig struct {
 	Args        []string `yaml:"args"`
 }
 
-// DefaultSystemPrompt is the built-in system prompt used when no custom system_prompt is set.
 const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a terminal.
 
 ## Core behavior
@@ -349,11 +272,6 @@ Antinoise rules: prefer DMs over broadcasts. No acknowledgments ("got it", "than
 - Never idle-wait while subagents or background commands run. Before waiting on any result, first do the work that does NOT depend on it; only wait when nothing else remains. Then wait briefly (15-60s) and continue, or tell the user you are waiting; batch-check all subagents in one call instead of polling them one by one. Do not issue long blocking waits.
 `
 
-// Config is the top-level configuration.
-// WatchTriggerConfig is one ambient fire-on-change rule (r372): when any
-// file matching Globs changes (and the change settles for one poll
-// interval), Prompt is enqueued on the session like a cron firing.
-// {files} in Prompt is replaced with the changed paths.
 type WatchTriggerConfig struct {
 	Globs       []string `yaml:"globs" json:"globs"`
 	Prompt      string   `yaml:"prompt" json:"prompt"`
@@ -361,108 +279,75 @@ type WatchTriggerConfig struct {
 	CooldownSec int      `yaml:"cooldown_sec,omitempty" json:"cooldown_sec,omitempty"`
 }
 
-// IdleConfig opts into sleep-time compute (r373): when the session has
-// been idle for after_min minutes, ggcode uses the window to pre-compact
-// the context (if usage is at/above precompact_ratio) so the next message
-// doesn't pay the compaction latency.
 type IdleConfig struct {
 	Enabled         bool    `yaml:"enabled" json:"enabled"`
-	AfterMin        int     `yaml:"after_min,omitempty" json:"after_min,omitempty"`               // default 10
-	PrecompactRatio float64 `yaml:"precompact_ratio,omitempty" json:"precompact_ratio,omitempty"` // default 0.6
+	AfterMin        int     `yaml:"after_min,omitempty" json:"after_min,omitempty"`
+	PrecompactRatio float64 `yaml:"precompact_ratio,omitempty" json:"precompact_ratio,omitempty"`
 }
 
 type Config struct {
-	Vendor   string `yaml:"vendor" json:"vendor"`
-	Endpoint string `yaml:"endpoint" json:"endpoint"`
-	Model    string `yaml:"model" json:"model"`
-	// AuxModel optionally names a cheaper model on the SAME resolved endpoint
-	// for auxiliary LLM calls (compaction summarization, autopilot strategist,
-	// health check). Task-tier model routing; see internal/agent/model_routing.go.
-	// Empty (default) routes all calls through Model.
-	AuxModel           string                  `yaml:"aux_model,omitempty" json:"aux_model,omitempty"`
-	Language           string                  `yaml:"language" json:"language"`
-	UI                 UIConfig                `yaml:"ui,omitempty" json:"ui,omitempty"`
-	IM                 IMConfig                `yaml:"im,omitempty" json:"im,omitempty"`
-	ExtraPrompt        string                  `yaml:"extra_prompt" json:"extra_prompt"`
-	Vendors            map[string]VendorConfig `yaml:"vendors" json:"vendors"`
-	AllowedDirs        []string                `yaml:"allowed_dirs" json:"allowed_dirs"`
-	MaxIterations      int                     `yaml:"max_iterations" json:"max_iterations"`
-	SessionTimeout     time.Duration           `yaml:"session_timeout,omitempty" json:"session_timeout,omitempty"`
-	SessionTokenBudget int64                   `yaml:"session_token_budget,omitempty" json:"session_token_budget,omitempty"`
-	// SessionCostLimitUSD caps the priced USD spend of a single agent run
-	// (80%/95%/100% ladder: guidance, urgent finalize, hard stop). Only
-	// metered models with known pricing accumulate; see session_cost_limit.go.
+	Vendor              string                    `yaml:"vendor" json:"vendor"`
+	Endpoint            string                    `yaml:"endpoint" json:"endpoint"`
+	Model               string                    `yaml:"model" json:"model"`
+	AuxModel            string                    `yaml:"aux_model,omitempty" json:"aux_model,omitempty"`
+	Language            string                    `yaml:"language" json:"language"`
+	UI                  UIConfig                  `yaml:"ui,omitempty" json:"ui,omitempty"`
+	IM                  IMConfig                  `yaml:"im,omitempty" json:"im,omitempty"`
+	ExtraPrompt         string                    `yaml:"extra_prompt" json:"extra_prompt"`
+	Vendors             map[string]VendorConfig   `yaml:"vendors" json:"vendors"`
+	AllowedDirs         []string                  `yaml:"allowed_dirs" json:"allowed_dirs"`
+	MaxIterations       int                       `yaml:"max_iterations" json:"max_iterations"`
+	SessionTimeout      time.Duration             `yaml:"session_timeout,omitempty" json:"session_timeout,omitempty"`
+	SessionTokenBudget  int64                     `yaml:"session_token_budget,omitempty" json:"session_token_budget,omitempty"`
 	SessionCostLimitUSD float64                   `yaml:"session_cost_limit_usd,omitempty" json:"session_cost_limit_usd,omitempty"`
 	SessionTimeBudget   time.Duration             `yaml:"session_time_budget,omitempty" json:"session_time_budget,omitempty"`
 	ToolCallBudget      int                       `yaml:"tool_call_budget,omitempty" json:"tool_call_budget,omitempty"`
 	ToolPerms           map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
 	Plugins             []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
 	MCPServers          []MCPServerConfig         `yaml:"mcp_servers" json:"mcp_servers"`
-	// MCPSamplingDisabled (#1484-D) turns the MCP sampling handler off
-	// entirely - sampling is the only LLM-consumption path with no gate:
-	// a buggy/malicious server could loop sampling requests and burn the
-	// budget with no prompt, breaker, or even an off switch. Zero value
-	// keeps sampling ON (backward compat); a per-minute rate cap applies
-	// regardless (see mcp_sampling.go).
-	MCPSamplingDisabled bool `yaml:"mcp_sampling_disabled,omitempty" json:"mcp_sampling_disabled,omitempty"`
-	// DeletedMCPServers records user-deleted MCP server names (tombstones).
-	// External apps (e.g. Pen.app) rewrite their Claude registration files
-	// (~/.claude.json) behind our back; without a tombstone the startup/panel
-	// merge re-imports the deleted name on the next read and it "comes back"
-	// as an unconfigured row. Loaded from / persisted to mcp_deleted.yaml in
-	// the external config dir, never the main config file.
-	DeletedMCPServers []string `yaml:"-" json:"-"`
-	// imAdaptersMu guards c.IM.Adapters for runtime read-modify-write
-	// (config_save.go writers) vs. locked readers (im_access.go). Load-time
-	// normalization and expandEnv are single-threaded and unguarded (#2152).
-	imAdaptersMu   sync.RWMutex
-	Hooks          hooks.HookConfig           `yaml:"hooks" json:"hooks"`
-	DefaultMode    string                     `yaml:"default_mode" json:"default_mode"`
-	SubAgents      SubAgentConfig             `yaml:"subagents" json:"subagents"`
-	Impersonation  ImpersonationConfig        `yaml:"impersonation,omitempty" json:"impersonation,omitempty"`
-	KnightConfig   KnightConfig               `yaml:"knight,omitempty" json:"knight,omitempty"`
-	Swarm          SwarmConfig                `yaml:"swarm,omitempty" json:"swarm,omitempty"`
-	Verify         VerifyConfig               `yaml:"verify,omitempty" json:"verify,omitempty"`
-	A2A            A2AConfig                  `yaml:"a2a,omitempty" json:"a2a,omitempty"`
-	LanChat        LanChatConfig              `yaml:"lanchat,omitempty" json:"lanchat,omitempty"`
-	Watch          []WatchTriggerConfig       `yaml:"watch,omitempty" json:"watch,omitempty"`
-	Idle           IdleConfig                 `yaml:"idle,omitempty" json:"idle,omitempty"`
-	Stream         stream.StreamConfig        `yaml:"stream,omitempty" json:"stream,omitempty"`
-	LSPServers     map[string]LSPServerConfig `yaml:"lsp_servers,omitempty" json:"lsp_servers,omitempty"`
-	ProbeContext   bool                       `yaml:"probe_context,omitempty" json:"probe_context,omitempty"`
-	P2P            P2PConfig                  `yaml:"p2p,omitempty" json:"p2p,omitempty"`
-	OutputStyle    string                     `yaml:"output_style,omitempty" json:"output_style,omitempty"`
-	StatusLine     StatusLineConfig           `yaml:"statusline,omitempty" json:"statusline,omitempty"`
-	Notifications  NotificationConfig         `yaml:"notifications,omitempty" json:"notifications,omitempty"`
-	Fallback       FallbackConfig             `yaml:"fallback,omitempty" json:"fallback,omitempty"`
-	Fallbacks      []FallbackConfig           `yaml:"fallbacks,omitempty" json:"fallbacks,omitempty"`
-	FilePath       string                     `yaml:"-" json:"-"`
-	ProtectedPaths []string                   `yaml:"protected_paths,omitempty" json:"protected_paths,omitempty"`
-	Sandbox        SandboxConfig              `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
-	FirstRun       bool                       `yaml:"-" json:"-"`
-	instanceDir    string                     `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
-	instancePath   string                     `yaml:"-" json:"-"` // instanceDir + "/ggcode.yaml"
-	instanceWS     string                     `yaml:"-" json:"-"` // workspace path for SaveInstance
-	saveScope      string                     `yaml:"-" json:"-"` // current save scope: "global" or "instance"
-	globalSnap     *Config                    `yaml:"-" json:"-"` // deep copy of global config before instance merge
-	instanceFields map[string]bool            `yaml:"-" json:"-"` // fields that were filled by instance config
-	// explicitKeys (#2284-C): top-level keys PRESENT in this file's yaml -
-	// lets the instance merge treat "explicitly set to zero/empty" as an
-	// override instead of resurrecting the cleared global value.
-	explicitKeys map[string]bool   `yaml:"-" json:"-"`
-	diskStrSnap  map[string]string `yaml:"-" json:"-"` // #610: dotted path -> raw string value on disk at Load time (clear/tombstone basis)
+	MCPSamplingDisabled bool                      `yaml:"mcp_sampling_disabled,omitempty" json:"mcp_sampling_disabled,omitempty"`
+	DeletedMCPServers   []string                  `yaml:"-" json:"-"`
+	imAdaptersMu        sync.RWMutex
+	Hooks               hooks.HookConfig           `yaml:"hooks" json:"hooks"`
+	DefaultMode         string                     `yaml:"default_mode" json:"default_mode"`
+	SubAgents           SubAgentConfig             `yaml:"subagents" json:"subagents"`
+	Impersonation       ImpersonationConfig        `yaml:"impersonation,omitempty" json:"impersonation,omitempty"`
+	KnightConfig        KnightConfig               `yaml:"knight,omitempty" json:"knight,omitempty"`
+	Swarm               SwarmConfig                `yaml:"swarm,omitempty" json:"swarm,omitempty"`
+	Verify              VerifyConfig               `yaml:"verify,omitempty" json:"verify,omitempty"`
+	A2A                 A2AConfig                  `yaml:"a2a,omitempty" json:"a2a,omitempty"`
+	LanChat             LanChatConfig              `yaml:"lanchat,omitempty" json:"lanchat,omitempty"`
+	Watch               []WatchTriggerConfig       `yaml:"watch,omitempty" json:"watch,omitempty"`
+	Idle                IdleConfig                 `yaml:"idle,omitempty" json:"idle,omitempty"`
+	Stream              stream.StreamConfig        `yaml:"stream,omitempty" json:"stream,omitempty"`
+	LSPServers          map[string]LSPServerConfig `yaml:"lsp_servers,omitempty" json:"lsp_servers,omitempty"`
+	ProbeContext        bool                       `yaml:"probe_context,omitempty" json:"probe_context,omitempty"`
+	P2P                 P2PConfig                  `yaml:"p2p,omitempty" json:"p2p,omitempty"`
+	OutputStyle         string                     `yaml:"output_style,omitempty" json:"output_style,omitempty"`
+	StatusLine          StatusLineConfig           `yaml:"statusline,omitempty" json:"statusline,omitempty"`
+	Notifications       NotificationConfig         `yaml:"notifications,omitempty" json:"notifications,omitempty"`
+	Fallback            FallbackConfig             `yaml:"fallback,omitempty" json:"fallback,omitempty"`
+	Fallbacks           []FallbackConfig           `yaml:"fallbacks,omitempty" json:"fallbacks,omitempty"`
+	FilePath            string                     `yaml:"-" json:"-"`
+	ProtectedPaths      []string                   `yaml:"protected_paths,omitempty" json:"protected_paths,omitempty"`
+	Sandbox             SandboxConfig              `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
+	FirstRun            bool                       `yaml:"-" json:"-"`
+	instanceDir         string                     `yaml:"-" json:"-"`
+	instancePath        string                     `yaml:"-" json:"-"`
+	instanceWS          string                     `yaml:"-" json:"-"`
+	saveScope           string                     `yaml:"-" json:"-"`
+	globalSnap          *Config                    `yaml:"-" json:"-"`
+	instanceFields      map[string]bool            `yaml:"-" json:"-"`
+	explicitKeys        map[string]bool            `yaml:"-" json:"-"`
+	diskStrSnap         map[string]string          `yaml:"-" json:"-"`
 }
 
-// ImpersonationConfig holds persisted impersonation settings.
 type ImpersonationConfig struct {
 	Preset        string            `yaml:"preset,omitempty"`
 	CustomVersion string            `yaml:"custom_version,omitempty"`
 	CustomHeaders map[string]string `yaml:"custom_headers,omitempty"`
 }
 
-// LSPServerConfig allows users to override the auto-detected LSP server binary
-// and arguments for a specific language. The key is the language ID (e.g. "go",
-// "rust", "typescript", "python").
 type LSPServerConfig struct {
 	Binary string   `yaml:"binary,omitempty" json:"binary,omitempty"`
 	Args   []string `yaml:"args,omitempty" json:"args,omitempty"`
@@ -473,18 +358,14 @@ type UIConfig struct {
 }
 
 type IMConfig struct {
-	Enabled             bool                       `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	ActiveSessionPolicy string                     `yaml:"active_session_policy,omitempty" json:"active_session_policy,omitempty"`
-	RequireLocalSession *bool                      `yaml:"require_local_session,omitempty" json:"require_local_session,omitempty"`
-	OutputMode          string                     `yaml:"output_mode,omitempty" json:"output_mode,omitempty"` // verbose, quiet, summary (default: verbose)
-	Streaming           IMStreamingConfig          `yaml:"streaming,omitempty" json:"streaming,omitempty"`
-	STT                 IMSTTConfig                `yaml:"stt,omitempty" json:"stt,omitempty"`
-	Adapters            map[string]IMAdapterConfig `yaml:"adapters,omitempty" json:"adapters,omitempty"`
-	// RemoteDangerousCommands (#2185) is the opt-in gate for dangerous
-	// remote operations over IM: /mode escalation to bypass/autopilot and
-	// the $/! shell passthrough. Both are hard-denied when false (default)
-	// so a bound IM peer cannot escalate privileges with zero confirmation.
-	RemoteDangerousCommands bool `yaml:"remote_dangerous_commands,omitempty" json:"remote_dangerous_commands,omitempty"`
+	Enabled                 bool                       `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	ActiveSessionPolicy     string                     `yaml:"active_session_policy,omitempty" json:"active_session_policy,omitempty"`
+	RequireLocalSession     *bool                      `yaml:"require_local_session,omitempty" json:"require_local_session,omitempty"`
+	OutputMode              string                     `yaml:"output_mode,omitempty" json:"output_mode,omitempty"`
+	Streaming               IMStreamingConfig          `yaml:"streaming,omitempty" json:"streaming,omitempty"`
+	STT                     IMSTTConfig                `yaml:"stt,omitempty" json:"stt,omitempty"`
+	Adapters                map[string]IMAdapterConfig `yaml:"adapters,omitempty" json:"adapters,omitempty"`
+	RemoteDangerousCommands bool                       `yaml:"remote_dangerous_commands,omitempty" json:"remote_dangerous_commands,omitempty"`
 }
 
 type IMStreamingConfig struct {
@@ -511,7 +392,7 @@ type IMAdapterConfig struct {
 	Args       []string               `yaml:"args,omitempty" json:"args,omitempty"`
 	Env        map[string]string      `yaml:"env,omitempty" json:"env,omitempty"`
 	AllowFrom  []string               `yaml:"allow_from,omitempty" json:"allow_from,omitempty"`
-	OutputMode string                 `yaml:"output_mode,omitempty" json:"output_mode,omitempty"` // adapter-level override: verbose, quiet, summary
+	OutputMode string                 `yaml:"output_mode,omitempty" json:"output_mode,omitempty"`
 	Targets    []IMTargetConfig       `yaml:"targets,omitempty" json:"targets,omitempty"`
 	Extra      map[string]interface{} `yaml:"extra,omitempty" json:"extra,omitempty"`
 }
@@ -524,70 +405,35 @@ type IMTargetConfig struct {
 	Metadata map[string]string `yaml:"metadata,omitempty" json:"metadata,omitempty"`
 }
 
-// SubAgentConfig holds sub-agent configuration.
 type SubAgentConfig struct {
-	MaxConcurrent int           `yaml:"max_concurrent"` // default: 16 - max simultaneously running sub-agents
-	MaxTotal      int           `yaml:"max_total"`      // default: 0 (unlimited) - lifetime spawn budget for this manager; bounds total agent calls per session even when concurrency slots free up
+	MaxConcurrent int           `yaml:"max_concurrent"`
+	MaxTotal      int           `yaml:"max_total"`
 	Timeout       time.Duration `yaml:"timeout"`
 	ShowOutput    bool          `yaml:"show_output"`
 }
 
-// VerifyConfig controls the post-loop automatic verification pass.
-// Disabled by default: the system prompt already mandates that the model
-// verifies its own changes inside the loop (scoped to what changed), which
-// current models do reliably; a second whole-pass at loop end duplicated
-// that work, added wall-clock latency, and its failure injection could loop
-// the agent on phantom errors (e.g. whole-repo pipelines exceeding the
-// verify budget). Opt in for weaker models that tend to claim success
-// without testing.
 type VerifyConfig struct {
-	AutoAfterRun bool `yaml:"auto_after_run" json:"auto_after_run"` // run build/test verification after the agent loop
+	AutoAfterRun bool `yaml:"auto_after_run" json:"auto_after_run"`
 
-	// ClaimsSupervision re-enables the success-claim heuristic detectors
-	// (premature success declarations, unverified/phantom verification claims).
-	// Default off: these injections are derived from lexical matching of
-	// intermediate-state text and add noise for models that already verify
-	// their changes in-loop per the system prompt mandate. Opt in only for
-	// models that habitually claim success without testing.
-	ClaimsSupervision bool `yaml:"claims_supervision" json:"claims_supervision"` // enable success-claim heuristic detectors
+	ClaimsSupervision bool `yaml:"claims_supervision" json:"claims_supervision"`
 
-	// AdversarialReview enables the independent evaluator gate (generator-
-	// evaluator separation): before completion, a fresh-context LLM evaluator
-	// reviews the run's diff against the original task with a skeptical rubric
-	// and FAIL findings are injected back into the loop for repair (max 2
-	// rounds per task). Complements the command-oracle gates (build/test/lint)
-	// with semantic review that self-assessment cannot provide. Default off.
 	AdversarialReview bool `yaml:"adversarial_review" json:"adversarial_review"`
 }
 type SwarmConfig struct {
-	MaxTeammatesPerTeam int           `yaml:"max_teammates_per_team"` // default: 16
-	TeammateTimeout     time.Duration `yaml:"teammate_timeout"`       // default: 0 (no timeout, run until task completes)
-	InboxSize           int           `yaml:"inbox_size"`             // default: 32
-	PollInterval        time.Duration `yaml:"poll_interval"`          // default: 1s — how often idle teammates check the task board
+	MaxTeammatesPerTeam int           `yaml:"max_teammates_per_team"`
+	TeammateTimeout     time.Duration `yaml:"teammate_timeout"`
+	InboxSize           int           `yaml:"inbox_size"`
+	PollInterval        time.Duration `yaml:"poll_interval"`
 }
 
-// LanChatConfig holds LAN Chat rate-limiting configuration.
-// The DM cooldown prevents agent-originated message storms by enforcing
-// a per-recipient cooldown between messages. Default: 150s.
-// Set via `config set lanchat.dm_cooldown 300s`.
 type LanChatConfig struct {
-	DMCooldown time.Duration `yaml:"dm_cooldown" json:"dm_cooldown"` // default: 150s
+	DMCooldown time.Duration `yaml:"dm_cooldown" json:"dm_cooldown"`
 
-	// RequireApprovalForAgents disables auto-approval of @agent DMs that
-	// self-report FromRole "agent". Default false keeps agent-to-agent
-	// collaboration zero-friction; set true to gate every @agent DM behind
-	// manual approval (#986).
 	RequireApprovalForAgents bool `yaml:"require_approval_for_agents,omitempty" json:"require_approval_for_agents,omitempty"`
 
-	// APIKey is a DEDICATED lanchat peer-authentication key. It is decoupled
-	// from a2a.auth.api_key (#1015): that key gates A2A task traffic only.
-	// Unset (default) keeps zero-config LAN Chat interop via the well-known
-	// community key. Set it to restrict LAN Chat to peers sharing the key —
-	// nodes without it (including zero-config ones) are rejected 401 (#986).
 	APIKey string `yaml:"api_key,omitempty" json:"api_key,omitempty"`
 }
 
-// EffectiveDMCooldown returns the configured DM cooldown, or 150s if zero/unset.
 func (c LanChatConfig) EffectiveDMCooldown() time.Duration {
 	if c.DMCooldown <= 0 {
 		return 150 * time.Second
@@ -595,10 +441,6 @@ func (c LanChatConfig) EffectiveDMCooldown() time.Duration {
 	return c.DMCooldown
 }
 
-// EffectiveAPIKey returns the dedicated lanchat key, or the well-known
-// community key when unset — lanchat never inherits a2a.auth.api_key
-// (#1015): configuring an A2A task key must not silently lock the LAN
-// Chat discovery layer out of zero-config interop.
 func (c LanChatConfig) EffectiveAPIKey() string {
 	if c.APIKey == "" {
 		return DefaultA2AAPIKey
@@ -606,110 +448,55 @@ func (c LanChatConfig) EffectiveAPIKey() string {
 	return c.APIKey
 }
 
-// DefaultA2AAPIKey is a well-known key baked into every ggcode binary.
-// It is NOT a secret — its purpose is to ensure that only ggcode instances
-// (not random HTTP clients) can reach the A2A endpoint.
-//
-// For real security, teams should set a2a.auth.api_key to their own value.
 const DefaultA2AAPIKey = "ggcode-lan-a2a-v1"
 
-// A2AConfig holds A2A protocol server configuration.
-// A2A is enabled by default — mDNS discovery runs automatically so teams
-// on the same network can discover each other without any configuration.
 type A2AConfig struct {
-	Disabled    bool                `yaml:"disabled,omitempty"`   // true to disable (default: enabled)
-	Port        int                 `yaml:"port"`                 // 0 = auto-assign
-	Host        string              `yaml:"host"`                 // default "0.0.0.0" (always)
-	MaxTasks    int                 `yaml:"max_tasks"`            // concurrent task limit (default 5)
-	TaskTimeout string              `yaml:"task_timeout"`         // per-task timeout (default "5m")
-	Interfaces  []string            `yaml:"interfaces,omitempty"` // mDNS advertise interfaces (default: auto-detect default route)
+	Disabled    bool                `yaml:"disabled,omitempty"`
+	Port        int                 `yaml:"port"`
+	Host        string              `yaml:"host"`
+	MaxTasks    int                 `yaml:"max_tasks"`
+	TaskTimeout string              `yaml:"task_timeout"`
+	Interfaces  []string            `yaml:"interfaces,omitempty"`
 	Auth        A2AAuthConfig       `yaml:"auth,omitempty"`
 	Delegation  A2ADelegationConfig `yaml:"delegation,omitempty"`
 
-	// Extensions declares A2A protocol extensions this instance SUPPORTS
-	// (server side, A2A v1.0 "Extension Declaration"). They appear in the
-	// Agent Card and are negotiated per-request via the A2A-Extensions
-	// header; clients that fail to activate a required extension are
-	// rejected with -32004.
 	Extensions []A2AExtensionConfig `yaml:"extensions,omitempty"`
 
-	// ActivateExtensions opts this instance in (client side) to A2A
-	// extensions on REMOTE agents: the URIs are sent in the A2A-Extensions
-	// header on outgoing tasks. Outgoing calls to an agent whose card marks
-	// an extension required but not activated here fail fast instead of
-	// violating the remote contract.
 	ActivateExtensions []string `yaml:"activate_extensions,omitempty"`
 
-	// disabledExplicit records that the "disabled" key was explicitly present
-	// in the source yaml (#665). Only set by LoadA2AOverride; enables the
-	// bidirectional instance-wins merge in MergeA2AConfig. Unexported so it
-	// never round-trips through yaml or crosses package boundaries.
 	disabledExplicit bool
 }
 
-// A2ADelegationConfig configures the A-JWT-lite delegation declarations
-// (sa-84): outbound tasks may carry ggcode.dev/on-behalf-of +
-// ggcode.dev/delegation message metadata (declarations, NOT signatures -
-// audit anchors only, never an authentication basis). These knobs control
-// INBOUND enforcement on the local A2A server; the zero value disables all
-// checks.
 type A2ADelegationConfig struct {
-	// RequireOnBehalfOf rejects inbound tasks that carry no
-	// ggcode.dev/on-behalf-of declaration.
 	RequireOnBehalfOf bool `yaml:"require_on_behalf_of,omitempty"`
-	// MaxDepth rejects inbound tasks whose delegation-depth exceeds this
-	// bound (guard against unbounded agent-to-agent forwarding chains).
-	// 0 (default) = no depth check. Recommended: 3.
-	MaxDepth int `yaml:"max_depth,omitempty"`
+	MaxDepth          int  `yaml:"max_depth,omitempty"`
 }
 
-// A2AExtensionConfig declares one supported A2A protocol extension
-// (AgentExtension in the A2A v1.0 spec).
 type A2AExtensionConfig struct {
-	URI         string                 `yaml:"uri"`                   // unique extension URI, versioned (e.g. .../v1)
-	Description string                 `yaml:"description,omitempty"` // how this agent uses the extension
-	Required    bool                   `yaml:"required,omitempty"`    // client MUST activate it or requests are rejected
-	Params      map[string]interface{} `yaml:"params,omitempty"`      // extension-specific configuration
+	URI         string                 `yaml:"uri"`
+	Description string                 `yaml:"description,omitempty"`
+	Required    bool                   `yaml:"required,omitempty"`
+	Params      map[string]interface{} `yaml:"params,omitempty"`
 }
 
-// P2PConfig controls WebRTC P2P direct connection between host and mobile.
-// When not disabled, the tunnel attempts to upgrade from relay-mediated WebSocket
-// to a direct P2P DataChannel, reducing relay bandwidth by ~70%.
 type P2PConfig struct {
-	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"` // opt-out, default enabled
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 }
 
-// NotificationConfig controls how the user is notified when an agent run
-// completes (success or failure). Mode "all" fires on every completion,
-// "long" (default) only for runs exceeding MinDuration, "errors" only on
-// failures, and "off" disables all notifications.
-// SandboxConfig configures the OS-level containment layer for agent-driven
-// shell execution (run_command / start_command). When Enabled, command spawns
-// are wrapped in a kernel sandbox (Seatbelt on macOS); on platforms without
-// native sandboxing the layer is a no-op. This complements (does not replace)
-// the existing path-based sandboxing: policy/protected_paths still decide
-// WHAT paths are allowed, the OS sandbox enforces them at the kernel level.
 type SandboxConfig struct {
-	// Enabled turns on OS-level command containment. Default: false.
-	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	// AllowNetwork permits outbound network access inside the sandbox.
-	// Nil = platform default (macOS: network allowed). Default: allow
-	// (agents need fetch/git-push; opt out for stricter containment).
-	AllowNetwork *bool `yaml:"allow_network,omitempty" json:"allow_network,omitempty"`
-	// ExtraWritePaths grants additional writable directories (absolute
-	// paths or ~-expanded), e.g. "~/go/pkg/mod" for module builds.
+	Enabled         bool     `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	AllowNetwork    *bool    `yaml:"allow_network,omitempty" json:"allow_network,omitempty"`
 	ExtraWritePaths []string `yaml:"extra_write_paths,omitempty" json:"extra_write_paths,omitempty"`
 }
 
 type NotificationConfig struct {
-	Mode           string `yaml:"mode,omitempty" json:"mode,omitempty"`                                 // all|long|errors|off (default: long)
-	Bell           *bool  `yaml:"bell,omitempty" json:"bell,omitempty"`                                 // terminal bell (\x07); nil = default on, explicit false disables (#959)
-	Desktop        bool   `yaml:"desktop,omitempty" json:"desktop,omitempty"`                           // OS desktop notification
-	MinDuration    int    `yaml:"min_duration_sec,omitempty" json:"min_duration_sec,omitempty"`         // minimum run seconds before "long" fires (default: 3)
-	InputBellDelay int    `yaml:"input_bell_delay_sec,omitempty" json:"input_bell_delay_sec,omitempty"` // seconds to wait before alerting on pending input (default: 5, negative = off)
+	Mode           string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Bell           *bool  `yaml:"bell,omitempty" json:"bell,omitempty"`
+	Desktop        bool   `yaml:"desktop,omitempty" json:"desktop,omitempty"`
+	MinDuration    int    `yaml:"min_duration_sec,omitempty" json:"min_duration_sec,omitempty"`
+	InputBellDelay int    `yaml:"input_bell_delay_sec,omitempty" json:"input_bell_delay_sec,omitempty"`
 }
 
-// EffectiveMode returns the notification mode, defaulting to "long".
 func (n NotificationConfig) EffectiveMode() string {
 	switch n.Mode {
 	case "all", "long", "errors", "off":
@@ -719,7 +506,6 @@ func (n NotificationConfig) EffectiveMode() string {
 	}
 }
 
-// EffectiveMinDuration returns the minimum duration in seconds, defaulting to 3.
 func (n NotificationConfig) EffectiveMinDuration() int {
 	if n.MinDuration > 0 {
 		return n.MinDuration
@@ -727,11 +513,6 @@ func (n NotificationConfig) EffectiveMinDuration() int {
 	return 3
 }
 
-// EffectiveInputBellDelay returns the delay (in seconds) before firing an
-// input-needed notification. Returns 5 by default (when unset/zero), or 0
-// if the feature is disabled by the user (set to a negative value).
-// Note: 0 is treated as "use default" because it is the Go zero value for int.
-// To disable, use a negative value (e.g. -1).
 func (n NotificationConfig) EffectiveInputBellDelay() int {
 	if n.InputBellDelay < 0 {
 		return 0
@@ -742,10 +523,6 @@ func (n NotificationConfig) EffectiveInputBellDelay() int {
 	return n.InputBellDelay
 }
 
-// ShouldBell reports whether terminal bell is enabled. Defaults to true
-// when Bell is nil (unset). An explicit bell:false disables the bell even
-// with desktop notifications off — the pre-*bool zero-value trap of #959
-// made bell:false + desktop:false fall through to "on".
 func (n NotificationConfig) ShouldBell() bool {
 	if n.Bell != nil {
 		return *n.Bell
@@ -753,10 +530,6 @@ func (n NotificationConfig) ShouldBell() bool {
 	return true
 }
 
-// FallbackConfig configures one automatic provider/model failover level.
-// When the primary provider fails with a permanent error (quota exhaustion,
-// auth failure) or sustained transient errors, requests are transparently
-// rerouted to the configured fallback vendor/endpoint/model.
 type FallbackConfig struct {
 	Enabled  bool   `yaml:"enabled" json:"enabled"`
 	Vendor   string `yaml:"vendor,omitempty" json:"vendor,omitempty"`
@@ -764,15 +537,10 @@ type FallbackConfig struct {
 	Model    string `yaml:"model,omitempty" json:"model,omitempty"`
 }
 
-// IsConfigured reports whether the fallback has enough info to be usable.
 func (f FallbackConfig) IsConfigured() bool {
 	return f.Enabled && f.Vendor != "" && f.Model != ""
 }
 
-// FallbackChain returns the ordered failover chain: the legacy single
-// `fallback` entry first (backward compatibility), then each configured
-// entry of `fallbacks` in listed order (earlier = higher priority).
-// Entries that are not enabled or lack vendor/model are skipped.
 func (c *Config) FallbackChain() []FallbackConfig {
 	var chain []FallbackConfig
 	if c.Fallback.IsConfigured() {
@@ -786,7 +554,6 @@ func (c *Config) FallbackChain() []FallbackConfig {
 	return chain
 }
 
-// HasAuth returns true if at least one authentication mechanism is configured.
 func (c A2AConfig) HasAuth() bool {
 	return strings.TrimSpace(c.Auth.APIKey) != "" ||
 		len(c.Auth.APIKeys) > 0 ||
@@ -795,9 +562,6 @@ func (c A2AConfig) HasAuth() bool {
 		c.Auth.MTLS != nil
 }
 
-// isLoopbackHost reports whether the given host string is a loopback address
-// (127.0.0.1, ::1, localhost). Such addresses make the A2A server unreachable
-// from the LAN, breaking mDNS peer discovery and LAN Chat.
 func isLoopbackHost(host string) bool {
 	host = strings.TrimSpace(strings.ToLower(host))
 	if host == "localhost" {
@@ -809,12 +573,6 @@ func isLoopbackHost(host string) bool {
 	return false
 }
 
-// EffectiveAPIKey returns the user-configured API key if set. The built-in
-// default key is only a fallback when NO authentication mechanism is
-// configured at all (LAN convenience). When api_keys / oauth2 / oidc / mTLS
-// is configured, returning the public default key here would merge it into
-// the server's accepted key list and let anyone who has read the source
-// bypass the configured credentials (#4259).
 func (c A2AConfig) EffectiveAPIKey() string {
 	if strings.TrimSpace(c.Auth.APIKey) != "" {
 		return c.Auth.APIKey
@@ -825,82 +583,49 @@ func (c A2AConfig) EffectiveAPIKey() string {
 	return DefaultA2AAPIKey
 }
 
-// A2AAuthConfig configures which authentication mechanisms the A2A server accepts.
-// Multiple schemes can be enabled simultaneously — clients choose any one.
 type A2AAuthConfig struct {
-	// APIKey is the simplest shared-secret auth. All clients use the same key.
-	// Empty = no API key auth.
 	APIKey string `yaml:"api_key,omitempty"`
 
-	// APIKeys allows multiple API keys for different clients/teams.
-	// Both api_key and api_keys are merged; any match authenticates.
 	APIKeys []string `yaml:"api_keys,omitempty"`
 
-	// OAuth2 + PKCE / Device Flow for human-interactive agents.
 	OAuth2 *A2AOAuth2Config `yaml:"oauth2,omitempty"`
 
-	// OpenID Connect — layered on top of OAuth2, provides identity tokens.
 	OIDC *A2AOIDCConfig `yaml:"oidc,omitempty"`
 
-	// Mutual TLS for machine-to-machine. No secrets needed.
 	MTLS *A2AMTLSConfig `yaml:"mtls,omitempty"`
 
-	// HMACSecret is the shared secret for HS256/HS384/HS512 JWT signing.
-	// MUST NOT be the clientID (which is public). Set this only if your IdP
-	// uses HMAC-signed JWTs; most providers use RS256/ES256 instead.
-	// Supports ${ENV_VAR} expansion.
 	HMACSecret string `yaml:"hmac_secret,omitempty"`
 
-	// ValidIssuers lists additional issuer URLs to accept in JWT validation.
-	// The configured issuer_url is always allowed. Use this when your IdP
-	// returns different issuer URLs in different contexts.
 	ValidIssuers []string `yaml:"valid_issuers,omitempty"`
 }
 
-// A2AOAuth2Config for OAuth2 Authorization Code + PKCE or Device Flow.
-// Use "provider" for built-in presets or set fields manually for custom IdP.
 type A2AOAuth2Config struct {
-	// Provider selects a built-in preset: "github", "google", "auth0", "azure".
-	// When set, endpoint URLs and default_client_id are auto-populated.
 	Provider string `yaml:"provider,omitempty"`
 
-	// ClientID is the OAuth2 client ID. Auto-filled from provider preset.
-	// Override to use your own registered OAuth App.
 	ClientID string `yaml:"client_id,omitempty"`
 
-	// ClientSecret is required for GitHub (confidential client).
-	// Most other providers support PKCE without a secret.
-	// Can also be set via GGCODE_OAUTH_CLIENT_SECRET env var.
 	ClientSecret string `yaml:"client_secret,omitempty"`
 
-	// IssuerURL is the OAuth2 issuer base URL. Auto-filled from provider preset.
-	// For custom providers: "https://your-idp.example.com"
 	IssuerURL string `yaml:"issuer_url,omitempty"`
 
-	// Scopes are space-separated OAuth2 scopes. Auto-filled from provider preset.
 	Scopes string `yaml:"scopes,omitempty"`
 
-	// Flow selects the OAuth2 flow: "auto" (default), "pkce", or "device".
-	// "auto" picks PKCE for desktop environments, Device Flow for headless.
 	Flow string `yaml:"flow,omitempty"`
 }
 
-// A2AOIDCConfig adds OpenID Connect on top of OAuth2.
-// Same provider preset and flow selection as OAuth2.
 type A2AOIDCConfig struct {
 	Provider     string `yaml:"provider,omitempty"`
 	ClientID     string `yaml:"client_id,omitempty"`
 	ClientSecret string `yaml:"client_secret,omitempty"`
-	IssuerURL    string `yaml:"issuer_url,omitempty"` // must have /.well-known/openid-configuration
-	Scopes       string `yaml:"scopes,omitempty"`     // should include "openid"
-	Flow         string `yaml:"flow,omitempty"`       // "auto", "pkce", "device"
+	IssuerURL    string `yaml:"issuer_url,omitempty"`
+	Scopes       string `yaml:"scopes,omitempty"`
+	Flow         string `yaml:"flow,omitempty"`
 }
 
-// A2AMTLSConfig for mutual TLS authentication.
 type A2AMTLSConfig struct {
-	CertFile string `yaml:"cert_file"` // server certificate
-	KeyFile  string `yaml:"key_file"`  // server private key
-	CAFile   string `yaml:"ca_file"`   // CA to verify client certs
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
+	CAFile   string `yaml:"ca_file"`
 }
 
 func defaultEndpoint(displayName, protocol, baseURL, defaultModel string, tags ...string) EndpointConfig {
@@ -928,7 +653,6 @@ func defaultVendor(displayName, apiKey string, endpoints map[string]EndpointConf
 	}
 }
 
-// DefaultConfig returns a config with sensible defaults.
 func DefaultConfig() *Config {
 	cfg := &Config{
 		Vendor:        "zai",
@@ -1363,7 +1087,6 @@ func DefaultConfig() *Config {
 	return cfg
 }
 
-// Load reads config from the given path. If the file doesn't exist, returns defaults.
 func Load(path string) (*Config, error) {
 	cfg := DefaultConfig()
 	cfg.FilePath = path
@@ -1397,7 +1120,6 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("reading config %s: %w", path, err)
 	}
 
-	// Parse YAML into raw map for env expansion
 	var raw map[string]interface{}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parsing config %s: %w", path, err)
@@ -1411,9 +1133,6 @@ func Load(path string) (*Config, error) {
 		applyFirstLaunchAnthropicBootstrapWith(cfg, lookup)
 	}
 
-	// Auto-migrate plaintext API keys to environment variable references.
-	// This sets os.Setenv for the current process and writes ~/.ggcode/keys.env
-	// for future sessions, then rewrites the YAML to use ${VAR} references.
 	var migrated []APIKeyFinding
 	var migrateErr error
 	if !skipAuto {
@@ -1537,11 +1256,6 @@ func isDefaultUserConfigPath(path string) bool {
 	return filepath.Clean(path) == filepath.Clean(ConfigPath())
 }
 
-// canonicalIMPlatforms mirrors the canonical platform IDs of the IM adapter
-// registry (internal/im Platform* constants and wailskit GetIMPlatformRegistry).
-// internal/im imports internal/config, so the config package cannot reference
-// the registry directly without an import cycle - hence this local set.
-// Keep in sync when a platform is added.
 var canonicalIMPlatforms = map[string]struct{}{
 	"qq":          {},
 	"telegram":    {},
@@ -1563,15 +1277,6 @@ var canonicalIMPlatforms = map[string]struct{}{
 	"privateclaw": {},
 }
 
-// normalizeIMAdapterPlatforms canonicalizes IM adapter platform names
-// case-insensitively (#736). #648 fixed the SAVE path to persist the
-// registry's canonical ID, but configs saved before that fix carry values
-// like "Telegram" that the runtime startup switch (internal/im
-// startConfiguredAdapter) matches exactly - the adapter silently never
-// started and no migration healed the stored data. Load-time
-// normalization fixes the in-memory value; the next Save persists it.
-// Unknown platforms are left untouched (validation/save paths own
-// rejecting them).
 func (c *Config) normalizeIMAdapterPlatforms() {
 	if c == nil || c.IM.Adapters == nil {
 		return
@@ -1682,7 +1387,6 @@ func (c *Config) expandEnvWithLookup(lookup envLookupFunc) {
 	c.A2A.Host = ExpandEnvWithLookup(c.A2A.Host, lookup)
 }
 
-// Validate checks for invalid core configuration values that should fail fast.
 func (c *Config) Validate() error {
 
 	if c.FirstRun && strings.TrimSpace(c.Vendor) == "" {
@@ -1831,10 +1535,6 @@ func hasLegacyProviderKeys(raw map[string]interface{}) bool {
 	return hasProvider || hasProviders
 }
 
-// migrateLegacyA2AAPIKey silently moves a2a.api_key to a2a.auth.api_key
-// in the raw YAML map if the legacy field is present and the new field
-// is not already set. This is a backward-compatibility shim so existing
-// configs with the old format keep working without user intervention.
 func migrateLegacyA2AAPIKey(raw map[string]interface{}) {
 	if raw == nil {
 		return
@@ -1870,10 +1570,6 @@ func shouldApplyFirstLaunchAnthropicBootstrap(raw map[string]interface{}) bool {
 	return true
 }
 
-// skipAutoConfig returns true when the GGCODE_SKIP_AUTOCONFIG environment
-// variable is set. This disables ALL auto-initialization side effects during
-// Load(): Anthropic bootstrap, plaintext key migration, system_prompt
-// cleanup, legacy max_iterations migration, and the compact re-save.
 func skipAutoConfig() bool {
 	return os.Getenv("GGCODE_SKIP_AUTOCONFIG") != ""
 }
@@ -1899,9 +1595,6 @@ func uniqueNonEmptyStrings(values ...string) []string {
 	return result
 }
 
-// BuildSystemPrompt enhances the base system prompt with runtime context.
-// BuildSystemPrompt builds the full system prompt by prepending the built-in
-// default, appending the user's extra_prompt (if any), then runtime context.
 func BuildSystemPrompt(extraPrompt, workingDir, language string, toolNames []string, gitStatus string, customCmds []string, availableModels []string) string {
 	toolNames = append([]string(nil), toolNames...)
 	sort.Strings(toolNames)
@@ -1976,9 +1669,6 @@ func summarizeNames(names []string, limit int) string {
 	return fmt.Sprintf("%s (+%d more)", strings.Join(head, ", "), len(names)-limit)
 }
 
-// replyLanguageNames maps normalized language codes to their English names
-// for the reply-language guidance. Must stay in sync with the TUI language
-// list (internal/tui/i18n.go languageOptionsFor).
 var replyLanguageNames = map[string]string{
 	"zh-CN": "Simplified Chinese",
 	"zh-TW": "Traditional Chinese",
@@ -2043,7 +1733,6 @@ func hasAnyToolPrefix(toolNames []string, prefix string) bool {
 	return false
 }
 
-// ExpandAllowedDirs resolves allowed_dirs entries relative to baseDir.
 func (c *Config) ExpandAllowedDirs(baseDir string) []string {
 	dirs := make([]string, 0, len(c.AllowedDirs))
 	for _, d := range c.AllowedDirs {
@@ -2058,9 +1747,6 @@ func (c *Config) ExpandAllowedDirs(baseDir string) []string {
 	return dirs
 }
 
-// mergeDefaultEndpoints merges endpoints from defaults that are missing in cfg.
-// This ensures new built-in endpoints (e.g. "oauth") are available even when
-// the user has an existing config file that doesn't include them.
 func mergeDefaultEndpoints(cfg, defaults *Config) {
 	if cfg == nil || defaults == nil {
 		return
@@ -2154,12 +1840,6 @@ func mergeDefaultEndpoints(cfg, defaults *Config) {
 	}
 }
 
-// carryGatewayVendorKey (#959) preserves a legacy gateway vendor's
-// vendor-level API key when that vendor is merged into ai-gateway, so the
-// migration cannot irreversibly drop credentials. Endpoint-level placement
-// preserves per-vendor keys when several gateway vendors coexist; only when
-// the target endpoint does not exist at all does the key fall back to the
-// ai-gateway vendor-level key. Existing keys are never overwritten.
 func carryGatewayVendorKey(agVC *VendorConfig, epName, oldKey string) {
 	if oldKey == "" {
 		return
@@ -2180,15 +1860,10 @@ func carryGatewayVendorKey(agVC *VendorConfig, epName, oldKey string) {
 	}
 }
 
-// isPlaceholderBaseURL returns true if the URL looks like a template placeholder
-// rather than a real endpoint (e.g. "https://your-global-api-endpoint.example.com/v1").
-// We look for the "your-" prefix pattern which is used in all our placeholder URLs,
-// so that legitimate example.com domains (used by some proxies) are not clobbered.
 func isPlaceholderBaseURL(u string) bool {
 	return strings.Contains(u, "your-") && strings.Contains(u, "example.com")
 }
 
-// rewriteYAML rewrites the config file from the given raw map.
 func rewriteYAML(path string, raw map[string]interface{}) error {
 	data, err := yaml.Marshal(raw)
 	if err != nil {
@@ -2197,16 +1872,12 @@ func rewriteYAML(path string, raw map[string]interface{}) error {
 	return writeSecureConfigFile(path, data)
 }
 
-// OutputStyleNames lists the built-in output styles in display cycle order.
 var outputStyleOrder = []string{"", "concise", "detailed", "socratic"}
 
-// OutputStyleCycle returns the ordered list of output style keys.
 func OutputStyleCycle() []string {
 	return append([]string(nil), outputStyleOrder...)
 }
 
-// NormalizeOutputStyle returns the canonical key for the given style,
-// defaulting to "" (standard) if unrecognized.
 func NormalizeOutputStyle(style string) string {
 	style = strings.ToLower(strings.TrimSpace(style))
 	for _, s := range outputStyleOrder {
@@ -2217,7 +1888,6 @@ func NormalizeOutputStyle(style string) string {
 	return ""
 }
 
-// NextOutputStyle returns the next style in the cycle after the given one.
 func NextOutputStyle(current string) string {
 	current = strings.ToLower(strings.TrimSpace(current))
 	for i, s := range outputStyleOrder {
@@ -2228,7 +1898,6 @@ func NextOutputStyle(current string) string {
 	return outputStyleOrder[1]
 }
 
-// outputStyleGuidanceMap maps style keys to system prompt directives.
 var outputStyleGuidanceMap = map[string]string{
 	"concise": "## Output Style: Concise\n" +
 		"- Keep explanations minimal — one or two sentences max.\n" +
@@ -2249,8 +1918,6 @@ var outputStyleGuidanceMap = map[string]string{
 		"- Prefer collaborative problem-solving for architectural decisions; implement directly for straightforward tasks.",
 }
 
-// OutputStyleGuidance returns the system prompt section for the given style.
-// Returns "" for the default ("") style.
 func OutputStyleGuidance(style string) string {
 	style = NormalizeOutputStyle(style)
 	if style == "" {
@@ -2262,7 +1929,6 @@ func OutputStyleGuidance(style string) string {
 	return ""
 }
 
-// DisplayOutputStyle returns a human-friendly label for the status bar.
 func DisplayOutputStyle(style string) string {
 	style = NormalizeOutputStyle(style)
 	if style == "" {

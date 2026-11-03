@@ -16,10 +16,6 @@ import (
 	"github.com/topcheer/ggcode/internal/usage"
 )
 
-// BuildCrossSessionCostSummary is retired (#2312 ruling B): the .cost.json
-// store it loaded has no live writer - the IM fallback rendered empty or
-// stale legacy data. The first-class usage/balance surface (#2150, in
-// flight) will serve cross-session totals from live data.
 func BuildCrossSessionCostSummary() (string, error) {
 	return "Cross-session cost totals are being rebuilt on the live usage pipeline (#2150). Session /cost is available.", nil
 }
@@ -62,9 +58,6 @@ func (b *DaemonBridge) SessionUsageSummary() (string, error) {
 	return usage.RenderText(probeID, info, err), nil
 }
 
-// imUsageServiceOnce guards the process-wide probe service for the IM
-// /usage path (usage.DefaultService builds a fresh Service per call; a
-// singleton preserves its cache across commands).
 var imUsageServiceOnce sync.Once
 var imUsageServiceInst *usage.Service
 
@@ -106,8 +99,6 @@ func (b *DaemonBridge) SwitchMode(name string) error {
 	return nil
 }
 
-// remoteDangerousAllowed reports whether the #2185 im.remote_dangerous_commands
-// opt-in is set for this bridge's workspace (fail closed: nil config denies).
 func (b *DaemonBridge) remoteDangerousAllowed() bool {
 	if b.remoteDangerousOverride != nil {
 		return *b.remoteDangerousOverride
@@ -175,12 +166,6 @@ func (b *DaemonBridge) ModifiedFiles() (string, error) {
 	return sb.String(), nil
 }
 
-// sanitizeGitDiffArgs filters remote /diff arguments down to a safe
-// subset (#1752 case 1): IM text arrives via strings.Fields and was passed
-// through verbatim - `--output=~/.bashrc` made git WRITE the diff to any
-// file the process can touch, --ext-diff/-O widened the surface. No shell
-// is involved, but git's own options are attacker-reachable. Allowlist:
-// a few display flags, then anything after a `--` separator (paths).
 func SanitizeGitDiffArgs(args []string) []string {
 	allowed := map[string]bool{
 		"--cached": true, "--stat": true, "--numstat": true,
@@ -239,9 +224,6 @@ func (b *DaemonBridge) GitDiff(args []string) (string, error) {
 	return trimmed, nil
 }
 
-// Compile-time interface conformance for the path-A deps implementation.
 var _ SlashDeps = (*DaemonBridge)(nil)
 
-// keep provider import for token usage parity with the TUI path (usage
-// rendering on the TUI side references provider.TokenUsage).
 var _ = provider.TokenUsage{}

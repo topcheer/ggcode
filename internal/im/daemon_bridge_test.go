@@ -41,9 +41,6 @@ func (p *daemonBridgeMetricsProvider) CountTokens(context.Context, []provider.Me
 	return 0, nil
 }
 
-// TestDaemonBridgeInterruptionQueuing verifies that when an agent run is
-// active (cancelFunc != nil), a new IM message is queued as an interruption
-// instead of cancelling the current run.
 func TestDaemonBridgeInterruptionQueuing(t *testing.T) {
 	bridge := &DaemonBridge{}
 
@@ -74,7 +71,6 @@ func TestDaemonBridgeInterruptionQueuing(t *testing.T) {
 	}
 }
 
-// TestDaemonBridgeInterruptionQueueOrder verifies messages are queued in order.
 func TestDaemonBridgeInterruptionQueueOrder(t *testing.T) {
 	bridge := &DaemonBridge{}
 
@@ -103,7 +99,6 @@ func TestDaemonBridgeInterruptionQueueOrder(t *testing.T) {
 	}
 }
 
-// TestDaemonBridgeInterruptionDrain verifies the handler drains the queue correctly.
 func TestDaemonBridgeInterruptionDrain(t *testing.T) {
 	bridge := &DaemonBridge{
 		pendingInterruptions: []pendingInterruption{
@@ -138,7 +133,6 @@ func TestDaemonBridgeInterruptionDrain(t *testing.T) {
 	}
 }
 
-// TestDaemonBridgeEmptyMessageIgnored verifies empty messages are not queued.
 func TestDaemonBridgeEmptyMessageIgnored(t *testing.T) {
 	bridge := &DaemonBridge{}
 
@@ -162,7 +156,6 @@ func TestDaemonBridgeEmptyMessageIgnored(t *testing.T) {
 	}
 }
 
-// TestDaemonBridgeNoRaceOnInterruption tests concurrent access to the queue.
 func TestDaemonBridgeNoRaceOnInterruption(t *testing.T) {
 	bridge := &DaemonBridge{}
 
@@ -194,7 +187,6 @@ func TestDaemonBridgeNoRaceOnInterruption(t *testing.T) {
 	}
 }
 
-// TestDaemonBridgeNoCancelStress repeats the no-cancel check under rapid messages.
 func TestDaemonBridgeNoCancelStress(t *testing.T) {
 	bridge := &DaemonBridge{}
 
@@ -721,9 +713,6 @@ func TestDaemonSlashCommandWinsOverPendingApproval(t *testing.T) {
 	}
 }
 
-// TestDaemonApproval_AlwaysReplyCarriesAlwaysFlag (#943) verifies that an "a"
-// (always) IM reply carries the AlwaysAllow flag through the daemon approval
-// channel instead of degrading to a one-shot allow.
 func TestDaemonApproval_AlwaysReplyCarriesAlwaysFlag(t *testing.T) {
 	mgr := NewManager()
 	emitter := NewIMEmitter(mgr, "en", t.TempDir())
@@ -755,10 +744,6 @@ func TestDaemonApproval_AlwaysReplyCarriesAlwaysFlag(t *testing.T) {
 	}
 }
 
-// TestDaemonApproval_HandleApprovalAlwaysPersistsGrant (#943) verifies that
-// handleApproval, upon receiving an Always reply, persists the grant on the
-// agent's ConfigPolicy (tool-level override for non-command tools) so future
-// calls of the same tool no longer prompt.
 func TestDaemonApproval_HandleApprovalAlwaysPersistsGrant(t *testing.T) {
 	mgr := NewManager()
 	emitter := NewIMEmitter(mgr, "en", t.TempDir())
@@ -802,10 +787,6 @@ func TestDaemonApproval_HandleApprovalAlwaysPersistsGrant(t *testing.T) {
 	}
 }
 
-// TestDaemonAskUser_DoubleSenderDoesNotBlock (#944) verifies that two
-// concurrent text replies to the same pending ask_user do not block forever
-// when HandleAskUser exits via ctx.Done() without draining the 1-buffered
-// response channel. Previously the second sender blocked permanently.
 func TestDaemonAskUser_DoubleSenderDoesNotBlock(t *testing.T) {
 	mgr := NewManager()
 	emitter := NewIMEmitter(mgr, "en", t.TempDir())
@@ -859,11 +840,6 @@ func TestDaemonAskUser_DoubleSenderDoesNotBlock(t *testing.T) {
 	}
 }
 
-// TestExpiryNoticeEmitted pins #1656/#1667: when the ctx behind a pending
-// approval or ask_user dies (timeout/stop), the bridge clears the pending
-// entry AND emits a visible expiry notice - the on-screen prompt is stale
-// and late replies route to NEW messages. The approval side landed with
-// #1656; the ask_user side (and both assertions) with #1667.
 func TestExpiryNoticeEmitted(t *testing.T) {
 	t.Run("approval", func(t *testing.T) {
 		mgr := NewManager()

@@ -33,8 +33,6 @@ func TestWithIMProvenancePrependsHeader(t *testing.T) {
 	}
 }
 
-// The header must instruct refusal of hostile directives, not wrap the
-// message as untrusted data (IM messages stay obeyable user requests).
 func TestIMProvenanceHeaderSemantics(t *testing.T) {
 	h := imProvenanceHeader(Envelope{Adapter: "tg", Platform: PlatformTelegram, SenderID: "42"})
 	if !strings.Contains(h, "refuse it") {
@@ -45,8 +43,6 @@ func TestIMProvenanceHeaderSemantics(t *testing.T) {
 	}
 }
 
-// Missing identity fields degrade to sane defaults instead of empty
-// provenance.
 func TestIMProvenanceHeaderDefaults(t *testing.T) {
 	h := imProvenanceHeader(Envelope{})
 	if !strings.Contains(h, "unknown sender") {
@@ -57,8 +53,6 @@ func TestIMProvenanceHeaderDefaults(t *testing.T) {
 	}
 }
 
-// Non-text blocks (images, path hints) pass through untouched after the
-// header - provenance must not disturb the vision/attachment pipeline.
 func TestWithIMProvenanceKeepsNonTextBlocks(t *testing.T) {
 	content := []provider.ContentBlock{
 		{Type: "image", ImageMIME: "image/png", ImageData: "aGk="},

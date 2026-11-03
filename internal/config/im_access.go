@@ -1,7 +1,5 @@
 package config
 
-// GetIMAdapter returns a deep copy of the named adapter's config. Safe to
-// call from any goroutine; mutating the copy never touches live config.
 func (c *Config) GetIMAdapter(name string) (IMAdapterConfig, bool) {
 	if c == nil {
 		return IMAdapterConfig{}, false
@@ -15,16 +13,11 @@ func (c *Config) GetIMAdapter(name string) (IMAdapterConfig, bool) {
 	return cloneIMAdapterConfig(adapter), true
 }
 
-// IMAdapterEnabled is the hot-path convenience accessor for render code
-// (`Disabled: !m.config.IMAdapterEnabled(name)`).
 func (c *Config) IMAdapterEnabled(name string) bool {
 	adapter, ok := c.GetIMAdapter(name)
 	return ok && adapter.Enabled
 }
 
-// IMSnapshot returns a deep copy of the whole IMConfig. The returned value
-// owns its Adapters map: safe to hand to long-lived consumers such as
-// im.StartNamedAdapter — later config writes never leak into them.
 func (c *Config) IMSnapshot() IMConfig {
 	if c == nil {
 		return IMConfig{}
@@ -41,8 +34,6 @@ func (c *Config) IMSnapshot() IMConfig {
 	return snap
 }
 
-// cloneIMAdapterConfig deep-copies every reference field so callers can
-// never race live config through a handed-out copy.
 func cloneIMAdapterConfig(a IMAdapterConfig) IMAdapterConfig {
 	a.Args = append([]string(nil), a.Args...)
 	a.AllowFrom = append([]string(nil), a.AllowFrom...)

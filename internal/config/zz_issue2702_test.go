@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// load2702 writes an instance yaml and loads it through the real path so
-// explicitKeys (dotted, #2702) is populated exactly as in production.
 func load2702(t *testing.T, yaml string) *Config {
 	t.Helper()
 	withTestHome(t)
@@ -26,9 +24,6 @@ func load2702(t *testing.T, yaml string) *Config {
 	return cfg
 }
 
-// #2702 scenario 1: instance clears a2a.auth.api_key to "" explicitly.
-// The write side (diffA2A) persists the clear; the old gap-fill read side
-// ignored the empty value and the global secret resurrected on reload.
 func TestIssue2702_A2AAPIKeyClearSurvivesReload(t *testing.T) {
 	instance := load2702(t, "a2a:\n  auth:\n    api_key: \"\"\n")
 	global := &Config{A2A: A2AConfig{Auth: A2AAuthConfig{APIKey: "secret"}}}
@@ -40,8 +35,6 @@ func TestIssue2702_A2AAPIKeyClearSurvivesReload(t *testing.T) {
 	}
 }
 
-// #2702 scenario 2: instance disables knight explicitly (enabled: false
-// with global true). The old merge only accepted the false->true direction.
 func TestIssue2702_KnightDisableSurvivesReload(t *testing.T) {
 	instance := load2702(t, "knight:\n  enabled: false\n")
 	global := &Config{KnightConfig: KnightConfig{Enabled: true}}
@@ -53,8 +46,6 @@ func TestIssue2702_KnightDisableSurvivesReload(t *testing.T) {
 	}
 }
 
-// Explicit-true keeps working (existing direction), and absent keys keep the
-// gap-fill semantics: no a2a section at all -> global value untouched.
 func TestIssue2702_GapFillSemanticsUnchanged(t *testing.T) {
 	instance := load2702(t, "language: zh-CN\n")
 	global := &Config{A2A: A2AConfig{Port: 9000}, KnightConfig: KnightConfig{Enabled: true}}
@@ -76,7 +67,6 @@ func TestIssue2702_GapFillSemanticsUnchanged(t *testing.T) {
 	}
 }
 
-// Scalar clears within a2a (port: 0) honor the explicit rule too.
 func TestIssue2702_A2AScalarClears(t *testing.T) {
 	instance := load2702(t, "a2a:\n  port: 0\n  host: \"\"\n  max_tasks: 0\n")
 	global := &Config{A2A: A2AConfig{Port: 4747, Host: "example.com", MaxTasks: 16}}
@@ -88,8 +78,6 @@ func TestIssue2702_A2AScalarClears(t *testing.T) {
 	}
 }
 
-// The dotted explicit set must not break the pre-existing top-level scalar
-// lookups (#2284-C semantics stay intact).
 func TestIssue2702_TopLevelExplicitUnchanged(t *testing.T) {
 	instance := load2702(t, "max_iterations: 0\n")
 	global := &Config{MaxIterations: 80}

@@ -43,7 +43,6 @@ func TestOpenPersistentCryptoStoreOpens(t *testing.T) {
 	}
 }
 
-// The DSN must be modernc-compatible: bare file: form, no sqlite3:// scheme.
 func TestCryptoStoreDSNShape(t *testing.T) {
 	a := &matrixAdapter{name: "dsn", userID: "@u:e.org"}
 	dir := filepath.Join(t.TempDir(), "matrix-crypto")

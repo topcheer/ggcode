@@ -14,7 +14,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// stubInboundBridge captures inbound messages submitted by HandleInbound.
 type stubInboundBridge struct {
 	mu        sync.Mutex
 	messages  []InboundMessage
@@ -46,8 +45,6 @@ func (b *stubInboundBridge) last() InboundMessage {
 	return b.messages[len(b.messages)-1]
 }
 
-// newWechatTestManager builds a manager with a bound wechat adapter channel and
-// a recording bridge, ready for handleMessage tests.
 func newWechatTestManager(t *testing.T, channelID string) (*Manager, *stubInboundBridge) {
 	t.Helper()
 	mgr := NewManager()
@@ -64,7 +61,6 @@ func newWechatTestManager(t *testing.T, channelID string) (*Manager, *stubInboun
 	return mgr, bridge
 }
 
-// newWechatTestAdapter builds an adapter whose sends go to a recording server.
 func newWechatTestAdapter(t *testing.T, mgr *Manager, handler http.HandlerFunc) (*WechatAdapter, *[]ilinkSendMessageRequest) {
 	t.Helper()
 	var mu sync.Mutex
@@ -106,9 +102,6 @@ func wechatInboundMsg(fromUserID, text, contextToken string, messageID int64) il
 	}
 }
 
-// An unauthorized user's message must NOT overwrite the authorized binding's
-// context_token (previously UpdateBindingContextToken ran before the
-// HandleInbound channel check).
 func TestWechatHandleMessage_UnauthorizedUserDoesNotOverwriteContextToken(t *testing.T) {
 	mgr, bridge := newWechatTestManager(t, "user-authorized")
 	a, _ := newWechatTestAdapter(t, mgr, nil)
@@ -127,8 +120,6 @@ func TestWechatHandleMessage_UnauthorizedUserDoesNotOverwriteContextToken(t *tes
 	}
 }
 
-// An authorized user's message DOES refresh the binding's context_token (the
-// fix must not break the legitimate refresh path).
 func TestWechatHandleMessage_AuthorizedUserRefreshesContextToken(t *testing.T) {
 	mgr, bridge := newWechatTestManager(t, "user-authorized")
 	a, _ := newWechatTestAdapter(t, mgr, nil)
@@ -145,9 +136,6 @@ func TestWechatHandleMessage_AuthorizedUserRefreshesContextToken(t *testing.T) {
 	}
 }
 
-// Pairing flow still works after moving the token update: an unbound adapter's
-// first inbound gets a pairing challenge reply, and a successful pairing
-// persists the pairing user's token.
 func TestWechatHandleMessage_PairingFlowStillWorks(t *testing.T) {
 	mgr := NewManager()
 	bridge := &stubInboundBridge{}
@@ -190,8 +178,6 @@ func TestWechatHandleMessage_PairingFlowStillWorks(t *testing.T) {
 	}
 }
 
-// The unauthorized-rejection reply must carry the STRANGER's context_token,
-// not the authorized binding's token (per-conversation tokens).
 func TestWechatHandleMessage_UnauthorizedReplyUsesStrangerToken(t *testing.T) {
 	mgr, _ := newWechatTestManager(t, "user-authorized")
 	a, sent := newWechatTestAdapter(t, mgr, nil)
@@ -257,8 +243,6 @@ func TestWechatSendTextToUser_Success(t *testing.T) {
 	}
 }
 
-// A stale context_token (older than the documented ~24h TTL) must fail with a
-// visible, actionable error instead of a guaranteed server-side rejection.
 func TestWechatSend_StaleContextTokenFails(t *testing.T) {
 	mgr, _ := newWechatTestManager(t, "user-1")
 	a, _ := newWechatTestAdapter(t, mgr, nil)
@@ -276,7 +260,6 @@ func TestWechatSend_StaleContextTokenFails(t *testing.T) {
 	}
 }
 
-// A fresh token and a zero timestamp (legacy binding, unknown age) both pass.
 func TestWechatSend_FreshOrUnknownAgeTokenPasses(t *testing.T) {
 	mgr, _ := newWechatTestManager(t, "user-1")
 	a, _ := newWechatTestAdapter(t, mgr, nil)
@@ -296,8 +279,6 @@ func TestWechatSend_FreshOrUnknownAgeTokenPasses(t *testing.T) {
 	}
 }
 
-// Long output is capped at wechatMaxChunksPerSend chunks, with a visible
-// truncation notice on the last chunk.
 func TestWechatSend_ChunkCapWithTruncationNotice(t *testing.T) {
 	mgr, _ := newWechatTestManager(t, "user-1")
 	a, sent := newWechatTestAdapter(t, mgr, nil)
@@ -329,7 +310,6 @@ func TestWechatSend_ChunkCapWithTruncationNotice(t *testing.T) {
 	}
 }
 
-// Short output is unaffected by the cap (single chunk, no notice).
 func TestWechatSend_ShortOutputUnaffected(t *testing.T) {
 	mgr, _ := newWechatTestManager(t, "user-1")
 	a, sent := newWechatTestAdapter(t, mgr, nil)
@@ -398,7 +378,6 @@ func TestWechatSeenMessageID_CapacityBounded(t *testing.T) {
 	}
 }
 
-// Concurrent handleMessage calls must not race (go test -race covers this).
 func TestWechatHandleMessage_ConcurrentNoRace(t *testing.T) {
 	mgr, bridge := newWechatTestManager(t, "user-1")
 	a, _ := newWechatTestAdapter(t, mgr, nil)

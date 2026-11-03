@@ -329,9 +329,6 @@ func TestVendorPresetsNeedsAPIKey(t *testing.T) {
 	}
 }
 
-// #1712 case 1: the default endpoint must be the MAINSTREAM official one,
-// not the alphabetically-first key (enterprise < github.com sorted first
-// and preselected a placeholder GHE domain).
 func TestVendorPresetDefaultEndpointOfficial1712(t *testing.T) {
 	presets := VendorPresets()
 	var copilot *VendorPreset

@@ -332,11 +332,6 @@ func TestIsRetryable_DefaultTrue(t *testing.T) {
 	}
 }
 
-// TestIsRetryable_QuotaAndAuthFailFast verifies that permanent quota/billing
-// exhaustion and auth errors are never retried, regardless of how the error
-// is packaged. Previously, string-based quota errors (e.g. "coding plan
-// expired") that didn't match typed SDK error types fell through to the
-// default `return true`, wasting 20 retry attempts.
 func TestIsRetryable_QuotaAndAuthFailFast(t *testing.T) {
 
 	quotaErrs := []error{

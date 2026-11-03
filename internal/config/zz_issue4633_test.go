@@ -2,10 +2,6 @@ package config
 
 import "testing"
 
-// #4633: the legacy gateway-vendor migration must carry EVERY endpoint
-// (endpoint-level API keys included) into ai-gateway - previously only the
-// sort-lowest endpoint survived and the rest were silently deleted,
-// violating the "cannot irreversibly drop credentials" contract.
 func TestIssue4633_MigrationCarriesAllEndpoints(t *testing.T) {
 	cfg := &Config{
 		Vendors: map[string]VendorConfig{
@@ -46,8 +42,6 @@ func TestIssue4633_MigrationCarriesAllEndpoints(t *testing.T) {
 	}
 }
 
-// #4633 case B: target endpoint name already exists - the legacy endpoint
-// must still be carried (namespaced), not dropped wholesale.
 func TestIssue4633_ExistingTargetStillCarriesLegacy(t *testing.T) {
 	cfg := &Config{
 		Vendors: map[string]VendorConfig{

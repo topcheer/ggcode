@@ -6,7 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// #1027: both key spellings must work; missing both must fail.
 func TestDingtalkKeyAliases(t *testing.T) {
 	a, err := newDingtalkAdapter("d", nil, config.IMAdapterConfig{
 		Extra: map[string]interface{}{"client_id": "cid", "client_secret": "sec"},

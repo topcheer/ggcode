@@ -51,8 +51,6 @@ func TestIssue3938_ProjectionRoundTripsFiveFields(t *testing.T) {
 	}
 }
 
-// Old tapes (pre-#3938, no new keys) still load and replay to the same
-// StreamEvent the old projection produced.
 func TestIssue3938_OldTapeShapeStillReplays(t *testing.T) {
 	legacy := `{"t":4,"tx":"hi","ti":"t1","tm":"read_file","ta":"{}"}`
 	var te tapeEvent

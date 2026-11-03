@@ -26,13 +26,6 @@ type OpenAICompatible struct {
 	httpClient *http.Client
 }
 
-// MaxAudioSize bounds STT audio uploads (100MB). #2055: the #1893 fix
-// reused the IMAGE attachment ceiling (imagepkg.MaxSize, 20MB), which
-// legitimate audio routinely exceeds - a 1-hour mp3 is ~55MB, and
-// Telegram's ffmpeg conversion to uncompressed WAV expands files
-// further (16kHz/16bit mono passes 20MB at ~10 minutes of speech).
-// Audio keeps its own, larger bound instead of the unbounded pre-#1893
-// read.
 const MaxAudioSize = 100 * 1024 * 1024
 
 func NewOpenAICompatible(baseURL, apiKey, model, provider string) *OpenAICompatible {

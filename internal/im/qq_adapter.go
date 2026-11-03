@@ -40,24 +40,13 @@ const (
 	qqMsgTypeMedia    = 7
 	qqFileTypeImage   = 1
 
-	// qqInterMessageDelay is the delay between consecutive messages to the same
-	// channel. QQ Bot API limits 5 messages/second per sub-channel.
-	// Source: https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/send-receive/send.html
 	qqInterMessageDelay     = 250 * time.Millisecond
 	qqUploadCacheMaxEntries = 500
 	qqUploadCacheTTL        = 30 * time.Minute
 )
 
-// qqMentionPrefix strips the leading bot mention from AT message content.
-// QQ sends the mention as `<@!openid>` (group) or `<@userid>` (guild)
-// rather than a plain `@name`, so both forms must be handled (#966).
 var qqMentionPrefix = regexp.MustCompile(`^(?:<@!?\S+>|@\S+)\s*`)
 
-// qqStripMentionPrefix removes the leading bot mention for AT-message event
-// types. Applied to BOTH GROUP_AT_MESSAGE_CREATE and GUILD_AT_MESSAGE_CREATE
-// (#1231: the regex handled both forms but the dispatch gate only stripped
-// the group variant, leaking `<@userid> ` garbage into the agent prompt for
-// guild mentions).
 func qqStripMentionPrefix(eventType, text string) string {
 	if eventType == "GROUP_AT_MESSAGE_CREATE" || eventType == "GUILD_AT_MESSAGE_CREATE" {
 		return strings.TrimSpace(qqMentionPrefix.ReplaceAllString(text, ""))
@@ -125,7 +114,6 @@ func (a *qqAdapter) Start(ctx context.Context) {
 	safego.Go("im.qq.run", func() { a.run(ctx) })
 }
 
-// Close physically closes the websocket connection.
 func (a *qqAdapter) Close() error {
 	a.mu.Lock()
 	ws := a.ws
@@ -847,9 +835,6 @@ func (a *qqAdapter) sendIdentify() error {
 	return a.writeJSON(payload)
 }
 
-// sendResume requests session resumption (op 6) so the gateway replays events
-// missed during the disconnect window instead of starting a fresh session,
-// where those events would be silently lost (#966).
 func (a *qqAdapter) sendResume() error {
 	a.mu.RLock()
 	sid, seq := a.sessionID, a.lastSeq
@@ -881,9 +866,6 @@ func (a *qqAdapter) sendResume() error {
 	return nil
 }
 
-// handleHello processes op 10 (HELLO): adopts the heartbeat interval, then
-// resumes the stored session when possible so the gateway replays events
-// missed during the disconnect window; otherwise IDENTIFYs fresh (#966).
 func (a *qqAdapter) handleHello(payload map[string]any) error {
 	debug.Log("qq", "adapter=%s gateway hello", a.name)
 	if d, ok := payload["d"].(map[string]any); ok {
@@ -902,9 +884,6 @@ func (a *qqAdapter) handleHello(payload map[string]any) error {
 	return a.sendIdentify()
 }
 
-// handleInvalidSession processes op 9: d is a bool — true means the session is
-// still resumable (retry RESUME on the next connection), false means it is
-// dead and the next connection must IDENTIFY fresh (#966).
 func (a *qqAdapter) handleInvalidSession(payload map[string]any) error {
 	resumable, _ := payload["d"].(bool)
 	a.mu.Lock()
@@ -919,13 +898,8 @@ func (a *qqAdapter) handleInvalidSession(payload map[string]any) error {
 	return errQQReconnect
 }
 
-// errQQReconnect tells the serve loop the connection must be re-established
-// (op 7 reconnect / op 9 invalid session). run() then dials a fresh gateway;
-// the next HELLO sends RESUME or IDENTIFY based on retained session state.
 var errQQReconnect = errors.New("qq gateway reconnect requested")
 
-// closeWS closes the current websocket, if any, to unblock ReadMessage in the
-// serve loop and trigger the reconnect cycle in run().
 func (a *qqAdapter) closeWS() {
 	a.mu.RLock()
 	ws := a.ws
@@ -1024,9 +998,6 @@ func (a *qqAdapter) apiRequestWithRetry(ctx context.Context, method, path string
 	return resp, nil
 }
 
-// tokenRetryDelay returns the delay before retrying token refresh.
-// It uses exponential backoff: 0s, 2s, 4s for attempts 0, 1, 2.
-// Tests can override tokenRetryDelayFn to eliminate the delay.
 var tokenRetryDelayFn = func(attempt int) time.Duration {
 	return time.Duration(attempt) * 2 * time.Second
 }
@@ -1043,8 +1014,6 @@ func (a *qqAdapter) ensureToken(ctx context.Context) (string, error) {
 	if token != "" && time.Now().Before(expires.Add(-60*time.Second)) {
 		return token, nil
 	}
-	// Retry token refresh up to 3 times to absorb transient failures
-	// (e.g. QQ API returns 200 with empty access_token on first try).
 	var lastErr error
 	for attempt := range 3 {
 		if attempt > 0 {
@@ -1220,9 +1189,6 @@ func (a *qqAdapter) rememberChatType(channelID, chatType string) {
 	a.chatTypes[channelID] = normalizeQQChatType(chatType)
 }
 
-// TriggerTyping sends an input notify to indicate the bot is typing.
-// Only supported for C2C chats; group chats do not support this API.
-// Must include msg_id to be treated as a passive reply (avoids proactive message rate limits).
 func (a *qqAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 	channelID := strings.TrimSpace(binding.ChannelID)
 	if channelID == "" {
@@ -1261,9 +1227,6 @@ func (a *qqAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) e
 	return nil
 }
 
-// qqChunkCount mirrors the chunk splitting used for the remaining text so
-// the #3319 pre-reservation sizes the seq allocation exactly like the send
-// loop below will consume it.
 func qqChunkCount(markdown bool, text string) int {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -1296,10 +1259,6 @@ func (a *qqAdapter) recordPassiveReply(binding ChannelBinding, replyTo string) {
 	}
 }
 
-// recordPassiveReplies advances the passive-reply quota counter by the number
-// of msg_seq slots actually consumed by this Send (images + text chunks). The
-// server bills one passive reply per msg_seq, so undercounting makes the next
-// Send reuse an already-consumed seq and get deduplicated away (#966).
 func (a *qqAdapter) recordPassiveReplies(binding ChannelBinding, replyTo string, count int) {
 	if count <= 0 {
 		return
@@ -1376,7 +1335,6 @@ func (a *qqAdapter) setUploadCache(key, fileInfo string) {
 	}
 }
 
-// uploadMedia uploads an image to QQ CDN and returns the file_info string.
 func (a *qqAdapter) uploadMedia(ctx context.Context, chatType, targetID, base64Data string) (string, error) {
 	uploadPath := qqUploadPath(chatType, targetID)
 	if uploadPath == "" {
@@ -1415,7 +1373,6 @@ func (a *qqAdapter) uploadMedia(ctx context.Context, chatType, targetID, base64D
 	return fileInfo, nil
 }
 
-// sendMediaMessage sends a rich media message (msg_type: 7) with an uploaded image.
 func (a *qqAdapter) sendMediaMessage(ctx context.Context, path, chatType, fileInfo, replyTo string, replySeq int) error {
 	body := map[string]any{
 		"msg_type": qqMsgTypeMedia,
@@ -1434,7 +1391,6 @@ func (a *qqAdapter) sendMediaMessage(ctx context.Context, path, chatType, fileIn
 	return nil
 }
 
-// sendImageFromBase64 uploads a base64 image and sends it as a media message.
 func (a *qqAdapter) sendImageFromBase64(ctx context.Context, chatType, channelID, base64Data, replyTo string, replySeq int) error {
 	path := qqMessagePath(chatType, channelID)
 	if path == "" {
@@ -1704,7 +1660,6 @@ func truncateStr(s string, maxLen int) string {
 	return string(runes[:maxLen-1]) + "…"
 }
 
-// resolveImageSource resolves an extracted image to a base64 string for upload.
 func (a *qqAdapter) resolveImageSource(ctx context.Context, img ExtractedImage) (string, error) {
 	switch img.Kind {
 	case "data_url":

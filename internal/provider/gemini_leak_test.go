@@ -11,14 +11,8 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// TestGeminiChatStream_ProducerExitsAfterConsumerCancel is the #3068
-// regression test: the streamRead producer goroutine used 11 bare
-// `ch <- StreamEvent{...}` sends. A consumer that cancels and stops reading
-// filled the 64-event buffer and parked the producer forever (defer
-// close(ch) never ran). With the sendEvent guard, cancellation unblocks the
-// next send and the channel closes promptly.
 func TestGeminiChatStream_ProducerExitsAfterConsumerCancel(t *testing.T) {
-	const totalEvents = 200 // well over the 64-event channel buffer
+	const totalEvents = 200
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

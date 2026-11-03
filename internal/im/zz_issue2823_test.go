@@ -7,13 +7,6 @@ import (
 	"testing"
 )
 
-// zz_issue2823_test.go - probe for #2823: matrix_adapter must detect the
-// "no bound session" case via the sentinel (errors.Is(err, ErrNoSessionBound)),
-// not by comparing error text. The old compare used the wrong literal
-// ("no session bound" vs the sentinel's "no active session bound") so it never
-// matched and healthy adapters got flagged warning on every inbound message.
-// AST-level assertions: string literals in comments do not appear as BasicLit,
-// so the fix's explanatory comment cannot satisfy or break these checks.
 func TestIssue2823MatrixUsesSentinelComparison(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "matrix_adapter.go", nil, 0)

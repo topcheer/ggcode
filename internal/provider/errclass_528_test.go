@@ -8,12 +8,6 @@ import (
 	"time"
 )
 
-// TestClassifyAnthropicFiveHourWindowLimitNotQuota (#528): Anthropic's 429
-// rate_limit_error message ("This request would exceed your usage limit for
-// the 5-hour window. Your limit will reset at ...") contains the substring
-// "usage limit", which previously classified it as permanent quota — a single
-// rate-limit hit then triggered sticky failover for the rest of the session.
-// The window auto-resets within hours, so it must be FailureRateLimit.
 func TestClassifyAnthropicFiveHourWindowLimitNotQuota(t *testing.T) {
 	errs := []error{
 		errors.New(`rate_limit_error - This request would exceed your usage limit for the 5-hour window. Your limit will reset at 2026-01-01T12:00:00Z. Please try again then`),
@@ -31,9 +25,6 @@ func TestClassifyAnthropicFiveHourWindowLimitNotQuota(t *testing.T) {
 	}
 }
 
-// TestMiniMaxUsageLimitStillQuota (#528): MiniMax's genuine permanent form
-// ("usage limit exceeded, 5-hour usage limit reached") carries none of the
-// Anthropic window markers and must still classify as quota.
 func TestMiniMaxUsageLimitStillQuota(t *testing.T) {
 	err := errors.New("usage limit exceeded, 5-hour usage limit reached")
 	if !IsQuotaExhaustedError(err) {
@@ -44,10 +35,6 @@ func TestMiniMaxUsageLimitStillQuota(t *testing.T) {
 	}
 }
 
-// TestClassifyDeadlineExceededNotCounted (#528, sibling of #304): client-side
-// timeouts (context.DeadlineExceeded — long-turn deadline, user re-sending)
-// say nothing about provider health and must not count toward the
-// consecutive-failure failover threshold, which only exempts FailureNone.
 func TestClassifyDeadlineExceededNotCounted(t *testing.T) {
 	if got := ClassifyLLMError(context.DeadlineExceeded); got != FailureNone {
 		t.Errorf("ClassifyLLMError(context.DeadlineExceeded) = %v, want FailureNone", got)

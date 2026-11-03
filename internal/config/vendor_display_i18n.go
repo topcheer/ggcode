@@ -2,9 +2,6 @@ package config
 
 import "strings"
 
-// builtinVendorDisplayZh maps built-in vendor IDs to Chinese display names.
-// Only vendors with meaningful Chinese translations are listed here.
-// International brand names (Anthropic, OpenAI, etc.) are not translated.
 var builtinVendorDisplayZh = map[string]string{
 	"zai":            "智谱 Z.AI",
 	"xiaomi-mimo":    "小米 MiMo",
@@ -17,8 +14,6 @@ var builtinVendorDisplayZh = map[string]string{
 	"ai-gateway":     "AI 网关",
 }
 
-// builtinEndpointDisplayZh maps "vendorID/endpointID" to Chinese display names.
-// The key format is "vendor/endpoint" to avoid collisions across vendors.
 var builtinEndpointDisplayZh = map[string]string{
 
 	"zai/cn-coding-openai":        "国内编程套餐",
@@ -60,13 +55,10 @@ var builtinEndpointDisplayZh = map[string]string{
 	"ai-gateway/vercel":     "Vercel AI 网关",
 }
 
-// isChineseLanguage returns true if the language code indicates Chinese.
 func isChineseLanguage(lang string) bool {
 	return strings.HasPrefix(lang, "zh")
 }
 
-// localizedVendorDisplay returns the localized display name for a built-in vendor.
-// Falls back to the English display name if no translation exists.
 func localizedVendorDisplay(vendorID, englishName, lang string) string {
 	if isChineseLanguage(lang) {
 		if zh, ok := builtinVendorDisplayZh[vendorID]; ok {
@@ -76,8 +68,6 @@ func localizedVendorDisplay(vendorID, englishName, lang string) string {
 	return englishName
 }
 
-// localizedEndpointDisplay returns the localized display name for a built-in endpoint.
-// Falls back to the English display name if no translation exists.
 func localizedEndpointDisplay(vendorID, endpointID, englishName, lang string) string {
 	if isChineseLanguage(lang) {
 		key := vendorID + "/" + endpointID
@@ -88,15 +78,10 @@ func localizedEndpointDisplay(vendorID, endpointID, englishName, lang string) st
 	return englishName
 }
 
-// LocalizedVendorDisplay / LocalizedEndpointDisplay are thin exported
-// wrappers for consumers outside config (e.g. the TUI's display-name
-// snapshot resolver, #2347) that hold a copied map snapshot and must apply
-// the same localization rules Config.ResolveDisplayName uses.
 func LocalizedVendorDisplay(vendorID, englishName, lang string) string {
 	return localizedVendorDisplay(vendorID, englishName, lang)
 }
 
-// LocalizedEndpointDisplay mirrors LocalizedVendorDisplay for endpoints.
 func LocalizedEndpointDisplay(vendorID, endpointID, englishName, lang string) string {
 	return localizedEndpointDisplay(vendorID, endpointID, englishName, lang)
 }

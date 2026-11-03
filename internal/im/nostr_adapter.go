@@ -26,15 +26,8 @@ const (
 	nostrMaxBackoff       = 120 * time.Second
 	nostrDedupMaxSize     = 5000
 	nostrStartupLookback  = 120
-	// nostrInterMsgDelay is the delay between consecutive chunk sends.
-	// Relays may rate-limit rapid publishes; 300ms is conservative.
-	nostrInterMsgDelay = 300 * time.Millisecond
+	nostrInterMsgDelay    = 300 * time.Millisecond
 
-	// nostrWatchdogTimeout is the maximum idle period before forcing a reconnect.
-	// Since go-nostr doesn't expose the underlying WebSocket for read deadlines,
-	// we use a watchdog timer instead. Nostr events are persistent on relays,
-	// so a brief reconnection gap doesn't cause data loss — the Since filter
-	// on re-subscribe picks up any missed events.
 	nostrWatchdogTimeout = 5 * time.Minute
 )
 
@@ -42,14 +35,11 @@ type nostrAdapter struct {
 	name    string
 	manager *Manager
 
-	// Keys (hex)
 	privKey string
 	pubKey  string
 
-	// Relays
 	relays []string
 
-	// Proxy
 	proxy string
 
 	mu         sync.RWMutex
@@ -57,7 +47,6 @@ type nostrAdapter struct {
 	connected  int
 	closed     bool
 
-	// Dedup
 	seen map[string]time.Time
 }
 
@@ -160,15 +149,8 @@ func (a *nostrAdapter) relayLoop(ctx context.Context, relayURL string) {
 	}
 }
 
-// errNostrServed marks a relay session that ended AFTER a successful connect
-// and subscribe (watchdog timeout, subscription closed by the relay). The
-// relay was healthy, so the reconnect backoff must reset instead of doubling
-// (#964 — same lesson as the mattermost adapter, #388/#389).
 var errNostrServed = errors.New("nostr: relay session served before disconnect")
 
-// nostrBackoffNext returns the backoff for the next reconnect attempt after a
-// relay session ended with err. Clean/serve-phase exits reset to the short
-// initial delay; connect-phase failures double up to the cap (#964).
 func nostrBackoffNext(backoff time.Duration, err error) time.Duration {
 	if err == nil || errors.Is(err, errNostrServed) {
 		return nostrReconnectBackoff
@@ -282,10 +264,6 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 	}
 }
 
-// nostrShortID returns a display-safe prefix. #1553-B: raw evt.ID[:12] /
-// evt.PubKey[:12] panics on short values from a MALICIOUS relay (nothing
-// enforces 64-hex before the handler), and the panic killed that relay's
-// entire safego reconnect loop - remote-triggerable DoS.
 func nostrShortID(s string) string {
 	if len(s) > 12 {
 		return s[:12]
@@ -439,12 +417,6 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 	return hardErr
 }
 
-// nostrFoldChunk folds one chunk's publish outcome into the send error
-// state. A zero-success chunk sets a sticky error (the chunk is undelivered
-// data, #964); a partial-success chunk counts as delivered and never clears
-// an error recorded by an earlier chunk (#1225: the previous per-chunk
-// `lastErr = nil` erasure silently dropped fully-failed chunks in
-// multi-chunk sends).
 func nostrFoldChunk(hardErr error, success int, relayErr error) error {
 	if success == 0 && relayErr != nil {
 		return relayErr
@@ -456,11 +428,6 @@ func (a *nostrAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding
 	return nil
 }
 
-// NormalizeNostrPrivateKey canonicalizes a private key to 64-char hex,
-// accepting both hex and nsec1... (bech32) input. Exported for the TUI
-// panel: validation accepts nsec, so the display path (GetPublicKey /
-// nip19 encode) must feed the same normalized hex - go-nostr's helpers
-// are hex-only and error on the raw nsec string (#2626).
 func NormalizeNostrPrivateKey(key string) string {
 	return normalizeNostrKey(key)
 }
@@ -497,8 +464,6 @@ func resolveNostrPubkey(input string) string {
 	return input
 }
 
-// splitNostrMessage splits text into chunks fitting within maxLen runes.
-// Uses balanced breaking: prefers newline boundaries, then hard cut.
 func splitNostrMessage(text string, maxLen int) []string {
 	return splitMessageRunes(text, maxLen, false, false, true)
 }
@@ -517,10 +482,6 @@ func (a *nostrAdapter) publishState(healthy bool, status, lastErr string) {
 	})
 }
 
-// ValidateNostrPrivateKey performs the same key checks newNostrAdapter
-// applies at start time (normalize, length, pubkey derivation) so callers
-// can validate BEFORE persisting a nostr adapter config (#1384: a bad key
-// used to land in the yaml first and error only on every later start).
 func ValidateNostrPrivateKey(key string) error {
 	k := strings.TrimSpace(key)
 	if k == "" {
