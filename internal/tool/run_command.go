@@ -594,12 +594,24 @@ func shellDegradedHint() string {
 //   - (b) a genuine shell-channel outage (transient, self-heals per #4787).
 func spawnEnoentDiagnosis(dir string) string {
 	if dir == "" {
-		return "[S-16 diag] cwd: inherited process cwd (cmd.Dir unset) - genuine shell-channel outage"
+		return "[S-16 diag] cwd: inherited process cwd (cmd.Dir unset) - genuine shell-channel outage" + pressureLine()
 	}
 	if _, err := os.Stat(dir); err != nil {
 		return fmt.Sprintf("[S-16 diag] cwd %q no longer exists (deleted worktree / moved repo?) - Go mislabels the failed chdir as fork/exec on the shell binary; the next tool call falls back to the nearest live ancestor via NearestLiveDir", dir)
 	}
-	return fmt.Sprintf("[S-16 diag] cwd %q still exists - genuine shell-channel outage (transient per #4787)", dir)
+	return fmt.Sprintf("[S-16 diag] cwd %q still exists - genuine shell-channel outage (transient per #4787)", dir) + pressureLine()
+}
+
+// pressureLine appends the zero-spawn resource-pressure capture (#4852
+// Ask 1: fd usage, proc count, vm pressure) so the next occurrence pins
+// the saturated resource without anyone having to run a capture script
+// manually. Best-effort: empty when nothing is readable, and never part of
+// the dead-cwd branch where the root cause is already named.
+func pressureLine() string {
+	if p := spawnPressure(); p != "" {
+		return "\n" + p
+	}
+	return ""
 }
 
 func (t RunCommand) rebuildShellCommand(ctx context.Context, command string, failed *exec.Cmd, stdout, stderr *boundedOutputWriter, progressFn ToolProgressFunc, sandboxed bool) (*exec.Cmd, *streamingProgressWriter, *streamingProgressWriter, error) {
