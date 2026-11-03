@@ -33,9 +33,8 @@ irm https://ggcode.dev/install.ps1 | iex
 cd your-project
 ggcode
 
-# 2. 首次启动时按提示配置 API Key（交互式）
-#    或直接指定:
-#    首次启动时通过交互式向导配置
+# 2. 首次启动时通过交互式向导配置 API Key
+#    （也可稍后在 TUI 中用 /config 设置）
 
 # 3. 开始编程 — 直接输入你的需求
 ```

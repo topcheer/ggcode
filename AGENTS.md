@@ -6,9 +6,9 @@
 | Item | Value |
 |------|-------|
 | Module | `github.com/topcheer/ggcode` |
-| Go version | 1.26.2 (see `go.mod`) |
+| Go version | 1.26.10 (see `go.mod`) |
 | Build tag | **`-tags goolm`** required for ALL `go build` / `go test` |
-| Current release | v1.3.188 |
+| Current release | v1.3.272 |
 | Platform | Linux / macOS / Windows (amd64 + arm64) |
 
 ## Validation Commands
@@ -96,10 +96,10 @@ Quick checklist:
 | Mode | Behavior |
 |------|----------|
 | `supervised` | Default; asks confirmation for tool calls |
-| `plan` | Read-only exploration only |
-| `auto` | Safe operations auto-allowed |
-| `bypass` | Almost everything allowed |
-| `autopilot` | Bypass + autonomous goal-directed execution |
+| `plan` | Read-only exploration only (tool-internal; entered via plan-mode tools, not directly switchable) |
+| `bypass` | Almost everything allowed; enables autopilot cruise surface |
+
+`auto` and `autopilot` are accepted as **legacy aliases**: `auto` normalizes to `supervised`, `autopilot` to `bypass` (see `internal/permission/mode.go`).
 
 Mid-run user interruptions are typed (InterruptBench arXiv:2604.00892):
 **addition** (default, legacy preamble) / **revision** (explicit redirection marker -> goal-supersession preamble) / **retraction-stop** (whole-message stop phrase like `stop`, `算了` -> abort the run without another LLM call; the withdrawal notice stays in context for the next resume). Classification is deterministic (`internal/agent/interrupt_typing.go`).
