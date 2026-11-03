@@ -2,6 +2,75 @@
 
 package main
 
+/*
+#cgo CFLAGS: -x objective-c
+#cgo LDFLAGS: -framework Cocoa -framework Carbon -framework Foundation
+
+#import <Cocoa/Cocoa.h>
+#import <Carbon/Carbon.h>
+
+// Volatile flag written by the Carbon hotkey callback and polled by Go.
+static volatile int gcHotkeyFired = 0; // 0=none, 1=toggle
+
+static EventHotKeyRef gcHotkeyRef = NULL;
+static EventHandlerRef gcHotkeyHandler = NULL;
+
+static OSStatus gcHotkeyCallback(EventHandlerCallRef next, EventRef evt, void *data) {
+    gcHotkeyFired = 1;
+    return noErr;
+}
+
+// Register Option+Command+G as a system-wide hotkey.
+// Returns the first non-noErr OSStatus so callers can surface registration
+// failure (#615) — e.g. another app exclusively owning the combo.
+static OSStatus gcRegisterGlobalHotkey() {
+    @autoreleasepool {
+        EventTypeSpec spec;
+        spec.eventClass = kEventClassKeyboard;
+        spec.eventKind  = kEventHotKeyPressed;
+
+        OSStatus st = InstallApplicationEventHandler(&gcHotkeyCallback, 1, &spec, NULL, &gcHotkeyHandler);
+        if (st != noErr) return st;
+
+        EventHotKeyID keyID;
+        keyID.signature = 'GGCO';
+        keyID.id = 1;
+
+        // kVK_ANSI_G = 0x05, modifiers: cmdKey | optionKey
+        st = RegisterEventHotKey(0x05, cmdKey | optionKey, keyID,
+                                 GetApplicationEventTarget(), 0, &gcHotkeyRef);
+        // #3008: if hotkey registration fails (e.g. -9866 key combo owned by
+        // another app), roll back the handler we just installed - otherwise
+        // the static gcHotkeyHandler ref gets overwritten on the next retry
+        // and the leaked handler can never be removed.
+        if (st != noErr) {
+            if (gcHotkeyHandler) {
+                RemoveEventHandler(gcHotkeyHandler);
+                gcHotkeyHandler = NULL;
+            }
+        }
+        return st;
+    }
+}
+
+static void gcUnregisterGlobalHotkey() {
+    if (gcHotkeyRef) {
+        UnregisterEventHotKey(gcHotkeyRef);
+        gcHotkeyRef = NULL;
+    }
+    if (gcHotkeyHandler) {
+        RemoveEventHandler(gcHotkeyHandler);
+        gcHotkeyHandler = NULL;
+    }
+    gcHotkeyFired = 0;
+}
+
+static int gcPollHotkey() {
+    int v = gcHotkeyFired;
+    gcHotkeyFired = 0;
+    return v;
+}
+*/
 import "C"
 
 import (
