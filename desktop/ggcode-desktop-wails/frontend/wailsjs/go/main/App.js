@@ -90,10 +90,6 @@ export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
 
-export function GetUsageInfo() {
-  return window['go']['main']['App']['GetUsageInfo']();
-}
-
 export function GetCronJob(arg1) {
   return window['go']['main']['App']['GetCronJob'](arg1);
 }
@@ -164,6 +160,10 @@ export function GetTeamBoard() {
 
 export function GetUnreadNotifications() {
   return window['go']['main']['App']['GetUnreadNotifications']();
+}
+
+export function GetUsageInfo() {
+  return window['go']['main']['App']['GetUsageInfo']();
 }
 
 export function GetVendorPresets() {
@@ -460,6 +460,10 @@ export function ToggleAlwaysOnTop() {
 
 export function ToggleLogStream(arg1) {
   return window['go']['main']['App']['ToggleLogStream'](arg1);
+}
+
+export function TrajConfidenceOverview() {
+  return window['go']['main']['App']['TrajConfidenceOverview']();
 }
 
 export function UnbindIMAdapter(arg1) {
