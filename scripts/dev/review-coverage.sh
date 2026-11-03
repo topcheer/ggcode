@@ -60,7 +60,7 @@ case "${1:-status}" in
     ;;
   mark)
     shift
-    [ $
+    [ $# -lt 1 ] && { echo "usage: $0 mark <path>..." >&2; exit 1; }
     touch "$LEDGER"
     for p in "$@"; do
       line=$(git ls-files -s -- "$p" || true)
