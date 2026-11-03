@@ -287,9 +287,12 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 
 	if isGUI {
 		if err := cmd.Start(); err != nil {
-
 			cancel()
-			return Result{IsError: true, Content: fmt.Sprintf("failed to start GUI command: %v", err)}, nil
+			msg := fmt.Sprintf("failed to start GUI command: %v", err)
+			if isSpawnEnoentFailure(err) {
+				msg += "\n\n" + spawnEnoentDiagnosis(cmd.Dir)
+			}
+			return Result{IsError: true, Content: msg}, nil
 		}
 
 		safego.Go("tool.runCommand.guiWait", func() {
@@ -357,7 +360,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	}
 
 	if isSpawnEnoentFailure(err) {
-		result.Content += "\n\n" + shellDegradedHint()
+		result.Content += "\n\n" + spawnEnoentDiagnosis(cmd.Dir) + "\n\n" + shellDegradedHint()
 	}
 	return result, nil
 }
@@ -462,7 +465,11 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel contex
 
 		content := snapshot.ErrText
 		if isSpawnEnoentFailureText(content) {
-			content += "\n\n" + shellDegradedHint()
+			// #4852: name the root cause before the generic degraded hint -
+			// the managed-job path previously lumped dead-cwd chdir failures
+			// (which NearestLiveDir self-heals on the NEXT call) together with
+			// transient host outages.
+			content += "\n\n" + spawnEnoentDiagnosis(cmd.Dir) + "\n\n" + shellDegradedHint()
 		}
 		return Result{IsError: true, Content: content}, nil
 	}
@@ -572,6 +579,27 @@ func shellDegradedHint() string {
 		"Do NOT change strategy, rewrite the command, or abandon the task. " +
 		"Instead, periodically run the health probe: " + util.ShellHealthProbeCommand + ". " +
 		"When it succeeds, re-run the original command unchanged."
+}
+
+// spawnEnoentDiagnosis distinguishes the two root causes behind a
+// "fork/exec /bin/sh: no such file or directory" surface form (#4852
+// reopen):
+//   - (a) the cwd was deleted between the NearestLiveDir check and Start
+//     (merged-away worktree). Go's os/exec reports the forked child's failed
+//     chdir using the BINARY path, so the surface form names /bin/sh even
+//     though the shell is fine (watchdog_dev's control experiment in the
+//     issue: a genuinely missing binary errors with an "exec:" prefix and
+//     names the binary, a different shape). The apparent "self-heal" is the
+//     NEXT call's NearestLiveDir falling back to a live ancestor.
+//   - (b) a genuine shell-channel outage (transient, self-heals per #4787).
+func spawnEnoentDiagnosis(dir string) string {
+	if dir == "" {
+		return "[S-16 diag] cwd: inherited process cwd (cmd.Dir unset) - genuine shell-channel outage"
+	}
+	if _, err := os.Stat(dir); err != nil {
+		return fmt.Sprintf("[S-16 diag] cwd %q no longer exists (deleted worktree / moved repo?) - Go mislabels the failed chdir as fork/exec on the shell binary; the next tool call falls back to the nearest live ancestor via NearestLiveDir", dir)
+	}
+	return fmt.Sprintf("[S-16 diag] cwd %q still exists - genuine shell-channel outage (transient per #4787)", dir)
 }
 
 func (t RunCommand) rebuildShellCommand(ctx context.Context, command string, failed *exec.Cmd, stdout, stderr *boundedOutputWriter, progressFn ToolProgressFunc, sandboxed bool) (*exec.Cmd, *streamingProgressWriter, *streamingProgressWriter, error) {
