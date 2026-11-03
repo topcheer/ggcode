@@ -286,6 +286,9 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			if len(parts) > 1 {
 				if err := m.config.SetActiveSelection(m.config.Vendor, m.config.Endpoint, parts[1]); err == nil {
 					if err := m.reloadActiveProvider(); err == nil {
+						if serr := m.saveConfig(); serr != nil {
+							m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Model switched to %s but config not saved: %s", parts[1], serr))
+						}
 						m.chatWriteSystem(nextSystemID(), m.t("command.model_switched", parts[1], m.config.Vendor))
 					} else {
 						m.chatWriteSystem(nextSystemID(), m.t("command.model_failed", err))
@@ -320,6 +323,9 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 				}
 				if err := m.config.SetActiveSelection(newVendor, endpoint, ""); err == nil {
 					if err := m.reloadActiveProvider(); err == nil {
+						if serr := m.saveConfig(); serr != nil {
+							m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Provider switched to %s but config not saved: %s", newVendor, serr))
+						}
 						m.chatWriteSystem(nextSystemID(), m.t("command.provider_switched", newVendor, m.config.Model))
 					} else {
 						m.chatWriteSystem(nextSystemID(), m.t("command.provider_failed", err))
