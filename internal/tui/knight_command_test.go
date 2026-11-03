@@ -18,7 +18,7 @@ type testKnightRunner struct {
 	output string
 }
 
-func (r testKnightRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
+func (r testKnightRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error {
 	onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: r.output})
 	return nil
 }

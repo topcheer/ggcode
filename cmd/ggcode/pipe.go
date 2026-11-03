@@ -281,7 +281,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 				fmt.Fprintf(os.Stderr, "error: %v\n", event.Error)
 				hasError = true
 			}
-		})
+		}, "human")
 	} else {
 		agentErr = ag.RunStream(ctx, fullPrompt, func(event provider.StreamEvent) {
 			switch event.Type {
@@ -305,7 +305,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 				fmt.Fprintf(os.Stderr, "error: %v\n", event.Error)
 				hasError = true
 			}
-		})
+		}, "human")
 	}
 
 	// r414: preference capture aligned with the TUI reflection path

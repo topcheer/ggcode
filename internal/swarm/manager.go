@@ -20,7 +20,8 @@ type AgentFactory func(prov provider.Provider, tools interface{}, systemPrompt s
 
 // AgentRunner is the minimal interface a teammate agent must satisfy.
 type AgentRunner interface {
-	RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error
+	// #4537: variadic origin mirrors agent.Agent.RunStream (human-origin tag).
+	RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error
 }
 
 type usageHandlerSetter interface {

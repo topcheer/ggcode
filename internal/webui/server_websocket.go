@@ -297,7 +297,7 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 					if m := streamEventToJSON(event); m != nil {
 						send(m)
 					}
-				})
+				}, "human")
 				if err != nil && ctx.Err() == nil {
 					send(map[string]interface{}{"type": "error", "error": err.Error()})
 				}

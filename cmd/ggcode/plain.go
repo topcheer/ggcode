@@ -683,7 +683,7 @@ func runLinearTurn(ctx context.Context, ag *agent.Agent, line string) {
 	// while tool results arrive between iterations.
 	pendingToolCalls := make(map[string]bool)
 	printer, closeTurn := plainStreamPrinter(pendingToolCalls)
-	err := ag.RunStream(ctx, line, printer)
+	err := ag.RunStream(ctx, line, printer, "human")
 	closeTurn()
 	if err != nil {
 		fmt.Printf("\n[error] turn failed: %v\n", err)

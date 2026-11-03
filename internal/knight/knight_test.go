@@ -23,7 +23,7 @@ type stubKnightRunner struct {
 	err    error
 }
 
-func (r stubKnightRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
+func (r stubKnightRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error {
 	if strings.TrimSpace(r.output) != "" {
 		onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: r.output})
 	}
@@ -35,7 +35,7 @@ type captureKnightRunner struct {
 	prompt *string
 }
 
-func (r captureKnightRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
+func (r captureKnightRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error {
 	if r.prompt != nil {
 		*r.prompt = prompt
 	}

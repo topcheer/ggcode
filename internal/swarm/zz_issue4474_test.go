@@ -18,7 +18,7 @@ import (
 
 type streamErrAgent struct{}
 
-func (a *streamErrAgent) RunStream(_ context.Context, _ string, onEvent func(provider.StreamEvent)) error {
+func (a *streamErrAgent) RunStream(_ context.Context, _ string, onEvent func(provider.StreamEvent), origin ...string) error {
 	onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "partial work"})
 	// Relay-style non-fatal in-stream failure, then a clean stream return.
 	onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: errors.New("upstream 429, degraded")})
@@ -47,7 +47,7 @@ func TestIssue4474_StreamErrorEventPromotesToTaskError(t *testing.T) {
 // Clean streams must stay unaffected: no error, no injected markers.
 type okAgent struct{}
 
-func (a *okAgent) RunStream(_ context.Context, _ string, onEvent func(provider.StreamEvent)) error {
+func (a *okAgent) RunStream(_ context.Context, _ string, onEvent func(provider.StreamEvent), origin ...string) error {
 	onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "all good"})
 	return nil
 }

@@ -451,12 +451,12 @@ type mockAgent struct {
 	delay       time.Duration
 }
 
-func (m *mockAgent) RunStream(ctx context.Context, userMsg string, onEvent func(provider.StreamEvent)) error {
+func (m *mockAgent) RunStream(ctx context.Context, userMsg string, onEvent func(provider.StreamEvent), origin ...string) error {
 	m.lastMsg = userMsg
 	return m.RunStreamWithContent(ctx, []provider.ContentBlock{provider.TextBlock(userMsg)}, onEvent)
 }
 
-func (m *mockAgent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) error {
+func (m *mockAgent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent), origin ...string) error {
 	m.lastContent = content
 	if len(content) > 0 && content[0].Type == "text" {
 		m.lastMsg = content[0].Text

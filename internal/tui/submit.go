@@ -573,7 +573,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			}
 			round.Reset()
 		}
-	})
+	}, "human")
 
 	// Ensure batch goroutine is stopped if RunStreamWithContent returns
 	// without sending StreamEventDone (e.g. on error). Idempotent thanks to

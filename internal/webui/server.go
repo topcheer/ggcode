@@ -165,7 +165,8 @@ type ChatBridge interface {
 // AgentRunner is kept for backward compatibility -- ChatBridge replaces it.
 type AgentRunner interface {
 	RunStream(ctx context.Context, userMsg string, onEvent func(provider.StreamEvent)) error
-	RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) error
+	// #4537: variadic origin mirrors agent.Agent.RunStreamWithContent.
+	RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent), origin ...string) error
 	Messages() []provider.Message
 }
 
