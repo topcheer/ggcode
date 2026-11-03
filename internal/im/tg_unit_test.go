@@ -19,7 +19,7 @@ func TestSplitTGMessage(t *testing.T) {
 		name   string
 		input  string
 		maxLen int
-		want   int // expected number of chunks
+		want   int
 	}{
 		{"empty", "", 10, 1},
 		{"short", "hello", 10, 1},

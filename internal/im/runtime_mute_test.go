@@ -658,7 +658,6 @@ func TestMuteAllSetsDisconnected(t *testing.T) {
 	}
 }
 
-// dummySink is a minimal Sink for testing
 type dummySink struct {
 	name   string
 	closed bool
@@ -849,7 +848,6 @@ func TestHandleInboundDropsMuted(t *testing.T) {
 	}
 }
 
-// trackingBridge records how many times SubmitInboundMessage is called.
 type trackingBridge struct{ calls int }
 
 func (b *trackingBridge) SubmitInboundMessage(_ context.Context, _ InboundMessage) error {
@@ -1043,9 +1041,6 @@ func TestMuteAllExceptNonexistent(t *testing.T) {
 	}
 }
 
-// TestStartNamedAdapterRejectsMuted verifies that StartNamedAdapter refuses
-// to start a connection for a muted adapter. This is the core guard that
-// prevents muted adapters from establishing connections.
 func TestStartNamedAdapterRejectsMuted(t *testing.T) {
 	mgr := NewManager()
 	mgr.BindSession(SessionBinding{
@@ -1081,7 +1076,6 @@ func TestStartNamedAdapterRejectsMuted(t *testing.T) {
 	}
 }
 
-// TestStartNamedAdapterNilManager verifies the nil manager guard.
 func TestStartNamedAdapterNilManager(t *testing.T) {
 	cfg := config.IMConfig{}
 	err := StartNamedAdapter(context.Background(), cfg, "test", nil)

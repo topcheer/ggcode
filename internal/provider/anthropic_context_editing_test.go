@@ -8,7 +8,7 @@ import (
 func TestParseContextEditing(t *testing.T) {
 	cases := []struct {
 		in   string
-		want string // "" = nil
+		want string
 	}{
 		{"", ""},
 		{"off", ""},

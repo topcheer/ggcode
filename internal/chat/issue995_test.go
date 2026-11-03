@@ -7,11 +7,6 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// simulateTerminalTabExpand mimics how a terminal renders TAB characters:
-// advancing the cursor to the next 8-column tab stop per tab (the exact
-// behavior width libraries fail to model - they count '\t' as 0-1 columns).
-// Used by the #995 invariant test so assertions do NOT share the same
-// distorted measurement function as production code.
 func simulateTerminalTabExpand(s string) string {
 	var b strings.Builder
 	col := 0
@@ -34,10 +29,6 @@ func simulateTerminalTabExpand(s string) string {
 	return b.String()
 }
 
-// TestIssue995ErrorBodyTabAndCRNormalized pins the fix: the isError branch
-// of RenderBody must run the same CR normalization + TAB expansion as
-// FormatBody before wrapping, so tab-indented compiler errors and CRLF
-// command output no longer render past the width invariant (scroll desync).
 func TestIssue995ErrorBodyTabAndCRNormalized(t *testing.T) {
 
 	raw := "./foo.go:12:3: undefined: x\r\n\tif x != nil {\n\t^\n"
@@ -66,8 +57,6 @@ func TestIssue995ErrorBodyTabAndCRNormalized(t *testing.T) {
 
 func utf8Len(s string) int { return len([]rune(s)) }
 
-// TestIssue995ErrorBodyStillWraps guards the regression surface: plain
-// error output keeps wrapping identically to before the fix.
 func TestIssue995ErrorBodyStillWraps(t *testing.T) {
 	item := &BaseToolItem{}
 	item.SetResult(strings.Repeat("x", 100), true)
@@ -81,13 +70,6 @@ func TestIssue995ErrorBodyStillWraps(t *testing.T) {
 	}
 }
 
-// TestSystemItemTabWidthInvariant pins the #995 tab-expansion contract for
-// SystemItem: verification results embed raw build/test output whose fields
-// are TAB-separated ("FAIL\tpkg", "ok\tpkg 0.5s"). lipgloss.Width counts '\t'
-// as 0 columns, so without expansion those lines measure as fitting the
-// viewport but the terminal advances to the next tab stop and wraps them -
-// one more displayed line than Height() counted, corrupting the viewport
-// during verification (ghost blank rows, lost panel border).
 func TestSystemItemTabWidthInvariant(t *testing.T) {
 	st := DefaultStyles()
 	msgs := []string{
@@ -117,13 +99,6 @@ func TestSystemItemTabWidthInvariant(t *testing.T) {
 	}
 }
 
-// TestWrapLinesChokePointNormalization pins the choke-point contract inside
-// wrapLines itself: every producer (UserItem, SystemItem, agent plan/field
-// renderers, FormatBody) funnels raw content through here, so CR and TAB
-// must be normalized at this level regardless of which caller forgot.
-// Measurement libraries count these as zero/near-zero width while terminals
-// expand them (tab stops) or rewind the cursor (bare CR progress bars),
-// desynchronizing Height() from displayed lines.
 func TestWrapLinesChokePointNormalization(t *testing.T) {
 	cases := []struct {
 		name string
@@ -152,10 +127,6 @@ func TestWrapLinesChokePointNormalization(t *testing.T) {
 	}
 }
 
-// TestUserItemTabAndCRInvariant covers UserItem, the one bare-wrapping
-// producer that had no normalization at all before the choke-point fix:
-// pasted code with TAB indentation and CR-terminated lines must not produce
-// lines wider than the viewport.
 func TestUserItemTabAndCRInvariant(t *testing.T) {
 	st := DefaultStyles()
 	texts := []string{

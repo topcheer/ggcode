@@ -77,7 +77,6 @@ func TestHandleShellInbound_ExecutesAndPushesResult(t *testing.T) {
 	t.Fatal("shell result was not pushed back to the emitter")
 }
 
-// captureEmitter records EmitText calls for assertions.
 type captureEmitter struct {
 	mu    sync.Mutex
 	texts []string
@@ -103,7 +102,6 @@ func TestHandleShellInbound_UsageHintOnBarePrefix(t *testing.T) {
 	}
 }
 
-// waitForShellResult polls until predicate matches an emitted text or fails.
 func waitForShellResult(t *testing.T, em *captureEmitter, pred func(string) bool, what string) string {
 	t.Helper()
 
@@ -122,9 +120,6 @@ func waitForShellResult(t *testing.T, em *captureEmitter, pred func(string) bool
 	return ""
 }
 
-// TestHandleShellInbound_TruncationPreservesUTF8 (issue #727): truncating at a
-// byte cap must not split a multi-byte rune: Telegram rejects invalid UTF-8
-// with a 400 and the result would never reach the user.
 func TestHandleShellInbound_TruncationPreservesUTF8(t *testing.T) {
 	em := &captureEmitter{}
 	b := &DaemonBridge{emitTextOverride: em.EmitText}

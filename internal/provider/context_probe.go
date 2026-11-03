@@ -18,9 +18,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// probeTiers defines the context window sizes to try, from largest to
-// smallest. Models below 64K are not worth probing — they won't work
-// well for a coding agent anyway.
 var probeTiers = []int{
 	1_000_000,
 	512_000,
@@ -32,37 +29,26 @@ var probeTiers = []int{
 	64_000,
 }
 
-// probeTokenBudget caps the total billed input tokens one tiered probe
-// run may spend (#2116). Every tier attempt bills ~tier tokens of padding
-// regardless of outcome, so a small-window model behind a gateway whose
-// overflow errors carry no exact number descended 1M+512K+256K ≈ 1.8M
-// tokens. The cap stops the descent and asks for explicit config; a model
-// that legitimately fits a tier succeeds within the budget because the
-// first tier that fits returns immediately.
 const probeTokenBudget = 1_500_000
 
-// tierFitsBudget reports whether firing the next tier keeps the run within
-// probeTokenBudget given what has already been spent (#2116).
 func tierFitsBudget(spent, nextTier, budget int) bool {
 	return spent+nextTier <= budget
 }
 
-// ProbeResult is delivered asynchronously after a probe completes.
-// probeInflight tracks running background probes by key (#1789 case 1).
 var (
 	probeInflightMu sync.Mutex
 	probeInflight   = map[string]bool{}
 )
 
 type ProbeResult struct {
-	Key           string // "vendor|baseURL|model"
-	ContextWindow int    // discovered value, 0 if probe failed
-	FromCache     bool   // true if value came from persistent cache
+	Key           string
+	ContextWindow int
+	FromCache     bool
 }
 
 var (
 	probeCacheMu sync.RWMutex
-	probeCache   = map[string]int{} // key → context window
+	probeCache   = map[string]int{}
 	probeLoaded  bool
 )
 
@@ -85,7 +71,6 @@ func loadProbeCache() {
 		return
 	}
 
-	// Try to unmarshal as versioned cache format
 	var cache probeCacheData
 	if err := json.Unmarshal(data, &cache); err == nil && cache.Version > 0 {
 
@@ -133,8 +118,6 @@ func loadProbeCache() {
 		len(cache.Entries), path, dropped)
 }
 
-// applyCacheMigration drops entries below the minimum tier (128K) that were
-// written by the old estimate-based inference. Returns count of dropped entries.
 func applyCacheMigration(fromVersion int, cache *probeCacheData) int {
 	dropped := 0
 	if fromVersion < 2 {
@@ -162,12 +145,6 @@ func applyCacheMigration(fromVersion int, cache *probeCacheData) int {
 	return dropped
 }
 
-// lookupKnownRetiredFamilyHijack reports whether model is an unlisted variant
-// of a bare family name whose prefix-match retirement (#782/#1287) means the
-// cached value under it can no longer be trusted: the model starts with a
-// retired family name, the NEW known table returns 0 for it (falls through to
-// probe), and the model is not itself protected by an earlier specific entry
-// (which the lookup already honors — returning 0 here means it did not).
 func lookupKnownRetiredFamilyHijack(model string) bool {
 	if LookupKnownModelContextWindow(model) != 0 {
 		return false
@@ -197,10 +174,6 @@ func saveProbeCache() {
 
 func saveProbeCacheData(cache probeCacheData) {
 	path := probeCachePath()
-	// #1337: same lost-update shape as the cron store - hold a cross-process
-	// lock around the read-merge-write cycle so two processes' saves don't
-	// erase each other's disk-only entries. Degrade to unlocked on lock
-	// failure: the merge still reduces loss.
 	var unlock func()
 	if lock, err := util.FileLock(path + ".flock"); err == nil {
 		unlock = lock
@@ -238,8 +211,6 @@ func saveProbeCacheData(cache probeCacheData) {
 	}
 }
 
-// LookupProbeCache returns the cached context window for the given key.
-// Returns 0 if not cached.
 func LookupProbeCache(key string) int {
 	if !probeLoaded {
 		loadProbeCache()
@@ -250,7 +221,6 @@ func LookupProbeCache(key string) int {
 	return probeCache[key]
 }
 
-// SetProbeCache persists a discovered context window value.
 func SetProbeCache(key string, window int) {
 	if window <= 0 {
 		return
@@ -262,9 +232,6 @@ func SetProbeCache(key string, window int) {
 	debug.Log("probe", "cached context_window=%d for key=%s", window, key)
 }
 
-// contextOverflowTiers are used when inferring context window from an overflow
-// error. Ordered from largest to smallest. We pick the largest tier that does
-// not exceed the estimated token count.
 var contextOverflowTiers = []int{
 	2_000_000,
 	1_000_000,
@@ -275,10 +242,6 @@ var contextOverflowTiers = []int{
 	128_000,
 }
 
-// matchOverflowTier returns the largest contextOverflowTiers entry that is <=
-// tokenCount. Returns 0 when tokenCount is smaller than every tier — callers
-// must NOT substitute a floor value: the old 64K floor let a fuzzy local
-// token estimate permanently shrink healthy 128K+ windows.
 func matchOverflowTier(tokenCount int) int {
 	for _, tier := range contextOverflowTiers {
 		if tier <= tokenCount {
@@ -288,23 +251,6 @@ func matchOverflowTier(tokenCount int) int {
 	return 0
 }
 
-// InferContextWindowFromError is called when a context overflow error is
-// received. It attempts to determine the model's actual context window:
-//
-//   - Parses the EXACT limit from the error message. This is required: an
-//     overflow error without a number is not evidence of the real limit, and
-//     the old fallback (matching the local token estimate against tiers)
-//     shrank healthy windows to the 64K minimum tier whenever the estimate
-//     undercounted, then persisted the bogus value. Window resets now happen
-//     ONLY on precise numbers.
-//   - Matches the exact value to the largest tier from contextOverflowTiers
-//     that does not exceed it (e.g. 200019 → 200000).
-//   - If the parsed value is below every tier (sub-128K model), trusts the
-//     provider's precise number as-is instead of snapping up to 128K.
-//   - If the inferred window is strictly smaller than currentMaxTokens,
-//     updates via setMaxTokens and persists to the probe cache.
-//
-// Returns the inferred context window (0 if no update was needed/possible).
 func InferContextWindowFromError(
 	err error,
 	currentTokenCount int,
@@ -341,9 +287,6 @@ func InferContextWindowFromError(
 	return tier
 }
 
-// parseContextWindowFromError tries to extract the actual context window
-// limit from an API error message. Many providers include the limit in
-// their error responses.
 var contextLimitPatterns = []*regexp.Regexp{
 
 	regexp.MustCompile(`(?i)maximum context length\D+(\d+)`),
@@ -383,8 +326,6 @@ func parseContextWindowFromError(err error) int {
 	return 0
 }
 
-// MakeProbeKey builds the cache key for a vendor+baseURL+model combination.
-// Matches adaptiveCap's capKey convention.
 func MakeProbeKey(vendor, baseURL, model string) string {
 	return strings.Join([]string{
 		strings.TrimSpace(vendor),
@@ -393,16 +334,6 @@ func MakeProbeKey(vendor, baseURL, model string) string {
 	}, "|")
 }
 
-// ProbeContextWindow probes the actual context window limit for the given
-// provider. It runs asynchronously and calls onResult when done.
-//
-// This is fully non-blocking:
-//   - Cache hit → onResult called synchronously (O(1) read + SetContextWindow under lock)
-//   - Cache miss → onResult called from a background goroutine
-//
-// The onResult callback may be called from any goroutine. The caller must
-// ensure any shared state access within onResult is thread-safe.
-// ContextManager.SetContextWindow is already mutex-protected, so it's safe.
 func ProbeContextWindow(ctx context.Context, p Provider, vendor, baseURL, model string, onResult func(ProbeResult)) {
 	if p == nil {
 		debug.Log("probe", "skipped: provider is nil")
@@ -458,19 +389,6 @@ func ProbeContextWindow(ctx context.Context, p Provider, vendor, baseURL, model 
 	})
 }
 
-// probeInBackground does the actual probing. The strategy, in order:
-//
-//  1. Models API — query the provider's models endpoint (Gemini only,
-//     others don't return token limits).
-//
-//  2. Simple probe — send "hi" to verify API connectivity, check if
-//     the error message reveals the context limit.
-//
-//  3. Tiered probing — send padded messages from 1M down to 64K.
-//     Padding matches tier size to test the real limit.
-//
-// No artificial timeout — this runs in a background goroutine and will
-// complete at its own pace without blocking the user.
 func probeInBackground(ctx context.Context, p Provider, key string) int {
 
 	if window := tryModelsAPI(ctx, p); window > 0 {
@@ -528,8 +446,6 @@ func probeInBackground(ctx context.Context, p Provider, key string) int {
 	return 0
 }
 
-// tryModelsAPI queries the provider's models endpoint to extract the
-// context window limit. Only effective for Gemini (returns inputTokenLimit).
 func tryModelsAPI(ctx context.Context, p Provider) int {
 	if p.Name() != "gemini" {
 		debug.Log("probe", "models API: skipped — %s does not expose token limits", p.Name())
@@ -546,14 +462,10 @@ func tryModelsAPI(ctx context.Context, p Provider) int {
 	return gp.probeModelsAPI(ctx, gp.model)
 }
 
-// prober is implemented by all provider types (OpenAI, Anthropic, Gemini).
-// It sends a single chat request without retry, adaptive cap tracking,
-// or token counting.
 type prober interface {
 	probeChat(ctx context.Context, messages []Message) error
 }
 
-// chatNoRetry calls the provider's probeChat directly.
 func chatNoRetry(ctx context.Context, p Provider, msgs []Message) error {
 	pp, ok := p.(prober)
 	if !ok {
@@ -562,8 +474,6 @@ func chatNoRetry(ctx context.Context, p Provider, msgs []Message) error {
 	return pp.probeChat(ctx, msgs)
 }
 
-// trySimpleProbe sends "hi" to verify the API is working.
-// Returns: >0 = found context limit in error, 0 = continue probing, -1 = abort.
 func trySimpleProbe(ctx context.Context, p Provider) int {
 	msgs := []Message{
 		{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}},
@@ -600,10 +510,6 @@ func trySimpleProbe(ctx context.Context, p Provider) int {
 	return 0
 }
 
-// tryTierProbe sends a message padded to approximately `tier` tokens.
-// Returns: >0 = found context limit in error, 0 = inconclusive/retry, -1 = abort.
-// Like trySimpleProbe, classifies errors to distinguish transient failures
-// (rate limits, 5xx, network) from genuine context overflow.
 func tryTierProbe(ctx context.Context, p Provider, tier int) int {
 	padding := strings.Repeat("a ", tier)
 

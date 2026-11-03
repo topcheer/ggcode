@@ -13,11 +13,8 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// Compile-time proof the provider now participates in the sa-78 wiring.
 var _ callPolicySetter = (*OpenAIResponsesProvider)(nil)
 
-// Chat must retry transient 5xx failures per the configured maxRetries
-// instead of a single throwaway post.
 func TestIssue2573ChatRetriesTransientFailures(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -48,8 +45,6 @@ func TestIssue2573ChatRetriesTransientFailures(t *testing.T) {
 	}
 }
 
-// Chat must honor the configured per-call deadline instead of hanging for
-// the server's full response.
 func TestIssue2573ChatDeadline(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(5 * time.Second)
@@ -77,8 +72,6 @@ func TestIssue2573ChatDeadline(t *testing.T) {
 	}
 }
 
-// The explicit openai-responses protocol branch must wire the resolved
-// policy (pre-fix: policy parsed then discarded).
 func TestIssue2573RegistryWiresPolicyExplicitProtocol(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(5 * time.Second)
@@ -115,8 +108,6 @@ func TestIssue2573RegistryWiresPolicyExplicitProtocol(t *testing.T) {
 	}
 }
 
-// The URL-sniff fallback branch (protocol "openai" pointed at a /responses
-// path) must wire the resolved policy too.
 func TestIssue2573RegistryWiresPolicyURLSniffFallback(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(5 * time.Second)
@@ -155,9 +146,6 @@ func TestIssue2573RegistryWiresPolicyURLSniffFallback(t *testing.T) {
 	}
 }
 
-// ChatStream must honor the configured deadline for the full stream
-// lifetime: a delta followed by a hang ends in a deadline error event, not
-// an eternal stream.
 func TestIssue2573StreamDeadlineCoversFullStream(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() { _ = recover() }()
@@ -208,8 +196,6 @@ func TestIssue2573StreamDeadlineCoversFullStream(t *testing.T) {
 	}
 }
 
-// A mid-stream transport failure BEFORE any content event was emitted must
-// be retried: the retry replays the same stateless input losslessly.
 func TestIssue2573StreamRetriesTransportFailureBeforeEmission(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -262,8 +248,6 @@ func TestIssue2573StreamRetriesTransportFailureBeforeEmission(t *testing.T) {
 	}
 }
 
-// A mid-stream transport failure AFTER content was emitted must NOT be
-// retried: replaying would duplicate already-delivered content.
 func TestIssue2573StreamDoesNotRetryAfterEmission(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

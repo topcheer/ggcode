@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// #4698: the #4644 key-retry wait must be ctx-aware - a raw Sleep held the
-// serial syncer pipeline up to 2.4s per bad event even after cancellation,
-// stalling every room behind it.
 func TestIssue4698_KeyRetryCtxAware(t *testing.T) {
 	data, err := os.ReadFile("matrix_adapter.go")
 	if err != nil {

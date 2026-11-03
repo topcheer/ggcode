@@ -256,8 +256,6 @@ func startConfiguredAdapter(ctx context.Context, cfg config.IMConfig, name strin
 	return nil
 }
 
-// StartPCAdapterOnly starts only the built-in PrivateClaw adapter.
-// Used when IM is not explicitly enabled but PC should still be available.
 func StartPCAdapterOnly(parent context.Context, cfg config.IMConfig, mgr *Manager) (*AdapterController, error) {
 	if mgr == nil {
 		return nil, fmt.Errorf("IM manager is nil")
@@ -267,7 +265,6 @@ func StartPCAdapterOnly(parent context.Context, cfg config.IMConfig, mgr *Manage
 	return &AdapterController{cancel: cancel}, nil
 }
 
-// newDefaultPCSessionStore creates a JSONFilePCSessionStore at the default path.
 func newDefaultPCSessionStore() PCSessionStore {
 	storePath, err := DefaultPCSessionStorePath()
 	if err != nil {
@@ -282,8 +279,6 @@ func newDefaultPCSessionStore() PCSessionStore {
 	return store
 }
 
-// startPCAdapter starts the built-in PrivateClaw adapter with defaults.
-// It uses config from im.adapters if a PrivateClaw entry exists, otherwise uses defaults.
 func startPCAdapter(ctx context.Context, cfg config.IMConfig, mgr *Manager) {
 
 	for name, adapterCfg := range cfg.Adapters {

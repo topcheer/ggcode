@@ -11,7 +11,6 @@ func TestRepairJSON_AlreadyValid(t *testing.T) {
 	if repaired {
 		t.Errorf("expected repaired=false for valid JSON")
 	}
-	// Result should be the trimmed input.
 	var m map[string]any
 	if err := json.Unmarshal(result, &m); err != nil {
 		t.Fatalf("result should be valid JSON: %v", err)

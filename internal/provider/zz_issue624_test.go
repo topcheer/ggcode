@@ -5,13 +5,6 @@ import (
 	"testing"
 )
 
-// #624: LiteLLM/OpenRouter-style gateways send their own x-ratelimit-*
-// headers (often only the requests fields) ALONGSIDE the upstream
-// anthropic-ratelimit-* token headers. The OpenAI-group early return
-// (`if !info.IsEmpty() { return info }`) used to drop the Anthropic token
-// headers, leaving RemainingTokens=-1 so TokenFractionRemaining() read as
-// 1.000 (100% illusion) and token-critical warnings never fired — the same
-// failure mode #602 R6 fixed for the anthropic/reratelimit prefix pair.
 func TestIssue624_OpenAIGroupDoesNotDropAnthropicTokenHeaders(t *testing.T) {
 	h := http.Header{}
 	h.Set("x-ratelimit-remaining-requests", "3")
@@ -39,9 +32,6 @@ func TestIssue624_OpenAIGroupDoesNotDropAnthropicTokenHeaders(t *testing.T) {
 	}
 }
 
-// Regression guards: single-group responses must still parse exactly as
-// before — absent headers must never clobber fields parsed from the other
-// group.
 func TestIssue624_SingleGroupStillParses(t *testing.T) {
 	h := http.Header{}
 	h.Set("x-ratelimit-remaining-requests", "99")

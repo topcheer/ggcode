@@ -9,9 +9,6 @@ import (
 
 const corruptYAML = "adapters:\n  qq:\n    enabled: true\n\tding: broken-tab\n"
 
-// TestIssue1160PatchIMAdapterRejectsCorruptFile verifies that patching with a
-// corrupted im.yaml returns an error and does NOT rewrite the file (the
-// pre-existing qq adapter must survive byte-for-byte).
 func TestIssue1160PatchIMAdapterRejectsCorruptFile(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -50,8 +47,6 @@ func TestIssue1160PatchIMAdapterRejectsCorruptFile(t *testing.T) {
 	}
 }
 
-// TestIssue1160PatchExternalFileRejectsCorruptFile verifies the generic
-// external-file path (mcp_servers.yaml) behaves the same way.
 func TestIssue1160PatchExternalFileRejectsCorruptFile(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -87,8 +82,6 @@ func TestIssue1160PatchExternalFileRejectsCorruptFile(t *testing.T) {
 	}
 }
 
-// TestIssue1160PatchStillWorksOnValidFile guards the happy path: a valid
-// im.yaml must still receive patches without losing existing adapters.
 func TestIssue1160PatchStillWorksOnValidFile(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()

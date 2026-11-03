@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// issue736WriteConfig writes a minimal valid global config with an IM
-// section whose adapter platform uses pre-#648 non-canonical casing.
 func issue736WriteConfig(t *testing.T, dir, platform string) string {
 	t.Helper()
 	cfgPath := filepath.Join(dir, "ggcode.yaml")
@@ -35,11 +33,6 @@ im:
 	return cfgPath
 }
 
-// TestIssue736_LoadNormalizesLegacyPlatformCasing is the core probe: a config
-// persisted before #648 fixed the SAVE path carries platform: "Telegram".
-// Load previously returned it verbatim, and the runtime startup switch
-// (internal/im startConfiguredAdapter) matched platform IDs exactly, so the
-// adapter silently never started. Load must canonicalize in memory.
 func TestIssue736_LoadNormalizesLegacyPlatformCasing(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")
@@ -64,9 +57,6 @@ func TestIssue736_LoadNormalizesLegacyPlatformCasing(t *testing.T) {
 	}
 }
 
-// TestIssue736_SavePersistsCanonicalPlatform: after Load normalizes the
-// legacy value, the next Save must persist the canonical ID so the stored
-// bad data self-heals (not just the in-memory copy).
 func TestIssue736_SavePersistsCanonicalPlatform(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")
@@ -99,9 +89,6 @@ func TestIssue736_SavePersistsCanonicalPlatform(t *testing.T) {
 	}
 }
 
-// TestIssue736_UnknownPlatformLeftUntouched: load-time normalization must not
-// fabricate a platform for unknown values - typos stay visible for the
-// validation/save paths to reject with a proper error.
 func TestIssue736_UnknownPlatformLeftUntouched(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")
@@ -126,8 +113,6 @@ func TestIssue736_UnknownPlatformLeftUntouched(t *testing.T) {
 	}
 }
 
-// TestIssue736_NormalizeIMAdapterPlatforms unit-tests the helper directly,
-// covering whitespace trimming, mixed case, and canonical no-op.
 func TestIssue736_NormalizeIMAdapterPlatforms(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.IM.Adapters = map[string]IMAdapterConfig{

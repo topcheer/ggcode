@@ -22,12 +22,11 @@ const (
 	wecomConnectTimeout  = 20 * time.Second
 	wecomRequestTimeout  = 15 * time.Second
 	wecomHeartbeatPeriod = 30 * time.Second
-	wecomMaxTextLen      = 2048 // Official: text content max 2048 bytes (https://developer.work.weixin.qq.com/document/path/90236)
+	wecomMaxTextLen      = 2048
 	wecomDedupMaxSize    = 1000
-	wecomInterMsgDelay   = 600 * time.Millisecond // delay between consecutive proactive sends
+	wecomInterMsgDelay   = 600 * time.Millisecond
 )
 
-// WeCom WebSocket command constants (official WeCom AI Bot gateway).
 const (
 	wecomCmdSubscribe      = "aibot_subscribe"
 	wecomCmdCallback       = "aibot_msg_callback"
@@ -45,30 +44,22 @@ type wecomAdapter struct {
 	secret  string
 	wsURL   string
 
-	// Access policies
-	dmPolicy       string   // "open", "allowlist", "disabled"
-	allowFrom      []string // DM allowlist
-	groupPolicy    string   // "open", "allowlist", "disabled"
-	groupAllowFrom []string // Group allowlist
+	dmPolicy       string
+	allowFrom      []string
+	groupPolicy    string
+	groupAllowFrom []string
 
 	mu            sync.RWMutex
 	ws            *websocket.Conn
-	writeMu       sync.Mutex // protects websocket writes (gorilla/websocket not concurrent-safe)
+	writeMu       sync.Mutex
 	connected     bool
 	closed        bool
-	seen          map[string]time.Time // message dedup
-	replyReqIDs   map[string]string    // msgid → req_id for respond_msg replies
-	replyReqOrder []string             // insertion order of replyReqIDs for oldest-first eviction (#974); guarded by mu
+	seen          map[string]time.Time
+	replyReqIDs   map[string]string
+	replyReqOrder []string
 
-	// pendingAcks maps an outbound req_id → buffered ack-waiter channel.
-	// Registered by writeAndAwait, resolved (LoadAndDelete) by
-	// dispatchPayload when the server's ack frame arrives (#974). Previously
-	// outbound WriteJSON success was treated as delivery success, so async
-	// rejections (errcode 45009 etc.) were silently dropped.
 	pendingAcks sync.Map
 
-	// ackTimeout overrides wecomRequestTimeout for outbound ack waits;
-	// zero means default. Tests set a short value. Guarded by mu.
 	ackTimeout time.Duration
 }
 
@@ -493,8 +484,6 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 	}
 }
 
-// extractText extracts plain text content from the callback body.
-// Supports text, mixed, voice, and appmsg message types.
 func (a *wecomAdapter) extractText(body map[string]any) string {
 	msgType, _ := body["msgtype"].(string)
 	var textParts []string
@@ -539,7 +528,6 @@ func (a *wecomAdapter) extractText(body map[string]any) string {
 	return strings.Join(textParts, "\n")
 }
 
-// extractQuote extracts the quoted/replied-to text from the callback body.
 func (a *wecomAdapter) extractQuote(body map[string]any) string {
 	quote, _ := body["quote"].(map[string]any)
 	if quote == nil {
@@ -683,10 +671,6 @@ func (a *wecomAdapter) isGroupAllowed(chatID, senderID string) bool {
 	return true
 }
 
-// Send delivers an outbound message to a WeCom chat.
-// Prefers aibot_respond_msg (stream reply) when the inbound message's req_id
-// is still tracked, which shows a "reply" bubble in the WeCom UI.
-// Falls back to aibot_send_msg (proactive message) otherwise.
 func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	chatID := binding.ChannelID
 	if chatID == "" {
@@ -757,9 +741,6 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	return nil
 }
 
-// TriggerTyping implements the TypingIndicator interface.
-// WeCom AI Bot does not have a native typing API, but we can send an
-// intermediate respond_msg with finish=false to show a "thinking" state.
 func (a *wecomAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 	msgID := strings.TrimSpace(binding.LastInboundMessageID)
 	if msgID == "" {
@@ -796,7 +777,6 @@ func (a *wecomAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding
 	return ws.WriteJSON(typingMsg)
 }
 
-// sendRespond sends via aibot_respond_msg — shows as a reply bubble in WeCom.
 func (a *wecomAdapter) sendRespond(chatID, replyReqID, text string) error {
 
 	text = stripMarkdown(text)
@@ -821,7 +801,6 @@ func (a *wecomAdapter) sendRespond(chatID, replyReqID, text string) error {
 	return nil
 }
 
-// sendProactive sends via aibot_send_msg — a standalone message.
 func (a *wecomAdapter) sendProactive(chatID, text string) error {
 	reqID := newWeComReqID("send")
 	sendMsg := map[string]any{
@@ -838,7 +817,6 @@ func (a *wecomAdapter) sendProactive(chatID, text string) error {
 	return a.writeAndAwaitAck(reqID, sendMsg)
 }
 
-// sendText is a convenience wrapper used for pairing replies (no inbound to correlate).
 func (a *wecomAdapter) sendText(ctx context.Context, chatID, text string) error {
 	if text == "" || chatID == "" {
 		return nil
@@ -865,18 +843,12 @@ func (a *wecomAdapter) publishState(healthy bool, status, lastErr string) {
 	})
 }
 
-// wecomReqSeq guarantees req_id uniqueness even when two sends land on the
-// same nanosecond — req_ids now key the pending-ack table, so collisions
-// would cross-deliver acks (#974).
 var wecomReqSeq atomic.Uint64
 
 func newWeComReqID(prefix string) string {
 	return fmt.Sprintf("%s-%d-%d", prefix, time.Now().UnixNano(), wecomReqSeq.Add(1))
 }
 
-// ackWait returns the outbound ack timeout, defaulting to
-// wecomRequestTimeout (the constant was previously dead — declared but never
-// used; it now bounds every outbound ack wait, #974).
 func (a *wecomAdapter) ackWait() time.Duration {
 	a.mu.RLock()
 	d := a.ackTimeout
@@ -887,11 +859,6 @@ func (a *wecomAdapter) ackWait() time.Duration {
 	return d
 }
 
-// writeAndAwaitAck writes frame to the websocket and blocks until the
-// server's ack frame with the same req_id arrives (resolved by
-// dispatchPayload) or the ack timeout elapses (#974). A non-nil return
-// means the message was NOT confirmed delivered: transport failure, an
-// errcode!=0 rejection, or ack timeout.
 func (a *wecomAdapter) writeAndAwaitAck(reqID string, frame map[string]any) error {
 	a.mu.RLock()
 	ws := a.ws
@@ -920,8 +887,6 @@ func (a *wecomAdapter) writeAndAwaitAck(reqID string, frame map[string]any) erro
 	}
 }
 
-// wecomAckError converts a server ack frame into an error when errcode!=0,
-// mirroring the subscribe-ack check (#974).
 func wecomAckError(reqID string, payload map[string]any) error {
 	body, _ := payload["body"].(map[string]any)
 	if body == nil {
@@ -944,7 +909,6 @@ func payloadReqID(payload map[string]any) string {
 	return reqID
 }
 
-// jsonStringField safely extracts a string field from a nested map.
 func jsonStringField(m map[string]any, key string) string {
 	if m == nil {
 		return ""
@@ -965,7 +929,6 @@ func jsonStringField(m map[string]any, key string) string {
 	}
 }
 
-// normalizeAllowList trims and filters a list of allowlist entries.
 func normalizeAllowList(entries []string) []string {
 	var result []string
 	for _, e := range entries {
@@ -977,7 +940,6 @@ func normalizeAllowList(entries []string) []string {
 	return result
 }
 
-// entryMatches checks if a target matches any entry in an allowlist (case-insensitive, supports "*").
 func entryMatches(entries []string, target string) bool {
 	t := strings.TrimSpace(strings.ToLower(target))
 	for _, e := range entries {
@@ -989,7 +951,6 @@ func entryMatches(entries []string, target string) bool {
 	return false
 }
 
-// outboundText converts an OutboundEvent to display text for WeCom.
 func (a *wecomAdapter) outboundText(event OutboundEvent) string {
 	switch event.Kind {
 	case OutboundEventText:

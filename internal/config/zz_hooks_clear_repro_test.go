@@ -9,30 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/hooks"
 )
 
-// CHARACTERIZATION TEST - documents a real, verified bug (do not "fix" the
-// test without fixing the bug; when the bug is fixed, invert the assertions
-// marked BUG).
-//
-// Bug: clearing instance-scope hooks (non-empty -> empty) is silently lost.
-//
-// Evidence chain (verified against the failing repro, see git history):
-//  1. WRITE-SIDE SUPPRESSION: diffHooks (instance_delta.go) only writes
-//     pre_tool_use/post_tool_use into the delta when len(current) > 0, so a
-//     cleared list never enters the delta.
-//  2. NO RESET FALLBACK: applyInstanceResets (instance_reset.go) deletes
-//     stale on-disk keys only for instanceResetManagedKeys (scalars, #2106)
-//     and instanceResetNestedKeys (knight/subagents/swarm, #2936). "hooks"
-//     is in neither table, so no nil deletion marker is emitted for it.
-//  3. MERGE KEEPS STALE KEYS: deepMergeYAMLMaps (config_save.go) only
-//     deletes a dst key when the delta carries an explicit nil marker;
-//     unmentioned keys survive, so the stale hooks stay on disk.
-//  4. READ-SIDE SUPPRESSION: mergeHookConfig (instance.go) replaces the
-//     global list only when len(instance) > 0, so the stale non-empty
-//     on-disk list resurrects on the next LoadWithInstance.
-//
-// Scalar fields and knight/subagents/swarm all closed the identical
-// resurrection hole (#2106/#2936); hooks is the only family left with
-// write-side zero-suppression AND no reset fallback.
 func TestInstanceHooksClearToEmptySilentlyLost(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()

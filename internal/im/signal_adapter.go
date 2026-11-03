@@ -35,9 +35,6 @@ const (
 	signalBackoffMax        = 60 * time.Second
 	signalMaxSentTimestamps = 100
 
-	// signalInterMessageDelay is the delay between consecutive messages.
-	// signal-cli-rest-api can return HTTP 429 (rate limit) on rapid sends.
-	// Source: https://github.com/AsamK/signal-cli/discussions/1513
 	signalInterMessageDelay = 500 * time.Millisecond
 )
 
@@ -45,24 +42,20 @@ type signalAdapter struct {
 	name    string
 	manager *Manager
 
-	// Connection
 	baseURL string
-	account string // phone number like +1234567890
+	account string
 
-	// Policies
 	requireMention bool
 	allowedUsers   []string
-	groupAllowlist []string // group IDs or ["*"] for all
+	groupAllowlist []string
 
 	mu        sync.RWMutex
 	conn      *http.Client
 	connected bool
 	closed    bool
 
-	// Dedup by timestamp
 	seen map[int64]time.Time
 
-	// Echo suppression — outbound timestamps
 	sentTimestamps []int64
 }
 
@@ -512,22 +505,10 @@ func (a *signalAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	return a.sendText(ctx, chatID, signalMarkdown(remainder))
 }
 
-// sanitizeSignalAttachmentName neutralizes ';' and ',' in attachment
-// filenames before they are embedded in the data-URL metadata section.
-// signal-cli-rest-api (src/client/attachment.go AttachmentEntry
-// .extractMetaData) splits the header on ';' and prefix-matches each
-// segment, so a raw 'a;b.pdf' is parsed as filename="a" and the ';b.pdf'
-// fragment is silently dropped (#3332). Replacing with '_' keeps the name
-// readable and preserves the extension. url.PathEscape is NOT usable
-// here: the server never decodes the filename, so escaping would ship
-// percent-sequences as the literal name.
 func sanitizeSignalAttachmentName(name string) string {
 	return strings.NewReplacer(";", "_", ",", "_").Replace(name)
 }
 
-// sendExtractedImage resolves one extracted image and sends it as a Signal
-// attachment via /v2/send base64_attachments (signal-cli-rest-api accepts
-// "data:<mime>;filename=<name>;base64,<data>" entries).
 func (a *signalAdapter) sendExtractedImage(ctx context.Context, chatID string, img ExtractedImage) error {
 	data, mime, filename, err := a.resolveImageBytes(ctx, img)
 	if err != nil {
@@ -550,7 +531,6 @@ func (a *signalAdapter) sendExtractedImage(ctx context.Context, chatID string, i
 	return nil
 }
 
-// signalMIMEExt maps an image MIME type to a file extension.
 func signalMIMEExt(mime string) string {
 	switch {
 	case strings.Contains(mime, "jpeg") || strings.Contains(mime, "jpg"):
@@ -564,8 +544,6 @@ func signalMIMEExt(mime string) string {
 	}
 }
 
-// signalDownloadImage fetches an http(s) image URL with bounds and
-// content-type checks; returns data, mime, and a filename from the URL path.
 func (a *signalAdapter) signalDownloadImage(ctx context.Context, rawURL string) ([]byte, string, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -596,7 +574,6 @@ func (a *signalAdapter) signalDownloadImage(ctx context.Context, rawURL string) 
 	return data, mime, "image" + signalMIMEExt(mime), nil
 }
 
-// resolveImageBytes turns an ExtractedImage into raw bytes plus a filename.
 func (a *signalAdapter) resolveImageBytes(ctx context.Context, img ExtractedImage) ([]byte, string, string, error) {
 	switch img.Kind {
 	case "data_url":
@@ -647,12 +624,6 @@ func (a *signalAdapter) resolveImageBytes(ctx context.Context, img ExtractedImag
 	}
 }
 
-// gateGroupMention enforces requireMention for group messages. It consults
-// the structured mentions array first (official Signal clients render an
-// "@Name" placeholder whose E.164 number only appears in mentions, so a
-// text-only scan would silently drop an explicit bot mention #1018), then
-// falls back to scanning the text for the account number. Returns the
-// mention-stripped text and whether the message must be dropped.
 func (a *signalAdapter) gateGroupMention(text string, dataMessage map[string]any) (string, bool) {
 	structured := signalMentionsAccount(dataMessage["mentions"], a.account)
 	hasMention := structured ||
@@ -669,8 +640,6 @@ func (a *signalAdapter) gateGroupMention(text string, dataMessage map[string]any
 	return text, false
 }
 
-// signalMentionsAccount reports whether the envelope's structured mentions
-// array contains the given E.164 account number (#1018).
 func signalMentionsAccount(raw any, account string) bool {
 	mentions, ok := raw.([]any)
 	if !ok || account == "" {
@@ -736,8 +705,6 @@ func (a *signalAdapter) sendText(ctx context.Context, chatID, text string) error
 	return lastErr
 }
 
-// applySignalRecipient fills the recipient fields of a /v2/send payload for
-// the given chatID (direct number or "group:" prefixed group ID).
 func applySignalRecipient(payload map[string]any, chatID string) {
 	if strings.HasPrefix(chatID, "group:") {
 
@@ -749,8 +716,6 @@ func applySignalRecipient(payload map[string]any, chatID string) {
 	}
 }
 
-// trackSignalTimestamp extracts the send timestamp from a response body for
-// echo suppression.
 func trackSignalTimestamp(respBody []byte, add func(int64)) {
 	var result struct {
 		Timestamp int64 `json:"timestamp"`
@@ -760,7 +725,6 @@ func trackSignalTimestamp(respBody []byte, add func(int64)) {
 	}
 }
 
-// postSignalSend marshals the payload and POSTs it to /v2/send.
 func (a *signalAdapter) postSignalSend(ctx context.Context, payload map[string]any) ([]byte, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -769,8 +733,6 @@ func (a *signalAdapter) postSignalSend(ctx context.Context, payload map[string]a
 	return a.postSignalBody(ctx, "/v2/send", body)
 }
 
-// postSignalBody POSTs one request to the signal-cli-rest-api with the
-// shared 429 rate-limit retry loop. Returns the response body on 2xx.
 func (a *signalAdapter) postSignalBody(ctx context.Context, endpoint string, body []byte) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
@@ -808,7 +770,6 @@ func (a *signalAdapter) postSignalBody(ctx context.Context, endpoint string, bod
 	return nil, lastErr
 }
 
-// TriggerTyping sends a Signal typing indicator.
 func (a *signalAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 	chatID := strings.TrimSpace(binding.ChannelID)
 	if chatID == "" {
@@ -955,8 +916,6 @@ func (a *signalAdapter) publishState(healthy bool, status, lastErr string) {
 	})
 }
 
-// CheckSignalDaemon pings the signal-cli REST API at the given baseURL to
-// check if the daemon is running. Returns nil if reachable.
 func CheckSignalDaemon(baseURL string) error {
 	if baseURL == "" {
 		baseURL = signalDefaultBaseURL
@@ -977,8 +936,6 @@ func CheckSignalDaemon(baseURL string) error {
 	return nil
 }
 
-// FetchSignalQRCode fetches the QR code PNG from signal-cli-rest-api for
-// device linking. Returns the raw PNG bytes.
 func FetchSignalQRCode(baseURL, deviceName string) ([]byte, error) {
 	if baseURL == "" {
 		baseURL = signalDefaultBaseURL
@@ -1003,8 +960,6 @@ func FetchSignalQRCode(baseURL, deviceName string) ([]byte, error) {
 	return util.ReadAll(resp.Body, util.ReadLimitGeneral)
 }
 
-// SignalDaemonInstallCommand returns a shell command string that installs
-// signal-cli-rest-api via Docker.
 func SignalDaemonInstallCommand() string {
 	return "docker run -d --name signal-cli-rest-api -p 8080:8080 -v signal-cli-config:/home/.local/share/signal-cli/ bbernhard/signal-cli-rest-api:latest"
 }

@@ -10,13 +10,6 @@ import (
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 )
 
-// sleepBeforeRetry emits the "[Retry n/m...]" system event and sleeps under
-// the shared retry budget (#722). Mirrors openai.go's sleepBeforeRetry except
-// the send is a bare blocking ch<- (historical anthropic semantics - this
-// provider has no ctx-aware sendEvent). Extracted verbatim from ChatStream's
-// stream-phase retry block. Returns (slept, terminalErr): terminalErr non-nil
-// means the budget is exhausted - caller must emit Error{terminalErr}, set
-// streamError, and return.
 func (p *AnthropicProvider) sleepBeforeRetry(ctx context.Context, ch chan<- StreamEvent, budget *retryBudget, cause error, attempt int) (bool, error) {
 
 	if isTimeoutClassError(cause) {
@@ -37,10 +30,6 @@ func (p *AnthropicProvider) sleepBeforeRetry(ctx context.Context, ch chan<- Stre
 	return true, nil
 }
 
-// handleContentBlockStart registers or directly emits content_block_start
-// blocks (tool_use / server_tool_use / tool results / thinking variants).
-// Verbatim extraction from ChatStream - no branch/order/guard changes.
-// Returns whether the block produced a user-visible event.
 func handleContentBlockStart(ch chan<- StreamEvent, toolCalls map[int]*ToolCallDelta, event anthropic.MessageStreamEventUnion) bool {
 	cb := event.ContentBlock
 	switch cb.Type {
@@ -93,10 +82,6 @@ func handleContentBlockStart(ch chan<- StreamEvent, toolCalls map[int]*ToolCallD
 	return false
 }
 
-// handleContentBlockStop finalizes a content block: server_tool_use echo-back
-// (incl. PTC code_execution tool_use re-shaping) or client tool_use
-// ToolCallDone. Returns (charsDelta, emittedDelta); nothing happened for
-// non-tool blocks. Verbatim extraction from ChatStream.
 func handleContentBlockStop(ch chan<- StreamEvent, toolCalls map[int]*ToolCallDelta, idx int) (int, bool) {
 	if tc, ok := toolCalls[idx]; ok && tc.ServerTool {
 		debug.Log("anthropic", "content_block_stop server_tool_use id=%s name=%s", tc.ID, tc.Name)

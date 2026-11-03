@@ -7,39 +7,23 @@ import (
 )
 
 var (
-	// Code block and inline code protection (same pattern as Slack)
 	waCodeBlockRe  = regexp.MustCompile("(?s)```.*?```")
 	waInlineCodeRe = regexp.MustCompile("`[^`]+`")
 
-	// WhatsApp-specific patterns
-	// Match **bold** but not *bold* (which WhatsApp uses natively)
-	waBoldRe = regexp.MustCompile(`\*\*(.+?)\*\*`)
-	// Match __bold__ (CommonMark underscore strong emphasis)
+	waBoldRe           = regexp.MustCompile(`\*\*(.+?)\*\*`)
 	waUnderscoreBoldRe = regexp.MustCompile(`__(.+?)__`)
-	// Match ~~strikethrough~~ but not ~text~ (which WhatsApp uses natively)
-	waStrikeRe = regexp.MustCompile(`~~(.+?)~~`)
-	// Markdown headers: ### Text → *Text* (WhatsApp bold)
-	waHeaderRe = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
-	// Markdown images: ![alt](url) → remove
-	waImageRe = regexp.MustCompile(`!\[([^\]]*)\]\([^)]+\)`)
-	// Markdown links: [text](url) → text
-	waLinkRe = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
-	// Markdown horizontal rules
-	waHRRe = regexp.MustCompile(`(?m)^(-{3,}|\*{3,})$`)
+	waStrikeRe         = regexp.MustCompile(`~~(.+?)~~`)
+	waHeaderRe         = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
+	waImageRe          = regexp.MustCompile(`!\[([^\]]*)\]\([^)]+\)`)
+	waLinkRe           = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+	waHRRe             = regexp.MustCompile(`(?m)^(-{3,}|\*{3,})$`)
 )
 
-// markdownToWhatsApp converts standard markdown formatting to WhatsApp's
-// native formatting syntax. Unlike stripMarkdown(), this preserves
-// formatting intent (bold stays bold, strikethrough stays strikethrough)
-// by adapting the marker syntax.
 func markdownToWhatsApp(text string) string {
 	if text == "" {
 		return text
 	}
 
-	// Protect code blocks and inline code from delimiter conversion.
-	// Without this, characters like #, *, ~, []() inside code would be
-	// incorrectly converted (e.g., Python `# comment` → `*comment*` bold).
 	var codeSegments []string
 	protectCode := func(match string) string {
 		idx := len(codeSegments)

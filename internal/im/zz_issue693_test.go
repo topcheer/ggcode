@@ -9,11 +9,6 @@ import (
 	"time"
 )
 
-// fakeInstanceDetect builds an InstanceDetect whose directory is pre-seeded
-// with instance files for the given PIDs, with a controllable liveness probe.
-// The Manager under test gets its own registered entry (its real PID+UUID).
-// Other instances' files are written directly (no Register) so its cleanup
-// logic cannot remove them.
 func fakeInstanceDetect(t *testing.T, mgr *Manager, otherPIDs []int, alive func(pid int) bool) {
 	t.Helper()
 	dir := t.TempDir()
@@ -42,7 +37,6 @@ func fakeInstanceDetect(t *testing.T, mgr *Manager, otherPIDs []int, alive func(
 }
 
 func fakeUUID(pid int) string {
-	// Deterministic distinct UUID per pid; only uniqueness matters here.
 	const hex = "0123456789abcdef"
 	u := "00000000-0000-4000-8000-"
 	for i := 0; i < 12; i++ {
@@ -57,8 +51,6 @@ func (d *InstanceDetect) dirOf694() string {
 	return d.dir
 }
 
-// Part 1a: dead owner (no other live instance) — UnmuteBinding must take over
-// the orphan binding instead of a hard denial.
 func TestIssue693_UnmuteTakesOverDeadOwnersBinding(t *testing.T) {
 	mgr, _ := testDummyManager()
 	mgr.mu.Lock()
@@ -84,8 +76,6 @@ func TestIssue693_UnmuteTakesOverDeadOwnersBinding(t *testing.T) {
 	}
 }
 
-// Part 1b: live owner (another live instance exists) — rejection stands,
-// preserving #689's hijack guarantee. #693 only allows DEAD owners.
 func TestIssue693_UnmuteStillRejectsLiveForeignOwner(t *testing.T) {
 	mgr, _ := testDummyManager()
 	mgr.mu.Lock()
@@ -107,8 +97,6 @@ func TestIssue693_UnmuteStillRejectsLiveForeignOwner(t *testing.T) {
 	}
 }
 
-// Part 2a: UnmuteAll skips bindings owned by a live foreign session instead of
-// silently grabbing them for the ~3s window before the binding watcher re-mutes.
 func TestIssue693_UnmuteAllSkipsLiveForeignOwner(t *testing.T) {
 	mgr, _ := testDummyManager()
 	mgr.mu.Lock()
@@ -143,8 +131,6 @@ func TestIssue693_UnmuteAllSkipsLiveForeignOwner(t *testing.T) {
 	}
 }
 
-// Part 2b: UnmuteAll takes over a dead owner's orphan binding, mirroring
-// UnmuteBinding's takeover path.
 func TestIssue693_UnmuteAllTakesOverDeadOwnersBinding(t *testing.T) {
 	mgr, _ := testDummyManager()
 	mgr.mu.Lock()
@@ -171,8 +157,6 @@ func TestIssue693_UnmuteAllTakesOverDeadOwnersBinding(t *testing.T) {
 	}
 }
 
-// Guard: unregistered instanceDetect (nil) keeps the conservative #689
-// rejection — dead-owner takeover requires a liveness registry.
 func TestIssue693_NoDetectorKeepsConservativeRejection(t *testing.T) {
 	mgr, _ := testDummyManager()
 	mgr.mu.Lock()

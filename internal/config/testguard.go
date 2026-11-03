@@ -8,9 +8,6 @@ import (
 	"testing"
 )
 
-// realHomeSnapshot captures the home directory as seen at process start
-// (package init runs before any test can call t.Setenv). On Unix that is
-// $HOME; on Windows, USERPROFILE.
 var realHomeSnapshot = firstNonEmpty(os.Getenv("HOME"), os.Getenv("USERPROFILE"))
 
 func firstNonEmpty(vals ...string) string {
@@ -22,8 +19,6 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// homeIsIsolatedForTest reports whether the current process is a test
-// binary whose HOME has been redirected away from the real user home.
 func homeIsIsolatedForTest() bool {
 	if !testing.Testing() {
 		return true
@@ -43,9 +38,6 @@ func homeIsIsolatedForTest() bool {
 	return filepath.Clean(cur) != filepath.Clean(realHomeSnapshot)
 }
 
-// guardRealHomeDir panics when a test binary derives config paths from the
-// real, un-isolated user HOME. It is called from path roots such as
-// ConfigDir so both reads and writes are covered.
 func guardRealHomeDir(op string) {
 	if homeIsIsolatedForTest() {
 		return
@@ -56,10 +48,6 @@ func guardRealHomeDir(op string) {
 	))
 }
 
-// GuardRealHomePath returns an error when a test binary is about to write
-// into the real user HOME. path-anchored: writes to explicit temp paths
-// (the common t.Setenv-free pattern of passing a tempdir file into Load)
-// pass; writes under the un-isolated real home fail.
 func GuardRealHomePath(path, op string) error {
 	if homeIsIsolatedForTest() {
 		return nil
@@ -85,10 +73,6 @@ func GuardRealHomePath(path, op string) error {
 	return nil
 }
 
-// underTempRoot reports whether abs sits inside the current OS temp root.
-// On Unix that is /tmp (never under $HOME); on Windows it is
-// %LOCALAPPDATA%\Temp, which lives under the user profile, so the
-// home-prefix check needs this explicit exemption.
 func underTempRoot(abs string) bool {
 	tmp := os.TempDir()
 	if tmp == "" {

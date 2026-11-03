@@ -74,13 +74,6 @@ func TestSA142_DiscoverModelsFromURL(t *testing.T) {
 	}
 }
 
-// #3429: openai-responses endpoints must discover models too - the
-// Responses API exposes the same GET /v1/models {"data":[...]} shape, and
-// the protocol falls into the default (Bearer) header branch. The two
-// discovery gates (provider model_discovery.go + TUI provider_panel.go)
-// previously whitelisted only openai/anthropic/gemini/copilot, so the
-// wizard let users CREATE an openai-responses endpoint and then silently
-// skipped auto-discovery (TUI gate: bare return nil, zero explanation).
 func TestSA142_DiscoverModelsFromURL_ResponsesProtocol(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

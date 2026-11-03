@@ -5,7 +5,6 @@ import (
 	"time"
 )
 
-// Defect 1: rebind must clear the old disabled tombstone.
 func TestIssue689_RebindPurgesDisabledTombstone(t *testing.T) {
 	mgr, _ := testDummyManager()
 
@@ -43,7 +42,6 @@ func (m *Manager) getBindingForTest(adapter string) (*ChannelBinding, bool) {
 	return b, ok
 }
 
-// Defect 2: UnmuteBinding must reject a binding owned by another session.
 func TestIssue689_UnmuteOwnershipCheck(t *testing.T) {
 	mgr, _ := testDummyManager()
 	mgr.mu.Lock()
@@ -60,7 +58,6 @@ func TestIssue689_UnmuteOwnershipCheck(t *testing.T) {
 	}
 }
 
-// Defect 2 (companion): own binding still unmutes fine.
 func TestIssue689_UnmuteOwnBindingStillWorks(t *testing.T) {
 	mgr, _ := testDummyManager()
 	mgr.mu.Lock()
@@ -80,7 +77,6 @@ func TestIssue689_UnmuteOwnBindingStillWorks(t *testing.T) {
 	}
 }
 
-// Defect 3: pre-session reload must preserve in-memory bindings.
 func TestIssue689_ReloadWithoutSessionKeepsMemoryState(t *testing.T) {
 	mgr := NewManager()
 	_ = mgr.SetBindingStore(NewMemoryBindingStore())

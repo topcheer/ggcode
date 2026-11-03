@@ -8,9 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// responsesHostedTool renders one configured server tool as a Responses API
-// hosted-tool entry. Hosted tools carry no name/parameters - they are
-// addressed purely by type. Unknown types are rejected (fail closed).
 func responsesHostedTool(t ServerToolConfig) (responsesTool, bool) {
 	normalized := strings.ToLower(strings.TrimSpace(t.Type))
 	switch normalized {
@@ -25,10 +22,6 @@ func responsesHostedTool(t ServerToolConfig) (responsesTool, bool) {
 	}
 }
 
-// responsesServerToolBlock wraps a raw hosted-tool output item (e.g.
-// web_search_call) into the shared "server_tool" carrier block. The verbatim
-// JSON rides in Raw so buildResponsesInput can echo it back losslessly under
-// store=false.
 func responsesServerToolBlock(raw json.RawMessage) ContentBlock {
 	b := ContentBlock{
 		Type:       "server_tool",
@@ -44,10 +37,6 @@ func responsesServerToolBlock(raw json.RawMessage) ContentBlock {
 	return b
 }
 
-// decodeResponsesServerToolItem parses a raw hosted-tool item captured from a
-// previous Responses response (stored in a "server_tool" block's Raw) and
-// reports whether it is replayable. Only hosted-tool call items are echoed;
-// anything else (foreign provider signatures, malformed JSON) is dropped.
 func decodeResponsesServerToolItem(raw json.RawMessage) (responsesInputItem, bool) {
 	if len(raw) == 0 {
 		return responsesInputItem{}, false
@@ -65,19 +54,8 @@ func decodeResponsesServerToolItem(raw json.RawMessage) (responsesInputItem, boo
 	return responsesInputItem{}, false
 }
 
-// applyPatchInternalToolName is the hidden internal tool that executes V4A
-// patches client-side (internal/tool.ApplyPatch). The Responses provider
-// surfaces each apply_patch_call output item as a call to this name, and maps
-// the executor's Result back into apply_patch_call_output. It must match the
-// tool's Name() exactly; the const lives here because provider cannot import
-// internal/tool (tool imports provider for its definitions).
 const applyPatchInternalToolName = "apply_patch"
 
-// decodeResponsesApplyPatchCall probes a raw output item (non-stream output
-// array entry or response.output_item.* event payload) for an apply_patch_call
-// item and extracts the call id plus the operation object. Returns ok=false
-// for anything else - foreign providers, function_call, web_search_call,
-// malformed JSON.
 func decodeResponsesApplyPatchCall(raw json.RawMessage) (callID string, operation json.RawMessage, ok bool) {
 	if len(raw) == 0 {
 		return "", nil, false
@@ -106,11 +84,6 @@ func decodeResponsesApplyPatchCall(raw json.RawMessage) (callID string, operatio
 	return callID, op.Operation, true
 }
 
-// responsesApplyPatchCallReplay rebuilds the model's apply_patch_call item for
-// stateless replay (store=false discards server state, so the next request
-// must echo the call back). The operation rides through verbatim when it is
-// valid JSON; corrupt inputs replay without an operation so the item still
-// pairs with its output and the model sees its call was attempted.
 func responsesApplyPatchCallReplay(callID string, operation json.RawMessage) json.RawMessage {
 	id, _ := json.Marshal(callID)
 	op := "null"
@@ -120,9 +93,6 @@ func responsesApplyPatchCallReplay(callID string, operation json.RawMessage) jso
 	return json.RawMessage(fmt.Sprintf(`{"type":"apply_patch_call","call_id":%s,"status":"completed","operation":%s}`, id, op))
 }
 
-// responsesApplyPatchOutputReplay builds the apply_patch_call_output item
-// reporting the local executor's outcome. status mirrors the Result error
-// flag exactly like anthropic.NewToolResultBlock does for tool_result.
 func responsesApplyPatchOutputReplay(callID, output string, failed bool) json.RawMessage {
 	id, _ := json.Marshal(callID)
 	out, _ := json.Marshal(output)

@@ -2,12 +2,6 @@ package config
 
 import "testing"
 
-// TestIssue606PatchExplicitClearVsAbsent: patchMCPServerConfig must
-// distinguish "field absent" from "field explicitly cleared" for
-// Args/Env/Headers. nil means absent (keep the old value, #249 semantics);
-// an empty non-nil slice/map means the user cleared it (#606 A3 — before
-// this fix, deleting every env line in the desktop form and saving silently
-// kept the old env, because len()>0 guards treated empty as absent).
 func TestIssue606PatchExplicitClearVsAbsent(t *testing.T) {
 	base := MCPServerConfig{
 		Name:    "s",
@@ -56,9 +50,6 @@ func TestIssue606PatchExplicitClearVsAbsent(t *testing.T) {
 	}
 }
 
-// TestIssue606PatchPreservesStringFields: string fields keep the #249
-// "empty means not provided" semantics — the A3 fix only changes collection
-// fields, so a form that omits the command must not wipe it.
 func TestIssue606PatchPreservesStringFields(t *testing.T) {
 	base := MCPServerConfig{
 		Name:    "s",

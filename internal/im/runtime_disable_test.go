@@ -281,8 +281,6 @@ func TestApplyAdapterConfig_Idempotent(t *testing.T) {
 	}
 }
 
-// TestApplyAdapterConfig_EnablePreviouslyDisabled verifies that ApplyAdapterConfig
-// does NOT re-enable adapters that are already disabled — enabling requires EnableBinding.
 func TestApplyAdapterConfig_DoesNotReEnable(t *testing.T) {
 	mgr := NewManager()
 	mgr.BindSession(SessionBinding{
@@ -308,10 +306,6 @@ func TestApplyAdapterConfig_DoesNotReEnable(t *testing.T) {
 	}
 }
 
-// TestSimulateRestartFlow simulates the full restart scenario:
-// 1. User disables an adapter
-// 2. App restarts (new Manager, fresh bindings from store)
-// 3. ApplyAdapterConfig reads the persisted config and re-disables the adapter
 func TestSimulateRestartFlow(t *testing.T) {
 
 	mgr := NewManager()

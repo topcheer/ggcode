@@ -10,10 +10,6 @@ import (
 	"testing"
 )
 
-// TestSignalSendExtractedImageDataURL pins the attachment path: a data-URL
-// image must be POSTed to /v2/send with base64_attachments carrying the
-// data:<mime>;filename=<name>;base64,<data> format from the
-// signal-cli-rest-api docs.
 func TestSignalSendExtractedImageDataURL(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -54,9 +50,6 @@ func TestSignalSendExtractedImageDataURL(t *testing.T) {
 	}
 }
 
-// TestSignalSendExtractedImageLocalPath verifies local file routing: a bare
-// local path (Kind "url") must be read from disk, decoded, and sent as an
-// attachment - not fetched over HTTP.
 func TestSignalSendExtractedImageLocalPath(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +84,6 @@ func TestSignalSendExtractedImageLocalPath(t *testing.T) {
 	}
 }
 
-// TestSignalSendExtractedImageNonImage verifies non-image content is rejected.
 func TestSignalSendExtractedImageNonImage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")

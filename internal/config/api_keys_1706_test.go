@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// #1706 case 1: a PARTIAL update (base_url only, protocol omitted) must
-// keep the existing protocol - the pre-merge default silently flipped an
-// anthropic endpoint to openai.
 func TestAddEndpointPartialUpdateKeepsProtocol1706(t *testing.T) {
 	c := testConfigWithVendor()
 	if err := c.AddEndpoint("zai", "ep1", "anthropic", "https://a.example", "sk-x"); err != nil {
@@ -35,7 +32,6 @@ func TestAddEndpointPartialUpdateKeepsProtocol1706(t *testing.T) {
 	}
 }
 
-// #1706 case 3: clearing a vendor key removes the keys.env entry.
 func TestSetVendorAPIKeyClearRemovesKeysEnv1706(t *testing.T) {
 	keysPath := filepath.Join(t.TempDir(), "keys.env")
 	keysEnvPathOverride = keysPath

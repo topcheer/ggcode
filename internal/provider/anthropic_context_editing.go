@@ -7,37 +7,21 @@ import (
 )
 
 const (
-	// anthropicContextManagementBeta is the beta header token enabling both
-	// the request field and the response's context_management block.
 	anthropicContextManagementBeta = "context-management-2025-06-27"
-	// Server-side edit strategy identifiers (documented API values).
-	contextEditStrategyToolUses = "clear_tool_uses_20250919"
-	contextEditStrategyThinking = "clear_thinking_20251015"
+	contextEditStrategyToolUses    = "clear_tool_uses_20250919"
+	contextEditStrategyThinking    = "clear_thinking_20251015"
 )
 
-// ContextEditingConfig opts an Anthropic endpoint into server-side context
-// management. Mode selects which strategies are attached:
-//
-//	"" / "off"          — feature disabled (default; ParseContextEditing → nil)
-//	"tool_results"      — clear_tool_uses_20250919 only
-//	"thinking"          — clear_thinking_20251015 only
-//	"all"               — both strategies
-//
-// The remaining fields tune thresholds; zero values keep the documented API
-// defaults (trigger 100k input tokens, keep last 3 tool uses, etc.).
 type ContextEditingConfig struct {
 	Mode               string
-	TriggerTokens      int64    // input_tokens threshold before edits fire
-	KeepToolUses       int64    // most recent tool uses to preserve
-	ClearAtLeastTokens int64    // minimum tokens a pass must clear
-	ExcludeTools       []string // tool names whose results are never cleared
-	ClearToolInputs    bool     // also clear tool inputs (default false)
-	KeepThinkingTurns  int64    // thinking turns preserved by clear_thinking
+	TriggerTokens      int64
+	KeepToolUses       int64
+	ClearAtLeastTokens int64
+	ExcludeTools       []string
+	ClearToolInputs    bool
+	KeepThinkingTurns  int64
 }
 
-// ParseContextEditing converts the endpoint-level context_editing config
-// value into a provider config. Unrecognized values return nil (feature off)
-// so a typo can never change request semantics silently.
 func ParseContextEditing(v string) *ContextEditingConfig {
 	switch strings.TrimSpace(strings.ToLower(v)) {
 	case "", "off":
@@ -53,9 +37,6 @@ func ParseContextEditing(v string) *ContextEditingConfig {
 	}
 }
 
-// contextManagementPayload builds the JSON value for the context_management
-// request field. Returns nil when the feature is off or the config carries
-// no usable strategy, in which case the field must NOT be attached.
 func contextManagementPayload(cfg *ContextEditingConfig) map[string]any {
 	if cfg == nil {
 		return nil
@@ -93,8 +74,6 @@ func contextManagementPayload(cfg *ContextEditingConfig) map[string]any {
 	return map[string]any{"edits": edits}
 }
 
-// contextAppliedEdit mirrors one entry of the response-side
-// context_management.applied_edits array.
 type contextAppliedEdit struct {
 	Type                 string `json:"type"`
 	ClearedToolUses      int64  `json:"cleared_tool_uses"`
@@ -102,12 +81,6 @@ type contextAppliedEdit struct {
 	ClearedInputTokens   int64  `json:"cleared_input_tokens"`
 }
 
-// parseAppliedEdits extracts a human-readable summary of the server-side
-// edits from the raw JSON of a Message (non-streaming) or a
-// message_delta stream event (streaming carries the same block in
-// context_management). The second return is false when nothing was edited
-// or the payload does not parse — a missing block is the normal no-edit
-// case, not an error.
 func parseAppliedEdits(rawJSON []byte) (string, bool) {
 	var probe struct {
 		ContextManagement *struct {

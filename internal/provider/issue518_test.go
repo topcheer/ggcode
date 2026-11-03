@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// #518: the four real-world string forms of a 422 error (probe-verified in the
-// issue) must all be classified non-retryable, matching the typed path
-// isRetryableHTTPStatus(422) == false. Previously the string-fallback list
-// contained "422" and retried 20 times (~7m16s) per turn.
 func TestIsRetryable_String422NotRetryable(t *testing.T) {
 	for _, msg := range []string{
 
@@ -26,7 +22,6 @@ func TestIsRetryable_String422NotRetryable(t *testing.T) {
 	}
 }
 
-// #518: 429 string forms stay retryable, 408/409 keep original semantics.
 func TestIsRetryable_String429StillRetryable(t *testing.T) {
 	for _, msg := range []string{
 		"error, status code: 429, message: rate limit exceeded",
@@ -49,8 +44,6 @@ func TestIsRetryable_String429StillRetryable(t *testing.T) {
 	}
 }
 
-// #518 low-risk side item: digit coincidences must not count as status codes
-// now that the retryable list uses containsHTTPStatus anchoring.
 func TestIsRetryable_DigitCoincidenceNotRetryCode(t *testing.T) {
 
 	msg := "request id=42913 rejected by upstream validation: unknown field"

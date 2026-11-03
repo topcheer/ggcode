@@ -11,9 +11,6 @@ import (
 	"time"
 )
 
-// udpTestHub builds a custom-key hub for UDP transport tests. Returns
-// port 0 so the transport binds its own ephemeral port (a pre-bound
-// placeholder conn would collide with the transport's own listen).
 func udpTestHub(t *testing.T) (*Hub, int) {
 	t.Helper()
 	store := NewStore(filepath.Join(t.TempDir(), "store"))
@@ -21,11 +18,6 @@ func udpTestHub(t *testing.T) (*Hub, int) {
 	return hub, 0
 }
 
-// TestIssue989UDPTransportUsesHubAPIKey pins the #989 fix: the UDP transport
-// must be constructed with the hub's EFFECTIVE key (hub.APIKey()), not the
-// hardcoded community key. Before the fix, a custom-key node's UDP fallback
-// envelopes carried the custom key while the receiver's t.apiKey stayed
-// communityKey, so #988 turned the TCP 401 into a silent UDP drop.
 func TestIssue989UDPTransportUsesHubAPIKey(t *testing.T) {
 	hub, port := udpTestHub(t)
 
@@ -39,10 +31,6 @@ func TestIssue989UDPTransportUsesHubAPIKey(t *testing.T) {
 	}
 }
 
-// TestIssue989UDPAuthMirrorsHTTPGate pins #989 problem 2: the UDP inbound
-// gate must mirror the TCP AuthMiddleware semantics - a custom-key receiver
-// rejects community-key envelopes outright (the old unconditional
-// "|| communityKey" branch let any LAN host inject a custom-key hub).
 func TestIssue989UDPAuthMirrorsHTTPGate(t *testing.T) {
 	hub, port := udpTestHub(t)
 	udp, err := NewUDPTransport(port, "", hub, hub.NodeID(), hub.APIKey())
@@ -83,10 +71,6 @@ func TestIssue989UDPAuthMirrorsHTTPGate(t *testing.T) {
 	}
 }
 
-// TestIssue989CustomKeyDMEndToEnd pins #989 problem 3: a real Hub A ->
-// Hub B link where BOTH sides run the same custom key must interoperate on
-// the DM main path. The receiver exposes the production HTTP route behind
-// AuthMiddleware; the sender runs SendDirect; the message must land.
 func TestIssue989CustomKeyDMEndToEnd(t *testing.T) {
 	const sharedKey = "team-shared-key-989"
 	storeB := NewStore(filepath.Join(t.TempDir(), "storeB"))

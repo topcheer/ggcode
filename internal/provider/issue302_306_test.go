@@ -8,7 +8,6 @@ import (
 	"testing"
 )
 
-// #303: digit coincidences must NOT classify as FailureAuth.
 func TestClassifyLLMError_TokenCountNotAuth(t *testing.T) {
 	err := fmt.Errorf("request failed: requested 40123 tokens, maximum is 131072")
 	if got := ClassifyLLMError(err); got == FailureAuth {
@@ -16,7 +15,6 @@ func TestClassifyLLMError_TokenCountNotAuth(t *testing.T) {
 	}
 }
 
-// #303: context-anchored 401 patterns still classify as FailureAuth.
 func TestClassifyLLMError_Anchored401StillAuth(t *testing.T) {
 	for _, msg := range []string{
 		"request failed: status 401 unauthorized body",
@@ -35,7 +33,6 @@ func TestClassifyLLMError_Anchored401StillAuth(t *testing.T) {
 	}
 }
 
-// #303: overflow errors must not be misclassified as quota/auth.
 func TestClassifyLLMError_OverflowNotAuthQuota(t *testing.T) {
 	err := fmt.Errorf("request failed: requested 40123 tokens, maximum is 131072")
 	if IsContextOverflowError(err) != true {
@@ -47,7 +44,6 @@ func TestClassifyLLMError_OverflowNotAuthQuota(t *testing.T) {
 	}
 }
 
-// #304: cancellation must not count toward consecutive-failure failover.
 func TestMaybeFailover_CanceledNotCounted(t *testing.T) {
 	f := &FallbackProvider{
 		consecutiveFail: atomic.Int32{},
@@ -67,7 +63,6 @@ func TestMaybeFailover_CanceledNotCounted(t *testing.T) {
 	}
 }
 
-// #306: string-form 400 must not be retried.
 func TestIsRetryable_String400NotRetryable(t *testing.T) {
 	for _, msg := range []string{
 		"upstream request failed: status code: 400, message: invalid tool_use id: toolu_abc",
@@ -80,7 +75,6 @@ func TestIsRetryable_String400NotRetryable(t *testing.T) {
 	}
 }
 
-// #306: 401/403/404 string forms remain non-retryable.
 func TestIsRetryable_String4xxNotRetryable(t *testing.T) {
 	for _, code := range []string{"401", "403", "404"} {
 		if isRetryable(fmt.Errorf("status code: %s", code)) {
@@ -89,7 +83,6 @@ func TestIsRetryable_String4xxNotRetryable(t *testing.T) {
 	}
 }
 
-// #302-retry parity: cancellation never retryable.
 func TestIsRetryable_CanceledNeverRetryable(t *testing.T) {
 	if isRetryable(context.Canceled) {
 		t.Fatalf("context.Canceled should not be retryable")

@@ -15,30 +15,25 @@ import (
 	"sync/atomic"
 )
 
-// GeminiProvider implements Provider using the Google Generative AI API.
 type GeminiProvider struct {
 	client           *genai.Client
 	model            string
 	maxTokens        int
 	cap              *adaptiveCap
-	reasoningEffort  string                           // "", "low", "medium", "high" - maps to Gemini ThinkingConfig
-	toolChoice       string                           // "", "auto", "required", "none" - maps to Gemini FunctionCallingConfig
-	temperature      float64                          // 0 = provider default
-	samplingOverride atomic.Pointer[SamplingOverride] // #2248
-	serverTools      []ServerToolConfig               // Gemini built-in tools (google_search/url_context), executed in-API
-	topP             float64                          // 0 = provider default
-	// responseSchema constrains the final response (Gemini responseSchema,
-	// sa-229 follow-up to #3312). Empty = unconstrained.
-	responseSchema json.RawMessage
-	transport      *headerInjectingTransport // kept for runtime header updates
-	logprobs       bool                      // sa-74: request token logprobs for confidence telemetry
-	policy         callPolicy                // sa-78: per-call deadline + retry budget
+	reasoningEffort  string
+	toolChoice       string
+	temperature      float64
+	samplingOverride atomic.Pointer[SamplingOverride]
+	serverTools      []ServerToolConfig
+	topP             float64
+	responseSchema   json.RawMessage
+	transport        *headerInjectingTransport
+	logprobs         bool
+	policy           callPolicy
 }
 
-// ModelName returns the current model name used by this provider.
 func (p *GeminiProvider) ModelName() string { return p.model }
 
-// CloneWithModel returns a shallow copy of this provider with a different model.
 func (p *GeminiProvider) CloneWithModel(model string) Provider {
 	clone := &GeminiProvider{
 		client:    p.client,
@@ -64,11 +59,6 @@ func (p *GeminiProvider) CloneWithModel(model string) Provider {
 	return clone
 }
 
-// SetReasoningEffort sets the reasoning effort, which maps to Gemini's
-// ThinkingConfig.ThinkingBudget parameter. Effort levels: "low" (~25% of
-// max tokens), "medium" (~50%), "high" (~75%). Empty string disables
-// explicit thinking budget (uses model default behavior).
-// SetMaxTokens implements provider.MaxTokensSetter (#1592-A).
 func (p *GeminiProvider) SetMaxTokens(n int) {
 	if n > 0 {
 		p.maxTokens = n
@@ -85,39 +75,24 @@ func (p *GeminiProvider) SetReasoningEffort(effort string) {
 
 func (p *GeminiProvider) ReasoningEffort() string { return p.reasoningEffort }
 
-// SetTemperature sets the sampling temperature. 0 means "use provider default".
 func (p *GeminiProvider) SetTemperature(temp float64) { p.temperature = temp }
 
-// SetSamplingOverride implements provider.SamplingOverrideSetter (#2248).
 func (p *GeminiProvider) SetSamplingOverride(o *SamplingOverride) { p.samplingOverride.Store(o) }
 
-// SamplingOverride implements provider.SamplingOverrideSetter (#2248).
 func (p *GeminiProvider) SamplingOverride() *SamplingOverride { return p.samplingOverride.Load() }
 func (p *GeminiProvider) Temperature() float64                { return p.temperature }
 
-// SetTopP sets the nucleus sampling parameter. 0 means "use provider default".
 func (p *GeminiProvider) SetTopP(topP float64) { p.topP = topP }
 func (p *GeminiProvider) TopP() float64        { return p.topP }
 
-// SetToolChoice sets the tool_choice parameter: "auto" (model decides),
-// "required" (force at least one tool call), "none" (disable tools), or ""
-// (API default). These map to Gemini's FunctionCallingConfig.Mode values
-// AUTO, ANY, and NONE respectively.
 func (p *GeminiProvider) SetToolChoice(choice string) {
 	p.toolChoice = strings.ToLower(strings.TrimSpace(choice))
 }
 
-// SetLogprobsRequest toggles token logprobs in requests (sa-74 confidence
-// telemetry). Gemini exposes responseLogprobs + logprobs (top-k candidates
-// per token) on GenerateContentConfig; the response carries the turn-average
-// in candidate.avgLogprobs, which we relay as StreamEvent.Confidence.
 func (p *GeminiProvider) SetLogprobsRequest(on bool) { p.logprobs = on }
 
-// LogprobsRequested reports whether logprobs were requested.
 func (p *GeminiProvider) LogprobsRequested() bool { return p.logprobs }
 
-// applyLogprobs requests token logprobs when confidence telemetry is enabled
-// (sa-74). logprobs=5 matches the API default cap on top-k candidates.
 func (p *GeminiProvider) applyLogprobs(config *genai.GenerateContentConfig) {
 	if !p.logprobs {
 		return
@@ -129,14 +104,6 @@ func (p *GeminiProvider) applyLogprobs(config *genai.GenerateContentConfig) {
 
 func (p *GeminiProvider) ToolChoice() string { return p.toolChoice }
 
-// SetServerTools implements provider.ServerToolsSetter: declarative Gemini
-// built-in tools executed inside the Gemini API (never client-side). Mapping:
-//   - "google_search" / "web_search" → GoogleSearch grounding (searches the
-//     public web; grounding sources are surfaced back as text blocks)
-//   - "url_context"                  → URLContext (fetches URLs named in
-//     the prompt, including PDFs/images)
-//
-// Unknown declarations are ignored (fail closed), mirroring the Anthropic leg.
 func (p *GeminiProvider) SetServerTools(tools []ServerToolConfig) {
 	kept := make([]ServerToolConfig, 0, len(tools))
 	for _, t := range tools {
@@ -152,14 +119,8 @@ func (p *GeminiProvider) SetServerTools(tools []ServerToolConfig) {
 	}
 }
 
-// hasBuiltinTools reports whether any Gemini built-in (server-side) tool is
-// configured. Built-in tools cannot coexist with FunctionCallingConfig ANY -
-// the Gemini API rejects the combination - so applyToolChoice downgrades.
 func (p *GeminiProvider) hasBuiltinTools() bool { return len(p.serverTools) > 0 }
 
-// builtinGeminiTools renders configured built-in tools as separate genai.Tool
-// entries. The Gemini API requires each built-in tool to occupy its own Tool
-// object, disjoint from FunctionDeclarations.
 func (p *GeminiProvider) builtinGeminiTools() []*genai.Tool {
 	var out []*genai.Tool
 	for _, t := range p.serverTools {
@@ -173,15 +134,12 @@ func (p *GeminiProvider) builtinGeminiTools() []*genai.Tool {
 	return out
 }
 
-// SetAdaptiveCap installs the adaptive max-output-tokens cap.
 func (p *GeminiProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
 
-// NewGeminiProvider creates a new Gemini provider.
 func NewGeminiProvider(apiKey string, model string, maxTokens int) (*GeminiProvider, error) {
 	return NewGeminiProviderWithBaseURL(apiKey, model, maxTokens, "")
 }
 
-// NewGeminiProviderWithBaseURL creates a new Gemini provider with a custom base URL.
 func NewGeminiProviderWithBaseURL(apiKey string, model string, maxTokens int, baseURL string) (*GeminiProvider, error) {
 	headers := BuildHeadersForProvider("gemini")
 	transport := &headerInjectingTransport{
@@ -216,8 +174,6 @@ func (p *GeminiProvider) Name() string {
 	return "gemini"
 }
 
-// SetSessionID injects the session ID into outgoing requests via a custom
-// HTTP header (GGCode-SessionID).
 func (p *GeminiProvider) SetSessionID(sessionID string) {
 	if sessionID == "" || p.transport == nil {
 		return
@@ -227,10 +183,6 @@ func (p *GeminiProvider) SetSessionID(sessionID string) {
 	p.transport.UpdateHeaders(existing)
 }
 
-// UpdateRuntimeHeaders updates the injected headers at runtime.
-// GGCode-SessionID is session-lifecycle state owned by SetSessionID -
-// callers that replace the whole header set (e.g. the impersonation
-// panel) must not silently drop it, so it is carried over (#sa-142).
 func (p *GeminiProvider) UpdateRuntimeHeaders(headers http.Header) {
 	if p.transport != nil {
 		if sid := p.transport.snapshotHeaders().Get("GGCode-SessionID"); sid != "" && headers.Get("GGCode-SessionID") == "" {
@@ -242,8 +194,6 @@ func (p *GeminiProvider) UpdateRuntimeHeaders(headers http.Header) {
 	}
 }
 
-// normalizeGeminiFinishReason maps genai FinishReason values onto the
-// anthropic value family used by ChatResponse.StopReason (#1484-C).
 func normalizeGeminiFinishReason(r genai.FinishReason) string {
 	switch r {
 	case genai.FinishReasonMaxTokens:
@@ -309,7 +259,6 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 	if len(resp.Candidates) > 0 {
 		finishReason = normalizeGeminiFinishReason(resp.Candidates[0].FinishReason)
 	}
-	// sa-74: relay the turn-average token logprob as the confidence signal.
 	var confidence *float64
 	if p.logprobs && len(resp.Candidates) > 0 {
 		avg := resp.Candidates[0].AvgLogprobs
@@ -323,12 +272,6 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 	}, nil
 }
 
-// sendEvent delivers ev to ch unless ctx is done, reporting cancellation.
-// #3068: the 11 former bare `ch <- StreamEvent{...}` sends parked the
-// producer goroutine forever once a cancelling consumer stopped reading
-// (buffer of 64 fills, nobody ever returns). #2570/#602 fixed the fallback
-// wrapper layer only - this is the underlying-provider half. Every send in
-// the streamRead goroutine must go through here.
 func (p *GeminiProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
 
 	select {
@@ -375,11 +318,11 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 				cancelAttempt()
 			}
 			ctx, cancelAttempt = p.policy.withTimeout(parentCtx)
-			var usage TokenUsage // reset per attempt to avoid leaking failed-attempt usage
+			var usage TokenUsage
 			var truncated bool
 			var policyBlocked bool
-			var avgConf *float64 // sa-74: turn-average logprob, reset per attempt
-			var outputChars int  // #561(C): for usage fallback when UsageMetadata is missing
+			var avgConf *float64
+			var outputChars int
 			iter := p.client.Models.GenerateContentStream(ctx, p.model, contents, config)
 			emitted := false
 			retry := false
@@ -439,11 +382,6 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 					avgConf = &avg
 				}
 
-				// Check finish reason for truncation / policy errors (#232).
-				// This must run BEFORE the no-content skip below: fully blocked
-				// responses (e.g. RECITATION with no partial text) have nil
-				// Content but still carry the fatal finish reason - skipping
-				// first would drop the Truncated/PolicyBlocked flags (#266).
 				var finishNotice string
 				if len(resp.Candidates) > 0 {
 					fr := resp.Candidates[0].FinishReason
@@ -559,19 +497,6 @@ func (p *GeminiProvider) CountTokens(ctx context.Context, messages []Message) (i
 	return estimateTokensForMessages(messages), nil
 }
 
-// applyReasoningEffort maps the reasoning effort level to Gemini's
-// ThinkingConfig. Gemini 2.5+ models support a thinking budget expressed in
-// tokens. We convert effort levels to approximate token budgets as a fraction
-// of maxTokens, similar to the Anthropic provider's budget_tokens mapping.
-//
-//   - low:    ~25% of maxTokens (min 512)
-//   - medium: ~50% of maxTokens
-//   - high:   ~75% of maxTokens
-//
-// An empty effort string leaves ThinkingConfig unset (model default).
-// The budget is clamped to [512, maxTokens-1] to satisfy API constraints.
-// isGemini3Model reports whether the model is a gemini-3 family member,
-// which only accepts thinkingLevel (#1610-B).
 func isGemini3Model(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	return strings.Contains(m, "gemini-3")
@@ -636,12 +561,6 @@ func (p *GeminiProvider) applyReasoningEffort(config *genai.GenerateContentConfi
 	debug.Log("gemini", "thinking budget=%d (effort=%s maxTok=%d)", budget, p.reasoningEffort, maxTok)
 }
 
-// applyToolChoice maps the tool_choice setting to Gemini's
-// FunctionCallingConfig.Mode. Only applied when tools are present and
-// toolChoice is non-empty. Values map as:
-//   - "auto"     → AUTO (model decides whether to call a function)
-//   - "required" → ANY  (model must call one of the provided functions)
-//   - "none"     → NONE (model must not call any function)
 func (p *GeminiProvider) applyToolChoice(config *genai.GenerateContentConfig, tools []ToolDefinition) {
 	if p.toolChoice == "" || len(tools) == 0 {
 		return
@@ -668,14 +587,8 @@ func (p *GeminiProvider) applyToolChoice(config *genai.GenerateContentConfig, to
 	}
 }
 
-// ptrToInt32 returns a pointer to the given int32 value.
 func ptrToInt32(v int32) *int32 { return &v }
 
-// effectiveMaxTokens mirrors the anthropic/openai legs (#1592-A
-// family, third member): the active sampling override's budget wins,
-// then the adaptive cap, then the configured default. Gemini previously
-// consumed Temperature/StopSequences but silently dropped MaxTokens -
-// MCP sampling budgets ran to the model default on this provider.
 func (p *GeminiProvider) effectiveMaxTokens() int {
 	if o := p.samplingOverride.Load(); o != nil && o.MaxTokens > 0 {
 		return o.MaxTokens
@@ -688,8 +601,6 @@ func (p *GeminiProvider) effectiveMaxTokens() int {
 	return p.maxTokens
 }
 
-// applySamplingConfig injects temperature and top_p into the Gemini config
-// when they are set (non-zero). Both map directly to genai fields.
 func (p *GeminiProvider) applySamplingConfig(config *genai.GenerateContentConfig) {
 	temp := p.temperature
 	if o := p.samplingOverride.Load(); o != nil && o.Temperature > 0 {
@@ -882,8 +793,6 @@ func (p *GeminiProvider) convertResponse(resp *genai.GenerateContentResponse) ([
 	return blocks, usage
 }
 
-// geminiGroundingAccum collects grounding metadata across stream chunks,
-// deduplicating queries and source URIs.
 type geminiGroundingAccum struct {
 	queries []string
 	sources []string
@@ -894,8 +803,6 @@ func newGeminiGroundingAccum() *geminiGroundingAccum {
 	return &geminiGroundingAccum{seen: make(map[string]bool)}
 }
 
-// add merges one chunk's grounding metadata. Returns the accumulator for
-// chaining; nil metadata is a no-op.
 func (a *geminiGroundingAccum) add(gm *genai.GroundingMetadata) *geminiGroundingAccum {
 	if gm == nil || a == nil {
 		return a
@@ -926,8 +833,6 @@ func (a *geminiGroundingAccum) add(gm *genai.GroundingMetadata) *geminiGrounding
 	return a
 }
 
-// summary renders accumulated grounding metadata as a user-visible text
-// block. Returns "" when nothing was collected.
 func (a *geminiGroundingAccum) summary() string {
 	if a == nil || (len(a.queries) == 0 && len(a.sources) == 0) {
 		return ""
@@ -945,8 +850,6 @@ func (a *geminiGroundingAccum) summary() string {
 	return b.String()
 }
 
-// geminiFinishReasonError returns an error for finish reasons that indicate
-// truncation or policy issues. Returns nil for normal completion.
 func geminiFinishReasonError(reason genai.FinishReason) error {
 	switch reason {
 	case "", genai.FinishReasonStop, genai.FinishReasonUnspecified:
@@ -968,8 +871,6 @@ func geminiFinishReasonError(reason genai.FinishReason) error {
 	}
 }
 
-// probeModelsAPI queries the Gemini models endpoint for the model's
-// inputTokenLimit, which is the context window size.
 func (p *GeminiProvider) probeModelsAPI(ctx context.Context, model string) int {
 	modelInfo, err := p.client.Models.Get(ctx, model, nil)
 	if err != nil {
@@ -984,8 +885,6 @@ func (p *GeminiProvider) probeModelsAPI(ctx context.Context, model string) int {
 	return 0
 }
 
-// probeChat sends a single generate-content request without retry or
-// adaptive cap tracking. Used by context window probing.
 func (p *GeminiProvider) probeChat(ctx context.Context, messages []Message) error {
 	contents, _ := p.convertMessages(messages)
 	_, err := p.client.Models.GenerateContent(ctx, p.model, contents, nil)

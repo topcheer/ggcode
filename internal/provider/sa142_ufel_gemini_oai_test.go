@@ -235,7 +235,6 @@ func TestSA142_GeminiProbes(t *testing.T) {
 	}
 }
 
-// sa142ProbeProvider implements Provider + probeChat for probe-phase tests.
 type sa142ProbeProvider struct {
 	name     string
 	probeErr error

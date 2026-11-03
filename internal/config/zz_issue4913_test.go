@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// #4913: creating a bot means the user wants IM to work. AddIMAdapter used
-// to persist only the adapter map - the global im.enabled switch stayed
-// memory-only, so the bot worked this session and silently failed to start
-// after restart (daemon/root gate on the DISK config).
 func TestIssue4913_AddIMAdapterPersistsGlobalEnable(t *testing.T) {
 	withTestHome(t)
 	path := filepath.Join(t.TempDir(), "ggcode.yaml")
@@ -38,8 +34,6 @@ func TestIssue4913_AddIMAdapterPersistsGlobalEnable(t *testing.T) {
 	}
 }
 
-// Rollback symmetry (#2797/#4486): removing the adapter must NOT flip the
-// global switch off - other adapters may still be live.
 func TestIssue4913_RemoveIMAdapterKeepsGlobalEnable(t *testing.T) {
 	withTestHome(t)
 	path := filepath.Join(t.TempDir(), "ggcode.yaml")

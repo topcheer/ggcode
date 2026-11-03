@@ -64,10 +64,6 @@ func TestIssue1287_GPT4ExactMigration(t *testing.T) {
 	}
 }
 
-// TestIssue1287_ProbeCachePoisonPurged: entries solidified by the OLD
-// prefix table (Phase 1b sync-writes) must be dropped by the v3 cache
-// migration — Phase 1 (cache HIT) runs before every other check, so stale
-// poison would otherwise shadow the fix forever.
 func TestIssue1287_ProbeCachePoisonPurged(t *testing.T) {
 
 	for _, poisoned := range []string{"qwen3-coder-plus", "deepseek-chat-v3.2", "glm-4.6", "gpt-4-32k"} {

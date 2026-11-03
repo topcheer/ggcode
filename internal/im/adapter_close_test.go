@@ -8,8 +8,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// testWSServer starts a minimal WebSocket echo server and returns its URL + a
-// function to create a connected websocket.Conn.
 func testWSServer(t *testing.T) (url string) {
 	t.Helper()
 	upgrader := websocket.Upgrader{}
@@ -184,7 +182,6 @@ func TestDummyAdapterClose(t *testing.T) {
 	}
 }
 
-// TestCloserInterface verifies all adapters implement the Closer interface.
 func TestCloserInterface(t *testing.T) {
 	var _ Closer = (*qqAdapter)(nil)
 	var _ Closer = (*discordAdapter)(nil)

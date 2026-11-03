@@ -7,9 +7,6 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
-// IsImageBlockFallbackCandidate reports whether an image-bearing request should
-// be retried without image blocks. We intentionally gate on HTTP 400 only and
-// only for requests that already attempted to send image content.
 func IsImageBlockFallbackCandidate(err error) bool {
 	if err == nil {
 		return false

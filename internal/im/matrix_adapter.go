@@ -34,21 +34,13 @@ import (
 )
 
 const (
-	matrixMaxMessageLen = 60000 // Synapse default max_event_size is 100KB; 60K leaves room for event JSON metadata
-	matrixSyncTimeout   = 30000
-	matrixCryptoDBName  = "matrix-crypto.db"
-	// matrixCryptoPickleKey encrypts crypto material at rest in the
-	// SQLite store. Device-identity continuity, not secrecy against the
-	// local user, is the goal (#1404-A); a fixed key keeps the store
-	// portable across restarts without a new secrets bootstrap path.
+	matrixMaxMessageLen   = 60000
+	matrixSyncTimeout     = 30000
+	matrixCryptoDBName    = "matrix-crypto.db"
 	matrixCryptoPickleKey = "ggcode-matrix-crypto-v1"
 
-	// matrixInterMessageDelay is the delay between consecutive messages to the
-	// same room. Most Matrix homeservers rate-limit at ~1 message/second/user.
-	// Source: https://spec.matrix.org/latest/client-server-api/#rate-limiting
 	matrixInterMessageDelay = 500 * time.Millisecond
 
-	// matrixMaxRetries is the maximum number of retries on M_LIMIT_EXCEEDED.
 	matrixMaxRetries = 3
 )
 
@@ -57,7 +49,6 @@ type matrixAdapter struct {
 	manager  *Manager
 	platform Platform
 
-	// Config
 	homeserver     string
 	token          string
 	userID         string
@@ -65,33 +56,22 @@ type matrixAdapter struct {
 	freeRooms      []string
 	allowedUsers   []string
 
-	// mautrix client
 	client *mautrix.Client
 
-	// E2EE
-	mach *crypto.OlmMachine
-	// cryptoDBCloser closes the SQLite handle backing the crypto store
-	// (#2126): runOnce re-enters on every reconnect - without closing the
-	// previous handle each cycle leaked one open file (and lock) per
-	// reconnect once the driver-name fix made the opens actually succeed).
+	mach           *crypto.OlmMachine
 	cryptoDBCloser io.Closer
 
-	// State
 	mu        sync.RWMutex
 	connected bool
 	closed    bool
 	cancelFn  context.CancelFunc
 
-	// DM room cache: room_id → true
 	dmRooms map[string]bool
 
-	// Dedup
 	seen map[string]time.Time
 
-	// First sync flag - ignore events from initial sync
 	didFirstSync atomic.Bool
 
-	// Transaction ID counter for send
 	txnID atomic.Int64
 
 	reactionAck reactionAckState
@@ -185,10 +165,6 @@ func (a *matrixAdapter) Close() error {
 	return nil
 }
 
-// currentClient snapshots the mautrix client under the adapter lock (#4517:
-// the #433 sweep missed these sites - syncer callbacks, DM heuristics and
-// the cryptoStateStore run on sync/crypto goroutines that race Close/reconnect
-// writes to a.client; Send/sendImage/TriggerTyping already RLock, these did not).
 func (a *matrixAdapter) currentClient() *mautrix.Client {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -245,9 +221,6 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("client init: %w", err)
 	}
-	// #1553-A: persist the sync token - a full initial sync on every
-	// restart fed offline timeline events into the didFirstSync drop gate
-	// (silent loss). With the token, Sync resumes from the last event.
 	var syncStoreRef *fileSyncStore
 	syncDir := filepath.Join(config.ConfigDir(), "matrix-sync")
 	if err := os.MkdirAll(syncDir, 0o700); err == nil {
@@ -353,11 +326,6 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 	return nil
 }
 
-// openPersistentCryptoStore opens the SQLite-backed crypto store so the
-// Olm device identity, sessions and Megolm room keys survive reconnects
-// and restarts (#1404-A). The file is keyed by adapter name under the
-// workspace config dir; accountID is derived from homeserver+name so two
-// adapters never share a device identity.
 func (a *matrixAdapter) openPersistentCryptoStore() (crypto.Store, error) {
 	dir := filepath.Join(config.ConfigDir(), "matrix-crypto")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -382,7 +350,6 @@ func (a *matrixAdapter) openPersistentCryptoStore() (crypto.Store, error) {
 	return crypto.NewSQLCryptoStore(db, nil, accountID, deviceID, []byte(matrixCryptoPickleKey)), nil
 }
 
-// sanitizeFileToken reduces an adapter name to a filename-safe token.
 func sanitizeFileToken(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -396,15 +363,6 @@ func sanitizeFileToken(s string) string {
 	return b.String()
 }
 
-// newSyncStoreForAdapter builds the per-account sync-token store path.
-// #1851 case 2: the file is keyed by adapter name AND user ID - the
-// name-only key made two workspaces running same-named adapters overwrite
-// each other's token: the restart loser discarded its token, full
-// initial-synced, and the didFirstSync gate dropped the offline messages
-// collected while it was down. A one-time migration from the legacy
-// name-only path preserves the existing token (avoids one unnecessary
-// initial sync); migration failure only logs - worst case is an initial
-// sync.
 func newSyncStoreForAdapter(syncDir, adapterName, userID string) *fileSyncStore {
 	storeName := sanitizeFileToken(adapterName)
 	if uid := strings.TrimSpace(userID); uid != "" {
@@ -426,16 +384,6 @@ func newSyncStoreForAdapter(syncDir, adapterName, userID string) *fileSyncStore 
 	return &fileSyncStore{path: storePath}
 }
 
-// newCryptoDBForAdapter builds the per-account crypto (Olm) SQLite path.
-// #1851 case 2 sibling: the db was keyed by adapter name alone, so two
-// workspaces running same-named adapters opened the SAME file - the second
-// user's OlmMachine loaded the first user's Olm account (E2EE identity
-// confusion: messages fail to decrypt, peers see spurious device churn).
-// Keyed by name AND user ID, with a one-time best-effort rename from the
-// legacy name-only path. The SQLCryptoStore accountID deliberately stays
-// homeserver|name: uniqueness only matters WITHIN a db file, and keeping it
-// stable avoids rotating the device identity (mass peer re-verification)
-// for existing single-user setups after the rename.
 func newCryptoDBForAdapter(dir, adapterName, userID string) string {
 	dbName := sanitizeFileToken(adapterName)
 	if uid := strings.TrimSpace(userID); uid != "" {
@@ -707,8 +655,6 @@ func (a *matrixAdapter) checkIsDMViaAPI(ctx context.Context, roomID string) bool
 
 		return true
 	}
-	// Authoritative source: m.direct account data (same semantics as
-	// fetchDMRooms). A room marked there IS a DM regardless of membership.
 	var dmMap map[string][]string
 	if err := client.GetAccountData(ctx, "m.direct", &dmMap); err == nil {
 		for _, rooms := range dmMap {
@@ -810,14 +756,8 @@ func (a *matrixAdapter) stripMention(text string) string {
 	return strings.TrimSpace(text)
 }
 
-// matrixLocalPartContChars are the characters that may legally continue a
-// Matrix localpart after a prefix (#2749): if the byte following a candidate
-// match is one of these, the match is a strict PREFIX of a longer handle and
-// must not count.
 const matrixLocalPartContChars = "abcdefghijklmnopqrstuvwxyz0123456789._=-+/"
 
-// mentionsLocalPart reports whether text contains "@localpart" NOT followed
-// by a legal localpart continuation character (RE2-safe boundary).
 func mentionsLocalPart(lower, localPart string) bool {
 
 	needle := "@" + strings.ToLower(localPart)
@@ -835,8 +775,6 @@ func mentionsLocalPart(lower, localPart string) bool {
 	}
 }
 
-// stripLocalPartMention removes "@localpart" occurrences that are not
-// prefixes of a longer handle (same boundary rule as mentionsLocalPart).
 func stripLocalPartMention(text, localPart string) string {
 
 	needle := "@" + strings.ToLower(localPart)
@@ -855,9 +793,6 @@ func stripLocalPartMention(text, localPart string) string {
 	return b.String()
 }
 
-// matrixASCIIFoldPrefix reports whether s starts with the ASCII needle
-// case-insensitively (needle MUST already be lowercased) and returns the
-// matched length in s's own bytes.
 func matrixASCIIFoldPrefix(s, needleLower string) (int, bool) {
 	if len(s) < len(needleLower) {
 		return 0, false
@@ -877,9 +812,6 @@ func matrixASCIIFoldPrefix(s, needleLower string) (int, bool) {
 	return len(needleLower), true
 }
 
-// matrixIsLocalPartContByte is the byte-level form of the
-// matrixLocalPartContChars boundary rule (#2749): a non-ASCII byte can
-// never be a legal localpart continuation.
 func matrixIsLocalPartContByte(b byte) bool {
 	if b >= 'a' && b <= 'z' || b >= '0' && b <= '9' {
 		return true
@@ -937,7 +869,6 @@ func (a *matrixAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	return err
 }
 
-// resolveImageToBytes resolves an ExtractedImage to raw bytes and MIME type.
 func (a *matrixAdapter) resolveImageToBytes(ctx context.Context, img ExtractedImage) ([]byte, string, error) {
 	switch img.Kind {
 	case "data":
@@ -1006,17 +937,8 @@ func (a *matrixAdapter) resolveImageToBytes(ctx context.Context, img ExtractedIm
 	}
 }
 
-// matrixRetryAfterMaxMS caps server-provided retry_after_ms values (#664).
-// 24h in milliseconds - a sane upper bound for a homeserver backoff.
 const matrixRetryAfterMaxMS = 24 * 60 * 60 * 1000
 
-// matrixRetryAfter converts a server-provided retry_after_ms value (already
-// verified > 0 by the caller) into a Duration, clamping to
-// matrixRetryAfterMaxMS BEFORE the float→Duration multiplication. Without
-// the clamp, retry_after_ms above ~9.22e12 (or +Inf) wraps to a large
-// negative duration, and time.After(negative) fires immediately - a zero-
-// delay hammering that ignores the server's backoff signal (bounded by
-// matrixMaxRetries, but still 4 rapid hits per send).
 func matrixRetryAfter(msFloat float64) time.Duration {
 	if msFloat > matrixRetryAfterMaxMS {
 		msFloat = matrixRetryAfterMaxMS
@@ -1024,7 +946,6 @@ func matrixRetryAfter(msFloat float64) time.Duration {
 	return time.Duration(msFloat) * time.Millisecond
 }
 
-// sendImage uploads image data to the Matrix homeserver and sends an m.image event.
 func (a *matrixAdapter) sendImage(ctx context.Context, roomID, threadID string, data []byte, mimeType string) error {
 
 	a.mu.RLock()
@@ -1093,10 +1014,6 @@ func (a *matrixAdapter) outboundText(event OutboundEvent) string {
 	return defaultOutboundText(event)
 }
 
-// maybeEncryptMessage wraps a m.room.message content as m.room.encrypted
-// when the room is E2EE and the Olm machine is available (#2737). On
-// encryption failure it falls back to the plaintext payload so messages are
-// never silently dropped.
 func (a *matrixAdapter) maybeEncryptMessage(ctx context.Context, roomID string, content *event.MessageEventContent) (event.Type, interface{}) {
 	a.mu.RLock()
 	mach := a.mach
@@ -1166,7 +1083,6 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 			Body:    chunk,
 		}
 
-		// Render markdown to HTML for rich display in Element
 		var htmlBuf bytes.Buffer
 		if err := goldmark.Convert([]byte(chunk), &htmlBuf); err == nil && htmlBuf.Len() > 0 {
 			content.Format = event.FormatHTML
@@ -1189,7 +1105,6 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 			if err == nil {
 				break
 			}
-			// Retry on M_LIMIT_EXCEEDED with server-provided delay.
 			var respErr *mautrix.RespError
 			if errors.As(err, &respErr) && respErr.ErrCode == "M_LIMIT_EXCEEDED" && attempt < matrixMaxRetries {
 				retryAfter := matrixInterMessageDelay * 2
@@ -1221,20 +1136,8 @@ func chunkText(text string, maxLen int) []string {
 	return splitMessageRunes(text, maxLen, false, false, true)
 }
 
-// matrixMaxEventByteBudget is the byte ceiling matrixChunkMarkdown budgets
-// chunks against: the Synapse default max_event_size is 100KB; the event
-// carries Body plus the goldmark-rendered FormattedBody (worst case ~2x the
-// raw chunk plus render tags), so 95KB minus a tag allowance is the safe
-// per-chunk budget for the pair.
 const matrixMaxEventByteBudget = 95000
 
-// matrixChunkMarkdown (#4769 defect 1): split markdown-aware, then shrink
-// the rune cap proportionally until every chunk's Body+FormattedBody pair
-// fits matrixMaxEventByteBudget. ASCII text never shrinks (60K runes ~60KB,
-// well under budget); CJK-heavy text (3 bytes/rune) converges in one or two
-// rounds. The floor keeps pathological input from looping forever - a
-// single oversized chunk is then returned as-is and the server's
-// M_TOO_LARGE error surfaces (visible) instead of a silent mis-split.
 func matrixChunkMarkdown(text string) []string {
 	cap := matrixMaxMessageLen
 	for round := 0; round < 8; round++ {
@@ -1284,10 +1187,6 @@ type cryptoStateStore struct {
 	adapter *matrixAdapter
 }
 
-// GetHistoryVisibility satisfies the mautrix v0.30 crypto.StateStore
-// interface. The OlmMachine uses it to decide key-sharing scope; unknown
-// rooms fall back to Matrix's default ("shared"), matching mautrix's own
-// DefaultHistoryVisibility handling.
 func (s *cryptoStateStore) GetHistoryVisibility(ctx context.Context, roomID id.RoomID) (*event.HistoryVisibilityEventContent, error) {
 
 	client := s.adapter.currentClient()
@@ -1362,11 +1261,6 @@ func (s *cryptoStateStore) GetRoomJoinedOrInvitedMembers(ctx context.Context, ro
 	return users, nil
 }
 
-// stripMatrixReplyFallback removes the rich-reply fallback quote block from
-// the TOP of a reply body, per the Matrix spec: the fallback is the leading
-// run of ">" lines plus the blank-line separator that follows it. Body
-// content after the separator - including the user's own blockquotes and
-// code fences containing ">" lines - is preserved verbatim (#1222).
 func stripMatrixReplyFallback(body string) string {
 	lines := strings.Split(body, "\n")
 	i := 0
@@ -1380,14 +1274,8 @@ func stripMatrixReplyFallback(body string) string {
 	return strings.TrimSpace(strings.Join(lines[i+1:], "\n"))
 }
 
-// minimal json import for fetchDMRooms
 var _ = json.Marshal
 
-// fileSyncStore persists the Matrix sync token (next_batch) across
-// restarts (#1553-A). Without it every process start did a full initial
-// sync (since="") whose timeline events were ALL dropped by the
-// didFirstSync gate - offline messages (Megolm DMs included) silently
-// lost, while the SQLCryptoStore comment claimed tokens survive restarts.
 type fileSyncStore struct {
 	path string
 	mu   sync.Mutex
@@ -1396,13 +1284,11 @@ type fileSyncStore struct {
 type syncStoreData struct {
 	FilterID    string `json:"filter_id,omitempty"`
 	NextBatch   string `json:"next_batch,omitempty"`
-	UserID      string `json:"user_id,omitempty"`    // #1661: token must be account-bound, not adapter-name-bound
-	Homeserver  string `json:"homeserver,omitempty"` // #1661: full identity of the token's owner
+	UserID      string `json:"user_id,omitempty"`
+	Homeserver  string `json:"homeserver,omitempty"`
 	SavedAtUnix int64  `json:"saved_at,omitempty"`
 }
 
-// fileSyncStoreUserIDMismatch reports whether the persisted data belongs
-// to a different account (old files without a UserID skip the check).
 func (d syncStoreData) ownedBy(userID id.UserID) bool {
 	return d.UserID == "" || d.UserID == string(userID)
 }
@@ -1436,11 +1322,6 @@ func (s *fileSyncStore) save(d syncStoreData) error {
 	return os.Rename(tmp, s.path)
 }
 
-// loadFor returns the persisted data only when it belongs to userID;
-// another account's data (same adapter name across workspaces - the file
-// lives under the user-global ~/.ggcode) is treated as absent so the
-// client falls back to a fresh initial sync instead of replaying a
-// foreign token.
 func (s *fileSyncStore) loadFor(userID id.UserID) (syncStoreData, error) {
 	d, err := s.load()
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -1457,8 +1338,6 @@ func (s *fileSyncStore) loadFor(userID id.UserID) (syncStoreData, error) {
 	return d, nil
 }
 
-// resetNextBatch clears the persisted token so the next sync attempt
-// performs an initial sync (self-heal for M_UNKNOWN_POS).
 func (s *fileSyncStore) resetNextBatch() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1503,19 +1382,9 @@ func (s *fileSyncStore) LoadNextBatch(ctx context.Context, userID id.UserID) (st
 	return d.NextBatch, nil
 }
 
-// selfHealingSyncer wraps DefaultSyncer to recover from a persisted sync
-// token the server no longer accepts (#1661 case 2): DefaultSyncer treats
-// everything except M_UNKNOWN_TOKEN as retry-with-same-token, which wedged
-// the adapter in a permanently "connected" but eventless state.
 type selfHealingSyncer struct {
 	*mautrix.DefaultSyncer
-	store *fileSyncStore
-	// onTokenReset runs when the persisted token is discarded (#2112):
-	// the next Sync is an INITIAL sync whose replayed timeline must hit
-	// the didFirstSync drop gate, exactly like a process restart. Without
-	// this the gate stayed open across the in-process restart and every
-	// replayed event (per-room filter limit 50, seen-window only 5min)
-	// was processed a second time.
+	store        *fileSyncStore
 	onTokenReset func()
 }
 

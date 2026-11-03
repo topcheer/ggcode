@@ -36,7 +36,7 @@ type copilotHeaderRoundTripper struct {
 	base           http.RoundTripper
 	token          string
 	uaMu           sync.RWMutex
-	impersonatedUA string // when non-empty, overrides the default "ggcode" UA
+	impersonatedUA string
 }
 
 func (rt *copilotHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -118,7 +118,6 @@ func (p *CopilotProvider) Name() string {
 	return "github-copilot"
 }
 
-// SetImpersonatedUA sets the impersonated User-Agent for the copilot transport.
 func (p *CopilotProvider) SetImpersonatedUA(ua string) {
 	if p.OpenAIProvider == nil || p.OpenAIProvider.transport == nil {
 		return

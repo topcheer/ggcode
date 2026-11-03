@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// #4913: shared-workspace collision alert — the exact iron rules depend on
-// collision state and VCS presence; the no-collision case must stay silent.
 func TestSharedWorkspaceAlert(t *testing.T) {
 	store := NewStore(t.TempDir())
 	h := NewHub("self-node", "tui", "http://127.0.0.1:1", "", store, WorkspaceMeta{Workspace: "/ws"})

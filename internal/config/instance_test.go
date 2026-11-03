@@ -10,7 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/hooks"
 )
 
-// withTestHome redirects HOME to a temp dir to prevent test pollution of ~/.ggcode/.
 func withTestHome(t *testing.T) {
 	t.Helper()
 	tmpHome := t.TempDir()
@@ -24,7 +23,7 @@ func TestInstanceDir(t *testing.T) {
 	tests := []struct {
 		name      string
 		workspace string
-		wantLen   int // expected hash length
+		wantLen   int
 	}{
 		{"absolute path", "/home/user/projects/myapp", 16},
 		{"with trailing slash", "/home/user/projects/myapp/", 16},
@@ -505,7 +504,6 @@ func TestLoadWithInstance(t *testing.T) {
 	}
 }
 
-// containsYAMLKey checks if a YAML string contains a top-level key.
 func containsYAMLKey(s, key string) bool {
 
 	return len(s) > 0 && (s[:len(key)+1] == key+":" ||
@@ -2227,8 +2225,6 @@ func TestSetIMAdapterEnabled_NilAdapters(t *testing.T) {
 	}
 }
 
-// TestSetIMAdapterEnabled_FullCycle tests the complete cycle:
-// disable → persist → reload → verify disabled → enable → persist → reload → verify enabled
 func TestSetIMAdapterEnabled_FullCycle(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -2277,9 +2273,6 @@ func TestSetIMAdapterEnabled_FullCycle(t *testing.T) {
 	}
 }
 
-// TestSave_MergePreservesExistingVendorFromOtherProcess verifies that when
-// two processes load the same global config, modify different fields, and
-// save sequentially, neither save clobbers the other's changes.
 func TestSave_MergePreservesExistingVendorFromOtherProcess(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -2325,9 +2318,6 @@ func TestSave_MergePreservesExistingVendorFromOtherProcess(t *testing.T) {
 	}
 }
 
-// TestSave_MergePreservesUnknownYAMLFields verifies that the merge
-// preserves YAML fields that exist in the file but are not in the
-// Config struct (e.g. future fields added by a newer version).
 func TestSave_MergePreservesUnknownYAMLFields(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()

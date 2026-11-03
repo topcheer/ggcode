@@ -7,13 +7,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// marshalInstanceDelta computes the minimal set of top-level fields that
-// differ between the current Config and the globalSnap (original global values).
-// Returns a raw map containing only the changed fields, suitable for yaml.Marshal.
-//
-// The comparison is field-by-field: a field is included in the delta only if
-// the current value differs from the globalSnap value. This ensures the instance
-// file is always the smallest possible representation of the overrides.
 func (c *Config) marshalInstanceDelta() map[string]interface{} {
 	delta := map[string]interface{}{}
 
@@ -354,8 +347,6 @@ func (*Config) diffHooks(current, global *hooks.HookConfig, delta map[string]int
 	}
 }
 
-// hookSlicesEqual reports whether two hook lists are deeply equal. Hook
-// contains map fields, so it is not comparable with ==.
 func hookSlicesEqual(a, b []hooks.Hook) bool {
 	if len(a) != len(b) {
 		return false

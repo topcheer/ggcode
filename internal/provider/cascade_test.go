@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// countProvider fails permanently (quota) but counts calls.
 type countProvider struct {
 	name  string
 	err   error
@@ -35,7 +34,6 @@ func (m *countProvider) CountTokens(ctx context.Context, messages []Message) (in
 	return 1, nil
 }
 
-// recoverableProvider fails while failing is set, succeeds after Clear.
 type recoverableProvider struct {
 	name    string
 	failing atomic.Bool
@@ -63,8 +61,6 @@ func (m *recoverableProvider) CountTokens(ctx context.Context, messages []Messag
 }
 func (m *recoverableProvider) Clear() { m.failing.Store(false) }
 
-// TestCascade_MultiLevelFailover: primary and fb1 both hard-down -> traffic
-// advances through the chain and is served by fb2; the active index is 2.
 func TestCascade_MultiLevelFailover(t *testing.T) {
 	primary := &countProvider{name: "primary", err: errors.New("insufficient_quota: quota exceeded")}
 	fb1 := &countProvider{name: "fb1", err: errors.New("invalid_api_key: bad key")}
@@ -88,8 +84,6 @@ func TestCascade_MultiLevelFailover(t *testing.T) {
 	}
 }
 
-// TestCascade_WraparoundToPrimary: the LAST level failing hard wraps the
-// active back to the primary (#936 generalization).
 func TestCascade_WraparoundToPrimary(t *testing.T) {
 	primary := &mockProvider{name: "primary"}
 	fb1 := &countProvider{name: "fb1", err: errors.New("insufficient_quota: quota exceeded")}
@@ -105,9 +99,6 @@ func TestCascade_WraparoundToPrimary(t *testing.T) {
 	}
 }
 
-// TestCascade_RecoveryPrefersPrimary: while running on the LAST level, the
-// recovery prober must return straight to the PRIMARY when it recovers -
-// not linger on intermediate fb1 (user requirement: primary-first recovery).
 func TestCascade_RecoveryPrefersPrimary(t *testing.T) {
 	primary := &recoverableProvider{name: "primary"}
 	primary.failing.Store(true)
@@ -140,9 +131,6 @@ func TestCascade_RecoveryPrefersPrimary(t *testing.T) {
 	}
 }
 
-// TestCascade_RecoverySkipsStillDown: when the primary is still down but an
-// intermediate level recovers, the prober advances to that level - and
-// later upgrades to the primary once it recovers too.
 func TestCascade_RecoverySkipsStillDown(t *testing.T) {
 	primary := &recoverableProvider{name: "primary"}
 	primary.failing.Store(true)

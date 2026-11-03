@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// newSA142AnthropicServer spins up a fake Anthropic Messages API.
 func newSA142AnthropicServer(t *testing.T, handler http.HandlerFunc) *AnthropicProvider {
 	t.Helper()
 	server := httptest.NewServer(handler)
@@ -28,8 +27,6 @@ func sa142ReadBody(t *testing.T, r *http.Request) map[string]any {
 	return body
 }
 
-// TestSA142_AnthropicChatText: non-streaming happy path relays content,
-// usage, stop reason, and captures the PTC container from the response.
 func TestSA142_AnthropicChatText(t *testing.T) {
 	var gotModel any
 	p := newSA142AnthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +64,6 @@ func TestSA142_AnthropicChatText(t *testing.T) {
 	}
 }
 
-// TestSA142_AnthropicChatToolUse: tool_use blocks are converted losslessly.
 func TestSA142_AnthropicChatToolUse(t *testing.T) {
 	p := newSA142AnthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -95,8 +91,6 @@ func TestSA142_AnthropicChatToolUse(t *testing.T) {
 	}
 }
 
-// TestSA142_AnthropicChatAuthError: a 401 surfaces as an error (no retry
-// storm, no fabricated response).
 func TestSA142_AnthropicChatAuthError(t *testing.T) {
 	p := newSA142AnthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -108,8 +102,6 @@ func TestSA142_AnthropicChatAuthError(t *testing.T) {
 	}
 }
 
-// TestSA142_AnthropicStreamText: full SSE text stream produces text chunks
-// plus a Done event carrying usage.
 func TestSA142_AnthropicStreamText(t *testing.T) {
 	p := newSA142AnthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -161,8 +153,6 @@ loop:
 	}
 }
 
-// TestSA142_AnthropicStreamToolUse: input_json_delta fragments accumulate
-// into one ToolCallDone with the merged arguments.
 func TestSA142_AnthropicStreamToolUse(t *testing.T) {
 	p := newSA142AnthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -215,8 +205,6 @@ loop:
 	}
 }
 
-// TestSA142_AnthropicCountTokensRemote: first calibration runs synchronously
-// against the count_tokens endpoint and returns the REAL count.
 func TestSA142_AnthropicCountTokensRemote(t *testing.T) {
 	var hitCount int
 	p := newSA142AnthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -244,9 +232,6 @@ func TestSA142_AnthropicCountTokensRemote(t *testing.T) {
 	}
 }
 
-// TestSA142_AnthropicCountTokensUnsupported: a 404 count_tokens endpoint
-// permanently disables remote calibration and falls back to the local
-// estimate.
 func TestSA142_AnthropicCountTokensUnsupported(t *testing.T) {
 	p := newSA142AnthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -274,9 +259,6 @@ func TestSA142_AnthropicCountTokensUnsupported(t *testing.T) {
 	}
 }
 
-// TestSA142_AnthropicAccessorsAndSampling: simple getters/setters, the
-// sampling-override precedence, header injection, effort-carrier hysteresis,
-// and probeChat all behave per contract.
 func TestSA142_AnthropicAccessorsAndSampling(t *testing.T) {
 	p := newSA142AnthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -355,8 +337,6 @@ func TestSA142_AnthropicAccessorsAndSampling(t *testing.T) {
 	}
 }
 
-// TestSA142_AnthropicPTCAndServerTools: PTC container freshness margin and
-// server-tool declaration flags.
 func TestSA142_AnthropicPTCAndServerTools(t *testing.T) {
 	p := newSA142AnthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

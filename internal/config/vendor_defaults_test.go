@@ -234,9 +234,6 @@ func TestPopulateDefaultModels_UnknownVendorMatchedByURL(t *testing.T) {
 	}
 }
 
-// Regression for #1525: zai/zhipu-coding and minimax/minimax-china alias
-// pairs carry byte-identical model lists - merge by name or every model
-// shows twice in the model panel; and the "kimi" catwalk key never existed.
 func TestPopulateDefaultModelsNoDuplicates(t *testing.T) {
 	cfg := &Config{Vendors: map[string]VendorConfig{
 		"zai": {Endpoints: map[string]EndpointConfig{
@@ -257,15 +254,8 @@ func TestPopulateDefaultModelsNoDuplicates(t *testing.T) {
 	}
 }
 
-// #2157: populateDefaultModels must hand out COPIES of the package-level
-// registry lists. The ai-gateway and unknown-vendor branches used to assign
-// lookupVendorModels(pid) directly, sharing the backing array across Configs -
-// an in-place ep.Models[i] write (expandEnvWithLookup) then raced concurrent
-// Loads and cross-contaminated the global model table.
 func TestPopulateDefaultModels_DoesNotShareRegistryBackingArray(t *testing.T) {
 	cfg := DefaultConfig()
-	// Find a built-in endpoint URL whose host maps to a provider with a
-	// registry model list (e.g. zai's coding endpoint).
 	var probeURL string
 	for _, ep := range cfg.Vendors["zai"].Endpoints {
 		if len(lookupVendorModels(matchProviderByBaseURL(ep.BaseURL))) > 0 {

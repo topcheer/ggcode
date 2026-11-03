@@ -5,62 +5,27 @@ import (
 	"strings"
 )
 
-// Markdown element regex patterns.
-// Ordered for correct processing: code blocks → bold → italic → other.
 var (
-	// Fenced code blocks: ```lang\ncode\n``` → code
-	// Use .*? (non-greedy) with (?s) so code containing backtick chars
-	// (Go raw strings, inline code) is handled correctly. The old [^`]*
-	// pattern would break on any backtick inside the code block.
-	mdCodeFenceRe = regexp.MustCompile("(?s)```.*?```")
-	// Inline code: `code` → code
-	mdInlineCodeRe = regexp.MustCompile("`([^`]+)`")
-	// Bold: **text** → text
-	mdBoldRe = regexp.MustCompile(`\*\*(.+?)\*\*`)
-	// Underscore bold: __text__ → text (CommonMark strong emphasis)
+	mdCodeFenceRe      = regexp.MustCompile("(?s)```.*?```")
+	mdInlineCodeRe     = regexp.MustCompile("`([^`]+)`")
+	mdBoldRe           = regexp.MustCompile(`\*\*(.+?)\*\*`)
 	mdUnderscoreBoldRe = regexp.MustCompile(`__(.+?)__`)
-	// Asterisk italic: *text* → text (processed after bold ** is stripped)
-	// Requires non-space immediately after opening * and before closing * to
-	// avoid matching bullet lists (* item), math (5 * 3), or literal asterisks.
 	mdAsteriskItalicRe = regexp.MustCompile(`\*([^\s*](?:[^*]*?[^\s*])?)\*`)
-	// Italic: _text_ → text (avoid matching __ or word_middle)
-	mdItalicRe = regexp.MustCompile(`(?m)\b_([^_]+)_\b`)
-	// Strikethrough: ~~text~~ → text
-	mdStrikeRe = regexp.MustCompile(`~~(.+?)~~`)
-	// Images: ![alt](url) → url (preserve URL so text-only platforms show the link)
-	mdImageRe = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
-	// Links: [text](url) → text (url)
-	mdLinkRe = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
-	// GFM task lists: - [ ] item → ○ item, - [x] item → ✓ item
-	// Processed after code blocks (so code containing [ ] is preserved)
-	// and before links (so [ ] isn't confused with link syntax).
-	mdTaskUncheckedRe = regexp.MustCompile(`(?m)^([-*])\s+\[ \]\s+`)
-	mdTaskCheckedRe   = regexp.MustCompile(`(?m)^([-*])\s+\[[xX]\]\s+`)
-	// Bullet lists: - item or * item at start of line → • item
-	// Processed AFTER task lists (task lines already have ○/✓ prefixes).
-	mdBulletRe = regexp.MustCompile(`(?m)^[-*]\s+`)
+	mdItalicRe         = regexp.MustCompile(`(?m)\b_([^_]+)_\b`)
+	mdStrikeRe         = regexp.MustCompile(`~~(.+?)~~`)
+	mdImageRe          = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
+	mdLinkRe           = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+	mdTaskUncheckedRe  = regexp.MustCompile(`(?m)^([-*])\s+\[ \]\s+`)
+	mdTaskCheckedRe    = regexp.MustCompile(`(?m)^([-*])\s+\[[xX]\]\s+`)
+	mdBulletRe         = regexp.MustCompile(`(?m)^[-*]\s+`)
 
-	// Headers: ### Header → Header
-	mdHeaderRe = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
-	// Blockquotes: > text → text
-	mdBlockquoteRe = regexp.MustCompile(`(?m)^>\s?(.+)$`)
-	// Horizontal rules (dash and asterisk): --- or *** → —
-	// Underscore HRs are handled separately at step 3a (before __bold__).
-	mdHRRe = regexp.MustCompile(`(?m)^(-{3,}|\*{3,})$`)
-	// Underscore horizontal rules: ___ → —
-	// Must be processed BEFORE __bold__ to prevent ________ being consumed.
+	mdHeaderRe       = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
+	mdBlockquoteRe   = regexp.MustCompile(`(?m)^>\s?(.+)$`)
+	mdHRRe           = regexp.MustCompile(`(?m)^(-{3,}|\*{3,})$`)
 	mdUnderscoreHRRe = regexp.MustCompile(`(?m)^_{3,}$`)
-	// GFM tables: consecutive lines starting with | (bordered table syntax)
-	mdTableRe = regexp.MustCompile(`(?m)^(?:\|[^\n]*\|\s*\n)+\|[^\n]*\|`)
+	mdTableRe        = regexp.MustCompile(`(?m)^(?:\|[^\n]*\|\s*\n)+\|[^\n]*\|`)
 )
 
-// stripMarkdown converts markdown-formatted text to plain text for platforms
-// that don't support markdown rendering. It preserves readability by:
-//   - Removing formatting markers (**, *, _, ~~, `)
-//   - Converting headers to plain text
-//   - Converting links to "text (url)" format
-//   - Converting images to their URL (text-only platforms show the link)
-//   - Converting bullet lists to Unicode bullets (• item)
 func stripMarkdown(text string) string {
 	if text == "" {
 		return text
@@ -135,17 +100,6 @@ func stripMarkdown(text string) string {
 	return strings.TrimSpace(text)
 }
 
-// signalMarkdown converts standard markdown to Signal's text formatting syntax.
-// Signal supports: *bold*, _italic_, ~strike~, `code`, ||spoiler||.
-//
-// Key differences from standard markdown:
-//   - Bold uses single * (not **)
-//   - Italic uses _ (not *, since * means bold in Signal)
-//   - Strikethrough uses single ~ (not ~~)
-//   - Inline code uses ` (same as markdown)
-//
-// Non-formatting elements (headers, links, lists, tables) are processed the
-// same way as stripMarkdown since Signal has no equivalent rendering for them.
 func signalMarkdown(text string) string {
 	if text == "" {
 		return text
@@ -214,9 +168,6 @@ func signalMarkdown(text string) string {
 	return strings.TrimSpace(text)
 }
 
-// isTableSeparator reports whether a table line is a separator row (contains
-// only dashes, colons, pipes, and spaces). GFM separator rows look like:
-// |---|---| or |:--:|---:| or | --- | --- |
 func isTableSeparator(line string) bool {
 
 	core := strings.ReplaceAll(line, "|", "")

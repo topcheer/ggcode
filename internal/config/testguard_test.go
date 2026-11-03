@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// withUnisolatedHome temporarily restores the snapshot (real) HOME.
 func withUnisolatedHome(t *testing.T) {
 	t.Helper()
 	prev, had := os.LookupEnv("HOME")

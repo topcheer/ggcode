@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// gzipBomb builds a small datagram whose decompressed size far exceeds
-// maxUDPDecompressed (5MB of zeros compresses to a few KB).
 func gzipBomb(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -25,10 +23,6 @@ func gzipBomb(t *testing.T) []byte {
 	return buf.Bytes()
 }
 
-// TestIssue991GzipBombDroppedBeforeAllocation pins #991 problem 1: a
-// high-ratio gzip datagram from an unauthenticated LAN host must be dropped
-// by the decompression cap before allocating unbounded memory, with no
-// dispatch to the hub and no panic.
 func TestIssue991GzipBombDroppedBeforeAllocation(t *testing.T) {
 	hub, port := udpTestHub(t)
 	udp, err := NewUDPTransport(port, "", hub, hub.NodeID(), hub.APIKey())
@@ -81,9 +75,6 @@ func TestIssue991GzipBombDroppedBeforeAllocation(t *testing.T) {
 	}
 }
 
-// TestIssue991NormalGzipStillPasses verifies the 4MB cap does not break the
-// legitimate compressed-message path: a small gzipped envelope is decompressed
-// and dispatched normally.
 func TestIssue991NormalGzipStillPasses(t *testing.T) {
 	hub, port := udpTestHub(t)
 	udp, err := NewUDPTransport(port, "", hub, hub.NodeID(), hub.APIKey())
@@ -124,14 +115,6 @@ func TestIssue991NormalGzipStillPasses(t *testing.T) {
 	}
 }
 
-// TestIssue991SendUnicastErrorOnRetryExhaustion pins #991 problem 2: when a
-// fragment exhausts all ACK retries (target port closed / no listener), the
-// transport must return a non-nil error so the hub-side UDP multicast
-// fallback fires instead of a false "delivered" nil.
-//
-// Retry-duration control: udpAckWaitFn is a package-level hook (the #991
-// analogue of PeerRetryDelayFn) — the test shrinks the per-attempt ACK wait
-// to 20ms so the full 3-attempt exhaustion finishes in ~60ms instead of 6s.
 func TestIssue991SendUnicastErrorOnRetryExhaustion(t *testing.T) {
 	hub, port := udpTestHub(t)
 	udp, err := NewUDPTransport(port, "", hub, hub.NodeID(), hub.APIKey())
@@ -167,9 +150,6 @@ func TestIssue991SendUnicastErrorOnRetryExhaustion(t *testing.T) {
 	}
 }
 
-// TestIssue991SendUnicastSuccessReturnsNil pins the regression contract: a
-// fully ACKed unicast send still returns nil. Two transports on loopback; A
-// sends to B's port, B ACKs, A must see success on first attempt.
 func TestIssue991SendUnicastSuccessReturnsNil(t *testing.T) {
 	hubA, portA := udpTestHub(t)
 	udpA, err := NewUDPTransport(portA, "", hubA, hubA.NodeID(), hubA.APIKey())
@@ -211,12 +191,6 @@ func TestIssue991SendUnicastSuccessReturnsNil(t *testing.T) {
 	}
 }
 
-// TestIssue991ACKPreregistrationNoLoss pins the #991 race fix: the ACK
-// waiter is registered BEFORE WriteToUDP, so even when the peer's ACK comes
-// back within the same scheduling slice (LAN RTT < 1ms), the first attempt
-// ACKs instead of timing out. A loopback send with a generous per-attempt
-// timeout must succeed on the very first try; with the old
-// write-then-register order this intermittently burned retries.
 func TestIssue991ACKPreregistrationNoLoss(t *testing.T) {
 	hubA, portA := udpTestHub(t)
 	udpA, err := NewUDPTransport(portA, "", hubA, hubA.NodeID(), hubA.APIKey())

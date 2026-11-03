@@ -13,9 +13,6 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
-// sa142StatusErr carries an HTTP status via the duck-typed
-// interface{ HTTPStatusCode() int } path exercised by hasHTTPStatus /
-// extractHTTPStatus (covers providers wrapping their own status errors).
 type sa142StatusErr struct {
 	code int
 	msg  string
@@ -24,14 +21,12 @@ type sa142StatusErr struct {
 func (e *sa142StatusErr) Error() string       { return e.msg }
 func (e *sa142StatusErr) HTTPStatusCode() int { return e.code }
 
-// TestSA142_UserFacingErrorLang: the gateway error taxonomy (auth / quota /
-// rate limit / not-found / blind spot) maps to actionable bilingual copy.
 func TestSA142_UserFacingErrorLang(t *testing.T) {
 	cases := []struct {
 		name string
 		err  error
-		zh   string // substring expected in the zh-CN message
-		en   string // substring expected in the en message
+		zh   string
+		en   string
 	}{
 		{
 			name: "401 auth",
@@ -119,8 +114,6 @@ func TestSA142_UserFacingErrorLang(t *testing.T) {
 	}
 }
 
-// TestSA142_TruncateRawError: truncation respects the byte budget, marks the
-// cut, and never splits a multi-byte rune (#1720).
 func TestSA142_TruncateRawError(t *testing.T) {
 	short := truncateRawError("tiny")
 	if short != "tiny" {
@@ -141,8 +134,6 @@ func TestSA142_TruncateRawError(t *testing.T) {
 	}
 }
 
-// TestSA142_BlindSpotAndStatus: IsBlindSpotError detects only the fallback
-// branch; extractHTTPStatus reads every known carrier.
 func TestSA142_BlindSpotAndStatus(t *testing.T) {
 	if IsBlindSpotError(nil) {
 		t.Fatal("nil error is not a blind spot")
@@ -173,8 +164,6 @@ func TestSA142_BlindSpotAndStatus(t *testing.T) {
 	}
 }
 
-// TestSA142_TokenCalibrator: ratio learning, skip/failure bookkeeping, and
-// permanent disable.
 func TestSA142_TokenCalibrator(t *testing.T) {
 	c := newTokenCountCalibrator()
 	if got := c.currentRatio(); got != 1.0 {
@@ -238,7 +227,6 @@ func TestSA142_TokenCalibrator(t *testing.T) {
 	}
 }
 
-// TestSA142_CopilotHelpers: request inspection and resolved-endpoint checks.
 func TestSA142_CopilotHelpers(t *testing.T) {
 	if err := validateCopilotResolved("", "key"); err == nil {
 		t.Fatal("empty baseURL must be rejected")
@@ -278,15 +266,12 @@ func TestSA142_CopilotHelpers(t *testing.T) {
 	bare.SetImpersonatedUA("x")
 }
 
-// TestSA142_MakeProbeKey: components are trimmed and pipe-joined.
 func TestSA142_MakeProbeKey(t *testing.T) {
 	if got := MakeProbeKey(" v ", " u ", " m "); got != "v|u|m" {
 		t.Fatalf("MakeProbeKey = %q", got)
 	}
 }
 
-// TestSA142_ProbeContextWindow: guard rails, cache hit, known-model hit, and
-// the background probe failing closed on a dead provider.
 func TestSA142_ProbeContextWindow(t *testing.T) {
 
 	called := false

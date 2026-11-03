@@ -7,8 +7,6 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// FormatAskUserPrompt formats an AskUserRequest into an IM-friendly prompt
-// with per-question-type reply guidance. Shared by TUI and daemon modes.
 func FormatAskUserPrompt(lang string, req toolpkg.AskUserRequest) string {
 	multiQuestion := len(req.Questions) > 1
 	lines := make([]string, 0, 16+len(req.Questions)*4)

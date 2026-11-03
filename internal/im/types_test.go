@@ -31,10 +31,6 @@ func TestInboundMessageProviderContentBuildsImageAndTranscript(t *testing.T) {
 	}
 }
 
-// TestProviderContentAutoDetectsMIME verifies that when an image attachment
-// has DataBase64 but no MIME type (as seen with WeCom callbacks), the MIME
-// type is auto-detected from the decoded image data so the LLM receives
-// the image as a proper ImageBlock instead of silently dropping it.
 func TestProviderContentAutoDetectsMIME(t *testing.T) {
 
 	b64 := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9AwAAAABJRU5ErkJggg=="

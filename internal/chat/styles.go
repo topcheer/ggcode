@@ -9,7 +9,6 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
-// ToolStatus represents the current state of a tool call.
 type ToolStatus int
 
 const (
@@ -20,7 +19,6 @@ const (
 	StatusCanceled
 )
 
-// String returns a human-readable status name.
 func (s ToolStatus) String() string {
 	switch s {
 	case StatusPending:
@@ -38,44 +36,33 @@ func (s ToolStatus) String() string {
 	}
 }
 
-// Styles holds all rendering styles for the chat package.
 type Styles struct {
-	// User message
 	UserPrefix string
 	UserIcon   string
 	UserStyle  lipgloss.Style
 
-	// Assistant message
 	AssistantPrefix string
 	AssistantIcon   string
 	AssistantStyle  lipgloss.Style
 
-	// Tool name rendering
 	ToolName lipgloss.Style
 
-	// Tool body
 	ToolBody lipgloss.Style
-	BashBody lipgloss.Style // command output with subtle background
+	BashBody lipgloss.Style
 
-	// System message
 	SystemPrefix string
 	SystemStyle  lipgloss.Style
 
-	// Reasoning / thinking
 	ReasoningPrefix string
 	ReasoningStyle  lipgloss.Style
 
-	// Error
 	ErrorStyle lipgloss.Style
 
-	// Muted
 	MutedStyle lipgloss.Style
 
-	// Spacing
-	ItemGap int // lines between items
+	ItemGap int
 }
 
-// DefaultStyles returns the default style set.
 func DefaultStyles() Styles {
 	return Styles{
 		UserPrefix:      "❯ ",
@@ -97,22 +84,14 @@ func DefaultStyles() Styles {
 	}
 }
 
-// toolAnimGlyphs are the rotating quarter-circle frames for running tools.
-// They keep the circle aesthetic of the static pending icon (○) while
-// clearly showing the tool is actively executing.
 var toolAnimGlyphs = []string{"◐", "◓", "◑", "◒"}
 
-// toolAnimFrame is the current animation frame index, set by the TUI on each
-// spinner tick (every ~150ms). Read by ToolIcon when rendering running tools.
 var toolAnimFrame int
 
-// SetToolAnimFrame updates the global animation frame for running tool icons.
-// Called by the TUI before rendering the conversation panel.
 func SetToolAnimFrame(frame int) {
 	toolAnimFrame = frame
 }
 
-// ToolIcon returns the icon for a given tool status.
 func (s Styles) ToolIcon(status ToolStatus) string {
 	switch status {
 	case StatusPending:
@@ -130,7 +109,6 @@ func (s Styles) ToolIcon(status ToolStatus) string {
 	}
 }
 
-// ToolIconStyle returns a styled icon for the given tool status.
 func (s Styles) ToolIconStyle(status ToolStatus) string {
 	icon := s.ToolIcon(status)
 	switch status {
@@ -147,9 +125,6 @@ func (s Styles) ToolIconStyle(status ToolStatus) string {
 	}
 }
 
-// ToolHeader builds the standard tool header line: "✓ ToolName  params".
-// If the header exceeds width, params are word-wrapped onto continuation lines
-// indented to align with the first param.
 const toolHeaderMaxRenderWidth = 120
 
 func (s Styles) ToolHeader(status ToolStatus, name string, width int, params ...string) string {
@@ -166,11 +141,8 @@ func (s Styles) ToolHeader(status ToolStatus, name string, width int, params ...
 	return wrapHeaderParams(prefix, paramStr, prefixW, width)
 }
 
-// toolNameTruncSuffix is appended to a tool name truncated for narrow headers.
 const toolNameTruncSuffix = "..."
 
-// truncateRunesByWidth returns the byte length of the longest prefix of s
-// whose accumulated rune width stays within maxW.
 func truncateRunesByWidth(s string, maxW int) int {
 	w := 0
 	for i, r := range s {
@@ -183,15 +155,6 @@ func truncateRunesByWidth(s string, maxW int) int {
 	return len(s)
 }
 
-// toolHeaderPrefix builds the "icon name " prefix, honoring the width
-// invariant even in narrow terminals: a long tool name (run_command = 15
-// cols + icon) can exceed width outright, and every continuation line
-// indents by prefixW - so the whole header block would be wider than
-// width, desynchronizing Height()'s visual-line count from Render()'s
-// physical lines. The name truncates at rune boundaries with the "..."
-// suffix budgeted INSIDE the remaining width (the suffix was initially
-// forgotten and re-broke the invariant at width 12); at degenerate widths
-// only the icon survives.
 func (s Styles) toolHeaderPrefix(icon, name string, width int) (prefix string, prefixW int) {
 	prefix = fmt.Sprintf("%s %s ", icon, s.ToolName.Render(name))
 	prefixW = lipgloss.Width(prefix)
@@ -218,10 +181,6 @@ func (s Styles) toolHeaderPrefix(icon, name string, width int) (prefix string, p
 	return prefix, lipgloss.Width(prefix)
 }
 
-// capHeaderParams shortens params for the wide-terminal one-line display
-// cap (toolHeaderMaxRenderWidth). Note: this cap may exceed a NARROW
-// terminal's width - the invariant for narrow terminals is enforced by
-// wrapHeaderParams below.
 func capHeaderParams(paramStr string, prefixW int) string {
 	if lipgloss.Width(paramStr)+prefixW <= toolHeaderMaxRenderWidth {
 		return paramStr
@@ -235,13 +194,6 @@ func capHeaderParams(paramStr string, prefixW int) string {
 	return paramStr[:cut] + "…"
 }
 
-// wrapHeaderParams word-wraps params onto continuation lines aligned with
-// the header prefix. Width is a hard invariant, not a preference:
-// measureHeightWidth counts ceil(visualWidth/width) while List.Render
-// emits physical lines, so a line wider than width desynchronizes the two
-// and the viewport drifts (content floats mid-screen, blank space below).
-// The old `if avail < 10 { avail = 10 }` clamp INFLATED past width in
-// narrow terminals; emit at most one rune in the degenerate case.
 func wrapHeaderParams(prefix, paramStr string, prefixW, width int) string {
 	indent := strings.Repeat(" ", prefixW)
 	var lines []string
@@ -264,8 +216,6 @@ func wrapHeaderParams(prefix, paramStr string, prefixW, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-// splitAtWidth splits s at the maximum visual width that fits in maxW.
-// Returns (fit, rest). Tries to break at a space boundary.
 func splitAtWidth(s string, maxW int) (string, string) {
 	if lipgloss.Width(s) <= maxW {
 		return s, ""
@@ -293,9 +243,6 @@ func splitAtWidth(s string, maxW int) (string, string) {
 	return string(runes[:breakIdx]), string(runes[breakIdx:])
 }
 
-// truncateTailByWidth truncates a string from the tail so that its visual
-// width (measured by lipgloss.Width) does not exceed maxW. The result is
-// safe for multi-byte runes and strips any partial ANSI sequences.
 func truncateTailByWidth(s string, maxW int) string {
 	if lipgloss.Width(s) <= maxW {
 		return s
@@ -312,15 +259,8 @@ func truncateTailByWidth(s string, maxW int) string {
 	return ""
 }
 
-// tabStop is the column multiple that TAB characters expand to. Terminals
-// advance to the next 8-col stop by default, but the absolute stop size
-// does not matter for correctness - only that measurement and terminal
-// agree, which expansion to ANY fixed stop guarantees. 4 keeps tab-aligned
-// columns (git status, ls -l) reasonably narrow after wrapping.
 const tabStop = 4
 
-// expandTabs replaces every '\t' with spaces up to the next tabStop
-// column, tracked per line (a tab's width depends on the current column).
 func expandTabs(s string) string {
 	if !strings.ContainsRune(s, '\t') {
 		return s
@@ -346,12 +286,8 @@ func expandTabs(s string) string {
 	return sb.String()
 }
 
-// ToolBodyMaxLines is the maximum number of body lines shown before truncation.
 const ToolBodyMaxLines = 10
 
-// FormatBody renders tool body content with optional truncation.
-// For long output, shows the last maxLines lines (users care about the end).
-// Returns the formatted body and whether it was truncated.
 func FormatBody(content string, width int, maxLines int) (string, bool) {
 	if content == "" {
 		return "", false
@@ -362,7 +298,6 @@ func FormatBody(content string, width int, maxLines int) (string, bool) {
 
 	content = expandTabs(content)
 
-	// Split into lines, then wrap each line that exceeds visual width.
 	var wrapped []string
 	for _, line := range strings.Split(content, "\n") {
 		if line == "" {

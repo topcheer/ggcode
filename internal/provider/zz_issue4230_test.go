@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// #4230 case A: chatResponseFromPayload must preserve generation order.
-// Model outputs [message, function_call]; the old collect-texts-then-append-
-// at-end reversed the reconstructed Content to [tool_use, text].
 func TestIssue4230_PayloadContentOrderFidelity(t *testing.T) {
 	payload := &responsesPayload{
 		Output: []json.RawMessage{
@@ -27,8 +24,6 @@ func TestIssue4230_PayloadContentOrderFidelity(t *testing.T) {
 	}
 }
 
-// #4230 case B: usage details (cached_tokens) must survive the payload path
-// so background/non-stream cost accounting gets the cache discount.
 func TestIssue4230_UsageCacheReadDecoded(t *testing.T) {
 	payload := &responsesPayload{}
 	if err := json.Unmarshal([]byte(`{"usage":{"input_tokens":100,"output_tokens":5,"input_tokens_details":{"cached_tokens":80}}}`), &payload); err != nil {

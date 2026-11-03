@@ -85,4 +85,4 @@ func TestSubmitInboundMessage_PlainTextStillQueues(t *testing.T) {
 	}
 }
 
-var _ = sync.Mutex{} // keep sync import stable if assertions change
+var _ = sync.Mutex{}

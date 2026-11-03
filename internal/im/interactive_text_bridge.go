@@ -10,13 +10,7 @@ import (
 )
 
 type InteractiveTextBridge struct {
-	Submit func(context.Context, string, string) error // (ctx, text, adapterName)
-	// PendingApprovals returns the pending approval request IDs in
-	// registration order (#1657 case 2). Optional: when wired and more than
-	// one approval is pending, a bare "y"/"a"/"n" is ambiguous and is NOT
-	// resolved blindly - the reply must carry the target's 1-based index
-	// (e.g. "y 2"); otherwise the text falls through to Submit so the user
-	// and the agent both see it instead of a random approval being decided.
+	Submit           func(context.Context, string, string) error
 	PendingApprovals func() []string
 	CurrentApproval  func() (requestID, toolName string, ok bool)
 	ResolveApproval  func(requestID, decision string)
@@ -24,9 +18,6 @@ type InteractiveTextBridge struct {
 	ResolveAskUser   func(requestID string, response toolpkg.AskUserResponse)
 }
 
-// approvalIndexFromText extracts a 1-based approval index from a reply like
-// "y 2", "2 y", or "n 1" (n pending). Returns ok=false when absent or out of
-// range.
 func approvalIndexFromText(text string, n int) (int, bool) {
 	if n <= 1 {
 		return 0, false

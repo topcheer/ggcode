@@ -343,7 +343,7 @@ func TestWeComExtractAttachments(t *testing.T) {
 	tests := []struct {
 		name string
 		body map[string]any
-		want int // expected number of attachments
+		want int
 	}{
 		{
 			name: "image with url",

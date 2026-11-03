@@ -10,13 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// flushResidualToolCalls emits tool_calls that accumulated but never saw a
-// chunk with a non-empty finish_reason (#302-era LiteLLM/vLLM/ZAI compat
-// flush). Extracted verbatim from ChatStream's deferred flush - behavior
-// identical: skip unnamed/id-less calls, repair nearly-valid JSON args, never
-// flush on retry (double-execute) or hard error (untrustworthy partial args).
-// Returns the character count added and whether anything was emitted; ok=false
-// means the consumer context died mid-flush.
 func (p *OpenAIProvider) flushResidualToolCalls(ctx context.Context, ch chan<- StreamEvent, toolCalls map[int]*ToolCallDelta, normalEnd, retry bool) (chars int, emittedAny bool, ok bool) {
 	shouldFlush := normalEnd && !retry
 	if !shouldFlush {
@@ -49,12 +42,6 @@ func (p *OpenAIProvider) flushResidualToolCalls(ctx context.Context, ch chan<- S
 	return chars, emittedAny, true
 }
 
-// sleepBeforeRetry emits the "[Retry n/m...]" system event and sleeps under
-// the shared retry budget (#722). Extracted verbatim from the two duplicated
-// retry blocks in ChatStream (connect-phase and stream-phase). Returns
-// (slept, terminalErr): terminalErr non-nil means the budget is exhausted and
-// the caller must emit Error{terminalErr}, set streamError, and return;
-// slept=false with nil err means the consumer context died mid-emit, return.
 func (p *OpenAIProvider) sleepBeforeRetry(ctx context.Context, ch chan<- StreamEvent, budget *retryBudget, cause error, attempt int) (bool, error) {
 
 	if isTimeoutClassError(cause) {

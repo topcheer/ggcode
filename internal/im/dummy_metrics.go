@@ -7,11 +7,6 @@ import (
 	"time"
 )
 
-// EvalMetrics collects quantitative metrics during an evaluation session.
-// #1302: written concurrently by agent event goroutines (RecordEvent via
-// fanOutSend) and HTTP handlers (Reset, UserMessages), read by /status
-// (Snapshot) - every method now holds mu, and Snapshot deep-copies maps so
-// callers never race the originals.
 type EvalMetrics struct {
 	mu sync.Mutex
 
@@ -20,12 +15,12 @@ type EvalMetrics struct {
 
 	UserMessages     int
 	AskUserCount     int
-	AskUserLatencyMs map[string]int64 // question_id → latency
+	AskUserLatencyMs map[string]int64
 
-	ToolCalls        map[string]int // tool_name → count
+	ToolCalls        map[string]int
 	TotalToolCalls   int
 	ToolErrors       int
-	ToolErrorsByTool map[string]int // tool_name → error count
+	ToolErrorsByTool map[string]int
 	ReworkCount      int
 	Rounds           int
 
@@ -38,14 +33,11 @@ type EvalMetrics struct {
 	ElapsedMs int64
 
 	lastToolName string
-	askStart     map[string]time.Time // question_id → start time
+	askStart     map[string]time.Time
 }
 
-// roundPattern matches round summary text. Requires a digit AND "tool" keyword
-// to avoid false positives. Coupled with EmitRoundSummary (emitter.go:229).
 var roundPattern = regexp.MustCompile(`(?i)\d+.*tool|tool.*\d+`)
 
-// NewEvalMetrics creates a new metrics collector.
 func NewEvalMetrics() *EvalMetrics {
 	return &EvalMetrics{
 		SessionStart:     time.Now(),
@@ -56,7 +48,6 @@ func NewEvalMetrics() *EvalMetrics {
 	}
 }
 
-// RecordEvent updates metrics based on an outbound event.
 func (m *EvalMetrics) RecordEvent(event OutboundEvent) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -93,16 +84,12 @@ func (m *EvalMetrics) RecordEvent(event OutboundEvent) {
 	}
 }
 
-// IncUserMessages increments the user-message counter under the lock
-// (#1302: HTTP handlers previously incremented the field directly,
-// racing Snapshot's read).
 func (m *EvalMetrics) IncUserMessages() {
 	m.mu.Lock()
 	m.UserMessages++
 	m.mu.Unlock()
 }
 
-// Reset clears all per-task metrics while keeping session-level fields.
 func (m *EvalMetrics) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -124,7 +111,6 @@ func (m *EvalMetrics) Reset() {
 	m.askStart = make(map[string]time.Time)
 }
 
-// Snapshot returns a copy of current metrics as a map.
 func (m *EvalMetrics) Snapshot() map[string]interface{} {
 	m.mu.Lock()
 	defer m.mu.Unlock()

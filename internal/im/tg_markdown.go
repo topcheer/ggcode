@@ -4,19 +4,12 @@ import (
 	"strings"
 )
 
-// mdv2Special is the set of characters that Telegram MarkdownV2 requires
-// to be escaped with a preceding backslash.
 const mdv2Special = "_*[]()~`>#+-=|{}.!"
 
-// isMDV2Special reports whether a byte is a MarkdownV2 special character.
 func isMDV2Special(c byte) bool {
 	return strings.ContainsRune(mdv2Special, rune(c))
 }
 
-// EscapeMarkdownV2 converts plain or markdown text to Telegram MarkdownV2 safe text.
-//
-// It preserves markdown formatting structures (bold, italic, strikethrough, code,
-// code blocks, links, images) while escaping all other MarkdownV2 special characters.
 func EscapeMarkdownV2(text string) string {
 	var b strings.Builder
 	b.Grow(len(text) + len(text)/4)
@@ -49,9 +42,6 @@ func EscapeMarkdownV2(text string) string {
 	return b.String()
 }
 
-// escapeLine processes a single line outside of code blocks.
-// It preserves inline code spans and markdown formatting structures,
-// escaping everything else.
 func escapeLine(b *strings.Builder, line string) {
 	i := 0
 	n := len(line)
@@ -151,13 +141,6 @@ func escapeLine(b *strings.Builder, line string) {
 	}
 }
 
-// escapeText escapes special characters in plain text content (inside bold/italic/etc).
-// escapeMDV2LinkURL escapes exactly what Telegram's MarkdownV2 spec requires
-// inside the (...) part of an inline link: "all ')' and '\' must be escaped
-// with the preceding '\' character" (Bot API docs). A raw ')' would end the
-// link early and the dangling ')' then fails the WHOLE message with
-// 400 "character ')' is reserved" - Wikipedia-style parenthesized URLs are
-// the common trigger (#1246). Everything else in the URL stays as-is.
 func escapeMDV2LinkURL(b *strings.Builder, url string) {
 	for i := 0; i < len(url); i++ {
 		if url[i] == ')' || url[i] == '\\' {
@@ -177,8 +160,6 @@ func escapeText(b *strings.Builder, text string) {
 	}
 }
 
-// findClosingSeq finds the index of the start of a closing double-char sequence (e.g. **).
-// Returns the index of the first char of the pair, or -1 if not found.
 func findClosingSeq(line string, start int, ch byte) int {
 	for i := start; i+1 < len(line); i++ {
 		if line[i] == ch && line[i+1] == ch {
@@ -192,8 +173,6 @@ func findClosingSeq(line string, start int, ch byte) int {
 	return -1
 }
 
-// findLinkEnd finds the closing ) of a markdown link/image starting from the [ position.
-// Returns the index of ), or -1 if not found.
 func findLinkEnd(line string, bracketStart int) int {
 
 	bracketEnd := strings.IndexByte(line[bracketStart:], ']')

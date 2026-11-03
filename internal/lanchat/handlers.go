@@ -9,8 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// MountHandlers registers lanchat HTTP endpoints on the given mux and
-// optionally starts a UDP transport on the same port for fallback delivery.
 func MountHandlers(mux *http.ServeMux, hub *Hub, tcpPort int) {
 	apiKey := hub.APIKey()
 	auth := func(next http.HandlerFunc) http.HandlerFunc {
@@ -39,19 +37,8 @@ func MountHandlers(mux *http.ServeMux, hub *Hub, tcpPort int) {
 	}
 }
 
-// communityKey is the built-in shared key for zero-config LAN Chat.
-// It is accepted ONLY when no custom API key is configured; setting
-// a2a.auth.api_key disables community-key access entirely (#986).
 const communityKey = "ggcode-lan-a2a-v1"
 
-// AuthMiddleware wraps an http.HandlerFunc with API key validation.
-//
-// Zero-config (no custom key configured): only the built-in community key
-// is accepted, so out-of-the-box instances interoperate as before.
-//
-// When a custom API key IS configured, the community key is rejected: the
-// well-known constant is public knowledge and must never silently bypass
-// an operator's configured key (#986).
 func AuthMiddleware(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		key := r.Header.Get("X-API-Key")
@@ -73,9 +60,6 @@ func AuthMiddleware(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// lanchatMaxBodyBytes caps any single lanchat request body (#1583-A).
-// Attachments travel out-of-band (50MB cap there); chat messages are
-// text - 1MB is orders of magnitude above any legitimate message.
 const lanchatMaxBodyBytes = 1 << 20
 
 func (h *Hub) handleReceiveMessage(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +160,6 @@ func (h *Hub) handlePresence(w http.ResponseWriter, r *http.Request) {
 
 	var p Participant
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		// #1627-B: 413 for oversize bodies, not a 400 that hides the cap.
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {
 			http.Error(w, "presence body too large", http.StatusRequestEntityTooLarge)

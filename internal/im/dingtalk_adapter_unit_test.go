@@ -141,7 +141,6 @@ func TestDingtalkRefreshToken_MarshalError(t *testing.T) {
 }
 
 func TestDingtalkRefreshToken_SuccessfulMarshal(t *testing.T) {
-	// Verify that the token request body is correctly marshaled
 	var receivedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -478,7 +477,6 @@ func TestDingtalkSendFrameResponse_MarshalError(t *testing.T) {
 }
 
 func TestDingtalkMarshalErrorWithUnmarshallableField(t *testing.T) {
-	// Verify that json.Marshal correctly fails for types with channels
 	type badStruct struct {
 		Ch chan int `json:"ch"`
 	}
@@ -488,7 +486,6 @@ func TestDingtalkMarshalErrorWithUnmarshallableField(t *testing.T) {
 		t.Fatal("expected json.Marshal to fail for struct with chan field")
 	}
 
-	// Verify a good struct marshals fine
 	type goodStruct struct {
 		Name  string `json:"name"`
 		Value int    `json:"value"`

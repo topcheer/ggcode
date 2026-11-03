@@ -12,9 +12,6 @@ import (
 
 const sa54ReasoningItemRaw = `{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"considering paths"}],"encrypted_content":"ENC-1"}`
 
-// A full agent loop: user prompt -> assistant (reasoning + tool call) -> tool
-// result. The next request must replay the reasoning item verbatim, before
-// its function_call item.
 func TestBuildResponsesInputEncryptedReasoningReplay(t *testing.T) {
 	msgs := []Message{
 		{Role: "user", Content: []ContentBlock{TextBlock("list files")}},
@@ -52,8 +49,6 @@ func TestBuildResponsesInputEncryptedReasoningReplay(t *testing.T) {
 	}
 }
 
-// decodeResponsesReasoningItem must be a strict gate: only genuine Responses
-// reasoning items with encrypted content pass.
 func TestDecodeResponsesReasoningItemGating(t *testing.T) {
 	if it, ok := decodeResponsesReasoningItem(sa54ReasoningItemRaw); !ok || it.ID != "rs_1" {
 		t.Errorf("valid item rejected: ok=%v item=%+v", ok, it)
@@ -69,8 +64,6 @@ func TestDecodeResponsesReasoningItemGating(t *testing.T) {
 	}
 }
 
-// Non-streaming Chat: reasoning items in the output array become thinking
-// blocks carrying the raw item for later replay.
 func TestOpenAIResponsesChatCapturesReasoningItems(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"output":[`+
@@ -99,8 +92,6 @@ func TestOpenAIResponsesChatCapturesReasoningItems(t *testing.T) {
 	}
 }
 
-// Streaming: output_item.done for a reasoning item arrives as a signature-only
-// reasoning stream event (empty Text so UIs render nothing opaque).
 func TestOpenAIResponsesChatStreamCapturesEncryptedItem(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -147,7 +138,6 @@ func TestOpenAIResponsesChatStreamCapturesEncryptedItem(t *testing.T) {
 	}
 }
 
-// Every request must ask for encrypted reasoning tokens.
 func TestBuildResponsesRequestIncludeEncryptedReasoning(t *testing.T) {
 	p := NewOpenAIResponsesProvider("k", "m", 0, "http://127.0.0.1:1/v1")
 	for _, stream := range []bool{false, true} {

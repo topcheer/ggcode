@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// TestUpsertMCPServerPatchPreservesUnsetFields (#249): overlaying a partial
-// server onto an existing one must keep fields the patch leaves zero.
 func TestUpsertMCPServerPatchPreservesUnsetFields(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.MCPServers = []MCPServerConfig{{
@@ -41,9 +39,6 @@ func TestUpsertMCPServerPatchPreservesUnsetFields(t *testing.T) {
 	}
 }
 
-// TestMigrateVendorsFilePlaintextAPIKeys (#250): plaintext keys in the
-// standalone vendors.yaml are moved to keys.env and replaced with ${VAR}
-// references in the file.
 func TestMigrateVendorsFilePlaintextAPIKeys(t *testing.T) {
 	withTestHome(t)
 	dir := t.TempDir()
@@ -85,8 +80,6 @@ func TestMigrateVendorsFilePlaintextAPIKeys(t *testing.T) {
 	}
 }
 
-// TestMigrateVendorsFilePlaintextAPIKeys_NoFindings: files without plaintext
-// keys are left untouched.
 func TestMigrateVendorsFilePlaintextAPIKeys_NoFindings(t *testing.T) {
 	withTestHome(t)
 	dir := t.TempDir()

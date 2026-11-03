@@ -26,49 +26,33 @@ const (
 	ircPongTimeout         = 30 * time.Second
 	ircReconnectBackoff    = 5 * time.Second
 	ircMaxReconnectBackoff = 120 * time.Second
-	// ircHealthySession is how long a connection must stay up before a
-	// disconnect is treated as a fresh transient (backoff reset) instead of
-	// resuming an accumulated wait - same threshold family as matrix #432.
-	ircHealthySession = 60 * time.Second
-	ircMaxMessageLen  = 400
-	// ircInterMessageDelay is the delay between consecutive PRIVMSG lines.
-	// IRC servers enforce flood protection; 300ms is conservative.
-	// Source: RFC 2812 §2.3.1, common IRC server flood protection policies.
-	ircInterMessageDelay = 300 * time.Millisecond
+	ircHealthySession      = 60 * time.Second
+	ircMaxMessageLen       = 400
+	ircInterMessageDelay   = 300 * time.Millisecond
 )
 
 type ircAdapter struct {
 	name    string
 	manager *Manager
 
-	// Connection
 	host     string
 	port     int
 	useTLS   bool
 	password string
-	proxy    string // HTTP/SOCKS5 proxy URL
+	proxy    string
 
-	// Identity
 	nick     string
 	nickPass string
 	realName string
 
-	// Channels to join
 	channels []string
 
-	mu        sync.RWMutex
-	conn      net.Conn
-	connected bool
-	closed    bool
-	// healthySince marks when the current connection was established
-	// (#3562); run() uses it to reset reconnect backoff after a healthy
-	// session. Only the run-loop goroutine reads and writes it.
+	mu           sync.RWMutex
+	conn         net.Conn
+	connected    bool
+	closed       bool
 	healthySince time.Time
 
-	// writeMu serializes raw writes to conn. a.mu (RLock) does not serialize
-	// concurrent writers, and three goroutines (read loop, keepalive, send path)
-	// can call sendRaw concurrently - interleaved partial writes produce
-	// malformed IRC lines and server disconnects (issue #960).
 	writeMu sync.Mutex
 }
 
@@ -157,10 +141,6 @@ func (a *ircAdapter) Close() error {
 	return nil
 }
 
-// ircBackoffAfterDisconnect (#3562) decides the next reconnect wait after a
-// disconnect: a session that stayed healthy past ircHealthySession resets
-// the accumulated backoff to the base (fresh transient); anything shorter
-// keeps the accumulated value so rapid-fail loops still back off.
 func ircBackoffAfterDisconnect(current, healthyFor time.Duration) time.Duration {
 	if healthyFor >= ircHealthySession {
 		return ircReconnectBackoff
@@ -557,9 +537,6 @@ func splitIRCMessage(text string, maxLen int) []string {
 	return splitMessageBytes(text, maxLen, false)
 }
 
-// ircTextContainsNick reports whether text mentions nick, case-insensitive
-// per IRC RFC 2812 casemapping (issue #960: servers may render the nick in a
-// different case than configured, e.g. "Bot" vs configured "bot").
 func ircTextContainsNick(text, nick string) bool {
 	if nick == "" {
 		return false
@@ -567,17 +544,6 @@ func ircTextContainsNick(text, nick string) bool {
 	return strings.Contains(strings.ToLower(text), strings.ToLower(nick))
 }
 
-// ircRemoveNick strips occurrences of nick from text (case-insensitive) so the
-// mention itself does not leak into the message forwarded to the agent.
-//
-// #1221: word-based EqualFold matching. The previous implementation located
-// the nick in strings.ToLower(text) but sliced the ORIGINAL string with those
-// byte offsets; Unicode case mappings that change byte length (İ U+0130,
-// K U+212A shrink; Ⱥ U+023A grows) shifted the offsets, corrupting the text
-// or panicking with out-of-range slices - remotely triggerable by any channel
-// user, permanently killing the adapter's run goroutine. EqualFold compares
-// case-insensitively without building a second string, so no cross-string
-// byte indexing exists at all.
 func ircRemoveNick(text, nick string) string {
 	if nick == "" {
 		return text
@@ -597,7 +563,6 @@ func ircRemoveNick(text, nick string) string {
 	return b.String()
 }
 
-// TriggerTyping - IRC has no typing indicator.
 func (a *ircAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 	return nil
 }

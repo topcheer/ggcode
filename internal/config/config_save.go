@@ -10,9 +10,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// effectiveFilePath returns the file path that should be used for config I/O.
-// When a saveScope is set to "instance", it returns the instance config path.
-// Otherwise it returns the global config path (c.FilePath).
 func (c *Config) effectiveFilePath(saveScope string) string {
 	if saveScope == "instance" && c.instancePath != "" {
 		return c.instancePath
@@ -20,15 +17,6 @@ func (c *Config) effectiveFilePath(saveScope string) string {
 	return c.FilePath
 }
 
-// Save persists the config to its configured file path (global config).
-//
-// Merge semantics: if the target file already exists, the current config is
-// overlaid onto the existing file content via deep-merge. This prevents one
-// process from clobbering fields that another process added concurrently.
-// Only when the file does NOT exist (first write) is a full overwrite used.
-//
-// If an instance config was merged at load time (globalSnap is set), instance-
-// only fields are excluded so they never leak into the global file.
 func (c *Config) Save() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -79,22 +67,11 @@ func (c *Config) Save() error {
 		}
 	}
 
-	//    3b. (#4506) Same collection for ZERO NUMBERS: the public contract
-	//    (e.g. SetEndpointModelLimits "A value of 0 means 'unset' and will
-	//    clear the field") requires 0 to clear the persisted value, but the
-	//    overlay strips zeroes (3) and deep-merge keeps absent keys - so the
-	//    disk value survived every save. Collected here so the merged map can
-	//    be pruned below.
 	clearedInMemory := collectEmptyStringPaths(currentRaw)
 
-	// #4506 note: raw-map collection CANNOT see the zeros - ContextWindow/
-	// MaxTokens carry yaml omitempty, so yaml.Marshal drops 0 before we ever
-	// look. The contract fields are collected from the CONFIG STRUCT instead
-	// (endpointZeroClearPaths below).
 	clearedZeros := endpointZeroClearPaths(c)
 	cleanZeroYAMLValues(currentRaw)
 
-	// 4. Build the data to write: merge onto existing file, or full write.
 	var data []byte
 	existingData, readErr := os.ReadFile(c.FilePath)
 
@@ -109,13 +86,6 @@ func (c *Config) Save() error {
 
 			applyClearedTombstones(existingRaw, c.diskStrSnap, clearedInMemory)
 
-			// (#4506) Delete numeric keys the merged view says are 0 - the
-			// "0 = unset/clear" contract. Numeric fields carry no Load-time
-			// string snapshot, so there is no #284 changed-on-disk guard
-			// here; a 0 in memory against a nonzero on-disk value is BY
-			// CONTRACT an explicit clear, so deleting is the documented
-			// behavior (a field merely never set is 0 in memory AND absent
-			// from disk, which this loop no-ops on).
 			applyZeroNumberClears(existingRaw, clearedZeros)
 			merged, marshalErr := yaml.Marshal(existingRaw)
 			if marshalErr != nil {
@@ -160,9 +130,6 @@ func (c *Config) Save() error {
 	return nil
 }
 
-// globalOnlyVendors returns the subset of merged vendors that existed in the
-// global snapshot — i.e. excluding vendors that came from the instance config
-// merge. If globalSnap is unavailable the merged set is returned unchanged.
 func globalOnlyVendors(merged, globalSnapVendors map[string]VendorConfig) map[string]VendorConfig {
 	if globalSnapVendors == nil {
 		return merged
@@ -177,13 +144,6 @@ func globalOnlyVendors(merged, globalSnapVendors map[string]VendorConfig) map[st
 	return out
 }
 
-// deepMergeYAMLMaps merges src onto dst in-place. For each key:
-//   - If both dst and src have the key with map values, merge recursively.
-//   - Otherwise (scalars, slices, type mismatches), src overwrites dst.
-//
-// This ensures that nested maps (like vendors, im.adapters, knight) are
-// merged field-by-field, while slices (like mcp_servers) are replaced
-// wholesale (honoring additions and removals from the current process).
 func deepMergeYAMLMaps(dst, src map[string]interface{}) {
 	for key, srcVal := range src {
 
@@ -203,10 +163,6 @@ func deepMergeYAMLMaps(dst, src map[string]interface{}) {
 	}
 }
 
-// snapshotDiskStringKeys flattens a raw YAML map into dotted paths of
-// non-empty string leaves: {"ui": {"theme": "dark"}} -> {"ui.theme": "dark"}.
-// Values are captured verbatim (pre env-expansion) because Save() compares
-// them against the on-disk file, which is also pre-expansion (#610).
 func snapshotDiskStringKeys(m map[string]interface{}) map[string]string {
 	out := map[string]string{}
 	var walk func(prefix []string, cur map[string]interface{})
@@ -227,11 +183,6 @@ func snapshotDiskStringKeys(m map[string]interface{}) map[string]string {
 	return out
 }
 
-// endpointZeroClearPaths returns the YAML paths of the two documented
-// "0 = unset/clear" contract fields (SetEndpointModelLimits: context_window
-// and max_tokens) for every endpoint whose in-memory value is 0. Struct-level
-// collection is required because yaml omitempty drops 0 at marshal time, so
-// no raw-map pass can see them.
 func endpointZeroClearPaths(c *Config) map[string]bool {
 	out := map[string]bool{}
 	if c == nil {
@@ -250,10 +201,6 @@ func endpointZeroClearPaths(c *Config) map[string]bool {
 	return out
 }
 
-// applyZeroNumberClears deletes the collected zero-number paths from the
-// merged disk view (#4506): without this, the "0 clears the field"
-// contract never reached the file because the merge overlay strips zeroes
-// and deep-merge preserves absent keys.
 func applyZeroNumberClears(existingRaw map[string]interface{}, zeros map[string]bool) {
 	for path := range zeros {
 		if _, exists := yamlPathLookup(existingRaw, path); exists {
@@ -262,9 +209,6 @@ func applyZeroNumberClears(existingRaw map[string]interface{}, zeros map[string]
 	}
 }
 
-// collectEmptyStringPaths returns the dotted paths of "" string leaves in m.
-// These are the fields the current in-memory config has at its zero value and
-// which cleanZeroYAMLValues will strip from the merge overlay (#610).
 func collectEmptyStringPaths(m map[string]interface{}) map[string]bool {
 	out := map[string]bool{}
 	var walk func(prefix []string, cur map[string]interface{})
@@ -285,16 +229,6 @@ func collectEmptyStringPaths(m map[string]interface{}) map[string]bool {
 	return out
 }
 
-// applyClearedTombstones deletes keys whose value was present on disk at Load
-// time (per snap) and has since been explicitly cleared in memory to the empty
-// string (per cleared). The #284 multi-process guard applies in three
-// dimensions (#610):
-//   - keys absent from disk at Load time are never deleted (a field merely
-//     left at its zero default must not erase another process's value);
-//   - a key whose on-disk value changed since our Load (another process wrote
-//     a different value) is preserved, not deleted;
-//   - ${VAR} env references are never tombstoned, so key rotation semantics
-//     (#608) are unaffected.
 func applyClearedTombstones(existingRaw map[string]interface{}, snap map[string]string, cleared map[string]bool) {
 	if len(snap) == 0 || len(cleared) == 0 {
 		return
@@ -316,7 +250,6 @@ func applyClearedTombstones(existingRaw map[string]interface{}, snap map[string]
 	}
 }
 
-// yamlPathLookup resolves a dotted path against a nested YAML map.
 func yamlPathLookup(m map[string]interface{}, path string) (interface{}, bool) {
 	parts := strings.Split(path, ".")
 	var cur interface{} = m
@@ -334,8 +267,6 @@ func yamlPathLookup(m map[string]interface{}, path string) (interface{}, bool) {
 	return cur, true
 }
 
-// yamlPathDelete removes the leaf at a dotted path, pruning ancestor maps that
-// become empty as a result.
 func yamlPathDelete(m map[string]interface{}, parts []string) {
 	if len(parts) == 0 {
 		return
@@ -352,18 +283,6 @@ func yamlPathDelete(m map[string]interface{}, parts []string) {
 	delete(m, parts[0])
 }
 
-// cleanZeroYAMLValues recursively removes zero-value entries from a YAML map
-// so they don't overwrite real values during merge. Removed zero values:
-//   - nil
-//   - "" (empty string)
-//   - empty []interface{}
-//   - empty map[string]interface{} (after recursive cleaning)
-//
-// Integers (0) and booleans (false) are NOT cleaned because they can be
-// All int fields in Config use 0 as the "not set / default" sentinel
-// (max_iterations=0 means unlimited, max_tokens=0 means unlimited, etc.),
-// so cleaning 0 is semantically correct: it means "preserve the existing
-// file value rather than overwriting it with the default".
 func cleanZeroYAMLValues(m map[string]interface{}) {
 	for k, v := range m {
 		switch val := v.(type) {
@@ -398,9 +317,6 @@ func cleanZeroYAMLValues(m map[string]interface{}) {
 	}
 }
 
-// patchConfigFile reads the effective config file (global or instance depending
-// on saveScope), applies a patch function to the raw YAML map, and writes it back.
-// This is the common implementation for Save*Preference methods.
 func (c *Config) patchConfigFile(patch func(raw map[string]interface{})) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -464,7 +380,6 @@ func (c *Config) SaveLanguagePreference(lang string) error {
 	return nil
 }
 
-// SaveImpersonation persists impersonation settings to the config file.
 func (c *Config) SaveImpersonation(imp ImpersonationConfig) error {
 	return c.patchConfigFile(func(raw map[string]interface{}) {
 		if imp.Preset == "" && imp.CustomVersion == "" && len(imp.CustomHeaders) == 0 {
@@ -526,7 +441,6 @@ func (c *Config) SaveDefaultModePreference(mode string) error {
 	return nil
 }
 
-// SaveKnightEnabled persists the knight.enabled setting to the config file.
 func (c *Config) SaveKnightEnabled(enabled bool) error {
 	if err := c.patchConfigFile(func(raw map[string]interface{}) {
 		knightMap, _ := raw["knight"].(map[string]interface{})
@@ -543,8 +457,6 @@ func (c *Config) SaveKnightEnabled(enabled bool) error {
 	return nil
 }
 
-// SaveA2AEnabled persists the a2a.disabled setting to the config file.
-// A2A is enabled by default; setting enabled=false writes disabled=true.
 func (c *Config) SaveA2AEnabled(enabled bool) error {
 	if err := c.patchConfigFile(func(raw map[string]interface{}) {
 		a2aMap, _ := raw["a2a"].(map[string]interface{})
@@ -677,7 +589,6 @@ func (c *Config) AddIMAdapter(name string, adapter IMAdapterConfig) error {
 	})
 }
 
-// RemoveIMAdapter removes an IM adapter from the configuration.
 func (c *Config) RemoveIMAdapter(name string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -711,9 +622,6 @@ func (c *Config) RemoveIMAdapter(name string) error {
 	})
 }
 
-// SetIMAdapterEnabled toggles the enabled state of an IM adapter.
-// Uses patchConfigFile so enabled=false is explicitly written (the
-// yaml tag has omitempty, so Save()-based merge would omit it).
 func (c *Config) SetIMAdapterEnabled(name string, enabled bool) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -735,8 +643,6 @@ func (c *Config) SetIMAdapterEnabled(name string, enabled bool) error {
 	})
 }
 
-// SetIMAdapterExtra sets a single key in the adapter's Extra map.
-// Uses patchConfigFile for correct merge semantics.
 func (c *Config) SetIMAdapterExtra(name, key, value string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -770,10 +676,6 @@ func (c *Config) SetIMAdapterExtra(name, key, value string) error {
 	})
 }
 
-// SetIMAdapterEnv sets a single key in the adapter's Env map.
-// #897: env edits previously fell into SetIMAdapterExtra, writing a literal
-// 'env.FOO' key into Extra while adapter.Env kept its old value (config
-// pollution + silently ineffective edits + fake bounce-back in the panel).
 func (c *Config) SetIMAdapterEnv(name, key, value string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -807,12 +709,6 @@ func (c *Config) SetIMAdapterEnv(name, key, value string) error {
 	})
 }
 
-// PatchIMAdapter patches a single IM adapter. For global scope, it operates
-// on im.yaml (external file). For instance scope, it patches the instance
-// ggcode.yaml directly (instance configs keep inline im: section).
-// PatchIMAdapter patches a single IM adapter's persisted form. Public entry
-// takes imAdaptersMu; internal callers already holding the lock (Set*,
-// AddIMTarget) use patchIMAdapterUnlocked (#2152: mutex is not reentrant).
 func (c *Config) PatchIMAdapter(name string, patch func(adapter map[string]interface{})) error {
 	c.imAdaptersMu.Lock()
 	defer c.imAdaptersMu.Unlock()
@@ -879,8 +775,6 @@ func (c *Config) patchIMAdapterUnlocked(name string, patch func(adapter map[stri
 	return writeSecureConfigFile(imPath, out)
 }
 
-// patchExternalFile is the external-file equivalent of patchConfigFile.
-// It patches a standalone YAML file (vendors.yaml, im.yaml, mcp_servers.yaml).
 func (c *Config) patchExternalFile(section string, patch func(raw map[string]interface{})) error {
 	configDir := c.externalConfigDir()
 	path := externalFilePath(configDir, section)
@@ -910,7 +804,6 @@ func (c *Config) patchExternalFile(section string, patch func(raw map[string]int
 	return writeSecureConfigFile(path, out)
 }
 
-// externalConfigDir returns the directory where external config files live.
 func (c *Config) externalConfigDir() string {
 
 	if c.saveScope == "instance" && c.instanceDir != "" {
@@ -923,7 +816,6 @@ func (c *Config) externalConfigDir() string {
 	return d
 }
 
-// recompactConfigFile reads a config file, strips defaults, and rewrites it.
 func recompactConfigFile(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -933,8 +825,6 @@ func recompactConfigFile(path string) error {
 	return writeSecureConfigFile(path, data)
 }
 
-// stripDefaultsFromYAML removes top-level YAML entries that are identical to
-// DefaultConfig(). This prevents 22 built-in vendors from bloating the config.
 func stripDefaultsFromYAML(data []byte) []byte {
 	if len(data) == 0 {
 		return data

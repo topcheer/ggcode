@@ -8,7 +8,6 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// mockEmitter tracks EmitText calls and can simulate errors
 type mockEmitter struct {
 	emitTextCalls         []string
 	emitTextError         error
@@ -54,7 +53,6 @@ func (m *mockEmitter) EmitToolStatus(toolName, rawArgs string)                  
 func (m *mockEmitter) EmitRoundSummary(text string, toolCalls, toolSuccesses, toolFailures int) {}
 func (m *mockEmitter) EmitKnightReport(report string)                                           {}
 
-// mockAdapter simulates an adapter for testing
 type mockAdapter struct {
 	name                 string
 	interactiveSupported bool
@@ -76,7 +74,6 @@ func (m *mockAdapter) SendInteractive(ctx context.Context, binding ChannelBindin
 func (m *mockAdapter) Ping(ctx context.Context) error { return nil }
 func (m *mockAdapter) Close() error                   { return nil }
 
-// TestBugD_EmitTextReturnsError tests that EmitText returns error on IM disconnect
 func TestBugD_EmitTextReturnsError(t *testing.T) {
 	mockEm := &mockEmitter{}
 	mockEm.emitTextError = errors.New("IM disconnected")
@@ -90,8 +87,6 @@ func TestBugD_EmitTextReturnsError(t *testing.T) {
 	}
 }
 
-// TestBugF_PendingAskRegisteredBeforeSend tests that pendingAsk is registered
-// before interactive buttons are sent, eliminating the race window
 func TestBugF_PendingAskRegisteredBeforeSend(t *testing.T) {
 	mockEm := &mockEmitter{}
 
@@ -119,16 +114,11 @@ func TestBugF_PendingAskRegisteredBeforeSend(t *testing.T) {
 	}
 }
 
-// TestBugA_SubmitInboundMessageReverifyPending tests that pending is re-verified
-// after re-locking to avoid the race where approval/ask timeout between routing
-// snapshot and channel read
 func TestBugA_SubmitInboundMessageReverifyPending(t *testing.T) {
 
 	t.Skip("Requires full bridge setup - covered by integration tests")
 }
 
-// TestBugB_PublishAdapterStateTerminalGuard tests that late error states
-// don't overwrite a properly set disconnected state
 func TestBugB_PublishAdapterStateTerminalGuard(t *testing.T) {
 
 	t.Skip("Requires adapter runtime setup - covered by integration tests")

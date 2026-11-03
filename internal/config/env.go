@@ -12,30 +12,14 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// envPattern matches the plain ${VAR} form.
 var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
-// #559 (Bug F): also recognize the standard bash default-value forms
-// ${VAR:-default} and ${VAR-default} so they no longer leak through as literal
-// strings (a literal "${MY_KEY:-fallback}" silently became the API key value,
-// with zero warnings, and was then treated as a plaintext secret by the key
-// migration). Group 1 is the variable name, group 2 is the default value
-// (present only for the :-/- form).
 var envDefaultPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*))?\}`)
 
-// envAnyRefPattern matches any ${...} form, including ones the expander does
-// not understand; used by WarnUnresolvedEnvRefs to report leftovers.
 var envAnyRefPattern = regexp.MustCompile(`\$\{[^}]*\}`)
 
 type envLookupFunc func(string) (string, bool)
 
-// ExpandEnv replaces ${VAR} patterns in a string with environment variable values.
-// If the variable is not set, the pattern is left unchanged.
-//
-// #559 (Bug F): ${VAR:-default} (and ${VAR-default}) is expanded using bash
-// semantics: if VAR is unset or empty (:-) — or unset only (-) — the default
-// value is used. Unresolvable/unparseable ${...} forms are reported via
-// debug.Log instead of silently passing through.
 func ExpandEnv(s string) string {
 	return ExpandEnvWithLookup(s, os.LookupEnv)
 }
@@ -79,7 +63,6 @@ func ExpandEnvWithLookup(s string, lookup envLookupFunc) string {
 	})
 }
 
-// ExpandEnvRecursive expands ${VAR} in all string values of a map recursively.
 func ExpandEnvRecursive(m map[string]interface{}) map[string]interface{} {
 	return ExpandEnvRecursiveWithLookup(m, os.LookupEnv)
 }
@@ -109,11 +92,6 @@ func expandValueWithLookup(v interface{}, lookup envLookupFunc) interface{} {
 	}
 }
 
-// WarnUnresolvedEnvRefs reports ${...} references in the given raw config map
-// that the expander does not understand (any ${...} that is neither plain
-// ${VAR} nor ${VAR:-default}/${VAR-default}). Previously such forms (e.g.
-// "${MY_KEY:?err}") silently became literal credential values with zero
-// warnings (#559 Bug F).
 func WarnUnresolvedEnvRefs(raw map[string]interface{}) {
 	if raw == nil {
 		return
@@ -139,12 +117,10 @@ func WarnUnresolvedEnvRefs(raw map[string]interface{}) {
 	walk(raw)
 }
 
-// HomeDir returns the user's home directory.
 func HomeDir() string {
 	return util.HomeDir()
 }
 
-// ConfigDir returns ~/.ggcode
 func ConfigDir() string {
 	guardRealHomeDir("ConfigDir()")
 
@@ -155,7 +131,6 @@ func ConfigDir() string {
 	return filepath.Join(home, ".ggcode")
 }
 
-// ConfigPath returns the default config file path.
 func ConfigPath() string {
 
 	return filepath.Join(ConfigDir(), "ggcode.yaml")

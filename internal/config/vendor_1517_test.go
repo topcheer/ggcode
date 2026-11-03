@@ -4,9 +4,6 @@ import (
 	"testing"
 )
 
-// #1517 case C: removing the ACTIVE endpoint/vendor must fall the selection
-// back to a remaining one instead of leaving it dangling (which made
-// NeedsOnboard pop onboarding on every launch).
 func Test1517RemoveActiveSelectionFallback(t *testing.T) {
 
 	c := &Config{

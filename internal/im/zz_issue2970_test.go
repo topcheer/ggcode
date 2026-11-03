@@ -8,10 +8,6 @@ import (
 	"time"
 )
 
-// fakeSOCKS5Server accepts one handshake, answering with the given write
-// chunking, and echoes everything after a successful CONNECT back to the
-// client. writeChunk splits server writes into separate TCP writes of
-// chunkSize bytes (fragmented delivery).
 func fakeSOCKS5Server(t *testing.T, ln net.Listener, chunk int, greeting []byte, reply []byte, proxyRejectMethod bool) {
 	t.Helper()
 	conn, err := ln.Accept()
@@ -44,7 +40,6 @@ func fakeSOCKS5Server(t *testing.T, ln net.Listener, chunk int, greeting []byte,
 	}
 	writeChunked(greeting)
 
-	// consume CONNECT request (variable length; read greedily with deadline)
 	var connectReq []byte
 	buf := make([]byte, 512)
 	for {
@@ -92,9 +87,6 @@ func socks5ProxyURL(host string) *url.URL {
 	return &url.URL{Scheme: "socks5", Host: host}
 }
 
-// TestIssue2970FragmentedGreeting verifies the greeting is read with
-// ReadFull: a proxy that writes VER and METHOD as separate 1-byte writes
-// must still produce a working connection.
 func TestIssue2970FragmentedGreeting(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -122,9 +114,6 @@ func TestIssue2970FragmentedGreeting(t *testing.T) {
 	}
 }
 
-// TestIssue2970FragmentedReplyDomainAddr verifies the reply header and the
-// domain bound address are fully consumed even when the reply arrives in
-// 2-byte fragments: the caller's first write must land cleanly (echo proof).
 func TestIssue2970FragmentedReplyDomainAddr(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -153,8 +142,6 @@ func TestIssue2970FragmentedReplyDomainAddr(t *testing.T) {
 	}
 }
 
-// TestIssue2970IPv6BoundAddrDrain verifies the IPv6 ATYP branch drains all
-// 16 + 2 bytes.
 func TestIssue2970IPv6BoundAddrDrain(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -185,8 +172,6 @@ func TestIssue2970IPv6BoundAddrDrain(t *testing.T) {
 	}
 }
 
-// TestIssue2970AuthRequiredRejected verifies a proxy that requires auth
-// (method 0x02) is rejected with the auth error, not a zero-byte false pass.
 func TestIssue2970AuthRequiredRejected(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -201,8 +186,6 @@ func TestIssue2970AuthRequiredRejected(t *testing.T) {
 	}
 }
 
-// TestIssue2970UnknownAddressType verifies the unknown-ATYP branch errors
-// instead of leaving bound bytes in the stream.
 func TestIssue2970UnknownAddressType(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

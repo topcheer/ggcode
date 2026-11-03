@@ -30,7 +30,6 @@ func (m *Manager) BindChannel(binding ChannelBinding) (ChannelBinding, error) {
 	return bound, nil
 }
 
-// GetBindingContextToken returns the persisted ContextToken for the given adapter.
 func (m *Manager) GetBindingContextToken(adapter string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -42,10 +41,6 @@ func (m *Manager) GetBindingContextToken(adapter string) string {
 	return ""
 }
 
-// UpdateBindingContextToken updates the ContextToken (and ContextTokenUpdatedAt) on the
-// binding for the given adapter. The token is persisted to disk so it survives restarts.
-// WeChat iLink requires context_token for every sendmessage; without it only ~2 messages
-// succeed before the server stops responding. Tokens expire after ~24 hours.
 func (m *Manager) UpdateBindingContextToken(adapter, token string) {
 	m.mu.Lock()
 	for _, b := range m.currentBindings {
@@ -117,7 +112,6 @@ func (m *Manager) UnbindChannel(workspace string) error {
 	return nil
 }
 
-// DeleteBinding removes a specific persisted binding by adapter and workspace.
 func (m *Manager) DeleteBinding(adapter, workspace string) error {
 	m.mu.Lock()
 	if m.bindingStore == nil {
@@ -198,12 +192,6 @@ func (m *Manager) BindAdapterToWorkspace(adapterName, workspace string) error {
 	return nil
 }
 
-// UnbindAdapter removes the binding for whatever workspace has the given
-// adapter name. This is needed when unbinding from a panel where the current
-// session workspace may differ from the workspace that originally bound the
-// AdapterBindings returns the workspaces the adapter is currently bound to
-// (#1811 case 2: Rebind captures these so a failed rebind can restore the
-// previous binding instead of leaving the adapter silently dead).
 func (m *Manager) AdapterBindings(adapterName string) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -221,9 +209,6 @@ func (m *Manager) AdapterBindings(adapterName string) []string {
 	return out
 }
 
-// adapter. Idempotent: no persisted binding for this adapter is a successful
-// no-op, not an error (#396 cascade / #498 note — the old doc claimed
-// ErrNoChannelBound here, contradicting the implementation below it).
 func (m *Manager) UnbindAdapter(adapterName string) error {
 	m.mu.Lock()
 	if m.bindingStore != nil {
@@ -295,10 +280,6 @@ func (m *Manager) ClearChannelByAdapter(adapterName string) error {
 	return nil
 }
 
-// DisableBinding temporarily disables an adapter's binding for the current session.
-// The binding is moved from currentBindings to disabledBindings, so it will no
-// longer receive outbound messages and inbound messages will be rejected.
-// The persistent binding is NOT deleted, so it can be re-enabled later.
 func (m *Manager) DisableBinding(adapterName string) error {
 	m.mu.Lock()
 	binding, ok := m.currentBindings[adapterName]
@@ -339,9 +320,6 @@ func (m *Manager) DisableBinding(adapterName string) error {
 	return nil
 }
 
-// EnableBinding re-enables a previously disabled adapter binding.
-// The binding is moved back to currentBindings so it resumes receiving messages.
-// LastSessionID is set to the current session to claim ownership.
 func (m *Manager) EnableBinding(adapterName string) error {
 	m.mu.Lock()
 	binding, ok := m.disabledBindings[adapterName]
@@ -399,7 +377,6 @@ func (m *Manager) EnableBinding(adapterName string) error {
 	return nil
 }
 
-// DisabledBindings returns a snapshot of currently disabled bindings.
 func (m *Manager) DisabledBindings() []ChannelBinding {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -410,7 +387,6 @@ func (m *Manager) DisabledBindings() []ChannelBinding {
 	return out
 }
 
-// IsBindingDisabled returns true if the given adapter's binding is currently disabled.
 func (m *Manager) IsBindingDisabled(adapterName string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -418,9 +394,6 @@ func (m *Manager) IsBindingDisabled(adapterName string) bool {
 	return ok
 }
 
-// MuteBinding mutes an adapter for this process only. The binding stays in
-// currentBindings (so the UI still shows it as bound) but is marked Muted.
-// The connection is dropped so inbound/outbound messages stop.
 func (m *Manager) MuteBinding(adapterName string) error {
 	m.mu.Lock()
 	binding, ok := m.currentBindings[adapterName]
@@ -445,7 +418,6 @@ func (m *Manager) MuteBinding(adapterName string) error {
 	return nil
 }
 
-// UnmuteBinding unmutes a previously muted adapter and restarts it.
 func (m *Manager) UnmuteBinding(adapterName string) error {
 	m.mu.Lock()
 	binding, ok := m.currentBindings[adapterName]
@@ -499,13 +471,10 @@ func (m *Manager) UnmuteBinding(adapterName string) error {
 	return nil
 }
 
-// Returns the number of adapters that were muted.
 func (m *Manager) MuteAll() (int, error) {
 	return m.MuteAllExcept("")
 }
 
-// MuteAllExcept mutes all currently active bindings except the named adapter.
-// If exclude is empty, all bindings are muted. Returns the number muted.
 func (m *Manager) MuteAllExcept(exclude string) (int, error) {
 	m.mu.Lock()
 	count := 0
@@ -529,19 +498,14 @@ func (m *Manager) MuteAllExcept(exclude string) (int, error) {
 	return count, nil
 }
 
-// bindingOwnership classifies a binding's persisted owner relative to this
-// session. Shared by UnmuteBinding and UnmuteAll so both apply the identical
-// #689/#693 rule (live foreign owner → reject/skip; dead foreign owner →
-// takeover; own or unclaimed → proceed).
 type bindingOwnership int
 
 const (
-	ownershipOwned       bindingOwnership = iota // ours or unclaimed
-	ownershipForeignDead                         // foreign owner's instance is dead — takeover allowed
-	ownershipForeignLive                         // foreign owner's instance is alive — reject/skip
+	ownershipOwned bindingOwnership = iota
+	ownershipForeignDead
+	ownershipForeignLive
 )
 
-// bindingOwnershipLocked classifies binding ownership. Caller must hold m.mu.
 func (m *Manager) bindingOwnershipLocked(binding *ChannelBinding) bindingOwnership {
 	if m.session == nil || binding.LastSessionID == "" || binding.LastSessionID == m.session.SessionID {
 		return ownershipOwned
@@ -552,12 +516,6 @@ func (m *Manager) bindingOwnershipLocked(binding *ChannelBinding) bindingOwnersh
 	return ownershipForeignDead
 }
 
-// foreignOwnerPossiblyAliveLocked reports whether a foreign-owed binding's
-// owner might still be running. Caller must hold m.mu (or accept the race).
-// It consults the instance-detect registry: another LIVE instance in this
-// workspace could own the binding → true. No other live instance (only self)
-// → the owner must be dead → false. Unregistered detector (nil) → true
-// (unknown, be conservative and keep the #689 rejection).
 func (m *Manager) foreignOwnerPossiblyAliveLocked() bool {
 	if m.instanceDetect == nil {
 		return true
@@ -565,12 +523,6 @@ func (m *Manager) foreignOwnerPossiblyAliveLocked() bool {
 	return len(m.instanceDetect.ListInstances()) > 1
 }
 
-// UnmuteAll unmutes all muted bindings for this process.
-// Returns the number of adapters that were unmuted.
-//
-// #693: applies the same ownership rule as UnmuteBinding — bindings owned by
-// another LIVE session are skipped (staying muted), while dead owners' orphan
-// bindings are taken over and re-claimed for this session.
 func (m *Manager) UnmuteAll() (int, error) {
 	m.mu.Lock()
 	var toRestart []string
@@ -630,12 +582,6 @@ func (m *Manager) UnmuteAll() (int, error) {
 	return count, nil
 }
 
-// DisableAll disables all ACTIVE (non-muted) bindings owned by this
-// session. #1233: muted bindings — where #689/#693 park foreign-owned
-// channels — are left untouched, and an unmuted binding that turns out to
-// be foreign-live is skipped (same guard as UnmuteAll), so disable-all can
-// no longer clear another live instance's claim and let a third instance
-// hijack the channel.
 func (m *Manager) DisableAll() (int, error) {
 	m.mu.Lock()
 	count := 0
@@ -683,12 +629,6 @@ func (m *Manager) DisableAll() (int, error) {
 	return count, nil
 }
 
-// EnableAll re-enables all disabled bindings.
-//
-// #967: each enabled binding goes through the SAME claim path as
-// EnableBinding, including the #689/#693 ownership guard — a binding owned by
-// another LIVE session is skipped (stays disabled), everything else is
-// re-claimed for this session both in memory and in the store.
 func (m *Manager) EnableAll() (int, error) {
 	m.mu.Lock()
 	var toRestart []string
@@ -755,9 +695,6 @@ func (m *Manager) EnableAll() (int, error) {
 	return count, nil
 }
 
-// ApplyAdapterConfig moves adapters marked as disabled in config from
-// currentBindings to disabledBindings. Call this after BindSession and
-// reloadBindingLocked during startup.
 func (m *Manager) ApplyAdapterConfig(adapters map[string]bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -772,7 +709,6 @@ func (m *Manager) ApplyAdapterConfig(adapters map[string]bool) {
 	}
 }
 
-// MutedBindings returns a snapshot of currently muted bindings.
 func (m *Manager) MutedBindings() []ChannelBinding {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -785,7 +721,6 @@ func (m *Manager) MutedBindings() []ChannelBinding {
 	return out
 }
 
-// IsBindingMuted returns true if the given adapter's binding is currently muted.
 func (m *Manager) IsBindingMuted(adapterName string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -890,18 +825,6 @@ func (m *Manager) SyncSessionHistory(ctx context.Context, binding ChannelBinding
 	return nil
 }
 
-// ReservePassiveSeqs atomically reserves n passive-reply seq slots for the
-// binding matching (workspace, messageID) and returns the first usable seq
-// (store count before reservation + 1). The reservation happens in the
-// binding store under its cross-process file lock when the store implements
-// PassiveSeqReserver (#3319: TUI + daemon instances each holding divergent
-// in-memory counters previously emitted the same msg_seq and QQ deduplicated
-// one send away). Stores without the capability fall back to the in-process
-// counter (single-instance behavior, unchanged).
-//
-// Reserving before sending (rather than recording after) may skip seq
-// numbers when a send later fails; skipping is safe - the server dedup key
-// only requires uniqueness, not density.
 func (m *Manager) ReservePassiveSeqs(workspace, messageID string, n int) (int, error) {
 	if n < 1 {
 		return 0, fmt.Errorf("reserving %d passive seqs: n must be >= 1", n)
@@ -991,10 +914,6 @@ func (m *Manager) RecordPassiveReply(workspace, messageID string, sentAt time.Ti
 	return nil
 }
 
-// RecordPassiveReplyByMessage (#3326) locates the binding by its inbound
-// message id alone (no workspace at hand on echo paths) and records one
-// passive reply - everything under m.mu, unlike the adapter-side bare map
-// range it replaces.
 func (m *Manager) RecordPassiveReplyByMessage(messageID string, sentAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1020,8 +939,6 @@ func (m *Manager) RecordPassiveReplyByMessage(messageID string, sentAt time.Time
 	return nil
 }
 
-// recordPassiveReplyLocked advances one binding's passive-reply counter
-// with the #967 persist-rollback discipline. Caller holds m.mu.
 func (m *Manager) recordPassiveReplyLocked(b *ChannelBinding, sentAt time.Time) error {
 	if sentAt.IsZero() {
 		sentAt = time.Now()
@@ -1042,8 +959,6 @@ func (m *Manager) recordPassiveReplyLocked(b *ChannelBinding, sentAt time.Time) 
 	return nil
 }
 
-// RecordOutboundMessage records the message ID of a bot reply so that
-// typing indicator reactions can target it when no inbound message exists.
 func (m *Manager) RecordOutboundMessage(workspace, adapter, messageID string) error {
 	m.mu.Lock()
 	workspace = normalizeWorkspace(workspace)
@@ -1069,8 +984,6 @@ func (m *Manager) RecordOutboundMessage(workspace, adapter, messageID string) er
 	return nil
 }
 
-// TriggerTyping sends a typing indicator to all bound adapters that
-// implement the TypingIndicator interface.
 func (m *Manager) TriggerTyping(ctx context.Context) {
 	m.mu.RLock()
 	var targets []struct {

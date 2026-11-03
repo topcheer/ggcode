@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// extraSink is a test Sink distinct from stubSink in runtime_test.go.
 type extraSink struct {
 	nameVal string
 	sent    []OutboundEvent

@@ -8,24 +8,8 @@ import (
 	"time"
 )
 
-// streamIdleReadTimeout bounds how long a response body may stay silent
-// (no bytes read) before the underlying request context is cancelled and the
-// blocked Read returns. Without it, a dropped proxy connection (proxy accepts
-// the TCP peer, response headers already flushed, then the tunnel dies
-// without FIN/RST) leaves the SSE read loop blocked forever: net/http has no
-// idle/read deadline for body bytes, http.Client.Timeout is deliberately 0
-// for streaming LLM responses, and the agent-layer stall detector is advisory
-// only (it warns, never cancels).
-//
-// 10 minutes is deliberately generous: during long reasoning pauses providers
-// send SSE heartbeats (Anthropic ping events, OpenAI keep-alive comments),
-// but some proxies strip them, so the threshold must tolerate a genuinely
-// quiet - yet alive - stream. A dead tunnel produces no bytes ever, so it is
-// still cut off eventually instead of hanging forever.
 const defaultStreamIdleReadTimeout = 10 * time.Minute
 
-// streamIdleReadTimeoutFromEnv allows overriding the idle-read window via
-// GGCODE_STREAM_IDLE_TIMEOUT (seconds). "0" disables the guard entirely.
 func streamIdleReadTimeoutFromEnv() time.Duration {
 	v := os.Getenv("GGCODE_STREAM_IDLE_TIMEOUT")
 	if v == "" {
@@ -41,12 +25,6 @@ func streamIdleReadTimeoutFromEnv() time.Duration {
 	return time.Duration(secs) * time.Second
 }
 
-// idleTimeoutTransport wraps a RoundTripper and cancels the request context
-// once the response body stays unreadably silent for the configured window.
-// Cancelling the context is the only portable way to unblock a body Read:
-// it tears down the underlying connection for both HTTP/1.1 and HTTP/2, and
-// does not require reaching the net.Conn (unreachable through the SDK's
-// response body wrappers).
 type idleTimeoutTransport struct {
 	base    http.RoundTripper
 	timeout time.Duration
@@ -77,9 +55,6 @@ func (t *idleTimeoutTransport) RoundTrip(req *http.Request) (*http.Response, err
 	return resp, nil
 }
 
-// idleTimeoutBody resets the idle deadline on every successful read and
-// stops the watchdog on Close. Read errors (including the watchdog's
-// context.Canceled) are passed through unchanged.
 type idleTimeoutBody struct {
 	rc interface {
 		Read(p []byte) (int, error)

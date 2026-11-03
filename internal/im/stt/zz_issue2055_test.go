@@ -36,8 +36,6 @@ func writeAudioFile(t *testing.T, size int) string {
 	return p
 }
 
-// A 25MB file (over the old 20MB image ceiling, under the new audio one)
-// must pass the read gate and reach the transcription endpoint.
 func TestTranscribeAcceptsAudioAboveImageCeiling(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"text":"ok"}`)
@@ -55,7 +53,6 @@ func TestTranscribeAcceptsAudioAboveImageCeiling(t *testing.T) {
 	}
 }
 
-// A file above MaxAudioSize fails with an error naming size and limit.
 func TestTranscribeRejectsAudioAboveAudioLimit(t *testing.T) {
 	audio := writeAudioFile(t, MaxAudioSize+1024*1024)
 	c := NewOpenAICompatible("http://127.0.0.1:1", "k", "whisper-1", "openai")

@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// #1752 case 1: the /diff allowlist must drop every dangerous git option
-// and keep only display flags plus post-separator paths.
 func Test1752SanitizeGitDiffArgs(t *testing.T) {
 
 	got := SanitizeGitDiffArgs([]string{"--output=~/.bashrc", "HEAD"})

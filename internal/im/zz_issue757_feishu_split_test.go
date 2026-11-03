@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// Regression guard for #757: Feishu chunks are measured in BYTES (card limit
-// ~30KB JSON), not runes. The old rune split let 28000 CJK runes (~84KB)
-// through, so every long Chinese reply failed the card API and degraded to
-// plain text.
 func TestSplitFeishuMessage_CJKChunksAreByteBounded(t *testing.T) {
 
 	text := strings.Repeat("汉", 30000)
@@ -23,7 +19,6 @@ func TestSplitFeishuMessage_CJKChunksAreByteBounded(t *testing.T) {
 	}
 }
 
-// ASCII behavior is preserved: 28000 ASCII chars = 28000 bytes, single chunk.
 func TestSplitFeishuMessage_ASCIIUnchanged(t *testing.T) {
 	text := strings.Repeat("a", 28000)
 	chunks := splitFeishuMessage(text, 28000)
@@ -32,7 +27,6 @@ func TestSplitFeishuMessage_ASCIIUnchanged(t *testing.T) {
 	}
 }
 
-// Platform registry consistency: Feishu must be byte-measured everywhere.
 func TestByteLimitPlatforms_FeishuRegistered(t *testing.T) {
 	if !ByteLimitPlatforms[PlatformFeishu] {
 		t.Fatal("PlatformFeishu must be in ByteLimitPlatforms (#757)")

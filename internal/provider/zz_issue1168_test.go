@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// zz1168RunStream drives one ChatStream call against an SSE test server
-// and returns the final Done event's TokenUsage.
 func zz1168RunStream(t *testing.T, sse string) (input, output, cacheWrite, cacheRead int) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -53,9 +51,6 @@ loop:
 	return done.Usage.InputTokens, done.Usage.OutputTokens, done.Usage.CacheWrite, done.Usage.CacheRead
 }
 
-// TestZZIssue1168_DuplicateMessageStartDoesNotZeroCache: a mid-stream
-// duplicate message_start carrying a zeroed Usage must not erase cache
-// counters already reported by the first message_start.
 func TestZZIssue1168_DuplicateMessageStartDoesNotZeroCache(t *testing.T) {
 	sse := "" +
 		"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"m\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":100,\"output_tokens\":1,\"cache_creation_input_tokens\":10,\"cache_read_input_tokens\":20}}}\n\n" +
@@ -75,9 +70,6 @@ func TestZZIssue1168_DuplicateMessageStartDoesNotZeroCache(t *testing.T) {
 	}
 }
 
-// TestZZIssue1168_OutOfOrderDeltaBeforeMessageStart: cache tokens seen in
-// a message_delta before a zeroed message_start must survive, mirroring
-// the #722 Fold 4 input_tokens ordering case.
 func TestZZIssue1168_OutOfOrderDeltaBeforeMessageStart(t *testing.T) {
 	sse := "" +
 		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{},\"usage\":{\"input_tokens\":99,\"output_tokens\":2,\"cache_creation_input_tokens\":7,\"cache_read_input_tokens\":9}}\n\n" +
@@ -97,9 +89,6 @@ func TestZZIssue1168_OutOfOrderDeltaBeforeMessageStart(t *testing.T) {
 	}
 }
 
-// TestZZIssue1168_NonZeroMessageStartStillUpdates: the guard must only
-// reject zero values - a legitimate later message_start with real
-// non-zero cache numbers still overwrites the counters.
 func TestZZIssue1168_NonZeroMessageStartStillUpdates(t *testing.T) {
 	sse := "" +
 		"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"m\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":100,\"output_tokens\":1,\"cache_creation_input_tokens\":10,\"cache_read_input_tokens\":20}}}\n\n" +

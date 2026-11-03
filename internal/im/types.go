@@ -156,7 +156,7 @@ type ToolCallInfo struct {
 	ToolName string
 	Args     string
 	Detail   string
-	Lang     string // "zh-CN" or "en", set by emitter
+	Lang     string
 }
 
 type ToolResultInfo struct {
@@ -164,9 +164,9 @@ type ToolResultInfo struct {
 	Args         string
 	Result       string
 	IsError      bool
-	Detail       string // display text for the tool call (e.g. command line)
-	Lang         string // "zh-CN" or "en", set by emitter
-	CallNotified bool   // true if a tool-call start notification was already sent to IM
+	Detail       string
+	Lang         string
+	CallNotified bool
 }
 
 type SessionBinding struct {
@@ -189,9 +189,9 @@ type ChannelBinding struct {
 	PassiveReplyStartedAt time.Time
 	BoundAt               time.Time
 	Muted                 bool
-	ContextToken          string    // WeChat iLink: latest context_token for reply routing
-	ContextTokenUpdatedAt time.Time // When ContextToken was last refreshed by an inbound message
-	LastSessionID         string    // Session that last claimed this binding; empty = unclaimed (workspace-level)
+	ContextToken          string
+	ContextTokenUpdatedAt time.Time
+	LastSessionID         string
 }
 
 type AdapterState struct {
@@ -200,8 +200,8 @@ type AdapterState struct {
 	Healthy    bool
 	Status     string
 	LastError  string
-	ContactURI string // deep link to add/contact bot (e.g. https://t.me/botname)
-	QRCode     string // ASCII art QR code (for WhatsApp pairing, etc.)
+	ContactURI string
+	QRCode     string
 	UpdatedAt  time.Time
 }
 
@@ -245,7 +245,6 @@ type StatusSnapshot struct {
 	PendingApprovals []ApprovalState
 }
 
-// BindingByAdapter returns the first current binding matching the given adapter name.
 func (s StatusSnapshot) BindingByAdapter(adapter string) *ChannelBinding {
 	for i := range s.CurrentBindings {
 		if s.CurrentBindings[i].Adapter == adapter {
@@ -264,10 +263,6 @@ type Sink interface {
 	Send(context.Context, ChannelBinding, OutboundEvent) error
 }
 
-// OutboundFile (#3316) is one arbitrary file to deliver as a real file
-// message (document/media upload), not path text. Data is pre-read and
-// size-checked by the tool layer; adapters decide photo-vs-document per
-// their platform's semantics.
 type OutboundFile struct {
 	Path     string
 	Filename string
@@ -275,10 +270,6 @@ type OutboundFile struct {
 	Data     []byte
 }
 
-// FileSender (#3316): optional interface for adapters that can upload
-// ARBITRARY files (documents, archives, logs - not just images) as real
-// file messages. Adapters that don't implement it keep the legacy
-// behavior (file path delivered as text).
 type FileSender interface {
 	SendFile(ctx context.Context, binding ChannelBinding, file OutboundFile, caption string) error
 }
@@ -287,70 +278,39 @@ type ShareLinkProvider interface {
 	GenerateShareLink(context.Context, string) (string, error)
 }
 
-// TypingIndicator is an optional interface that adapters can implement
-// to show a processing indicator on the IM platform, such as a native typing
-// signal or a reaction-style acknowledgement on the latest user message.
 type TypingIndicator interface {
 	TriggerTyping(ctx context.Context, binding ChannelBinding) error
 }
 
-// InteractiveSender is an optional interface that adapters implement to
-// send messages with native interactive elements (buttons, select menus).
-// Adapters that don't implement this fall back to text-based interaction.
 type InteractiveSender interface {
 	SendInteractive(ctx context.Context, binding ChannelBinding, msg InteractiveMessage) (string, error)
 }
 
-// InteractiveMessage describes a message with interactive elements.
-// Used for ask_user questions with choices, approval actions, etc.
 type InteractiveMessage struct {
-	// ID is a unique identifier for correlating callbacks.
-	ID string
-	// Text is the main message body (markdown).
-	Text string
-	// Buttons is a list of clickable options presented to the user.
-	// Each button has a label and a value that gets sent back on click.
-	Buttons []InteractiveButton
-	// MultiSelect allows selecting multiple buttons (for multi-question ask_user).
+	ID          string
+	Text        string
+	Buttons     []InteractiveButton
 	MultiSelect bool
-	// Placeholder is shown in select menus (Slack, DingTalk).
 	Placeholder string
 }
 
-// InteractiveButton represents a single clickable option.
 type InteractiveButton struct {
-	// Label is the button text shown to the user.
 	Label string
-	// Value is the opaque value sent back when the button is clicked.
-	// For ask_user, this is the choice number (e.g. "1", "2").
 	Value string
-	// Style hints (optional): "primary", "danger", "default".
 	Style string
 }
 
-// InteractiveCallback represents a user's response to an interactive element.
-// Adapters translate platform-specific callbacks into this common type.
 type InteractiveCallback struct {
-	// MessageID is the platform message ID of the original interactive message.
 	MessageID string
-	// Values are the selected button values (one for single, multiple for multi-select).
-	Values []string
-	// Adapter is the adapter name that received the callback.
-	Adapter string
-	// Envelope carries the standard sender/channel info.
-	Envelope Envelope
+	Values    []string
+	Adapter   string
+	Envelope  Envelope
 }
 
-// Closer is an optional interface that adapters implement to close
-// their underlying network connections. Called by Manager when an
-// adapter is muted or disabled to physically disconnect.
 type Closer interface {
 	Close() error
 }
 
-// LastMessageID returns the most recent message ID for typing reaction targeting:
-// prefers the bot's last outbound message so reactions stay near current progress,
-// and falls back to the user's inbound message when no outbound message exists yet.
 func LastMessageID(b ChannelBinding) string {
 	if id := strings.TrimSpace(b.LastOutboundMessageID); id != "" {
 		return id
@@ -361,11 +321,6 @@ func LastMessageID(b ChannelBinding) string {
 	return ""
 }
 
-// LastReactionTargetMessageID returns the preferred message ID for reaction-style
-// typing indicators. When the user has just sent a new message, reacting to that
-// inbound message makes it explicit that the bot has read and started processing
-// the latest user request. If no inbound message is known yet, fall back to the
-// bot's most recent outbound message.
 func LastReactionTargetMessageID(b ChannelBinding) string {
 	if id := strings.TrimSpace(b.LastInboundMessageID); id != "" {
 		return id

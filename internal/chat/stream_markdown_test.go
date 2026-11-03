@@ -138,9 +138,6 @@ func TestAssistantItemFinishedRenderPreservesLists(t *testing.T) {
 	}
 }
 
-// TestStreamingMarkdownPreservesSpacesInMultiLineParagraph verifies that
-// text spanning multiple lines within a single paragraph block does not lose
-// whitespace when split into blocks and re-rendered.
 func TestStreamingMarkdownPreservesSpacesInMultiLineParagraph(t *testing.T) {
 	input := "I'll start by examining the current code\nthen check the configuration\nand finally run the tests."
 	rendered, _ := renderStreamingMarkdown(input, 120, nil)
@@ -152,8 +149,6 @@ func TestStreamingMarkdownPreservesSpacesInMultiLineParagraph(t *testing.T) {
 	}
 }
 
-// TestSplitMarkdownBlocksPreservesLineBreaks verifies that splitMarkdownBlocks
-// does not drop line breaks within paragraph blocks.
 func TestSplitMarkdownBlocksPreservesLineBreaks(t *testing.T) {
 	input := "First line of text.\nSecond line of text.\nThird line."
 	blocks := splitMarkdownBlocks(input)

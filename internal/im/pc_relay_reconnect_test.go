@@ -15,9 +15,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// pcTestRelayServer is a minimal relay provider endpoint for tests: upgrades
-// WebSocket connections, sends relay:provider_ready, then drains (which also
-// answers client heartbeat pings per RFC6455).
 type pcTestRelayServer struct {
 	srv      *httptest.Server
 	url      string
@@ -25,7 +22,7 @@ type pcTestRelayServer struct {
 
 	mu      sync.Mutex
 	conns   []*websocket.Conn
-	writeMu sync.Mutex // gorilla/websocket allows a single concurrent writer per conn
+	writeMu sync.Mutex
 }
 
 func newPCTestRelayServer(t *testing.T) *pcTestRelayServer {
@@ -71,15 +68,12 @@ func (ts *pcTestRelayServer) latestConn() *websocket.Conn {
 	return ts.conns[len(ts.conns)-1]
 }
 
-// sendFrame writes a server->client message synchronously (single writer).
 func (ts *pcTestRelayServer) sendFrame(conn *websocket.Conn, data []byte) error {
 	ts.writeMu.Lock()
 	defer ts.writeMu.Unlock()
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
-// closeAll abruptly drops every server-side connection (simulates relay
-// restart / network drop).
 func (ts *pcTestRelayServer) closeAll() {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -101,11 +95,6 @@ func pcWaitFor(t *testing.T, timeout time.Duration, cond func() bool, msg string
 	t.Fatalf("condition not met within %s: %s", timeout, msg)
 }
 
-// TestPCRelayReadLoopSurvivesCallerCtxCancel verifies that cancelling the ctx
-// passed to Connect (as runtime sendWithTimeout does the moment Send returns)
-// does NOT kill the resident ReadLoop. Old behavior: the loop exited after
-// processing the first post-cancel inbound message, so the second frame was
-// never delivered.
 func TestPCRelayReadLoopSurvivesCallerCtxCancel(t *testing.T) {
 	ts := newPCTestRelayServer(t)
 
@@ -146,10 +135,6 @@ func TestPCRelayReadLoopSurvivesCallerCtxCancel(t *testing.T) {
 	}
 }
 
-// TestPCAdapterHandleRelayDisconnectedClearsClientAndPublishes verifies the
-// ReadLoop-exit callback: the dead client is cleared (ensureConnected no
-// longer short-circuits on a stale pointer) and "disconnected" is published
-// to the manager.
 func TestPCAdapterHandleRelayDisconnectedClearsClientAndPublishes(t *testing.T) {
 	mgr := NewManager()
 	adapter := &pcAdapter{name: "pc-test", manager: mgr, providerID: "p1"}
@@ -178,10 +163,6 @@ func TestPCAdapterHandleRelayDisconnectedClearsClientAndPublishes(t *testing.T) 
 	adapter.handleRelayDisconnected(&pcRelayClient{}, "stale event")
 }
 
-// TestPCAdapterReconnectsAfterRelayDrop verifies end-to-end recovery: when
-// the relay drops the connection, the adapter clears the dead client,
-// reconnects with a fresh client (using the reconnect backoff loop), and
-// Close() tears the client down.
 func TestPCAdapterReconnectsAfterRelayDrop(t *testing.T) {
 	ts := newPCTestRelayServer(t)
 	mgr := NewManager()
@@ -225,10 +206,6 @@ func TestPCAdapterReconnectsAfterRelayDrop(t *testing.T) {
 	}
 }
 
-// TestPCAdapterEnsureConnectedConcurrentSingleConnection races N concurrent
-// ensureConnected calls and asserts exactly one WebSocket connection is
-// established (run under -race; the old RLock-check/Lock-write window let
-// every caller dial its own connection and leak the losers).
 func TestPCAdapterEnsureConnectedConcurrentSingleConnection(t *testing.T) {
 	ts := newPCTestRelayServer(t)
 	adapter := &pcAdapter{
@@ -267,9 +244,6 @@ func TestPCAdapterEnsureConnectedConcurrentSingleConnection(t *testing.T) {
 	}
 }
 
-// TestPCRelayErrorCarriesCodeToPendingWaiter pins #1229: a relay:error
-// reply must deliver the relay's code/message to the waiting caller, not a
-// closed channel that reads as the fixed (and misleading) "disposed" text.
 func TestPCRelayErrorCarriesCodeToPendingWaiter(t *testing.T) {
 	c := newPCRelayClient("ws://unused", "test-provider")
 	ch := make(chan *pcCreateResult, 1)
@@ -301,9 +275,6 @@ func TestPCRelayErrorCarriesCodeToPendingWaiter(t *testing.T) {
 	}
 }
 
-// TestPCRelayErrorNoRequestIDBroadcasts pins #1229's amplifier: a relay
-// error without requestId must fail ALL pending waiters instead of leaving
-// them to the 30s timeout.
 func TestPCRelayErrorNoRequestIDBroadcasts(t *testing.T) {
 	c := newPCRelayClient("ws://unused", "test-provider")
 	chC := make(chan *pcCreateResult, 1)

@@ -19,64 +19,32 @@ import (
 )
 
 const (
-	providerRetryAttempts = 20
-	// providerRetryBackoffCap caps a single backoff sleep.
+	providerRetryAttempts   = 20
 	providerRetryBackoffCap = 30 * time.Second
 )
 
-// providerRetryTimeBudget caps the CUMULATIVE backoff sleep per logical call
-// (#722). Without it, 20 attempts with 1s→30s exponential backoff sleep
-// ~7.5min per call; multiplied by the failover layer's 3-call threshold a
-// persistently failing primary blocks headless callers (cron/daemon/a2a)
-// ~23min before the fallback takes over. Interactive users can Ctrl-C, so
-// this is primarily a headless guard. Declared as a var so tests can
-// shrink it.
 var providerRetryTimeBudget = 2 * time.Minute
 
-// retryAlwaysEnabled lifts ALL retry caps for the process: every error
-// class becomes retryable (see isRetryableForContext), the cumulative
-// backoff budget becomes infinite (see retryWithBackoffCtx), and the
-// attempt cap is removed (see callPolicy.attempts). Only caller-context
-// cancellation still stops the loop. Set once at startup by ad-hoc pipe
-// mode (--llm-retry-always / GGCODE_LLM_RETRY_ALWAYS, cmd/ggcode/adhoc.go):
-// the user explicitly opts into grinding through misleading permanent codes
-// from flaky gateways (intermittent 401/404/quota) instead of failing fast.
 var retryAlwaysEnabled atomic.Bool
 
-// SetRetryAlways turns the retry-everything mode on or off process-wide.
 func SetRetryAlways(v bool) { retryAlwaysEnabled.Store(v) }
 
-// RetryAlwaysEnabled reports whether retry-everything mode is active.
 func RetryAlwaysEnabled() bool { return retryAlwaysEnabled.Load() }
 
-// retryAlwaysAttempts is the attempt cap under retry-always mode. Huge but
-// bounded so loop counters stay well clear of int overflow even with jitter.
 const retryAlwaysAttempts = 1 << 30
 
-// errRetryBudgetExhausted marks a failure whose inner retry loop already
-// consumed the full per-call backoff budget - the provider got a best-effort
-// chance. FallbackProvider treats it as sustained failure and switches
-// immediately instead of demanding failoverThreshold more full-budget calls.
 var errRetryBudgetExhausted = errors.New("retry budget exhausted")
 
-// retryBudget tracks cumulative backoff sleep against
-// providerRetryTimeBudget. Once the deadline passes, sleep returns
-// errRetryBudgetExhausted so callers stop retrying and surface a
-// sentinel-wrapped error.
 type retryBudget struct {
 	deadline  time.Time
 	done      bool
-	unlimited bool // retry-always mode: skip every deadline check
+	unlimited bool
 }
 
 func newRetryBudget() *retryBudget {
 	return &retryBudget{deadline: time.Now().Add(providerRetryTimeBudget)}
 }
 
-// sleep sleeps for delay (from retryDelay) unless the budget deadline is
-// closer, in which case it truncates the sleep and returns
-// errRetryBudgetExhausted (the pending retry must not run - the budget is
-// spent). Context cancellation propagates unchanged.
 func (b *retryBudget) sleep(ctx context.Context, delay time.Duration) error {
 	if b.unlimited {
 		return retrySleep(ctx, delay)
@@ -106,14 +74,6 @@ var retrySleep = func(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-// isRetryable returns true for any error that is worth retrying.
-//
-// We retry aggressively: only 401 (auth), 403 (forbidden), and 404 (not found)
-// are considered permanent failures. Everything else - rate limits, server
-// errors, timeouts, network glitches, bad gateway, etc. - gets retried.
-// IsContextOverflowError checks whether the error indicates the input prompt
-// exceeds the model's context window. These errors are never retryable - the
-// same request will always fail until the context is compacted.
 func IsContextOverflowError(err error) bool {
 	if err == nil {
 		return false
@@ -180,7 +140,6 @@ func isRetryable(err error) bool {
 		return false
 	}
 
-	// Check for HTTP status codes from known SDK error types.
 	var openaiAPIErr *openai.APIError
 	if errors.As(err, &openaiAPIErr) {
 
@@ -205,7 +164,6 @@ func isRetryable(err error) bool {
 		return isRetryableHTTPStatus(httpErr.HTTPStatusCode())
 	}
 
-	// Network / timeout errors are always retryable.
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		return true
@@ -253,17 +211,6 @@ func isRetryable(err error) bool {
 	return true
 }
 
-// containsHTTPStatus reports whether msg contains the given HTTP status code
-// in a context-anchored position. Bare substring matching ("401") would hit
-// digit coincidences like "requested 40123 tokens" (#303/#306); the patterns
-// below require the code to be delimited by spacing/punctuation or to follow
-// a status label, matching the formats emitted by go-openai ("status code:
-// 401, message: ..."), JSON relays (`status":401`), and plain wrappers
-// ("statusCode:401").
-// #561(F): sentence-final terminators (`.` `)` `;` `:`) are anchors too -
-// `"status 401."` (period-terminated) previously matched none of the
-// patterns, fell through to the default-retryable path, and burned 19
-// retries (~7.5 min) on a permanent auth failure.
 func containsHTTPStatus(msg, code string) bool {
 
 	return containsPatternAnchored(msg, " "+code+" ") ||
@@ -298,11 +245,6 @@ func isRetryableForContext(ctx context.Context, err error) bool {
 	return isRetryable(err)
 }
 
-// isRetryableHTTPStatus returns true unless the status code is a permanent
-// client error. 400/401/403/404 plus 402 (payment required - FriendlyError
-// already treats billing exhaustion as needing user action), 413 (payload
-// too large - the request will not shrink by retrying), and 422
-// (unprocessable entity - schema/semantic rejection) are permanent (#267).
 func isRetryableHTTPStatus(status int) bool {
 	switch status {
 	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden,
@@ -314,22 +256,10 @@ func isRetryableHTTPStatus(status int) bool {
 	}
 }
 
-// isQuotaExhaustedError checks whether a 429 error is actually a permanent
-// quota/billing exhaustion rather than a transient rate limit. Coding plan
-// providers (ZAI/GLM, Kimi, OpenAI) use 429 for both cases.
-// Delegates to the shared classifier in errclass.go (single source of truth).
 func isQuotaExhaustedError(err error) bool {
 	return IsQuotaExhaustedError(err)
 }
 
-// retryWithBackoffCtx retries fn up to maxAttempts times with exponential backoff.
-// Only retries retryable errors (429 or 5xx), and honors Retry-After where available.
-//
-// #4729: timeout-class failures retry IN PLACE - the attempt cap and the
-// cumulative backoff budget lift (mirroring the stream paths), so a flaky
-// network keeps retrying instead of dying after "Retry 1/20". Only caller-
-// context cancellation ends the loop (budget.sleep and isRetryableForContext
-// both honor ctx).
 func retryWithBackoffCtx(ctx context.Context, fn func() error, maxAttempts int, timeoutRetryInPlace bool) error {
 	if maxAttempts <= 0 {
 		maxAttempts = 1
@@ -458,12 +388,6 @@ func minInt(a, b int) int {
 	return b
 }
 
-// isTimeoutClassError reports whether err is a timeout-class failure worth
-// in-place retry (#4729): a net.Error whose Timeout() is true, a
-// context.DeadlineExceeded / os.ErrDeadlineExceeded anywhere in the chain, or
-// the string forms gateways actually emit ("connection timed out",
-// "context deadline exceeded"). Non-timeout network errors (refused, DNS)
-// are deliberately NOT timeout-class: they keep the normal capped budget.
 func isTimeoutClassError(err error) bool {
 	if err == nil {
 		return false
@@ -485,11 +409,6 @@ func isTimeoutClassError(err error) bool {
 		strings.Contains(s, "context deadline exceeded")
 }
 
-// TimeoutRetryNotice returns the periodic user notice for an in-place
-// timeout retry loop (#4729): after every 3rd consecutive timeout retry the
-// user gets a system message, so an unbounded retry loop never looks frozen.
-// Empty string when no notice is due (attempt is 0-based: notices fire on
-// attempts 2, 5, 8, ... i.e. after the 3rd, 6th, 9th retry).
 func TimeoutRetryNotice(err error, attempt int) string {
 	if !isTimeoutClassError(err) {
 		return ""
@@ -501,12 +420,6 @@ func TimeoutRetryNotice(err error, attempt int) string {
 	return fmt.Sprintf("[Timeout retry %d: provider still not responding - retrying in place until it recovers (Ctrl-C to stop)]", n)
 }
 
-// friendlyWrappedError carries the FriendlyError text while keeping the
-// original error chain unwrap-able. The agent's old
-// fmt.Errorf("%s", FriendlyError(err)) stringified the error, so every
-// errors.Is/As assertion downstream (UserFacingErrorLang's net.Error /
-// DeadlineExceeded branches) failed and the TUI reported an unrecognized
-// error on plain connection timeouts (#4729).
 type friendlyWrappedError struct {
 	text string
 	err  error
@@ -515,8 +428,6 @@ type friendlyWrappedError struct {
 func (e *friendlyWrappedError) Error() string { return e.text }
 func (e *friendlyWrappedError) Unwrap() error { return e.err }
 
-// WrapFriendly returns err wrapped so Error() renders the FriendlyError text
-// while errors.Is / errors.As still reach the original typed error.
 func WrapFriendly(err error) error {
 	if err == nil {
 		return nil
@@ -524,8 +435,6 @@ func WrapFriendly(err error) error {
 	return &friendlyWrappedError{text: FriendlyError(err), err: err}
 }
 
-// FriendlyError translates a raw provider error into a human-readable message
-// with actionable advice. Returns the original error message if no pattern matches.
 func FriendlyError(err error) string {
 	if err == nil {
 		return ""
@@ -608,7 +517,6 @@ func FriendlyError(err error) string {
 			"This is temporary - please retry in a moment.", statusCode)
 	}
 
-	// Check for common network errors
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		if netErr.Timeout() {

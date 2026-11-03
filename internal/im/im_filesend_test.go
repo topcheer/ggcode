@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// fakeFileSink accepts arbitrary files and records them.
 type fakeFileSink struct {
 	name string
 	err  error
@@ -32,7 +31,6 @@ func (f *fakeFileSink) SendFile(ctx context.Context, b ChannelBinding, file Outb
 	return nil
 }
 
-// plainSink does NOT implement FileSender.
 type plainSink struct{ name string }
 
 func (p *plainSink) Name() string { return p.name }

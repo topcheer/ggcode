@@ -201,10 +201,6 @@ func TestEscapeMarkdownV2_Parentheses(t *testing.T) {
 	}
 }
 
-// TestEscapeMarkdownV2_LinkURLParensAndBackslash pins #1246: the URL part
-// of a MarkdownV2 inline link/image must escape ')' and '\' per the Bot API
-// spec - a raw ')' (Wikipedia-style URLs) failed the WHOLE message with
-// 400 "character ')' is reserved".
 func TestEscapeMarkdownV2_LinkURLParensAndBackslash(t *testing.T) {
 	cases := []struct {
 		name, in, want string

@@ -57,8 +57,6 @@ func TestIssue602_R1_TypedVsStringAgreement(t *testing.T) {
 	}
 }
 
-// mockStreamProvider yields a stream that emits N events and then blocks
-// forever (never closes) — emulating a provider stuck mid-stream.
 type mockStreamProvider struct {
 	name   string
 	events int
@@ -152,7 +150,6 @@ func TestIssue602_R2_FailoverDrainSurvivesCancellation(t *testing.T) {
 	}
 }
 
-// errThenHangProvider sends one error event and never closes the channel.
 type errThenHangProvider struct {
 	name string
 }

@@ -7,12 +7,6 @@ import (
 	"testing"
 )
 
-// zz_issue2819_test.go - probe for #2819: mid-loop detectors inject guidance as
-// text-only user messages between assistant tool_use and user tool_result.
-// Anthropic rejects that sequence with a 400 ("tool_use ids found without
-// tool_result blocks immediately after"), so buildParams (and
-// buildCountTokensParams) must fold those messages into the tool_result turn,
-// keeping tool_result blocks FIRST in the user message content.
 func TestIssue2819AnthropicFoldsInjectedUserMessages(t *testing.T) {
 	msgs := []Message{
 		{Role: "assistant", Content: []ContentBlock{

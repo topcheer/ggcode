@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// mockChannelBindingStore captures persist calls and can simulate failures.
 type mockChannelBindingStore struct {
 	persistErr error
 	persisted  []ChannelBinding

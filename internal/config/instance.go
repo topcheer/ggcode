@@ -16,15 +16,10 @@ import (
 )
 
 const (
-	// instancesDir is the subdirectory under ~/.ggcode/ for instance configs.
 	instancesDir = "instances"
-	// hashLen is the number of hex chars used from the SHA256 hash.
-	hashLen = 16
+	hashLen      = 16
 )
 
-// InstanceDir returns the per-workspace instance config directory path.
-// Format: ~/.ggcode/instances/{sha256(normalized-workspace)[:16]}
-// Returns empty string if the home directory cannot be resolved.
 func InstanceDir(workspace string) string {
 	home := HomeDir()
 	normalized := normalizeInstanceWorkspacePath(workspace)
@@ -47,8 +42,6 @@ func normalizeInstanceWorkspacePath(workspace string) string {
 	return filepath.Clean(trimmed)
 }
 
-// InstanceConfigPath returns the full path to the instance config file.
-// Returns empty string if InstanceDir fails.
 func InstanceConfigPath(workspace string) string {
 	dir := InstanceDir(workspace)
 	if dir == "" {
@@ -57,8 +50,6 @@ func InstanceConfigPath(workspace string) string {
 	return filepath.Join(dir, "ggcode.yaml")
 }
 
-// LoadInstanceConfig loads the instance-level config for a workspace.
-// Returns nil if no instance config file exists.
 func LoadInstanceConfig(workspace string) *Config {
 	path := InstanceConfigPath(workspace)
 	if path == "" {
@@ -73,12 +64,6 @@ func LoadInstanceConfig(workspace string) *Config {
 		debug.Log("config", "instance config parse error %s: %v", path, err)
 		return nil
 	}
-	// #2284-C: also unmarshal as a raw map to record which top-level keys
-	// the instance file EXPLICITLY contains. yaml cannot distinguish
-	// "max_iterations: 0" from an absent key after typed unmarshal, and the
-	// zero-value merge gate resurrected cleared values (set 80 -> clear to
-	// 0 -> SaveInstance -> reload -> 80 back). With the explicit set, the
-	// merge treats a present key as an override even when its value is zero.
 	var rawKeys map[string]interface{}
 	if err := yaml.Unmarshal(data, &rawKeys); err == nil {
 		cfg.explicitKeys = make(map[string]bool, len(rawKeys))
@@ -88,14 +73,6 @@ func LoadInstanceConfig(workspace string) *Config {
 	return &cfg
 }
 
-// flattenExplicitKeys records every key path the instance file explicitly
-// contains, recursing into nested maps as dotted paths ("a2a.auth.api_key").
-// Top-level scalars keep their plain name so existing lookups like
-// explicit("language") are unchanged; nested sections additionally record
-// each intermediate path ("a2a", "a2a.auth"). #2702: the a2a/knight merges
-// need sub-key explicitness - a raw "enabled: false" under knight must
-// override a truthy global, which the old top-level-only set could not
-// express, so cleared/disabled values silently resurrected on reload.
 func flattenExplicitKeys(prefix string, m map[string]interface{}, out map[string]bool) {
 	for k, v := range m {
 		path := k
@@ -109,7 +86,6 @@ func flattenExplicitKeys(prefix string, m map[string]interface{}, out map[string
 	}
 }
 
-// HasInstanceConfig returns true if an instance config file exists for the workspace.
 func HasInstanceConfig(workspace string) bool {
 	path := InstanceConfigPath(workspace)
 	if path == "" {
@@ -119,11 +95,6 @@ func HasInstanceConfig(workspace string) bool {
 	return err == nil
 }
 
-// MergeInstance applies instance config on top of global (base) config.
-// Rule: global non-zero fields are never overwritten by instance values.
-// Instance values only fill in gaps where global fields are zero/empty.
-// Fields filled by instance are recorded in instanceFields to prevent
-// them from leaking back into the global file on Save().
 func MergeInstance(global, instance *Config) {
 	if instance == nil {
 		return
@@ -211,7 +182,6 @@ func MergeInstance(global, instance *Config) {
 	mergeHookConfig(&global.Hooks, &instance.Hooks, global.instanceFields)
 }
 
-// mergeUIConfig merges instance UI config into global.
 func mergeUIConfig(global, instance *UIConfig, tracked map[string]bool) {
 	if global.SidebarVisible == nil && instance.SidebarVisible != nil {
 		global.SidebarVisible = instance.SidebarVisible
@@ -219,7 +189,6 @@ func mergeUIConfig(global, instance *UIConfig, tracked map[string]bool) {
 	}
 }
 
-// mergeIMConfig merges instance IM config into global.
 func mergeIMConfig(global, instance *IMConfig, tracked map[string]bool) {
 	if !global.Enabled && instance.Enabled {
 		global.Enabled = instance.Enabled
@@ -258,9 +227,6 @@ func mergeIMConfig(global, instance *IMConfig, tracked map[string]bool) {
 	}
 }
 
-// mergeKnightConfig merges instance Knight config into global. Fields filled
-// from the instance are recorded in tracked so Save() strips them from the
-// global file write (#609).
 func mergeKnightConfig(global, instance *KnightConfig, tracked map[string]bool, explicit func(string) bool) {
 
 	if !global.Enabled && instance.Enabled {
@@ -302,9 +268,6 @@ func mergeKnightConfig(global, instance *KnightConfig, tracked map[string]bool, 
 	}
 }
 
-// mergeA2AConfigFields merges instance A2A config into global.
-// Uses the same "global wins if set" rule. Instance-filled fields are
-// tracked so Save() keeps them out of the global file (#609).
 func mergeA2AConfigFields(global, instance *A2AConfig, tracked map[string]bool, explicit func(string) bool) {
 
 	if !global.Disabled && instance.Disabled || explicit("a2a.disabled") {
@@ -351,9 +314,6 @@ func mergeA2AConfigFields(global, instance *A2AConfig, tracked map[string]bool, 
 	}
 }
 
-// mergeSubAgentConfig merges instance subagent config into global.
-// Instance-filled fields are tracked so Save() keeps them out of the global
-// file (#609).
 func mergeSubAgentConfig(global, instance *SubAgentConfig, tracked map[string]bool) {
 	if global.MaxConcurrent == 0 && instance.MaxConcurrent != 0 {
 		global.MaxConcurrent = instance.MaxConcurrent
@@ -365,8 +325,6 @@ func mergeSubAgentConfig(global, instance *SubAgentConfig, tracked map[string]bo
 	}
 }
 
-// mergeSwarmConfig merges instance swarm config into global. Instance-filled
-// fields are tracked so Save() keeps them out of the global file (#609).
 func mergeSwarmConfig(global, instance *SwarmConfig, tracked map[string]bool) {
 	if global.MaxTeammatesPerTeam == 0 && instance.MaxTeammatesPerTeam != 0 {
 		global.MaxTeammatesPerTeam = instance.MaxTeammatesPerTeam
@@ -386,15 +344,6 @@ func mergeSwarmConfig(global, instance *SwarmConfig, tracked map[string]bool) {
 	}
 }
 
-// mergeHookConfig merges instance hook config into global with REPLACE
-// semantics (#524 Bug B): a non-empty instance list replaces the global list.
-// The previous append semantics could not express "change or remove a global
-// hook" and would duplicate entries across save/reload cycles (load appends
-// global+instance, save diffs the merged list against the global snapshot and
-// re-writes it, reload appends again). Replace keeps that cycle stable, and is
-// identical to append for the previously-reachable case (global list empty).
-// Replaced/merged instance hooks are tracked so Save() strips them from the
-// global write — without this, instance hooks leaked into the global file.
 func mergeHookConfig(global, instance *hooks.HookConfig, tracked map[string]bool) {
 	if len(instance.PreToolUse) > 0 {
 		global.PreToolUse = instance.PreToolUse
@@ -406,17 +355,6 @@ func mergeHookConfig(global, instance *hooks.HookConfig, tracked map[string]bool
 	}
 }
 
-// SaveInstance saves only the fields that differ from the global config
-// into the instance-level override file at ~/.ggcode/instances/{sha256}/ggcode.yaml.
-//
-// Merge semantics: the computed delta is deep-merged onto the existing
-// instance file content (if the file exists). This prevents concurrent
-// saves from different features within the same workspace from clobbering
-// each other's overrides. Only when the instance file does NOT exist is
-// the delta written as a full new file.
-//
-// If no fields differ from global, the instance file is deleted to keep
-// things clean.
 func (c *Config) SaveInstance(workspace string) error {
 	dir := InstanceDir(workspace)
 	if dir == "" {
@@ -429,10 +367,6 @@ func (c *Config) SaveInstance(workspace string) error {
 
 	delta := c.marshalInstanceDelta()
 
-	// Read the existing instance file BEFORE deciding emptiness: reset
-	// detection (#2106) needs the on-disk keys to turn "current == global"
-	// fields into explicit deletions, otherwise a partial reset resurrects
-	// from the file on the next MergeInstance (deep-merge never deletes).
 	var existingRaw map[string]interface{}
 	existingData, readErr := os.ReadFile(path)
 	if readErr == nil && len(existingData) > 0 {
@@ -455,7 +389,6 @@ func (c *Config) SaveInstance(workspace string) error {
 		return nil
 	}
 
-	// Merge delta onto existing instance file, or write delta as new file.
 	var data []byte
 	if existingRaw != nil && len(existingRaw) > 0 {
 		deepMergeYAMLMaps(existingRaw, delta)
@@ -472,8 +405,6 @@ func (c *Config) SaveInstance(workspace string) error {
 			return fmt.Errorf("marshaling merged instance config: %w", marshalErr)
 		}
 	} else {
-		// File doesn't exist (or unparseable) — write delta directly. A delta
-		// computed against no existing file cannot contain reset markers.
 		var marshalErr error
 		data, marshalErr = yaml.Marshal(delta)
 		if marshalErr != nil {
@@ -496,8 +427,6 @@ func (c *Config) SaveInstance(workspace string) error {
 	return nil
 }
 
-// SetInstancePaths records the instance config directory and path on the Config.
-// This is called after MergeInstance so that Save() can know about the instance context.
 func (c *Config) SetInstancePaths(workspace string) {
 	dir := InstanceDir(workspace)
 	if dir != "" {
@@ -507,17 +436,14 @@ func (c *Config) SetInstancePaths(workspace string) {
 	}
 }
 
-// InstanceDirPath returns the instance directory for this config, or empty string.
 func (c *Config) InstanceDirPath() string {
 	return c.instanceDir
 }
 
-// HasInstanceConfigAttached returns true if this config has an instance workspace attached.
 func (c *Config) HasInstanceConfigAttached() bool {
 	return c.instanceWS != ""
 }
 
-// HasInstanceConfigFile returns true if an instance config file actually exists on disk.
 func (c *Config) HasInstanceConfigFile() bool {
 	if c.instancePath == "" {
 		return false
@@ -526,17 +452,10 @@ func (c *Config) HasInstanceConfigFile() bool {
 	return err == nil
 }
 
-// InstanceWorkspace returns the workspace path for instance config, or empty string.
 func (c *Config) InstanceWorkspace() string {
 	return c.instanceWS
 }
 
-// SyncVendorToGlobalSnapshot records vendor into the global snapshot so that
-// subsequent Save() calls keep writing it to vendors.yaml. globalOnlyVendors
-// (config_save.go) drops every merged vendor absent from globalSnap — a
-// vendor ADDED at runtime on an instance-bound workspace is therefore not
-// global-sourced, yet the user expectation is that it persists globally once
-// saved. Call this after persisting such a vendor change (#368).
 func (c *Config) SyncVendorToGlobalSnapshot(vendor string) {
 	if c == nil || vendor == "" {
 		return
@@ -552,21 +471,6 @@ func (c *Config) SyncVendorToGlobalSnapshot(vendor string) {
 	}
 }
 
-// VendorNotInGlobalSnapshot reports whether vendor exists in the current
-// config but is absent from the pre-instance-merge global snapshot
-// (globalSnap). This is the runtime provenance check the desktop write-back
-// gate uses (#734): instanceFields["vendors"] is only set when
-// MergeInstance adopted at least one vendor KEY from the instance file, so
-// an attached instance config WITHOUT a vendors section (the common
-// instance.yaml carrying just language/mode) leaves the flag unset - a
-// vendor added at runtime (AddCustomEndpoint / SaveAPIKey) then bypassed
-// the instance write-back and was dropped by Save()'s globalOnlyVendors
-// filter, silently lost on restart.
-//
-// Returns false when no snapshot exists (no instance merge happened):
-// Save() performs no vendor filtering in that case, so no write-back is
-// needed. Conventions match SyncVendorToGlobalSnapshot: callers hold the
-// config lock (wailskit globalMu) when mutating.
 func (c *Config) VendorNotInGlobalSnapshot(vendor string) bool {
 	if c == nil || c.globalSnap == nil || vendor == "" {
 		return false
@@ -578,10 +482,6 @@ func (c *Config) VendorNotInGlobalSnapshot(vendor string) bool {
 	return inCur
 }
 
-// SaveScoped persists config changes to either global or instance config.
-// scope: "global" saves to the global config file (default behavior).
-// scope: "instance" saves to the instance config directory.
-// Also sets c.saveScope so that subsequent Save*Preference calls use the same target.
 func (c *Config) SaveScoped(scope string) error {
 	c.saveScope = scope
 	switch scope {
@@ -592,20 +492,10 @@ func (c *Config) SaveScoped(scope string) error {
 	}
 }
 
-// SaveInstanceScoped persists the current config to the instance-level override
-// file WITHOUT changing the sticky save scope. Long-lived holders of a shared
-// *Config (e.g. the desktop app's global config) should prefer this when a
-// one-off feature needs instance persistence (endpoint/model limits): calling
-// SaveScoped("instance") instead would silently redirect all subsequent
-// scope-aware saves (Save*Preference, PatchIMAdapter) to the instance file (#282).
 func (c *Config) SaveInstanceScoped(workspace string) error {
 	return c.SaveInstance(workspace)
 }
 
-// InstanceFields returns the sorted top-level YAML keys that were sourced from
-// the instance config at load time. Save() strips these keys from the global
-// file write, so callers mutating those fields must also persist them to the
-// instance file (e.g. via SaveInstanceScoped) or the changes are lost on restart.
 func (c *Config) InstanceFields() []string {
 	if c == nil || len(c.instanceFields) == 0 {
 		return nil
@@ -618,7 +508,6 @@ func (c *Config) InstanceFields() []string {
 	return keys
 }
 
-// SetSaveScope records which config target future save helpers should write to.
 func (c *Config) SetSaveScope(scope string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -639,15 +528,10 @@ func (c *Config) SetSaveScope(scope string) error {
 	}
 }
 
-// writeFileAtomic writes data to a temp file then renames.
 func writeFileAtomic(path string, data []byte, _ os.FileMode) error {
 	return writeSecureConfigFile(path, data)
 }
 
-// LoadWithInstance loads the global config and applies instance-level overrides.
-// workspace is the current working directory used to locate the instance config.
-// It saves a snapshot of the global config so that Save() can avoid leaking
-// instance-level fields back into the global file.
 func LoadWithInstance(path, workspace string) (*Config, error) {
 	cfg, err := Load(path)
 	if err != nil {
@@ -680,9 +564,6 @@ func LoadWithInstance(path, workspace string) (*Config, error) {
 	return cfg, nil
 }
 
-// MigrateA2AYaml checks if a legacy .ggcode/a2a.yaml exists and offers
-// to migrate it to the new instance config system.
-// Returns true if migration was performed or already done.
 func MigrateA2AYaml(workspace string) bool {
 	legacyPath := filepath.Join(workspace, ".ggcode", "a2a.yaml")
 	if _, err := os.Stat(legacyPath); err != nil {
@@ -698,7 +579,6 @@ func MigrateA2AYaml(workspace string) bool {
 		return false
 	}
 
-	// Parse as raw map to wrap it under "a2a:" key
 	var a2aRaw map[string]interface{}
 	if err := yaml.Unmarshal(data, &a2aRaw); err != nil {
 		return false
@@ -731,7 +611,6 @@ func MigrateA2AYaml(workspace string) bool {
 	return true
 }
 
-// InstanceSummary returns a debug string about the instance config state.
 func (c *Config) InstanceSummary() string {
 	if c.instanceDir == "" {
 		return "no instance config"
@@ -739,9 +618,6 @@ func (c *Config) InstanceSummary() string {
 	return fmt.Sprintf("instance dir: %s", c.instanceDir)
 }
 
-// deepCopyConfig creates a deep copy of a Config via YAML round-trip.
-// Fields tagged yaml:"-" are lost; this is intentional because we only
-// need the serializable fields for comparison.
 func deepCopyConfig(src *Config) *Config {
 	if src == nil {
 		return nil

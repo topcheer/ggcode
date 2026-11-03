@@ -8,12 +8,6 @@ import (
 	"testing"
 )
 
-// fakeBin writes a tiny shell script that records its argv to a file and
-// creates the .txt output a real whisper CLI would produce (openai-whisper
-// via --output_dir, whisper.cpp via the -of prefix). This lets the tests
-// verify the exact argument layout per binary flavor without shipping
-// whisper binaries. argv reconstruction relies on one argument per line,
-// so any argument containing a newline would corrupt the log; none do.
 func fakeBin(t *testing.T, dir, name, outText string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -39,8 +33,6 @@ func argvLog(dir, name string) string {
 	return filepath.Join(dir, "argv-"+name)
 }
 
-// shQuote wraps s in single quotes for safe interpolation into the fake
-// binary's shell script.
 func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
@@ -58,7 +50,6 @@ func readArgv(t *testing.T, path string) []string {
 	return lines
 }
 
-// readArgvAt returns the index of want in the argv log, or -1.
 func readArgvAt(t *testing.T, path, want string) int {
 	t.Helper()
 	for i, a := range readArgv(t, path) {
@@ -78,9 +69,6 @@ func writeAudio(t *testing.T, dir string) string {
 	return p
 }
 
-// newTestWhisperForPath builds a LocalWhisper pointed at an absolute binary
-// path and forces the availability probe to succeed without touching PATH,
-// so the test only exercises argv construction.
 func forceAvailable(t *testing.T, w *LocalWhisper) {
 	t.Helper()
 	w.mu.Lock()
@@ -272,8 +260,6 @@ func TestResolveCPPModelAutoDetectsDownloadedModel(t *testing.T) {
 	}
 }
 
-// swapCPPModelSearchDirs replaces the model search dirs for the current
-// test and returns a restore func.
 func swapCPPModelSearchDirs(t *testing.T, dirs []string) func() {
 	t.Helper()
 	orig := cppModelSearchDirs

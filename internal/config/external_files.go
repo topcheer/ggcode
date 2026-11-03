@@ -10,32 +10,26 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// externalFilePath returns the path for a given external config section.
 func externalFilePath(configDir, section string) string {
 	return filepath.Join(configDir, section+".yaml")
 }
 
-// VendorsPath returns the path to vendors.yaml.
 func VendorsPath(configDir string) string {
 	return externalFilePath(configDir, "vendors")
 }
 
-// IMPath returns the path to im.yaml.
 func IMPath(configDir string) string {
 	return externalFilePath(configDir, "im")
 }
 
-// MCPServersPath returns the path to mcp_servers.yaml.
 func MCPServersPath(configDir string) string {
 	return externalFilePath(configDir, "mcp_servers")
 }
 
-// MCPDeletedPath returns the path to mcp_deleted.yaml (deletion tombstones).
 func MCPDeletedPath(configDir string) string {
 	return externalFilePath(configDir, "mcp_deleted")
 }
 
-// LoadMCPDeleted reads the tombstone list from mcp_deleted.yaml.
 func LoadMCPDeleted(configDir string) []string {
 	data, err := os.ReadFile(MCPDeletedPath(configDir))
 	if err != nil {
@@ -48,8 +42,6 @@ func LoadMCPDeleted(configDir string) []string {
 	return names
 }
 
-// SaveMCPDeleted writes the tombstone list to mcp_deleted.yaml. An empty
-// list removes the file.
 func SaveMCPDeleted(configDir string, names []string) error {
 	path := MCPDeletedPath(configDir)
 	if len(names) == 0 {
@@ -65,11 +57,6 @@ func SaveMCPDeleted(configDir string, names []string) error {
 	return writeSecureConfigFile(path, out)
 }
 
-// loadExternalSections loads vendors, im, and mcp_servers from their respective
-// standalone files if they exist. If the files don't exist but the data is
-// present in the main config file, it auto-migrates them out.
-//
-// All three surfaces (daemon, TUI, desktop) use this through Load().
 func loadExternalSections(cfg *Config, mainConfigPath string) {
 	configDir := filepath.Dir(mainConfigPath)
 	if configDir == "." {
@@ -108,13 +95,6 @@ func loadExternalSections(cfg *Config, mainConfigPath string) {
 	cfg.DeletedMCPServers = LoadMCPDeleted(configDir)
 }
 
-// saveExternalSections writes vendors, im, and mcp_servers to their respective
-// standalone files. Called by Save() to keep external files in sync.
-// configDir is the resolved external-files directory (unified with the
-// vendors.yaml key migration in Save, fix #293); vendors is the vendor set to
-// persist (Save passes the instance-only-filtered set).
-// #4697 (defect B): returns the first write failure instead of only logging -
-// Save() must not report success while an external section silently failed.
 func saveExternalSections(cfg *Config, configDir string, vendors map[string]VendorConfig) error {
 	var firstErr error
 	if err := SaveVendors(configDir, vendors); err != nil {
@@ -136,8 +116,6 @@ func saveExternalSections(cfg *Config, configDir string, vendors map[string]Vend
 	return firstErr
 }
 
-// SaveVendors writes vendor definitions to vendors.yaml, stripping default
-// vendors and applying flow-style formatting for models/tags arrays.
 func SaveVendors(configDir string, vendors map[string]VendorConfig) error {
 	path := VendorsPath(configDir)
 
@@ -192,7 +170,6 @@ func SaveVendors(configDir string, vendors map[string]VendorConfig) error {
 	return writeSecureConfigFile(path, out)
 }
 
-// SaveIMConfig writes IM configuration to im.yaml.
 func SaveIMConfig(configDir string, im *IMConfig) error {
 	path := IMPath(configDir)
 
@@ -228,7 +205,6 @@ func SaveIMConfig(configDir string, im *IMConfig) error {
 	return writeSecureConfigFile(path, out)
 }
 
-// SaveMCPServers writes MCP server list to mcp_servers.yaml.
 func SaveMCPServers(configDir string, servers []MCPServerConfig) error {
 	path := MCPServersPath(configDir)
 
@@ -239,7 +215,6 @@ func SaveMCPServers(configDir string, servers []MCPServerConfig) error {
 		return nil
 	}
 
-	// Strip internal-only fields before persisting
 	type persistMCP struct {
 		Name              string            `yaml:"name" json:"name"`
 		Type              string            `yaml:"type,omitempty" json:"type,omitempty"`
@@ -290,11 +265,6 @@ func SaveMCPServers(configDir string, servers []MCPServerConfig) error {
 	return writeSecureConfigFile(path, out)
 }
 
-// alignByName reorders `existing` (the on-disk list) to match the element
-// order of `out` by the elements' "name" key when both sides are lists of
-// name-bearing maps (#3533). Elements without a usable name keep their
-// positional correspondence (append in original order). Non-list inputs are
-// returned unchanged.
 func alignByName(existing, out []interface{}) []interface{} {
 	idxByName := map[string]int{}
 	for i, el := range existing {
@@ -342,13 +312,6 @@ func alignByName(existing, out []interface{}) []interface{} {
 	return aligned
 }
 
-// restoreEnvRefs walks an on-disk (unexpanded) tree and an outgoing
-// (expanded) tree in parallel. At each string leaf, if the on-disk value
-// contains a ${VAR} reference and expanding it with the runtime environment
-// yields exactly the outgoing value, the unexpanded reference is returned so
-// the caller can keep referencing the environment instead of materializing
-// it (#608). Any mismatch (changed value, changed shape) keeps the outgoing
-// value untouched.
 func restoreEnvRefs(existing, out interface{}, lookup envLookupFunc) interface{} {
 	switch ev := existing.(type) {
 	case map[string]interface{}:
@@ -379,7 +342,6 @@ func restoreEnvRefs(existing, out interface{}, lookup envLookupFunc) interface{}
 	return out
 }
 
-// loadVendorsFile reads and parses a vendors.yaml file.
 func loadVendorsFile(path string) map[string]VendorConfig {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -403,7 +365,6 @@ func loadVendorsFile(path string) map[string]VendorConfig {
 	return vendors
 }
 
-// loadIMFile reads and parses an im.yaml file.
 func loadIMFile(path string) *IMConfig {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -426,7 +387,6 @@ func loadIMFile(path string) *IMConfig {
 	return &im
 }
 
-// loadMCPServersFile reads and parses an mcp_servers.yaml file.
 func loadMCPServersFile(path string) []MCPServerConfig {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -434,8 +394,6 @@ func loadMCPServersFile(path string) []MCPServerConfig {
 	}
 	lookup := runtimeEnvLookup(nil)
 
-	// mcp_servers.yaml is a YAML array at top level (a sequence of maps).
-	// Parse as []map[string]interface{} so env expansion works on each element.
 	var rawList []map[string]interface{}
 	if err := yaml.Unmarshal(data, &rawList); err != nil {
 		debug.Log("config", "failed to parse mcp servers from %s: %v", path, err)
@@ -454,29 +412,10 @@ func loadMCPServersFile(path string) []MCPServerConfig {
 	return servers
 }
 
-// LoadMCPServersPublic loads MCP server configs from the given file path.
-// It is an exported wrapper around loadMCPServersFile for use by the
-// hot-reload watcher.
 func LoadMCPServersPublic(path string) []MCPServerConfig {
 	return loadMCPServersFile(path)
 }
 
-// mergeVendors merges external vendors on top of in-memory vendors.
-//
-// #559 (Bug E): the merge is FIELD-LEVEL, not a wholesale replacement. When a
-// user overrides a same-name built-in vendor in vendors.yaml (even a single
-// field), built-in endpoints that the external definition does not mention are
-// preserved, keeping mergeDefaultEndpoints' promise that "new built-in
-// endpoints are available even when the user has an existing config" — load
-// order in Load() is mergeDefaultEndpoints → loadExternalSections, so a
-// whole-replace here would drop the built-in endpoints again (probe: zai
-// collapsed 6 built-in endpoints to 1; switching back to a deleted endpoint
-// then failed Validate()).
-//
-// Field-level precedence within an existing endpoint: non-zero external
-// fields win; zero-value external fields keep the built-in value. Explicitly
-// disabling a built-in endpoint remains possible by removing the whole vendor
-// entry via a fully custom definition or a distinct vendor name.
 func mergeVendors(base, external map[string]VendorConfig) map[string]VendorConfig {
 	if external == nil {
 		return base
@@ -514,10 +453,6 @@ func mergeVendors(base, external map[string]VendorConfig) map[string]VendorConfi
 	return base
 }
 
-// mergeEndpointConfig merges an external endpoint definition on top of the
-// built-in one. Non-zero external fields win; zero-value external fields keep
-// the built-in value. This lets users override e.g. just the base_url while
-// keeping built-in models/tags/protocol.
 func mergeEndpointConfig(base, ext EndpointConfig) EndpointConfig {
 	if ext.DisplayName != "" {
 		base.DisplayName = ext.DisplayName
@@ -555,14 +490,6 @@ func mergeEndpointConfig(base, ext EndpointConfig) EndpointConfig {
 	return base
 }
 
-// mergeIMExternal merges an external im.yaml definition on top of the base
-// (main-config or default) IMConfig. Non-zero external fields win; zero-value
-// external fields keep the base value — the same field-level precedence
-// mergeVendors uses (#559). An empty or comment-only im.yaml parses to a
-// zero-value IMConfig and therefore leaves the base untouched (#981).
-// Limitation (shared with mergeVendors): a bare `enabled: false` in the
-// external file cannot clear a base `enabled: true` because false is the zero
-// value; disable by removing the im section or the file instead.
 func mergeIMExternal(base, ext IMConfig) IMConfig {
 	if ext.ActiveSessionPolicy != "" {
 		base.ActiveSessionPolicy = ext.ActiveSessionPolicy
@@ -594,8 +521,6 @@ func mergeIMExternal(base, ext IMConfig) IMConfig {
 	return base
 }
 
-// mergeIMStreamingConfig merges external streaming settings into the base;
-// non-zero external fields win.
 func mergeIMStreamingConfig(base, ext IMStreamingConfig) IMStreamingConfig {
 	if ext.Enabled {
 		base.Enabled = ext.Enabled
@@ -615,8 +540,6 @@ func mergeIMStreamingConfig(base, ext IMStreamingConfig) IMStreamingConfig {
 	return base
 }
 
-// mergeIMSTTConfig merges external STT settings into the base; non-zero
-// external fields win.
 func mergeIMSTTConfig(base, ext IMSTTConfig) IMSTTConfig {
 	if ext.Provider != "" {
 		base.Provider = ext.Provider
@@ -636,9 +559,6 @@ func mergeIMSTTConfig(base, ext IMSTTConfig) IMSTTConfig {
 	return base
 }
 
-// mergeIMAdapterConfig merges an external adapter definition into the base;
-// non-zero external fields win, maps are merged key-level (external values
-// win on key collision), non-empty external slices replace base slices.
 func mergeIMAdapterConfig(base, ext IMAdapterConfig) IMAdapterConfig {
 	if ext.Enabled {
 		base.Enabled = ext.Enabled
@@ -683,8 +603,6 @@ func mergeIMAdapterConfig(base, ext IMAdapterConfig) IMAdapterConfig {
 	return base
 }
 
-// migrateSectionToExternal extracts a section from the main config file
-// and writes it to a standalone external file, then removes it from the main file.
 func migrateSectionToExternal(mainConfigPath, configDir, section string) {
 
 	unlock := lockConfigFile(mainConfigPath)
@@ -704,7 +622,6 @@ func migrateSectionToExternal(mainConfigPath, configDir, section string) {
 		return
 	}
 
-	// Write to external file
 	var extPath string
 	var outData []byte
 
@@ -773,7 +690,6 @@ func migrateSectionToExternal(mainConfigPath, configDir, section string) {
 	debug.Log("config", "migrated %s from main config to %s", section, extPath)
 }
 
-// hasMainSection checks if the main config file contains a given top-level key.
 func hasMainSection(mainConfigPath, section string) bool {
 	data, err := os.ReadFile(mainConfigPath)
 	if err != nil {
@@ -787,8 +703,6 @@ func hasMainSection(mainConfigPath, section string) bool {
 	return exists
 }
 
-// stripFirstYAMLKey removes the top-level YAML key wrapper.
-// For example, "vendors:\n    myvendor:\n        ..." becomes "myvendor:\n    ...".
 func stripFirstYAMLKey(data []byte) []byte {
 	lines := strings.Split(string(data), "\n")
 	if len(lines) == 0 {
@@ -828,7 +742,6 @@ func stripFirstYAMLKey(data []byte) []byte {
 	return []byte(strings.Join(result, "\n"))
 }
 
-// fileExists checks if a file exists on disk.
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil

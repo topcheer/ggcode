@@ -9,7 +9,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// #559 F: expandEnvWithLookup_DefaultValue tests ${VAR:-default} semantics.
 func TestIssue559F_ExpandEnvDefaultValue(t *testing.T) {
 	lookup := func(name string) (string, bool) {
 		switch name {
@@ -46,8 +45,6 @@ func TestIssue559F_ExpandEnvDefaultValue(t *testing.T) {
 	}
 }
 
-// #559 E: mergeVendors must NOT drop built-in endpoints that the external
-// definition does not mention (probe: zai 6 → 1).
 func TestIssue559E_MergeVendorsPreservesUnmentionedBuiltInEndpoints(t *testing.T) {
 	base := map[string]VendorConfig{
 		"zai": {
@@ -91,8 +88,6 @@ func TestIssue559E_MergeVendorsPreservesUnmentionedBuiltInEndpoints(t *testing.T
 	}
 }
 
-// #559 E: end-to-end — Load() with an external vendors.yaml that overrides one
-// field of a built-in vendor must keep all built-in endpoints available.
 func TestIssue559E_LoadExternalVendorsKeepsBuiltinEndpoints(t *testing.T) {
 	dir := t.TempDir()
 	mainPath := filepath.Join(dir, "ggcode.yaml")
@@ -123,7 +118,6 @@ func TestIssue559E_LoadExternalVendorsKeepsBuiltinEndpoints(t *testing.T) {
 	}
 }
 
-// #559 G: explicit enabled=false (enabledSet) must survive MarshalYAML.
 func TestIssue559G_KnightExplicitFalsePersists(t *testing.T) {
 	kc := KnightConfig{Enabled: false}
 	kc.SetEnabledExplicitly()
@@ -134,7 +128,6 @@ func TestIssue559G_KnightExplicitFalsePersists(t *testing.T) {
 	if !strings.Contains(string(data), "enabled: false") {
 		t.Errorf("explicit disable not persisted, got:\n%s", data)
 	}
-	// Round-trip: unmarshal must set Enabled=false (and enabledSet).
 	var back KnightConfig
 	if err := yaml.Unmarshal(data, &back); err != nil {
 		t.Fatal(err)
@@ -147,7 +140,6 @@ func TestIssue559G_KnightExplicitFalsePersists(t *testing.T) {
 	}
 }
 
-// #559 G: unset enabled stays omitted (no file bloat, no behavior change).
 func TestIssue559G_KnightUnsetStillOmitted(t *testing.T) {
 	kc := KnightConfig{Enabled: false}
 	data, err := yaml.Marshal(kc)
@@ -159,7 +151,6 @@ func TestIssue559G_KnightUnsetStillOmitted(t *testing.T) {
 	}
 }
 
-// #559 G: explicit true still marshals.
 func TestIssue559G_KnightExplicitTrueMarshals(t *testing.T) {
 	kc := KnightConfig{Enabled: true}
 	kc.SetEnabledExplicitly()

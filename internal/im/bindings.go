@@ -14,35 +14,20 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// BindingStore persists channel bindings keyed by (workspace, adapter).
 type BindingStore interface {
 	Save(binding ChannelBinding) error
 	Delete(workspace, adapter string) error
 	List() ([]ChannelBinding, error)
 	ListByWorkspace(workspace string) ([]ChannelBinding, error)
 	ListByAdapter(adapter string) ([]ChannelBinding, error)
-	// BindExclusive atomically removes ALL existing bindings for the given
-	// adapter (across all workspaces) and saves the new binding. This prevents
-	// cross-process TOCTOU races where two ggcode instances in different
-	// workspaces bind the same adapter simultaneously.
 	BindExclusive(binding ChannelBinding) error
-	// UpdateSessionID persists the LastSessionID field for a binding identified
-	// by (workspace, adapter). If sessionID is empty, the field is cleared.
 	UpdateSessionID(workspace, adapter, sessionID string) error
 }
 
-// PassiveSeqReserver is an optional BindingStore capability (#3319):
-// atomically advancing PassiveReplyCount by n and returning the first
-// reserved seq (newCount-n+1) with the whole read-modify-write under the
-// store's cross-process lock. Two ggcode instances (e.g. TUI + daemon)
-// can then never reserve the same (msg_id, msg_seq) pair and have the QQ
-// server deduplicate one of the sends away. Stores that do not implement
-// this (test mocks) fall back to in-process reservation in the Manager.
 type PassiveSeqReserver interface {
 	ReservePassiveSeqs(workspace, messageID string, n int) (int, error)
 }
 
-// compositeKey builds a map key from workspace and adapter name.
 func compositeKey(workspace, adapter string) string {
 	return normalizeWorkspace(workspace) + "\x00" + adapter
 }
@@ -55,10 +40,9 @@ func splitCompositeKey(key string) (workspace, adapter string) {
 	return key[:i], key[i+1:]
 }
 
-// MemoryBindingStore is an in-memory BindingStore for tests.
 type MemoryBindingStore struct {
 	mu       sync.RWMutex
-	bindings map[string]ChannelBinding // compositeKey -> binding
+	bindings map[string]ChannelBinding
 }
 
 func NewMemoryBindingStore() *MemoryBindingStore {
@@ -118,8 +102,6 @@ func (s *MemoryBindingStore) ListByAdapter(adapter string) ([]ChannelBinding, er
 	return out, nil
 }
 
-// BindExclusive atomically removes all existing bindings for the given adapter
-// and saves the new one under a single lock.
 func (s *MemoryBindingStore) BindExclusive(binding ChannelBinding) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -136,10 +118,6 @@ func (s *MemoryBindingStore) BindExclusive(binding ChannelBinding) error {
 	return nil
 }
 
-// ReservePassiveSeqs implements PassiveSeqReserver. In-memory
-// store: the mutex already makes read-modify-write atomic within the
-// process (tests use this store; production multi-instance uses the JSON
-// file store whose file lock spans processes).
 func (s *MemoryBindingStore) ReservePassiveSeqs(workspace, messageID string, n int) (int, error) {
 	if n < 1 {
 		return 0, fmt.Errorf("reserving %d passive seqs: n must be >= 1", n)
@@ -172,7 +150,6 @@ func (s *MemoryBindingStore) UpdateSessionID(workspace, adapter, sessionID strin
 	return nil
 }
 
-// JSONFileBindingStore persists bindings to a JSON file with atomic writes.
 type JSONFileBindingStore struct {
 	path string
 	mu   sync.Mutex
@@ -215,9 +192,6 @@ func (s *JSONFileBindingStore) Save(binding ChannelBinding) error {
 	return s.writeAllLocked(all)
 }
 
-// ReservePassiveSeqs implements PassiveSeqReserver. The whole
-// read-modify-write cycle runs under the cross-process bindings file lock,
-// so concurrent instances serialize here instead of racing in memory (#3319).
 func (s *JSONFileBindingStore) ReservePassiveSeqs(workspace, messageID string, n int) (int, error) {
 	if n < 1 {
 		return 0, fmt.Errorf("reserving %d passive seqs: n must be >= 1", n)
@@ -281,10 +255,6 @@ func (s *JSONFileBindingStore) List() ([]ChannelBinding, error) {
 	return out, nil
 }
 
-// BindExclusive atomically removes all bindings for the given adapter across
-// all workspaces, then saves the new binding — under a single file lock.
-// This prevents cross-process TOCTOU where two processes read the file
-// simultaneously, each deleting the other's binding, then both writing back.
 func (s *JSONFileBindingStore) BindExclusive(binding ChannelBinding) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

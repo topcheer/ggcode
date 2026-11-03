@@ -24,7 +24,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/skip2/go-qrcode"
-	_ "modernc.org/sqlite" // pure-Go SQLite driver (no CGO required)
+	_ "modernc.org/sqlite"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -40,9 +40,9 @@ func init() {
 }
 
 const (
-	waMaxTextLen    = 65536                  // Official: WhatsApp personal accounts support up to 65,536 characters per text message
-	waInterMsgDelay = 300 * time.Millisecond // Conservative inter-chunk delay to avoid WhatsApp rate limiting
-	waDedupMaxSize  = 1000                   // inbound msgid dedup cap, mirrors wecomDedupMaxSize (#974)
+	waMaxTextLen    = 65536
+	waInterMsgDelay = 300 * time.Millisecond
+	waDedupMaxSize  = 1000
 )
 
 var waBackoffs = []time.Duration{
@@ -55,10 +55,6 @@ var waBackoffs = []time.Duration{
 
 var errWhatsAppLoggedOut = errors.New("whatsapp logged out")
 
-// waNextBackoff returns the reconnect delay for the given 0-based attempt,
-// capped at the largest entry of waBackoffs (60s). Reconnect attempts are
-// unbounded: a network outage — however long — must not permanently kill the
-// adapter (#603). Only errWhatsAppLoggedOut is terminal (see waTerminal).
 func waNextBackoff(attempt int) time.Duration {
 	if attempt < 0 {
 		attempt = 0
@@ -69,10 +65,6 @@ func waNextBackoff(attempt int) time.Duration {
 	return waBackoffs[attempt]
 }
 
-// waTerminal reports whether a connectAndServe error is permanent. The only
-// permanent case is errWhatsAppLoggedOut (device unpaired; requires manual QR
-// re-pairing). Everything else — including multi-minute network outages —
-// retries forever with capped backoff (#603).
 func waTerminal(err error) bool {
 	return errors.Is(err, errWhatsAppLoggedOut)
 }
@@ -89,15 +81,10 @@ type whatsappAdapter struct {
 	connected bool
 	cancel    context.CancelFunc
 
-	// runWG tracks the run goroutine(s) started by Start so shutdown paths
-	// (and tests) can wait for them to finish writing session state (#603).
 	runWG sync.WaitGroup
 
-	// seen deduplicates inbound messages by msgid — reconnects and offline
-	// history sync can redeliver the same message (#974). Guarded by a.mu.
 	seen map[string]time.Time
 
-	// QR code for TUI display (set during pairing, cleared after connect)
 	lastQR      string
 	sessionDone chan error
 }
@@ -123,7 +110,6 @@ func newWhatsAppAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdap
 	}, nil
 }
 
-// waDebugLogger bridges whatsmeow's internal logger to our debug log system.
 type waDebugLogger struct{ prefix string }
 
 func (l *waDebugLogger) Debugf(msg string, args ...interface{}) {
@@ -218,7 +204,6 @@ func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, even
 	return nil
 }
 
-// sendExtractedImage dispatches image sending based on the image kind.
 func (a *whatsappAdapter) sendExtractedImage(ctx context.Context, client *whatsmeow.Client, jid types.JID, img ExtractedImage) error {
 	switch img.Kind {
 	case "url":
@@ -271,7 +256,6 @@ func (a *whatsappAdapter) sendExtractedImage(ctx context.Context, client *whatsm
 	}
 }
 
-// sendImageByUpload uploads image data to WhatsApp servers and sends as ImageMessage.
 func (a *whatsappAdapter) sendImageByUpload(ctx context.Context, client *whatsmeow.Client, jid types.JID, data []byte, caption string) error {
 	uploaded, err := client.Upload(ctx, data, whatsmeow.MediaImage)
 	if err != nil {
@@ -318,15 +302,10 @@ func (a *whatsappAdapter) Stop() {
 	}
 }
 
-// waitRunStopped blocks until every run goroutine started by Start has
-// exited. Useful for deterministic shutdown in tests (#603).
 func (a *whatsappAdapter) waitRunStopped() {
 	a.runWG.Wait()
 }
 
-// Close implements the Closer interface so the runtime can properly
-// shut down the adapter. Without this, the runtime logs a warning and
-// leaks the WhatsApp websocket connection.
 func (a *whatsappAdapter) Close() error {
 	a.Stop()
 	return nil
@@ -409,8 +388,6 @@ func (a *whatsappAdapter) run(ctx context.Context) {
 	}
 }
 
-// connectAndServe handles a single connection lifecycle.
-// On failure or logout, the caller (reconnectLoop) retries.
 func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 	dbPath := filepath.Join(a.storeDir, "whatsmeow.db")
 	container, err := sqlstore.New(ctx, "sqlite", fmt.Sprintf("file:%s?_pragma=foreign_keys(1)", dbPath), &waDebugLogger{prefix: "store"})
@@ -630,9 +607,6 @@ func (a *whatsappAdapter) signalSessionDone(err error) {
 	}
 }
 
-// whatsappMediaCaption extracts the plain-text caption from a media message
-// (#1257). Media bodies themselves are out of scope (no download pipeline);
-// the caption is delivered so the user's accompanying instruction survives.
 func whatsappMediaCaption(m *waE2E.Message) string {
 	if m == nil {
 		return ""
@@ -795,18 +769,12 @@ func (a *whatsappAdapter) publishState(healthy bool, status, lastErr string) {
 	})
 }
 
-// currentClient returns a lock-protected snapshot of the client pointer.
-// The pointer itself is always safe to dereference: publish (connectAndServe)
-// and clear (markLoggedOut) writes happen under a.mu, so every read site must
-// go through this snapshot instead of touching a.client directly (#974).
 func (a *whatsappAdapter) currentClient() *whatsmeow.Client {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.client
 }
 
-// markLoggedOut clears the client and connected flag (idempotent). Called
-// from the LoggedOut event handler; safe to call again from other paths.
 func (a *whatsappAdapter) markLoggedOut() {
 	a.mu.Lock()
 	client := a.client
@@ -818,9 +786,6 @@ func (a *whatsappAdapter) markLoggedOut() {
 	}
 }
 
-// removeStoreDB deletes the whatsmeow sqlite store so the next start pairs
-// fresh. Call only AFTER the container is closed — Windows refuses to unlink
-// open files (#974).
 func (a *whatsappAdapter) removeStoreDB() {
 	dbPath := filepath.Join(a.storeDir, "whatsmeow.db")
 	_ = os.Remove(dbPath)
@@ -829,10 +794,6 @@ func (a *whatsappAdapter) removeStoreDB() {
 	debug.Log("whatsapp", "adapter %q: store removed, will re-pair on next start", a.name)
 }
 
-// chunkWARunes delegates to the shared splitMessageRunes with balanced
-// break preference, which searches the entire chunk for newline boundaries
-// (wider than the previous 200-rune lookback) while still avoiding splits
-// at very early newlines.
 func chunkWARunes(text string, maxLen int) []string {
 	return splitMessageRunes(text, maxLen, false, false, true)
 }

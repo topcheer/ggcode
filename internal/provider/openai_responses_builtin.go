@@ -8,19 +8,8 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// responsesIncludeFileSearchResults asks the API to inline retrieved chunk
-// text in file_search_call items so the agent can quote its sources.
 const responsesIncludeFileSearchResults = "file_search_call.results"
 
-// SetServerTools implements provider.ServerToolsSetter: declarative OpenAI
-// Responses built-in tools executed inside the API. Recognized types:
-//   - "code_interpreter" — sandboxed Python (auto container with optional
-//     memory_limit tier and seed file_ids)
-//   - "file_search"      — semantic search over vector stores (requires
-//     vector_store_ids)
-//
-// Unknown declarations are ignored (fail closed), mirroring the Anthropic
-// and Gemini legs.
 func (p *OpenAIResponsesProvider) SetServerTools(tools []ServerToolConfig) {
 
 	kept := make([]ServerToolConfig, 0, len(tools))
@@ -42,9 +31,6 @@ func (p *OpenAIResponsesProvider) SetServerTools(tools []ServerToolConfig) {
 	}
 }
 
-// responsesBuiltinTools converts server_tools declarations into Responses
-// API tool entries. Malformed declarations (file_search without vector
-// stores) are dropped rather than sent and rejected by the API.
 func responsesBuiltinTools(tools []ServerToolConfig) []responsesTool {
 	var out []responsesTool
 	for _, t := range tools {
@@ -69,9 +55,6 @@ func responsesBuiltinTools(tools []ServerToolConfig) []responsesTool {
 	return out
 }
 
-// responsesCodeInterpreterContainer builds the `container` property. Auto
-// mode is always used (the API creates or reuses a sandboxed VM); optional
-// memory_limit and seed file_ids are attached when declared.
 func responsesCodeInterpreterContainer(t ServerToolConfig) map[string]any {
 	auto := map[string]any{"type": "auto"}
 	if t.MemoryLimit != "" {
@@ -93,9 +76,6 @@ func nonEmptyStrings(in []string) []string {
 	return out
 }
 
-// responseAnnotation is the subset of message output_text annotations this
-// adapter surfaces. Code interpreter files arrive as container_file_citation
-// entries; file_search sources arrive as file_citation entries.
 type responseAnnotation struct {
 	Type        string `json:"type"`
 	FileID      string `json:"file_id"`
@@ -104,9 +84,6 @@ type responseAnnotation struct {
 	Quote       string `json:"quote"`
 }
 
-// appendResponsesCitations appends one compact line per annotation so
-// generated files and retrieval sources survive into the agent transcript
-// (raw annotations would otherwise be dropped by the message mapping).
 func appendResponsesCitations(text string, anns []responseAnnotation) string {
 	if len(anns) == 0 {
 		return text
@@ -154,11 +131,6 @@ func truncateRunes(s string, n int) string {
 	return string(r[:n]) + "..."
 }
 
-// formatResponsesServerItem renders a completed server-executed output item
-// (code_interpreter_call / file_search_call) as an inspectable text block.
-// The model already consumed the result server-side, so nothing is replayed
-// into the tool loop; this is observability only, mirroring the Gemini
-// grounding text blocks.
 func formatResponsesServerItem(raw json.RawMessage) (string, bool) {
 	var probe struct {
 		Type string `json:"type"`

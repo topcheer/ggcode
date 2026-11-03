@@ -51,10 +51,6 @@ func newWecomInboundHarness(t *testing.T) (*wecomAdapter, *stubInboundBridge, *M
 	return a, bridge, mgr
 }
 
-// TestWecomPureImageMessageRoutedWithAttachment pins #1252: a pure media
-// message (image, no text) used to hit `text == "" → return` BEFORE
-// extractAttachments and was dropped entirely; it must now route with its
-// attachment.
 func TestWecomPureImageMessageRoutedWithAttachment(t *testing.T) {
 	a, bridge, _ := newWecomInboundHarness(t)
 
@@ -74,7 +70,6 @@ func TestWecomPureImageMessageRoutedWithAttachment(t *testing.T) {
 	}
 }
 
-// TestWecomPureFileMessageRouted pins #1252 for the file variant.
 func TestWecomPureFileMessageRouted(t *testing.T) {
 	a, bridge, _ := newWecomInboundHarness(t)
 
@@ -87,9 +82,6 @@ func TestWecomPureFileMessageRouted(t *testing.T) {
 	}
 }
 
-// TestWecomMixedMessageImageCollected pins #1253: mixed messages carry
-// per-item msgtypes; the image item of a "text + screenshot" composition
-// used to vanish (text arrived, image in neither text nor attachments).
 func TestWecomMixedMessageImageCollected(t *testing.T) {
 	a, bridge, _ := newWecomInboundHarness(t)
 
@@ -117,9 +109,6 @@ func TestWecomMixedMessageImageCollected(t *testing.T) {
 	}
 }
 
-// TestWecomPairingFlowNoWarningState guards the #1255 downgrade: the normal
-// pairing flow (unbound channel, instructions consumed) must not publish any
-// warning state, and the reply path stays intact.
 func TestWecomPairingFlowNoWarningState(t *testing.T) {
 	mgr := NewManager()
 	mgr.SetBindingStore(NewMemoryBindingStore())
@@ -142,9 +131,6 @@ func TestWecomPairingFlowNoWarningState(t *testing.T) {
 	}
 }
 
-// TestWecomUploadChunkAckRetried pins #1254's retry half: a lost chunk ack
-// must be retried (chunk upload is idempotent) instead of aborting the whole
-// upload.
 func TestWecomUploadChunkAckRetried(t *testing.T) {
 	f := newFakeWeComServer(t)
 	defer f.srv.Close()
@@ -172,9 +158,6 @@ func TestWecomUploadChunkAckRetried(t *testing.T) {
 	}
 }
 
-// TestWecomMultiImageSendSpacing pins #1254's spacing half: two images plus
-// a text chunk must be spaced by wecomInterMsgDelay after every image and
-// before the first proactive text (3 × 600ms total).
 func TestWecomMultiImageSendSpacing(t *testing.T) {
 	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
@@ -203,9 +186,6 @@ func TestWecomMultiImageSendSpacing(t *testing.T) {
 	}
 }
 
-// TestWhatsappMediaCaption pins #1257: media messages carry their
-// accompanying text in Caption fields; without extraction, "screenshot +
-// question" messages were dropped entirely.
 func TestWhatsappMediaCaption(t *testing.T) {
 	cases := []struct {
 		name string

@@ -136,9 +136,6 @@ func TestOpenAIConvertToolsStrict(t *testing.T) {
 	}
 }
 
-// TestAnthropicStrictToolSerialization pins the wire shape: strict:true on the
-// tool param and additionalProperties:false inside input_schema (via
-// ExtraFields, because ToolInputSchemaParam's typed fields cannot carry it).
 func TestAnthropicStrictToolSerialization(t *testing.T) {
 	inputSchema := anthropic.ToolInputSchemaParam{Type: "object"}
 	inputSchema.ExtraFields = map[string]any{"additionalProperties": false}

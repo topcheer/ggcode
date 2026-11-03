@@ -82,7 +82,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 		toolNames  []string
 		gitStatus  string
 		customCmds []string
-		want       []string // substrings that must appear
+		want       []string
 	}{
 		{
 			name:       "default prompt",
@@ -195,8 +195,6 @@ func TestLoad_NonExistent(t *testing.T) {
 	}
 }
 
-// sa-84 A-JWT-lite delegation declarations: yaml surface + zero-value
-// default (all inbound checks off).
 func TestLoad_A2ADelegationConfig(t *testing.T) {
 	withTestHome(t)
 	path := filepath.Join(t.TempDir(), "ggcode.yaml")
@@ -1848,9 +1846,6 @@ func TestBuildReplyLanguageGuidance(t *testing.T) {
 	}
 }
 
-// TestMergeDefaultEndpointsDeterministic pins #1422-B2: merging a
-// multi-endpoint gateway vendor must pick the same endpoint every run -
-// map iteration order is random, and the pick gets PERSISTED by Save.
 func TestMergeDefaultEndpointsDeterministic(t *testing.T) {
 	build := func() *Config {
 		cfg := DefaultConfig()
@@ -1901,7 +1896,6 @@ sandbox:
 		t.Fatalf("extra_write_paths parse mismatch: %v", cfg.Sandbox.ExtraWritePaths)
 	}
 
-	// Absent section must yield the zero value (sandbox off).
 	var def Config
 	if err := yaml.Unmarshal([]byte("vendor: zai\n"), &def); err != nil {
 		t.Fatalf("unmarshal default: %v", err)
@@ -1911,8 +1905,6 @@ sandbox:
 	}
 }
 
-// TestResolveEndpointLogprobsPassThrough (sa-74): endpoint-level logprobs
-// flag reaches the provider via ResolvedEndpoint.
 func TestResolveEndpointLogprobsPassThrough(t *testing.T) {
 	cfg := testConfigWithVendor()
 	vc := cfg.Vendors["zai"]
@@ -1943,7 +1935,6 @@ func TestResolveEndpointLogprobsPassThrough(t *testing.T) {
 	}
 }
 
-// r372: the watch: section parses into WatchTriggerConfig.
 func TestLoad_WatchSection(t *testing.T) {
 	withTestHome(t)
 	dir := t.TempDir()
@@ -1972,7 +1963,6 @@ func TestLoad_WatchSection(t *testing.T) {
 	}
 }
 
-// Companion (r373): the idle: section parses into IdleConfig.
 func TestLoad_IdleSection(t *testing.T) {
 	withTestHome(t)
 	dir := t.TempDir()

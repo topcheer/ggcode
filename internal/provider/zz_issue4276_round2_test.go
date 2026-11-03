@@ -28,7 +28,6 @@ func assertNoRefs4276R2(t *testing.T, doc map[string]any) {
 	}
 }
 
-// walle invalid.jsonl: $defs self-reference through a required hop.
 func Test4276R2_DefsSelfReferenceCycleCut(t *testing.T) {
 	in := `{"$defs":{"XXX":{"properties":{"next":{"$ref":"#/$defs/XXX"}},"required":["next"],"type":"object"}},"properties":{"node":{"$ref":"#/$defs/XXX"}},"type":"object"}`
 	doc := mustNormalize4276R2(t, in)
@@ -61,22 +60,18 @@ func Test4276R2_DefsSelfReferenceCycleCut(t *testing.T) {
 	}
 }
 
-// walle invalid.jsonl: mutual references A <-> B through required hops.
 func Test4276R2_MutualRefCycleCut(t *testing.T) {
 	in := `{"type":"object","properties":{"root":{"$ref":"#/$defs/A"}},"required":["root"],"$defs":{"A":{"type":"object","properties":{"b":{"$ref":"#/$defs/B"}},"required":["b"]},"B":{"type":"object","properties":{"a":{"$ref":"#/$defs/A"}},"required":["a"]}}}`
 	doc := mustNormalize4276R2(t, in)
 	assertNoRefs4276R2(t, doc)
 }
 
-// walle invalid.jsonl: array self-reference with minItems>=1.
 func Test4276R2_ArraySelfReferenceCycleCut(t *testing.T) {
 	in := `{"type":"array","items":{"type":"object","properties":{"elements":{"$ref":"#"}},"required":["elements"]},"minItems":1}`
 	doc := mustNormalize4276R2(t, in)
 	assertNoRefs4276R2(t, doc)
 }
 
-// Unresolvable / non-local refs (walle: "references must start with #/$defs/")
-// must fall back to the permissive object instead of failing the request.
 func Test4276R2_UnresolvableRefFallsBack(t *testing.T) {
 	in := `{"type":"object","properties":{"a":{"type":"string"},"b":{"$ref":"#/properties/a/type"}}}`
 	doc := mustNormalize4276R2(t, in)
@@ -94,8 +89,6 @@ func Test4276R2_UnresolvableRefFallsBack(t *testing.T) {
 	}
 }
 
-// A legitimate non-cyclic $ref must be inlined semantically (the referenced
-// body appears at the reference site), not just cut.
 func Test4276R2_LegitRefInlined(t *testing.T) {
 	in := `{"type":"object","properties":{"sym":{"$ref":"#/$defs/Sym"}},"required":["sym"],"$defs":{"Sym":{"type":"string","minLength":1}}}`
 	doc := mustNormalize4276R2(t, in)
@@ -106,8 +99,6 @@ func Test4276R2_LegitRefInlined(t *testing.T) {
 	}
 }
 
-// Depth beyond moonshotMaxRefDepth is cut even without a cycle (diamonds and
-// adversarial chains must not blow up the payload).
 func Test4276R2_DeepChainCut(t *testing.T) {
 	in := `{"type":"object","properties":{"p":{"$ref":"#/$defs/L1"}},"$defs":{"L1":{"properties":{"n":{"$ref":"#/$defs/L2"}}},"L2":{"properties":{"n":{"$ref":"#/$defs/L3"}}},"L3":{"properties":{"n":{"$ref":"#/$defs/L4"}}},"L4":{"properties":{"n":{"$ref":"#/$defs/L5"}}},"L5":{"type":"object"}}}`
 	doc := mustNormalize4276R2(t, in)
@@ -119,8 +110,6 @@ func Test4276R2_DeepChainCut(t *testing.T) {
 	}
 }
 
-// Ref-free schemas (every builtin tool) take the cheap path and stay
-// byte-identical apart from the round-1 free-form pass.
 func Test4276R2_RefFreeUnchanged(t *testing.T) {
 	in := `{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`
 	out := string(normalizeMoonshotSchema(json.RawMessage(in)))
@@ -129,12 +118,6 @@ func Test4276R2_RefFreeUnchanged(t *testing.T) {
 	}
 }
 
-// #4276 round 3: walle caps each tool schema at 120000 serialized bytes and
-// answers 400 "schema exceeds maximum allowed size" at root. Dereferencing
-// (pass 1) can inflate a schema with many refs to one big def; huge MCP tool
-// schemas can be over the cap on arrival. Both must degrade to the
-// permissive free-form object instead of failing every request in the
-// session.
 func Test4276R3_SizeGuardDegradesOversizedSchema(t *testing.T) {
 
 	props := make([]string, 260)
@@ -168,7 +151,6 @@ func Test4276R3_SizeGuardDegradesOversizedSchema(t *testing.T) {
 	}
 }
 
-// A schema just under the cap keeps its full shape (guard must not fire early).
 func Test4276R3_SizeGuardKeepsUnderCap(t *testing.T) {
 	props := make([]string, 150)
 	for i := range props {

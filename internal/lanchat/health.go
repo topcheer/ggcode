@@ -9,44 +9,25 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// Agent status values broadcast in Participant.AgentStatus.
 const (
-	AgentStatusOK          = ""             // model healthy
-	AgentStatusQuota       = "quota"        // permanent quota/billing exhaustion
-	AgentStatusRateLimited = "rate_limited" // sustained transient rate limiting
-	AgentStatusAuth        = "auth"         // authentication/authorization failure
+	AgentStatusOK          = ""
+	AgentStatusQuota       = "quota"
+	AgentStatusRateLimited = "rate_limited"
+	AgentStatusAuth        = "auth"
 )
 
-// rateLimitFailThreshold is how many consecutive run-level rate-limit
-// failures mark the node degraded. A single 429 often recovers inside the
-// provider's own retry loop; requiring consecutive failures avoids flapping.
 const rateLimitFailThreshold = 2
 
-// healthProbeSuccessThreshold is how many consecutive probe successes clear
-// the degraded status. Guards against single lucky responses during flapping.
 const healthProbeSuccessThreshold = 2
 
-// Probe backoff schedule. Package vars (not consts) so tests can shorten them,
-// following the ageOffline/presenceHeartbeat pattern in types.go.
 var (
-	// healthProbeInitialRateLimit is the first probe delay for transient
-	// rate limiting — expected to recover within minutes.
 	healthProbeInitialRateLimit = 1 * time.Minute
-	// healthProbeInitialSticky is the first probe delay for quota/auth
-	// failures — these usually require user action (top-up, new key, plan
-	// reset), so probe less aggressively.
-	healthProbeInitialSticky = 5 * time.Minute
-	// healthProbeMax caps the exponential backoff.
-	healthProbeMax = 15 * time.Minute
+	healthProbeInitialSticky    = 5 * time.Minute
+	healthProbeMax              = 15 * time.Minute
 )
 
-// HealthProber performs a minimal LLM call (e.g. max_tokens=1 completion) to
-// test whether the current model is usable again. Returns nil on success.
-// Registered by the frontend (TUI/desktop/daemon) which owns the provider.
 type HealthProber func(ctx context.Context) error
 
-// SetHealthProber registers the callback used by the recovery probe loop.
-// If the node is currently degraded, starts probing immediately.
 func (h *Hub) SetHealthProber(fn HealthProber) {
 	h.mu.Lock()
 	h.healthProber = fn
@@ -58,10 +39,6 @@ func (h *Hub) SetHealthProber(fn HealthProber) {
 	h.mu.Unlock()
 }
 
-// SetModel records the currently configured model name and clears any
-// degraded status — switching models means a different quota pool / credential,
-// so previous degradation no longer applies. Broadcasts presence when the
-// model (or cleared status) is visible to peers.
 func (h *Hub) SetModel(model string) {
 	h.mu.Lock()
 	changed := h.model != model
@@ -74,11 +51,6 @@ func (h *Hub) SetModel(model string) {
 	h.broadcastPresence()
 }
 
-// ReportAgentFailure classifies a run-level LLM failure and updates the
-// degraded status with hysteresis:
-//   - quota/auth: mark immediately (retry provably cannot succeed)
-//   - rate limit: mark after rateLimitFailThreshold consecutive failures
-//   - network/transient: never mark (says nothing about model health)
 func (h *Hub) ReportAgentFailure(class provider.FailureClass) {
 	switch class {
 	case provider.FailureQuota:
@@ -98,8 +70,6 @@ func (h *Hub) ReportAgentFailure(class provider.FailureClass) {
 	}
 }
 
-// ReportAgentSuccess records a successful LLM run: resets the consecutive
-// failure counter and clears any degraded status (broadcasting the recovery).
 func (h *Hub) ReportAgentSuccess() {
 	h.mu.Lock()
 	h.consecRateLimitFails = 0
@@ -107,15 +77,12 @@ func (h *Hub) ReportAgentSuccess() {
 	h.setAgentStatus(AgentStatusOK)
 }
 
-// AgentStatus returns the current degraded status ("" when healthy).
 func (h *Hub) AgentStatus() string {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.agentStatus
 }
 
-// setAgentStatus transitions the degraded status, broadcasting presence on
-// change, and manages the recovery probe loop lifecycle.
 func (h *Hub) setAgentStatus(status string) {
 	h.mu.Lock()
 	if h.agentStatus == status {
@@ -143,8 +110,6 @@ func (h *Hub) setAgentStatus(status string) {
 	h.broadcastPresence()
 }
 
-// broadcastPresence sends this node's current presence to all online peers.
-// Used by busy/model/health status transitions.
 func (h *Hub) broadcastPresence() {
 	h.mu.RLock()
 	peers := make([]Participant, 0, len(h.peers))
@@ -160,8 +125,6 @@ func (h *Hub) broadcastPresence() {
 	}
 }
 
-// startHealthProbeLocked starts the recovery probe goroutine. Caller must
-// hold h.mu and ensure agentStatus != "" and probeCancel == nil.
 func (h *Hub) startHealthProbeLocked() {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.probeCancel = cancel
@@ -170,9 +133,6 @@ func (h *Hub) startHealthProbeLocked() {
 	safego.Go("lanchat.healthProbe", func() { h.healthProbeLoop(ctx, status, prober) })
 }
 
-// healthProbeLoop probes the model with exponential backoff until it recovers
-// (healthProbeSuccessThreshold consecutive successes), the status changes
-// (ctx cancelled by setAgentStatus), or the hub closes.
 func (h *Hub) healthProbeLoop(ctx context.Context, status string, prober HealthProber) {
 	delay := healthProbeInitialSticky
 	if status == AgentStatusRateLimited {

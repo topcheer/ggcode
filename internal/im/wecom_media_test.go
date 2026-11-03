@@ -13,17 +13,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// fakeWeComServer accepts a WebSocket, answers upload init/chunk/finish and
-// aibot_send_msg acks, and records every received frame.
 type fakeWeComServer struct {
-	srv      *httptest.Server
-	url      string
-	mu       sync.Mutex
-	frames   []map[string]any
-	mediaID  string // returned by finish
-	initFail bool
-	// chunkDrops: drop the ack for the first N upload-chunk frames (#1254
-	// retry test) - the adapter must re-send the idempotent chunk.
+	srv        *httptest.Server
+	url        string
+	mu         sync.Mutex
+	frames     []map[string]any
+	mediaID    string
+	initFail   bool
 	chunkDrops int
 }
 
@@ -125,8 +121,6 @@ func newWecomMediaAdapter(t *testing.T, f *fakeWeComServer) *wecomAdapter {
 	return a
 }
 
-// TestWecomUploadAndSendImage pins the full media flow: init → N chunks →
-// finish → aibot_send_msg with msgtype=image and the returned media_id.
 func TestWecomUploadAndSendImage(t *testing.T) {
 	f := newFakeWeComServer(t)
 	defer f.srv.Close()
@@ -193,8 +187,6 @@ func TestWecomUploadAndSendImage(t *testing.T) {
 	}
 }
 
-// TestWecomUploadRejectsOversized verifies the official 10MB image cap is
-// enforced locally before any upload frames are sent.
 func TestWecomUploadRejectsOversized(t *testing.T) {
 	f := newFakeWeComServer(t)
 	defer f.srv.Close()
@@ -210,7 +202,6 @@ func TestWecomUploadRejectsOversized(t *testing.T) {
 	}
 }
 
-// TestWecomUploadInitRejected verifies server-side init errors surface.
 func TestWecomUploadInitRejected(t *testing.T) {
 	f := newFakeWeComServer(t)
 	f.initFail = true
@@ -223,10 +214,6 @@ func TestWecomUploadInitRejected(t *testing.T) {
 	}
 }
 
-// TestWecomUploadFileTypedAndSend (#3325) verifies the file-media upload
-// path end-to-end: a payload ABOVE the 10MB image cap but below the 20MB
-// file cap must ride the full init/chunk/finish protocol with body
-// type=file, then a msgtype=file frame carries the returned media_id.
 func TestWecomUploadFileTypedAndSend(t *testing.T) {
 	f := newFakeWeComServer(t)
 	defer f.srv.Close()
@@ -273,7 +260,6 @@ func TestWecomUploadFileTypedAndSend(t *testing.T) {
 	}
 }
 
-// TestWecomResolveImageLocalPath verifies local files feed the upload.
 func TestWecomResolveImageLocalPath(t *testing.T) {
 	a := &wecomAdapter{}
 	data, name, err := a.wecomResolveImageBytes(t.Context(), ExtractedImage{Kind: "url", Data: writeTempPNG(t)})
@@ -285,7 +271,6 @@ func TestWecomResolveImageLocalPath(t *testing.T) {
 	}
 }
 
-// TestWechatImageURL pins which extracted kinds are deliverable via iLink.
 func TestWechatImageURL(t *testing.T) {
 	cases := []struct {
 		img  ExtractedImage
@@ -303,8 +288,6 @@ func TestWechatImageURL(t *testing.T) {
 	}
 }
 
-// TestWechatSendSingleImage pins the iLink item structure: type 2 image_item
-// carrying the URL.
 func TestWechatSendSingleImage(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

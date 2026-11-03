@@ -9,8 +9,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
-// ptcToolUseJSON is a verbatim Anthropic response block whose tool_use was
-// invoked by the code execution container (programmatic tool calling).
 const ptcToolUseJSON = `{"type":"tool_use","id":"toolu_ptc1","name":"read_file",` +
 	`"input":{"path":"x.go"},"caller":{"type":"code_execution_20260120","tool_id":"srvtoolu_ce1"}}`
 
@@ -100,8 +98,6 @@ func TestIsProgrammaticCaller(t *testing.T) {
 }
 
 func TestServerToolBlockParamCodeExecutionResult(t *testing.T) {
-	// PTC: code execution results must round-trip like web server-tool results
-	// or the API rejects the replayed exchange.
 	const raw = `{"type":"code_execution_tool_result","tool_use_id":"srvtoolu_ce1",` +
 		`"content":[{"type":"code_execution_result_block","content":"42"}]}`
 	u, err := serverToolBlockParam(json.RawMessage(raw))
@@ -116,10 +112,6 @@ func TestServerToolBlockParamCodeExecutionResult(t *testing.T) {
 	}
 }
 
-// TestBuildParamsEchoesPTCCaller pins #2566: buildParams (the Chat/
-// ChatStream request path) must echo the caller field on assistant
-// tool_use blocks - a programmatic call in the code-execution container
-// cannot be matched to its pending client tool_result without it.
 func TestBuildParamsEchoesPTCCaller(t *testing.T) {
 	p := NewAnthropicProviderWithBaseURL("test-key", "claude-sonnet-4-5", 1024, "https://api.anthropic.com")
 	blocks := convertAnthropicResponse([]anthropic.ContentBlockUnion{ptcBlockUnion(t, ptcToolUseJSON)})
@@ -144,11 +136,6 @@ func TestBuildParamsEchoesPTCCaller(t *testing.T) {
 	}
 }
 
-// TestCloneWithModelInheritsCapabilityConfig pins #2567: the clone a
-// named subagent (model override) runs on must inherit the registry-time
-// capability config - toolSearchBeta, memoryTool, files uploader and the
-// context-editing latch. Nothing re-applies SetServerTools/SetMemoryTool
-// after the clone.
 func TestCloneWithModelInheritsCapabilityConfig(t *testing.T) {
 	p := NewAnthropicProviderWithBaseURL("test-key", "claude-sonnet-4-5", 1024, "https://api.anthropic.com")
 	p.SetServerTools([]ServerToolConfig{{Type: "tool_search_tool_regex"}})

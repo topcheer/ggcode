@@ -6,12 +6,6 @@ import (
 	"testing"
 )
 
-// TestIssue4608_NoRetryReplyOnUnboundChannel (#4608): the Slack adapter's
-// HandleInbound failure path must return BEFORE the generic failure reply
-// when err == ErrNoChannelBound - an unbound channel is routine routing,
-// not a delivery failure. Source-pinned (harness for a stubbed Slack
-// transport is out of scope for the minimal fix): the branch order in
-// handleMessage is the contract.
 func TestIssue4608_NoRetryReplyOnUnboundChannel(t *testing.T) {
 	b, err := os.ReadFile("slack_adapter.go")
 	if err != nil {

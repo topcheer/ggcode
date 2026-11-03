@@ -31,9 +31,6 @@ func issue3402Key(t *testing.T, dir string) *NodeKey {
 	return key
 }
 
-// Full chain: first signed DM pins the sender key (message still queues -
-// endorsement not key-bound yet), endorsement binds the pinned
-// fingerprint, and the next signed DM auto-approves.
 func TestIssue3402_TrustedPeerExemptionRequiresVerifiedSignature(t *testing.T) {
 	h := newIssue986Hub(t, "daemon")
 	h.SetRequireAgentApproval(true)
@@ -54,10 +51,6 @@ func TestIssue3402_TrustedPeerExemptionRequiresVerifiedSignature(t *testing.T) {
 	}
 }
 
-// The #3399 attack: an attacker holding their OWN valid key claims the
-// trusted node's node_id. The signature is valid for the attacker key,
-// but the pin (friend-node -> real key) conflicts, so the message stays
-// unverified and the exemption never fires.
 func TestIssue3402_ForgedNodeIDWithValidOwnKeyDoesNotExempt(t *testing.T) {
 	h := newIssue986Hub(t, "daemon")
 	h.SetRequireAgentApproval(true)
@@ -74,8 +67,6 @@ func TestIssue3402_ForgedNodeIDWithValidOwnKeyDoesNotExempt(t *testing.T) {
 	}
 }
 
-// Unsigned messages from an endorsed node are pre-#3402 peers: routed,
-// unverified, never exempt in strict mode.
 func TestIssue3402_UnsignedDMFromEndorsedNodeStillQueues(t *testing.T) {
 	h := newIssue986Hub(t, "daemon")
 	h.SetRequireAgentApproval(true)
@@ -94,7 +85,6 @@ func TestIssue3402_UnsignedDMFromEndorsedNodeStillQueues(t *testing.T) {
 	}
 }
 
-// Tampering with any canonical field (here: Content) breaks verification.
 func TestIssue3402_TamperedContentFailsVerification(t *testing.T) {
 	dir := t.TempDir()
 	key := issue3402Key(t, dir)

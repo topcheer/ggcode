@@ -29,9 +29,8 @@ const (
 	discordAPIBase         = "https://discord.com/api/v10"
 	discordGatewayBotPath  = "/gateway/bot"
 	discordMaxTextLen      = 2000
-	discordIdentifyIntents = (1 << 0) | (1 << 9) | (1 << 10) | (1 << 12) | (1 << 15) // Guilds=1, GuildMessages=512, GuildMessageReactions=1024, DirectMessages=4096, MessageContent=32768 = 38401
+	discordIdentifyIntents = (1 << 0) | (1 << 9) | (1 << 10) | (1 << 12) | (1 << 15)
 
-	// Discord Gateway opcodes
 	discordOpDispatch       = 0
 	discordOpHeartbeat      = 1
 	discordOpIdentify       = 2
@@ -41,16 +40,9 @@ const (
 	discordOpHello          = 10
 	discordOpHeartbeatACK   = 11
 
-	// Discord allows 5 messages per 5 seconds per channel. Adding a brief delay
-	// between chunks prevents hitting the per-channel rate limit.
-	// Source: https://docs.discord.com/developers/topics/rate-limits
 	discordInterMsgDelay = 500 * time.Millisecond
 
-	// discordSuppressEmbeds is the MessageFlags bit that prevents Discord from
-	// auto-generating embed cards (link previews) from URLs in message content.
-	// Without this, code output containing URLs creates noisy preview cards.
-	// Source: https://discord.com/developers/docs/resources/message#message-object-message-flags
-	discordSuppressEmbeds = 1 << 2 // = 4
+	discordSuppressEmbeds = 1 << 2
 )
 
 type discordAdapter struct {
@@ -62,12 +54,12 @@ type discordAdapter struct {
 	stt        imstt.Transcriber
 
 	mu          sync.RWMutex
-	writeMu     sync.Mutex // protects websocket writes (gorilla/websocket not concurrent-safe)
+	writeMu     sync.Mutex
 	connected   bool
 	sessionID   string
 	sequence    int
 	ws          *websocket.Conn
-	botUserID   string // set from READY event
+	botUserID   string
 	reactionAck reactionAckState
 }
 
@@ -250,7 +242,6 @@ func (a *discordAdapter) connectAndServe(ctx context.Context) error {
 	}
 }
 
-// handleGatewayDispatch routes op 0 DISPATCH events by gateway event type.
 func (a *discordAdapter) handleGatewayDispatch(ctx context.Context, t string, d map[string]any) {
 	switch t {
 	case "READY":
@@ -305,9 +296,6 @@ func (a *discordAdapter) sendIdentify(conn *websocket.Conn) {
 	a.writeMu.Unlock()
 }
 
-// sendResume sends Gateway op 6 RESUME with the stored session ID and last
-// sequence number so the server replays events missed while disconnected
-// (Discord Gateway v10 session resume semantics, #947).
 func (a *discordAdapter) sendResume(conn *websocket.Conn, sessionID string, seq int) {
 	payload := map[string]any{
 		"op": discordOpResume,
@@ -424,7 +412,6 @@ func (a *discordAdapter) handleMessage(ctx context.Context, d map[string]any) {
 	}
 }
 
-// processDiscordAttachments extracts image, audio, and file attachments from a Discord message.
 func (a *discordAdapter) processDiscordAttachments(ctx context.Context, d map[string]any) ([]Attachment, string) {
 	raw, ok := d["attachments"].([]any)
 	if !ok || len(raw) == 0 {
@@ -647,13 +634,6 @@ func (a *discordAdapter) sendChannelMessage(ctx context.Context, channelID, cont
 	return a.sendChannelMessageFlags(ctx, channelID, content, true)
 }
 
-// sendChannelMessageFlags is the underlying text-message send; suppress
-// toggles the SUPPRESS_EMBEDS flag. #4519: sendExtractedImage's remote-URL
-// path used to ride sendChannelMessage, whose unconditional
-// discordSuppressEmbeds stopped Discord from expanding the image URL into a
-// preview - the user saw bare URL text instead of the image. Image sends
-// pass suppress=false so the URL renders; ordinary text keeps the cleaner
-// no-embed UX.
 func (a *discordAdapter) sendChannelMessageFlags(ctx context.Context, channelID, content string, suppress bool) error {
 	url := a.apiBase + "/channels/" + channelID + "/messages"
 	body := map[string]any{
@@ -700,9 +680,6 @@ func (a *discordAdapter) sendChannelMessageFlags(ctx context.Context, channelID,
 	return rateLimitExhausted("Discord")
 }
 
-// TriggerTyping adds a reaction acknowledgement to the latest real user message
-// when possible, and falls back to the native typing indicator when there is no
-// target message to acknowledge yet.
 func (a *discordAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 	channelID := strings.TrimSpace(binding.ChannelID)
 	if channelID == "" {
@@ -809,7 +786,6 @@ func (a *discordAdapter) publishState(healthy bool, status, lastErr string) {
 	})
 }
 
-// sendExtractedImage resolves and sends an extracted image to a Discord channel.
 func (a *discordAdapter) sendExtractedImage(ctx context.Context, channelID string, img ExtractedImage) error {
 	switch img.Kind {
 	case "url":
@@ -851,7 +827,6 @@ func (a *discordAdapter) sendExtractedImage(ctx context.Context, channelID strin
 	}
 }
 
-// sendFileMessage uploads a file to a Discord channel via multipart/form-data.
 func (a *discordAdapter) sendFileMessage(ctx context.Context, channelID, filename string, data []byte, caption string) error {
 	url := a.apiBase + "/channels/" + channelID + "/messages"
 
@@ -920,7 +895,6 @@ func jsonInt(v any) int {
 	}
 }
 
-// transcribeDiscordAudio downloads an audio attachment and transcribes it via STT.
 func (a *discordAdapter) transcribeDiscordAudio(ctx context.Context, url, filename, contentType string) string {
 	data, _, err := a.downloadDiscordAttachment(ctx, url)
 	if err != nil || len(data) == 0 {
@@ -993,7 +967,6 @@ func resolveDiscordSTTConfig(global config.IMSTTConfig, extra map[string]interfa
 	return &cfg
 }
 
-// SendInteractive implements InteractiveSender using Discord message components.
 func (a *discordAdapter) SendInteractive(ctx context.Context, binding ChannelBinding, msg InteractiveMessage) (string, error) {
 	a.mu.RLock()
 	connected := a.connected
@@ -1007,7 +980,6 @@ func (a *discordAdapter) SendInteractive(ctx context.Context, binding ChannelBin
 		return "", fmt.Errorf("Discord channel is not configured")
 	}
 
-	// Build action row with buttons
 	var buttons []map[string]any
 	for _, btn := range msg.Buttons {
 		style := 2
@@ -1093,7 +1065,6 @@ func (a *discordAdapter) SendInteractive(ctx context.Context, binding ChannelBin
 	return "", rateLimitExhausted("Discord")
 }
 
-// handleInteraction processes Discord INTERACTION_CREATE events (button clicks).
 func (a *discordAdapter) handleInteraction(ctx context.Context, d map[string]any) {
 
 	interactionID, _ := d["id"].(string)

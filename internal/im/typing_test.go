@@ -13,7 +13,6 @@ import (
 	"maunium.net/go/mautrix"
 )
 
-// stubTypingSink implements both Sink and TypingIndicator.
 type stubTypingSink struct {
 	name        string
 	typingCalls []ChannelBinding
@@ -29,7 +28,6 @@ func (s *stubTypingSink) TriggerTyping(_ context.Context, binding ChannelBinding
 	return s.typingErr
 }
 
-// stubNonTypingSink implements Sink but NOT TypingIndicator.
 type stubNonTypingSink struct {
 	name string
 }
@@ -1165,12 +1163,9 @@ func TestFeishuSend_RecordsOutboundMessageID(t *testing.T) {
 	}
 }
 
-// urlRewriteTransport rewrites request URLs from hardcoded targets to a
-// test server. Used for adapters (feishu, slack, QQ) that construct URLs
-// from hardcoded constants rather than a configurable apiBase field.
 type urlRewriteTransport struct {
-	targets   []string // URLs to rewrite (tried in order)
-	rewriteTo string   // e.g. test server URL
+	targets   []string
+	rewriteTo string
 	transport http.RoundTripper
 }
 

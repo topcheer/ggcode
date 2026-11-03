@@ -10,14 +10,12 @@ import (
 	"time"
 )
 
-// fakeTimeoutNetErr is a net.Error whose Timeout() reports true.
 type fakeTimeoutNetErr struct{}
 
 func (fakeTimeoutNetErr) Error() string   { return "connection timed out (fake)" }
 func (fakeTimeoutNetErr) Timeout() bool   { return true }
 func (fakeTimeoutNetErr) Temporary() bool { return true }
 
-// fakeNoTimeoutNetErr is a net.Error that is NOT a timeout (refused-class).
 type fakeNoTimeoutNetErr struct{}
 
 func (fakeNoTimeoutNetErr) Error() string   { return "connection refused (fake)" }

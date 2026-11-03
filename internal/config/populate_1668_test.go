@@ -2,8 +2,6 @@ package config
 
 import "testing"
 
-// #1668 case 3 pin: an unknown vendor's endpoints each get the provider
-// list their OWN BaseURL matches - not the vendor's first sorted URL.
 func Test1668PerEndpointAttribution(t *testing.T) {
 	cfg := &Config{Vendors: map[string]VendorConfig{
 		"my-gateway": {

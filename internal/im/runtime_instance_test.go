@@ -196,10 +196,6 @@ func TestManagerIsPrimary_NoDetector(t *testing.T) {
 	}
 }
 
-// TestReloadBindingPreservesMutedState is a regression test for the bug where
-// calling BindSession after RegisterInstance+MuteAll would wipe the auto-mute
-// state. This simulates the real flow: InitRuntime → RegisterInstance (auto-mute)
-// → SetIMManager → bindIMSession → BindSession → reloadBindingLocked.
 func TestReloadBindingPreservesMutedState(t *testing.T) {
 	dir := t.TempDir()
 	instancesDir := filepath.Join(dir, ".ggcode", "instances")
@@ -256,8 +252,6 @@ func TestReloadBindingPreservesMutedState(t *testing.T) {
 	mgr.UnregisterInstance()
 }
 
-// TestReloadBindingSkipsDisabled tests that reloadBindingLocked does not
-// re-add adapters that were explicitly disabled via ApplyAdapterConfig.
 func TestReloadBindingSkipsDisabled(t *testing.T) {
 	dir := t.TempDir()
 	store := &memBindingStore{
@@ -293,7 +287,6 @@ func TestReloadBindingSkipsDisabled(t *testing.T) {
 	}
 }
 
-// memBindingStore is a minimal in-memory BindingStore for testing.
 type memBindingStore struct {
 	bindings []ChannelBinding
 }

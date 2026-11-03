@@ -21,11 +21,6 @@ type claudeSettingsFile struct {
 	Env map[string]string `json:"env"`
 }
 
-// applyFirstLaunchAnthropicBootstrapWith bootstraps from env credentials.
-// lookup is the runtime env map (process env + keys.env, #2284-A): after the
-// wholesale Setenv loop was removed, keys.env values no longer live in the
-// process environment, so the trio is resolved through the map first and
-// only then through the real shell environment (launchctl/export users).
 func applyFirstLaunchAnthropicBootstrapWith(cfg *Config, lookup func(string) (string, bool)) bool {
 	if cfg == nil {
 		return false
@@ -72,9 +67,6 @@ func applyFirstLaunchAnthropicBootstrapWith(cfg *Config, lookup func(string) (st
 	return true
 }
 
-// isBootstrapKnownHost returns true when the URL belongs to a known built-in
-// vendor that should be auto-bootstrapped. Unknown URLs are ignored so that
-// the user's configured vendor/endpoint/model selection is preserved.
 func isBootstrapKnownHost(rawURL string) bool {
 	for _, p := range knownAnthropicHostPatterns {
 		if strings.Contains(strings.ToLower(rawURL), p.substring) {
@@ -164,10 +156,6 @@ func upsertAnthropicBootstrapVendor(cfg *Config, baseURL, apiKey, model, authVar
 	return "", ""
 }
 
-// knownAnthropicHostPatterns maps URL substrings to (vendorID, endpointID)
-// pairs for known built-in anthropic-compatible endpoints. When the
-// ANTHROPIC_BASE_URL contains one of these substrings, the bootstrap
-// reuses the existing endpoint instead of creating a new vendor.
 var knownAnthropicHostPatterns = []struct {
 	substring  string
 	vendorID   string
@@ -176,11 +164,6 @@ var knownAnthropicHostPatterns = []struct {
 	{"bigmodel", "zai", "cn-coding-anthropic"},
 }
 
-// matchKnownAnthropicEndpoint finds the built-in anthropic endpoint whose
-// host pattern matches baseURL and injects the API key and model. Called
-// only when isBootstrapKnownHost is true. Each table row is matched
-// against the URL with the same Contains(lower) test as the entry gate,
-// so adding rows to knownAnthropicHostPatterns stays correct (#1515 C).
 func matchKnownAnthropicEndpoint(cfg *Config, baseURL, apiKey, model string) (string, string) {
 	lower := strings.ToLower(strings.TrimSpace(baseURL))
 	for _, p := range knownAnthropicHostPatterns {

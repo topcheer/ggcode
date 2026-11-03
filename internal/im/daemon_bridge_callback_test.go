@@ -33,8 +33,6 @@ func newCallbackTestBridge(msgIDs map[string]string, multi bool) (*DaemonBridge,
 	return b, ch
 }
 
-// Pending question with interactive buttons + callback from that exact
-// message → accepted and submitted as the answer.
 func TestHandleInteractiveCallback_MessageIDMatchAccepted(t *testing.T) {
 	b, ch := newCallbackTestBridge(map[string]string{"tg": "tg_msg_1"}, false)
 
@@ -61,8 +59,6 @@ func TestHandleInteractiveCallback_MessageIDMatchAccepted(t *testing.T) {
 	}
 }
 
-// Pending question with interactive buttons + callback from a stale card
-// (different message ID) → dropped: no answer submitted, no state pollution.
 func TestHandleInteractiveCallback_StaleMessageIDDropped(t *testing.T) {
 	b, ch := newCallbackTestBridge(map[string]string{"tg": "tg_msg_2"}, false)
 
@@ -90,8 +86,6 @@ func TestHandleInteractiveCallback_StaleMessageIDDropped(t *testing.T) {
 	}
 }
 
-// Stale-card click on the multi-select toggle path must not pollute
-// multiSelectChosen.
 func TestHandleInteractiveCallback_StaleMultiSelectToggleDropped(t *testing.T) {
 	b, _ := newCallbackTestBridge(map[string]string{"tg": "tg_msg_5"}, true)
 
@@ -109,8 +103,6 @@ func TestHandleInteractiveCallback_StaleMultiSelectToggleDropped(t *testing.T) {
 	}
 }
 
-// Text-only pending (no interactive message IDs recorded) → callbacks are
-// accepted without ID correlation ("no comparable ID → don't reject").
 func TestHandleInteractiveCallback_TextOnlyPendingAccepted(t *testing.T) {
 	b, ch := newCallbackTestBridge(nil, false)
 
@@ -130,7 +122,6 @@ func TestHandleInteractiveCallback_TextOnlyPendingAccepted(t *testing.T) {
 	}
 }
 
-// No pending question → callback silently dropped (existing behavior).
 func TestHandleInteractiveCallback_NoPendingDropped(t *testing.T) {
 	b := &DaemonBridge{
 		interactiveMsgIDs: map[string]string{"tg": "tg_msg_1"},

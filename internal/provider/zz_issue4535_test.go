@@ -9,14 +9,6 @@ import (
 	"time"
 )
 
-// TestIssue4535_ToolCallDeltaNoIndex covers tool-call delta slot resolution when
-// the streaming relay omits the per-call index field.
-//
-// #4471 fixed the single-delta path (one tool call per chunk) by resolving
-// slots via the delta ID. #4535 extends the same treatment to deltas that
-// batch SEVERAL tool calls in one chunk: a delta carrying an ID is locatable
-// regardless of how many siblings share the chunk; only a delta with neither
-// index nor ID is unattributable and must stay dropped.
 func TestIssue4535_ToolCallDeltaNoIndex(t *testing.T) {
 	const chunkPrefix = `{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":`
 	const chunkSuffix = `,"finish_reason":null}]}`

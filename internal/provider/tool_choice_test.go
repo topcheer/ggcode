@@ -70,7 +70,6 @@ func TestOpenAIProvider_ToolChoicePreservedInClone(t *testing.T) {
 func TestOpenAIProvider_ApplyToolChoice(t *testing.T) {
 	p := NewOpenAIProviderWithBaseURL("test-key", "gpt-4o", 4096, "https://api.openai.com/v1")
 
-	// With no tools, tool_choice should not be set even if configured
 	var req openai.ChatCompletionRequest
 	p.SetToolChoice("required")
 	p.applyToolChoice(&req)

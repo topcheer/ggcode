@@ -15,7 +15,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// OpenAIResponsesProvider speaks the /v1/responses protocol.
 type OpenAIResponsesProvider struct {
 	apiKey     string
 	model      string
@@ -23,34 +22,21 @@ type OpenAIResponsesProvider struct {
 	maxTokens  int
 	httpClient *http.Client
 
-	// policy (#2573): per-call deadline + retry budget resolved from the
-	// endpoint config; zero values keep pre-existing behavior (no deadline,
-	// providerRetryAttempts) so the feature is fully opt-in.
 	policy callPolicy
 
 	reasoningEffort   string
-	textVerbosity     string // GPT-5 text.verbosity: "", "low", "medium", "high"
-	serviceTier       string // sa-81: processing tier ("", auto, default, flex, priority, fast, scale)
-	promptCacheKey    string // sa-231: prompt_cache_key cache-routing affinity ("" = none)
+	textVerbosity     string
+	serviceTier       string
+	promptCacheKey    string
 	toolChoice        string
 	maxTokensOverride int
 
-	// background (sa-73) enables Responses background mode: the create call
-	// returns immediately with status "queued" and ggcode polls
-	// GET /responses/{id} until a terminal state instead of holding the HTTP
-	// connection open. pollDelay is the initial poll interval (doubled up to
-	// responsesPollMaxDelay).
 	background bool
 	pollDelay  time.Duration
 
-	// Hosted (server-side) tools configured via server_tools (sa-62), e.g.
-	// web_search. Declared once in config and executed inside the API.
 	serverTools []ServerToolConfig
 }
 
-// NewOpenAIResponsesProvider creates a provider for an OpenAI-compatible
-// /v1/responses endpoint. baseURL should include the /v1 segment; the
-// "/responses" suffix is appended if missing.
 func NewOpenAIResponsesProvider(apiKey, model string, maxTokens int, baseURL string) *OpenAIResponsesProvider {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if !strings.HasSuffix(baseURL, "/responses") {
@@ -68,18 +54,12 @@ func NewOpenAIResponsesProvider(apiKey, model string, maxTokens int, baseURL str
 
 func (p *OpenAIResponsesProvider) Name() string { return "openai-responses" }
 
-// SetReasoningEffort stores the reasoning effort level for the request's
-// `reasoning.effort` field (mirrors the openai chat adapter).
 func (p *OpenAIResponsesProvider) SetReasoningEffort(effort string) {
 	p.reasoningEffort = normalizeResponsesEffort(effort)
 }
 
 func (p *OpenAIResponsesProvider) ReasoningEffort() string { return p.reasoningEffort }
 
-// SetTextVerbosity stores the GPT-5 output-length hint sent as the request's
-// `text.verbosity` field ("low", "medium", "high"). An empty value clears the
-// hint; any other value is ignored so existing settings survive typo'd input,
-// mirroring the effort setters.
 func (p *OpenAIResponsesProvider) SetTextVerbosity(v string) {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "":
@@ -89,14 +69,8 @@ func (p *OpenAIResponsesProvider) SetTextVerbosity(v string) {
 	}
 }
 
-// TextVerbosity returns the currently configured verbosity hint.
 func (p *OpenAIResponsesProvider) TextVerbosity() string { return p.textVerbosity }
 
-// SetServiceTier stores the processing-tier hint sent as the request's
-// `service_tier` field (sa-81). Allowed: "auto", "default", "flex",
-// "priority", "fast", "scale". Empty clears the hint; unknown values are
-// ignored so existing settings survive typo'd input, mirroring the other
-// hint setters.
 func (p *OpenAIResponsesProvider) SetServiceTier(tier string) {
 	switch strings.ToLower(strings.TrimSpace(tier)) {
 	case "":
@@ -106,36 +80,22 @@ func (p *OpenAIResponsesProvider) SetServiceTier(tier string) {
 	}
 }
 
-// ServiceTier returns the currently configured processing-tier hint.
 func (p *OpenAIResponsesProvider) ServiceTier() string { return p.serviceTier }
 
-// SetToolChoice stores tool_choice ("auto", "required", "none" or a JSON
-// object). Empty means the API default ("auto").
 func (p *OpenAIResponsesProvider) SetToolChoice(choice string) {
 	p.toolChoice = strings.TrimSpace(choice)
 }
 
 func (p *OpenAIResponsesProvider) ToolChoice() string { return p.toolChoice }
 
-// SetMaxTokens honors the MaxTokensSetter contract (MCP sampling #1592-A).
 func (p *OpenAIResponsesProvider) SetMaxTokens(n int) { p.maxTokensOverride = n }
 
-// SetBackgroundMode turns on Responses background mode (sa-73): the create
-// call POSTs with background=true and returns immediately with status
-// "queued"; ggcode then polls GET /responses/{id} until a terminal state
-// (completed/failed/incomplete/cancelled). This decouples multi-minute
-// reasoning turns (GPT-5.x Pro, codex-max) from HTTP idle timeouts and
-// dropped connections: if the client dies the server keeps executing, and a
-// context cancellation explicitly cancels the server-side run.
 func (p *OpenAIResponsesProvider) SetBackgroundMode(on bool) { p.background = on }
 
 func (p *OpenAIResponsesProvider) CountTokens(ctx context.Context, messages []Message) (int, error) {
 	return estimateTokensForMessages(messages), nil
 }
 
-// normalizeResponsesEffort maps the shared effort vocabulary (minimal/low/
-// medium/high/xhigh/max/turbo) onto the Responses API values. Unknown levels
-// are passed through untouched so future API levels keep working.
 func normalizeResponsesEffort(effort string) string {
 	switch strings.ToLower(strings.TrimSpace(effort)) {
 	case "":
@@ -150,28 +110,19 @@ func normalizeResponsesEffort(effort string) string {
 }
 
 type responsesInputItem struct {
-	Type    string          `json:"type,omitempty"` // "message", "function_call", "function_call_output", "reasoning"
-	Role    string          `json:"role,omitempty"`
-	Content json.RawMessage `json:"content,omitempty"` // string or part array, per role
-	CallID  string          `json:"call_id,omitempty"`
-	Name    string          `json:"name,omitempty"`
-	Args    string          `json:"arguments,omitempty"` // function_call arguments (JSON string)
-	Output  string          `json:"output,omitempty"`    // function_call_output payload
-	ID      string          `json:"id,omitempty"`        // item id for assistant output_text messages
-	// Reasoning item replay (sa-54): the summary parts and encrypted
-	// chain-of-thought are echoed back verbatim in stateless multi-turn
-	// tool loops. For non-reasoning items both stay empty and are omitted.
+	Type             string          `json:"type,omitempty"`
+	Role             string          `json:"role,omitempty"`
+	Content          json.RawMessage `json:"content,omitempty"`
+	CallID           string          `json:"call_id,omitempty"`
+	Name             string          `json:"name,omitempty"`
+	Args             string          `json:"arguments,omitempty"`
+	Output           string          `json:"output,omitempty"`
+	ID               string          `json:"id,omitempty"`
 	Summary          json.RawMessage `json:"summary,omitempty"`
 	EncryptedContent string          `json:"encrypted_content,omitempty"`
-	// RawReplay (sa-62) carries a verbatim output item (hosted tool call such
-	// as web_search_call) that must be echoed back byte-for-byte under
-	// store=false; see MarshalJSON.
-	RawReplay json.RawMessage `json:"-"`
+	RawReplay        json.RawMessage `json:"-"`
 }
 
-// MarshalJSON emits RawReplay verbatim when set - hosted-tool items replay
-// byte-for-byte, so re-encoding through the structured fields is not an
-// option. Without RawReplay the structured fields are marshalled as before.
 func (i responsesInputItem) MarshalJSON() ([]byte, error) {
 	if len(i.RawReplay) > 0 {
 		return i.RawReplay, nil
@@ -181,17 +132,14 @@ func (i responsesInputItem) MarshalJSON() ([]byte, error) {
 }
 
 type responsesTool struct {
-	// Type is "function" for declared client tools, or a hosted tool type
-	// ("web_search", "web_search_preview", ...) for server-side tools (sa-62).
-	Type        string          `json:"type"`
-	Name        string          `json:"name,omitempty"` // hosted tools carry no name
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters,omitempty"`
-	Strict      bool            `json:"strict,omitempty"`
-	// Built-in tool properties (sa-63); omitted for function tools.
-	Container      json.RawMessage `json:"container,omitempty"`        // code_interpreter: {type:"auto",memory_limit?,file_ids?}
-	VectorStoreIDs []string        `json:"vector_store_ids,omitempty"` // file_search
-	MaxNumResults  int             `json:"max_num_results,omitempty"`  // file_search
+	Type           string          `json:"type"`
+	Name           string          `json:"name,omitempty"`
+	Description    string          `json:"description,omitempty"`
+	Parameters     json.RawMessage `json:"parameters,omitempty"`
+	Strict         bool            `json:"strict,omitempty"`
+	Container      json.RawMessage `json:"container,omitempty"`
+	VectorStoreIDs []string        `json:"vector_store_ids,omitempty"`
+	MaxNumResults  int             `json:"max_num_results,omitempty"`
 }
 
 type responsesRequest struct {
@@ -204,21 +152,16 @@ type responsesRequest struct {
 	Reasoning       *responsesReasoning  `json:"reasoning,omitempty"`
 	Text            *responsesTextConfig `json:"text,omitempty"`
 	ServiceTier     string               `json:"service_tier,omitempty"`
-	PromptCacheKey  string               `json:"prompt_cache_key,omitempty"` // sa-231: cache-routing affinity
+	PromptCacheKey  string               `json:"prompt_cache_key,omitempty"`
 	Store           *bool                `json:"store,omitempty"`
-	// Background (sa-73) asks the API to execute the response asynchronously;
-	Background *bool `json:"background,omitempty"`
-	// Include asks the API to return encrypted reasoning tokens inside
-	// reasoning items so they can be replayed statelessly (sa-54).
-	Include []string `json:"include,omitempty"`
+	Background      *bool                `json:"background,omitempty"`
+	Include         []string             `json:"include,omitempty"`
 }
 
 type responsesReasoning struct {
 	Effort string `json:"effort,omitempty"`
 }
 
-// responsesTextConfig carries GPT-5 output-shaping controls. Only verbosity
-// is used today; the request field itself is named `text` per API spec.
 type responsesTextConfig struct {
 	Verbosity string `json:"verbosity,omitempty"`
 }
@@ -231,11 +174,6 @@ func responsesImagePart(mime, base64 string) map[string]any {
 	return map[string]any{"type": "input_image", "image_url": "data:" + mime + ";base64," + base64}
 }
 
-// buildResponsesInput converts ggcode messages into Responses `input` items,
-// preserving protocol order: an assistant message's text is emitted before the
-// function_call items it contains, and tool results become function_call_output
-// items in the same position they appear. tool_calls and tool_results are never
-// separated by a role boundary violation - both are flat items in one input array.
 func buildResponsesInput(messages []Message) []responsesInputItem {
 	var items []responsesInputItem
 
@@ -351,18 +289,8 @@ func mustJSON(v any) json.RawMessage {
 	return b
 }
 
-// responsesIncludeEncryptedReasoning asks the API to embed encrypted
-// reasoning tokens in reasoning item outputs (required for stateless
-// multi-turn replay when store=false).
 const responsesIncludeEncryptedReasoning = "reasoning.encrypted_content"
 
-// decodeResponsesReasoningItem parses a raw reasoning item captured from a
-// previous response (stored in a "thinking" block's ThinkingSignature) and
-// reports whether it is replayable. Only items that actually carry encrypted
-// reasoning content are replayed: bare item ids cannot be resolved once
-// store=false has discarded server state, and anything that is not a
-// Responses reasoning item (Anthropic/Gemini signatures from a failed-over
-// session) fails the type probe and is dropped.
 func decodeResponsesReasoningItem(raw string) (responsesInputItem, bool) {
 	if raw == "" {
 		return responsesInputItem{}, false
@@ -446,9 +374,6 @@ func (p *OpenAIResponsesProvider) buildRequest(messages []Message, tools []ToolD
 
 func boolPtr(b bool) *bool { return &b }
 
-// Responses background-mode lifecycle states. Per OpenAI's background mode
-// guide: queued/in_progress are pending; completed/failed/incomplete/
-// cancelled are terminal.
 const (
 	responsesStatusQueued     = "queued"
 	responsesStatusInProgress = "in_progress"
@@ -457,12 +382,8 @@ const (
 	responsesStatusIncomplete = "incomplete"
 	responsesStatusCancelled  = "cancelled"
 
-	// Consecutive polling errors tolerated before giving up: background mode
-	// exists precisely to survive transient connectivity blips, but a
-	// persistent endpoint failure must surface instead of polling forever.
 	responsesPollMaxErrors = 5
-	// Poll backoff ceiling.
-	responsesPollMaxDelay = 10 * time.Second
+	responsesPollMaxDelay  = 10 * time.Second
 )
 
 func isBackgroundPending(status string) bool {
@@ -477,11 +398,6 @@ func backgroundTerminalError(p *responsesPayload) error {
 	return fmt.Errorf("responses: %s", msg)
 }
 
-// pollBackground polls GET /responses/{id} until the response reaches a
-// terminal state. onPoll, when non-nil, is invoked with each intermediate
-// payload (used to stream incremental text deltas while polling). On context
-// cancellation the server-side run is best-effort cancelled first so a
-// dropped turn does not keep burning tokens.
 func (p *OpenAIResponsesProvider) pollBackground(ctx context.Context, payload *responsesPayload, onPoll func(*responsesPayload)) (*responsesPayload, error) {
 	if payload.ID == "" {
 		return nil, fmt.Errorf("responses: background request returned no id")
@@ -525,7 +441,6 @@ func (p *OpenAIResponsesProvider) pollBackground(ctx context.Context, payload *r
 	return payload, nil
 }
 
-// get retrieves a Response object by id (GET /responses/{id}).
 func (p *OpenAIResponsesProvider) get(ctx context.Context, id string) (*responsesPayload, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/"+id, nil)
 	if err != nil {
@@ -545,10 +460,6 @@ func (p *OpenAIResponsesProvider) get(ctx context.Context, id string) (*response
 	return decodeResponsesPayload(resp.Body)
 }
 
-// cancelResponse best-effort cancels a background response (POST
-// /responses/{id}/cancel). The operation is idempotent per the API guide, so
-// racing terminal states are harmless; failures are logged and swallowed
-// because the run would be orphaned server-side at worst.
 func (p *OpenAIResponsesProvider) cancelResponse(id string) {
 	cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -569,8 +480,6 @@ func (p *OpenAIResponsesProvider) cancelResponse(id string) {
 	}
 }
 
-// responsesOutputText concatenates output_text parts across message items of
-// a payload, for incremental streaming during background polling.
 func responsesOutputText(payload *responsesPayload) string {
 	var b strings.Builder
 	for _, rawItem := range payload.Output {
@@ -593,11 +502,6 @@ func responsesOutputText(payload *responsesPayload) string {
 	return b.String()
 }
 
-// chatStreamBackground implements ChatStream on top of background mode: the
-// create call is issued with background=true (stream=false - polling, not
-// SSE), text deltas are diffed across poll snapshots, and opaque blocks
-// (reasoning items, function calls, hosted tools) are forwarded from the
-// terminal payload so stateless replay (sa-54/sa-62) keeps working.
 func (p *OpenAIResponsesProvider) chatStreamBackground(ctx context.Context, req *responsesRequest) (<-chan StreamEvent, error) {
 	req.Stream = false
 	resp, err := p.post(ctx, req)
@@ -723,9 +627,6 @@ func (p *OpenAIResponsesProvider) post(ctx context.Context, req *responsesReques
 	return resp, nil
 }
 
-// responsesRejectsVerbosity reports whether an API error snippet indicates
-// the text.verbosity parameter was rejected (unknown/unsupported parameter
-// classes).
 func responsesRejectsVerbosity(snippet []byte) bool {
 	s := strings.ToLower(string(snippet))
 	if !strings.Contains(s, "verbosity") {
@@ -739,9 +640,6 @@ func responsesRejectsVerbosity(snippet []byte) bool {
 	return false
 }
 
-// responsesRejectsServiceTier reports whether an API error snippet indicates
-// the service_tier parameter was rejected (unknown/unsupported parameter
-// classes).
 func responsesRejectsServiceTier(snippet []byte) bool {
 	s := strings.ToLower(string(snippet))
 	if !strings.Contains(s, "service_tier") && !strings.Contains(s, "service tier") {
@@ -788,18 +686,14 @@ func (p *OpenAIResponsesProvider) Chat(ctx context.Context, messages []Message, 
 	return chatResponseFromPayload(payload), nil
 }
 
-// responsesPayload is the Response object returned by both the create and
-// retrieve (GET) endpoints of the Responses API.
 type responsesPayload struct {
 	ID     string             `json:"id"`
 	Status string             `json:"status"`
 	Error  *responsesAPIError `json:"error"`
 	Output []json.RawMessage  `json:"output"`
 	Usage  struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-		// #4230 case B: cached-token detail for background/non-stream cost
-		// accounting, same shape parseResponsesFinal already decodes.
+		InputTokens        int `json:"input_tokens"`
+		OutputTokens       int `json:"output_tokens"`
 		InputTokensDetails struct {
 			CachedTokens int `json:"cached_tokens"`
 		} `json:"input_tokens_details"`
@@ -822,9 +716,6 @@ func decodeResponsesPayload(r io.Reader) (*responsesPayload, error) {
 	return &p, nil
 }
 
-// chatBackground drives an already-created background response (status
-// "queued" or terminal) to completion via GET polling, then converts the
-// terminal payload into a ChatResponse.
 func (p *OpenAIResponsesProvider) chatBackground(ctx context.Context, payload *responsesPayload) (*ChatResponse, error) {
 	final, err := p.pollBackground(ctx, payload, nil)
 	if err != nil {
@@ -914,11 +805,6 @@ func chatResponseFromPayload(payload *responsesPayload) *ChatResponse {
 	return out
 }
 
-// #4266: the same leak family as #3068 (gemini) / #3071 (openai chat) /
-// #4230 case C (background path here): a bare send on the 64-buffer
-// channel parks the producer goroutine forever once a cancelling consumer
-// stops reading. Every send on the SSE (non-background) path must go
-// through here.
 func (p *OpenAIResponsesProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
 
 	select {
@@ -1023,12 +909,6 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 	return ch, nil
 }
 
-// readResponsesStream pumps SSE events from one established /responses
-// stream into ch until a terminal event (Done/Error) or transport failure.
-// It returns retry=true only when the stream died to a retryable transport
-// error BEFORE any content event reached ch - every request replays the full
-// stateless input so a retry duplicates nothing, but content already
-// delivered can never be unsent and must not be replayed.
 func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpResp *http.Response, ch chan<- StreamEvent) (retryable bool, lastErr error) {
 	defer httpResp.Body.Close()
 	scanner := bufio.NewScanner(httpResp.Body)
@@ -1221,8 +1101,6 @@ func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpR
 	return false, nil
 }
 
-// parseResponsesFinal extracts usage and incomplete_details from a
-// response.completed / response.incomplete payload.
 func parseResponsesFinal(data string) (*TokenUsage, string) {
 	var final struct {
 		Response struct {

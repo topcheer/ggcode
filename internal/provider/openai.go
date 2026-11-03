@@ -22,41 +22,31 @@ import (
 )
 
 const (
-	// claudeCLIVersion is the version we masquerade as.
 	claudeCLIVersion = "2.1.209"
 )
 
-// OpenAIProvider implements Provider using the OpenAI-compatible API.
 type OpenAIProvider struct {
 	client           *openai.Client
 	model            string
 	maxTokens        int
-	cap              *adaptiveCap // optional; when non-nil, takes precedence over maxTokens
+	cap              *adaptiveCap
 	reasoningEffort  string
-	toolChoice       string          // "", "auto", "required", "none"
-	strictTools      map[string]bool // strict tool use allowlist (empty = disabled)
-	serviceTier      string          // sa-81: processing tier ("", auto, default, flex, priority, fast, scale)
+	toolChoice       string
+	strictTools      map[string]bool
+	serviceTier      string
 	temperature      float64
-	samplingOverride atomic.Pointer[SamplingOverride] // #2248: MCP sampling per-call stop sequences
+	samplingOverride atomic.Pointer[SamplingOverride]
 	topP             float64
-	// responseSchema constrains the FINAL assistant response to a JSON
-	// Schema (OpenAI structured outputs, response_format=json_schema,
-	// strict). Empty = unconstrained. Anthropic/Gemini providers do not
-	// implement ResponseSchemaSetter and fall back to prompt-level
-	// guidance + jsonrepair.
-	responseSchema json.RawMessage
-	name           string
-	baseURL        string                    // endpoint URL, for logging
-	transport      *headerInjectingTransport // kept for runtime header updates
-	logprobs       bool                      // sa-74: request token logprobs for confidence telemetry
-	policy         callPolicy                // sa-78: per-call deadline + retry budget
+	responseSchema   json.RawMessage
+	name             string
+	baseURL          string
+	transport        *headerInjectingTransport
+	logprobs         bool
+	policy           callPolicy
 }
 
-// ModelName returns the current model name, implementing ModelNameProvider.
 func (p *OpenAIProvider) ModelName() string { return p.model }
 
-// CloneWithModel returns a shallow copy of this provider with a different model.
-// Used by named subagents to run with a model override.
 func (p *OpenAIProvider) CloneWithModel(model string) Provider {
 	clone := &OpenAIProvider{
 		client:    p.client,
@@ -84,11 +74,8 @@ func (p *OpenAIProvider) CloneWithModel(model string) Provider {
 	return clone
 }
 
-// SetAdaptiveCap installs (or replaces) the adaptive max-output-tokens cap.
-// Used by NewProvider to share learned state across reconstructions.
 func (p *OpenAIProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
 
-// SetMaxTokens implements provider.MaxTokensSetter (#1592-A).
 func (p *OpenAIProvider) SetMaxTokens(n int) {
 	if n > 0 {
 		p.maxTokens = n
@@ -105,11 +92,6 @@ func (p *OpenAIProvider) SetReasoningEffort(effort string) {
 
 func (p *OpenAIProvider) ReasoningEffort() string { return p.reasoningEffort }
 
-// SetServiceTier stores the processing-tier hint sent as the request's
-// `service_tier` field (sa-81). Allowed: "auto", "default", "flex",
-// "priority", "fast" (Fast mode, alias of priority since 2026-07), "scale".
-// Empty clears the hint; unknown values are ignored so a typo cannot silently
-// flip an expensive production tier, mirroring the effort/verbosity setters.
 func (p *OpenAIProvider) SetServiceTier(tier string) {
 	switch strings.ToLower(strings.TrimSpace(tier)) {
 	case "":
@@ -121,8 +103,6 @@ func (p *OpenAIProvider) SetServiceTier(tier string) {
 
 func (p *OpenAIProvider) ServiceTier() string { return p.serviceTier }
 
-// applyServiceTier sets the service_tier field on the request. Returns true
-// when applied, so retry paths know a tierless retry is possible.
 func (p *OpenAIProvider) applyServiceTier(req *openai.ChatCompletionRequest) bool {
 	if p.serviceTier == "" {
 		return false
@@ -131,34 +111,22 @@ func (p *OpenAIProvider) applyServiceTier(req *openai.ChatCompletionRequest) boo
 	return true
 }
 
-// SetToolChoice sets the tool_choice parameter: "auto" (model decides),
-// "required" (force tool use), "none" (disable tools), or "" (API default).
 func (p *OpenAIProvider) SetToolChoice(choice string) {
 	p.toolChoice = strings.ToLower(strings.TrimSpace(choice))
 }
 
 func (p *OpenAIProvider) ToolChoice() string { return p.toolChoice }
 
-// SetStrictTools implements StrictToolsSetter: tools in the allowlist are sent
-// with OpenAI's grammar-constrained `strict: true` (structured outputs).
-// Non-allowlisted tools are serialized exactly as before.
 func (p *OpenAIProvider) SetStrictTools(allow map[string]bool) {
 	p.strictTools = allow
 }
 
-// SetResponseSchema installs a JSON Schema that constrains the final
-// assistant response (OpenAI structured outputs). nil/empty disables.
-// Implemented per the same bare-field pattern as SetToolChoice.
 func (p *OpenAIProvider) SetResponseSchema(schema json.RawMessage) {
 	p.responseSchema = schema
 }
 
-// ResponseSchema returns the installed response schema (nil = none).
 func (p *OpenAIProvider) ResponseSchema() json.RawMessage { return p.responseSchema }
 
-// applyResponseSchema injects response_format=json_schema (strict) when a
-// schema is installed. The schema is passed through verbatim as a JSON
-// object (json.RawMessage implements json.Marshaler).
 func (p *OpenAIProvider) applyResponseSchema(req *openai.ChatCompletionRequest) {
 	if len(p.responseSchema) == 0 {
 		return
@@ -172,8 +140,6 @@ func (p *OpenAIProvider) applyResponseSchema(req *openai.ChatCompletionRequest) 
 	}
 }
 
-// probeChat sends a single chat request without retry, adaptive cap
-// tracking, or token counting. Used by context window probing.
 func (p *OpenAIProvider) probeChat(ctx context.Context, messages []Message) error {
 	req := openai.ChatCompletionRequest{
 		Model:    p.model,
@@ -191,8 +157,6 @@ func (p *OpenAIProvider) applyReasoningEffort(req *openai.ChatCompletionRequest)
 	return true
 }
 
-// applyToolChoice sets the tool_choice field on the request when tools are
-// present and tool_choice is configured. Values: "auto", "required", "none".
 func (p *OpenAIProvider) applyToolChoice(req *openai.ChatCompletionRequest) {
 	if p.toolChoice == "" || len(req.Tools) == 0 {
 		return
@@ -203,32 +167,20 @@ func (p *OpenAIProvider) applyToolChoice(req *openai.ChatCompletionRequest) {
 	}
 }
 
-// SetTemperature sets the sampling temperature. A value of 0 means "use provider
-// default" (which is typically 1.0). Values between 0 and 2 are valid.
 func (p *OpenAIProvider) SetTemperature(temp float64) { p.temperature = temp }
 
-// SetLogprobsRequest toggles token logprobs in requests (sa-74 confidence
-// telemetry). Applies to chat completions; reasoning models may ignore it.
 func (p *OpenAIProvider) SetLogprobsRequest(on bool) { p.logprobs = on }
 
-// LogprobsRequested reports whether logprobs were requested.
 func (p *OpenAIProvider) LogprobsRequested() bool { return p.logprobs }
 
-// SetSamplingOverride implements provider.SamplingOverrideSetter (#2248).
 func (p *OpenAIProvider) SetSamplingOverride(o *SamplingOverride) { p.samplingOverride.Store(o) }
 
-// SamplingOverride implements provider.SamplingOverrideSetter (#2248).
 func (p *OpenAIProvider) SamplingOverride() *SamplingOverride { return p.samplingOverride.Load() }
 func (p *OpenAIProvider) Temperature() float64                { return p.temperature }
 
-// SetTopP sets the nucleus sampling parameter. A value of 0 means "use provider
-// default". Values between 0 and 1 are valid.
 func (p *OpenAIProvider) SetTopP(topP float64) { p.topP = topP }
 func (p *OpenAIProvider) TopP() float64        { return p.topP }
 
-// applySampling sets temperature and top_p on the request when configured.
-// Following the OpenAI API guidance, both can be set simultaneously (unlike
-// Anthropic which recommends using only one).
 func (p *OpenAIProvider) applySampling(req *openai.ChatCompletionRequest) {
 	temp := p.temperature
 	if o := p.samplingOverride.Load(); o != nil && o.Temperature > 0 {
@@ -246,12 +198,6 @@ func (p *OpenAIProvider) applySampling(req *openai.ChatCompletionRequest) {
 	}
 }
 
-// effectiveMaxTokens returns the max output tokens to send on the next
-// request: the adaptive cap when set (learned from rejections/truncations),
-// otherwise the configured maxTokens. Mirrors anthropic.go's
-// effectiveMaxTokens (#561-A: this was previously never consumed - requests
-// went out without max_tokens and the backend's small default truncated
-// them into a finish_reason=length continue-loop).
 func (p *OpenAIProvider) effectiveMaxTokens() int {
 	if o := p.samplingOverride.Load(); o != nil && o.MaxTokens > 0 {
 		return o.MaxTokens
@@ -264,8 +210,6 @@ func (p *OpenAIProvider) effectiveMaxTokens() int {
 	return p.maxTokens
 }
 
-// applyMaxTokens sets req.MaxTokens from the effective limit. A zero value
-// means "don't send" (use the model default).
 func (p *OpenAIProvider) applyMaxTokens(req *openai.ChatCompletionRequest) {
 	if v := p.effectiveMaxTokens(); v > 0 {
 		req.MaxTokens = v
@@ -285,9 +229,6 @@ func retryWithoutReasoningEffort(err error) bool {
 	return strings.Contains(msg, "reasoning_effort") || strings.Contains(msg, "reasoning effort")
 }
 
-// retryWithoutServiceTier reports whether an API error indicates the
-// service_tier parameter was rejected (unknown/unsupported parameter classes
-// on OpenAI-compatible relays), so the request can be retried without it.
 func retryWithoutServiceTier(err error) bool {
 	var apiErr *openai.APIError
 	if errors.As(err, &apiErr) {
@@ -327,16 +268,11 @@ func (p *OpenAIProvider) createChatCompletionStream(ctx context.Context, req ope
 	return stream, err
 }
 
-// headerInjectingTransport wraps an http.RoundTripper to inject custom headers
-// that mimic the claude-cli client identity, and captures rate-limit headers
-// from responses for proactive quota monitoring.
 type headerInjectingTransport struct {
-	base       http.RoundTripper
-	mu         sync.RWMutex
-	headers    http.Header
-	rateLimits *rateLimitTracker // nil if rate-limit capture is disabled
-	// promptCacheKey (sa-231) is injected into POST JSON bodies as
-	// prompt_cache_key for cache-routing affinity; "" = disabled.
+	base           http.RoundTripper
+	mu             sync.RWMutex
+	headers        http.Header
+	rateLimits     *rateLimitTracker
 	promptCacheKey string
 }
 
@@ -359,15 +295,12 @@ func (t *headerInjectingTransport) RoundTrip(req *http.Request) (*http.Response,
 	return resp, err
 }
 
-// UpdateHeaders replaces the injected headers. Safe for concurrent use with RoundTrip.
 func (t *headerInjectingTransport) UpdateHeaders(newHeaders http.Header) {
 	t.mu.Lock()
 	t.headers = newHeaders
 	t.mu.Unlock()
 }
 
-// snapshotHeaders returns a copy of the current headers so callers can
-// safely modify and re-set them.
 func (t *headerInjectingTransport) snapshotHeaders() http.Header {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -378,15 +311,11 @@ func (t *headerInjectingTransport) snapshotHeaders() http.Header {
 	return cp
 }
 
-// claudeCLIHeaders returns the set of HTTP headers that mimic the official
-// claude-cli client, allowing compatible API providers to recognize the client.
-// NewOpenAIProvider creates a new OpenAI provider.
 func NewOpenAIProvider(apiKey string, model string, maxTokens int) *OpenAIProvider {
 	config := openai.DefaultConfig(apiKey)
 	return NewOpenAIProviderWithConfig(config, apiKey, model, maxTokens, "openai")
 }
 
-// NewOpenAIProviderWithBaseURL creates a new OpenAI provider with a custom base URL.
 func NewOpenAIProviderWithBaseURL(apiKey string, model string, maxTokens int, baseURL string) *OpenAIProvider {
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = baseURL
@@ -457,10 +386,6 @@ func (p *OpenAIProvider) Name() string {
 	return p.name
 }
 
-// UpdateRuntimeHeaders updates the injected headers at runtime.
-// GGCode-SessionID is session-lifecycle state owned by SetSessionID -
-// callers that replace the whole header set (e.g. the impersonation
-// panel) must not silently drop it, so it is carried over (#sa-142).
 func (p *OpenAIProvider) UpdateRuntimeHeaders(headers http.Header) {
 	if p.transport != nil {
 		if sid := p.transport.snapshotHeaders().Get("GGCode-SessionID"); sid != "" && headers.Get("GGCode-SessionID") == "" {
@@ -472,7 +397,6 @@ func (p *OpenAIProvider) UpdateRuntimeHeaders(headers http.Header) {
 	}
 }
 
-// RateLimitInfo returns the latest rate-limit status parsed from response headers.
 func (p *OpenAIProvider) RateLimitInfo() RateLimitInfo {
 	if p.transport != nil && p.transport.rateLimits != nil {
 		return p.transport.rateLimits.Snapshot()
@@ -480,8 +404,6 @@ func (p *OpenAIProvider) RateLimitInfo() RateLimitInfo {
 	return RateLimitInfo{RemainingRequests: -1, RemainingTokens: -1, LimitRequests: -1, LimitTokens: -1}
 }
 
-// SetSessionID injects the session ID into outgoing requests via a custom
-// HTTP header (GGCode-SessionID).
 func (p *OpenAIProvider) SetSessionID(sessionID string) {
 	if sessionID == "" || p.transport == nil {
 		return
@@ -491,8 +413,6 @@ func (p *OpenAIProvider) SetSessionID(sessionID string) {
 	p.transport.UpdateHeaders(existing)
 }
 
-// normalizeOpenAIFinishReason maps openai finish_reason values onto the
-// anthropic value family used by ChatResponse.StopReason (#1484-C).
 func normalizeOpenAIFinishReason(reason string) string {
 	switch strings.ToLower(strings.TrimSpace(reason)) {
 	case "stop":
@@ -509,9 +429,6 @@ func normalizeOpenAIFinishReason(reason string) string {
 	}
 }
 
-// applyLogprobs requests token logprobs when confidence telemetry is enabled
-// (sa-74). top_logprobs=1 is sufficient for the mean-token-logprob confidence
-// signal; larger values only inflate the response payload.
 func (p *OpenAIProvider) applyLogprobs(req *openai.ChatCompletionRequest) {
 	if !p.logprobs {
 		return
@@ -520,10 +437,6 @@ func (p *OpenAIProvider) applyLogprobs(req *openai.ChatCompletionRequest) {
 	req.TopLogProbs = 1
 }
 
-// meanLogprob computes the mean logprob over returned content tokens
-// (sa-74). Returns nil when the provider returned no content logprobs.
-// Takes []float64 so both the non-streaming (openai.LogProb.LogProb) and
-// streaming (ChatCompletionTokenLogprob.Logprob) shapes can feed it.
 func meanLogprob(ps []float64) *float64 {
 	if len(ps) == 0 {
 		return nil
@@ -608,8 +521,6 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		}
 	}
 
-	// #1484-C: normalize finish_reason into the anthropic value family so
-	// downstream consumers (MCP sampling) see one vocabulary.
 	var confidence *float64
 	if p.logprobs && choice.LogProbs != nil {
 		lps := make([]float64, 0, len(choice.LogProbs.Content))
@@ -626,13 +537,6 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	}, nil
 }
 
-// sendEvent delivers ev to ch unless ctx is done, reporting cancellation.
-// #3071: the 14 former bare `ch <- StreamEvent{...}` sends parked the
-// producer goroutine forever once a cancelling consumer stopped reading
-// (buffer of 64 fills, nobody ever returns) - the same trap #3068 fixed in
-// gemini.go; the fallback wrapper layer (#2570/#602) never covered the
-// no-fallback production path. Every send in the ChatStream producer
-// goroutine must go through here.
 func (p *OpenAIProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
 
 	select {
@@ -683,7 +587,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		var outputChars int
 		var err error
 		var truncated bool
-		var logprobSum float64 // sa-74: confidence telemetry accumulators
+		var logprobSum float64
 		var logprobN int
 		streamError := false
 		budget := newRetryBudget()
@@ -704,7 +608,6 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 			truncated = false
 
-			// (Re-)establish the stream for each attempt
 			var localStreamer *openai.ChatCompletionStream
 			localStreamer, err = p.createChatCompletionStream(ctx, req, hasReasoningEffort)
 			if err != nil {
@@ -941,7 +844,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						}
 					}
 				}
-				var confidence *float64 // sa-74
+				var confidence *float64
 				if logprobN > 0 {
 					avg := logprobSum / float64(logprobN)
 					confidence = &avg
@@ -961,12 +864,6 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	return ch, nil
 }
 
-// resolveNoIndexToolCallSlot locates the accumulator slot for a
-// single-element tool-call delta that omits index (#722 minimal relays).
-// #4471: those relays may stream parallel calls one chunk each - when the
-// delta carries an ID, reuse the slot with the same ID, or open a fresh
-// slot when slot 0 already belongs to a different ID; never merge two
-// distinct calls into one accumulator (corrupts arguments JSON).
 func resolveNoIndexToolCallSlot(toolCalls map[int]*ToolCallDelta, id string) int {
 	idx := 0
 	if id == "" {
@@ -983,9 +880,6 @@ func resolveNoIndexToolCallSlot(toolCalls map[int]*ToolCallDelta, id string) int
 	return idx
 }
 
-// nextToolCallSlot returns the next free slot index for a tool-call delta
-// whose ID matches no existing slot (#4471: relays omitting index may
-// stream parallel calls one chunk each; distinct IDs must not share a slot).
 func nextToolCallSlot(toolCalls map[int]*ToolCallDelta) int {
 	max := -1
 	for k := range toolCalls {
@@ -1008,10 +902,6 @@ func openAIUsage(usage openai.Usage) TokenUsage {
 	return parsed
 }
 
-// applyOpenAIUsage merges an incoming stream usage chunk into the
-// accumulated usage with anthropic-style zero guards (#1286): zero fields
-// never overwrite non-zero accumulated values, and an all-zero chunk leaves
-// cur unchanged (nil stays nil so the estimation fallback can still run).
 func applyOpenAIUsage(cur *TokenUsage, u openai.Usage) *TokenUsage {
 	parsed := openAIUsage(u)
 	if parsed.InputTokens == 0 && parsed.OutputTokens == 0 && parsed.CacheRead == 0 {
@@ -1040,8 +930,6 @@ func (p *OpenAIProvider) CountTokens(ctx context.Context, messages []Message) (i
 	return estimateTokensForMessages(messages), nil
 }
 
-// estimateTokensForMessages counts all content fields (Text, Output, Input)
-// and converts to an approximate token count.
 func estimateTokensForMessages(messages []Message) int {
 	totalChars := 0
 	textChars := 0
@@ -1098,31 +986,10 @@ func finishReasonError(finishReason string) error {
 	}
 }
 
-// mergeInjectedUserMessages folds text-only "user" messages that appear between
-// an assistant tool_use message and the subsequent tool_result message into the
-// tool_result message's content. Many detectors inject guidance as user messages
-// during the tool execution loop. Strict OpenAI-compatible APIs (e.g. Kimi K3)
-// reject requests where a tool_call is not immediately followed by its tool_result.
-//
-// Example transformation:
-//
-//	assistant: [tool_use(id=1)]
-//	user:      [text: "guidance warning"]           ← injected by detector
-//	user:      [tool_result(id=1), text: "result"]  ← actual tool results
-//
-// Becomes:
-//
-//	assistant: [tool_use(id=1)]
-//	user:      [tool_result(id=1), text: "guidance warning\n\nresult"]
 func mergeInjectedUserMessages(messages []Message) []Message {
 	return foldInjectedUserMessages(messages, prependToToolResultContent)
 }
 
-// foldInjectedUserMessages is the provider-agnostic core of
-// mergeInjectedUserMessages. fold controls where the folded guidance text
-// lands within the tool_result message: OpenAI prepends it before the first
-// text/tool_result block, Anthropic must keep tool_result blocks as the FIRST
-// content of the user turn (#2819) so it appends after the tool_result blocks.
 func foldInjectedUserMessages(messages []Message, fold func([]ContentBlock, string) []ContentBlock) []Message {
 	if len(messages) < 3 {
 		return messages
@@ -1168,7 +1035,6 @@ func foldInjectedUserMessages(messages []Message, fold func([]ContentBlock, stri
 		if messages[i].Role == "assistant" && hasToolUseBlock(messages[i].Content) &&
 			i+1 < len(messages) && messages[i+1].Role == "user" && isTextOnly(messages[i+1].Content) {
 
-			// Collect all consecutive text-only user messages between assistant and tool_result
 			var guidanceTexts []string
 			j := i + 1
 			for j < len(messages) && messages[j].Role == "user" && isTextOnly(messages[j].Content) {
@@ -1236,8 +1102,6 @@ func isTextOnly(blocks []ContentBlock) bool {
 	return true
 }
 
-// prependToToolResultContent adds a text prefix to the first text block in a
-// tool_result message, or inserts a new text block at the beginning if none exists.
 func prependToToolResultContent(blocks []ContentBlock, prefix string) []ContentBlock {
 	result := make([]ContentBlock, 0, len(blocks)+1)
 	inserted := false
@@ -1276,7 +1140,6 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 		}
 		switch m.Role {
 		case "system":
-			// Collect text blocks for system messages
 			var text string
 			for _, b := range m.Content {
 				if b.Type == "text" {
@@ -1307,13 +1170,6 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 				}
 			}
 			if hasToolResult {
-				// #453/#474: mergeInjectedUserMessages prepends guidance TEXT
-				// blocks into tool_result messages; the old loop emitted only
-				// tool blocks and silently dropped the text. Emitting the text
-				// as a separate user message BETWEEN the assistant tool_calls
-				// and the tool messages violates the ordering contract (strict
-				// backends 400) - instead prepend it to the FIRST tool
-				// message's content, which every backend accepts.
 				var guidanceText []string
 				for _, b := range m.Content {
 					if b.Type == "text" && b.Text != "" {
@@ -1336,7 +1192,6 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 				}
 			}
 			if hasImage {
-				// Multi-part content with images
 				var parts []openai.ChatMessagePart
 				for _, b := range m.Content {
 					switch b.Type {
@@ -1422,11 +1277,6 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 	return result
 }
 
-// appendToolResultMessages emits each tool_result block in blocks as a
-// separate OpenAI tool message, appending to dst. The first emitted text
-// content is prefixed with guidancePrefix so injected guidance text (#453/#474)
-// can ride along with the first tool result without inserting a user message
-// between assistant tool_calls and tool results (which strict backends reject).
 func appendToolResultMessages(dst []openai.ChatCompletionMessage, blocks []ContentBlock, guidancePrefix string) []openai.ChatCompletionMessage {
 	first := true
 	for _, b := range blocks {

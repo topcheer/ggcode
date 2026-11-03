@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// #4645: checkIsDMViaAPI must fail OPEN on API errors - returning false sent
-// real DM traffic into the mention gate, silently dropping mention-less DMs
-// during transient homeserver 5xx/limiting.
 func TestIssue4645_DMLookupFailsOpen(t *testing.T) {
 	data, err := os.ReadFile("matrix_adapter.go")
 	if err != nil {
@@ -42,7 +39,6 @@ func TestIssue4645_DMLookupFailsOpen(t *testing.T) {
 	}
 }
 
-// #4646: edits (m.replace) must use m.new_content, not the "* " fallback body.
 func TestIssue4646_ReplaceUsesNewContent(t *testing.T) {
 	data, err := os.ReadFile("matrix_adapter.go")
 	if err != nil {

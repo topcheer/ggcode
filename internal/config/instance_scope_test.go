@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// writeGlobalConfig writes a minimal valid global config and returns its path.
 func writeGlobalConfig(t *testing.T, tmpDir string) string {
 	t.Helper()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
@@ -17,10 +16,6 @@ func writeGlobalConfig(t *testing.T, tmpDir string) string {
 	return globalPath
 }
 
-// TestSaveInstanceScopedDoesNotChangeStickyScope verifies that the non-sticky
-// instance save (#282) persists to the instance file without redirecting
-// subsequent scope-aware saves: after a limits-style SaveInstanceScoped call,
-// SaveDefaultModePreference must still write to the GLOBAL config file.
 func TestSaveInstanceScopedDoesNotChangeStickyScope(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()
@@ -72,8 +67,6 @@ func TestSaveInstanceScopedDoesNotChangeStickyScope(t *testing.T) {
 	}
 }
 
-// TestInstanceFields verifies the accessor used by desktop UpdateConfig to
-// detect instance-sourced fields that Save() strips from the global write.
 func TestInstanceFields(t *testing.T) {
 	withTestHome(t)
 	tmpDir := t.TempDir()

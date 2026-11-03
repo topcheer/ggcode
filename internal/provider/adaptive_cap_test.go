@@ -70,12 +70,6 @@ func TestAdaptiveCapString_NonNil(t *testing.T) {
 	}
 }
 
-// TestCloneWithModelCapIsolation pins #1603: a clone on a DIFFERENT model
-// must not share the parent's adaptive cap - the registry keys caps on
-// (vendor, baseURL, model) precisely so learned values never mix, but the
-// clone sites used to copy the pointer wholesale (a smaller-limit clone
-// inherited the parent's learned 8000 cap, and its rejections wrote back
-// through the shared pointer, dragging the parent down).
 func TestCloneWithModelCapIsolation(t *testing.T) {
 	parent := AdaptiveCapFor("testvendor", "https://t.example", "model-a", 8000)
 	parent.OnRejected(9000)

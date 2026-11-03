@@ -5,10 +5,6 @@ import (
 	"time"
 )
 
-// TestParseDurationSafeNegativeRejected verifies #664: a bare negative
-// millisecond header value (e.g. "-5000") must be rejected instead of
-// producing a negative duration that flows into tracker display as a
-// misleading value.
 func TestParseDurationSafeNegativeRejected(t *testing.T) {
 	for _, s := range []string{"-5000", "-1", "0"} {
 		if got := parseDurationSafe(s); got != 0 {
@@ -17,9 +13,6 @@ func TestParseDurationSafeNegativeRejected(t *testing.T) {
 	}
 }
 
-// TestParseDurationSafeOverflowClamped verifies #664: a bare ms value large
-// enough to overflow the ms→ns multiplication (~9.3e12) used to wrap to a
-// negative duration. It must clamp to 24h instead.
 func TestParseDurationSafeOverflowClamped(t *testing.T) {
 	tests := []struct {
 		input string

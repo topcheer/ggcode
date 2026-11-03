@@ -7,11 +7,6 @@ import (
 	"testing"
 )
 
-// TestSave_ExcludesInstanceOnlyVendorsFromGlobalFiles is the regression test
-// for #293: after LoadWithInstance merges an instance-only vendor (with a
-// plaintext API key) into the in-memory config, Save() must NOT write that
-// vendor to the global vendors.yaml, and the plaintext key must not be
-// migrated into the global keys.env (cross-workspace leak).
 func TestSave_ExcludesInstanceOnlyVendorsFromGlobalFiles(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")
@@ -98,9 +93,6 @@ vendors:
 	}
 }
 
-// TestSave_KeepsGlobalVendorPlaintextMigration ensures the fix did not break
-// the #250 behavior: a plaintext key on a GLOBAL vendor in vendors.yaml is
-// still migrated to the global keys.env with an unprefixed var name.
 func TestSave_KeepsGlobalVendorPlaintextMigration(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")

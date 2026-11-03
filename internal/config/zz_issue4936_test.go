@@ -3,10 +3,6 @@ package config
 import "testing"
 import "strings"
 
-// #4936: DeepSeek V4 sibling spellings must carry the official 384K max output
-// (per 1d41be032 / PR #4931) regardless of provider-naming variant. Before the
-// fix, colon/eu/OpenRouter spellings still carried 1048576/943718, which leaked
-// into API request max_output_tokens on the server-side-tools Responses path.
 func TestDeepSeekV4SiblingMaxOutputSynced(t *testing.T) {
 	cases := map[string]int{
 
@@ -29,10 +25,6 @@ func TestDeepSeekV4SiblingMaxOutputSynced(t *testing.T) {
 	}
 }
 
-// Sweep guard: no DeepSeek V4 spelling (present or future) may exceed the
-// official max output. 393216 = 384*1024 and 384000 = 384*1000 are the two
-// accepted unit spellings of the 384K cap; anything larger (1048576, 943718,
-// ...) is a stale pre-#4931 value that leaks into max_output_tokens.
 func TestDeepSeekV4NoEntryExceedsOfficialCap(t *testing.T) {
 	for model, cap := range knownModelCapabilities {
 		if cap.MaxOutputTokens > 393216 && strings.Contains(model, "deepseek-v4") {
@@ -41,13 +33,6 @@ func TestDeepSeekV4NoEntryExceedsOfficialCap(t *testing.T) {
 	}
 }
 
-// #4946: the router-alias layer (~ prefix, e.g. OpenRouter vendor routes) was
-// skipped by both the #4931 and #4937 calibration rounds because they matched
-// concrete version keys. Router aliases must mirror their target model's
-// official caps; before the fix they carried the pre-#4931 stale values
-// (943718/1310720) that the concrete-key fixes were supposed to have cleared.
-// Guard: any ~-prefixed alias naming deepseek (any generation) must not exceed
-// the official 393216 output cap; GLM aliases must not exceed 131072.
 func TestRouterAliasCapsMirrorOfficial(t *testing.T) {
 	pins := map[string][2]int{
 		"~z-ai/glm-latest":       {1048576, 131072},

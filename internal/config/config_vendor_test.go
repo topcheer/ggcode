@@ -6,9 +6,6 @@ import (
 	"time"
 )
 
-// Regression for #1517: AddEndpoint on an EXISTING endpoint wiped every
-// field the incoming call did not carry (Models, SelectedModel, APIKey
-// reference) - the comment promised "updated".
 func TestAddEndpointExistingMergesNotReplaces(t *testing.T) {
 	c := &Config{Vendors: map[string]VendorConfig{
 		"v": {Endpoints: map[string]EndpointConfig{
@@ -34,9 +31,6 @@ func TestAddEndpointExistingMergesNotReplaces(t *testing.T) {
 	}
 }
 
-// Regression for #1868 case 3: a failed delete must be able to roll the
-// tombstone back, or the yaml entry that survived on disk stays hidden by
-// the tombstone (split state) and re-adding the name revives stale fields.
 func TestMCPTombstoneRollback(t *testing.T) {
 	c := &Config{}
 	c.RecordMCPDeleted("srv")
@@ -61,10 +55,6 @@ func TestMCPTombstoneRollback(t *testing.T) {
 	}
 }
 
-// sa-60: strict_tools endpoint options must survive endpoint resolution and
-// land on ResolvedEndpoint, which is what provider/registry consumes to call
-// SetStrictTools. YAML shape alone (strict_tools_test.go) does not cover this
-// wiring.
 func TestResolveEndpointSelectionStrictTools(t *testing.T) {
 	cfg := testConfigWithVendor()
 	vc := cfg.Vendors["zai"]
@@ -110,9 +100,6 @@ func TestResolveEndpointSelectionStrictTools(t *testing.T) {
 	}
 }
 
-// sa-78: LLM call policy resolution - per-model override wins over the
-// endpoint-level default; unset values fall back to zero (no deadline /
-// provider-wide retry budget).
 func TestResolveEndpointSelection_CallPolicy(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Vendor = "acme"
@@ -170,9 +157,6 @@ func TestResolveEndpointSelection_CallPolicy(t *testing.T) {
 	}
 }
 
-// sa-73: responses_background must survive yaml parsing and endpoint
-// resolution so the registry can turn background mode on for OpenAI
-// Responses endpoints.
 func TestResponsesBackgroundWiring(t *testing.T) {
 	yamlSrc := `
 vendors:

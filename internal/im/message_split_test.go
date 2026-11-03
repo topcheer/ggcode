@@ -259,9 +259,6 @@ func BenchmarkSplitMessageShort(b *testing.B) {
 	}
 }
 
-// TestIssue1552_IRCByteLimit pins #1552-A: IRC splitting counts BYTES
-// (512-byte protocol line, ~400 usable), splitting CJK text at rune
-// boundaries instead of letting 400 runes = 1200 bytes overflow.
 func TestIssue1552_IRCByteLimit(t *testing.T) {
 	cjk := strings.Repeat("中", 300)
 	parts := splitIRCMessage(cjk, ircMaxMessageLen)
@@ -278,11 +275,7 @@ func TestIssue1552_IRCByteLimit(t *testing.T) {
 	}
 }
 
-// Regression for #1553-C: after the INNER flush inside the re-sync loop,
-// the byte ledger kept only one rune - runes between the new start and i
-// vanished from the account, so subsequent chunks could exceed maxBytes.
 func TestSplitMessageBytesInnerFlushLedgerComplete(t *testing.T) {
-	// Mixed CJK/ASCII filler long enough to force nested re-sync flushes.
 	var sb strings.Builder
 	for i := 0; i < 400; i++ {
 		if i%3 == 0 {
@@ -301,7 +294,6 @@ func TestSplitMessageBytesInnerFlushLedgerComplete(t *testing.T) {
 			t.Fatalf("chunk %d = %d bytes > max %d (ledger drop)", idx, got, maxBytes)
 		}
 	}
-	// Reassembly preserves every rune.
 	var total int
 	for _, c := range chunks {
 		total += len([]rune(c))
@@ -311,10 +303,6 @@ func TestSplitMessageBytesInnerFlushLedgerComplete(t *testing.T) {
 	}
 }
 
-// TestSplitMessageBytes_NoTrimPreservesIndentation pins #1660 case 1: the
-// IRC path (trim=false) must not TrimSpace the input - leading code-block
-// indentation is syntax in Python/Go and used to be silently stripped even
-// for lines that never needed splitting.
 func TestSplitMessageBytes_NoTrimPreservesIndentation(t *testing.T) {
 	chunks := splitMessageBytes("    foo := 1", 400, false)
 	if len(chunks) != 1 || chunks[0] != "    foo := 1" {
@@ -327,9 +315,6 @@ func TestSplitMessageBytes_NoTrimPreservesIndentation(t *testing.T) {
 	}
 }
 
-// TestSplitMessageBytes_SpaceBoundaryPreferred pins #1660 case 3: when no
-// newline is inside the budget, the split should land after the last space
-// in the budget instead of hard-cutting mid-word.
 func TestSplitMessageBytes_SpaceBoundaryPreferred(t *testing.T) {
 
 	text := "supercalifragilistic expialidocious supercalifragilistic expialidocious"

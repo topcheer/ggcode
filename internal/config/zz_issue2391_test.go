@@ -2,11 +2,6 @@ package config
 
 import "testing"
 
-// TestPatchMCPServerTypeSwitchClearsWS verifies #2391's ws edge: switching
-// a server from stdio to ws must clear the stdio-only fields. ws is
-// URL-shaped like http/sse, but the type-switch only matched http/sse, so a
-// stdio→ws switch resurrected dead Command/Args in the yaml (AddMCPServer's
-// doc accepts type "ws").
 func TestPatchMCPServerTypeSwitchClearsWS(t *testing.T) {
 	base := MCPServerConfig{
 		Name:    "s",

@@ -11,7 +11,6 @@ import (
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 )
 
-// V1: a clone must carry the parent's sampling override through.
 func TestIssue3066_CloneWithModelKeepsSamplingOverride(t *testing.T) {
 	p := &AnthropicProvider{}
 	p.SetSamplingOverride(&SamplingOverride{MaxTokens: 1234, StopSequences: []string{"END"}, Temperature: 0.7})
@@ -33,9 +32,6 @@ func TestIssue3066_CloneWithModelKeepsSamplingOverride(t *testing.T) {
 	}
 }
 
-// V2: an expired cache entry must NOT be served and must be evicted so the
-// next resolve re-uploads (observed here as a cache miss that attempts
-// upload, which fails without network and leaves the cache empty).
 func TestIssue3066_FilesCacheEntryExpires(t *testing.T) {
 	u := newFileUploader(&anthropic.Client{}, "")
 	data, _ := base64.StdEncoding.DecodeString(testTinyPNG)
@@ -64,7 +60,6 @@ func TestIssue3066_FilesCacheEntryExpires(t *testing.T) {
 	}
 }
 
-// V3: 413 is per-image, not endpoint-fatal. 404 remains endpoint-fatal.
 func TestIssue3066_NoteFailure413PerHashNotEndpoint(t *testing.T) {
 	u := newFileUploader(&anthropic.Client{}, "")
 	u.noteFailure("k1", &anthropic.Error{StatusCode: 413})
@@ -92,7 +87,6 @@ func TestIssue3066_NoteFailure413PerHashNotEndpoint(t *testing.T) {
 	}
 }
 
-// V3 companion: 404 on the first upload stays permanent (capability signal).
 func TestIssue3066_NoteFailure404Permanent(t *testing.T) {
 	u := newFileUploader(&anthropic.Client{}, "")
 	u.noteFailure("k1", &anthropic.Error{StatusCode: 404})
@@ -104,7 +98,6 @@ func TestIssue3066_NoteFailure404Permanent(t *testing.T) {
 	}
 }
 
-// V3 companion: 400 stays permanent only before any successful upload.
 func TestIssue3066_NoteFailure400AfterSuccessTransient(t *testing.T) {
 	u := newFileUploader(&anthropic.Client{}, "")
 	u.mu.Lock()
@@ -123,8 +116,6 @@ func TestIssue3066_NoteFailure400AfterSuccessTransient(t *testing.T) {
 	}
 }
 
-// V4: OnRejected with parsedLimit<=0 at lo==cur must hold the invariant
-// cur >= lo (previously cur dropped to lo-1).
 func TestIssue3066_OnRejectedHoldsInvariant(t *testing.T) {
 	c := &adaptiveCap{key: "zz-issue3066", lo: 4096}
 	c.cur.Store(4096)

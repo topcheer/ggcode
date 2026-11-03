@@ -11,7 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// mockProber implements the prober interface for testing
 type mockProber struct {
 	errToReturn error
 }
@@ -43,8 +42,6 @@ func (m *mockProber) probeChat(ctx context.Context, messages []Message) error {
 	return m.errToReturn
 }
 
-// TestIssue1198_RateLimitDoesNotShrink verifies that a 429 rate-limit error
-// during tier probing does NOT cause the tier to be treated as overflow.
 func TestIssue1198_RateLimitDoesNotShrink(t *testing.T) {
 	ctx := context.Background()
 
@@ -71,8 +68,6 @@ func TestIssue1198_RateLimitDoesNotShrink(t *testing.T) {
 	}
 }
 
-// TestIssue1198_ContextOverflowCounts verifies that genuine context overflow
-// errors are still detected and treated as overflow.
 func TestIssue1198_ContextOverflowCounts(t *testing.T) {
 	ctx := context.Background()
 
@@ -112,8 +107,6 @@ func TestIssue1198_ContextOverflowCounts(t *testing.T) {
 	}
 }
 
-// TestIssue1198_NetworkErrorsDoNotShrink verifies that network errors
-// during tier probing are treated as inconclusive, not overflow.
 func TestIssue1198_NetworkErrorsDoNotShrink(t *testing.T) {
 	ctx := context.Background()
 
@@ -136,8 +129,6 @@ func TestIssue1198_NetworkErrorsDoNotShrink(t *testing.T) {
 	}
 }
 
-// TestIssue1198_TimeoutErrorsDoNotShrink verifies that timeout errors
-// are treated as inconclusive.
 func TestIssue1198_TimeoutErrorsDoNotShrink(t *testing.T) {
 	ctx := context.Background()
 
@@ -157,8 +148,6 @@ func TestIssue1198_TimeoutErrorsDoNotShrink(t *testing.T) {
 	}
 }
 
-// TestIssue1198_AuthErrorsAbort verifies that auth errors cause
-// immediate abort (-1 return value).
 func TestIssue1198_AuthErrorsAbort(t *testing.T) {
 	ctx := context.Background()
 
@@ -179,8 +168,6 @@ func TestIssue1198_AuthErrorsAbort(t *testing.T) {
 	}
 }
 
-// TestIssue1198_FiveXXErrorsDoNotShrink verifies that 5xx errors
-// are treated as inconclusive.
 func TestIssue1198_FiveXXErrorsDoNotShrink(t *testing.T) {
 	ctx := context.Background()
 
@@ -200,9 +187,6 @@ func TestIssue1198_FiveXXErrorsDoNotShrink(t *testing.T) {
 	}
 }
 
-// TestIssue1198_Sub128KCachePersists verifies that sub-128K cache entries
-// written by InferContextWindowFromError survive process restarts after
-// the migration fix.
 func TestIssue1198_Sub128KCachePersists(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -239,8 +223,6 @@ func TestIssue1198_Sub128KCachePersists(t *testing.T) {
 	}
 }
 
-// TestIssue1198_LegacyCacheMigration verifies that legacy cache files
-// (without version field) are migrated and sub-128K entries are dropped.
 func TestIssue1198_LegacyCacheMigration(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -292,8 +274,6 @@ func TestIssue1198_LegacyCacheMigration(t *testing.T) {
 	}
 }
 
-// TestIssue1198_CacheVersionDowngrade verifies that if we encounter a cache
-// file with version < 2, it gets migrated.
 func TestIssue1198_CacheVersionDowngrade(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -339,10 +319,6 @@ func TestIssue1198_CacheVersionDowngrade(t *testing.T) {
 	}
 }
 
-// TestIssue1198_InferSub128KThenSurviveReload tests the end-to-end flow:
-// 1. Infer a sub-128K window from an error
-// 2. Write to cache
-// 3. Reload and verify it survives
 func TestIssue1198_InferSub128KThenSurviveReload(t *testing.T) {
 	resetProbeCacheForTest(t)
 
@@ -381,7 +357,6 @@ func TestIssue1198_InferSub128KThenSurviveReload(t *testing.T) {
 	}
 }
 
-// Helper function to check if a string contains a JSON key-value pair
 func containsJSONString(s, substr string) bool {
 	return len(s) > 0 && len(substr) > 0 && indexOfSubstring(s, substr) >= 0
 }
@@ -395,8 +370,6 @@ func indexOfSubstring(s, substr string) int {
 	return -1
 }
 
-// TestIssue1198_TierProbeRetryLogic verifies that transient errors allow
-// retry attempts rather than permanently shrinking the window.
 func TestIssue1198_TierProbeRetryLogic(t *testing.T) {
 	ctx := context.Background()
 
@@ -414,8 +387,6 @@ func TestIssue1198_TierProbeRetryLogic(t *testing.T) {
 	}
 }
 
-// TestIssue1198_ExactValueInTransientError verifies that even transient
-// errors (like 429) with exact context values are still extracted.
 func TestIssue1198_ExactValueInTransientError(t *testing.T) {
 	ctx := context.Background()
 

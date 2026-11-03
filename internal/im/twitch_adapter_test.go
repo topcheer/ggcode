@@ -17,19 +17,16 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// twitchFakeIRCServer is a minimal in-process Twitch IRC server: a TCP
-// listener that greets the client, records everything it sends, and lets the
-// test script the conversation.
 type twitchFakeIRCServer struct {
 	listener net.Listener
 
 	mu       sync.Mutex
-	received []string    // every raw line the client sent
-	written  chan string // lines pushed to the client
+	received []string
+	written  chan string
 	quit     chan struct{}
 	quitOnce sync.Once
 
-	connOpened chan struct{} // signaled on each accepted connection
+	connOpened chan struct{}
 }
 
 func newTwitchFakeIRCServer(t *testing.T) *twitchFakeIRCServer {
@@ -100,7 +97,6 @@ func (s *twitchFakeIRCServer) serveConn(conn net.Conn) {
 	}
 }
 
-// send pushes a raw line to the connected client.
 func (s *twitchFakeIRCServer) send(line string) { s.written <- line }
 
 func (s *twitchFakeIRCServer) lines() []string {
@@ -111,7 +107,6 @@ func (s *twitchFakeIRCServer) lines() []string {
 	return out
 }
 
-// dialTo returns a dial func pointing at the fake server.
 func (s *twitchFakeIRCServer) dialTo() func(addr string) (net.Conn, error) {
 	return func(string) (net.Conn, error) { return net.Dial("tcp", s.listener.Addr().String()) }
 }
@@ -126,10 +121,6 @@ func newTestTwitchAdapter(dial func(addr string) (net.Conn, error)) *twitchAdapt
 	}
 }
 
-// TestTwitchCloseDuringBackoffDoesNotReconnect verifies that Close() called
-// while the run loop is sleeping in its reconnect backoff window prevents any
-// further connection attempts (issue #972 problem 1: closed=true but conn=nil
-// made QUIT a no-op and the adapter reconnected forever).
 func TestTwitchCloseDuringBackoffDoesNotReconnect(t *testing.T) {
 	srv := newTwitchFakeIRCServer(t)
 	adapter := newTestTwitchAdapter(srv.dialTo())
@@ -174,10 +165,6 @@ func TestTwitchCloseDuringBackoffDoesNotReconnect(t *testing.T) {
 	}
 }
 
-// TestTwitchAuthFailureNOTICETerminatesRun verifies that a NOTICE
-// "Login authentication failed" makes connectAndServe return
-// errTwitchAuthFailed and the run loop exit with a published error state
-// instead of reconnecting forever with a dead token.
 func TestTwitchAuthFailureNOTICETerminatesRun(t *testing.T) {
 	srv := newTwitchFakeIRCServer(t)
 	adapter := newTestTwitchAdapter(srv.dialTo())
@@ -217,7 +204,6 @@ func TestTwitchAuthFailureNOTICETerminatesRun(t *testing.T) {
 	}
 }
 
-// TestTwitchIsAuthFailureNOTICE covers the NOTICE classifier.
 func TestTwitchIsAuthFailureNOTICE(t *testing.T) {
 	cases := []struct {
 		trailing string
@@ -243,9 +229,6 @@ func TestTwitchIsAuthFailureNOTICE(t *testing.T) {
 	}
 }
 
-// TestTwitchDMViaHelixAPI verifies that a non-# target is delivered via
-// POST /helix/messages (whisper) with a preceding users?login= lookup, and
-// that no PRIVMSG-to-nick is ever issued (issue #972 problem 2).
 func TestTwitchDMViaHelixAPI(t *testing.T) {
 	var (
 		mu          sync.Mutex
@@ -331,10 +314,6 @@ func TestTwitchDMViaHelixAPI(t *testing.T) {
 	}
 }
 
-// TestTwitchDMHelixFailureNoStickyWarning verifies that a Helix DM failure
-// is returned to the caller but does NOT publish a warning adapter state
-// (#1248): connected is only published once on IRC login, so any
-// message-level warning was sticky forever while IRC kept working.
 func TestTwitchDMHelixFailureNoStickyWarning(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"message":"missing scope"}`, http.StatusForbidden)
@@ -363,8 +342,6 @@ func TestTwitchDMHelixFailureNoStickyWarning(t *testing.T) {
 	}
 }
 
-// TestTwitchChannelMessageStillUsesPRIVMSG guards the non-DM path: channel
-// targets keep using IRC PRIVMSG.
 func TestTwitchChannelMessageStillUsesPRIVMSG(t *testing.T) {
 	srv := newTwitchFakeIRCServer(t)
 	adapter := newTestTwitchAdapter(srv.dialTo())
@@ -393,9 +370,6 @@ func TestTwitchChannelMessageStillUsesPRIVMSG(t *testing.T) {
 	t.Fatal("PRIVMSG to #mychan was never sent")
 }
 
-// TestTwitchBackoffResetAfterHealthyCycle covers twitchNextBackoff: a serve
-// cycle that lasted >= twitchBackoffResetAfter resets the backoff to its
-// initial value; short flapping cycles still grow up to the cap.
 func TestTwitchBackoffResetAfterHealthyCycle(t *testing.T) {
 
 	if got := twitchNextBackoff(twitchMaxBackoff, twitchReconnectBackoff, twitchMaxBackoff, twitchBackoffResetAfter); got != twitchReconnectBackoff {
@@ -414,8 +388,6 @@ func TestTwitchBackoffResetAfterHealthyCycle(t *testing.T) {
 	}
 }
 
-// TestTwitchUnescapeTagOrder covers the single-pass unescaping: the literal
-// sequence `\s`-produced-by-`\\` must not corrupt (issue #972 side item).
 func TestTwitchUnescapeTagOrder(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{`hello\sword`, "hello word"},
@@ -434,7 +406,6 @@ func TestTwitchUnescapeTagOrder(t *testing.T) {
 	}
 }
 
-// TestTwitchParseTagsRoundTrip sanity-checks tag parsing with escapes.
 func TestTwitchParseTagsRoundTrip(t *testing.T) {
 	tags := parseTwitchTags("display-name=Nice\\sName;user-id=42")
 	if tags["display-name"] != "Nice Name" {
@@ -445,7 +416,6 @@ func TestTwitchParseTagsRoundTrip(t *testing.T) {
 	}
 }
 
-// Unused import guard (keeps io referenced if the file evolves).
 var _ = io.Discard
 
 func TestNewTwitchAdapter_MissingToken(t *testing.T) {
@@ -644,8 +614,6 @@ func TestStripTwitchMention(t *testing.T) {
 	}
 }
 
-// Regression for #1565: mention gating is token-bounded and
-// case-insensitive; stripping never amputates mid-word substrings.
 func TestTwitchMentionTokenBoundary(t *testing.T) {
 	if twitchNickMentioned("ggcodex is broken", "ggcode") {
 		t.Fatal("substring inside a word must not count as a mention")

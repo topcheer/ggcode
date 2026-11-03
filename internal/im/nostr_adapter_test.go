@@ -316,9 +316,6 @@ func TestNostrEventSerialization(t *testing.T) {
 	}
 }
 
-// TestNostrFoldChunk pins #1225's multi-chunk semantics: partial success on
-// a chunk suppresses ITS error, but never erases the sticky error of an
-// earlier fully-failed chunk (which is undelivered data, #964).
 func TestNostrFoldChunk(t *testing.T) {
 	e1 := fmt.Errorf("publish to r1: boom")
 	e2 := fmt.Errorf("publish to r2: bang")
@@ -340,9 +337,6 @@ func TestNostrFoldChunk(t *testing.T) {
 	}
 }
 
-// TestValidateNostrPrivateKey pins #1384: the exported precheck must
-// accept a valid hex key, reject garbage/short keys and surface the
-// derivation error - callers rely on it BEFORE persisting config.
 func TestValidateNostrPrivateKey(t *testing.T) {
 
 	good := "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"

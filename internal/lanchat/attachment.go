@@ -10,13 +10,10 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// maxAttachmentSize is the maximum allowed attachment size (50MB).
 const maxAttachmentSize = 50 * 1024 * 1024
 
-// attachmentTTL is how long an attachment stays available for download.
 const attachmentTTL = 30 * time.Minute
 
-// AttachmentManager stores attachments in memory with TTL-based cleanup.
 type AttachmentManager struct {
 	mu      sync.RWMutex
 	pending map[string]*pendingAttachment
@@ -30,8 +27,6 @@ type pendingAttachment struct {
 	created  time.Time
 }
 
-// NewAttachmentManager creates a new attachment manager and starts the
-// background cleanup goroutine.
 func NewAttachmentManager() *AttachmentManager {
 	am := &AttachmentManager{
 		pending: make(map[string]*pendingAttachment),
@@ -41,12 +36,10 @@ func NewAttachmentManager() *AttachmentManager {
 	return am
 }
 
-// Stop halts the cleanup goroutine.
 func (am *AttachmentManager) Stop() {
 	close(am.stopCh)
 }
 
-// Store saves an attachment and returns its metadata.
 func (am *AttachmentManager) Store(name string, data []byte, mimeType string) Attachment {
 	id := uuid.NewString()
 	am.mu.Lock()
@@ -66,7 +59,6 @@ func (am *AttachmentManager) Store(name string, data []byte, mimeType string) At
 	}
 }
 
-// Get retrieves an attachment by ID. Returns nil if not found or expired.
 func (am *AttachmentManager) Get(id string) *pendingAttachment {
 	am.mu.RLock()
 	defer am.mu.RUnlock()
@@ -80,8 +72,6 @@ func (am *AttachmentManager) Get(id string) *pendingAttachment {
 	return a
 }
 
-// SetAttachmentURL populates the URL field for an attachment based on the
-// sender's endpoint.
 func SetAttachmentURL(endpoint string, att *Attachment) {
 	att.URL = strings.TrimRight(endpoint, "/") + "/lanchat/attach/" + att.ID
 }
@@ -109,10 +99,6 @@ func (am *AttachmentManager) cleanup() {
 	}
 }
 
-// inlineSafeMIMEs lists MIME types considered safe to render inline in a
-// browser. The attachment MIME type is peer-supplied, so anything outside
-// this list is served as a forced download instead of being rendered.
-// text/html and image/svg+xml are deliberately excluded (active content).
 var inlineSafeMIMEs = map[string]bool{
 	"text/plain":       true,
 	"text/markdown":    true,
@@ -125,9 +111,6 @@ var inlineSafeMIMEs = map[string]bool{
 	"application/pdf":  true,
 }
 
-// sanitizeAttachmentName makes a peer-supplied filename safe for use inside
-// a Content-Disposition quoted-string: control characters, quotes, and
-// backslashes are replaced so the header cannot be escaped (#986).
 func sanitizeAttachmentName(name string) string {
 	return strings.Map(func(r rune) rune {
 		if r < 0x20 || r == '"' || r == '\\' {
@@ -137,7 +120,6 @@ func sanitizeAttachmentName(name string) string {
 	}, name)
 }
 
-// HandleAttachmentDownload serves an attachment by ID via HTTP.
 func (am *AttachmentManager) HandleAttachmentDownload(w http.ResponseWriter, r *http.Request) {
 
 	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/lanchat/attach/"), "/")

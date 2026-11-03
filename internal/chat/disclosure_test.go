@@ -20,8 +20,6 @@ func newExpandedTestItem(result string, isErr bool) *GenericToolItem {
 	return it
 }
 
-// Collapsed body caps at ToolBodyMaxLines; expanded lifts the cap and
-// keeps every line.
 func TestDisclosure_ExpandLiftsCap(t *testing.T) {
 	body := longBodyLines(ToolBodyMaxLines * 3)
 	it := newExpandedTestItem(body, false)
@@ -49,7 +47,6 @@ func TestDisclosure_ExpandLiftsCap(t *testing.T) {
 	}
 }
 
-// Error path: collapsed caps with hint, expanded keeps everything.
 func TestDisclosure_ErrorPathExpand(t *testing.T) {
 	body := longBodyLines(ToolBodyMaxLines * 2)
 	it := newExpandedTestItem(body, true)
@@ -68,7 +65,6 @@ func TestDisclosure_ErrorPathExpand(t *testing.T) {
 	}
 }
 
-// ToggleExpanded invalidates the render cache so Height recomputes.
 func TestDisclosure_CacheInvalidation(t *testing.T) {
 	it := newExpandedTestItem(longBodyLines(ToolBodyMaxLines*2), false)
 	before := it.Height(80)
@@ -84,7 +80,6 @@ func TestDisclosure_CacheInvalidation(t *testing.T) {
 	}
 }
 
-// List toggle flips the most recent expandable item; empty list is a no-op.
 func TestDisclosure_ListToggle(t *testing.T) {
 	var l List
 	if l.ToggleLastExpandable() {
@@ -111,7 +106,6 @@ func TestDisclosure_ListToggle(t *testing.T) {
 	}
 }
 
-// FormatBody hint carries the alt+e affordance.
 func TestDisclosure_HintCarriesKey(t *testing.T) {
 	out, truncated := FormatBody(longBodyLines(30), 80, ToolBodyMaxLines)
 	if !truncated {

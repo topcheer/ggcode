@@ -2,10 +2,6 @@ package config
 
 import "testing"
 
-// TestIssue1015LanChatKeyDecoupledFromA2A pins the decoupling: lanchat must
-// never inherit a2a.auth.api_key. Configuring an A2A task key locks down A2A
-// traffic only; LAN Chat keeps zero-config interop via the community key
-// unless lanchat.api_key is explicitly set.
 func TestIssue1015LanChatKeyDecoupledFromA2A(t *testing.T) {
 
 	cfg := Config{}

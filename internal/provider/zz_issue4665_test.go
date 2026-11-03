@@ -19,8 +19,6 @@ func issue4665CountingServer(hits *atomic.Int32, models string) *httptest.Server
 	}))
 }
 
-// issue4665Port extracts the port an httptest server listens on, so tests
-// can build same-host different-path URLs against two distinct servers.
 func issue4665Port(t *testing.T, srv *httptest.Server) string {
 	t.Helper()
 	u, err := url.Parse(srv.URL)

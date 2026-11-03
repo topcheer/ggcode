@@ -11,7 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// ToolLanguage represents the language for tool status formatting.
 type ToolLanguage string
 
 const (
@@ -19,15 +18,12 @@ const (
 	ToolLangEn   ToolLanguage = "en"
 )
 
-// ToolPresentation holds the formatted display information for a tool call.
 type ToolPresentation struct {
-	DisplayName string // e.g. "读", "编辑", "执行"
-	Detail      string // e.g. file path, command preview
-	Activity    string // e.g. "读取 chart.html", "执行 npm test"
+	DisplayName string
+	Detail      string
+	Activity    string
 }
 
-// DescribeTool produces a human-readable presentation of a tool call,
-// mirroring the TUI's describeTool pipeline (tool_labels.go).
 func DescribeTool(lang ToolLanguage, toolName, rawArgs string) ToolPresentation {
 	args := parseToolArgs(rawArgs)
 	fileTarget := displayToolFileTarget(extractFilePath(toolName, rawArgs))
@@ -127,8 +123,6 @@ func DescribeTool(lang ToolLanguage, toolName, rawArgs string) ToolPresentation 
 	}
 }
 
-// FormatToolInline formats a tool name and detail as an inline status string,
-// e.g. "读 chart.html" or just "编辑" if detail is trivial.
 func FormatToolInline(name, detail string) string {
 	if isTrivialToolDetail(detail) {
 		return name
@@ -136,10 +130,6 @@ func FormatToolInline(name, detail string) string {
 	return name + " " + detail
 }
 
-// FormatIMStatus produces the final status string for IM delivery,
-// mirroring the TUI's formatIMStatus pipeline:
-//
-//	describeTool → formatToolInline → localizeIMProgress
 func FormatIMStatus(lang ToolLanguage, activity, toolName, toolArg string) string {
 	activity = strings.TrimSpace(activity)
 	toolSummary := strings.TrimSpace(FormatToolInline(toolName, toolArg))
@@ -163,8 +153,6 @@ func FormatIMStatus(lang ToolLanguage, activity, toolName, toolArg string) strin
 	}
 }
 
-// LocalizeIMProgress applies language-specific localization to an IM progress string,
-// mirroring the TUI's localizeIMProgress function.
 func LocalizeIMProgress(lang ToolLanguage, text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {

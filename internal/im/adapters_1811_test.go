@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// #1811 case 2: AdapterBindings reports the persisted workspaces so Rebind
-// can roll back to them when the rebind itself fails.
 func Test1811AdapterBindings(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewJSONFileBindingStore(filepath.Join(dir, "bindings.json"))

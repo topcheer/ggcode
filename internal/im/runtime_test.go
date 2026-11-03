@@ -1098,10 +1098,6 @@ func TestManager_UpdateBindingContextToken(t *testing.T) {
 	}
 }
 
-// TestClaimUnclaimedBindingsNilStoreNoPanic pins #1235's refactor: the
-// nil-store / no-session early returns must hold with the lock-snapshot
-// prologue (previously the reads happened before the lock; the snapshot
-// must not introduce a panic path for uninitialized managers).
 func TestClaimUnclaimedBindingsNilStoreNoPanic(t *testing.T) {
 	m := NewManager()
 

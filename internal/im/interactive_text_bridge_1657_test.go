@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// #1657 case 2: disambiguation index extraction for multi-pending replies.
 func Test1657ApprovalIndexFromText(t *testing.T) {
 	if idx, ok := approvalIndexFromText("y 2", 3); !ok || idx != 2 {
 		t.Fatalf(`"y 2" -> (%d,%v), want (2,true)`, idx, ok)
@@ -33,9 +32,6 @@ func Test1657ApprovalIndexFromText(t *testing.T) {
 	}
 }
 
-// #1657 case 2: with 2+ pending, a bare decision must fall through to
-// Submit (visible) instead of resolving a blind target; an indexed reply
-// resolves exactly the indexed approval; single pending stays one-tap.
 func Test1657MultiPendingDisambiguation(t *testing.T) {
 	mkMsg := func(text string) InboundMessage {
 		return InboundMessage{Envelope: Envelope{Adapter: "qq"}, Text: text}

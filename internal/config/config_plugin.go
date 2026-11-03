@@ -7,8 +7,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// AddGRPCPlugin adds or replaces a gRPC plugin entry in the config.
-// If a plugin with the same name already exists, it is replaced.
 func (c *Config) AddGRPCPlugin(name string, command []string, env map[string]string) {
 	if c == nil {
 		return
@@ -25,7 +23,6 @@ func (c *Config) AddGRPCPlugin(name string, command []string, env map[string]str
 	c.Plugins = append(c.Plugins, entry)
 }
 
-// AddCommandPlugin adds or replaces a command plugin entry in the config.
 func (c *Config) AddCommandPlugin(name string, commands []PluginCommandConfig) {
 	if c == nil {
 		return
@@ -40,7 +37,6 @@ func (c *Config) AddCommandPlugin(name string, commands []PluginCommandConfig) {
 	c.Plugins = append(c.Plugins, entry)
 }
 
-// RemovePlugin removes a plugin by name. Returns true if found.
 func (c *Config) RemovePlugin(name string) bool {
 	if c == nil {
 		return false
@@ -54,9 +50,6 @@ func (c *Config) RemovePlugin(name string) bool {
 	return false
 }
 
-// SavePlugins persists the current c.Plugins slice using patchConfigFile,
-// replacing the entire plugins array. Necessary because Save()-based merge
-// skips empty slices, which would preserve stale entries after removal.
 func (c *Config) SavePlugins() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -73,7 +66,6 @@ func (c *Config) SavePlugins() error {
 	})
 }
 
-// FindPlugin returns a plugin by name, or nil if not found.
 func (c *Config) FindPlugin(name string) *PluginConfigEntry {
 	if c == nil {
 		return nil
@@ -86,7 +78,6 @@ func (c *Config) FindPlugin(name string) *PluginConfigEntry {
 	return nil
 }
 
-// ValidateGRPCPlugin checks that a gRPC plugin config is valid.
 func (e *PluginConfigEntry) ValidateGRPCPlugin() error {
 	if e.Name == "" {
 		return fmt.Errorf("plugin name is required")

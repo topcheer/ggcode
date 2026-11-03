@@ -12,10 +12,6 @@ import (
 	"time"
 )
 
-// slowStreamFake produces its events over an UNBUFFERED channel, so any
-// consumer that stops reading parks the producer - exactly the leak shape
-// #4146 describes. producerDone is closed once all events have been sent,
-// which can only happen if someone keeps draining src after an abandon.
 type slowStreamFake struct {
 	events       []StreamEvent
 	producerDone chan struct{}
@@ -55,9 +51,6 @@ func (s *slowStreamFake) ChatStream(ctx context.Context, messages []Message, too
 	return src, nil
 }
 
-// TestTapeRecordStreamAbandonDrainsAndAligns: after the consumer reads one
-// event and cancels, the inner producer must still finish (src drained) and
-// the tape must gain a stream entry for the key (alignment invariant #3933).
 func TestTapeRecordStreamAbandonDrainsAndAligns(t *testing.T) {
 	dir := t.TempDir()
 	tape := filepath.Join(dir, "traj.llmtape.jsonl")
@@ -93,8 +86,6 @@ func TestTapeRecordStreamAbandonDrainsAndAligns(t *testing.T) {
 	}
 }
 
-// tapeHasStreamEntry reports whether the JSONL tape holds at least one
-// kind=="stream" entry with >=minEvents events.
 func tapeHasStreamEntry(t *testing.T, path string) bool {
 	t.Helper()
 	f, err := os.Open(path)
@@ -122,9 +113,6 @@ func tapeHasStreamEntry(t *testing.T, path string) bool {
 	return false
 }
 
-// TestFaultInjectStreamAbandonDrains: a hit fault (omit-content@1) wraps the
-// stream in the forwarding goroutine; after the consumer abandons, the inner
-// producer must still finish.
 func TestFaultInjectStreamAbandonDrains(t *testing.T) {
 	fake := newSlowStreamFake(4)
 

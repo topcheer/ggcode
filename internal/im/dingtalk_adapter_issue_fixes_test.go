@@ -77,10 +77,6 @@ func TestDingtalkCallbackContextKeyedByUser(t *testing.T) {
 	}
 }
 
-// TestDingtalkSendAddressesBindingUserWebhook verifies the #948 attack
-// scenario end-to-end at the Send() level: user B (unbound) sends a callback
-// AFTER user A's, then the agent replies to A - delivery must go to A's
-// webhook only, never B's.
 func TestDingtalkSendAddressesBindingUserWebhook(t *testing.T) {
 	var muA, muB sync.Mutex
 	hitsA, hitsB := 0, 0
@@ -137,8 +133,6 @@ func TestDingtalkSendAddressesBindingUserWebhook(t *testing.T) {
 	}
 }
 
-// TestDingtalkTriggerTypingUsesBindingContext verifies reactions (#948
-// secondary): the reaction target is looked up per binding user.
 func TestDingtalkTriggerTypingUsesBindingContext(t *testing.T) {
 	a := &dingtalkAdapter{
 		name:        "test",
@@ -163,11 +157,6 @@ func TestDingtalkTriggerTypingUsesBindingContext(t *testing.T) {
 	}
 }
 
-// TestDingtalkBotCallbackACKNotBlockedBySlowProcessing builds the exact
-// failure shape from #949: an inbound callback whose processing path blocks
-// (denied-user webhook POST to a hanging server). handleDataFrame must send
-// the DataFrame ACK and return immediately instead of blocking the WS read
-// goroutine for the duration of processing.
 func TestDingtalkBotCallbackACKNotBlockedBySlowProcessing(t *testing.T) {
 
 	hangReleased := make(chan struct{})

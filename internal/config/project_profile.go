@@ -6,31 +6,16 @@ import (
 	"strings"
 )
 
-// ProjectProfile contains auto-detected project metadata used to enrich
-// the system prompt at session start. Inspired by Claude Code's CLAUDE.md
-// auto-generation and Cursor's .cursorrules project context - but fully
-// deterministic and zero-LLM-cost.
 type ProjectProfile struct {
-	// Languages detected in the project (e.g., "Go", "TypeScript").
-	Languages []string
-	// BuildSystem is the primary build tool (e.g., "Make", "npm", "cargo").
-	BuildSystem string
-	// BuildCommand is the suggested build command.
+	Languages    []string
+	BuildSystem  string
 	BuildCommand string
-	// TestCommand is the suggested test command.
-	TestCommand string
-	// LintCommand is the suggested lint command.
-	LintCommand string
-	// Frameworks detected (e.g., "React", "Wails", "Flutter").
-	Frameworks []string
-	// KeyFiles are important project files found at the root.
-	KeyFiles []string
+	TestCommand  string
+	LintCommand  string
+	Frameworks   []string
+	KeyFiles     []string
 }
 
-// DetectProjectProfile scans the working directory for well-known project
-// marker files and infers the project type, build system, and standard
-// commands. It is intentionally fast (stat-only, no content parsing) and
-// conservative (only reports high-confidence detections).
 func DetectProjectProfile(workingDir string) *ProjectProfile {
 	if workingDir == "" {
 		return nil
@@ -38,8 +23,6 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 
 	profile := &ProjectProfile{}
 
-	// Marker file → detection logic. Order matters: earlier entries take
-	// priority for BuildSystem/BuildCommand/TestCommand assignment.
 	type marker struct {
 		filename string
 		detect   func(fullPath string)
@@ -203,8 +186,6 @@ func DetectProjectProfile(workingDir string) *ProjectProfile {
 	return profile
 }
 
-// FormatForSystemPrompt returns a compact single-line representation for
-// minimal token overhead in the system prompt.
 func (p *ProjectProfile) FormatForSystemPrompt() string {
 	if p == nil {
 		return ""
@@ -236,9 +217,6 @@ func (p *ProjectProfile) FormatForSystemPrompt() string {
 	return "Project: " + strings.Join(parts, " | ")
 }
 
-// detectProfileText is a thin wrapper for BuildSystemPrompt integration.
-// It caches the result per working directory to avoid redundant filesystem
-// scans on repeated calls within the same session.
 func detectProfileText(workingDir string) string {
 	if workingDir == "" {
 		return ""
@@ -268,7 +246,6 @@ func sliceContains(slice []string, val string) bool {
 	return false
 }
 
-// hasFilesWithSuffix checks if any file in the root directory has the given suffix.
 func hasFilesWithSuffix(dir, suffix string) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -282,7 +259,6 @@ func hasFilesWithSuffix(dir, suffix string) bool {
 	return false
 }
 
-// isMonorepo checks for common monorepo indicators.
 func isMonorepo(dir string) bool {
 
 	if data, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil {
@@ -305,7 +281,6 @@ func isMonorepo(dir string) bool {
 	return false
 }
 
-// detectGoMakefileTags checks for Makefile with build tags like goolm.
 func detectGoMakefileTags(p *ProjectProfile, workingDir string) {
 	if data, err := os.ReadFile(filepath.Join(workingDir, "Makefile")); err == nil {
 		mf := string(data)
@@ -321,7 +296,6 @@ func detectGoMakefileTags(p *ProjectProfile, workingDir string) {
 	}
 }
 
-// detectGoModFrameworks detects frameworks from go.mod content.
 func detectGoModFrameworks(p *ProjectProfile, goModPath string) {
 	if content, err := os.ReadFile(goModPath); err == nil {
 		if strings.Contains(string(content), "mautrix") {
@@ -330,7 +304,6 @@ func detectGoModFrameworks(p *ProjectProfile, goModPath string) {
 	}
 }
 
-// detectNpmFrameworks detects JS frameworks and scripts from package.json.
 func detectNpmFrameworks(p *ProjectProfile, pkgPath string) {
 	content, err := os.ReadFile(pkgPath)
 	if err != nil {
@@ -364,9 +337,6 @@ func detectNpmFrameworks(p *ProjectProfile, pkgPath string) {
 	}
 }
 
-// goolmTagUsage reports whether the Makefile uses the TAGS variable in a
-// go-build-shaped way, excluding unrelated *_TAGS variables like
-// DOCKER_TAGS. #1523
 func goolmTagUsage(makefile string) bool {
 	for _, line := range strings.Split(makefile, "\n") {
 		t := strings.TrimSpace(line)
@@ -381,10 +351,6 @@ func goolmTagUsage(makefile string) bool {
 	return false
 }
 
-// tagsAssignmentValue parses a `TAGS <op> value` assignment (make
-// operators ::=, :=, ?=, +=, =) and returns the raw right-hand side.
-// Whitespace between TAGS and the operator is allowed (TAGS := goolm).
-// Returns ok=false for TAGS_SUFFIX-style names and non-assignments.
 func tagsAssignmentValue(line string) (string, bool) {
 	if !strings.HasPrefix(line, "TAGS") {
 		return "", false
@@ -398,7 +364,6 @@ func tagsAssignmentValue(line string) (string, bool) {
 	return "", false
 }
 
-// detectCargoFrameworks detects Rust frameworks from Cargo.toml.
 func detectCargoFrameworks(p *ProjectProfile, cargoPath string) {
 	content, err := os.ReadFile(cargoPath)
 	if err != nil {

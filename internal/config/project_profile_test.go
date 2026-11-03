@@ -201,7 +201,6 @@ func mustWriteFile(t *testing.T, dir, name, content string) {
 	}
 }
 
-// #1523 case C/D: detection must fill-don't-overwrite and not substring-match.
 func TestProjectProfile_DockerTagsNoGoolmInjection(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, dir, "go.mod", "module example.com/x\n\ngo 1.27\n")

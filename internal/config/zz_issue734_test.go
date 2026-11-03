@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// TestIssue734VendorNotInGlobalSnapshotTable is the table-driven test for the
-// runtime provenance helper behind the desktop write-back gate (#734).
 func TestIssue734VendorNotInGlobalSnapshotTable(t *testing.T) {
 	vend := func(url string) VendorConfig {
 		return VendorConfig{Endpoints: map[string]EndpointConfig{
@@ -43,18 +41,6 @@ func TestIssue734VendorNotInGlobalSnapshotTable(t *testing.T) {
 	}
 }
 
-// TestIssue734InstanceWithoutVendorsWriteback is the regression test for #734:
-// the #731 per-key registration only covered "instance adopted >= 1 vendor
-// key". The common instance.yaml shape carries just language/mode and NO
-// vendors section, so instanceFields["vendors"] stayed unset, the desktop
-// write-back gate (formerly keyed on InstanceFields() containing "vendors")
-// never opened, and a runtime-added vendor was dropped by Save()'s
-// globalOnlyVendors filter and lost on restart.
-//
-// The fix gates on runtime provenance (VendorNotInGlobalSnapshot) instead of
-// the serialization flag. This test reproduces the full trigger sequence at
-// the config layer: global has vendor a, instance has no vendors, vendor C
-// added at runtime, write-back runs when the gate opens.
 func TestIssue734InstanceWithoutVendorsWriteback(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")

@@ -315,10 +315,6 @@ func TestSplitIRCMessage(t *testing.T) {
 	}
 }
 
-// TestSplitIRCMessage_PreservesIndentation pins #1660 case 1: the IRC
-// splitter must NOT TrimSpace its input - leading code-block indentation
-// is syntax in Python/Go. Both short (no split) and long (split) inputs
-// keep their leading whitespace verbatim.
 func TestSplitIRCMessage_PreservesIndentation(t *testing.T) {
 
 	if got := splitIRCMessage("    foo := 1", 400); len(got) != 1 || got[0] != "    foo := 1" {
@@ -344,10 +340,6 @@ func TestSplitIRCMessage_PreservesIndentation(t *testing.T) {
 	}
 }
 
-// TestIRCRemoveNick_UnicodeSafety pins #1221: nick removal must not corrupt
-// text or panic when case mapping changes byte lengths (cross-string byte
-// indexing used to slice the original string with offsets computed on a
-// lowercased copy).
 func TestIRCRemoveNick_UnicodeSafety(t *testing.T) {
 
 	got := ircRemoveNick("İşsel #test kanalı bot selam", "bot")

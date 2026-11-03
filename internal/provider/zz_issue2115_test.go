@@ -53,4 +53,4 @@ func TestIsThinkingErrorFalseCases(t *testing.T) {
 	}
 }
 
-var _ = fmt.Sprintf // keep fmt if future assertions use it
+var _ = fmt.Sprintf

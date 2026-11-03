@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// TestMeanLogprob (sa-74): confidence aggregation helper.
 func TestMeanLogprob(t *testing.T) {
 	if got := meanLogprob(nil); got != nil {
 		t.Fatalf("expected nil for empty input, got %v", *got)
@@ -22,9 +21,6 @@ func TestMeanLogprob(t *testing.T) {
 	}
 }
 
-// TestOpenAIStreamConfidence (sa-74): when logprobs are requested, the
-// request carries logprobs/top_logprobs and the Done event carries the
-// turn's mean token logprob as Confidence.
 func TestOpenAIStreamConfidence(t *testing.T) {
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -79,8 +75,6 @@ func TestOpenAIStreamConfidence(t *testing.T) {
 	}
 }
 
-// TestOpenAIStreamConfidenceDisabled (sa-74): without SetLogprobsRequest the
-// request must not ask for logprobs and Confidence stays nil.
 func TestOpenAIStreamConfidenceDisabled(t *testing.T) {
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -118,8 +112,6 @@ func TestOpenAIStreamConfidenceDisabled(t *testing.T) {
 	}
 }
 
-// TestOpenAIChatConfidenceNonStreaming (sa-74): non-streaming Chat relays the
-// mean content-token logprob as ChatResponse.Confidence.
 func TestOpenAIChatConfidenceNonStreaming(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

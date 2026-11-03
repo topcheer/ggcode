@@ -7,11 +7,6 @@ import (
 	"testing"
 )
 
-// #4643: the "existing file is unparseable" fallback branch used the raw
-// currentData marshal (external sections + instance-only fields unstripped),
-// so a corrupted main yaml caused Save() to write vendors/im/mcp_servers and
-// instance secrets straight back into the main config file. The fallback must
-// behave like the first-write branch: stripped currentRaw.
 func TestIssue4643_UnparseableFallbackStripsExternalSections(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".ggcode")

@@ -9,17 +9,14 @@ import (
 	"github.com/topcheer/ggcode/internal/version"
 )
 
-// ImpersonationPreset defines a known CLI tool identity that can be used to
-// set the User-Agent and other HTTP headers when communicating with LLM APIs.
 type ImpersonationPreset struct {
-	ID             string            // e.g. "claude-cli", "codex-cli"
-	DisplayName    string            // e.g. "Claude CLI"
-	UATemplate     string            // User-Agent template; {version} is replaced at runtime
-	ExtraHeaders   map[string]string // additional headers
-	DefaultVersion string            // default version when no custom version is set
+	ID             string
+	DisplayName    string
+	UATemplate     string
+	ExtraHeaders   map[string]string
+	DefaultVersion string
 }
 
-// impersonationState holds the global impersonation configuration.
 var (
 	impersonationMu     sync.RWMutex
 	activeImpersonation *ImpersonationPreset
@@ -27,7 +24,6 @@ var (
 	activeCustomHeaders map[string]string
 )
 
-// DefaultImpersonationPresets returns the ordered list of available presets.
 func DefaultImpersonationPresets() []ImpersonationPreset {
 	return []ImpersonationPreset{
 		{
@@ -125,7 +121,6 @@ func DefaultImpersonationPresets() []ImpersonationPreset {
 	}
 }
 
-// FindPresetByID looks up a preset by its ID. Returns nil if not found.
 func FindPresetByID(id string) *ImpersonationPreset {
 	for _, p := range DefaultImpersonationPresets() {
 		if p.ID == id {
@@ -135,8 +130,6 @@ func FindPresetByID(id string) *ImpersonationPreset {
 	return nil
 }
 
-// SetActiveImpersonation configures the global impersonation state.
-// Pass nil preset to clear impersonation.
 func SetActiveImpersonation(preset *ImpersonationPreset, version string, customHeaders map[string]string) {
 	impersonationMu.Lock()
 	defer impersonationMu.Unlock()
@@ -145,16 +138,12 @@ func SetActiveImpersonation(preset *ImpersonationPreset, version string, customH
 	activeCustomHeaders = customHeaders
 }
 
-// GetActiveImpersonation returns the current impersonation state.
 func GetActiveImpersonation() (preset *ImpersonationPreset, version string, customHeaders map[string]string) {
 	impersonationMu.RLock()
 	defer impersonationMu.RUnlock()
 	return activeImpersonation, activeVersion, activeCustomHeaders
 }
 
-// ResolveImpersonationHeaders builds the final http.Header set from the current
-// impersonation state. Priority: custom headers > preset extra headers.
-// Returns a new http.Header each time.
 func ResolveImpersonationHeaders() http.Header {
 	impersonationMu.RLock()
 	preset := activeImpersonation
@@ -196,8 +185,6 @@ func ResolveImpersonationHeaders() http.Header {
 	return h
 }
 
-// DefaultHeadersForProtocol returns the default headers for a given protocol
-// when no impersonation is active. These match the original hardcoded behavior.
 func DefaultHeadersForProtocol(protocol string) http.Header {
 	h := make(http.Header, 4)
 	switch strings.ToLower(strings.TrimSpace(protocol)) {
@@ -218,9 +205,6 @@ func DefaultHeadersForProtocol(protocol string) http.Header {
 	return h
 }
 
-// BuildHeadersForProvider returns the headers to use for a given protocol.
-// If impersonation is active, returns impersonation headers.
-// Otherwise returns protocol-specific defaults.
 func BuildHeadersForProvider(protocol string) http.Header {
 	if h := ResolveImpersonationHeaders(); h != nil {
 		return h
@@ -228,13 +212,10 @@ func BuildHeadersForProvider(protocol string) http.Header {
 	return DefaultHeadersForProtocol(protocol)
 }
 
-// HeaderMutable is implemented by providers that support runtime header updates.
 type HeaderMutable interface {
 	UpdateRuntimeHeaders(headers http.Header)
 }
 
-// SessionIDSetter is implemented by providers that can embed a session ID
-// header into outgoing LLM requests.
 type SessionIDSetter interface {
 	SetSessionID(sessionID string)
 }

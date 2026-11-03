@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// C: clearing an int back to the global default must reach the delta.
 func TestIssue1519C_ClearToDefaultReachesDelta(t *testing.T) {
 	var c Config
 	delta := map[string]interface{}{}
@@ -26,7 +25,6 @@ func TestIssue1519C_ClearToDefaultReachesDelta(t *testing.T) {
 	}
 }
 
-// B: after a successful migration the legacy file is gone.
 func TestIssue1519B_MigrationRemovesLegacy(t *testing.T) {
 	ws := t.TempDir()
 	legacyDir := filepath.Join(ws, ".ggcode")

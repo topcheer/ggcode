@@ -6,13 +6,10 @@ import (
 	"strings"
 )
 
-// DefaultRole is assigned when no role is specified via /nick.
 const DefaultRole = "developer"
 
-// DefaultTeam is assigned when no team is specified via /nick.
 const DefaultTeam = "dev-team"
 
-// adjectives for random nickname generation.
 var adjectives = []string{
 	"Clever", "Brave", "Swift", "Bright", "Calm", "Bold", "Eager",
 	"Gentle", "Happy", "Jolly", "Keen", "Lively", "Mighty", "Noble",
@@ -24,7 +21,6 @@ var adjectives = []string{
 	"Echo", "Flux",
 }
 
-// animals for random nickname generation.
 var animals = []string{
 	"Otter", "Wolf", "Fox", "Bear", "Lion", "Tiger", "Eagle",
 	"Hawk", "Falcon", "Panther", "Lynx", "Owl", "Raven", "Stag",
@@ -36,14 +32,12 @@ var animals = []string{
 	"Narwhal", "Plover",
 }
 
-// RandomNick generates a random nickname like "CleverOtter".
 func RandomNick() string {
 	adj := adjectives[rand.Intn(len(adjectives))]
 	animal := animals[rand.Intn(len(animals))]
 	return adj + animal
 }
 
-// AgentNick returns the agent nickname derived from a human nick.
 func AgentNick(humanNick string) string {
 
 	if strings.HasSuffix(humanNick, "_agent") {
@@ -52,22 +46,11 @@ func AgentNick(humanNick string) string {
 	return humanNick + "_agent"
 }
 
-// ParseNickRole splits "alice@frontend" into ("alice", "frontend").
-// "alice" → ("alice", "developer").
-// Deprecated: Use ParseNickRoleTeam for full 3-part parsing.
 func ParseNickRole(input string) (nick, role string) {
 	nick, role, _ = ParseNickRoleTeam(input)
 	return
 }
 
-// ParseNickRoleTeam splits "alice@frontend@platform" into ("alice", "frontend", "platform").
-// Missing parts get defaults: role="developer", team="dev-team".
-//
-//	"alice" → ("alice", "developer", "dev-team")
-//	"alice@frontend" → ("alice", "frontend", "dev-team")
-//	"alice@frontend@platform" → ("alice", "frontend", "platform")
-//
-// The split is on '@' so nicks, roles, and teams cannot contain '@'.
 func ParseNickRoleTeam(input string) (nick, role, team string) {
 	input = strings.TrimSpace(input)
 	parts := strings.Split(input, "@")
@@ -89,7 +72,6 @@ func ParseNickRoleTeam(input string) (nick, role, team string) {
 	return
 }
 
-// ResolveNickConflict appends a number if the nick is already taken.
 func ResolveNickConflict(nick string, taken map[string]bool) string {
 	if !taken[nick] {
 		return nick

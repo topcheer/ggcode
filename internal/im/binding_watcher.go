@@ -9,18 +9,8 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// bindingWatcherInterval is how often the watcher polls the bindings file.
-// It's a var (not const) so tests can override it for faster execution.
 var bindingWatcherInterval = 3 * time.Second
 
-// bindingStatChanged reports whether the bindings file changed given the
-// previous (mtime, size) snapshot.
-//
-// mtime equality alone must NOT skip the read: two rewrites inside the same
-// mtime granularity window (e.g. a cross-instance takeover rename followed by
-// a session-ID update) were swallowed by the strict After() check, leaving
-// both instances competing for the channel (#603). A size change with an
-// equal mtime now also counts as a modification.
 func bindingStatChanged(mod time.Time, size int64, lastMod time.Time, lastSize int64) bool {
 	if mod.After(lastMod) {
 		return true
@@ -29,19 +19,6 @@ func bindingStatChanged(mod time.Time, size int64, lastMod time.Time, lastSize i
 	return !mod.Before(lastMod) && size != lastSize
 }
 
-// StartBindingWatcher starts a background goroutine that monitors the
-// im-bindings.json file for LastSessionID changes by other ggcode instances.
-//
-// When another instance claims a binding (via UnmuteBinding/EnableBinding),
-// it writes its own session ID as LastSessionID to the shared file. This
-// watcher detects that change and auto-mutes the affected adapter so the
-// original (now stale) instance stops competing for the channel.
-//
-// The watcher is a no-op for bindings that are already muted or disabled.
-// It only acts on active (non-muted) bindings whose persisted LastSessionID
-// no longer matches this instance's session.
-//
-// Call StopBindingWatcher to stop the goroutine (e.g. on shutdown).
 func (m *Manager) StartBindingWatcher() {
 	m.mu.Lock()
 	if m.bindingWatcherCancel != nil {
@@ -74,7 +51,6 @@ func (m *Manager) StartBindingWatcher() {
 		var lastMod time.Time
 		var lastSize int64
 
-		// Resolve the file path from the store (only JSONFileBindingStore has a path).
 		var bindPath string
 		if fps, ok := store.(*JSONFileBindingStore); ok {
 			bindPath = fps.path
@@ -108,7 +84,6 @@ func (m *Manager) StartBindingWatcher() {
 	})
 }
 
-// StopBindingWatcher stops the binding watcher goroutine.
 func (m *Manager) StopBindingWatcher() {
 	m.mu.Lock()
 	cancel := m.bindingWatcherCancel
@@ -120,8 +95,6 @@ func (m *Manager) StopBindingWatcher() {
 	}
 }
 
-// checkBindingOwnership reads the current persisted bindings and mutes any
-// active adapter whose LastSessionID no longer matches this session.
 func (m *Manager) checkBindingOwnership(store BindingStore, workspace, sessionID string) {
 	bindings, err := store.ListByWorkspace(workspace)
 	if err != nil {

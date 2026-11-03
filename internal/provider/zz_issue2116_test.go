@@ -21,9 +21,6 @@ func TestTierFitsBudget(t *testing.T) {
 	}
 }
 
-// The ladder, walked with the budget, must stop before the cumulative
-// billed tokens exceed the cap: the worst case becomes 1M (first tier)
-// instead of 1.8M.
 func TestTierLadderBudgetWalk(t *testing.T) {
 	spent := 0
 	attempted := 0

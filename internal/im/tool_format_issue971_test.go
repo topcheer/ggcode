@@ -88,7 +88,6 @@ func TestImCodeBlock_FenceSafe(t *testing.T) {
 	}
 }
 
-// FormatSpecial grep success path must use the "matches" label, not the raw key.
 func TestFormatSpecialIMToolResult_GrepMatchesLabel(t *testing.T) {
 	tr := &ToolResultInfo{
 		ToolName: "grep",

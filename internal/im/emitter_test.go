@@ -226,7 +226,6 @@ func TestIMEmitterFormatAskUserPrompt(t *testing.T) {
 	}
 }
 
-// namedCaptureSink captures all sent events for test assertions.
 type namedCaptureSink struct {
 	name       string
 	mu         sync.Mutex
@@ -255,9 +254,6 @@ func (s *namedCaptureSink) reset() {
 
 var _ Sink = (*namedCaptureSink)(nil)
 
-// #1299: final assistant replies went out to IM adapters unredacted -
-// only tool results were masked. EmitText must redact secrets (this
-// covers all adapter paths since everything funnels through EmitEvent).
 func TestIMEmitterEmitTextRedactsSecrets(t *testing.T) {
 	mgr := NewManager()
 	sink := &namedCaptureSink{name: "qq"}
@@ -282,9 +278,6 @@ func TestIMEmitterEmitTextRedactsSecrets(t *testing.T) {
 	}
 }
 
-// #1333: EmitUserTextExcept enqueues directly and bypassed the EmitEvent
-// choke point - a secret the user pasted on one channel was forwarded
-// verbatim to other bound adapters. Must go through redactOutbound.
 func TestIMEmitterEmitUserTextExceptRedactsSecrets(t *testing.T) {
 	mgr := NewManager()
 	sink := &namedCaptureSink{name: "qq"}
@@ -309,9 +302,6 @@ func TestIMEmitterEmitUserTextExceptRedactsSecrets(t *testing.T) {
 	}
 }
 
-// #1333: EmitAskUserInteractive sends cardText/fallbackText via manager
-// paths that bypass EmitEvent. Question text quoting a secret (e.g. after
-// read_file on .env) must be redacted before leaving the machine.
 func TestIMEmitterAskUserInteractiveRedactsSecrets(t *testing.T) {
 	mgr := NewManager()
 	sink := &namedCaptureSink{name: "qq"}

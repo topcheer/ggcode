@@ -190,10 +190,6 @@ func TestAnthropicBuildParamsWithoutThinking(t *testing.T) {
 	}
 }
 
-// TestAnthropicMemoryToolDeclaration pins the memory_20250818 declaration
-// contract: absent by default, exactly one memory tool in the union when
-// enabled, and a cache breakpoint on it when it is the trailing static
-// declaration (no server tools).
 func TestAnthropicMemoryToolDeclaration(t *testing.T) {
 	p := &AnthropicProvider{model: "claude-sonnet-4-6", maxTokens: 64000}
 

@@ -50,9 +50,6 @@ func TestIssue577G_CapNotClampedByOverflowMessage(t *testing.T) {
 	}
 }
 
-// hijackAbortSSE writes the given SSE events inside a chunked response and
-// then hard-closes the TCP connection mid-stream, so the client reader sees
-// an "unexpected EOF" (retryable, nothing emitted) instead of a clean end.
 func hijackAbortSSE(w http.ResponseWriter, events ...string) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
@@ -188,7 +185,6 @@ func TestIssue577A_TokenCountInQuotaMessageNotMisreadAs401(t *testing.T) {
 	}
 }
 
-// scriptedProvider serves scripted event slices per ChatStream call.
 type scriptedProvider struct {
 	name    string
 	streams [][]StreamEvent

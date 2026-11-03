@@ -7,12 +7,6 @@ import (
 	"time"
 )
 
-// TestIssue2765SingleDatagramDeliveredToHub pins #2765: a small message sent
-// through the production splitFragments single-datagram path must actually
-// reach the receiving hub's onMessage callback. Before the fix the wrapped
-// base64 payload failed the hub's json.Unmarshal ("message payload parse
-// error"), the message was silently dropped, and the unconditional ACK still
-// told the sender it was delivered - suppressing the multicast fallback.
 func TestIssue2765SingleDatagramDeliveredToHub(t *testing.T) {
 	hub, port := udpTestHub(t)
 	udp, err := NewUDPTransport(port, "", hub, hub.NodeID(), hub.APIKey())

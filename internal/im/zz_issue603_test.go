@@ -13,14 +13,10 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
-// TestIssue603_PruneApprovalsBelowThresholdDenies verifies that abandoned
-// approvals are denied and removed even when the approvals map never reaches
-// the old 32-entry threshold. Before the fix, 31 stale approvals sat forever
-// with zero cleanup and zero Deny, hanging every waiter.
 func TestIssue603_PruneApprovalsBelowThresholdDenies(t *testing.T) {
 	mgr := NewManager()
 
-	const staleCount = 3 // far below the old 32 gate
+	const staleCount = 3
 	chans := make([]<-chan permission.Decision, 0, staleCount)
 	for i := 0; i < staleCount; i++ {
 		_, ch := mgr.RegisterApproval(ApprovalRequest{
@@ -64,9 +60,6 @@ func TestIssue603_PruneApprovalsBelowThresholdDenies(t *testing.T) {
 	}
 }
 
-// TestIssue603_PruneApprovalsTimeDrivenDeny verifies the time-driven pruner:
-// an approval that becomes stale AFTER registration (so no further
-// RegisterApproval ever runs) is still denied by the background pruner.
 func TestIssue603_PruneApprovalsTimeDrivenDeny(t *testing.T) {
 	orig := approvalPruneInterval
 	approvalPruneInterval = 30 * time.Millisecond
@@ -98,9 +91,6 @@ func TestIssue603_PruneApprovalsTimeDrivenDeny(t *testing.T) {
 	}
 }
 
-// TestIssue603_ApprovalPrunerSelfTerminates verifies the pruner goroutine
-// stops itself once the approvals map is empty (no permanent background
-// ticker per Manager).
 func TestIssue603_ApprovalPrunerSelfTerminates(t *testing.T) {
 	orig := approvalPruneInterval
 	approvalPruneInterval = 20 * time.Millisecond
@@ -141,8 +131,6 @@ func TestIssue603_ApprovalPrunerSelfTerminates(t *testing.T) {
 	}
 }
 
-// TestIssue603_WhatsAppBackoffUnboundedCapped verifies the backoff schedule
-// caps at the last waBackoffs entry instead of giving up after 5 attempts.
 func TestIssue603_WhatsAppBackoffUnboundedCapped(t *testing.T) {
 	maxBackoff := waBackoffs[len(waBackoffs)-1]
 	cases := []struct {
@@ -163,9 +151,6 @@ func TestIssue603_WhatsAppBackoffUnboundedCapped(t *testing.T) {
 	}
 }
 
-// TestIssue603_WhatsAppTerminalOnlyLoggedOut verifies that only
-// errWhatsAppLoggedOut is permanent; network-ish errors (and nil) must stay
-// retryable so a multi-minute outage no longer kills the adapter.
 func TestIssue603_WhatsAppTerminalOnlyLoggedOut(t *testing.T) {
 	if !waTerminal(errWhatsAppLoggedOut) {
 		t.Fatal("errWhatsAppLoggedOut must be terminal")
@@ -185,11 +170,6 @@ func TestIssue603_WhatsAppTerminalOnlyLoggedOut(t *testing.T) {
 	}
 }
 
-// TestIssue603_WhatsAppStartStopConcurrent hammers concurrent Start/Stop on a
-// shared adapter. Under -race this reproduces the original DATA RACE
-// (unsynchronized write a.cancel in Start vs read in Stop) and must stay
-// clean after the fix. The per-Start context carries a short timeout so no
-// run goroutine can outlive the test by much.
 func TestIssue603_WhatsAppStartStopConcurrent(t *testing.T) {
 	a := &whatsappAdapter{
 		name:     "race-probe",
@@ -217,8 +197,6 @@ func TestIssue603_WhatsAppStartStopConcurrent(t *testing.T) {
 	a.waitRunStopped()
 }
 
-// TestIssue603_SlackTerminalAuthStopsRetrying verifies that invalid_auth from
-// auth.test exits the run loop (previously: retried every cycle forever).
 func TestIssue603_SlackTerminalAuthStopsRetrying(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"ok":false,"error":"invalid_auth"}`)
@@ -247,8 +225,6 @@ func TestIssue603_SlackTerminalAuthStopsRetrying(t *testing.T) {
 	}
 }
 
-// TestIssue603_SlackTransientAuthKeepsRetrying verifies that non-terminal
-// errors still take the retry path (the fix must not over-trigger).
 func TestIssue603_SlackTransientAuthKeepsRetrying(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"ok":false,"error":"internal_error"}`)
@@ -283,9 +259,6 @@ func TestIssue603_SlackTransientAuthKeepsRetrying(t *testing.T) {
 	}
 }
 
-// TestIssue603_EmitterCloseAfterEnqueue verifies close() actually closes the
-// channel after enqueue() has run. Before the fix, the shared sync.Once was
-// consumed by the first enqueue, making close() a permanent no-op.
 func TestIssue603_EmitterCloseAfterEnqueue(t *testing.T) {
 	s := newIMEmitterState()
 	s.enqueue(NewManager(), OutboundEvent{Kind: OutboundEventText, Text: "hello"}, "")
@@ -305,9 +278,6 @@ func TestIssue603_EmitterCloseAfterEnqueue(t *testing.T) {
 	}
 }
 
-// TestIssue603_EmitterCloseIdempotentAndDropAfterClose verifies close() is
-// safe to call twice and that enqueue() after close() is a no-op (no send on
-// a closed channel panic, no dispatcher restart).
 func TestIssue603_EmitterCloseIdempotentAndDropAfterClose(t *testing.T) {
 	s := newIMEmitterState()
 	s.close()
@@ -327,9 +297,6 @@ func TestIssue603_EmitterCloseIdempotentAndDropAfterClose(t *testing.T) {
 	}
 }
 
-// TestIssue603_BindingStatChangedMatrix covers the change-detection matrix:
-// mtime advance, same-mtime+size-change (the swallowed takeover case),
-// unchanged, and older.
 func TestIssue603_BindingStatChangedMatrix(t *testing.T) {
 	t0 := time.Now()
 	t1 := t0.Add(2 * time.Second)

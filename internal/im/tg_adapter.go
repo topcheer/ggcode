@@ -30,13 +30,9 @@ import (
 )
 
 const (
-	tgDefaultAPIBase = "https://api.telegram.org"
-	tgPollTimeout    = 30
-	tgMaxTextLen     = 4096
-	// tgInterMessageDelay is the delay between consecutive messages to the same
-	// chat. Telegram recommends avoiding more than 1 message/second per chat.
-	// Source: https://core.telegram.org/bots/faq#my-bot-is-hitting-limits-how-do-i-avoid-this
-	// Quote: "In a single chat, avoid sending more than one message per second."
+	tgDefaultAPIBase    = "https://api.telegram.org"
+	tgPollTimeout       = 30
+	tgMaxTextLen        = 4096
 	tgInterMessageDelay = 1000 * time.Millisecond
 	tgGetUpdatesPath    = "/bot%s/getUpdates"
 	tgSendMessagePath   = "/bot%s/sendMessage"
@@ -105,7 +101,6 @@ func (a *tgAdapter) Start(ctx context.Context) {
 	safego.Go("im.tg.run", func() { a.run(ctx) })
 }
 
-// Close signals the polling loop to stop immediately.
 func (a *tgAdapter) Close() error {
 	a.mu.Lock()
 	if a.httpClient != nil {
@@ -637,9 +632,6 @@ func (a *tgAdapter) sendReplyText(ctx context.Context, chatID, replyTo, content 
 	return nil
 }
 
-// formatMessages converts markdown text into one or more Telegram-ready messages.
-// For entity mode (parseMode==""), it uses tgmd.ConvertAndSplit which safely splits
-// at entity boundaries. For legacy parse modes, it falls back to manual split + escape.
 func (a *tgAdapter) formatMessages(text string) ([]tgmd.Message, error) {
 	if a.parseMode == "" {
 		return tgmd.ConvertAndSplit(text, tgmd.WithMaxMessageLen(tgMaxTextLen)), nil
@@ -687,7 +679,6 @@ func (a *tgAdapter) sendTextMessage(ctx context.Context, chatID string, msg tgmd
 	return err
 }
 
-// sendExtractedImage resolves and sends an extracted image.
 func (a *tgAdapter) sendExtractedImage(ctx context.Context, chatID string, img ExtractedImage, replyTo string) error {
 	switch img.Kind {
 	case "url":
@@ -732,7 +723,6 @@ func (a *tgAdapter) sendExtractedImage(ctx context.Context, chatID string, img E
 	}
 }
 
-// sendPhotoByURL sends a photo using a URL. Telegram will fetch the image server-side.
 func (a *tgAdapter) sendPhotoByURL(ctx context.Context, chatID, imageURL, caption, replyTo string) error {
 	path := fmt.Sprintf(tgSendPhotoPath, a.botToken)
 	body := map[string]any{
@@ -767,12 +757,7 @@ func (a *tgAdapter) sendPhotoByURL(ctx context.Context, chatID, imageURL, captio
 	return err
 }
 
-// sendPhotoByUpload sends a photo by uploading file data via multipart/form-data.
 func (a *tgAdapter) sendPhotoByUpload(ctx context.Context, chatID string, data []byte, filename, caption, replyTo string) error {
-	// Telegram Bot API caps multipart photos at 10MB (documents allow 50MB,
-	// but this adapter sends photos only). The extraction layer allows up to
-	// 20MB, so reject locally with a clear message instead of letting the API
-	// return an opaque error after the full upload.
 	const maxPhotoBytes = 10 << 20
 	if len(data) > maxPhotoBytes {
 		return fmt.Errorf("photo is %d bytes; Telegram sendPhoto limit is %d bytes, use a smaller image", len(data), maxPhotoBytes)
@@ -888,7 +873,6 @@ func (a *tgAdapter) sendPhotoByUpload(ctx context.Context, chatID string, data [
 	return rateLimitExhausted("Telegram")
 }
 
-// TriggerTyping sends a "typing" chat action to the Telegram chat.
 func (a *tgAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 	channelID := strings.TrimSpace(binding.ChannelID)
 	if channelID == "" {
@@ -935,7 +919,6 @@ func (a *tgAdapter) resolveReplyTo(binding ChannelBinding) string {
 	return strings.TrimSpace(binding.LastInboundMessageID)
 }
 
-// handleCallbackQuery processes Telegram inline keyboard button callbacks.
 func (a *tgAdapter) handleCallbackQuery(ctx context.Context, cb map[string]any) {
 	cbID, _ := cb["id"].(string)
 	data, _ := cb["data"].(string)
@@ -1094,14 +1077,6 @@ func (a *tgAdapter) apiRequest(ctx context.Context, method, path string, body an
 	return nil, rateLimitExhausted("Telegram")
 }
 
-// tgExtractRetryAfter reads the response body and extracts the retry_after
-// value from a Telegram 429 response.
-// Response format: {"ok":false,"error_code":429,"description":"...",
-//
-//	"parameters":{"retry_after":N}}
-//
-// retry_after is in seconds (integer). Falls back to the Retry-After header
-// via parseRetryAfter, then defaultRetryDelay.
 func tgExtractRetryAfter(resp *http.Response) time.Duration {
 	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
@@ -1146,14 +1121,6 @@ func (a *tgAdapter) publishState(healthy bool, status, lastErr string) {
 	})
 }
 
-// tgStripBotMention removes the bot's own @username mention from an inbound
-// group message. It prefers Telegram's structured entities (type=mention with
-// offset/length in UTF-16 code units), so ONLY the exact bot mention is
-// removed; a plain ReplaceAll corrupts text when the bot username is a prefix
-// of another token (botUN="dev" turned "@devops" into "ops" and
-// "dev@devtools.com" into "devtools.com") (#540). When entities are absent
-// it falls back to a word-boundary scan; when entities are present but
-// contain no bot mention, the text is returned untouched.
 func tgStripBotMention(text, botUsername string, entitiesRaw any) string {
 	if botUsername == "" || text == "" {
 		return text
@@ -1196,9 +1163,6 @@ func tgStripBotMention(text, botUsername string, entitiesRaw any) string {
 	return tgStripBotMentionFallback(text, target)
 }
 
-// tgStripBotMentionFallback removes occurrences of target (@username) that
-// are delimited on both sides by non-mention characters, so "@dev" does not
-// match inside "@devops" or "dev@devtools.com" (#540).
 func tgStripBotMentionFallback(text, target string) string {
 	var idxs []int
 	search := 0
@@ -1220,12 +1184,6 @@ func tgStripBotMentionFallback(text, target string) string {
 	return strings.TrimSpace(text)
 }
 
-// tgCollapseAdjacentSpace removes ONE of two adjacent spaces created by
-// deleting a token: orig is the string before the cut, cut the string after,
-// and unitOff the UTF-16 offset where the deletion happened. When the kept
-// character before the deletion is a space and the kept character after it is
-// also a space, one is dropped so "hi @dev run" becomes "hi run", not
-// "hi  run" (#540).
 func tgCollapseAdjacentSpace(orig, cut string, unitOff int) string {
 	byteOff := utf16ByteIndex(orig, unitOff)
 	if byteOff < 0 {
@@ -1241,8 +1199,6 @@ func tgCollapseAdjacentSpaceAtByte(orig, cut string, byteOff int) string {
 	return cut
 }
 
-// utf16ByteIndex converts a UTF-16 code unit offset in s to a byte offset.
-// Returns -1 when the offset falls outside the string.
 func utf16ByteIndex(s string, unitOff int) int {
 	unit := 0
 	for i, r := range s {
@@ -1281,8 +1237,6 @@ func isTGMentionChar(r rune) bool {
 	return r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
 }
 
-// utf16Substr returns s[off:off+length] where offsets are in UTF-16 code
-// units — the convention Telegram uses for message entity positions.
 func utf16Substr(s string, off, length int) string {
 	var b strings.Builder
 	unit := 0
@@ -1300,7 +1254,6 @@ func utf16Substr(s string, off, length int) string {
 	return b.String()
 }
 
-// utf16Cut removes s[start:end] where offsets are in UTF-16 code units.
 func utf16Cut(s string, start, end int) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -1322,10 +1275,6 @@ func splitTGMessage(text string, maxLen int) []string {
 	return splitMessageRunes(text, maxLen, true, false, false)
 }
 
-// jsonInt64Str converts a JSON-decoded numeric value to its exact int64 string
-// representation. JSON numbers decode as float64 in Go, which loses precision
-// for large integers. This function handles float64 → int64 conversion safely
-// and also handles negative numbers (e.g. Telegram supergroup chat IDs).
 func jsonInt64Str(v any) string {
 	switch n := v.(type) {
 	case float64:
@@ -1363,9 +1312,6 @@ func parseInt(s string) (int64, error) {
 	return n, nil
 }
 
-// legacyCaption prepares a photo caption for legacy parse modes: it escapes
-// MarkdownV2 FIRST and then truncates, so escaping cannot push the caption
-// past Telegram's 1024-char limit (issue #970).
 func (a *tgAdapter) legacyCaption(cap string) string {
 	if a.parseMode == "MarkdownV2" {
 		cap = EscapeMarkdownV2(cap)
@@ -1376,9 +1322,6 @@ func (a *tgAdapter) legacyCaption(cap string) string {
 	return truncateTGRunes(cap, 1024)
 }
 
-// tgEscapeHTML escapes exactly the three characters Telegram's legacy HTML
-// parse mode treats as markup. html.EscapeString would also escape quotes,
-// turning plain prose into &quot; noise.
 func tgEscapeHTML(s string) string {
 	s = strings.ReplaceAll(s, "&", "&amp;")
 	s = strings.ReplaceAll(s, "<", "&lt;")
@@ -1386,9 +1329,6 @@ func tgEscapeHTML(s string) string {
 	return s
 }
 
-// truncateTGRunes truncates s to at most max runes. If the cut lands right
-// after a MarkdownV2 escape backslash, the dangling backslash is dropped so
-// the result remains valid escaped text.
 func truncateTGRunes(s string, max int) string {
 	r := []rune(s)
 	if len(r) <= max {
@@ -1401,8 +1341,6 @@ func truncateTGRunes(s string, max int) string {
 	return string(r)
 }
 
-// tgEntitiesToRaw converts tgmd.Entity slices to Telegram API's
-// []map[string]any format for JSON serialization.
 func tgEntitiesToRaw(entities []tgmd.Entity) []map[string]any {
 	result := make([]map[string]any, len(entities))
 	for i, e := range entities {
@@ -1449,8 +1387,6 @@ func tgPayloadKeys(value any) string {
 	return strings.Join(keys, ",")
 }
 
-// SendInteractive implements InteractiveSender.
-// Sends a message with Telegram InlineKeyboard buttons.
 func (a *tgAdapter) SendInteractive(ctx context.Context, binding ChannelBinding, msg InteractiveMessage) (string, error) {
 	a.mu.RLock()
 	connected := a.connected
@@ -1464,7 +1400,6 @@ func (a *tgAdapter) SendInteractive(ctx context.Context, binding ChannelBinding,
 		return "", fmt.Errorf("Telegram channel is not configured")
 	}
 
-	// Build InlineKeyboard buttons
 	var rows [][]map[string]any
 	for _, btn := range msg.Buttons {
 		button := map[string]any{

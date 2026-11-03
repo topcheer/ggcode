@@ -5,8 +5,6 @@ import (
 	"time"
 )
 
-// #4465: seen must only be written after the allowed-users / mention /
-// empty-text filters pass. A filtered message must NOT occupy dedup capacity.
 func TestMattermostSeenNotWrittenForFilteredMessages(t *testing.T) {
 	a := &mattermostAdapter{
 		botUserID:      "bot123",

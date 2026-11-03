@@ -12,14 +12,11 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// NodeKey is this node's static identity keypair.
 type NodeKey struct {
 	Private ed25519.PrivateKey
 	Public  ed25519.PublicKey
 }
 
-// LoadOrCreateNodeKey loads <dir>/node-ed25519.key or generates and
-// persists a new keypair (0600) on first run.
 func LoadOrCreateNodeKey(dir string) (*NodeKey, error) {
 	path := filepath.Join(dir, "node-ed25519.key")
 	if raw, err := os.ReadFile(path); err == nil {
@@ -44,25 +41,16 @@ func LoadOrCreateNodeKey(dir string) (*NodeKey, error) {
 	return &NodeKey{Private: priv, Public: pub}, nil
 }
 
-// KeyFingerprint returns a stable hex fingerprint for a public key.
 func KeyFingerprint(pub ed25519.PublicKey) string {
 	sum := sha256.Sum256(pub)
 	return "fp:" + hex.EncodeToString(sum[:16])
 }
 
-// canonicalPayload is the exact byte string covered by message
-// signatures. Every identity-bearing and content field participates so a
-// forged from_node_id/nick/content breaks the signature. Message.ID is
-// included too (#3419): without it, replaying a captured DM under a NEW
-// id (dropping the old one's dedup entry) or after a dedup-table restart
-// verifies clean - the signature now binds message uniqueness.
 func canonicalPayload(m *Message) []byte {
 	return []byte(fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%d",
 		m.ID, m.FromNodeID, m.FromRole, m.FromNick, m.ToNodeID, m.ToRole, m.Content, m.Timestamp))
 }
 
-// signMessage attaches PubKey (hex) and Sig (hex) to the message using
-// the node key.
 func signMessage(m *Message, key *NodeKey) {
 	if key == nil {
 		return
@@ -73,10 +61,6 @@ func signMessage(m *Message, key *NodeKey) {
 
 var errNoSignature = errors.New("lanchat: message carries no signature")
 
-// verifyMessage checks the signature and reports the signer fingerprint.
-// Messages without a key/signature (pre-#3402 peers) verify as
-// unverified with a nil fingerprint, not as an error - callers decide
-// policy; the strict-mode exemption requires a real fingerprint match.
 func verifyMessage(m *Message) (ok bool, fp string, err error) {
 	if m.PubKey == "" || m.Sig == "" {
 		return false, "", errNoSignature

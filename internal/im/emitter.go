@@ -16,33 +16,19 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// IMEmitter handles asynchronous outbound IM event emission with typing keepalive.
-// It is framework-agnostic and can be used by both TUI and daemon modes.
 type IMEmitter struct {
 	state    *imEmitterState
 	typing   *imTypingKeeper
 	manager  *Manager
-	language string // "zh-CN" or "en"
-	workDir  string // project working directory for path relativization
+	language string
+	workDir  string
 
-	// mu protects lastStatus, outputMode, state, and typing from concurrent
-	// access. These fields are read from the agent stream callback goroutine and
-	// written from the TUI event loop or IM slash-command handler goroutine.
-	// state and typing are lazily initialized; without the lock, two concurrent
-	// emit paths could each install their own state (leaking a dispatcher
-	// goroutine) and TriggerTyping raced on typing.lastTrigger (#954).
 	mu         sync.Mutex
-	lastStatus string // dedup status messages
-	outputMode string // verbose, quiet, summary (default: verbose)
+	lastStatus string
+	outputMode string
 }
 
-// imEmitterState manages a goroutine-based async event emission pipeline.
 type imEmitterState struct {
-	// mu guards ch, started, and closed. The dispatcher goroutine is started
-	// lazily by the first enqueue; close() closes ch so the dispatcher drains
-	// its buffer and exits. Previously close() shared the dispatcher-start
-	// sync.Once, so after the first enqueue consumed the Once, close(ch) never
-	// ran and the shutdown API was dead-on-arrival (#603).
 	mu      sync.Mutex
 	started bool
 	closed  bool
@@ -52,18 +38,13 @@ type imEmitterState struct {
 type queuedIMEvent struct {
 	mgr            *Manager
 	event          OutboundEvent
-	excludeAdapter string // if set, skip this adapter when emitting
+	excludeAdapter string
 }
 
 func newIMEmitterState() *imEmitterState {
 	return &imEmitterState{ch: make(chan queuedIMEvent, 256)}
 }
 
-// close shuts down the dispatcher goroutine by closing the channel. Any
-// buffered events are drained by the dispatcher before it exits. After close,
-// enqueue calls become no-ops. Safe to call multiple times and safe to call
-// after enqueue (#603: previously this was a silent no-op once enqueue had
-// consumed the shared Once, so the dispatcher could never be shut down).
 func (s *imEmitterState) close() {
 	if s == nil {
 		return
@@ -111,7 +92,6 @@ func (s *imEmitterState) enqueue(mgr *Manager, event OutboundEvent, excludeAdapt
 	}
 }
 
-// imTypingKeeper tracks the last typing trigger time to implement keepalive.
 type imTypingKeeper struct {
 	lastTrigger time.Time
 	interval    time.Duration
@@ -119,7 +99,6 @@ type imTypingKeeper struct {
 
 const imTypingKeepaliveInterval = 5 * time.Second
 
-// NewIMEmitter creates a new IM emitter for the given manager, language, and working directory.
 func NewIMEmitter(mgr *Manager, lang, workDir string) *IMEmitter {
 	if mgr != nil {
 		mgr.SetLanguage(lang)
@@ -131,7 +110,6 @@ func NewIMEmitter(mgr *Manager, lang, workDir string) *IMEmitter {
 	}
 }
 
-// EmitEvent sends a raw outbound event to all bound IM channels.
 func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 	if e == nil || e.manager == nil {
 		return
@@ -191,9 +169,6 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 	e.TriggerTyping()
 }
 
-// redactOutbound applies the same outbound-boundary sanitization the
-// EmitEvent choke point uses (#1299/#1333): relativize absolute paths and
-// redact secrets. Used by direct-send paths that bypass EmitEvent.
 func (e *IMEmitter) redactOutbound(text string) string {
 	if e == nil || text == "" {
 		return text
@@ -201,8 +176,6 @@ func (e *IMEmitter) redactOutbound(text string) string {
 	return redactResult(e.relativizePaths(text))
 }
 
-// HasTargets returns true if at least one IM channel is bound.
-// Uses a lightweight check that avoids copying the bindings list.
 func (e *IMEmitter) HasTargets() bool {
 	if e == nil || e.manager == nil {
 		return false
@@ -210,7 +183,6 @@ func (e *IMEmitter) HasTargets() bool {
 	return e.manager.HasActiveBindings()
 }
 
-// Manager returns the underlying Manager. Returns nil if the emitter is nil.
 func (e *IMEmitter) Manager() *Manager {
 	if e == nil {
 		return nil
@@ -218,11 +190,6 @@ func (e *IMEmitter) Manager() *Manager {
 	return e.manager
 }
 
-// EmitAskUserInteractive sends an ask_user question to IM, preferring
-// interactive buttons for adapters that support them (Discord, Telegram,
-// Feishu). Text fallback is only sent to adapters that did NOT receive an
-// interactive message (e.g. QQ, DingDing).
-// If the question has no choices, falls back to EmitAskUser for all adapters.
 func (e *IMEmitter) EmitAskUserInteractive(title string, q toolpkg.AskUserQuestion, fallbackText string) map[string]string {
 	if e == nil || e.manager == nil {
 		return nil
@@ -275,7 +242,6 @@ func (e *IMEmitter) EmitAskUserInteractive(title string, q toolpkg.AskUserQuesti
 	return msgIDs
 }
 
-// EmitText sends a text message to IM. Returns error if emission fails (e.g., IM disconnected).
 func (e *IMEmitter) EmitText(text string) error {
 	if e == nil {
 		return nil
@@ -293,7 +259,6 @@ func (e *IMEmitter) EmitText(text string) error {
 	return nil
 }
 
-// EmitUserText sends a user echo message to IM.
 func (e *IMEmitter) EmitUserText(text string) {
 	if e == nil {
 		return
@@ -304,8 +269,6 @@ func (e *IMEmitter) EmitUserText(text string) {
 	_ = e.EmitText(e.userEchoLabel() + text + "\n")
 }
 
-// EmitUserTextExcept sends a user echo message to all bound IM channels except the originating adapter.
-// This prevents the user from seeing their own message echoed back on the channel they sent from.
 func (e *IMEmitter) EmitUserTextExcept(text, excludeAdapter string) {
 	if e == nil {
 		return
@@ -333,7 +296,6 @@ func (e *IMEmitter) EmitUserTextExcept(text, excludeAdapter string) {
 	e.TriggerTyping()
 }
 
-// EmitStatus sends a status update to IM. Duplicate consecutive statuses are suppressed.
 func (e *IMEmitter) EmitStatus(status string) {
 	if e == nil {
 		return
@@ -355,8 +317,6 @@ func (e *IMEmitter) EmitStatus(status string) {
 	})
 }
 
-// imLongRunningTools lists tools that get a start notification via EmitToolStatus.
-// Other tools only get a result notification to avoid duplicate IM messages.
 var imLongRunningTools = map[string]bool{
 	"run_command":      true,
 	"bash":             true,
@@ -377,14 +337,10 @@ var imLongRunningTools = map[string]bool{
 	"skill":            true,
 }
 
-// IsLongRunningTool reports whether the tool gets a start notification.
 func IsLongRunningTool(name string) bool {
 	return imLongRunningTools[name]
 }
 
-// EmitToolStatus formats and sends a tool execution status using the shared
-// DescribeTool pipeline. Only long-running tools get a start notification
-// to avoid duplicate IM messages (IM does not support message merging).
 func (e *IMEmitter) EmitToolStatus(toolName, rawArgs string) {
 	if e == nil {
 		return
@@ -402,7 +358,6 @@ func (e *IMEmitter) EmitToolStatus(toolName, rawArgs string) {
 	e.EmitStatus(status)
 }
 
-// EmitRoundSummary sends the final round text to IM.
 func (e *IMEmitter) EmitRoundSummary(text string, toolCalls, toolSuccesses, toolFailures int) {
 	if e == nil {
 		return
@@ -411,7 +366,6 @@ func (e *IMEmitter) EmitRoundSummary(text string, toolCalls, toolSuccesses, tool
 	_ = e.EmitText(text)
 }
 
-// EmitAskUser sends an ask_user prompt to IM.
 func (e *IMEmitter) EmitAskUser(text string) {
 	if e == nil {
 		return
@@ -423,7 +377,6 @@ func (e *IMEmitter) EmitAskUser(text string) {
 	_ = e.EmitText(text)
 }
 
-// TriggerTyping sends typing indicators to all bound adapters with keepalive throttling.
 func (e *IMEmitter) TriggerTyping() {
 	if e == nil || e.manager == nil {
 		return
@@ -444,10 +397,6 @@ func (e *IMEmitter) TriggerTyping() {
 	})
 }
 
-// Close shuts down the emitter's dispatcher goroutine, draining any buffered
-// events. Previously the state-level close() existed but nothing called it,
-// so the dispatcher goroutine leaked for the process lifetime (#603, #954).
-// After Close, further emissions re-initialize a fresh state lazily.
 func (e *IMEmitter) Close() {
 	if e == nil {
 		return
@@ -461,7 +410,6 @@ func (e *IMEmitter) Close() {
 	}
 }
 
-// Language returns the emitter's configured language.
 func (e *IMEmitter) Language() string {
 	if e == nil {
 		return "en"
@@ -469,7 +417,6 @@ func (e *IMEmitter) Language() string {
 	return e.language
 }
 
-// SetOutputMode sets the IM output mode: verbose, quiet, or summary.
 func (e *IMEmitter) SetOutputMode(mode string) {
 	if e == nil {
 		return
@@ -479,7 +426,6 @@ func (e *IMEmitter) SetOutputMode(mode string) {
 	e.mu.Unlock()
 }
 
-// OutputMode returns the current output mode.
 func (e *IMEmitter) OutputMode() string {
 	if e == nil {
 		return "verbose"
@@ -492,8 +438,6 @@ func (e *IMEmitter) OutputMode() string {
 	return e.outputMode
 }
 
-// FormatAskUserPrompt formats an ask_user request as an IM-friendly prompt string.
-// Delegates to the shared FormatAskUserPrompt in ask_user_format.go.
 func (e *IMEmitter) FormatAskUserPrompt(rawArgs string) string {
 	if e == nil {
 		return ""
@@ -519,7 +463,6 @@ func (e *IMEmitter) FormatAskUserPrompt(rawArgs string) string {
 	return FormatAskUserPrompt(e.language, req)
 }
 
-// userEchoLabel returns the localized prefix for user echo messages.
 func (e *IMEmitter) userEchoLabel() string {
 	if e.language == "zh-CN" {
 		return "【用户】"
@@ -545,12 +488,10 @@ func extractAskUserTarget(rawArgs string) string {
 	return ""
 }
 
-// relativizePaths replaces absolute paths under workDir with relative paths (./).
 func (e *IMEmitter) relativizePaths(text string) string {
 	return util.RelativizePaths(text, e.workDir)
 }
 
-// EmitKnightReport sends a Knight status report to IM.
 func (e *IMEmitter) EmitKnightReport(report string) {
 	if e == nil {
 		return

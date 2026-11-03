@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// TestMergeA2AConfigExplicitFalseReenables verifies #665: a workspace
-// .ggcode/a2a.yaml with an explicit `disabled: false` must re-enable an A2A
-// that was disabled in the global config (instance-wins semantics, matching
-// instance_delta.go's bidirectional diffA2A handling).
 func TestMergeA2AConfigExplicitFalseReenables(t *testing.T) {
 	dir := t.TempDir()
 	ggcodeDir := filepath.Join(dir, ".ggcode")
@@ -31,8 +27,6 @@ func TestMergeA2AConfigExplicitFalseReenables(t *testing.T) {
 	}
 }
 
-// TestMergeA2AConfigExplicitTrueDisables: explicit `disabled: true` still
-// disables (the pre-existing one-way direction keeps working).
 func TestMergeA2AConfigExplicitTrueDisables(t *testing.T) {
 	dir := t.TempDir()
 	ggcodeDir := filepath.Join(dir, ".ggcode")
@@ -50,9 +44,6 @@ func TestMergeA2AConfigExplicitTrueDisables(t *testing.T) {
 	}
 }
 
-// TestMergeA2AConfigAbsentKeyPreservesGlobal: when the key is absent from
-// the override yaml entirely, the global value must be preserved (no
-// accidental default-false takeover).
 func TestMergeA2AConfigAbsentKeyPreservesGlobal(t *testing.T) {
 	dir := t.TempDir()
 	ggcodeDir := filepath.Join(dir, ".ggcode")
@@ -73,9 +64,6 @@ func TestMergeA2AConfigAbsentKeyPreservesGlobal(t *testing.T) {
 	}
 }
 
-// TestMergeA2AConfigProgrammaticLegacyOneWay: programmatically constructed
-// overrides (no explicit yaml marker) keep the legacy one-way behavior —
-// Disabled=true disables, Disabled=false is a no-op.
 func TestMergeA2AConfigProgrammaticLegacyOneWay(t *testing.T) {
 	base := &A2AConfig{Disabled: false}
 	MergeA2AConfig(base, &A2AConfig{Disabled: true})

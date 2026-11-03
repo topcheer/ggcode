@@ -13,8 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// V2: three consecutive text-only user messages after a tool_use assistant
-// turn, no tool_result anywhere - all must survive the fold.
 func TestIssue3071_FoldPreservesConsecutiveGuidanceUsers(t *testing.T) {
 	messages := []Message{
 		{Role: "user", Content: []ContentBlock{TextBlock("do the thing")}},
@@ -52,11 +50,8 @@ func TestIssue3071_FoldPreservesConsecutiveGuidanceUsers(t *testing.T) {
 	}
 }
 
-// V1: a consumer that cancels and stops reading must not park the producer
-// goroutine forever - the channel must close promptly (same shape as the
-// #3068 gemini_leak_test).
 func TestIssue3071_ChatStreamProducerExitsAfterConsumerCancel(t *testing.T) {
-	const totalEvents = 200 // well over the 64-event channel buffer
+	const totalEvents = 200
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

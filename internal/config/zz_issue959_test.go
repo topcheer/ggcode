@@ -8,11 +8,6 @@ import (
 	"testing"
 )
 
-// TestGatewayVendorMigrationPreservesVendorAPIKey (#959 problem 1):
-// merging a standalone gateway vendor (e.g. vendors.openrouter with a
-// vendor-level api_key) into ai-gateway must carry the key onto the migrated
-// endpoint. Previously the key was silently dropped and the vendor deleted,
-// then persisted by Load's unconditional Save: irreversible data loss.
 func TestGatewayVendorMigrationPreservesVendorAPIKey(t *testing.T) {
 	withTestHome(t)
 	dir := t.TempDir()
@@ -60,9 +55,6 @@ vendors:
 	}
 }
 
-// TestGatewayVendorMigrationNoEndpointsKeepsVendorKey (#959 problem 1 edge):
-// a gateway vendor with a key but no endpoints falls back to the ai-gateway
-// vendor-level key instead of dropping the credential entirely.
 func TestGatewayVendorMigrationNoEndpointsKeepsVendorKey(t *testing.T) {
 	withTestHome(t)
 	cfg := DefaultConfig()
@@ -82,8 +74,6 @@ func TestGatewayVendorMigrationNoEndpointsKeepsVendorKey(t *testing.T) {
 	}
 }
 
-// TestGatewayVendorMigrationDoesNotOverwriteEndpointKey (#959 problem 1):
-// an existing endpoint-level key wins over the incoming vendor-level key.
 func TestGatewayVendorMigrationDoesNotOverwriteEndpointKey(t *testing.T) {
 	cfg := DefaultConfig()
 	gw := cfg.Vendors["ai-gateway"]
@@ -108,9 +98,6 @@ func TestGatewayVendorMigrationDoesNotOverwriteEndpointKey(t *testing.T) {
 	}
 }
 
-// TestShouldBellExplicitFalseDisablesBell (#959 problem 2):
-// bell:false must disable the bell even when desktop notifications are also
-// off; nil (unset) keeps the backward-compatible default of on.
 func TestShouldBellExplicitFalseDisablesBell(t *testing.T) {
 	cases := []struct {
 		cfg  NotificationConfig
@@ -131,9 +118,6 @@ func TestShouldBellExplicitFalseDisablesBell(t *testing.T) {
 	}
 }
 
-// TestLoadBellExplicitFalseSurvivesSaveRoundtrip (#959 problem 2):
-// notifications.bell: false written to YAML must round-trip through
-// Load+Save without the zero-value merge resurrecting it as unset.
 func TestLoadBellExplicitFalseSurvivesSaveRoundtrip(t *testing.T) {
 	withTestHome(t)
 	dir := t.TempDir()
@@ -172,10 +156,6 @@ notifications:
 	}
 }
 
-// TestLoadSystemPromptRemovalConcurrent (#959 problem 3):
-// the system_prompt strip rewrites the file under lockConfigFile; several
-// concurrent Loads of the same legacy file must all succeed and converge on
-// a file without system_prompt.
 func TestLoadSystemPromptRemovalConcurrent(t *testing.T) {
 	withTestHome(t)
 	dir := t.TempDir()

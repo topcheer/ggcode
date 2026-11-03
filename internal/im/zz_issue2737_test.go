@@ -9,9 +9,6 @@ import (
 	"maunium.net/go/mautrix/event"
 )
 
-// TestIssue2737NoCryptoMachineSendsPlaintext pins the graceful no-crypto
-// path of maybeEncryptMessage: with a nil Olm machine (crypto setup failed
-// or disabled) the payload must pass through unchanged as m.room.message.
 func TestIssue2737NoCryptoMachineSendsPlaintext(t *testing.T) {
 	a := &matrixAdapter{userID: "@bot:example.org", name: "test"}
 	content := &event.MessageEventContent{MsgType: event.MsgText, Body: "hello"}
@@ -24,12 +21,6 @@ func TestIssue2737NoCryptoMachineSendsPlaintext(t *testing.T) {
 	}
 }
 
-// TestIssue2737SendPathsRouteThroughEncryption is a source-level invariant:
-// both outbound send paths (sendText/sendImage) must obtain their event type
-// and payload from maybeEncryptMessage instead of hardcoding
-// event.EventMessage - a regression to a direct plaintext
-// client.SendMessageEvent(..., event.EventMessage, content, ...) call is the
-// exact #2737 defect.
 func TestIssue2737SendPathsRouteThroughEncryption(t *testing.T) {
 	src, err := os.ReadFile("matrix_adapter.go")
 	if err != nil {

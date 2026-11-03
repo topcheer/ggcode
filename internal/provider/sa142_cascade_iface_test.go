@@ -6,16 +6,11 @@ import (
 	"time"
 )
 
-// sa142RichProvider implements the Provider core plus every optional
-// capability interface that FallbackProvider forwards (ModelName,
-// ReasoningEffort, TextVerbosity, ServiceTier, SessionID, ToolChoice,
-// SamplingConfig, RateLimit, ClonableWithModel). It lets us assert that the
-// cascade wrapper neither drops nor mis-routes optional capability calls.
 type sa142RichProvider struct {
 	name string
 
 	model      string
-	modelClone string // non-empty after CloneWithModel
+	modelClone string
 
 	effort    string
 	verbosity string
@@ -67,8 +62,6 @@ func (m *sa142RichProvider) CloneWithModel(model string) Provider {
 	return &clone
 }
 
-// TestSA142_CascadeIfaceDelegation: getters forward to the ACTIVE provider
-// and setters fan out to the whole chain.
 func TestSA142_CascadeIfaceDelegation(t *testing.T) {
 	l0 := &sa142RichProvider{name: "rich0", model: "model-a", effort: "high", verbosity: "medium", tier: "priority", toolChoce: "auto", temp: 0.5, topP: 0.9, rl: RateLimitInfo{RemainingRequests: 5}}
 	l1 := &sa142RichProvider{name: "rich1", model: "model-b"}
@@ -128,9 +121,6 @@ func TestSA142_CascadeIfaceDelegation(t *testing.T) {
 	}
 }
 
-// TestSA142_CascadeGettersNonCapable: when the active provider does not
-// implement an optional interface, the wrapper degrades to zero values
-// instead of panicking.
 func TestSA142_CascadeGettersNonCapable(t *testing.T) {
 	fp := NewCascadeProvider([]Provider{&mockProvider{name: "plain"}, &mockProvider{name: "plain2"}}, "sa142-plain")
 	if got := fp.ModelName(); got != "" {
@@ -167,8 +157,6 @@ func TestSA142_CascadeGettersNonCapable(t *testing.T) {
 	fp.SetTopP(1)
 }
 
-// TestSA142_CascadeCloneWithModel: full-chain cloning preserves the
-// description, notify callback, and active-level inheritance (#391/#372).
 func TestSA142_CascadeCloneWithModel(t *testing.T) {
 	l0 := &sa142RichProvider{name: "r0", model: "m0"}
 	l1 := &sa142RichProvider{name: "r1", model: "m1"}
@@ -213,9 +201,6 @@ func TestSA142_CascadeCloneWithModel(t *testing.T) {
 	}
 }
 
-// TestSA142_CascadeCloneWithModel_PartialClonable: a single non-clonable
-// level must degrade to returning the SAME wrapper (#391), never a wrapper
-// sharing un-cloned state.
 func TestSA142_CascadeCloneWithModel_PartialClonable(t *testing.T) {
 	fp := NewCascadeProvider([]Provider{&sa142RichProvider{name: "r"}, &mockProvider{name: "plain"}}, "sa142-partial")
 	got := fp.CloneWithModel("any")
@@ -224,8 +209,6 @@ func TestSA142_CascadeCloneWithModel_PartialClonable(t *testing.T) {
 	}
 }
 
-// TestSA142_CloneProviderWithModel: the package-level helper clones only
-// capable providers with a non-empty model override.
 func TestSA142_CloneProviderWithModel(t *testing.T) {
 	rich := &sa142RichProvider{name: "r", model: "m"}
 	got := CloneProviderWithModel(rich, "new")

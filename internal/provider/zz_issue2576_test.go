@@ -7,12 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// TestIssue2576_CopilotBranchAppliesCallPolicy pins #2576: the copilot
-// branch of NewProvider dropped the resolved callPolicy - CopilotProvider
-// embeds *OpenAIProvider whose Chat/ChatStream consume
-// policy.withTimeout/attempts, so request_timeout/max_retries configured
-// for a copilot endpoint ran as zero-value policy (no deadline, 20-attempt
-// default), the same #2573 failure mode.
 func TestIssue2576_CopilotBranchAppliesCallPolicy(t *testing.T) {
 	resolved := &config.ResolvedEndpoint{
 		VendorID:       "github-copilot",

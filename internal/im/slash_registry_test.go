@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// stubDeps is a controllable SlashDeps for registry dispatch tests.
 type stubDeps struct {
 	cost      string
 	usage     string
@@ -137,8 +136,6 @@ func TestIMSlashHelpLines_TUISummary(t *testing.T) {
 	}
 }
 
-// lanIdentityDeps is a stubDeps that also implements the optional
-// SetLanIdentity capability consumed by the /nick registry entry.
 type lanIdentityDeps struct {
 	stubDeps
 	setNick, setRole, setTeam string

@@ -57,7 +57,6 @@ func TestResponsesApplyPatchReplays(t *testing.T) {
 	if m["type"] != "apply_patch_call" || m["call_id"] != "call_1" || m["status"] != "completed" {
 		t.Fatalf("call replay shape: %s", call)
 	}
-	// Operation rides through verbatim.
 	var withOp struct {
 		Operation json.RawMessage `json:"operation"`
 	}
@@ -108,7 +107,6 @@ func TestBuildResponsesInputApplyPatchRoundTrip(t *testing.T) {
 		b, _ := json.Marshal(it)
 		got = append(got, string(b))
 	}
-	// item 2: replayed apply_patch_call
 	var callItem map[string]any
 	if err := json.Unmarshal([]byte(got[1]), &callItem); err != nil {
 		t.Fatalf("item1: %v", err)
@@ -116,7 +114,6 @@ func TestBuildResponsesInputApplyPatchRoundTrip(t *testing.T) {
 	if callItem["type"] != "apply_patch_call" || callItem["call_id"] != "call_ap" {
 		t.Fatalf("apply_patch_call replay: %s", got[1])
 	}
-	// item 3: apply_patch_call_output
 	var outItem map[string]any
 	if err := json.Unmarshal([]byte(got[2]), &outItem); err != nil {
 		t.Fatalf("item2: %v", err)
@@ -124,7 +121,6 @@ func TestBuildResponsesInputApplyPatchRoundTrip(t *testing.T) {
 	if outItem["type"] != "apply_patch_call_output" || outItem["status"] != "completed" || outItem["output"] != "Created a.txt (1 lines)" {
 		t.Fatalf("apply_patch_call_output replay: %s", got[2])
 	}
-	// item 4/5: ordinary function call path unchanged.
 	var fnItem, fnOut map[string]any
 	json.Unmarshal([]byte(got[3]), &fnItem)
 	json.Unmarshal([]byte(got[4]), &fnOut)

@@ -7,22 +7,12 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// StrictToolsSetter is implemented by providers that support strict tool
-// definitions. The allowlist maps tool names to their strict flag; tools not
-// in the map are sent without `strict` (zero risk on every endpoint because
-// strict mode only ever ADDS the field for allowlisted tools).
 type StrictToolsSetter interface {
 	SetStrictTools(allow map[string]bool)
 }
 
-// DefaultStrictTools is the default strict-tool allowlist: the built-in
-// file/command tools whose REQUIRED `description` parameter (used for TUI
-// activity labels) models historically omit. Keeps request-wide strict
-// counts far below Anthropic's 20-tool complexity cap.
 var DefaultStrictTools = []string{"read_file", "edit_file", "write_file", "run_command"}
 
-// StrictToolsAllowlist builds the setter map from a config allowlist.
-// Unknown names are harmless (never matched by any ToolDefinition).
 func StrictToolsAllowlist(names []string) map[string]bool {
 	m := make(map[string]bool, len(names))
 	for _, n := range names {
@@ -31,12 +21,6 @@ func StrictToolsAllowlist(names []string) map[string]bool {
 	return m
 }
 
-// InjectAdditionalPropertiesFalse recursively sets "additionalProperties":
-// false on every object-schema node (root, properties, items, tuple
-// prefixes, composition branches, and $defs/definitions). A node that
-// already sets it to false is left untouched; any other value (absent,
-// true, non-boolean) is overridden because strict mode semantically
-// forbids undeclared properties. Invalid JSON is returned unchanged.
 func InjectAdditionalPropertiesFalse(raw json.RawMessage) json.RawMessage {
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
@@ -49,10 +33,6 @@ func InjectAdditionalPropertiesFalse(raw json.RawMessage) json.RawMessage {
 	return json.RawMessage(out)
 }
 
-// injectAPF mutates map nodes in place and returns the (possibly rewritten)
-// value. Property-key iteration order follows the decoded map, which Go
-// randomizes; strict compilation is order-insensitive, so no canonical
-// reordering is attempted (avoids churn vs. hand-written schemas).
 func injectAPF(v any) any {
 	m, ok := v.(map[string]any)
 	if !ok {
@@ -92,10 +72,6 @@ func injectAPF(v any) any {
 	return m
 }
 
-// PrepareStrictToolSchema validates a tool schema for strict mode and returns
-// the request-ready schema. It enforces the top-level all-required rule and
-// injects additionalProperties:false. The bool result is false when the tool
-// is NOT strict-compatible (callers must then send it without `strict`).
 func PrepareStrictToolSchema(name string, raw json.RawMessage) (json.RawMessage, bool) {
 	if len(bytes.TrimSpace(raw)) == 0 || !json.Valid(raw) {
 		debug.Log("provider", "strict tool %q skipped: schema is empty or invalid JSON", name)

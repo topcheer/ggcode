@@ -5,12 +5,6 @@ import (
 	"testing"
 )
 
-// TestIssue2152_LockedReadsRaceWithWriters pins the IM accessors against
-// concurrent map access: N writers hammer the runtime writer methods while
-// M readers use GetIMAdapter / IMAdapterEnabled / IMSnapshot. Before #2152
-// the readers read c.IM.Adapters directly (TUI Cmd goroutines) while the
-// Update loop wrote it — `go test -race` flags it, and production hit the
-// unrecoverable "concurrent map read and map write" fatal.
 func TestIssue2152_LockedReadsRaceWithWriters(t *testing.T) {
 	withTestHome(t)
 	c := &Config{}
@@ -69,9 +63,6 @@ func TestIssue2152_LockedReadsRaceWithWriters(t *testing.T) {
 	readers.Wait()
 }
 
-// TestIssue2152_SnapshotIsDeepCopy verifies IMSnapshot hands out an
-// independent copy: mutating the snapshot (or its nested slices/maps) must
-// never leak into live config.
 func TestIssue2152_SnapshotIsDeepCopy(t *testing.T) {
 	c := &Config{}
 	c.IM.Adapters = map[string]IMAdapterConfig{

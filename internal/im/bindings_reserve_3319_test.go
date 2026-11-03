@@ -25,8 +25,6 @@ func TestReservePassiveSeqsCrossInstanceNoCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Both instances concurrently reserve; every returned start seq must be
-	// unique across the union of both instances' reservations.
 	const perInstance = 8
 	var mu sync.Mutex
 	seen := map[int]bool{}

@@ -18,74 +18,50 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// udpHandler is implemented by the Hub to process incoming UDP messages.
 type udpHandler interface {
 	handleUDPEnvelope(env udpEnvelope, remoteAddr net.Addr)
 }
 
-// maxFragmentEntries caps the fragment reassembly map to prevent unbounded growth.
 const maxFragmentEntries = 256
 
-// maxFragmentTotal caps the declared total fragments of one message (#3732):
-// FragmentTotal is packet input, and an authenticated hostile peer could
-// otherwise declare a huge total and grow the received map unchecked for the
-// full timeout window. A real message is at most a few dozen fragments.
 const maxFragmentTotal = 4096
 
-// maxAssemblyBytes caps the accumulated payload of ONE fragment assembly
-// (#3732): chunks are ~31.5KB each (udpMaxPayload-512), so 16MB is two orders
-// beyond any legitimate chat payload; a hostile peer flooding an assembly
-// gets it evicted rather than buffered.
-const maxAssemblyBytes = 16 << 20 // 16 MiB
+const maxAssemblyBytes = 16 << 20
 
-// maxUDPDecompressed caps the decompressed size of any UDP payload. LAN chat
-// messages are small; without a cap a ~60KB high-ratio gzip datagram can expand
-// to GBs of memory before the auth gate ever sees the envelope — a no-key LAN
-// DoS (#991).
 const maxUDPDecompressed = 4 * 1024 * 1024
 
-// udpAckWaitFn returns the per-attempt ACK wait used by SendUnicast. Tests
-// override it to shrink retry exhaustion below the default 2s×3 (#991).
 var udpAckWaitFn = func() time.Duration { return udpACKTimeout }
 
-// UDPTransport listens for UDP datagrams (both unicast and multicast) and
-// dispatches them to the Hub. It also provides methods for sending UDP
-// messages with automatic compression and fragmentation.
 type UDPTransport struct {
-	conn       *net.UDPConn // unicast listener
-	mcastConn  *net.UDPConn // multicast listener (may be nil)
-	mcastSend  *net.UDPConn // dedicated multicast send socket (avoids RX interference)
-	mcastAddr  *net.UDPAddr // multicast group address
-	hub        udpHandler   // Hub
-	nodeID     string       // our node ID (for filtering multicast DMs)
-	apiKey     string       // community key for auth
+	conn       *net.UDPConn
+	mcastConn  *net.UDPConn
+	mcastSend  *net.UDPConn
+	mcastAddr  *net.UDPAddr
+	hub        udpHandler
+	nodeID     string
+	apiKey     string
 	stopCh     chan struct{}
 	stopOnce   sync.Once
 	wg         sync.WaitGroup
-	listenPort int // port for self-filtering (ReadFromUDP remote port match)
+	listenPort int
 
-	// Fragment reassembly
 	fragMu    sync.Mutex
-	fragments map[string]*fragmentAssembly // keyed by FragmentID
+	fragments map[string]*fragmentAssembly
 
-	// ACK registry: maps message ID → channel, signalled when ACK arrives
 	ackMu sync.Mutex
 	acks  map[string]chan struct{}
 }
 
-// fragmentAssembly collects fragments until all are received.
 type fragmentAssembly struct {
 	id       string
 	total    int
-	received map[int][]byte // seq → data
+	received map[int][]byte
 	deadline time.Time
 	envType  string
 	fromNode string
-	bytes    int // accumulated payload bytes (#3732 per-assembly cap)
+	bytes    int
 }
 
-// NewUDPTransport creates a UDP listener bound to the given port.
-// If multicastAddr is non-empty, it also joins the multicast group.
 func NewUDPTransport(port int, mcastAddr string, hub udpHandler, nodeID, apiKey string) (*UDPTransport, error) {
 	addr := &net.UDPAddr{IP: net.IPv4zero, Port: port}
 	conn, err := net.ListenUDP("udp4", addr)
@@ -140,7 +116,6 @@ func NewUDPTransport(port int, mcastAddr string, hub udpHandler, nodeID, apiKey 
 	return t, nil
 }
 
-// Start begins the read loops for unicast and multicast UDP.
 func (t *UDPTransport) Start() {
 	t.wg.Add(1)
 	safego.Go("lanchat.udp.unicast", func() {
@@ -172,7 +147,6 @@ func (t *UDPTransport) Start() {
 	})
 }
 
-// Stop shuts down the UDP transport. Idempotent — safe to call multiple times.
 func (t *UDPTransport) Stop() {
 	t.stopOnce.Do(func() {
 		close(t.stopCh)
@@ -264,8 +238,6 @@ func (t *UDPTransport) processDatagram(data []byte, remoteAddr *net.UDPAddr, sou
 	}
 }
 
-// SendUnicast sends an envelope via UDP unicast with compression,
-// fragmentation, and ACK-based retry.
 func (t *UDPTransport) SendUnicast(ctx context.Context, addr *net.UDPAddr, env udpEnvelope) error {
 
 	if env.FragmentID == "" {
@@ -327,7 +299,6 @@ func (t *UDPTransport) SendUnicast(ctx context.Context, addr *net.UDPAddr, env u
 	return sendErr
 }
 
-// SendMulticast sends an envelope via UDP multicast (no ACK).
 func (t *UDPTransport) SendMulticast(env udpEnvelope) error {
 	if t.mcastSend == nil && t.mcastConn == nil {
 		return fmt.Errorf("multicast not available")
@@ -356,8 +327,6 @@ func (t *UDPTransport) SendMulticast(env udpEnvelope) error {
 	return nil
 }
 
-// compressIfNeeded returns gzip-compressed data only if it's actually smaller.
-// Otherwise returns the original data unchanged.
 func compressIfNeeded(data []byte) []byte {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
@@ -372,10 +341,6 @@ func compressIfNeeded(data []byte) []byte {
 	return data
 }
 
-// splitFragments divides raw payload bytes into fragment envelopes.
-// The payload bytes (which may be gzip-compressed) are base64-encoded and
-// split into chunks. Each fragment carries its chunk as a JSON string in Payload.
-// The receiver reassembles the base64 string, decodes it, and decompresses if needed.
 func splitFragments(data []byte, fragID, apiKey, fromNode, msgType string) []udpEnvelope {
 
 	payloadStr := base64.StdEncoding.EncodeToString(data)
@@ -414,10 +379,6 @@ func splitFragments(data []byte, fragID, apiKey, fromNode, msgType string) []udp
 	return fragments
 }
 
-// decompressIfGzipped checks for gzip magic bytes and decompresses, capped at
-// maxUDPDecompressed bytes. Oversized payloads are dropped (nil) so callers
-// fail the parse — the cap removes the gzip-bomb DoS vector on both the
-// datagram and fragment-reassembly paths (#991).
 func decompressIfGzipped(data []byte) []byte {
 	if len(data) < 2 || data[0] != 0x1f || data[1] != 0x8b {
 		return data
@@ -439,8 +400,6 @@ func decompressIfGzipped(data []byte) []byte {
 	return out
 }
 
-// registerACK creates a channel for tracking an ACK for the given message ID.
-// Returns the channel. Caller should call unregisterACK when done.
 func (t *UDPTransport) registerACK(msgID string) chan struct{} {
 	ch := make(chan struct{}, 1)
 	t.ackMu.Lock()
@@ -449,7 +408,6 @@ func (t *UDPTransport) registerACK(msgID string) chan struct{} {
 	return ch
 }
 
-// signalACK signals the waiting sender that an ACK was received.
 func (t *UDPTransport) signalACK(msgID string) {
 	t.ackMu.Lock()
 	ch, ok := t.acks[msgID]
@@ -465,20 +423,17 @@ func (t *UDPTransport) signalACK(msgID string) {
 	}
 }
 
-// unregisterACK removes a pending ACK registration (cleanup on timeout).
 func (t *UDPTransport) unregisterACK(msgID string) {
 	t.ackMu.Lock()
 	delete(t.acks, msgID)
 	t.ackMu.Unlock()
 }
 
-// handleFragment collects fragments and reassembles when complete.
 func (t *UDPTransport) handleFragment(env udpEnvelope, remoteAddr *net.UDPAddr, source string) {
 	t.fragMu.Lock()
 	defer t.fragMu.Unlock()
 
 	if len(t.fragments) >= maxFragmentEntries {
-		// Evict the oldest by deadline
 		var oldestID string
 		var oldestDeadline time.Time
 		for id, a := range t.fragments {
@@ -510,7 +465,6 @@ func (t *UDPTransport) handleFragment(env udpEnvelope, remoteAddr *net.UDPAddr, 
 		t.fragments[env.FragmentID] = assembly
 	}
 
-	// Store the fragment payload (base64 encoded chunk)
 	var chunkStr string
 	if err := json.Unmarshal(env.Payload, &chunkStr); err != nil {
 		debug.Log("lanchat-udp", "fragment payload parse error: %v", err)
@@ -551,7 +505,6 @@ func (t *UDPTransport) handleFragment(env udpEnvelope, remoteAddr *net.UDPAddr, 
 		return
 	}
 
-	// Reassemble: concatenate fragments in order
 	var fullStr string
 	for i := 0; i < assembly.total; i++ {
 		chunk, ok := assembly.received[i]
@@ -571,7 +524,6 @@ func (t *UDPTransport) handleFragment(env udpEnvelope, remoteAddr *net.UDPAddr, 
 
 	fullData = decompressIfGzipped(fullData)
 
-	// Parse the complete envelope
 	var completeEnv udpEnvelope
 	if err := json.Unmarshal(fullData, &completeEnv); err != nil {
 		debug.Log("lanchat-udp", "fragment reassembly parse error: %v", err)
@@ -585,18 +537,6 @@ func (t *UDPTransport) handleFragment(env udpEnvelope, remoteAddr *net.UDPAddr, 
 	t.hub.handleUDPEnvelope(completeEnv, remoteAddr)
 }
 
-// restoreSingleDatagram reverses the single-datagram wrapping applied by
-// splitFragments: small envelopes travel as one non-fragment datagram whose
-// Payload is a base64 JSON string of the original (possibly compressed)
-// envelope bytes. Before #2765 the base64 string was passed straight to the
-// hub, where every json.Unmarshal (string into a struct) failed and the
-// message was silently dropped while the unconditional ACK still told the
-// sender it was delivered, suppressing the multicast fallback retry. This
-// mirrors handleFragment's restoration: base64 decode -> decompress if
-// gzipped (capped by maxUDPDecompressed) -> re-unmarshal the inner
-// envelope. Empty or JSON-object payloads (acks, legacy peers) pass
-// through untouched; foreign formats log and pass through so the hub's
-// type switch retains its existing behavior for them.
 func (t *UDPTransport) restoreSingleDatagram(env *udpEnvelope) {
 	if len(env.Payload) == 0 || env.Payload[0] == '{' {
 		return
@@ -621,7 +561,6 @@ func (t *UDPTransport) restoreSingleDatagram(env *udpEnvelope) {
 	*env = restored
 }
 
-// cleanupExpiredFragments removes fragment assemblies that have timed out.
 func (t *UDPTransport) cleanupExpiredFragments() {
 	t.fragMu.Lock()
 	defer t.fragMu.Unlock()
@@ -634,7 +573,6 @@ func (t *UDPTransport) cleanupExpiredFragments() {
 	}
 }
 
-// Port returns the UDP port the transport is listening on.
 func (t *UDPTransport) Port() int {
 	if t.conn == nil {
 		return 0

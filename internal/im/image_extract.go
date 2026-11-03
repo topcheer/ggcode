@@ -13,31 +13,16 @@ var (
 	bareImageURLRe  = regexp.MustCompile(`(?i)(?:^|[\s(])(https?://[^\s)"'<>?#]+\.(?:png|jpe?g|gif|webp)(?:\?[^\s"'<>]*)?)`)
 	dataURLRe       = regexp.MustCompile(`(?i)(data:image/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+)`)
 
-	// localImagePathRe matches bare local image file paths in prose:
-	// Unix absolute (/tmp/shot.png, requires at least one directory level),
-	// relative (./shot.png, ../out/shot.png), and Windows (C:\Users\x\shot.png).
-	// Extracted as Kind "url": every adapter's sendExtractedImage already
-	// routes IsLocalFilePath payloads to local-file upload, so no per-adapter
-	// changes are needed. Bare names without a directory component
-	// ("shot.png") are deliberately NOT matched - too easy to be prose
-	// mentions rather than real paths (false-positive guard).
 	localImagePathRe = regexp.MustCompile(`(?i)(?:(?:/[\w.@\-]+)+|\.{1,2}/(?:[\w.@\-]+/)*[\w.@\-]*|[A-Za-z]:[\\/](?:[\w.@\-]+[\\/])*[\w.@\-]*)\.(?:png|jpe?g|gif|webp)\b`)
 
-	// imageDownloadClient is used by adapters to download images from URLs.
-	// It has an explicit 60s timeout to prevent slow servers from blocking
-	// the send path indefinitely. Context cancellation provides a secondary
-	// timeout via the 30s defaultSendTimeout.
 	imageDownloadClient = &http.Client{Timeout: 60 * time.Second}
 )
 
-// ExtractedImage represents an image found in message text.
 type ExtractedImage struct {
-	Kind string // "url", "data_url", "local_path"
-	Data string // URL, base64 data URL, or local file path
+	Kind string
+	Data string
 }
 
-// appendImage trims, dedupes, and appends an extracted image. Returns
-// false when the payload is empty or already seen.
 func appendImage(images []ExtractedImage, seen map[string]bool, kind, data string) ([]ExtractedImage, bool) {
 	data = strings.TrimSpace(data)
 	if data == "" || seen[data] {
@@ -47,9 +32,6 @@ func appendImage(images []ExtractedImage, seen map[string]bool, kind, data strin
 	return append(images, ExtractedImage{Kind: kind, Data: data}), true
 }
 
-// ExtractImagesFromText finds markdown images, bare image URLs, and data URLs in text.
-// Returns extracted images and the text with image references replaced by their alt text
-// (for markdown images) or removed (for bare URLs and data URLs). Line breaks are preserved.
 func ExtractImagesFromText(text string) ([]ExtractedImage, string) {
 	var images []ExtractedImage
 	seen := make(map[string]bool)
@@ -104,7 +86,6 @@ func ExtractImagesFromText(text string) ([]ExtractedImage, string) {
 	return images, text
 }
 
-// IsLocalFilePath checks if a string looks like a local file path.
 func IsLocalFilePath(s string) bool {
 	s = strings.TrimSpace(s)
 	if s == "" {

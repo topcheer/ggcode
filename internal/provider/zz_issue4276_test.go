@@ -36,8 +36,6 @@ func TestIssue4276_GateCaseInsensitive(t *testing.T) {
 	}
 }
 
-// The exact live-failure shape from the issue: define_tool/macro steps with a
-// free-form args object must gain an explicit additionalProperties:true.
 func TestIssue4276_NormalizeStepsFreeFormObject(t *testing.T) {
 	in := json.RawMessage(`{
 		"type":"object",
@@ -118,9 +116,6 @@ func TestIssue4276_NormalizeHandlesAnyOfAndInvalidJSON(t *testing.T) {
 	}
 }
 
-// convertTools integration: the gate is wired in the request path, so a
-// moonshot-targeting provider normalizes free-form object nodes while any
-// other provider emits the original schema byte-for-byte.
 func TestIssue4276_ConvertToolsGateWiring(t *testing.T) {
 	freeForm := json.RawMessage(`{"type":"object","properties":{"steps":{"type":"array","items":{"type":"object","properties":{"tool":{"type":"string"},"args":{"type":"object"}},"required":["tool"]}}},"required":[]}`)
 	tools := []ToolDefinition{{Name: "define_tool", Description: "d", Parameters: freeForm}}

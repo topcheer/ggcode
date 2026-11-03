@@ -8,21 +8,12 @@ import (
 	"time"
 )
 
-// newIssue988Hub builds a Hub whose apiKey is set explicitly (custom-key
-// topology) or left as the zero-config community key.
 func newIssue988Hub(t *testing.T, apiKey string) *Hub {
 	t.Helper()
 	store := NewStore(filepath.Join(t.TempDir(), "store"))
 	return NewHub("self-node", "tui", "http://127.0.0.1:1", apiKey, store, WorkspaceMeta{})
 }
 
-// TestIssue988OutboundUsesConfiguredAPIKey pins the #988 fix: every outbound
-// send path must carry the CONFIGURED api key (h.APIKey()), not the hardcoded
-// community key. Before the fix, two peers that both configured the same
-// custom api_key could not talk: the sender's outbound requests carried
-// communityKey and the receiver (post-#986) rejected it with 401 — the
-// "team shares a custom key" topology silently broke while zero-config kept
-// working.
 func TestIssue988OutboundUsesConfiguredAPIKey(t *testing.T) {
 	var gotKey string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -47,9 +38,6 @@ func TestIssue988OutboundUsesConfiguredAPIKey(t *testing.T) {
 	}
 }
 
-// TestIssue988OutboundZeroConfigStillUsesCommunityKey guards the
-// complementary side: with no custom key configured, h.APIKey() returns the
-// community key, so zero-config interop is unchanged by the fix.
 func TestIssue988OutboundZeroConfigStillUsesCommunityKey(t *testing.T) {
 	var gotKey string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

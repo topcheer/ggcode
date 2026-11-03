@@ -59,9 +59,6 @@ func TestSyncStoreEmptyUserFallsBackToNameOnly(t *testing.T) {
 	}
 }
 
-// #1851 case 2 sibling: the Olm crypto db must be keyed by adapter name AND
-// user ID (was name-only) - two same-named adapters opening one SQLite file
-// meant the second user's OlmMachine loaded the first user's account.
 func TestCryptoDBKeyedByNameAndUser(t *testing.T) {
 	dir := t.TempDir()
 	a := newCryptoDBForAdapter(dir, "work", "@alice:example.org")
@@ -102,11 +99,6 @@ func TestCryptoDBEmptyUserFallsBackToNameOnly(t *testing.T) {
 	}
 }
 
-// #2112: the M_UNKNOWN_POS self-heal must reset the didFirstSync gate via
-// onTokenReset - the in-process restart performs an initial sync whose
-// replayed timeline must be dropped, exactly like a process restart (the
-// gate existed precisely for that; 37e9de3b left it open and replayed
-// events were processed twice).
 func TestSelfHealingSyncerFiresTokenResetCallback(t *testing.T) {
 	dir := t.TempDir()
 	store := &fileSyncStore{path: filepath.Join(dir, "m.json")}

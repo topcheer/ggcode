@@ -11,10 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// TestIssue2572_ProviderIsLocalBaseURLIPv6 pins #2572: the provider-side
-// copy of isLocalBaseURL must agree with the #906-fixed tui copy - every
-// IPv6 loopback form is local. The old IndexByte(':') host extraction
-// truncated '[::1]:11434' to '[' and made both ::1 branches dead code.
 func TestIssue2572_ProviderIsLocalBaseURLIPv6(t *testing.T) {
 	local := []string{
 		"http://[::1]:11434",
@@ -53,10 +49,6 @@ func (b *countingBody) Close() error {
 	return b.ReadCloser.Close()
 }
 
-// TestIssue2574_PaginationClosesLastBody pins #2574: the gemini discovery
-// pagination loop used a registration-time defer bound to page 1's body -
-// every multi-page exit leaked the latest page. The closure defer now
-// closes whatever body is current at return.
 func TestIssue2574_PaginationClosesLastBody(t *testing.T) {
 	const pageSize = 2
 	page := 0

@@ -14,17 +14,14 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// ResolveActiveEndpoint resolves the selected vendor + endpoint into runtime settings.
 func (c *Config) ResolveActiveEndpoint() (*ResolvedEndpoint, error) {
 	return c.ResolveEndpointSelection(c.Vendor, c.Endpoint, c.Model)
 }
 
-// ResolveEndpoint resolves the given vendor + endpoint into runtime settings.
 func (c *Config) ResolveEndpoint(vendor, endpoint string) (*ResolvedEndpoint, error) {
 	return c.ResolveEndpointSelection(vendor, endpoint, "")
 }
 
-// ResolveEndpointSelection resolves the given vendor + endpoint + optional explicit model.
 func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*ResolvedEndpoint, error) {
 	if c == nil {
 		return nil, fmt.Errorf("config is nil")
@@ -207,9 +204,6 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 	}, nil
 }
 
-// ResolveDisplayName resolves vendor and endpoint keys to their display names.
-// Falls back to the raw key if the vendor/endpoint is not found or DisplayName is empty.
-// This is a lightweight lookup that does not require API keys or model resolution.
 func (c *Config) ResolveDisplayName(vendor, endpoint string) (vendorDisplay, endpointDisplay string) {
 	vendorDisplay = vendor
 	endpointDisplay = endpoint
@@ -231,7 +225,6 @@ func (c *Config) ResolveDisplayName(vendor, endpoint string) (vendorDisplay, end
 	return
 }
 
-// VendorNames returns configured vendors in a stable order.
 func (c *Config) VendorNames() []string {
 	if c == nil {
 		return nil
@@ -244,7 +237,6 @@ func (c *Config) VendorNames() []string {
 	return names
 }
 
-// EndpointNames returns configured endpoints for the given vendor in a stable order.
 func (c *Config) EndpointNames(vendor string) []string {
 	if c == nil {
 		return nil
@@ -261,7 +253,6 @@ func (c *Config) EndpointNames(vendor string) []string {
 	return names
 }
 
-// ActiveEndpointConfig returns a copy of the active endpoint config.
 func (c *Config) ActiveEndpointConfig() *EndpointConfig {
 	if c == nil {
 		return nil
@@ -277,7 +268,6 @@ func (c *Config) ActiveEndpointConfig() *EndpointConfig {
 	return &ep
 }
 
-// SetActiveSelection updates the current vendor, endpoint, and model.
 func (c *Config) SetActiveSelection(vendor, endpoint, model string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -305,7 +295,6 @@ func (c *Config) SetActiveSelection(vendor, endpoint, model string) error {
 	return nil
 }
 
-// SetEndpointModels replaces the known models for a configured endpoint while preserving active selections.
 func (c *Config) SetEndpointModels(vendor, endpoint string, models []string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -344,19 +333,6 @@ func (c *Config) UpsertMCPServer(server MCPServerConfig) (replaced bool) {
 	return false
 }
 
-// patchMCPServerConfig overlays the provided fields of patch onto base and
-// returns the merged config. Semantics per field kind (#249, #606 A3):
-//   - strings: empty means "not provided", keeps the existing value
-//   - Args/Env/Headers: nil means "not provided" (keep the existing value);
-//     an EMPTY non-nil slice/map means "explicitly cleared" and replaces the
-//     old value. Before #606 the len()>0 guard conflated the two, so saving
-//     a form with every env line deleted silently kept the old env.
-//
-// When switching server types, type-incompatible fields are cleared:
-//   - http/sse/ws types: Command and Args are cleared (ws is URL-shaped
-//     like http - a stdio→ws switch used to resurrect dead Command/Args
-//     in the yaml, #2391)
-//   - stdio type: URL and Headers are cleared (#584 M2-case2)
 func patchMCPServerConfig(base, patch MCPServerConfig) MCPServerConfig {
 	merged := base
 
@@ -414,24 +390,10 @@ func (c *Config) RemoveMCPServer(name string) bool {
 	return false
 }
 
-// RecordMCPDeleted is the exported tombstone entry point for surfaces that
-// delete servers which exist only in migration sources (never in the yaml):
-// cfg.RemoveMCPServer records internally, but returns false for those names
-// and never reaches it.
 func (c *Config) RecordMCPDeleted(name string) { c.recordMCPDeleted(name) }
 
-// ClearMCPDeleted is the exported rollback entry point: surfaces that
-// recorded a tombstone but then failed to persist the removal itself
-// (e.g. SaveMCPServers error) un-record it to avoid a split state where
-// the yaml entry survives on disk while the tombstone hides it (#1868
-// case 3).
 func (c *Config) ClearMCPDeleted(name string) { c.clearMCPDeleted(name) }
 
-// recordMCPDeleted appends name to the deletion tombstones and persists them
-// so a Claude source file rewritten behind our back (e.g. Pen.app re-adding
-// its registration) cannot resurrect the server via merge. Callers that
-// already persist separately (RemoveMCPServer paths save the server list
-// right after) still get the tombstone file written here immediately.
 func (c *Config) recordMCPDeleted(name string) {
 	if c == nil || strings.TrimSpace(name) == "" {
 		return
@@ -447,8 +409,6 @@ func (c *Config) recordMCPDeleted(name string) {
 	}
 }
 
-// clearMCPDeleted removes name from the tombstones (re-adding a server
-// revives it) and persists the change.
 func (c *Config) clearMCPDeleted(name string) {
 	if c == nil {
 		return
@@ -468,9 +428,6 @@ func (c *Config) clearMCPDeleted(name string) {
 	}
 }
 
-// SaveMCPServers persists the current c.MCPServers slice to mcp_servers.yaml.
-// Uses the package-level SaveMCPServers which writes the standalone external
-// file directly (not the main config file).
 func (c *Config) SaveMCPServers() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -479,9 +436,6 @@ func (c *Config) SaveMCPServers() error {
 	return SaveMCPServers(configDir, c.MCPServers)
 }
 
-// SaveMCPServersScoped is like SaveMCPServers but sets the save scope first.
-// Use this when the caller has its own scope tracking (e.g. TUI, WebUI)
-// to ensure the patch writes to the correct config file.
 func (c *Config) SaveMCPServersScoped(scope string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -490,9 +444,6 @@ func (c *Config) SaveMCPServersScoped(scope string) error {
 	return c.SaveMCPServers()
 }
 
-// AddEndpoint creates a new endpoint under the given vendor. If the endpoint
-// already exists it is updated. The endpoint name is sanitized for use as a
-// YAML map key (lowercase, no spaces).
 func (c *Config) AddEndpoint(vendor, endpointName, protocol, baseURL, apiKey string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -557,7 +508,6 @@ func (c *Config) AddEndpoint(vendor, endpointName, protocol, baseURL, apiKey str
 	return nil
 }
 
-// RemoveEndpoint removes an endpoint from the given vendor.
 func (c *Config) RemoveEndpoint(vendor, endpoint string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -607,7 +557,6 @@ func (c *Config) RemoveEndpoint(vendor, endpoint string) error {
 	return nil
 }
 
-// AddVendor creates a new vendor with optional display name and API key.
 func (c *Config) AddVendor(name, displayName, apiKey string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -644,7 +593,6 @@ func (c *Config) AddVendor(name, displayName, apiKey string) error {
 	return nil
 }
 
-// RemoveVendor removes a vendor entirely.
 func (c *Config) RemoveVendor(name string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -688,9 +636,6 @@ func (c *Config) RemoveVendor(name string) error {
 	return nil
 }
 
-// SetEndpointModelLimits persists context_window and max_tokens to the
-// endpoint config in the global config file. A value of 0 means "unset"
-// and will clear the field. The config is saved to the global scope.
 func (c *Config) SetEndpointModelLimits(vendor, endpoint string, contextWindow, maxTokens int) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -710,9 +655,6 @@ func (c *Config) SetEndpointModelLimits(vendor, endpoint string, contextWindow, 
 	return c.SaveScoped("global")
 }
 
-// isPermanentRefreshFailure reports whether an OAuth refresh error is the
-// permanent invalid_grant rejection (rotated or revoked refresh token) as
-// opposed to a transient network/5xx failure (#1805 case 1).
 func isPermanentRefreshFailure(err error) bool {
 	if err == nil {
 		return false
@@ -721,19 +663,8 @@ func isPermanentRefreshFailure(err error) bool {
 	return strings.Contains(msg, "invalid_grant") || strings.Contains(msg, "invalid refresh token")
 }
 
-// claudeRefreshMu single-flights the Anthropic OAuth refresh (#1505 case 2).
-// Anthropic rotates the refresh token on every refresh and invalidates the
-// old one server-side, so two concurrent resolvers that both read the same
-// expired token replayed a single-use token: the loser got invalid_grant
-// and was told to /login even though the winner had already persisted the
-// rotated token to disk.
 var claudeRefreshMu sync.Mutex
 
-// refreshClaudeOAuthToken refreshes the stored Anthropic OAuth credential
-// under claudeRefreshMu and returns a usable access token. It re-reads the
-// store after acquiring the lock: a concurrent refresh that finished while
-// we waited has already persisted a fresh token, and reusing it avoids
-// replaying the (now invalidated) refresh token.
 func refreshClaudeOAuthToken(store *auth.Store) (string, error) {
 	claudeRefreshMu.Lock()
 	defer claudeRefreshMu.Unlock()
@@ -776,13 +707,8 @@ func refreshClaudeOAuthToken(store *auth.Store) (string, error) {
 	return "", fmt.Errorf("claude oauth token refresh failed (run /login to re-authenticate): %w", refreshErr)
 }
 
-// openCodeRefreshMu serializes opencode token refreshes (same single-flight
-// rationale as claudeRefreshMu: overlapping refreshes race on store writes).
 var openCodeRefreshMu sync.Mutex
 
-// refreshOpenCodeOAuthToken refreshes an expired OpenCode console token via
-// its refresh_token grant and persists the rotated pair. Mirrors
-// refreshClaudeOAuthToken's bounded-refresh + loud-failure shape.
 func refreshOpenCodeOAuthToken(store *auth.Store) (string, error) {
 	openCodeRefreshMu.Lock()
 	defer openCodeRefreshMu.Unlock()

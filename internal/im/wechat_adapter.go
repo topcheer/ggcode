@@ -31,20 +31,15 @@ const (
 	ilinkLongPollTimeoutMs = 35000
 )
 
-// iLink reply-window limits (#973). WechatDefaultOutputMode's comment
-// documented these but Send never enforced them.
 const (
-	wechatMaxChunksPerSend = 5               // iLink: ~5 reply messages max per inbound
-	wechatContextTokenTTL  = 24 * time.Hour  // iLink: context_token expiry after last inbound
-	wechatSeenMsgTTL       = 5 * time.Minute // inbound dedup window (tg adapter parity)
-	wechatSeenMsgCapacity  = 512             // bound memory for the dedup map
+	wechatMaxChunksPerSend = 5
+	wechatContextTokenTTL  = 24 * time.Hour
+	wechatSeenMsgTTL       = 5 * time.Minute
+	wechatSeenMsgCapacity  = 512
 )
 
-// wechatTruncateNotice is appended to the last chunk when output exceeds the
-// per-inbound chunk cap, so the truncation is visible to the user.
 const wechatTruncateNotice = "\n\n[消息过长，已截断]"
 
-// iLink message item types
 const (
 	ilinkItemText  = 1
 	ilinkItemImage = 2
@@ -53,25 +48,19 @@ const (
 	ilinkItemVideo = 5
 )
 
-// iLink message types
 const (
 	ilinkMsgTypeUser = 1
 	ilinkMsgTypeBot  = 2
 )
 
-// iLink message states
 const (
 	ilinkMsgStateNew        = 1
 	ilinkMsgStateProcessing = 2
 	ilinkMsgStateFinish     = 3
 )
 
-// WechatDefaultOutputMode is the recommended output mode for WeChat IM channels.
-// WeChat iLink passive reply has a ~5 second context_token expiry and a 5-message
-// limit per inbound. Summary mode ensures only one combined reply is sent.
 const WechatDefaultOutputMode = "summary"
 
-// HasWechatAdapter returns true if the manager has any active WeChat adapter.
 func HasWechatAdapter(mgr *Manager) bool {
 	if mgr == nil {
 		return false
@@ -88,34 +77,29 @@ func HasWechatAdapter(mgr *Manager) bool {
 type WechatAdapter struct {
 	name       string
 	manager    *Manager
-	httpClient *http.Client // Normal requests (30s timeout)
-	lpClient   *http.Client // Long-poll requests (40s timeout, separate connection pool)
+	httpClient *http.Client
+	lpClient   *http.Client
 
-	// Config
 	baseURL string
 
-	// Runtime state
 	mu        sync.RWMutex
 	connected bool
 	botToken  string
-	cursor    string              // get_updates_buf cursor
-	seen      map[int64]time.Time // inbound message dedup (#973), guarded by mu
+	cursor    string
+	seen      map[int64]time.Time
 }
 
-// ilinkQRCodeResponse is the response from get_bot_qrcode.
 type ilinkQRCodeResponse struct {
 	QRCode           string `json:"qrcode"`
 	QRCodeImgContent string `json:"qrcode_img_content"`
 }
 
-// ilinkQRCodeStatusResponse is the response from get_qrcode_status.
 type ilinkQRCodeStatusResponse struct {
 	Status   string `json:"status"`
 	BotToken string `json:"bot_token"`
 	BaseURL  string `json:"baseurl"`
 }
 
-// ilinkGetUpdatesResponse is the response from getupdates.
 type ilinkGetUpdatesResponse struct {
 	Ret               int            `json:"ret"`
 	ErrCode           int            `json:"errcode"`
@@ -125,7 +109,6 @@ type ilinkGetUpdatesResponse struct {
 	LongPollTimeoutMs int            `json:"longpolling_timeout_ms"`
 }
 
-// ilinkMessage represents a single iLink message.
 type ilinkMessage struct {
 	Seq          int64       `json:"seq"`
 	MessageID    int64       `json:"message_id"`
@@ -141,7 +124,6 @@ type ilinkMessage struct {
 	ItemList     []ilinkItem `json:"item_list"`
 }
 
-// ilinkItem is a single item in an iLink message.
 type ilinkItem struct {
 	Type      int             `json:"type"`
 	TextItem  *ilinkTextItem  `json:"text_item,omitempty"`
@@ -164,7 +146,6 @@ type ilinkFileItem struct {
 	FileSize int64  `json:"file_size"`
 }
 
-// ilinkSendMessageRequest is the request body for sendmessage.
 type ilinkSendMessageRequest struct {
 	Msg      ilinkOutboundMessage `json:"msg"`
 	BaseInfo ilinkBaseInfo        `json:"base_info"`
@@ -219,8 +200,6 @@ func (a *WechatAdapter) Close() error {
 	return nil
 }
 
-// AuthenticateQRCode requests a QR code from iLink for the user to scan.
-// Returns the qrcode token (for status polling) and base64-encoded PNG image.
 func (a *WechatAdapter) AuthenticateQRCode(ctx context.Context) (qrcode string, imgBase64 string, err error) {
 	url := a.baseURL + ilinkGetQRCodePath + "?bot_type=3"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -247,8 +226,6 @@ func (a *WechatAdapter) AuthenticateQRCode(ctx context.Context) (qrcode string, 
 	return result.QRCode, result.QRCodeImgContent, nil
 }
 
-// PollQRCodeStatus checks the QR code scan status. Returns status string and
-// the bot_token when confirmed.
 func (a *WechatAdapter) PollQRCodeStatus(ctx context.Context, qrcode string) (status string, botToken string, err error) {
 	url := a.baseURL + ilinkGetQRCodeStatus + "?qrcode=" + qrcode
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -268,11 +245,6 @@ func (a *WechatAdapter) PollQRCodeStatus(ctx context.Context, qrcode string) (st
 	return result.Status, result.BotToken, nil
 }
 
-// SetBotToken updates the bot token (after QR scan). It does NOT start the
-// message loop — the QR flow in tui/wechat_panel.go rebuilds the adapter via
-// AddIMAdapter + StartNamedAdapter instead. (#973: the comment used to claim
-// it "starts the message loop", which was never true; kept because it is a
-// trivial setter, but no production caller currently wires it up.)
 func (a *WechatAdapter) SetBotToken(token string) {
 	a.mu.Lock()
 	a.botToken = token
@@ -470,8 +442,6 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 	}
 }
 
-// wechatUnsupportedItemKind reports the first voice/video item type present
-// in the message, or 0 if none (#1251 — these have no inbound mapping).
 func wechatUnsupportedItemKind(msg ilinkMessage) int {
 	for _, item := range msg.ItemList {
 
@@ -483,7 +453,6 @@ func wechatUnsupportedItemKind(msg ilinkMessage) int {
 	return 0
 }
 
-// wechatMessageText joins the text items of an iLink message into one string.
 func wechatMessageText(msg ilinkMessage) string {
 	var textParts []string
 	for _, item := range msg.ItemList {
@@ -494,11 +463,6 @@ func wechatMessageText(msg ilinkMessage) string {
 	return strings.Join(textParts, "\n")
 }
 
-// replyToPairing sends the pairing outcome reply and notifies a replaced
-// channel. #973: only a SUCCESSFUL pairing (Bound=true) authorizes this
-// channel — the fresh context_token is persisted then; challenge/wrong-code
-// replies come from not-yet-authorized users and must not touch the binding
-// token.
 func (a *WechatAdapter) replyToPairing(ctx context.Context, channelID string, msg ilinkMessage, pairingResult PairingResult) {
 	if pairingResult.Bound && msg.ContextToken != "" {
 		a.manager.UpdateBindingContextToken(a.name, msg.ContextToken)
@@ -511,10 +475,6 @@ func (a *WechatAdapter) replyToPairing(ctx context.Context, channelID string, ms
 	}
 }
 
-// replyUnauthorized sends the channel-denied notice to the stranger. The
-// reply carries the STRANGER's own context_token (tokens are per-conversation;
-// the binding token belongs to the authorized channel and must not be used to
-// route to anyone else).
 func (a *WechatAdapter) replyUnauthorized(ctx context.Context, channelID string, msg ilinkMessage) {
 	debug.Log("wechat", "adapter=%s unauthorized inbound channel=%s", a.name, channelID)
 	if err := a.sendTextToUser(ctx, channelID, UnauthorizedMessage(a.manager.Language()), msg.ContextToken); err != nil {
@@ -522,13 +482,6 @@ func (a *WechatAdapter) replyUnauthorized(ctx context.Context, channelID string,
 	}
 }
 
-// sendTextToUser sends a plain text reply to a WeChat user/group. It uses
-// the context_token from the inbound message that triggered the reply —
-// iLink tokens are per-conversation, so replying to user X must carry X's
-// token, never the authorized binding's token (which belongs to another
-// conversation). #973: empty bot_token or empty content used to return nil
-// silently, making pairing instructions and unauthorized-rejection notices
-// vanish without a trace; both now return an explicit error (logged).
 func (a *WechatAdapter) sendTextToUser(ctx context.Context, toUserID, content, contextToken string) error {
 	a.mu.RLock()
 	token := a.botToken
@@ -582,10 +535,6 @@ func (a *WechatAdapter) sendTextToUser(ctx context.Context, toUserID, content, c
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("sendmessage status=%d", resp.StatusCode)
 	}
-	// Parse iLink response body to check for API-level errors.
-	// The iLink API returns HTTP 200 with {"ret":0} on success,
-	// but non-zero ret/errcode indicates failure (e.g. rate limit,
-	// expired token, content too long).
 	var result struct {
 		Ret     int    `json:"ret"`
 		ErrCode int    `json:"errcode"`
@@ -604,10 +553,6 @@ func (a *WechatAdapter) sendTextToUser(ctx context.Context, toUserID, content, c
 	return nil
 }
 
-// Send sends an outbound message to the bound WeChat channel.
-// Per iLink protocol spec: context_token is NOT optional — every sendmessage
-// must carry the latest context_token from an inbound message, keyed by userID.
-// Without it, WeChat cannot route the reply to the correct conversation.
 func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	a.mu.RLock()
 	token := a.botToken
@@ -706,9 +651,6 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	return nil
 }
 
-// wechatImageURL returns the deliverable image URL for an ExtractedImage, or
-// "" when the iLink protocol cannot carry it (it needs a public http(s) URL;
-// there is no upload API, so local paths and data URLs are undeliverable).
 func wechatImageURL(img ExtractedImage) string {
 	if img.Kind != "url" {
 		return ""
@@ -719,8 +661,6 @@ func wechatImageURL(img ExtractedImage) string {
 	return ""
 }
 
-// sendSingleImage sends one image via the iLink sendmessage API using item
-// type 2 (image_item carries a public image_url the client renders).
 func (a *WechatAdapter) sendSingleImage(ctx context.Context, token, toUserID, contextToken, imageURL string) error {
 	items := []ilinkItem{
 		{Type: ilinkItemImage, ImageItem: &ilinkImageItem{ImageURL: imageURL}},
@@ -754,10 +694,6 @@ func (a *WechatAdapter) sendSingleImage(ctx context.Context, token, toUserID, co
 	respData, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 
 	var result struct {
-		// #1599-B: ret!=0 with errcode==0 is still a server rejection -
-		// the text path checks both (#1567-C); the image path counted
-		// these as sent, polluting the shared quota while the image was
-		// silently dropped.
 		Ret     int    `json:"ret"`
 		ErrCode int    `json:"errcode"`
 		ErrMsg  string `json:"errmsg"`
@@ -772,7 +708,6 @@ func (a *WechatAdapter) sendSingleImage(ctx context.Context, token, toUserID, co
 	return nil
 }
 
-// sendSingleChunk sends one text chunk via the iLink sendmessage API.
 func (a *WechatAdapter) sendSingleChunk(ctx context.Context, token, toUserID, contextToken, text string) error {
 	items := []ilinkItem{
 		{Type: ilinkItemText, TextItem: &ilinkTextItem{Text: text}},
@@ -814,7 +749,6 @@ func (a *WechatAdapter) sendSingleChunk(ctx context.Context, token, toUserID, co
 		debug.Log("wechat", "adapter=%s sendmessage failed: status=%d body=%s", a.name, resp.StatusCode, string(respBody))
 		return fmt.Errorf("sendmessage failed: status=%d body=%s", resp.StatusCode, string(respBody))
 	}
-	// Parse iLink response body for API-level errors (same pattern as sendTextToUser).
 	var sendResp struct {
 		Ret     int    `json:"ret"`
 		ErrCode int    `json:"errcode"`
@@ -828,9 +762,6 @@ func (a *WechatAdapter) sendSingleChunk(ctx context.Context, token, toUserID, co
 	return nil
 }
 
-// seenMessageID reports whether this inbound message ID was already handled
-// recently, marking it seen (#973 redelivery dedup; mutex+TTL+capacity, same
-// pattern as the tg adapter's seenUpdate).
 func (a *WechatAdapter) seenMessageID(msgID int64) bool {
 	if msgID == 0 {
 		return false
@@ -870,7 +801,6 @@ func (a *WechatAdapter) seenMessageID(msgID int64) bool {
 	return false
 }
 
-// truncateWechatBytes cuts s to at most maxBytes on a UTF-8 rune boundary.
 func truncateWechatBytes(s string, maxBytes int) string {
 	if maxBytes <= 0 {
 		return ""
@@ -884,11 +814,9 @@ func truncateWechatBytes(s string, maxBytes int) string {
 	return s[:maxBytes]
 }
 
-// setCommonHeaders sets the required iLink headers.
 func (a *WechatAdapter) setCommonHeaders(req *http.Request, token string) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("AuthorizationType", "ilink_bot_token")
-	// X-WECHAT-UIN: random uint32 → base64
 	var buf [4]byte
 	_, _ = rand.Read(buf[:])
 	uin := uint32(buf[0]) | uint32(buf[1])<<8 | uint32(buf[2])<<16 | uint32(buf[3])<<24
@@ -911,15 +839,12 @@ func (a *WechatAdapter) publishState(healthy bool, status, lastErr string) {
 	})
 }
 
-// generateWechatClientID generates a unique client ID for message sending.
-// Matches SDK pattern: random hex suffix.
 func generateWechatClientID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("go-weixin-%x", b)
 }
 
-// WechatAdapter returns the first wechat adapter sink from the manager, or nil.
 func (m *Manager) WechatAdapter() *WechatAdapter {
 	if m == nil {
 		return nil

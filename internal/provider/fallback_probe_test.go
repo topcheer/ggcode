@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// failingNProvider succeeds only after its error has been returned N times -
-// simulates a primary whose quota window resets / outage ends.
 type failingNProvider struct {
 	name  string
 	err   error
@@ -33,9 +31,6 @@ func (m *failingNProvider) CountTokens(ctx context.Context, messages []Message) 
 	return 1, nil
 }
 
-// TestFallback_ProactivePrimaryRecovery verifies that while the fallback is
-// active, a background prober checks the primary and switches back as soon
-// as it responds successfully - without waiting for the fallback to fail.
 func TestFallback_ProactivePrimaryRecovery(t *testing.T) {
 
 	primary := &failingNProvider{name: "primary", err: errors.New("insufficient_quota: quota exceeded")}
@@ -69,9 +64,6 @@ func TestFallback_ProactivePrimaryRecovery(t *testing.T) {
 	}
 }
 
-// TestFallback_ProberStopsWhenNotFailedOver ensures no probe traffic runs in
-// the normal (not failed-over) state - the prober is lazy, started only on
-// failover activation and retired on every switch-back path.
 func TestFallback_ProberStopsWhenNotFailedOver(t *testing.T) {
 	primary := &mockProvider{name: "primary"}
 	fallback := &mockProvider{name: "fallback"}

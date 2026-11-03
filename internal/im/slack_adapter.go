@@ -29,28 +29,21 @@ import (
 const (
 	slackAPIBase        = "https://slack.com/api"
 	slackMaxTextLen     = 12000
-	slackInterMsgDelay  = 500 * time.Millisecond // Slack allows ~1 msg/sec/channel; 500ms is safe with burst tolerance
-	slackWSPingInterval = 60 * time.Second       // AWS API Gateway idle timeout is 10min; ping every 60s
-	slackWSReadTimeout  = 90 * time.Second       // ping interval + 30s grace
-	slackDedupMaxSize   = 1000                   // mirrors signalDedupMaxSize (#968)
+	slackInterMsgDelay  = 500 * time.Millisecond
+	slackWSPingInterval = 60 * time.Second
+	slackWSReadTimeout  = 90 * time.Second
+	slackDedupMaxSize   = 1000
 )
 
-// Slack mrkdwn link format: [text](url) → <url|text>
-// Slack mrkdwn doesn't support standard markdown links.
 var slackLinkRe = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
 
-// Slack mrkdwn has no native header support; convert to bold.
 var slackHeaderRe = regexp.MustCompile(`(?m)^(#{1,6})\s+(.+)$`)
 
-// Code block/span regexes — used to protect code content from delimiter conversion.
 var slackCodeBlockRe = regexp.MustCompile("(?s)```.*?```")
 var slackInlineCodeRe = regexp.MustCompile("`[^`]+`")
 
-// Match paired *italic* — requires non-whitespace start to avoid matching
-// math expressions like "5 * 3 * 2" where asterisks are multiplication operators.
 var slackItalicRe = regexp.MustCompile(`\*([^\s*][^*]*?)\*`)
 
-// Match paired ~~strikethrough~~ — same non-whitespace guard.
 var slackStrikeRe = regexp.MustCompile(`~~([^\s~][^~]*?)~~`)
 
 type slackAdapter struct {
@@ -61,21 +54,15 @@ type slackAdapter struct {
 	appToken   string
 	botUserID  string
 	teamID     string
-	// botID is this app's own bot id, captured from auth.test. Bot-posted
-	// message events carry bot_id instead of user, so the user-based
-	// self-filter never matched them (#1236).
-	botID   string
-	apiBase string // override for tests
-	stt     imstt.Transcriber
+	botID      string
+	apiBase    string
+	stt        imstt.Transcriber
 
 	mu          sync.RWMutex
 	connected   bool
 	ws          *websocket.Conn
 	reactionAck reactionAckState
 
-	// seen dedups inbound messages by "channel:ts" (#968): Socket Mode
-	// delivery is at-least-once (unacked redelivery, reconnect replay),
-	// and without it the same message produced duplicate agent replies.
 	seen map[string]time.Time
 }
 
@@ -120,15 +107,8 @@ func (a *slackAdapter) Close() error {
 	return nil
 }
 
-// errSlackAuthTerminal marks Slack auth failures that are deterministic —
-// retrying cannot fix them because the token itself is bad/revoked/expired or
-// the workspace is deactivated. The run loop exits permanently on this error
-// instead of retrying every 60s forever (#603). Transient errors (network,
-// ratelimited, 5xx) keep the normal retry path.
 var errSlackAuthTerminal = errors.New("slack auth terminal failure")
 
-// slackTerminalAuthErrors lists Slack API error codes (from auth.test and
-// apps.connections.open) that are terminal for the adapter.
 var slackTerminalAuthErrors = map[string]bool{
 	"invalid_auth":     true,
 	"not_authed":       true,
@@ -280,11 +260,6 @@ func (a *slackAdapter) connectAndServe(ctx context.Context) error {
 	}
 }
 
-// slackAckForEnvelope builds the Socket Mode ack frame for an envelope.
-// Slack requires every envelope with an envelope_id to be acked or it gets
-// redelivered; accepts_response_payload only decides whether the ack MAY
-// carry a payload body, not whether an ack is required (#968). We never
-// attach a payload, so the flag is irrelevant here.
 func slackAckForEnvelope(envelopeID string) ([]byte, bool) {
 	if envelopeID == "" {
 		return nil, false
@@ -481,14 +456,6 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 	}
 }
 
-// stripBotMention removes the bot's own mention token from an inbound text.
-// Slack represents user mentions as "<@U123>" (or "<@U123|display name>")
-// literal tokens. Only the bot's own ID is removed; mentions of other users
-// are meaningful and preserved (#540).
-// markSeenDedup records an inbound "channel:ts" and reports whether this is
-// the first delivery (#968). Mirrors the signal adapter's seen[ts] dedup:
-// mutex-guarded, TTL-evicted, size-capped.
-// checkSeenDedup is the read-only half of the dedup pair (#4655).
 func (a *slackAdapter) checkSeenDedup(channel, ts string) bool {
 	if channel == "" || ts == "" {
 		return true
@@ -499,7 +466,6 @@ func (a *slackAdapter) checkSeenDedup(channel, ts string) bool {
 	return !dup
 }
 
-// markSeenDedup latches the seen key; returns false when already present.
 func (a *slackAdapter) markSeenDedup(channel, ts string) bool {
 	if channel == "" || ts == "" {
 		return true
@@ -549,7 +515,6 @@ func (a *slackAdapter) stripBotMention(text string) string {
 	return text
 }
 
-// processSlackAttachments extracts file attachments (images, audio, files) from a Slack message event.
 func (a *slackAdapter) processSlackAttachments(ctx context.Context, event map[string]any) ([]Attachment, string) {
 	files, ok := event["files"].([]any)
 	if !ok || len(files) == 0 {
@@ -772,9 +737,6 @@ func (a *slackAdapter) outboundText(event OutboundEvent) string {
 	}
 }
 
-// TriggerTyping adds a reaction on the latest real user message to
-// indicate the bot is processing. Slack does not have a native typing indicator
-// for bots, so we use a reaction as a visual cue.
 func (a *slackAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 	channelID := strings.TrimSpace(binding.ChannelID)
 	ts := LastReactionTargetMessageID(binding)
@@ -928,7 +890,6 @@ func (a *slackAdapter) publishState(healthy bool, status, lastErr string) {
 	})
 }
 
-// sendExtractedImage resolves and sends an extracted image to a Slack channel.
 func (a *slackAdapter) sendExtractedImage(ctx context.Context, channelID, threadTS string, img ExtractedImage) error {
 	switch img.Kind {
 	case "url":
@@ -998,7 +959,6 @@ func (a *slackAdapter) sendExtractedImage(ctx context.Context, channelID, thread
 	}
 }
 
-// uploadFile uploads a file to a Slack channel via multipart/form-data.
 func (a *slackAdapter) uploadFile(ctx context.Context, channelID, threadTS, filename string, data []byte, comment string) error {
 
 	baseURL := slackAPIBase
@@ -1088,13 +1048,7 @@ func (a *slackAdapter) uploadFile(ctx context.Context, channelID, threadTS, file
 	}
 }
 
-// markdownToMrkdwn converts basic Markdown to Slack mrkdwn format.
-// Slack mrkdwn reference: https://docs.slack.dev/messaging/formatting-message-text/
-// Bold: *text* (single asterisk), Italic: _text_ (underscore), Strike: ~text~ (single tilde)
 func markdownToMrkdwn(text string) string {
-	// Protect code blocks and inline code from delimiter conversion.
-	// Without this, characters like * or ~~ inside code would be incorrectly
-	// converted (e.g., `a * b` → `a _ b`).
 	var codeSegments []string
 	protectCode := func(match string) string {
 		idx := len(codeSegments)
@@ -1124,15 +1078,6 @@ func markdownToMrkdwn(text string) string {
 		}
 		return strings.Join(result, "\n")
 	})
-	// NOTE: Slack mrkdwn does NOT decode HTML entities (&amp;, &lt;, &gt;).
-	// Escaping them causes literal display (e.g., code blocks show &lt;div&gt;
-	// instead of <div>). The < character is only special in Slack when part of
-	// recognized patterns like <@U12345> or <http://url|text>, so standalone
-	// < and > characters are safe to leave unescaped.
-	// Convert **bold** to *bold* using a placeholder to avoid collision
-	// with the *italic* → _italic_ conversion below.
-	// Without the placeholder, step 1 would produce *bold* and step 2 would
-	// then convert that *bold* to _bold_ (wrong — bold would render as italic).
 	const boldPlaceholder = "\x00B\x00"
 	text = replaceDelimiters(text, "**", boldPlaceholder)
 
@@ -1171,7 +1116,6 @@ func splitSlackMessage(text string, maxLen int) []string {
 	return SplitMarkdown(strings.TrimSpace(text), maxLen)
 }
 
-// transcribeSlackAudio downloads an audio file from Slack and transcribes it via STT.
 func (a *slackAdapter) transcribeSlackAudio(ctx context.Context, downloadURL, filename, contentType string) string {
 	data, _, err := a.downloadSlackFile(ctx, downloadURL)
 	if err != nil || len(data) == 0 {
@@ -1244,7 +1188,6 @@ func resolveSlackSTTConfig(global config.IMSTTConfig, extra map[string]interface
 	return &cfg
 }
 
-// SendInteractive implements InteractiveSender using Slack Block Kit buttons.
 func (a *slackAdapter) SendInteractive(ctx context.Context, binding ChannelBinding, msg InteractiveMessage) (string, error) {
 	a.mu.RLock()
 	connected := a.connected
@@ -1266,7 +1209,6 @@ func (a *slackAdapter) SendInteractive(ctx context.Context, binding ChannelBindi
 		},
 	}
 
-	// Build action buttons
 	var elements []map[string]any
 	for _, btn := range msg.Buttons {
 		style := ""
@@ -1365,7 +1307,6 @@ func (a *slackAdapter) SendInteractive(ctx context.Context, binding ChannelBindi
 	return "", rateLimitExhausted("Slack")
 }
 
-// handleInteractive processes Slack interactive payloads (button clicks).
 func (a *slackAdapter) handleInteractive(ctx context.Context, payload map[string]any) {
 	actionType, _ := payload["type"].(string)
 	if actionType != "block_actions" {

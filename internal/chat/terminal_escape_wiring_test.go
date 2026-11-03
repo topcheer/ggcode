@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// sa-41: tool results are the primary untrusted-content display surface.
-// SetResult must neutralize terminal control sequences (ATR-2026-00259)
-// before anything reaches the screen.
 func TestBaseToolItem_SetResultSanitizesTerminalEscapes(t *testing.T) {
 	item := NewBaseToolItem("t1", "run_command", StatusPending, "", Styles{})
 	item.SetResult("\x1b]0;evil title\x07visible output", false)
@@ -22,8 +19,6 @@ func TestBaseToolItem_SetResultSanitizesTerminalEscapes(t *testing.T) {
 	}
 }
 
-// Streaming bodies are rendered live while the tool runs and previously
-// reached the screen completely unfiltered - both escapes and secrets.
 func TestBaseToolItem_SetStreamingBodySanitizesAndRedacts(t *testing.T) {
 	item := NewBaseToolItem("t2", "run_command", StatusRunning, "", Styles{})
 	key := "sk-" + strings.Repeat("a", 30)

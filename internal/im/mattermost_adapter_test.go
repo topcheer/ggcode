@@ -135,10 +135,6 @@ func TestMattermostPlatformConstant(t *testing.T) {
 	}
 }
 
-// TestMattermostSendHandlesAllEventTypes verifies that Send() uses
-// defaultOutboundText() to handle all event types, not just OutboundEventText.
-// Previously, Send() only passed event.Text, silently dropping tool calls,
-// tool results, status updates, and approval requests.
 func TestMattermostSendHandlesAllEventTypes(t *testing.T) {
 	tests := []struct {
 		name  string

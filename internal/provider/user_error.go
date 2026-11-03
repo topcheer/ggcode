@@ -14,22 +14,10 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
-// UserFacingError translates a technical provider/API error into a concise,
-// human-readable message in Chinese.
-//
-// Deprecated: Use UserFacingErrorLang for language-aware error messages.
-// This function is kept for backward compatibility with callers that don't
-// have a language context (e.g. tunnel_host, daemon_bridge).
 func UserFacingError(err error) string {
 	return UserFacingErrorLang(err, "zh-CN")
 }
 
-// UserFacingErrorLang translates a technical provider/API error into a concise,
-// human-readable message in the specified language ("zh-CN" or "en").
-//
-// It strips SDK-specific noise, maps HTTP status codes to friendly text, and
-// falls back to a generic message so users never see raw stack traces or
-// protocol details.
 func UserFacingErrorLang(err error, lang string) string {
 	if err == nil {
 		return ""
@@ -138,7 +126,6 @@ func UserFacingErrorLang(err error, lang string) string {
 		return "Request timed out. Type /retry to resend"
 	}
 
-	// ---- Network errors ----
 	var netErr net.Error
 	if errors.As(err, &netErr) || errors.As(inner, &netErr) {
 		if zh {
@@ -277,22 +264,14 @@ func UserFacingErrorLang(err error, lang string) string {
 }
 
 const (
-	// fallbackErrMsgZh/En are the blind-spot fallback stems.
-	// UserFacingErrorLang appends the raw error after them;
-	// IsBlindSpotError detects this branch by prefix match.
 	fallbackErrMsgZh = "请求失败，请稍后重试"
 	fallbackErrMsgEn = "Request failed. Please retry shortly"
 )
 
-// blindSpotRawLimit caps the raw error text embedded in the user-facing
-// message: enough to diagnose, short enough not to flood the chat panel.
 const blindSpotRawLimit = 400
 
 var blindSpotSecretRe = regexp.MustCompile(`(?i)(api[_-]?key|token|secret|password|authorization)["'\s:=]+[^\s"',;]{8,}`)
 
-// sanitizeRawError masks credential-looking pairs before the raw error
-// reaches the chat panel (#1720 case 2: the blind-spot fallback embedded
-// the FULL error chain with zero redaction).
 func sanitizeRawError(raw string) string {
 	return blindSpotSecretRe.ReplaceAllString(raw, "$1=[REDACTED]")
 }
@@ -309,10 +288,6 @@ func truncateRawError(raw string) string {
 	return sanitizeRawError(raw[:cut]) + "…(truncated)"
 }
 
-// IsBlindSpotError reports whether err fell through every category in
-// UserFacingErrorLang — an unrecognized error shape. Callers use this to
-// auto-enable file logging and auto-retry, since the generic message alone
-// gives the user nothing to act on.
 func IsBlindSpotError(err error) bool {
 	if err == nil {
 		return false
@@ -321,8 +296,6 @@ func IsBlindSpotError(err error) bool {
 	return strings.HasPrefix(msg, fallbackErrMsgZh)
 }
 
-// hasHTTPStatus checks whether err (or any wrapped error) carries the given
-// HTTP status code via known SDK error types.
 func hasHTTPStatus(err error, status int) bool {
 	if err == nil {
 		return false
@@ -346,7 +319,6 @@ func hasHTTPStatus(err error, status int) bool {
 	return false
 }
 
-// extractHTTPStatus returns the HTTP status code embedded in err, or 0 if none found.
 func extractHTTPStatus(err error) int {
 	if err == nil {
 		return 0

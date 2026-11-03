@@ -5,13 +5,6 @@ import (
 	"testing"
 )
 
-// TestStreamingBodyHeightMatchesRenderLines pins the contract that caused
-// display corruption: during live command output (SetStreamingBody), the
-// item's Height() must equal the number of visual lines List.Render will
-// actually slice. Height() counts width-wrapped lines (measureHeightWidth),
-// while List.Render splits physical lines — the streaming body MUST be
-// width-wrapped by RenderBody or the two disagree and scrolling produces
-// blank-line artifacts / skipped lines.
 func TestStreamingBodyHeightMatchesRenderLines(t *testing.T) {
 	styles := DefaultStyles()
 	item := NewBaseToolItem("t1", "wait_command", StatusRunning, "", styles)
@@ -30,8 +23,6 @@ func TestStreamingBodyHeightMatchesRenderLines(t *testing.T) {
 	}
 }
 
-// TestStreamingBodyCappedToMaxLines ensures a large live tail (agent passed
-// a big tail_lines) is bounded, same as the final result body.
 func TestStreamingBodyCappedToMaxLines(t *testing.T) {
 	styles := DefaultStyles()
 	item := NewBaseToolItem("t2", "wait_command", StatusRunning, "", styles)
@@ -56,8 +47,6 @@ func TestStreamingBodyCappedToMaxLines(t *testing.T) {
 	}
 }
 
-// TestStreamingBodyShortPassthrough: normal small tails render identically
-// to the old raw path (no marker, no truncation).
 func TestStreamingBodyShortPassthrough(t *testing.T) {
 	styles := DefaultStyles()
 	item := NewBaseToolItem("t3", "wait_command", StatusRunning, "", styles)
