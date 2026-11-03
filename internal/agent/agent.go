@@ -4139,6 +4139,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				if a.ruleStore != nil {
 					a.resetRuleStoreLocked()
 				}
+				if a.companionGuard != nil {
+					a.companionGuard.refreshProvenance(result.SuggestedWorkingDir)
+				}
 				a.mu.Unlock()
 				debug.Log("agent", "working dir changed: %s -> %s (suggested by %s)", oldDir, result.SuggestedWorkingDir, tc.Name)
 			}
