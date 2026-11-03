@@ -79,8 +79,18 @@ func (c *Config) Save() error {
 		}
 	}
 
+	//    3b. (#4506) Same collection for ZERO NUMBERS: the public contract
+	//    (e.g. SetEndpointModelLimits "A value of 0 means 'unset' and will
+	//    clear the field") requires 0 to clear the persisted value, but the
+	//    overlay strips zeroes (3) and deep-merge keeps absent keys - so the
+	//    disk value survived every save. Collected here so the merged map can
+	//    be pruned below.
 	clearedInMemory := collectEmptyStringPaths(currentRaw)
 
+	// #4506 note: raw-map collection CANNOT see the zeros - ContextWindow/
+	// MaxTokens carry yaml omitempty, so yaml.Marshal drops 0 before we ever
+	// look. The contract fields are collected from the CONFIG STRUCT instead
+	// (endpointZeroClearPaths below).
 	clearedZeros := endpointZeroClearPaths(c)
 	cleanZeroYAMLValues(currentRaw)
 
@@ -99,6 +109,13 @@ func (c *Config) Save() error {
 
 			applyClearedTombstones(existingRaw, c.diskStrSnap, clearedInMemory)
 
+			// (#4506) Delete numeric keys the merged view says are 0 - the
+			// "0 = unset/clear" contract. Numeric fields carry no Load-time
+			// string snapshot, so there is no #284 changed-on-disk guard
+			// here; a 0 in memory against a nonzero on-disk value is BY
+			// CONTRACT an explicit clear, so deleting is the documented
+			// behavior (a field merely never set is 0 in memory AND absent
+			// from disk, which this loop no-ops on).
 			applyZeroNumberClears(existingRaw, clearedZeros)
 			merged, marshalErr := yaml.Marshal(existingRaw)
 			if marshalErr != nil {
