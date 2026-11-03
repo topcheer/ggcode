@@ -4132,15 +4132,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 
 			if result.SuggestedWorkingDir != "" && !result.IsError {
+				// Companion provenance probes git (bounded, up to 3 subprocesses);
+				// the guard is confined to the run-loop goroutine, so run it before
+				// taking a.mu to avoid stalling other Agent methods on git I/O.
+				if a.companionGuard != nil {
+					a.companionGuard.refreshProvenance(result.SuggestedWorkingDir)
+				}
 				a.mu.Lock()
 				oldDir := a.workingDir
 				a.workingDir = result.SuggestedWorkingDir
 
 				if a.ruleStore != nil {
 					a.resetRuleStoreLocked()
-				}
-				if a.companionGuard != nil {
-					a.companionGuard.refreshProvenance(result.SuggestedWorkingDir)
 				}
 				a.mu.Unlock()
 				debug.Log("agent", "working dir changed: %s -> %s (suggested by %s)", oldDir, result.SuggestedWorkingDir, tc.Name)
