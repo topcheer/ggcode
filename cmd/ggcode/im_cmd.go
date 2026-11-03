@@ -30,30 +30,18 @@ import (
 // im.AdapterPlatformCanonical) rather than a duplicated wailskit-style
 // field registry: the CLI wizard keeps its own extras prompts.
 
-var imSupportedPlatforms = []string{
-	"qq", "telegram", "feishu", "dingtalk", "discord", "slack", "privateclaw",
+func imSupportedPlatforms() []string {
+	return im.SupportedPlatforms()
 }
 
 func imValidatePlatform(platform string) (string, error) {
-	switch strings.ToLower(platform) {
-	case string(im.PlatformQQ):
-		return string(im.PlatformQQ), nil
-	case string(im.PlatformTelegram):
-		return string(im.PlatformTelegram), nil
-	case string(im.PlatformFeishu):
-		return string(im.PlatformFeishu), nil
-	case string(im.PlatformDingTalk):
-		return string(im.PlatformDingTalk), nil
-	case string(im.PlatformDiscord):
-		return string(im.PlatformDiscord), nil
-	case string(im.PlatformSlack):
-		return string(im.PlatformSlack), nil
-	case "privateclaw":
-		return "privateclaw", nil
-	default:
-		supported := strings.Join(imSupportedPlatforms, ", ")
-		return "", fmt.Errorf("unknown platform %q (supported: %s)", platform, supported)
+	lower := strings.ToLower(platform)
+	for _, supported := range im.SupportedPlatforms() {
+		if lower == supported {
+			return supported, nil
+		}
 	}
+	return "", fmt.Errorf("unknown platform %q (supported: %s)", platform, strings.Join(im.SupportedPlatforms(), ", "))
 }
 
 func newIMCmd(cfgFile *string) *cobra.Command {
