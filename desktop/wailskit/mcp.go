@@ -47,29 +47,21 @@ func loadSessionScopedConfigFor(chat *ChatBridge) (*config.Config, error) {
 	if workDir == "" {
 		return config.Load(config.ConfigPath())
 	}
-	// Same loader the session uses (config.go LoadConfigForWorkspace), so the
-	// MCP list and save target match what the session's mcpManager reads.
+
 	return LoadConfigForWorkspace(workDir)
 }
 
 // ListMCPServers returns all configured MCP servers for the active session's
 // scope (workspace config when bound to a workspace, global otherwise).
 func ListMCPServers() ([]MCPServerInfo, error) {
-	// #458: snapshot the bridge ONCE and thread it through both the config
-	// load and the status lookup. The old code read activeChatBridge twice
-	// independently - a switchWorkspace in between spliced OLD workspace
-	// yaml config with NEW workspace connection state.
+
 	chatSnap := GetChatBridge()
 
 	cfg, err := loadSessionScopedConfigFor(chatSnap)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	// #606: list the same merged server set the runtime actually runs. The
-	// runtime (BuildInteractiveRuntimeCore -> mcp.MergeStartupServers) folds
-	// Claude migration files (.mcp.json / ~/.claude.json) into the yaml set,
-	// so a yaml-only view here forked from reality: migrated servers were
-	// live (tools callable) yet invisible in the MCP panel.
+
 	servers := effectiveSessionServers(chatSnap, cfg)
 	if len(servers) == 0 {
 		return nil, nil
@@ -115,55 +107,31 @@ func SetMCPServerEnabled(name string, enabled bool) bool {
 	chat := GetChatBridge()
 	scope := chatScope(chat)
 	if chat == nil || chat.mcpManager == nil {
-		// Persist the toggle FIRST so the UI state matches disk (#408):
-		// returning false after writing misled the frontend into showing
-		// "failed" for a change that had already taken effect.
-		// #1893: but a FAILED persist must surface as failure - the old
-		// call dropped the error, the UI reported success, and the
-		// server resurrected on restart (memory-only disable).
+
 		if err := plugin.SetMCPDisabledIn(scope, name, disabled); err != nil {
 			return false
 		}
 		return true
 	}
-	// #1893: propagate here too - a failed persist is not a success.
+
 	if err := plugin.SetMCPDisabledIn(scope, name, disabled); err != nil {
 		return false
 	}
 	if disabled {
-		// #2389: the persisted state IS the answer. Disconnect() returns
-		// false when name is not in the live plugin set (migration-added
-		// server, stale scope after a workspace switch) even though the
-		// disable already hit disk - the no-manager branch above returns
-		// true for the same persist. Reporting failure for a change that
-		// took effect is the #408 lie in mirror image; demote the live
-		// result to a log line.
+
 		if !chat.mcpManager.Disconnect(name) {
 			debug.Log("wailskit", "SetMCPServerEnabled: %s disabled on disk but not live in manager (not connected or unknown)", name)
 		}
 		return true
 	}
-	// #2872: fast path - the plugin is live in the manager (connected, or
-	// disconnected-but-present); Reconnect re-establishes it.
+
 	if chat.mcpManager.Reconnect(name) {
 		return true
 	}
-	// #2872: Reconnect has no rebuild path - it only scans the live plugin
-	// snapshot. A server whose definition joined after session start
-	// (workspace .mcp.json edit, migration file, stale scope after a
-	// workspace switch) is not in that set, so the old `return
-	// mcpManager.Reconnect(name)` surfaced false and the UI reported
-	// "enable failed" forever - even though the persist above already hit
-	// disk. That is #2389's disable lie in mirror image. Rebuild the
-	// plugin set from the SAME merged origin the runtime uses at startup:
-	// Reload's connect sweep picks the new plugin up (and still skips
-	// disabled servers), so no second Reconnect is issued here - it would
-	// race the sweep's own connect goroutine.
+
 	cfg, cfgErr := loadSessionScopedConfigFor(chat)
 	if cfgErr != nil {
-		// The enable already persisted; a failed config load only costs the
-		// in-session revive (next Add/Remove/restart reloads anyway). The
-		// persisted state remains the truth we report (#408).
+
 		debug.Log("wailskit", "SetMCPServerEnabled: %s enabled on disk but session config reload failed: %v", name, cfgErr)
 		return true
 	}
@@ -228,11 +196,7 @@ func reloadSessionMCPServers(chat *ChatBridge, cfg *config.Config) {
 		workDir = chat.WorkingDir()
 	}
 	merged, mergeWarnings := mcp.MergeStartupServersWithDeleted(workDir, cfg.MCPServers, cfg.DeletedMCPServers)
-	// Containment parity (#3438 follow-up): the desktop panel reload channel
-	// must not bypass the workspace trust gate - any Add/Update/Remove here
-	// re-merges every source, which would resurrect ungated .mcp.json
-	// servers as connected child processes. Same gate as CLI startup
-	// (agentruntime interactive_core.go) and hot-reload (mcp_hotreload.go).
+
 	allowed, blocked, gateWarnings := mcp.GateProjectServers(merged, workDir)
 	for _, warning := range append(mergeWarnings, gateWarnings...) {
 		debug.Log("mcp", "%s", warning)
@@ -268,16 +232,10 @@ func reloadSessionMCPServers(chat *ChatBridge, cfg *config.Config) {
 //   - "headers_*": HTTP headers (keys like "headers_Authorization")
 //   - "env_*": environment variables (keys like "env_KEY")
 func AddMCPServer(values map[string]string) error {
-	// #1813 case 1: serialize the load→save critical section. Wails runs each
-	// bound method on its own goroutine; two concurrent Adds could interleave
-	// A-load→B-load→B-save→A-save and B's entry was silently erased from
-	// disk by A's stale full-view write (runtime kept it until restart -
-	// config/reality drift the hot-reload watcher cannot heal). The same
-	// mutex covers Remove/Update so every full-file rewrite is serialized.
+
 	mcpConfigWriteMu.Lock()
 	defer mcpConfigWriteMu.Unlock()
-	// #458: snapshot the bridge once so the scope decision and the reload
-	// below see the same session even if a workspace switch interleaves.
+
 	chatSnap := GetChatBridge()
 	cfg, err := loadSessionScopedConfigFor(chatSnap)
 	if err != nil {
@@ -323,11 +281,7 @@ func AddMCPServer(values map[string]string) error {
 		Command: values["command"],
 		URL:     values["url"],
 	}
-	// #4386: command/url had no clear-channel twin of #1434-B's args_clear /
-	// #979's env_clear - clearing the field in the form saved
-	// "successfully" (an empty string reads as "not provided" at the patch
-	// layer) while the old command/url silently resurrected on reopen. An
-	// emptied (or explicitly *_clear-flagged) field now sets the sentinel.
+
 	if isTruthyFormFlag(values["command_clear"]) || values["command"] == "" {
 		serverCfg.CommandClear = true
 	}
@@ -335,14 +289,6 @@ func AddMCPServer(values map[string]string) error {
 		serverCfg.URLClear = true
 	}
 
-	// Parse args from space-separated string with quote awareness.
-	// strings.Fields splits quoted paths containing spaces (e.g. "/Users/John Doe/").
-	// parseShellArgs handles " and ' quoting correctly.
-	// #1434-B: args had no clear-channel twin of #979's env_clear/headers_clear
-	// sentinels - an emptied args form produced nil Args, which the patch
-	// layer reads as 'not provided' and the OLD args silently resurrected.
-	// args_clear=1 (or an explicitly-empty args value) writes a non-nil
-	// empty slice: the patch layer's 'cleared' semantic.
 	if isTruthyFormFlag(values["args_clear"]) || values["args"] == "" {
 		serverCfg.Args = []string{}
 	} else if argsStr := values["args"]; argsStr != "" {
@@ -353,13 +299,6 @@ func AddMCPServer(values map[string]string) error {
 		serverCfg.Args = args
 	}
 
-	// Parse env_ prefixed keys into env map.
-	// #979: an explicitly-cleared env must survive the len guard below: the
-	// form sends env_clear=1 when the user deleted every env row, and the
-	// patch layer (patchMCPServerConfig) defines "empty non-nil map =
-	// cleared". Without the sentinel, a form with zero env_* keys produced a
-	// nil Env ("not provided" -> keep old value), so stale credentials
-	// silently resurrected on save.
 	envClear := isTruthyFormFlag(values["env_clear"])
 	env := make(map[string]string)
 	for k, v := range values {
@@ -370,10 +309,9 @@ func AddMCPServer(values map[string]string) error {
 	if len(env) > 0 {
 		serverCfg.Env = env
 	} else if envClear {
-		serverCfg.Env = map[string]string{} // non-nil empty: explicit clear
+		serverCfg.Env = map[string]string{}
 	}
 
-	// Parse headers_ prefixed keys into headers map (same #979 semantics).
 	headersClear := isTruthyFormFlag(values["headers_clear"])
 	headers := make(map[string]string)
 	for k, v := range values {
@@ -384,19 +322,15 @@ func AddMCPServer(values map[string]string) error {
 	if len(headers) > 0 {
 		serverCfg.Headers = headers
 	} else if headersClear {
-		serverCfg.Headers = map[string]string{} // non-nil empty: explicit clear
+		serverCfg.Headers = map[string]string{}
 	}
 
 	cfg.UpsertMCPServer(serverCfg)
-	// SaveMCPServers writes only the scope's mcp_servers.yaml. A full cfg.Save()
-	// would also rewrite the main config file for what is an MCP-only change.
+
 	if err := cfg.SaveMCPServers(); err != nil {
 		return err
 	}
-	// #498/#979: propagate immediately with the merge-equivalent set - for
-	// workspace-scoped sessions the global-file watcher never sees this
-	// write, and a yaml-only list would kick .mcp.json servers out of the
-	// running session (Reload is replace-semantics).
+
 	reloadSessionMCPServers(chatSnap, cfg)
 	return nil
 }
@@ -410,14 +344,10 @@ func AddMCPServer(values map[string]string) error {
 // even though their tools were live, and removing a yaml copy was resurrected
 // by the merge that reloadSessionMCPServers (and every startup) re-runs.
 func RemoveMCPServer(name string) error {
-	// #1813 case 1: same serialization as AddMCPServer (see comment there).
+
 	mcpConfigWriteMu.Lock()
 	defer mcpConfigWriteMu.Unlock()
-	// #458: snapshot the bridge once so the scope decision and the Disconnect
-	// below see the same session even if a workspace switch interleaves.
-	// Without this, a switchWorkspace between loadSessionScopedConfig and the
-	// Disconnect below can leave the removed server connected in the old workspace
-	// while Disconnect operates on the new workspace's manager (#563).
+
 	chatSnap := GetChatBridge()
 	cfg, err := loadSessionScopedConfigFor(chatSnap)
 	if err != nil {
@@ -426,33 +356,17 @@ func RemoveMCPServer(name string) error {
 	removedYaml := cfg.RemoveMCPServer(name)
 	if removedYaml {
 		if err := cfg.SaveMCPServers(); err != nil {
-			// #1868 case 3: the in-memory removal already recorded + persisted
-			// the tombstone; with the yaml save failed the on-disk entry
-			// survives, which leaves a split state (tombstone hides the row,
-			// yaml keeps it, re-adding the name revives stale fields).
-			// Roll the tombstone back so the failed delete leaves the server
-			// fully present and consistent instead.
+
 			cfg.ClearMCPDeleted(name)
 			return err
 		}
 	}
-	// #606: clean the migration-file side as well. This covers merged-only
-	// servers (yaml removal returned false -> old code errored "not found")
-	// and dual-side names (yaml removal alone would be resurrected by merge).
+
 	removedOrigin, err := removeMigratedMCPServer(chatSnap, name)
 	if err != nil {
-		// #1868 case 2: partial migration-file cleanup - the files that DID
-		// get rewritten are gone, the survivors are a merge resurrect source
-		// with no tombstone in between, so the next panel read silently
-		// re-imports the server. The user's intent was DELETE: record the
-		// tombstone even on failure (idempotent) so survivors stay hidden.
+
 		cfg.RecordMCPDeleted(name)
-		// #1813 case 2: compensate the runtime side too. Returning early left
-		// the server connected and its tools callable through the residual
-		// origin even though the UI reported the delete as failed - a three-way
-		// drift (UI says gone, disk partially gone, runtime fully alive).
-		// Disconnect targets the merged set's residual origin; the reload
-		// pushes the tombstone-filtered set so nothing resurrects it.
+
 		if chatSnap != nil && chatSnap.mcpManager != nil {
 			_ = chatSnap.mcpManager.Disconnect(name)
 			reloadSessionMCPServers(chatSnap, cfg)
@@ -462,30 +376,15 @@ func RemoveMCPServer(name string) error {
 	if !removedYaml && !removedOrigin {
 		return fmt.Errorf("MCP server %q not found", name)
 	}
-	// Tombstone the name: external apps rewrite their Claude registrations
-	// behind our back; without the tombstone the merge re-imports the name on
-	// the next panel read and it "comes back" as an unconfigured row.
-	// removeMigratedMCPServer cleaned the origin files, so this is the only
-	// remaining resurrect path. Re-adding via UpsertMCPServer clears it.
+
 	cfg.RecordMCPDeleted(name)
-	// #1813 case 3: drop the server-name OAuth credential. Tokens persist
-	// per server name; without this, re-adding the same name silently
-	// reused the old tenant's token. Best-effort: a delete failure must not
-	// fail the (already durable) server removal, and Handle401 self-heals
-	// by re-running the OAuth flow on the next 401/403.
+
 	if h := mcp.NewOAuthHandler(name, "", auth.DefaultStore()); h != nil {
 		if derr := h.DeleteServerToken(); derr != nil {
 			debug.Log("wailskit.mcp", "remove %q: delete server token failed (will self-heal on 401): %v", name, derr)
 		}
 	}
-	// Symmetric with SetMCPServerEnabled(false): disconnect immediately
-	// instead of waiting for the ~2s hot-reload poll (which may also miss
-	// workspace-scoped yaml changes) - without this the removed server's
-	// tools stayed callable during the window (#408). Uses chatSnap to
-	// ensure Disconnect targets the same session whose config we just saved.
-	// The reload then pushes the merge-equivalent set (yaml ∪ .mcp.json);
-	// since every origin of the name has been removed from disk, the merge
-	// cannot resurrect it (#606), while other migrated servers survive (#979).
+
 	if chatSnap != nil && chatSnap.mcpManager != nil {
 		_ = chatSnap.mcpManager.Disconnect(name)
 		reloadSessionMCPServers(chatSnap, cfg)
@@ -546,7 +445,7 @@ func removeFromClaudeFile(path, name string) (bool, error) {
 	}
 	var parsed map[string]json.RawMessage
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		// Not a parseable Claude config; leave untouched.
+
 		return false, nil
 	}
 	var servers map[string]json.RawMessage
@@ -568,13 +467,7 @@ func removeFromClaudeFile(path, name string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("encode %s: %w", path, err)
 	}
-	// #1434-A: this overwrites ~/.claude.json - Claude Code's own config,
-	// which carries project history/consent state and can reach MBs.
-	// os.WriteFile is O_TRUNC: a mid-write crash truncates it, and on a
-	// full disk/quota the open already truncated it even when the write
-	// errors out cleanly - no backup, irreversible corruption. The
-	// project's own standard (mcp_disabled.go, post-#781) is
-	// util.AtomicWriteFile; a third-party file deserves no less.
+
 	if err := util.AtomicWriteFile(path, append(out, '\n'), 0o644); err != nil {
 		return false, fmt.Errorf("write %s: %w", path, err)
 	}
@@ -615,15 +508,15 @@ func isTruthyFormFlag(v string) bool {
 func parseShellArgs(s string) ([]string, error) {
 	var args []string
 	var current strings.Builder
-	var inQuote byte  // 0 = no quote, '"' or '\'' = inside quote
-	var escape bool   // true if next char is escaped
-	seenChar := false // any char (incl. quotes) seen since last separator
+	var inQuote byte // 0 = no quote, '"' or '\'' = inside quote
+	var escape bool  // true if next char is escaped
+	seenChar := false
 
 	for i := 0; i < len(s); i++ {
 		ch := s[i]
 
 		if escape {
-			// Escaped character - add it literally and clear escape flag
+
 			current.WriteByte(ch)
 			escape = false
 			seenChar = true
@@ -631,9 +524,7 @@ func parseShellArgs(s string) ([]string, error) {
 		}
 
 		if ch == '\\' {
-			// Backslash escapes quotes only. A backslash before any other
-			// character (or at end of input) is literal, so Windows paths
-			// and glob patterns are not silently corrupted (#584 M1).
+
 			if i+1 < len(s) && (s[i+1] == '"' || s[i+1] == '\'') {
 				escape = true
 				seenChar = true
@@ -659,9 +550,7 @@ func parseShellArgs(s string) ([]string, error) {
 			inQuote = ch
 			seenChar = true
 		case ' ', '\t', '\n', '\r':
-			// Explicit empty args ("") are meaningful CLI values - the old
-			// current.Len()>0 guard dropped them, shifting every later arg
-			// (#203).
+
 			if seenChar {
 				args = append(args, current.String())
 				current.Reset()
@@ -673,7 +562,6 @@ func parseShellArgs(s string) ([]string, error) {
 		}
 	}
 
-	// Check for unbalanced quotes or pending escape
 	if inQuote != 0 {
 		return nil, fmt.Errorf("unbalanced quote: missing closing %q", string(inQuote))
 	}

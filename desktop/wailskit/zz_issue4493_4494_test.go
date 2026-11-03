@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// #4493 pin: the RequestAskUser timeout branch must close BOTH ends
-// (#4250 pattern) - emit ask_user:cancel and push the tunnel result.
 func TestIssue4493_AskUserTimeoutClosesBothEnds(t *testing.T) {
 	b, err := os.ReadFile("chat.go")
 	if err != nil {
@@ -26,9 +24,7 @@ func TestIssue4493_AskUserTimeoutClosesBothEnds(t *testing.T) {
 	if !strings.Contains(fn, "PushTunnelAskUserResult") {
 		t.Fatal("timeout branch must push the mobile-side closure")
 	}
-	// Late desktop answer (RespondAskUser) and late mobile tap
-	// (HandleMobileAskUserResponse) must feed back "stale" instead of
-	// returning silently.
+
 	for _, fnName := range []string{"RespondAskUser", "HandleMobileAskUserResponse"} {
 		f := extractChatFunc(t, s, fnName)
 		if !strings.Contains(f, "PushTunnelAskUserResult") {
@@ -37,9 +33,6 @@ func TestIssue4493_AskUserTimeoutClosesBothEnds(t *testing.T) {
 	}
 }
 
-// #4494 pin: SendHiddenText must NOT re-bump runGeneration after
-// InitAgent - only the guarded persist refresh (#1181/#1511, same as
-// SendContent).
 func TestIssue4494_SendHiddenTextNoReBump(t *testing.T) {
 	b, err := os.ReadFile("chat.go")
 	if err != nil {

@@ -12,16 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// Issue #2741: LoadSession's busy guard is one-shot — a run started during
-// the disk-IO window (session-lock acquire, store.Load) left b.cancel set
-// but the load proceeded to install the new session anyway. LoadSession
-// never bumped runGeneration, so the still-draining run's emitIfCurrent
-// guard passed and the old session's stream events polluted the new
-// session's liveHistory/frontend, while run_done fired against the new
-// turn. The fix re-checks busy after the IO window and refuses the load
-// (mirroring ClearCurrentSession #550 E1), bumping runGeneration on the
-// install path to supersede any residual-window run.
-
 const issue2741Session = `{"type":"meta","session_id":"%s","title":"%s","created_at":"%s","updated_at":"%s"}` + "\n" +
 	`{"type":"message","session_id":"%s","timestamp":"%s","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}` + "\n"
 
@@ -66,7 +56,7 @@ func issue2741CurrentSessionID(b *ChatBridge) string {
 // keep owning the finish path for the session it belongs to).
 func TestIssue2741_LoadSessionRefusesWhenRunStartsDuringIO(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp) // NewDefaultStore -> $HOME/.ggcode/sessions
+	t.Setenv("HOME", tmp)
 	dir := filepath.Join(tmp, ".ggcode", "sessions")
 	issue2741WriteSession(t, dir, "sess2741a", "Session A")
 	issue2741WriteSession(t, dir, "sess2741b", "Session B")
@@ -81,7 +71,6 @@ func TestIssue2741_LoadSessionRefusesWhenRunStartsDuringIO(t *testing.T) {
 		t.Fatalf("setup: LoadSession(A): %v", err)
 	}
 
-	// Gate the store so LoadSession(B) parks inside the IO window.
 	bridge.mu.Lock()
 	realStore := bridge.sessionStore
 	blk := &blockingLoadStore{
@@ -101,8 +90,6 @@ func TestIssue2741_LoadSessionRefusesWhenRunStartsDuringIO(t *testing.T) {
 		t.Fatal("LoadSession never reached the store IO window")
 	}
 
-	// Simulate a run starting during the window (IM/cron auto-injection):
-	// same critical-section shape as hidden-run start (cancel + generation).
 	_, runCancel := context.WithCancel(context.Background())
 	defer runCancel()
 	bridge.mu.Lock()
@@ -139,8 +126,6 @@ func TestIssue2741_LoadSessionRefusesWhenRunStartsDuringIO(t *testing.T) {
 		t.Fatalf("refuse path bumped runGeneration: %d -> %d (in-flight run must stay current)", genAfterRunStart, genNow)
 	}
 
-	// The target session's lock must have been released, or a retry of
-	// LoadSession(B) reports "locked by another instance" (#246 class).
 	lock, err := session.TryAcquireSessionLock(dir, "sess2741b")
 	if err != nil || lock == nil || !lock.Acquired() {
 		t.Fatalf("session B lock still held after refusal: lock=%v err=%v", lock, err)

@@ -76,30 +76,21 @@ func LoadDesktopConfig() *DesktopConfig {
 		return dc
 	}
 	if uerr := json.Unmarshal(data, dc); uerr != nil {
-		// Corrupt/truncated config (e.g. crash mid-write). Try the .bak copy
-		// BEFORE resetting to defaults (#428): a partial write used to wipe
-		// WorkDir/LastSession/Language/AlwaysOnTop/notification prefs, and
-		// the shutdown Save() then persisted the defaults — silent total
-		// loss of user preferences.
+
 		if bak, berr := os.ReadFile(desktopConfigPath() + ".bak"); berr == nil {
 			bdc := &DesktopConfig{WindowW: 1280, WindowH: 860}
 			if json.Unmarshal(bak, bdc) == nil {
-				// #581 (D1): Promote the good .bak to main file so the first
-				// Save() after recovery rotates valid data, not corrupt bytes.
+
 				if werr := os.WriteFile(desktopConfigPath(), bak, 0600); werr != nil {
 					debug.Log("wailskit", "failed to promote .bak to main config: %v", werr)
-					// Still return recovered config; next Save() will try again.
+
 				} else {
 					debug.Log("wailskit", "desktop config corrupted; recovered and promoted from .bak")
 				}
 				return bdc
 			}
 		}
-		// No usable backup: return defaults but DO NOT let the unconditional
-		// shutdown Save() overwrite the file — preserve the original as .bak
-		// so the damage stays recoverable (#207). Rename errors are logged
-		// (#428): overwriting a previous .bak silently destroyed the only
-		// forensic sample of the earlier corruption.
+
 		if rerr := os.Rename(desktopConfigPath(), desktopConfigPath()+".bak"); rerr != nil {
 			debug.Log("wailskit", "failed to preserve corrupt desktop config as .bak: %v", rerr)
 		}
@@ -131,27 +122,20 @@ func (dc *DesktopConfig) Save() error {
 	// Load current disk state and merge with this instance's dirty fields.
 	var merged DesktopConfig
 	if data, rerr := os.ReadFile(path); rerr == nil && len(data) > 0 {
-		// Disk file exists and is readable: merge with it.
+
 		if uerr := json.Unmarshal(data, &merged); uerr != nil {
-			// Disk file is corrupt. Log but continue with defaults - the
-			// rotation logic below will handle preserving the corrupt file.
+
 			debug.Log("wailskit", "Save: disk config is corrupt, using defaults for merge: %v", uerr)
 		}
 	}
 
 	merged.mergeFromDirty(dc)
 
-	// Use merged config for marshaling (not the raw dc).
 	data, err := json.MarshalIndent(&merged, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	// #449: rotate the current good copy (if any) to .bak BEFORE writing.
-	// #581 (D1): Validate that old is parseable before rotating — a corrupt
-	// main file would overwrite the only good .bak, turning single corruption
-	// into total data loss. This closes the seam between #428 (read .bak) and
-	// #449 (write .bak) where the first Save() after recovery polluted the backup.
 	if old, rerr := os.ReadFile(path); rerr == nil && len(old) > 0 {
 		testCfg := &DesktopConfig{}
 		if json.Unmarshal(old, testCfg) == nil {
@@ -162,8 +146,7 @@ func (dc *DesktopConfig) Save() error {
 			debug.Log("wailskit", "skipping desktop config .bak rotation: existing file is unparseable")
 		}
 	}
-	// Atomic write: temp file + rename, so a crash mid-write can never
-	// leave a truncated main file.
+
 	tmp := path + ".tmp"
 	if werr := os.WriteFile(tmp, data, 0600); werr != nil {
 		return werr
@@ -171,11 +154,7 @@ func (dc *DesktopConfig) Save() error {
 	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
-	// #710: WorkDir is now durably persisted (or superseded by a newer
-	// on-disk value): clear the flag so a LATER Save from this instance —
-	// e.g. the unconditional shutdown Save — no longer counts as "this
-	// instance recently switched workspace" and cannot roll back a switch
-	// another instance performed in between.
+
 	dc.dirtyWorkDir = false
 	return nil
 }
@@ -188,32 +167,15 @@ func (dc *DesktopConfig) Save() error {
 // DesktopConfig embeds a sync.Mutex, so a value receiver would copy the lock
 // (vet copylocks). Called from Save with dc.mu held; touches plain fields only.
 func (merged *DesktopConfig) mergeFromDirty(dc *DesktopConfig) {
-	// #710: WorkDir merges only when this instance explicitly switched
-	// workspace (SetWorkDir) since its last successful Save. The old non-empty
-	// guard was ineffective for this field — WorkDir is almost always
-	// non-empty in any loaded instance, so a stale snapshot's shutdown Save
-	// rolled back the workspace another instance had just switched to. Unlike
-	// the UI fields below, the workspace is point-in-time shared state: the
-	// newest switch should win, hence Save() clears the flag after
-	// persisting instead of letting it stay dirty for the instance's lifetime.
+
 	if dc.dirtyWorkDir {
 		merged.WorkDir = dc.WorkDir
 	}
-	// Language: only overwrite if this instance has a non-empty value.
-	// Preserve the value from other instances if we're empty (old snapshot).
-	// #710: unlike WorkDir, no setter/dirty flag exists for Language yet, so
-	// the non-empty guard remains its (known-limited, lower-impact) protection.
+
 	if dc.Language != "" {
 		merged.Language = dc.Language
 	}
-	// #647: WindowW/H/X/Y moved inside the dirtyWindowState gate. The old
-	// `!= 0` guards dropped a legitimate (0,0) origin (and any 0-width edge
-	// case) while WindowPosSet was still persisted from the dirty flag —
-	// leaving the contradictory on-disk state "WindowPosSet=true + stale
-	// coords" and restoring the window to its OLD position on next launch.
-	// Bounds are plain ints with no non-default sentinel (0 is valid), so —
-	// exactly like the bools below — only an instance that actually ran
-	// SetWindowState may write them.
+
 	if dc.dirtyWindowState {
 		merged.WindowW = dc.WindowW
 		merged.WindowH = dc.WindowH
@@ -222,14 +184,11 @@ func (merged *DesktopConfig) mergeFromDirty(dc *DesktopConfig) {
 		merged.WindowMax = dc.WindowMax
 		merged.WindowPosSet = dc.WindowPosSet
 	}
-	// Language: only overwrite if this instance has a non-empty value.
-	// Preserve the value from other instances if we're empty (old snapshot).
+
 	if dc.Language != "" {
 		merged.Language = dc.Language
 	}
-	// #635: bools and FontZoom have no "non-default" sentinel, so they are
-	// merged only when this instance actually touched them via a setter.
-	// The companion *Set flags ride along with their owning toggle.
+
 	if dc.dirtyFontZoom {
 		merged.FontZoom = dc.FontZoom
 	}
@@ -252,7 +211,7 @@ func (merged *DesktopConfig) mergeFromDirty(dc *DesktopConfig) {
 func (dc *DesktopConfig) SetWorkDir(dir string) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
-	dc.dirtyWorkDir = true // #710
+	dc.dirtyWorkDir = true
 	dc.WorkDir = dir
 }
 
@@ -264,7 +223,7 @@ func (dc *DesktopConfig) SetWorkDir(dir string) {
 func (dc *DesktopConfig) SetWindowState(w, h, x, y int, maximized bool) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
-	dc.dirtyWindowState = true // #635
+	dc.dirtyWindowState = true
 	if maximized {
 		dc.WindowMax = true
 		return
@@ -273,23 +232,17 @@ func (dc *DesktopConfig) SetWindowState(w, h, x, y int, maximized bool) {
 	dc.WindowH = h
 	dc.WindowX = x
 	dc.WindowY = y
-	// #631: (0,0) is a valid position — record that normal-mode bounds were
-	// captured so restore can honor an origin-at-top-left window.
+
 	dc.WindowPosSet = true
 	dc.WindowMax = false
 }
-
-// SetLastSession was removed (#583 Bug 4): dead field with zero references.
-// LastSession field was only serialized but never read or set in production code.
-// The comment "shared with the Fyne desktop" was misleading - Fyne has no
-// reference to wailskit's DesktopConfig. Use app-level state instead if needed.
 
 // IsNotificationsEnabled returns whether desktop notifications are enabled.
 // Defaults to true when never explicitly set.
 func (dc *DesktopConfig) IsNotificationsEnabled() bool {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
-	// When not explicitly configured, default to enabled
+
 	if !dc.NotificationsSet {
 		return true
 	}
@@ -300,7 +253,7 @@ func (dc *DesktopConfig) IsNotificationsEnabled() bool {
 func (dc *DesktopConfig) SetNotificationsEnabled(enabled bool) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
-	dc.dirtyNotifications = true // #635
+	dc.dirtyNotifications = true
 	dc.NotificationsEnabled = enabled
 	dc.NotificationsSet = true
 }
@@ -320,7 +273,7 @@ func (dc *DesktopConfig) GetFontZoom() float64 {
 func (dc *DesktopConfig) SetFontZoom(zoom float64) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
-	dc.dirtyFontZoom = true // #635
+	dc.dirtyFontZoom = true
 	dc.FontZoom = zoom
 }
 
@@ -335,7 +288,7 @@ func (dc *DesktopConfig) IsAlwaysOnTop() bool {
 func (dc *DesktopConfig) SetAlwaysOnTop(on bool) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
-	dc.dirtyAlwaysOnTop = true // #635
+	dc.dirtyAlwaysOnTop = true
 	dc.AlwaysOnTop = on
 }
 
@@ -344,8 +297,7 @@ func (dc *DesktopConfig) SetAlwaysOnTop(on bool) {
 func (dc *DesktopConfig) IsGlobalHotkeyEnabled() bool {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
-	// First-run default: enabled. Once the user explicitly toggles it,
-	// GlobalHotkeySet becomes true and the explicit value takes effect.
+
 	if !dc.GlobalHotkeySet {
 		return true
 	}
@@ -356,7 +308,7 @@ func (dc *DesktopConfig) IsGlobalHotkeyEnabled() bool {
 func (dc *DesktopConfig) SetGlobalHotkey(on bool) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
-	dc.dirtyGlobalHotkey = true // #635
+	dc.dirtyGlobalHotkey = true
 	dc.GlobalHotkey = on
 	dc.GlobalHotkeySet = true
 }

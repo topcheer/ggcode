@@ -1,17 +1,5 @@
 package wailskit
 
-// zz_issue4123_4125_test.go pins the desktop fixes from PR #4134:
-//
-// #4123: LoadSession's restore short-circuit compared only the model name,
-// so a same-name model served by a different vendor skipped
-// ActivateCurrentSelection and silently kept the global vendor while
-// currentSes.Vendor kept the saved one (usage bucketing billed the wrong
-// endpoint). sessionSelectionMatches now requires vendor/endpoint match
-// too, when the session recorded them.
-//
-// #4125: RuntimePermissionMode fell back to a hardcoded "supervised" that
-// desynced enforcement from the auto default InitAgent actually armed.
-
 import (
 	"testing"
 
@@ -56,7 +44,6 @@ func TestIssue4125_RuntimePermissionModeFallbackRecomputesDefault(t *testing.T) 
 		t.Fatalf("fallback = %q, want recomputed default %q", got, want)
 	}
 
-	// Session-pinned mode keeps precedence over the fallback.
 	b.currentSes = &session.Session{PermissionMode: "bypass"}
 	if got := p.RuntimePermissionMode(); got != "bypass" {
 		t.Fatalf("session-pinned mode lost precedence: got %q, want bypass", got)

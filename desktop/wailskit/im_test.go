@@ -14,8 +14,7 @@ import (
 func TestSaveIMAdapterPreservesDisabledState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	// Seed a minimal config so Load treats it as an existing (non-first-run)
-	// config and merges the external im.yaml on reload.
+
 	if err := os.MkdirAll(filepath.Join(home, ".ggcode"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +22,6 @@ func TestSaveIMAdapterPreservesDisabledState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create an enabled adapter, then disable it.
 	if err := SaveIMAdapter("tg", map[string]string{
 		"platform": "telegram",
 		"command":  "echo",
@@ -42,7 +40,6 @@ func TestSaveIMAdapterPreservesDisabledState(t *testing.T) {
 		t.Fatal("precondition: adapter should be disabled before edit")
 	}
 
-	// Edit only the token field — the edit dialog never sends "enabled".
 	if err := SaveIMAdapter("tg", map[string]string{
 		"platform": "telegram",
 		"command":  "echo",
@@ -145,8 +142,7 @@ func TestRemoveIMAdapterFailedUnbindRetryWorks(t *testing.T) {
 	seedIMTestConfig(t)
 
 	fake := &fakeUnbinder{failures: 1}
-	// First attempt: unbind fails. The adapter config must survive so the
-	// retry can re-enter the full chain.
+
 	if err := RemoveIMAdapter("tg", fake); err == nil {
 		t.Fatal("expected first remove to fail while unbind fails")
 	}
@@ -158,7 +154,6 @@ func TestRemoveIMAdapterFailedUnbindRetryWorks(t *testing.T) {
 		t.Fatal("#497 regression: failed unbind must not leave the config deleted — retry would die at 'not found'")
 	}
 
-	// Retry: unbind succeeds, full removal completes.
 	if err := RemoveIMAdapter("tg", fake); err != nil {
 		t.Fatalf("retry should succeed once unbind recovers: %v", err)
 	}

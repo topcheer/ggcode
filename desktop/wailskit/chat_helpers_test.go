@@ -9,8 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// --- displayReasoningEffort ---
-
 func TestDisplayReasoningEffort_EmptyReturnsAuto(t *testing.T) {
 	if got := displayReasoningEffort(""); got != "auto (adaptive)" {
 		t.Fatalf("expected 'auto (adaptive)', got %q", got)
@@ -35,8 +33,6 @@ func TestDisplayReasoningEffort_PreservesWhitespaceAroundValue(t *testing.T) {
 	}
 }
 
-// --- nextReasoningEffort ---
-
 func TestNextReasoningEffort_Cycle(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -45,9 +41,9 @@ func TestNextReasoningEffort_Cycle(t *testing.T) {
 		{"", "low"},
 		{"low", "medium"},
 		{"medium", "high"},
-		{"high", ""},       // wraps back to empty
-		{"LOW", "medium"},  // case-insensitive
-		{"unknown", "low"}, // unknown → first non-empty
+		{"high", ""},
+		{"LOW", "medium"},
+		{"unknown", "low"},
 	}
 	for _, tc := range tests {
 		got := nextReasoningEffort(tc.input)
@@ -56,8 +52,6 @@ func TestNextReasoningEffort_Cycle(t *testing.T) {
 		}
 	}
 }
-
-// --- maskAPIKey ---
 
 func TestMaskAPIKey_EmptyReturnsEmpty(t *testing.T) {
 	if got := maskAPIKey(""); got != "" {
@@ -85,8 +79,6 @@ func TestMaskAPIKey_LongKeyShowsStartEnd(t *testing.T) {
 	}
 }
 
-// --- resolveAPIKey ---
-
 func TestResolveAPIKey_EndpointKeyTakesPriority(t *testing.T) {
 	cfg := &config.Config{
 		Vendors: map[string]config.VendorConfig{
@@ -110,7 +102,7 @@ func TestResolveAPIKey_FallsBackToVendorKey(t *testing.T) {
 			"test": {
 				APIKey: "vendor-key",
 				Endpoints: map[string]config.EndpointConfig{
-					"ep1": {}, // no endpoint key
+					"ep1": {},
 				},
 			},
 		},
@@ -141,8 +133,6 @@ func TestResolveAPIKey_EndpointNotFound(t *testing.T) {
 	}
 }
 
-// --- parseA2ATimeout ---
-
 func TestParseA2ATimeout_EmptyString(t *testing.T) {
 	if got := parseA2ATimeout(""); got != 5*time.Minute {
 		t.Fatalf("expected 5m default, got %v", got)
@@ -166,8 +156,6 @@ func TestParseA2ATimeout_ValidMinutes(t *testing.T) {
 		t.Fatalf("expected 10m, got %v", got)
 	}
 }
-
-// --- tunnelSubagentTextID / tunnelSubagentReasoningID ---
 
 func TestTunnelSubagentTextID(t *testing.T) {
 	got := tunnelSubagentTextID("agent-123")

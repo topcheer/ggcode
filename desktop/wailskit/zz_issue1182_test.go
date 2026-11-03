@@ -15,7 +15,7 @@ func TestEmitDoesNotHoldBridgeMutexDuringTunnelPush(t *testing.T) {
 	release := make(chan struct{})
 	b := &ChatBridge{}
 	b.tunnelPush = func(_ provider.StreamEvent) {
-		<-release // simulates a blocked projection-sync wait
+		<-release
 	}
 
 	done := make(chan struct{})
@@ -24,8 +24,6 @@ func TestEmitDoesNotHoldBridgeMutexDuringTunnelPush(t *testing.T) {
 		close(done)
 	}()
 
-	// While the push is blocked, b.mu MUST still be acquirable (this is the
-	// lock the mobile reconnect snapshot path and Cancel need).
 	acquired := make(chan struct{})
 	go func() {
 		b.mu.Lock()
@@ -34,7 +32,7 @@ func TestEmitDoesNotHoldBridgeMutexDuringTunnelPush(t *testing.T) {
 	}()
 	select {
 	case <-acquired:
-		// good: mutex is free during the push
+
 	case <-time.After(2 * time.Second):
 		close(release)
 		t.Fatal("b.mu not acquirable while tunnel push blocked: emit still holds the lock (#1182 AB-BA)")

@@ -19,16 +19,14 @@ import (
 func TestSetMCPServerEnabledEnablePathPersistWins(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home) // windows
+	t.Setenv("USERPROFILE", home)
 	if err := os.MkdirAll(filepath.Join(home, ".ggcode"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	globalMu.Lock()
 	prev := activeChatBridge
-	// Manager with zero live plugins: Reconnect("ghost") deterministically
-	// returns false (the mcp_loader loop falls through) - exactly the
-	// divergence window the issue describes.
+
 	activeChatBridge = &ChatBridge{mcpManager: plugin.NewMCPManager(nil, nil, "")}
 	globalMu.Unlock()
 	t.Cleanup(func() {
@@ -37,7 +35,6 @@ func TestSetMCPServerEnabledEnablePathPersistWins(t *testing.T) {
 		globalMu.Unlock()
 	})
 
-	// Pre-existing disabled mark on disk, as left by a prior disable click.
 	if err := plugin.SetMCPDisabledIn("", "ghost-server", true); err != nil {
 		t.Fatalf("seed disabled state: %v", err)
 	}
@@ -45,7 +42,7 @@ func TestSetMCPServerEnabledEnablePathPersistWins(t *testing.T) {
 	if !SetMCPServerEnabled("ghost-server", true) {
 		t.Fatal("enable path returned false with a successful persist (UI shows failed for a change that took effect)")
 	}
-	// And the enable really persisted.
+
 	if plugin.MCPDisabledIn("", "ghost-server") {
 		t.Fatal("enable did not persist (server still marked disabled)")
 	}
@@ -59,7 +56,7 @@ func TestSetMCPServerEnabledEnablePathPersistWins(t *testing.T) {
 func TestSetMCPServerEnabledEnablePathReloadIsHarmless(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home) // windows
+	t.Setenv("USERPROFILE", home)
 	if err := os.MkdirAll(filepath.Join(home, ".ggcode"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +71,6 @@ func TestSetMCPServerEnabledEnablePathReloadIsHarmless(t *testing.T) {
 		globalMu.Unlock()
 	})
 
-	// Definition exists nowhere; enabling a name with no origin must still
-	// report the persist result, not a live-set lookup failure.
 	if !SetMCPServerEnabled("phantom-server", true) {
 		t.Fatal("enable of an origin-less name must report the persist result, not Reconnect's false")
 	}

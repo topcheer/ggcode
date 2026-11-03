@@ -52,7 +52,6 @@ func TestHiddenRunStartBumpsGenerationAndTurn(t *testing.T) {
 		t.Fatal("hidden run must start a desktop turn (#514 parity) — desktopTurnID empty")
 	}
 
-	// Unwind the run so the goroutine cannot block the suite on provider I/O.
 	b.Cancel()
 	select {
 	case <-done:

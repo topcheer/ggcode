@@ -28,7 +28,6 @@ func TestAppendPersistMessage_DeletedSessionRefused(t *testing.T) {
 
 	b.appendPersistMessage(store, ses, provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "late"}}})
 
-	// The JSONL must NOT have been re-created on disk.
 	if _, statErr := os.Stat(filepath.Join(dir, ses.ID+".jsonl")); statErr == nil {
 		t.Fatalf("deleted session was resurrected on disk by late persist")
 	}
@@ -80,14 +79,14 @@ func TestFormatMessagesAsMarkdown_TruncationRuneBoundary(t *testing.T) {
 			Content: strings.Repeat("a", fill) + tail + strings.Repeat("b", 10),
 		}
 	}
-	// 3-byte char crossing: lead at 1998, 1999, or fully inside.
+
 	for _, fill := range []int{1997, 1998, 1999, 1996} {
 		out := formatMessagesAsMarkdown([]SessionMessage{mk(fill, "\u6c49")}, "t")
 		if !utf8.ValidString(out) {
 			t.Errorf("3-byte layout fill=%d produced invalid UTF-8 output", fill)
 		}
 	}
-	// 4-byte emoji crossing in 4 layouts.
+
 	for _, fill := range []int{1996, 1997, 1998, 1999} {
 		out := formatMessagesAsMarkdown([]SessionMessage{mk(fill, "\U0001f600")}, "t")
 		if !utf8.ValidString(out) {

@@ -8,15 +8,6 @@ import (
 	"testing"
 )
 
-// Tests for issue #979:
-//  1. Add/Remove-triggered reload must push the merge-equivalent set
-//     (yaml ∪ .mcp.json), not the yaml-only list — otherwise Claude-migrated
-//     servers are silently kicked out of the running session (UI-visible but
-//     tools gone) on any unrelated panel edit.
-//  2. env/headers clearing must be constructible via the env_clear /
-//     headers_clear form sentinels (empty non-nil map at the patch layer);
-//     without any sentinel the old values must be preserved.
-
 func setup979Workspace(t *testing.T) (home, ws string, bridge *ChatBridge) {
 	t.Helper()
 	home = t.TempDir()
@@ -51,12 +42,7 @@ func writeProjectMCPJSON(t *testing.T, ws string) {
 	if err := os.WriteFile(filepath.Join(ws, ".mcp.json"), []byte(mcpJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// #979 invariant updated for the workspace trust gate (#3438
-	// follow-up): the .mcp.json server must be pre-approved for this
-	// workspace, otherwise the gate (correctly) holds it out of the
-	// session. What #979 protects is that an APPROVED project server
-	// survives unrelated panel writes - approval is a precondition, not
-	// the thing under test.
+
 	merged, _ := mcp.MergeStartupServersWithDeleted(ws, nil, nil)
 	if _, err := mcp.ApproveProjectServers(ws, merged, []string{"migrated-srv"}); err != nil {
 		t.Fatalf("pre-approving project server: %v", err)
@@ -132,7 +118,6 @@ func TestAddMCPServerRemoveMigratedServerFromOriginOnly(t *testing.T) {
 	_, ws, bridge := setup979Workspace(t)
 	writeProjectMCPJSON(t, ws)
 
-	// Force a reload so the migrated server is live first.
 	if err := AddMCPServer(map[string]string{"name": "tmp", "type": "stdio", "command": "echo"}); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +131,7 @@ func TestAddMCPServerRemoveMigratedServerFromOriginOnly(t *testing.T) {
 	if snapshotHas(bridge, "migrated-srv") {
 		t.Fatal("migrated server still in manager snapshot after origin removal")
 	}
-	// Origin file must no longer provide it (reload would resurrect it).
+
 	data, err := os.ReadFile(filepath.Join(ws, ".mcp.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +151,6 @@ func TestAddMCPServerRemoveMigratedServerFromOriginOnly(t *testing.T) {
 func TestAddMCPServerExplicitClearEnvHeaders(t *testing.T) {
 	_, ws, _ := setup979Workspace(t)
 
-	// Seed with env + headers.
 	if err := AddMCPServer(map[string]string{
 		"name":         "srv",
 		"type":         "http",
@@ -177,8 +161,6 @@ func TestAddMCPServerExplicitClearEnvHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Edit without env_/headers_ keys and WITHOUT clear sentinels: old
-	// values must be preserved ("not provided" != "cleared").
 	if err := AddMCPServer(map[string]string{
 		"name": "srv",
 		"type": "http",
@@ -191,7 +173,6 @@ func TestAddMCPServerExplicitClearEnvHeaders(t *testing.T) {
 		t.Fatalf("old env/headers not preserved on partial edit: env=%v headers=%v", srv.Env, srv.Headers)
 	}
 
-	// Edit with explicit clear sentinels: values must be gone.
 	if err := AddMCPServer(map[string]string{
 		"name":          "srv",
 		"type":          "http",
@@ -233,7 +214,7 @@ func loadServerByName979(t *testing.T, ws, name string) (srv struct {
 
 func jsonHasNoServer(t *testing.T, content, name string) bool {
 	t.Helper()
-	// Minimal containment check: the quoted server key must be absent.
+
 	return !containsSubstring(content, `"`+name+`"`)
 }
 

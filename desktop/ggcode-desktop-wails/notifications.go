@@ -76,17 +76,14 @@ func NewNotificationManager() *NotificationManager {
 		lastShown: make(map[string]time.Time),
 		winQueue:  make(chan winToast, 32),
 		unixQueue: make(chan unixToast, 32),
-		// #2411: approvals never share the 32-slot bulk queues - a stuck
-		// worker (10s banner cap) or a cold-start backlog could drop the
-		// NEWEST item, and the newest is exactly what approvals are.
+
 		approvalQueue: make(chan unixToast, 8),
 	}
-	// Single worker drains the Windows toast queue serially (#399): at most
-	// ONE powershell process is alive at a time regardless of storm size.
+
 	safego.Go("notify-win-worker", nm.drainWinQueue)
-	// #1431-A: same single-worker discipline for osascript/notify-send.
+
 	safego.Go("notify-unix-worker", nm.drainUnixQueue)
-	// #2411: dedicated approval lane - never starved by Task-completed bulk.
+
 	safego.Go("notify-approval-worker", nm.drainApprovalQueue)
 	return nm
 }
@@ -120,20 +117,14 @@ func (nm *NotificationManager) SetEnabled(enabled bool) {
 	}
 	nm.mu.Unlock()
 	if !enabled {
-		// #1866 case 3: dropping the switch must also drop whatever is
-		// still queued - the worker would otherwise keep surfacing
-		// banners for minutes (Windows toasts include a 6s sleep each)
-		// after the user explicitly turned notifications off.
+
 		nm.dropQueuedToasts()
 	}
 }
 
 // dropQueuedToasts empties both bounded queues non-blockingly (#1866).
 func (nm *NotificationManager) dropQueuedToasts() {
-	// #2411 review: the approval lane drains here too - the user just
-	// turned notifications OFF, and a queued approval banner popping out
-	// afterwards would violate that explicit global intent. Approvals are
-	// not lost: the IM channel and the in-app center still carry them.
+
 	for {
 		select {
 		case <-nm.approvalQueue:
@@ -188,13 +179,8 @@ func (nm *NotificationManager) Notify(title, body string) {
 		return
 	}
 	if nm.focused {
-		// #579: focused sessions still get the in-app notification-center
-		// event — previously this early return dropped EventsEmit entirely,
-		// so completed-task events never reached the frontend history while
-		// the user was looking at the app (the "center still receives every
-		// event" comment only held inside the dedup branch). Only the OS
-		// banner/badge path is suppressed when focused.
-		count := nm.unread // focused: not bumped, but the listener still needs it
+
+		count := nm.unread
 		ctx := nm.ctx
 		nm.mu.Unlock()
 		if ctx != nil {
@@ -202,16 +188,14 @@ func (nm *NotificationManager) Notify(title, body string) {
 				wailsruntime.EventsEmit(wctx, "notification", map[string]string{
 					"title": title,
 					"body":  body,
-					"count": itoa(count), // #2410: the title-listener contract
+					"count": itoa(count),
 				})
 			}
 		}
 		debug.Log("desktop", "notification os-banner suppressed (focused), center event emitted: %s", title)
 		return
 	}
-	// Storm dedup (#398): identical title+body within a short window collapses
-	// to one OS banner (multi-session completes share fixed titles like
-	// "Task completed"). Frontend center still receives every event.
+
 	key := title + "\x00" + body
 	if t, ok := nm.lastShown[key]; ok && time.Since(t) < 5*time.Second {
 		nm.unread++
@@ -223,13 +207,11 @@ func (nm *NotificationManager) Notify(title, body string) {
 				wailsruntime.EventsEmit(wctx, "notification", map[string]string{
 					"title": title,
 					"body":  body,
-					"count": itoa(count), // #2410
+					"count": itoa(count),
 				})
 			}
 		}
-		// #427: the dedup branch bumps unread but skipped setBadge — once the
-		// frontend title listener lands (#201), deduped notifications would
-		// leave a stale badge count.
+
 		nm.setBadge(count)
 		debug.Log("desktop", "notification deduped: %s (unread=%d)", title, count)
 		return
@@ -237,9 +219,7 @@ func (nm *NotificationManager) Notify(title, body string) {
 	if nm.lastShown == nil {
 		nm.lastShown = make(map[string]time.Time)
 	}
-	// #427: bound lastShown — dynamic-body notifications (job titles with
-	// timestamps, error text) used to accumulate one map entry per distinct
-	// title+body forever. Keep recent keys only.
+
 	if len(nm.lastShown) >= maxLastShownEntries {
 		nm.pruneLastShown()
 	}
@@ -251,46 +231,33 @@ func (nm *NotificationManager) Notify(title, body string) {
 
 	debug.Log("desktop", "notification: %s - %s (unread=%d)", title, body, count)
 
-	// Update dock badge
 	nm.setBadge(count)
 
-	// Show OS-level notification. #600 N4: on Windows the toast queue can be
-	// full; enqueueWinToast reports that and we roll back the dedup-map entry
-	// and unread count committed above — otherwise the badge counts a banner
-	// that will never display, and a retry within 5s hits the dedup branch
-	// and is never re-queued either.
 	if runtime.GOOS == "windows" {
 		if !nm.enqueueWinToast(title, body) {
 			nm.rollbackNotify(key)
 			debug.Log("desktop", "notification rolled back after toast enqueue failure: %s", title)
 		}
 	} else if runtime.GOOS == "darwin" {
-		// #1866: macOS delivery is queue-mediated too (single osascript
-		// worker, 0.3-1.5s per toast) - the queue fills under notification
-		// storms exactly like winQueue, and a bare blocking send stalled the
-		// stream-event dispatch goroutine for tens of seconds.
+
 		if !nm.enqueueUnixToast(title, body) {
 			nm.rollbackNotify(key)
 			debug.Log("desktop", "notification rolled back after unix enqueue failure: %s", title)
 		}
 	} else {
-		// #2095 bug A: the Linux/other branch used the void showOSNotification,
-		// whose notifyMacOS->enqueueUnixToast indirection swallowed the
-		// queue-full signal - the same failure mode the darwin branch above
-		// rolls back for (#1866), because Linux shares unixQueue with darwin.
+
 		if !nm.showOSNotification(title, body) {
 			nm.rollbackNotify(key)
 			debug.Log("desktop", "notification rolled back after unix enqueue failure: %s", title)
 		}
 	}
 
-	// Also emit to frontend for in-app notification center
 	if ctx != nil {
 		if wctx, ok := ctx.(context.Context); ok {
 			wailsruntime.EventsEmit(wctx, "notification", map[string]string{
 				"title": title,
 				"body":  body,
-				"count": itoa(count), // #2410: the title-listener contract
+				"count": itoa(count),
 			})
 		}
 	}
@@ -304,31 +271,22 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 		nm.mu.Unlock()
 		return
 	}
-	// #579 storm dedup: replayed/concurrent stream events can deliver the
-	// same approval request N times; title/body are effectively fixed
-	// ("GGCode"/"Approval needed"), so without dedup each replay spawned
-	// another osascript process (0.3-1.5s cold start) — #398 covered
-	// Notify only. Approval semantics preserved: no focused suppression
-	// here; the dedup window collapses the OS banner but still emits the
-	// frontend center event.
+
 	apKey := "approval\x00" + title + "\x00" + body
 	if t, ok := nm.lastShown[apKey]; ok && time.Since(t) < 5*time.Second {
-		// #600 N2: #427 fixed this exact omission in Notify's dedup branch but
-		// the sister function was missed — deduped approvals bumped nothing, so
-		// replayed requests never moved the badge. Mirror Notify: bump unread
-		// when unfocused and refresh the badge.
+
 		if !nm.focused {
 			nm.unread++
 		}
 		count := nm.unread
-		ctxSnap := nm.ctx // #450: snapshot under the lock
+		ctxSnap := nm.ctx
 		nm.mu.Unlock()
 		if ctx := ctxSnap; ctx != nil {
 			if wctx, ok := ctx.(context.Context); ok {
 				wailsruntime.EventsEmit(wctx, "notification", map[string]string{
 					"title": title,
 					"body":  body,
-					"count": itoa(count), // #2410
+					"count": itoa(count),
 				})
 			}
 		}
@@ -345,13 +303,12 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 		nm.pruneLastShown()
 	}
 	nm.lastShown[apKey] = time.Now()
-	// Approval notifications show even when focused (they're important),
-	// but only bump badge if not focused.
+
 	if !nm.focused {
 		nm.unread++
 	}
 	count := nm.unread
-	ctxSnap := nm.ctx // #450: snapshot under the lock — SetContext writes it concurrently
+	ctxSnap := nm.ctx
 	nm.mu.Unlock()
 
 	debug.Log("desktop", "approval notification: %s - %s", title, body)
@@ -359,18 +316,13 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 	if count > 0 {
 		nm.setBadge(count)
 	}
-	// #2411: approvals ride a DEDICATED lane, never the 32-slot bulk
-	// queues - bulk drop-new under backlog would discard exactly the
-	// highest-priority signal (approval even-when-focused). Same rollback
-	// contract (#600 N4/#2095 bug A) on the approval lane's own bound.
+
 	if !nm.enqueueApproval(title, body) {
 		nm.mu.Lock()
 		delete(nm.lastShown, apKey)
 		if !nm.focused && nm.unread > 0 {
 			nm.unread--
-			// #2411 review: re-read after the rollback - the count snapshot
-			// below still feeds the frontend emit, which would otherwise
-			// briefly report the rolled-back bump (title +1 too high).
+
 			count = nm.unread
 			if count > 0 {
 				nm.setBadge(count)
@@ -380,15 +332,12 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 		debug.Log("desktop", "approval notification rolled back after approval-lane enqueue failure: %s", title)
 	}
 
-	// #427: approval notifications must also reach the in-app notification
-	// center — Notify() emits "notification" on both paths, but this path
-	// never did, so approvals silently bypassed the frontend center.
 	if ctx := ctxSnap; ctx != nil {
 		if wctx, ok := ctx.(context.Context); ok {
 			wailsruntime.EventsEmit(wctx, "notification", map[string]string{
 				"title": title,
 				"body":  body,
-				"count": itoa(count), // #2410: the title-listener contract
+				"count": itoa(count),
 			})
 		}
 	}
@@ -437,8 +386,6 @@ func (nm *NotificationManager) GetUnread() int {
 	return nm.unread
 }
 
-// --- Platform-specific notification delivery ---
-
 // showOSNotification delivers an OS notification synchronously-ish (via
 // the platform queue) and reports whether it was accepted for delivery.
 // #2095 bug A: the void return was the rollback-contract gap - Linux
@@ -449,29 +396,16 @@ func (nm *NotificationManager) showOSNotification(title, body string) bool {
 	case "darwin":
 		return nm.notifyMacOS(title, body)
 	case "linux":
-		// #1852 case 1: route Linux through the SAME bounded queue as
-		// macOS - the old notifyLinux call spawned one goroutine+process
-		// per notification and never touched unixQueue, so the #1431-A
-		// serialization contract was honored on darwin only. The worker
-		// (deliverUnix) already dispatches notify-send for non-darwin.
+
 		return nm.notifyMacOS(title, body)
 	case "windows":
 		return nm.notifyWindows(title, body)
 	}
-	return true // unknown platform: nothing queued, nothing to roll back
+	return true
 }
 
 func (nm *NotificationManager) notifyMacOS(title, body string) bool {
-	// Use osascript to display a native notification.
-	// #1431-A: the #399 storm fix (single worker, bounded queue) only
-	// covered Windows; macOS/Linux kept the unbounded one-goroutine-
-	// per-notification path - osascript cold-starts 0.3-1.5s, and N
-	// concurrent sessions completing (#600 makes bodies unique, so
-	// dedup never folds them) meant N concurrent osascript processes.
-	// Same queue+worker pattern as winQueue, shared across platforms.
-	// #1866: enqueue via the non-blocking helper - Notify() rolls back on
-	// failure (see enqueueUnixToast). #2095: propagate acceptance to the
-	// caller instead of swallowing it here.
+
 	if !nm.enqueueUnixToast(title, body) {
 		debug.Log("desktop", "unix toast queue full; dropping notification: %s", title)
 		return false
@@ -583,11 +517,7 @@ func escapeAppleScriptText(s string) string {
 // deliverUnix synchronously delivers one non-Windows notification on the
 // queue worker: osascript on macOS, notify-send elsewhere (#1431-A).
 func (nm *NotificationManager) deliverUnix(title, body string) {
-	// #1504 case 3: bounded delivery. cmd.Run() without a deadline let a
-	// hung osascript/notify-send block the single worker FOREVER - with the
-	// queue cap 32, the 33rd notification then wedged the agent's event-
-	// dispatch goroutine (the whole chat stream froze). 10s covers the
-	// slowest legitimate cold start with two orders of margin.
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if runtime.GOOS == "darwin" {
@@ -631,15 +561,8 @@ func (nm *NotificationManager) warnDeliveryOnce(platform string, err error) {
 	})
 }
 
-// notifyLinux was removed (#1852 case 1): Linux now rides the shared
-// unixQueue (see showOSNotification); deliverUnix runs notify-send on
-// the single worker. The old one-goroutine-per-notification path was
-// the #399 storm shape that #1431-A fixed for darwin only.
-
 func (nm *NotificationManager) notifyWindows(title, body string) bool {
-	// Kept for interface parity; real delivery goes through enqueueWinToast so
-	// callers can roll back their dedup/unread commits on queue-full (#600 N4).
-	// #2095: propagate acceptance for the same rollback contract.
+
 	return nm.enqueueWinToast(title, body)
 }
 
@@ -661,12 +584,7 @@ func (nm *NotificationManager) enqueueWinToast(title, body string) bool {
 
 // runWinToast executes one PowerShell toast synchronously (worker context).
 func (nm *NotificationManager) runWinToast(title, body string) {
-	// #2095 bug B: mirror deliverUnix's bounded delivery (#1504 case 3) -
-	// cmd.Run() without a deadline let a hung PowerShell (COM/WMI init,
-	// AV interference) block drainWinQueue, the ONLY winQueue worker,
-	// forever; winQueue then filled and every subsequent Windows OS
-	// notification (including approval banners) was dropped until restart.
-	// The script itself sleeps 6s, so 10s bounds it with margin.
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	script := windowsToastScript(title, body)
@@ -698,35 +616,24 @@ func windowsToastScript(title, body string) string {
 		"$balloon.Dispose()"
 }
 
-// --- Dock badge management ---
-// NOTE (#201): the unread state machine (Notify increment, SetFocused/
-// SetEnabled/ClearUnread reset, GetUnread read) is kept because the bound
-// APIs are used by the frontend, but setBadge/clearBadge are intentionally
-// no-ops pending a frontend document.title listener. Emitting a "notification"
-// event with an unread count is the integration point when that lands.
-
 func (nm *NotificationManager) setBadge(count int) {
 	if count <= 0 {
 		nm.clearBadge()
 		return
 	}
-	// Dock badge on macOS via osascript (works for the running app).
+
 	if runtime.GOOS == "darwin" {
-		// Use NSApp via osascript to set dock badge.
+
 		script := "tell application \"System Events\" to set dock utilities's badge to \"" + itoa(count) + "\""
-		// Actually, setting the badge requires the app's NSApp.
-		// On macOS, Wails apps can use NSApp setDockTileBadge.
-		// We use a simpler approach: terminal-notifier or osascript display.
-		// The badge setting requires platform-specific code that Wails may not expose.
-		// For now, the OS notification itself serves as the badge-equivalent.
-		_ = script // no-op: badge is handled by notification + frontend title
+
+		_ = script
 	}
-	// Update document title via frontend event if context available
+
 }
 
 func (nm *NotificationManager) clearBadge() {
 	if runtime.GOOS == "darwin" {
-		// Same as setBadge — platform limitation noted above.
+
 	}
 }
 

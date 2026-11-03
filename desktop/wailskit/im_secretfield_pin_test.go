@@ -1,11 +1,5 @@
 package wailskit
 
-// #2180: the desktop registry declares Secret-ness explicitly (best
-// practice), but a name that drifts OUT of the single-source wide table
-// would silently render in cleartext if any code path ever fell back
-// to name heuristics. Pin: every registry Secret field must hit the
-// single source.
-
 import (
 	"testing"
 

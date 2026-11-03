@@ -27,7 +27,7 @@ func TestIssue700LastCloseAttemptConcurrentAccess(t *testing.T) {
 				} else {
 					a.lastCloseAttempt.Store(nil)
 				}
-				// Every goroutine also reads (mirrors the toggle-direction read).
+
 				_ = a.lastCloseAttempt.Load()
 			}
 		}(g)

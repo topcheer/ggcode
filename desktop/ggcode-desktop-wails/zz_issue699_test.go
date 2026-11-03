@@ -15,7 +15,6 @@ import (
 func TestIssue699NewSessionUsesChatSnapshot(t *testing.T) {
 	a := NewApp()
 
-	// Case 1: nil chat must return an error, not silent success.
 	sid, err := a.NewSession()
 	if err == nil {
 		t.Fatalf("NewSession with nil chat: expected error, got silent success (sid=%q)", sid)
@@ -27,13 +26,6 @@ func TestIssue699NewSessionUsesChatSnapshot(t *testing.T) {
 		t.Fatalf("NewSession with nil chat: expected empty session id, got %q", sid)
 	}
 
-	// Case 2: chat is non-nil at snapshot time, but a.chat is nilled by the
-	// time Cancel is called (simulated by nilling immediately after NewSession
-	// begins — since NewSession synchronously snapshots first, the snapshot
-	// must survive). We verify indirectly: NewSession with a live bridge must
-	// use the snapshot. A full live-bridge test is covered by the package's
-	// existing session tests; here we assert the nil-path contract only,
-	// which is the crash-relevant regression surface.
 }
 
 // #699: RespondAskUser must route the response through the snapshotted chat
@@ -43,8 +35,7 @@ func TestIssue699NewSessionUsesChatSnapshot(t *testing.T) {
 // checked before use and never dereferenced off the field.
 func TestIssue699RespondAskUserNilChatNoPanic(t *testing.T) {
 	a := NewApp()
-	// a.chat is nil — must return quietly (documented contract for nil
-	// bridge), never panic.
+
 	a.RespondAskUser("req-1", `{"status":"submitted","answers":[]}`)
 }
 
@@ -53,7 +44,7 @@ func TestIssue699RespondAskUserNilChatNoPanic(t *testing.T) {
 func TestIssue699InitWorkspacePropagatesError(t *testing.T) {
 	a := NewApp()
 	a.dc = wailskit.LoadDesktopConfig()
-	// Empty dir returns nil (early return branch).
+
 	if err := a.initWorkspace(""); err != nil {
 		t.Fatalf("initWorkspace(\"\") should be a no-op nil, got %v", err)
 	}

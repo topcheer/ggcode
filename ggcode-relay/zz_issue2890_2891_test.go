@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-// zz_issue2890_2891_test.go - regression probes for relay concurrency fixes.
-
 // TestIssue2891SessionIDReadInsideLock is a -race probe: notifyRelayRestarting
 // must copy room.sessionID inside the room.mu.RLock critical section. The old
 // code read it after RUnlock while bindRoomSession writes it under room.mu -
@@ -23,8 +21,6 @@ func TestIssue2891SessionIDReadInsideLock(t *testing.T) {
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 
-	// Writer: bindRoomSession mutates room.sessionID under room.mu (the
-	// production write side).
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -38,8 +34,6 @@ func TestIssue2891SessionIDReadInsideLock(t *testing.T) {
 		}
 	}()
 
-	// Reader: notifyRelayRestarting reads room.sessionID - with the fix the
-	// copy happens under RLock and the race detector stays silent.
 	deadline := time.Now().Add(300 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		h.notifyRelayRestarting()
@@ -63,10 +57,9 @@ func TestIssue2890StaleServerStopSharingIgnored(t *testing.T) {
 	client.ready = true
 	r.clients[client] = struct{}{}
 
-	shadow := newPeer(h, r, "server", nil) // role=server but NOT room.server
+	shadow := newPeer(h, r, "server", nil)
 	shadow.ready = true
 
-	// Shadow's stop_sharing must be a no-op (room survives).
 	if !shadow.onStopSharing(relayMessage{Type: "stop_sharing"}, h) {
 		t.Fatal("stop_sharing should be consumed by the handler")
 	}
@@ -77,7 +70,6 @@ func TestIssue2890StaleServerStopSharingIgnored(t *testing.T) {
 		t.Fatal("#2890: shadow server's stop_sharing destroyed the room - stale server must not be able to destroy the room")
 	}
 
-	// The legitimate server's stop_sharing still works.
 	if !legit.onStopSharing(relayMessage{Type: "stop_sharing"}, h) {
 		t.Fatal("legit stop_sharing should be handled")
 	}
@@ -87,7 +79,7 @@ func TestIssue2890StaleServerStopSharingIgnored(t *testing.T) {
 	if exists {
 		t.Fatal("legit server's stop_sharing should destroy the room")
 	}
-	// Client got the sharing_stopped notice.
+
 	select {
 	case raw := <-client.sendCh:
 		var msg relayMessage

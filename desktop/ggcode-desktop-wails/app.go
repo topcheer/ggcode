@@ -104,19 +104,8 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.startEventLoop()
 
-	// Initialize system tray icon with quick actions.
 	a.initSystemTray()
 
-	// Register system-wide global hotkey (Option+Cmd+G) to toggle window.
-	// NOTE: must run after a.dc is loaded below — initGlobalHotkey reads
-	// a.dc.IsGlobalHotkeyEnabled() and silently returns when a.dc is nil, so
-	// calling it earlier meant the persisted hotkey preference never took
-	// effect after a restart (#361).
-
-	// Register native file drag-and-drop handler.
-	// When the user drags files from the OS file manager into the window,
-	// Wails provides the absolute file paths. We emit them as a frontend
-	// event so ChatView can insert file references into the input.
 	wailsruntime.OnFileDrop(ctx, func(x, y int, paths []string) {
 		if len(paths) == 0 {
 			return
@@ -129,24 +118,14 @@ func (a *App) startup(ctx context.Context) {
 		})
 	})
 
-	// Initialize notification manager
 	a.notifications = NewNotificationManager()
 	a.notifications.SetContext(ctx)
 
-	// Load shared desktop config (same file as Fyne desktop)
 	a.dc = wailskit.LoadDesktopConfig()
 
-	// Register global hotkey now that the config (and its enabled flag) is
-	// available. This placement is before the onboarding early-return below,
-	// so the hotkey registers on every startup path. Registration failure is
-	// logged, not fatal (#615): the app still runs, just without the hotkey.
 	if err := a.initGlobalHotkey(); err != nil {
 		debug.Log("desktop", "global hotkey registration failed: %v", err)
-		// #1504 case 5: mirror the SetGlobalHotkeyEnabled rollback contract
-		// (#615) on the startup path - a persisted enabled=true left over
-		// from the pre-#615 stub era (or a newly conflicting combo) showed
-		// the settings page claiming "enabled" over a dead hotkey. Roll the
-		// persisted flag back to disabled so UI and reality stay in sync.
+
 		if a.dc.IsGlobalHotkeyEnabled() {
 			a.dc.SetGlobalHotkey(false)
 			if saveErr := a.dc.Save(); saveErr != nil {
@@ -155,18 +134,12 @@ func (a *App) startup(ctx context.Context) {
 		}
 	}
 
-	// Sync notification preference from config
 	a.notifications.SetEnabled(a.dc.IsNotificationsEnabled())
 
-	// Restore window position and size from the saved desktop config.
-	// This makes the window reopen at the same location/size as last session.
 	if a.dc.WindowW > 0 && a.dc.WindowH > 0 {
 		wailsruntime.WindowSetSize(ctx, a.dc.WindowW, a.dc.WindowH)
 	}
-	// #631: (0,0) is a legitimate window origin, not an "unset" sentinel.
-	// WindowPosSet records that a normal-mode position was actually captured;
-	// the nonzero fallback keeps legacy configs (saved before the flag
-	// existed) restoring as before.
+
 	if a.dc.WindowPosSet || a.dc.WindowX != 0 || a.dc.WindowY != 0 {
 		wailsruntime.WindowSetPosition(ctx, a.dc.WindowX, a.dc.WindowY)
 	}
@@ -174,45 +147,31 @@ func (a *App) startup(ctx context.Context) {
 		wailsruntime.WindowMaximise(ctx)
 	}
 
-	// Restore always-on-top state from saved config.
 	if a.dc.IsAlwaysOnTop() {
 		wailsruntime.WindowSetAlwaysOnTop(ctx, true)
 	}
 
-	// Restore last workspace — but verify it still exists.
-	// Desktop uses a cached workspace path; if the directory was moved or
-	// deleted since last run, we must not silently continue with a stale path.
 	if a.dc.WorkDir != "" {
 		if info, err := os.Stat(a.dc.WorkDir); err == nil && info.IsDir() {
 			a.workDir = a.dc.WorkDir
 			_ = os.Chdir(a.workDir)
 		} else {
-			// Cached workspace no longer exists — fall back to home dir
-			// and clear the stale cache so we don't keep trying.
+
 			debug.Log("desktop", "cached workspace %q no longer exists, falling back to home", a.dc.WorkDir)
 			a.workDir = config.HomeDir()
 			_ = os.Chdir(a.workDir)
 			a.dc.WorkDir = ""
 		}
 	} else {
-		// No cached workspace — default to the user's home directory.
-		// Using os.Getwd() would inherit the terminal's CWD, which often
-		// has an existing ggcode.yaml (e.g. the repo root) that masks the
-		// intended HOME-based config. This is especially important for
-		// onboarding: with HOME=/tmp/test-home, the desktop should see no
-		// config and show the onboarding wizard.
+
 		a.workDir = config.HomeDir()
 		_ = os.Chdir(a.workDir)
 	}
 
-	// Check if onboarding is needed before initializing workspace.
-	// If the user has no API key configured, skip workspace init and let
-	// the frontend show the onboarding wizard. The frontend will call
-	// SwitchWorkspace (→ initWorkspace) after onboarding completes.
 	cfg, err := wailskit.LoadConfigForWorkspace(a.workDir)
 	if err != nil || cfg == nil || cfg.NeedsOnboard() {
 		debug.Log("desktop", "onboarding needed, skipping workspace init")
-		// Set partial config so frontend GetConfig returns NeedsSetup=true
+
 		if cfg != nil {
 			wailskit.SetConfig(cfg)
 		}
@@ -229,10 +188,7 @@ func (a *App) startEventLoop() {
 		a.streamEvents = make(chan uiEvent, 4096)
 		safego.Go("wails-event-loop", func() {
 			for ev := range a.streamEvents {
-				// #701: per-event recover — a panic in EventsEmit (e.g. during
-				// Wails shutdown teardown) must skip one event, not kill the
-				// only consumer and permanently deadlock every emitter on a
-				// full 4096 buffer.
+
 				safego.Run("wails-event-emit", func() {
 					if a.ctx == nil {
 						return
@@ -251,22 +207,11 @@ func (a *App) enqueueUIEvent(name string, payload interface{}) {
 		}
 		return
 	}
-	// #701: non-blocking send with drop accounting — if the consumer loop
-	// ever dies or falls behind, a dropped UI event is strictly better than
-	// a frozen agent loop blocked forever on a full buffer.
+
 	select {
 	case a.streamEvents <- uiEvent{name: name, payload: payload}:
 	default:
-		// #706: that trade-off is only valid for regenerable stream data
-		// (chat:stream token deltas — the next delta repaints the view).
-		// One-shot interactive events (ask_user/approval request/cancel,
-		// pending_consumed) are NOT regenerable: a dropped request leaves
-		// the agent blocked on a no-timeout ask with no dialog shown, and a
-		// dropped cancel leaves a stale dialog. Route those through a
-		// lossless bypass — a direct EventsEmit dispatch (non-blocking;
-		// guarded by safego.Run so a dispatch panic cannot kill the agent
-		// goroutine). A request and its cancel can therefore never both be
-		// lost.
+
 		if interactiveUIEvent(name) {
 			debug.Log("desktop", "enqueueUIEvent: main buffer full, dispatching interactive event %q directly (lossless bypass)", name)
 			safego.Run("wails-event-emit", func() {
@@ -305,18 +250,14 @@ func (a *App) initWorkspace(dir string) error {
 	}
 	wailskit.SetConfig(cfg)
 
-	// Save workdir to shared desktop config (mirrors Fyne dc.Save)
 	a.dc.SetWorkDir(dir)
 	if err := a.dc.Save(); err != nil {
 		debug.Log("desktop", "persist workdir failed: %v", err)
 	}
 
-	// Initialize chat bridge with loaded config
 	chat, err := wailskit.NewChatBridge()
 	if err != nil {
-		// #699 (defensive): propagate instead of silently returning with
-		// a.chat == nil — a future NewChatBridge failure must not masquerade
-		// as success.
+
 		return err
 	}
 	chat.OnStreamEvent = func(eventType string, data json.RawMessage) {
@@ -338,27 +279,21 @@ func (a *App) initWorkspace(dir string) error {
 	a.chat = chat
 	wailskit.SetChatBridge(chat)
 
-	// Initialize log stream and hook to debug.Log
 	a.logStream = wailskit.NewLogStream(2000)
 	debug.SetLiveSink(func(category, msg string) {
 		a.logStream.Write(category, msg)
 	})
 
-	// Initialize IM runtime (same as Fyne's initIMRuntime)
 	a.initIMRuntime()
 
-	// Try to resume the latest session for this workspace, matching TUI behavior.
-	// If no sessions exist, create a new one.
 	if latestID := a.resumeLatestSession(); latestID != "" {
 		debug.Log("app", "resumed latest session: %s", latestID)
-		// InitAgent is already called inside LoadSession→resumeLatestSession,
-		// so we skip it here to avoid starting a duplicate A2A server.
+
 	} else {
 		chat.EnsureSession()
 		_ = chat.InitAgent()
 	}
 
-	// Start IM adapters AFTER InitAgent so the bridge has the correct chat instance
 	a.startIMAdapters()
 
 	if a.ctx != nil {
@@ -393,14 +328,12 @@ func (a *App) emitStreamEvent(eventType string, data json.RawMessage) {
 		Type: eventType,
 		Data: string(data),
 	}
-	// The streamQueue/DrainStreamEvents channel is dead code — no frontend
-	// caller ever drains it — and appending every token delta leaked memory
-	// for the app's lifetime (#208). Events go out via chat:stream only.
+
 	a.enqueueUIEvent("chat:stream", map[string]interface{}{
 		"type": envelope.Type,
 		"data": envelope.Data,
 	})
-	// Emit interactive events as standalone events for Layout-level dialogs.
+
 	if eventType == "ask_user:request" || eventType == "approval:request" ||
 		eventType == "ask_user:cancel" || eventType == "approval:cancel" {
 		var parsed interface{}
@@ -412,16 +345,10 @@ func (a *App) emitStreamEvent(eventType string, data json.RawMessage) {
 		a.enqueueUIEvent(eventType, nil)
 	}
 
-	// Trigger desktop notifications for important events when the
-	// window is not focused (user switched to another app).
 	if a.notifications != nil {
 		switch eventType {
 		case "run_done":
-			// #605 G2: the completion event is "run_done" (chat.go L722), not
-			// "complete" — the old case was dead code with zero emitters, so
-			// #600 N5's concurrent-session merge defect was fully preserved.
-			// Payload: {turn_id, message_id, error}; error != "" is a failed
-			// run — the error case below owns that notification.
+
 			if streamEventStringField(data, "error") == "" {
 				a.notifications.Notify("GGCode", notifyCompleteBody(data))
 			}
@@ -540,27 +467,23 @@ func (a *App) switchWorkspace(dir string) error {
 	if dir == "" {
 		return nil
 	}
-	// Verify target directory exists BEFORE tearing down the current workspace.
-	// This prevents destroying the current session/IM state when the user
-	// picks a non-existent path.
+
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 		return fmt.Errorf("workspace directory does not exist: %s", dir)
 	}
 
-	// #1183: reuse the shared teardown path (share/IM/bridge close).
 	a.teardownChatBridge()
-	// chdir is guaranteed to succeed because we verified the dir above.
+
 	a.workDir = dir
 	_ = os.Chdir(dir)
-	// #699 (defensive): propagate initWorkspace's error instead of
-	// unconditionally claiming success.
+
 	return a.initWorkspace(dir)
 }
 
 // shutdown is called when the app is closing.
 func (a *App) shutdown(_ context.Context) {
 	a.shutdownOnce.Do(func() {
-		// Persist window position/size so it can be restored on next launch.
+
 		if a.ctx != nil {
 			w, h := wailsruntime.WindowGetSize(a.ctx)
 			x, y := wailsruntime.WindowGetPosition(a.ctx)
@@ -576,19 +499,11 @@ func (a *App) shutdown(_ context.Context) {
 		a.removeSystemTray()
 		if a.chat != nil {
 			a.chat.Cancel()
-			// #1430-A: Cancel only aborts in-flight work; Close additionally
-			// deletes the empty 'created-but-never-messaged' session, clears
-			// IM session bindings, releases the session lock, stops A2A/
-			// ACP, and leaves the LAN hub (broadcast) - teardownChatBridge
-			// (workspace switch) already does Cancel+Close; the QUIT path was
-			// the odd one out, leaving empty sessions on disk forever (no
-			// startup sweep exists to clean them up). Close is idempotent.
+
 			a.chat.Close()
 		}
 	})
 }
-
-// ─── Workspace Init ──────────────────────────────────────
 
 // NeedsOnboard returns true if the config needs first-time setup.
 func (a *App) NeedsOnboard() bool {
@@ -628,11 +543,7 @@ func (a *App) CompleteOnboard(vendor, endpoint, model, apiKey string) error {
 			return err
 		}
 	}
-	// Reload chat bridge with new config. #1183: tear down the previous
-	// bridge first - re-running onboarding used to call initWorkspace
-	// directly, leaking the old bridge's JSONL session lock, A2A server
-	// port, tunnel share and IM adapters, and double-emitting events from
-	// both the old and new bridge.
+
 	a.teardownChatBridge()
 	return a.initWorkspace(a.workDir)
 }
@@ -647,8 +558,6 @@ func (a *App) TrajConfidenceOverview() wailskit.TrajConfidenceOverview {
 func (a *App) GetVendorPresets() []wailskit.VendorPresetInfo {
 	return wailskit.GetVendorPresets()
 }
-
-// ─── Chat ─────────────────────────────────────────────────
 
 type PastedImage struct {
 	MimeType string `json:"mimeType"`
@@ -739,17 +648,13 @@ func readClipboardAttachmentsFromPaths(paths []string) []ClipboardAttachment {
 			continue
 		}
 		att := readClipboardFileAttachment(abs)
-		// Budget counts the FILE size (att.Size), not just inlined data:
-		// binary attachments never inline their payload, but they still
-		// cross the bridge as a path the frontend will re-read.
+
 		if totalBytes+int(att.Size) > maxClipboardAttachmentTotalBytes {
 			budgetHit = true
 			att.Error = fmt.Sprintf(clipboardAttachmentBudgetErrorText, maxClipboardAttachmentCount, maxClipboardAttachmentTotalBytes>>20)
 			att.Data = ""
 		} else {
-			// Accumulate on pass. Error may carry a business notice
-			// ("not pasted as text") - that is not a budget failure and
-			// must not stop the running total.
+
 			totalBytes += int(att.Size)
 		}
 		attachments = append(attachments, att)
@@ -759,11 +664,7 @@ func readClipboardAttachmentsFromPaths(paths []string) []ClipboardAttachment {
 
 func clipboardFilePaths() ([]string, error) {
 	if runtime.GOOS != "darwin" {
-		// #425: the AppKit osascript path is macOS-only. Previously this ran
-		// on every platform, where osascript doesn't exist and the error was
-		// swallowed (nil, nil) — pasting files silently did nothing on
-		// Windows/Linux. Return an explicit unsupported error instead of
-		// masquerading as "clipboard has no files".
+
 		return nil, fmt.Errorf("clipboard file reading is not supported on %s", runtime.GOOS)
 	}
 	script := `use framework "AppKit"
@@ -787,9 +688,7 @@ return result`
 	cmd := exec.Command("osascript", "-e", script)
 	output, err := cmd.Output()
 	if err != nil {
-		// #425: surface the failure (e.g. TCC automation-permission denial)
-		// instead of swallowing it — callers could not distinguish "clipboard
-		// empty" from "osascript failed".
+
 		return nil, fmt.Errorf("reading clipboard file paths via osascript: %w", err)
 	}
 	return parseClipboardPathOutput(string(output)), nil
@@ -797,14 +696,7 @@ return result`
 
 func parseClipboardPathOutput(output string) []string {
 	var paths []string
-	// Split only by newlines. The AppleScript above joins the path list with
-	// linefeed, so no ", " secondary split is needed (and it would corrupt
-	// file names containing ", ").
-	// #579: the former file:// prefix branch was dead code — the upstream
-	// AppleScript reads |path|() which never returns URIs, so the branch
-	// only fired on synthetic test input and masked the separator's real
-	// limitation: macOS filenames may legally contain \n, which the
-	// linefeed separator cannot distinguish (documented in zz_issue579_test).
+
 	for _, item := range strings.Split(strings.ReplaceAll(output, "\r", "\n"), "\n") {
 		item = strings.TrimSpace(item)
 		if item == "" {
@@ -837,10 +729,7 @@ func readClipboardFileAttachment(path string) ClipboardAttachment {
 	}
 
 	if img, err := imgpkg.ReadFile(path); err == nil {
-		// #579: imgpkg.ReadFile enforces its own 20MB MaxSize, but the
-		// clipboard contract here is 10MB — on FIFOs (Stat size 0) the
-		// pre-read check above passed vacuously and this branch could
-		// hand back ~20MB×1.33 base64. Enforce the contract post-read.
+
 		if int64(len(img.Data)) > maxClipboardFileBytes {
 			att.Error = "File is larger than 10MB"
 			return att
@@ -856,32 +745,17 @@ func readClipboardFileAttachment(path string) ClipboardAttachment {
 		att.Error = fmt.Sprintf("read file: %v", err)
 		return att
 	}
-	// #459: post-read length recheck — Stat().Size() is 0 on FIFOs, so the
-	// pre-read check passed deterministically and ReadFile pulled in
-	// unbounded data. The recheck caps actual damage at detection time.
+
 	if int64(len(data)) > maxClipboardFileBytes {
 		att.Error = "File is larger than 10MB"
 		return att
 	}
-	// #671: MimeType must come from the same source of truth as Kind/Error —
-	// the file CONTENT — not the extension. Previously the extension-derived
-	// value was never overridden (only used as a fallback when empty), so a
-	// UTF-16 .txt was rejected as binary while still reporting
-	// "text/plain; charset=utf-8", and a renamed image kept an "image/*"
-	// label on non-image bytes.
+
 	extMime := mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
 	sniffed := http.DetectContentType(data)
 	if looksLikeText(data) {
 		att.Kind = "text"
-		// Keep the extension's richer textual type (e.g. text/csv) only when
-		// it agrees with the content verdict; otherwise the sniffed value
-		// wins so MimeType can never contradict Kind.
-		// #675: "richer textual type" is not just text/* — XML-family
-		// extension mimes (image/svg+xml per RFC 7303's …+xml suffix,
-		// application/xml, …) and other textual application/* types are
-		// UTF-8 text too. The text/-only whitelist degraded a pasted .svg
-		// from image/svg+xml to the sniffed text/plain, contradicting the
-		// comment's stated intent.
+
 		if extMime != "" && isTextualExtensionMime(extMime) {
 			att.MimeType = extMime
 		} else {
@@ -890,10 +764,7 @@ func readClipboardFileAttachment(path string) ClipboardAttachment {
 		att.Content = string(data)
 		return att
 	}
-	// Binary rejection path: report the sniffed content type. If sniffing
-	// still claims text/* (e.g. UTF-16 BOM detection), the content failed
-	// the paste-text heuristic, so downgrade to opaque octet-stream — no
-	// field may claim text while Kind/Error reject the data as binary.
+
 	att.MimeType = sniffed
 	if att.MimeType == "" || strings.HasPrefix(att.MimeType, "text/") {
 		att.MimeType = "application/octet-stream"
@@ -943,10 +814,7 @@ func isTextualExtensionMime(m string) bool {
 
 // SendMessage sends a user message to the agent.
 func (a *App) SendMessage(userMsg string) error {
-	// Snapshot under the nil check and use the local inside the goroutine:
-	// re-reading a.chat after the check was a TOCTOU race with
-	// switchWorkspace, and returning nil silently swallowed the message
-	// (#210). Same error convention as the other chat methods.
+
 	chat := a.chat
 	if chat == nil {
 		return fmt.Errorf("chat not available")
@@ -963,7 +831,7 @@ func (a *App) SendMessage(userMsg string) error {
 
 // LanChatParticipants returns all known LAN chat participants.
 func (a *App) LanChatParticipants() ([]lanchat.Participant, error) {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return nil, fmt.Errorf("chat not available")
 	}
@@ -972,7 +840,7 @@ func (a *App) LanChatParticipants() ([]lanchat.Participant, error) {
 
 // LanChatMessages returns recent LAN chat messages.
 func (a *App) LanChatMessages() ([]lanchat.Message, error) {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return nil, fmt.Errorf("chat not available")
 	}
@@ -981,7 +849,7 @@ func (a *App) LanChatMessages() ([]lanchat.Message, error) {
 
 // LanChatSend sends a LAN chat message (broadcast if toNodeID is empty).
 func (a *App) LanChatSend(content, toNodeID, toRole string, asAgent bool) error {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return fmt.Errorf("chat not available")
 	}
@@ -990,7 +858,7 @@ func (a *App) LanChatSend(content, toNodeID, toRole string, asAgent bool) error 
 
 // LanChatSetNick changes the user's nickname.
 func (a *App) LanChatSetNick(nick string) error {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return fmt.Errorf("chat not available")
 	}
@@ -999,7 +867,7 @@ func (a *App) LanChatSetNick(nick string) error {
 
 // LanChatPendingApprovals returns pending @agent messages.
 func (a *App) LanChatPendingApprovals() ([]lanchat.PendingAgentMsg, error) {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return nil, fmt.Errorf("chat not available")
 	}
@@ -1008,7 +876,7 @@ func (a *App) LanChatPendingApprovals() ([]lanchat.PendingAgentMsg, error) {
 
 // LanChatApprove approves a pending @agent message.
 func (a *App) LanChatApprove(messageID string) error {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return fmt.Errorf("chat not available")
 	}
@@ -1017,7 +885,7 @@ func (a *App) LanChatApprove(messageID string) error {
 
 // LanChatReject rejects a pending @agent message.
 func (a *App) LanChatReject(messageID, reason string) error {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return fmt.Errorf("chat not available")
 	}
@@ -1026,7 +894,7 @@ func (a *App) LanChatReject(messageID, reason string) error {
 
 // LanChatSelf returns this node's own participant info.
 func (a *App) LanChatSelf() (lanchat.Participant, error) {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return lanchat.Participant{}, fmt.Errorf("chat not available")
 	}
@@ -1036,7 +904,7 @@ func (a *App) LanChatSelf() (lanchat.Participant, error) {
 // LanChatSetApprovalPolicy sets the approval policy for a peer by nick.
 // policy: "always" (auto-approve), "never" (auto-reject), "" (ask).
 func (a *App) LanChatSetApprovalPolicy(peerNick string, policy string) error {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return fmt.Errorf("chat not available")
 	}
@@ -1045,7 +913,7 @@ func (a *App) LanChatSetApprovalPolicy(peerNick string, policy string) error {
 
 // LanChatApprovalPolicies returns all persisted approval policies.
 func (a *App) LanChatApprovalPolicies() (map[string]string, error) {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return nil, fmt.Errorf("chat not available")
 	}
@@ -1061,13 +929,13 @@ func dataURIMIME(meta string) string {
 		meta = meta[:i]
 	}
 	if meta == "" || !strings.Contains(meta, "/") {
-		return "" // not a MIME type (e.g. "base64" alone)
+		return ""
 	}
 	return meta
 }
 
 func (a *App) SendMessageWithImages(userMsg string, images []PastedImage) error {
-	// Snapshot + error convention: see SendMessage (#210).
+
 	chat := a.chat
 	if chat == nil {
 		return fmt.Errorf("chat not available")
@@ -1090,7 +958,7 @@ func (a *App) SendMessageWithImages(userMsg string, images []PastedImage) error 
 		if err == nil {
 			total += len(decoded)
 		} else {
-			// Undecodable payload still counts by its raw length.
+
 			total += len(img.Data)
 		}
 	}
@@ -1105,23 +973,15 @@ func (a *App) SendMessageWithImages(userMsg string, images []PastedImage) error 
 		for _, img := range imgs {
 			mime := strings.TrimSpace(img.MimeType)
 			data := strings.TrimSpace(img.Data)
-			// #426: when the data is a data URI, its declared MIME and
-			// ;base64 marker are authoritative — the caller-provided MimeType
-			// may be empty (defaulting every image to image/png, mislabeling
-			// JPEGs) and non-base64 (URL-encoded) URIs must not be shipped
-			// as if they were base64 bytes.
+
 			if strings.HasPrefix(data, "data:") {
 				if idx := strings.Index(data, ","); idx >= 0 {
-					meta := data[5:idx] // between "data:" and ","
+					meta := data[5:idx]
 					if uriMime := dataURIMIME(meta); uriMime != "" {
-						mime = uriMime // data URI MIME overrides caller hint
+						mime = uriMime
 					}
 					if !strings.Contains(meta, ";base64") && !strings.HasPrefix(meta, "base64") {
-						// URL-encoded (percent-encoded) payload, not base64.
-						// #936: PathUnescape, NOT QueryUnescape - data URIs follow
-						// RFC 3986/2397 percent-encoding where '+' is a LITERAL plus;
-						// the form-encoding semantics of QueryUnescape silently turned
-						// 'Foo+Bar' into 'Foo Bar' and corrupted binary payloads.
+
 						raw, _ := url.PathUnescape(data[idx+1:])
 						if raw == "" {
 							continue
@@ -1141,9 +1001,7 @@ func (a *App) SendMessageWithImages(userMsg string, images []PastedImage) error 
 			content = append(content, provider.ImageBlock(mime, data))
 		}
 		if len(content) == 0 {
-			// Silent returns make image-only sends vanish without feedback —
-			// emit the same error event the SendContent failure path uses
-			// so the user can tell the image never reached the agent (#211).
+
 			raw, _ := json.Marshal(map[string]string{"message": "image data was empty; nothing was sent"})
 			a.emitStreamEvent("error", raw)
 			return
@@ -1165,7 +1023,7 @@ func (a *App) CancelMessage() {
 
 // GetModelInfo returns current model info for the status bar.
 func (a *App) GetModelInfo() map[string]interface{} {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return nil
 	}
@@ -1173,7 +1031,7 @@ func (a *App) GetModelInfo() map[string]interface{} {
 }
 
 func (a *App) CycleReasoningEffort() (map[string]interface{}, error) {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return map[string]interface{}{"effort": "auto", "supported": false}, nil
 	}
@@ -1182,7 +1040,7 @@ func (a *App) CycleReasoningEffort() (map[string]interface{}, error) {
 }
 
 func (a *App) GetTeamBoard() []swarm.TeamBoardSnapshot {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return []swarm.TeamBoardSnapshot{}
 	}
@@ -1191,7 +1049,7 @@ func (a *App) GetTeamBoard() []swarm.TeamBoardSnapshot {
 
 // IsWorking reports whether the agent loop is currently running.
 func (a *App) IsWorking() bool {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return false
 	}
@@ -1200,13 +1058,11 @@ func (a *App) IsWorking() bool {
 
 // SetPermissionMode changes the agent permission mode at wailsruntime.
 func (a *App) SetPermissionMode(mode string) {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat != nil {
 		chat.SetPermissionMode(mode)
 	}
 }
-
-// --- Desktop Notification API (called from frontend) ---
 
 // SetWindowFocused tells the backend whether the window currently has focus.
 // Notifications are suppressed when focused, and the unread badge resets.
@@ -1215,10 +1071,7 @@ func (a *App) SetWindowFocused(focused bool) {
 		a.notifications.SetFocused(focused)
 	}
 	if focused && a.lastCloseAttempt.Load() != nil {
-		// The window is visible and focused again (e.g. restored via Dock
-		// icon click, which Wails handles natively without notifying Go).
-		// Clear the close-to-tray flag so the global hotkey toggle reflects
-		// actual visibility instead of a stale hidden-state heuristic (#158).
+
 		a.lastCloseAttempt.Store(nil)
 	}
 }
@@ -1274,7 +1127,7 @@ func (a *App) SetFontZoom(zoom float64) (float64, error) {
 
 // SwitchModel changes the active model at wailsruntime.
 func (a *App) SwitchModel(model string) error {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat != nil {
 		return chat.SwitchModel(model)
 	}
@@ -1283,14 +1136,12 @@ func (a *App) SwitchModel(model string) error {
 
 // GetAvailableModels returns models available for current endpoint.
 func (a *App) GetAvailableModels() []string {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat != nil {
 		return chat.GetAvailableModels()
 	}
 	return nil
 }
-
-// ─── Config ───────────────────────────────────────────────
 
 // GetConfig returns the current config.
 func (a *App) GetConfig() (*wailskit.FullConfig, error) {
@@ -1302,7 +1153,7 @@ func (a *App) UpdateConfig(values map[string]interface{}) error {
 	if err := wailskit.UpdateConfig(values); err != nil {
 		return err
 	}
-	// Refresh provider so the running agent uses the new LLM backend
+
 	if bridge := wailskit.GetChatBridge(); bridge != nil {
 		bridge.OnConfigProviderChanged()
 	}
@@ -1394,9 +1245,8 @@ func (a *App) SetEndpointLimits(vendor, endpoint string, contextWindow, maxToken
 	if err := wailskit.SetEndpointLimits(vendor, endpoint, contextWindow, maxTokens); err != nil {
 		return err
 	}
-	// Refresh the running agent's ContextManager so changes take effect
-	// immediately without requiring a session restart.
-	chat := a.chat // #457: single-read snapshot
+
+	chat := a.chat
 	if chat != nil {
 		chat.RefreshEndpointLimits()
 	}
@@ -1410,7 +1260,7 @@ func (a *App) SetModelLimits(vendor, endpoint, model string, contextWindow, maxT
 	if err := wailskit.SetModelLimits(vendor, endpoint, model, contextWindow, maxTokens); err != nil {
 		return err
 	}
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat != nil {
 		chat.RefreshEndpointLimits()
 	}
@@ -1419,7 +1269,7 @@ func (a *App) SetModelLimits(vendor, endpoint, model string, contextWindow, maxT
 
 // GetModelLimits returns all per-model limit overrides for the active endpoint.
 func (a *App) GetModelLimits() []wailskit.ModelLimitInfo {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return nil
 	}
@@ -1428,7 +1278,7 @@ func (a *App) GetModelLimits() []wailskit.ModelLimitInfo {
 
 // GetSessionLimits returns the current session's context_window and max_tokens.
 func (a *App) GetSessionLimits() wailskit.SessionLimitInfo {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return wailskit.SessionLimitInfo{}
 	}
@@ -1438,7 +1288,7 @@ func (a *App) GetSessionLimits() wailskit.SessionLimitInfo {
 // SetSessionLimits updates the current session's context_window and max_tokens.
 // A value of 0 means "auto" (falls back to endpoint/per-model config).
 func (a *App) SetSessionLimits(contextWindow, maxTokens int) error {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return fmt.Errorf("chat bridge not initialized")
 	}
@@ -1473,8 +1323,6 @@ func (a *App) LogoutAnthropicOAuth() error {
 	return wailskit.LogoutAnthropicOAuth()
 }
 
-// ─── Sessions ─────────────────────────────────────────────
-
 // ListSessions returns sessions for the current workspace.
 func (a *App) ListSessions() ([]wailskit.SessionInfo, error) {
 	return wailskit.ListSessions(a.workDir, a.chat)
@@ -1485,7 +1333,7 @@ func (a *App) ListSessions() ([]wailskit.SessionInfo, error) {
 // to sync state (the session:changed event may fire before the listener
 // is registered).
 func (a *App) GetCurrentSessionID() (string, error) {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return "", nil
 	}
@@ -1494,33 +1342,17 @@ func (a *App) GetCurrentSessionID() (string, error) {
 
 // DeleteSession removes a session by ID.
 func (a *App) DeleteSession(id string) error {
-	// Maintain the session-switch cleanup invariant that NewSession and
-	// LoadSession already follow: deleting the CURRENT session must also
-	// cancel the running agent and stop tunnel sharing, or later messages
-	// resurrect the deleted session (#209).
-	chat := a.chat // #457: single-read snapshot
+
+	chat := a.chat
 	if chat != nil && chat.CurrentSessionID() == id {
 		chat.Cancel()
 		a.stopShareForSessionChange()
-		// #297: Cancel alone keeps currentSes/sessionLock alive, so the next
-		// SendContent reuses the deleted session and O_CREATE-resurrects the
-		// JSONL. ClearCurrentSession releases the lock and nils the pointer,
-		// forcing ensureSession to start a fresh session.
+
 		chat.ClearCurrentSession()
-		// #630: ClearCurrentSession fires OnSessionChanged (re-emitting
-		// session:changed with an empty sessionId), but that wiring only
-		// exists when startup completed normally. Emit explicitly so the
-		// frontend always learns the current session is gone and stops
-		// rendering the deleted transcript instead of silently writing the
-		// next message into a brand-new session.
+
 		a.enqueueUIEvent("session:changed", map[string]string{"sessionId": ""})
 	}
-	// #305: tombstone the ID before the on-disk delete — the run goroutine
-	// cancelled above may still be draining and its late persists must not
-	// O_CREATE-resurrect the deleted session.
-	// #530: chat may be nil here (startup onboarding early-return path, or
-	// NewChatBridge failure) and MarkSessionDeleted locks b.mu, which panics
-	// on a nil receiver — guard like the sibling methods above.
+
 	if chat != nil {
 		chat.MarkSessionDeleted(id)
 	}
@@ -1534,8 +1366,8 @@ func (a *App) RenameSession(id string, title string) error {
 
 // NewSession creates a fresh initialized session, cancelling any current work.
 func (a *App) NewSession() (string, error) {
-	chat := a.chat   // #457: single-read snapshot
-	if chat == nil { // #699: check the snapshot, not the field
+	chat := a.chat
+	if chat == nil {
 		return "", fmt.Errorf("chat not available")
 	}
 	chat.Cancel()
@@ -1560,31 +1392,24 @@ func (a *App) resumeLatestSession() string {
 		return ""
 	}
 
-	// Try the latest session first (fast path).
 	latest, err := store.LatestForWorkspace(wd)
 	if err == nil && latest != nil {
-		// #1802 case 4: the load error's REASON was discarded ("unavailable")
-		// and the resume log claimed "latest was locked" regardless of the
-		// actual cause - a corrupt JSONL (silently falling back to an OLDER
-		// session, the newest conversation effectively disappearing) was
-		// indistinguishable from a transient lock.
+
 		loadErr := chat.LoadSession(latest.ID)
 		if loadErr == nil {
 			debug.Log("app", "resumed latest session: %s", latest.ID)
 			return latest.ID
 		}
-		// Latest is locked or load failed — fall through to iterate.
+
 		debug.Log("app", "resumeLatestSession: latest session %s failed to load: %v - trying older sessions", latest.ID, loadErr)
 	}
 
-	// Fall back: iterate all sessions for this workspace, try each until
-	// one loads successfully (i.e. is not locked by another instance).
 	sessions, err := store.ListForWorkspace(wd)
 	if err != nil || len(sessions) == 0 {
 		return ""
 	}
 	for _, ses := range sessions {
-		// Skip the one we already tried.
+
 		if latest != nil && ses.ID == latest.ID {
 			continue
 		}
@@ -1601,7 +1426,7 @@ func (a *App) resumeLatestSession() string {
 
 // LoadSession loads an existing session by ID.
 func (a *App) LoadSession(id string) error {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat != nil {
 		chat.Cancel()
 		a.stopShareForSessionChange()
@@ -1612,7 +1437,7 @@ func (a *App) LoadSession(id string) error {
 
 // GetSessionHistory returns messages from the current session.
 func (a *App) GetSessionHistory() ([]wailskit.SessionMessage, error) {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return nil, nil
 	}
@@ -1641,15 +1466,13 @@ func (a *App) SaveExportedFile(defaultName string, content string) (string, erro
 		return "", fmt.Errorf("save dialog: %w", err)
 	}
 	if path == "" {
-		return "", nil // user cancelled
+		return "", nil
 	}
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		return "", fmt.Errorf("write file: %w", err)
 	}
 	return path, nil
 }
-
-// ─── Workspace ────────────────────────────────────────────
 
 // GetWorkDir returns the current working directory.
 func (a *App) GetWorkDir() string {
@@ -1677,8 +1500,6 @@ func (a *App) TestIMConnection(name string) error {
 	return wailskit.TestIMConnection(name)
 }
 
-// ─── MCP Servers ─────────────────────────────────────────
-
 // ListMCPServers returns all configured MCP servers.
 func (a *App) ListMCPServers() ([]wailskit.MCPServerInfo, error) {
 	return wailskit.ListMCPServers()
@@ -1699,7 +1520,7 @@ func (a *App) ForceReauthMCPServer(name string) bool {
 }
 
 func (a *App) StartMCPOAuth(name string) (*wailskit.MCPOAuthStartResult, error) {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return nil, fmt.Errorf("chat not initialized")
 	}
@@ -1710,7 +1531,7 @@ func (a *App) StartMCPOAuth(name string) (*wailskit.MCPOAuthStartResult, error) 
 }
 
 func (a *App) CompleteMCPOAuth(name string) error {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return fmt.Errorf("chat not initialized")
 	}
@@ -1726,8 +1547,6 @@ func (a *App) AddMCPServer(values map[string]string) error {
 func (a *App) RemoveMCPServer(name string) error {
 	return wailskit.RemoveMCPServer(name)
 }
-
-// ─── Cron Jobs ───────────────────────────────────────────
 
 // ListCronJobs returns all cron jobs for the current session.
 // #580: surface bridge/scheduler-unavailable as an error instead of a
@@ -1809,8 +1628,6 @@ func (a *App) GenerateCronPrompt(description string) (string, error) {
 	return "", fmt.Errorf("chat bridge not available")
 }
 
-// ─── System ───────────────────────────────────────────────
-
 // GetVersion returns the application version.
 func (a *App) GetVersion() string {
 	return version.Version
@@ -1877,7 +1694,7 @@ func (a *App) SetGlobalHotkeyEnabled(enabled bool) error {
 	}
 	oldEnabled := a.dc.IsGlobalHotkeyEnabled()
 	if enabled {
-		// Register FIRST; only persist once the OS actually accepted it.
+
 		a.dc.SetGlobalHotkey(true)
 		if err := a.initGlobalHotkey(); err != nil {
 			a.dc.SetGlobalHotkey(oldEnabled)
@@ -1885,8 +1702,7 @@ func (a *App) SetGlobalHotkeyEnabled(enabled bool) error {
 			return fmt.Errorf("global hotkey registration failed: %w", err)
 		}
 		if err := a.dc.Save(); err != nil {
-			// Persist failed: undo the live registration so state stays
-			// consistent with what will be loaded on next startup.
+
 			a.removeGlobalHotkey()
 			a.dc.SetGlobalHotkey(oldEnabled)
 			debug.Log("desktop", "persist global-hotkey failed: %v", err)
@@ -1896,11 +1712,7 @@ func (a *App) SetGlobalHotkeyEnabled(enabled bool) error {
 		a.dc.SetGlobalHotkey(false)
 		a.removeGlobalHotkey()
 		if err := a.dc.Save(); err != nil {
-			// Persist failed: restore in-memory flag first, then if the hotkey was
-			// previously enabled, re-register it so the OS state stays consistent.
-			// Symmetric with the enable branch's "undo the live registration" rollback.
-			// #1200: flag MUST be restored before initGlobalHotkey() because the latter
-			// checks IsGlobalHotkeyEnabled() and no-ops if false.
+
 			a.dc.SetGlobalHotkey(oldEnabled)
 			if oldEnabled {
 				if reRegErr := a.initGlobalHotkey(); reRegErr != nil {
@@ -2024,10 +1836,7 @@ func (a *App) ReadFileAsBase64(path string) (*FileBinaryData, error) {
 	if err != nil {
 		return nil, err
 	}
-	// #579: FIFO post-read recheck — Stat().Size() is 0 on FIFOs (same
-	// class as #459's clipboard fix), so the 150MB pre-check passes
-	// vacuously and ReadFile pulls unbounded data into memory before the
-	// base64 expansion. Cap actual damage at detection time.
+
 	if int64(len(data)) > maxReadFileBase64Bytes {
 		return nil, fmt.Errorf("file data is %.1fMB, exceeding the %dMB preview limit; please open it in an external application instead",
 			float64(len(data))/(1<<20), maxReadFileBase64Bytes/(1<<20))
@@ -2073,13 +1882,9 @@ func mimeTypeFromExt(path string) string {
 	}
 }
 
-// ─── Approval & AskUser ────────────────────────────────────────
-// Approval/AskUser handling is delegated to wailskit.ChatBridge.
-// See chat.go for the full implementation.
-
 // RespondApproval is called from the frontend when the user responds to an approval request.
 func (a *App) RespondApproval(requestID string, decision string) {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat != nil {
 		chat.RespondApproval(requestID, decision)
 	}
@@ -2087,7 +1892,7 @@ func (a *App) RespondApproval(requestID string, decision string) {
 
 // RespondAskUser is called from the frontend when the user responds to an ask_user request.
 func (a *App) RespondAskUser(requestID string, answersJSON string) {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return
 	}
@@ -2098,11 +1903,7 @@ func (a *App) RespondAskUser(requestID string, answersJSON string) {
 		Answers []tool.AskUserAnswer `json:"answers"`
 	}
 	if err := json.Unmarshal([]byte(answersJSON), &payload); err != nil {
-		// #530: a malformed payload must not silently strand the pending
-		// ask_user run — RequestAskUser waits on a channel with no timeout,
-		// so a bare return here hangs the agent until manual cancel. Send a
-		// cancelled response to unblock the waiter and surface the error to
-		// the frontend instead.
+
 		debug.Log("app", "RespondAskUser: invalid answers payload: %v", err)
 		if msg, merr := json.Marshal(map[string]string{
 			"message": fmt.Sprintf("ask_user response error: invalid payload: %v", err),
@@ -2128,13 +1929,9 @@ func (a *App) RespondAskUser(requestID string, answersJSON string) {
 		AnsweredCount: answeredCount,
 		Answers:       payload.Answers,
 	}
-	// #699: use the snapshot taken above — re-reading a.chat here races a
-	// concurrent switchWorkspace (nil → panic, or replace → response lands in
-	// the NEW bridge's broker and the OLD ask_user waiter hangs, #530 pattern).
+
 	chat.RespondAskUser(requestID, response)
 }
-
-// ─── IM Runtime (mirrors Fyne's initIMRuntime / im_bridge.go) ──────────
 
 // initIMRuntime initializes the IM manager once at app startup.
 // Direct port of Fyne's App.initIMRuntime().
@@ -2162,21 +1959,21 @@ func (a *App) initIMRuntime() {
 	runtimeInit, err := im.InitRuntime(im.RuntimeInitOptions{
 		Workspace:        workDir,
 		EnabledAdapters:  adapters,
-		RegisterInstance: false, // Deferred to bindCurrentIMSession where session ID is available
+		RegisterInstance: false,
 		OnUpdate: func(snap im.StatusSnapshot) {
-			// Pairing code dialog
+
 			if snap.PendingPairing != nil {
 				ch := snap.PendingPairing
 				wailsruntime.EventsEmit(a.ctx, "im:pairing", map[string]string{
 					"adapter": ch.Adapter, "platform": string(ch.Platform), "code": ch.Code, "kind": string(ch.Kind),
 				})
 			} else {
-				// Pairing complete — dismiss dialog
+
 				wailsruntime.EventsEmit(a.ctx, "im:pairing_done", map[string]string{})
 			}
-			// Push status to frontend via both Wails events and stream events
+
 			raw, _ := json.Marshal(snap)
-			chat := a.chat // #457: single-read snapshot
+			chat := a.chat
 			if chat != nil && chat.OnStreamEvent != nil {
 				chat.OnStreamEvent("im:status", raw)
 			}
@@ -2190,7 +1987,7 @@ func (a *App) initIMRuntime() {
 	}
 
 	a.imManager = runtimeInit.Manager
-	// Single OnUpdate callback handles pairing + status + stream event push
+
 	a.imInstanceDetect = runtimeInit.InstanceDetect
 	if len(runtimeInit.OtherInstances) > 0 {
 		debug.Log("desktop", "im: auto-muted IM channels, another instance is primary")
@@ -2210,18 +2007,16 @@ func (a *App) startIMAdapters() {
 	}
 	debug.Log("desktop", "IM start: initializing adapters for workspace=%s", a.workDir)
 
-	// Bind IM emitter to chat bridge for outbound push
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat != nil {
 		lang := ""
 		if cfg != nil {
 			lang = cfg.Language
 		}
 		chat.Emitter = im.NewIMEmitter(a.imManager, lang, a.workDir)
-		// Wire IM tool to the runtime manager
+
 		chat.SetIMManager(im.NewToolManagerAdapter(a.imManager))
-		// #530: keep this inside the nil guard — SetRuntimeStatusProvider on a
-		// nil chat would panic.
+
 		chat.SetRuntimeStatusProvider()
 	}
 
@@ -2267,8 +2062,6 @@ func (a *App) startIMAdapters() {
 		},
 	})
 
-	// StartCurrentBindingAdapter is deferred to bindCurrentIMSession()
-	// where session ID is available, so only session-owned adapters start.
 }
 
 // stopIMAdapters stops all running IM adapters.
@@ -2284,8 +2077,6 @@ func (a *App) stopIMAdapters() {
 	}
 }
 
-// ─── IM Frontend API ──────────────────────────────────────────────────
-
 // ListIMAdapters returns all configured IM adapters with binding info.
 func (a *App) ListIMAdapters() ([]wailskit.IMAdapterInfo, error) {
 	return wailskit.ListIMAdapters(a.workDir, a.imManager)
@@ -2298,7 +2089,7 @@ func (a *App) GetIMPlatformRegistry() []wailskit.IMPlatformMeta {
 
 // GetLSPStatus returns detected language server status for the current workspace.
 func (a *App) GetLSPStatus() wailskit.LSPStatusResponse {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return wailskit.LSPStatusResponse{}
 	}
@@ -2307,7 +2098,7 @@ func (a *App) GetLSPStatus() wailskit.LSPStatusResponse {
 
 // InstallLSPServer installs a language server for the given language.
 func (a *App) InstallLSPServer(languageID, optionID string) wailskit.LSPInstallResult {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat == nil {
 		return wailskit.LSPInstallResult{Success: false, Output: "chat bridge not initialized"}
 	}
@@ -2317,14 +2108,14 @@ func (a *App) InstallLSPServer(languageID, optionID string) wailskit.LSPInstallR
 // SaveIMAdapter creates or updates an IM adapter.
 func (a *App) SaveIMAdapter(name string, values map[string]string) error {
 	debug.Log("desktop", "IM SaveAdapter: name=%s platform=%s", name, values["platform"])
-	// Stop existing adapter if running (for config updates)
+
 	a.imStopAdapter(name)
 	err := wailskit.SaveIMAdapter(name, values)
 	if err != nil {
 		debug.Log("desktop", "IM SaveAdapter failed: %v", err)
 		return err
 	}
-	// Auto-start if enabled
+
 	if values["enabled"] != "false" {
 		name := name
 		safego.Go("desktop.im-start-save", func() { a.imStartAdapter(name) })
@@ -2336,9 +2127,7 @@ func (a *App) SaveIMAdapter(name string, values map[string]string) error {
 func (a *App) RemoveIMAdapter(name string) error {
 	debug.Log("desktop", "IM RemoveAdapter: name=%s", name)
 	a.imStopAdapter(name)
-	// Cascade-unbind is handled inside wailskit.RemoveIMAdapter (#299/#396):
-	// a ghost binding keyed by adapter name would otherwise be inherited by
-	// a same-name rebuild.
+
 	err := wailskit.RemoveIMAdapter(name, a.imManager)
 	if err != nil {
 		debug.Log("desktop", "IM RemoveAdapter failed: %v", err)
@@ -2352,13 +2141,12 @@ func (a *App) RemoveIMAdapter(name string) error {
 // AFTER a session is available so that session-scoped binding ownership
 // (LastSessionID) works correctly.
 func (a *App) bindCurrentIMSession() {
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if a.imManager == nil || chat == nil {
 		return
 	}
 	if ses := chat.CurrentSession(); ses != nil {
-		// Use the session's workspace, not a.workDir, so cross-workspace
-		// session switches correctly rebind IM to the session's workspace.
+
 		imWorkspace := ses.Workspace
 		if imWorkspace == "" {
 			imWorkspace = a.workDir
@@ -2367,10 +2155,7 @@ func (a *App) bindCurrentIMSession() {
 			SessionID: ses.ID,
 			Workspace: imWorkspace,
 		})
-		// Register instance now that session ID is available.
-		// This enables session-scoped IM binding ownership: each instance
-		// claims/unclaims adapters via LastSessionID instead of all sharing
-		// the same workspace-level mutual exclusion.
+
 		if a.imInstanceDetect == nil && a.workDir != "" {
 			detect, others, err := a.imManager.RegisterInstance(a.workDir, ses.ID)
 			if err != nil {
@@ -2383,10 +2168,6 @@ func (a *App) bindCurrentIMSession() {
 			}
 		}
 
-		// Start adapters for session-owned bindings. This runs after
-		// RegisterInstance so session-scoped muting is already applied.
-		// StartUnstartedOwnedAdapters only starts non-muted bindings
-		// that don't have an active connection yet.
 		a.imManager.StartUnstartedOwnedAdapters()
 	}
 }
@@ -2397,7 +2178,7 @@ func (a *App) imStartAdapter(name string) {
 		return
 	}
 	cfg, err := wailskit.LoadConfigForWorkspace(a.workDir)
-	if err != nil { // #1811 case 3: the load error was discarded (cfg, _) - a broken yaml silently looked like "no config"
+	if err != nil {
 		debug.Log("desktop", "IM start %s: config load failed: %v", name, err)
 		return
 	}
@@ -2405,12 +2186,10 @@ func (a *App) imStartAdapter(name string) {
 		debug.Log("desktop", "IM start %s: no config", name)
 		return
 	}
-	// Ensure session is bound so pairing and inbound work
+
 	a.bindCurrentIMSession()
 	if adapterCfg, ok := cfg.IM.Adapters[name]; ok && !adapterCfg.Enabled {
-		// #1811 case 3: binding a disabled adapter reported success while the
-		// adapter could never send or receive - surface the state so the user
-		// knows to enable it.
+
 		debug.Log("desktop", "IM start %s: adapter is bound but DISABLED in config - it will not connect until enabled", name)
 		a.emitIMAdapterNotice(name, "bound but disabled - enable it to connect")
 		return
@@ -2418,8 +2197,7 @@ func (a *App) imStartAdapter(name string) {
 	debug.Log("desktop", "IM start: starting adapter %s", name)
 	if err := im.StartNamedAdapter(context.Background(), cfg.IM, name, a.imManager); err != nil {
 		debug.Log("desktop", "IM start %s failed: %v", name, err)
-		// #1811 case 3: an async start failure was debug-only - the UI kept
-		// showing a healthy binding while the adapter was down.
+
 		a.emitIMAdapterNotice(name, fmt.Sprintf("start failed: %v", err))
 	} else {
 		debug.Log("desktop", "IM start %s: ok", name)
@@ -2469,14 +2247,14 @@ func (a *App) MuteIMAdapter(name string, muted bool) error {
 		return fmt.Errorf("IM not initialized")
 	}
 	if muted {
-		// Stop the adapter
+
 		if err := a.imManager.MuteBinding(name); err != nil {
 			debug.Log("desktop", "IM MuteBinding failed: %v", err)
 			return err
 		}
 		a.imStopAdapter(name)
 	} else {
-		// Unmute and restart
+
 		if err := a.imManager.UnmuteBinding(name); err != nil {
 			debug.Log("desktop", "IM UnmuteBinding failed: %v", err)
 			return err
@@ -2490,17 +2268,14 @@ func (a *App) MuteIMAdapter(name string, muted bool) error {
 // BindIMAdapter binds an adapter to the current workspace.
 func (a *App) BindIMAdapter(name string) error {
 	debug.Log("desktop", "IM Bind: name=%s workDir=%s", name, a.workDir)
-	// #1811 case 1: stop any RUNNING instance first, exactly like Rebind.
-	// Without this, binding from workspace B while the adapter ran on A
-	// replaced the cancel/sink maps - the old goroutine/connection leaked
-	// until process exit and the same account received messages twice.
+
 	a.imStopAdapter(name)
 	err := wailskit.BindIMAdapter(name, a.workDir, a.imManager)
 	if err != nil {
 		debug.Log("desktop", "IM Bind failed: %v", err)
 		return err
 	}
-	// Start the adapter after binding
+
 	safego.Go("desktop.im-start-bind", func() { a.imStartAdapter(name) })
 	return nil
 }
@@ -2508,10 +2283,7 @@ func (a *App) BindIMAdapter(name string) error {
 // RebindIMAdapter re-binds an adapter to the current workspace.
 func (a *App) RebindIMAdapter(name string) error {
 	debug.Log("desktop", "IM Rebind: name=%s workDir=%s", name, a.workDir)
-	// #1811 case 2: capture the PREVIOUS workspace binding so a failed
-	// rebind can restore it - the old flow stopped the adapter, then
-	// returned the error on bind failure, leaving the adapter silently
-	// dead on its previous workspace while the user assumed nothing changed.
+
 	prevWorkspaces := a.imManager.AdapterBindings(name)
 	a.imStopAdapter(name)
 	err := wailskit.RebindIMAdapter(name, a.workDir, a.imManager)
@@ -2540,8 +2312,6 @@ func (a *App) UnbindIMAdapter(name string) error {
 	}
 	return err
 }
-
-// ─── Tunnel / Share ──────────────────────────────────────────────────
 
 // ShareInfo is returned to the frontend with connection details.
 type ShareInfo struct {
@@ -2583,16 +2353,7 @@ func (a *App) stopShareForSessionChange() {
 func (a *App) setTunnelState(sess *tunnel.Session, broker *tunnel.Broker) bool {
 	a.tunnelMu.Lock()
 	defer a.tunnelMu.Unlock()
-	// #2401: a StartShare that began BEFORE the user pressed stop must
-	// not resurrect a session the stop cleared - the generation guard
-	// (stopSeq) records the stop intent; a stale start finishing later
-	// drops its session/broker instead of wiring them live. >= because a
-	// stop-count that has caught up to the start-count means every start
-	// has been superseded (equality is the 1:1 race; > covers re-stops).
-	// Returns whether the wire happened so the caller (#2404 teardown)
-	// can tear a refused result down instead of leaking it: refusing here
-	// while the caller binds commands anyway recreates the half-wired
-	// state #2404 closed at the wide window.
+
 	if a.tunnelStopSeq != a.tunnelStartStopEq {
 		return false
 	}
@@ -2606,12 +2367,8 @@ func (a *App) clearTunnelState() {
 	defer a.tunnelMu.Unlock()
 	a.tunnelSession = nil
 	a.tunnelBroker = nil
-	a.tunnelStarting = false // #2387: a stop during an in-flight start ends it
-	// #2401: record the stop intent so a still-flying StartShare cannot
-	// resurrect state afterwards (the old comment above claimed "ends it"
-	// but nothing enforced that - th.StartShare is not cancellable, so a
-	// stop during the relay round-trip merely cleared the markers and the
-	// finishing start wired the session back in unconditionally).
+	a.tunnelStarting = false
+
 	a.tunnelStopSeq++
 }
 
@@ -2638,26 +2395,19 @@ func (a *App) IsSharing() bool {
 
 // StartShare starts a tunnel session and returns connection info for the frontend.
 func (a *App) StartShare() (*ShareInfo, error) {
-	// #2387: close the check-then-act window. The in-flight flag is set
-	// under the SAME mutex the state reads use, so a re-entrant call
-	// (dialog remount, background press while loading) sees it and
-	// short-circuits instead of racing a second relay session.
+
 	a.tunnelMu.Lock()
 	switch {
 	case a.tunnelSession != nil:
-		// Live session: fall through to the refresh path below.
+
 		a.tunnelMu.Unlock()
 	case a.tunnelStarting:
-		// #2396: an in-flight start is ALREADY creating the session -
-		// return busy. The first cut merely unlocked and fell through to
-		// a second th.StartShare, so a dialog remount still raced two
-		// sessions; only the session!=nil case may fall through.
+
 		a.tunnelMu.Unlock()
 		return nil, fmt.Errorf("share start already in progress")
 	default:
 		a.tunnelStarting = true
-		// #2401: snapshot the stop generation this start belongs to;
-		// any stop after this point invalidates the result at wire time.
+
 		a.tunnelStartStopEq = a.tunnelStopSeq
 		a.tunnelMu.Unlock()
 		defer func() {
@@ -2666,27 +2416,14 @@ func (a *App) StartShare() (*ShareInfo, error) {
 			a.tunnelMu.Unlock()
 		}()
 	}
-	// If already sharing, try to refresh the invite (same room, new ticket).
-	// This allows mobile to reconnect seamlessly after a brief relay hiccup.
+
 	if sess := a.currentTunnelSession(); sess != nil {
 		info, err := sess.RefreshInvite(context.Background())
 		if err != nil {
-			// Stale session (room not live, relay restarted, etc.) — tear down
-			// and create a fresh one below. #530: merely nil-ing tunnelSession
-			// leaked the un-stopped old session/broker (relay connection and
-			// goroutines kept alive, chat stayed attached to a dead broker), so
-			// run the full stopShare() teardown instead.
+
 			debug.Log("share", "refresh invite failed, restarting share: %v", err)
 			a.stopShare()
-			// #2401: the teardown above bumped stopSeq; the restart below
-			// is the SAME user action still in flight - re-snapshot so
-			// setTunnelState wires the fresh session instead of dropping it.
-			// #2413: the restart is also a long th.StartShare round-trip -
-			// guard it with tunnelStarting exactly like the default branch.
-			// This path runs precisely when the relay is flaky (refresh
-			// failed), i.e. when users retry: without the flag the window
-			// reports IsSharing()===false and a re-entrant StartShare races
-			// a SECOND relay session whose loser leaks as an orphan.
+
 			a.tunnelMu.Lock()
 			a.tunnelStartStopEq = a.tunnelStopSeq
 			a.tunnelStarting = true
@@ -2704,7 +2441,6 @@ func (a *App) StartShare() (*ShareInfo, error) {
 		}
 	}
 
-	// Resolve config for session info
 	cfg, _ := wailskit.LoadConfigForWorkspace(a.workDir)
 	model := ""
 	vendorName := ""
@@ -2718,12 +2454,8 @@ func (a *App) StartShare() (*ShareInfo, error) {
 		mode = cfg.DefaultMode
 	}
 
-	// Use unified TunnelHost.StartShare — the single canonical entry point
-	// for all frontends. It handles session creation, broker setup,
-	// SetSessionInfo, PrepareOnlineShare, and AnnounceActiveSession.
-	chat := a.chat // #457: single-read snapshot
-	// #1161: check the snapshot itself. Re-reading a.chat races a concurrent
-	// switchWorkspace and can nil a bridge we are about to use.
+	chat := a.chat
+
 	if chat == nil {
 		return nil, fmt.Errorf("chat not initialized")
 	}
@@ -2754,11 +2486,6 @@ func (a *App) StartShare() (*ShareInfo, error) {
 		return nil, fmt.Errorf("start share: %w", err)
 	}
 
-	// #2404: if a stop landed while this start was in flight, the result
-	// is stale - tear it down instead of leaking the relay session until
-	// app exit, and tell the caller the share was stopped rather than
-	// handing back a ConnectURL the app no longer tracks (a scanned QR
-	// would join a session StopShare can never terminate).
 	if a.tunnelStartStale() {
 		if chat != nil {
 			chat.DetachTunnelBroker()
@@ -2767,13 +2494,6 @@ func (a *App) StartShare() (*ShareInfo, error) {
 		return nil, fmt.Errorf("share was stopped while starting")
 	}
 
-	// Wire the session under the generation guard first, atomically under
-	// tunnelMu. A stop racing between the stale check above and this point
-	// makes the wire refuse HERE - without this second refusal that stop
-	// slipped through: setTunnelState dropped the session, yet the bind
-	// below had already attached handlers to the untracked broker and the
-	// caller still received a ConnectURL nothing could ever tear down
-	// (the narrow-window reappearance of the #2404 half-alive leak).
 	if !a.setTunnelState(result.Session, result.Broker) {
 		if chat != nil {
 			chat.DetachTunnelBroker()
@@ -2782,14 +2502,6 @@ func (a *App) StartShare() (*ShareInfo, error) {
 		return nil, fmt.Errorf("share was stopped while starting")
 	}
 
-	// Wire share commands (OnCommand handler, language switching, ask_user approval)
-	// #1161: bind through the entry snapshot. Re-reading the field here could
-	// attach commands to an already-closed bridge after a workspace switch,
-	// silently routing all mobile commands into the dead bridge.
-	// #2404: this must run AFTER the stale check AND the guarded wire above -
-	// binding before them attached handlers to a broker the generation
-	// guard would refuse, leaving a half-wired command channel alive while
-	// IsSharing() was false.
 	if result.Broker != nil {
 		chat.BindShareCommands(result.Broker, func(language string) {
 			c, _ := wailskit.LoadConfigForWorkspace(a.workDir)
@@ -2814,7 +2526,7 @@ func (a *App) StopShare() {
 func (a *App) stopShare() {
 	broker := a.currentTunnelBroker()
 	sess := a.currentTunnelSession()
-	chat := a.chat // #457: single-read snapshot
+	chat := a.chat
 	if chat != nil {
 		chat.DetachTunnelBroker()
 	}
@@ -2833,11 +2545,8 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 		},
 	}
 
-	// Populate model/provider from config
 	if cfg, err := wailskit.LoadConfigForWorkspace(a.workDir); err == nil {
-		// #935: resolve through the endpoint chain - raw cfg.Vendor/cfg.Model
-		// are often empty/stale when the active selection lives in vendor
-		// endpoint state (mobile snapshot showed an empty model).
+
 		snapshot.SessionInfo.Mode = cfg.DefaultMode
 		if resolved, rerr := cfg.ResolveActiveEndpoint(); rerr == nil && resolved != nil {
 			snapshot.SessionInfo.Provider = resolved.VendorName
@@ -2848,17 +2557,14 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 		}
 	}
 
-	chat := a.chat // #457: single-read snapshot
-	// #1161: check the snapshot itself - same TOCTOU pattern as StartShare.
+	chat := a.chat
+
 	if chat == nil {
 		snapshot.Status = tunnel.StatusData{Status: tunnel.StatusIdle}
 		return snapshot
 	}
 	snapshot.Status = chat.CurrentTunnelStatus()
 
-	// Populate history from agent messages — same as TUI does.
-	// Without this, mobile clients receive an empty snapshot for
-	// sessions whose projection store is empty.
 	msgs := chat.Messages()
 	if len(msgs) > 0 {
 		snapshot.History = messagesToTunnelHistory(msgs)
@@ -2947,8 +2653,6 @@ func truncateRunesDesktop(s string, maxRunes int, suffix string) string {
 	}
 	return string(runes[:maxRunes]) + suffix
 }
-
-// ─── AskUser request state for mobile response mapping ─────────────
 
 // currentAskUserRequest returns the stored ask_user request for mobile response mapping.
 func (a *App) currentAskUserRequest() tool.AskUserRequest {

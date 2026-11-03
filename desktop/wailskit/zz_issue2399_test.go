@@ -1,9 +1,5 @@
 package wailskit
 
-// #2399/#2400: the desktop + IM /usage paths must pick probes BY URL
-// (owner ruling) with a 15s outer budget, and the never-wired
-// FormatUsageForIM dead code is gone.
-
 import (
 	"os"
 	"strings"

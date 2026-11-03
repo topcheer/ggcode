@@ -1,10 +1,5 @@
 package wailskit
 
-// #2715: the wailskit reflection path must use LoadKey (single-key read),
-// not LoadAll (merges EVERY memory key), when refreshing run-insights -
-// and must record provenance via SaveMemoryWithSource, matching the TUI
-// (#1388) and daemon (#1752 case 3) reflection paths.
-
 import (
 	"os"
 	"path/filepath"
@@ -16,9 +11,7 @@ import (
 )
 
 func TestIssue2715ReflectionUsesLoadKeyNotLoadAll(t *testing.T) {
-	// The reflection logic lives in chat_reflection.go (extracted from
-	// ChatBridge.InitAgent for behavioral testing) and is wired via
-	// buildReflectionFunc in chat.go.
+
 	srcFiles := []string{"chat.go", "chat_reflection.go"}
 	var src string
 	for _, f := range srcFiles {

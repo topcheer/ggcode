@@ -1,11 +1,5 @@
 package main
 
-// #2410: every "notification" emit carries the unread count (the #201
-// document.title listener contract); the frontend ChatView subscribes.
-// #2411: approvals ride a dedicated queue+worker, never the 32-slot
-// bulk lanes whose drop-new under backlog would discard exactly the
-// highest-priority signal.
-
 import (
 	"os"
 	"regexp"
@@ -51,7 +45,7 @@ func TestIssue2411ApprovalDedicatedLane(t *testing.T) {
 			t.Fatalf("missing approval fast-lane element: %q", want)
 		}
 	}
-	// NotifyApprovalNeeded must no longer enqueue into the bulk lanes.
+
 	i := strings.Index(s, "func (nm *NotificationManager) NotifyApprovalNeeded")
 	j := strings.Index(s[i+5:], "\nfunc ")
 	if j < 0 {

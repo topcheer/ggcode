@@ -10,21 +10,15 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// TestIssue585_PlatformSwitchDiscardsOldExtra verifies that SaveIMAdapter
-// discards old Extra fields when the platform changes (Bug I1).
-// This prevents cross-platform credential leakage (e.g., telegram bot_token
-// becoming slack's bot_token).
 func TestIssue585_PlatformSwitchDiscardsOldExtra(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create temporary config directory
 	ggcodeDir := filepath.Join(tmpDir, ".ggcode")
 	if err := os.MkdirAll(ggcodeDir, 0o755); err != nil {
 		t.Fatalf("create .ggcode dir: %v", err)
 	}
 	t.Setenv("HOME", tmpDir)
 
-	// Initial config with telegram adapter having bot_token
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		t.Fatalf("load config: %v", err)
@@ -41,8 +35,6 @@ func TestIssue585_PlatformSwitchDiscardsOldExtra(t *testing.T) {
 		t.Fatalf("save initial config: %v", err)
 	}
 
-	// Switch platform to slack WITHOUT providing bot_token
-	// This simulates the UI edit flow where secret fields are masked and not sent
 	values := map[string]string{
 		"platform": "slack",
 		"enabled":  "true",
@@ -51,7 +43,6 @@ func TestIssue585_PlatformSwitchDiscardsOldExtra(t *testing.T) {
 		t.Fatalf("SaveIMAdapter: %v", err)
 	}
 
-	// Reload and verify: platform changed to slack, but bot_token was NOT inherited
 	cfg2, err := config.Load(config.ConfigPath())
 	if err != nil {
 		t.Fatalf("reload config: %v", err)
@@ -70,20 +61,15 @@ func TestIssue585_PlatformSwitchDiscardsOldExtra(t *testing.T) {
 	}
 }
 
-// TestIssue585_SamePlatformPreservesExtra verifies that SaveIMAdapter
-// preserves existing Extra fields when editing the same platform (Bug I1 negative test).
-// This ensures the fix doesn't break the existing correct behavior for same-platform edits.
 func TestIssue585_SamePlatformPreservesExtra(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create temporary config directory
 	ggcodeDir := filepath.Join(tmpDir, ".ggcode")
 	if err := os.MkdirAll(ggcodeDir, 0o755); err != nil {
 		t.Fatalf("create .ggcode dir: %v", err)
 	}
 	t.Setenv("HOME", tmpDir)
 
-	// Initial config with telegram adapter having bot_token
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		t.Fatalf("load config: %v", err)
@@ -100,17 +86,14 @@ func TestIssue585_SamePlatformPreservesExtra(t *testing.T) {
 		t.Fatalf("save initial config: %v", err)
 	}
 
-	// Edit same platform (telegram) WITHOUT providing bot_token
-	// This simulates the UI edit flow where secret fields are masked and not sent
 	values := map[string]string{
 		"platform": "telegram",
-		"enabled":  "false", // Just changing enabled state
+		"enabled":  "false",
 	}
 	if err := SaveIMAdapter("test-adapter", values); err != nil {
 		t.Fatalf("SaveIMAdapter: %v", err)
 	}
 
-	// Reload and verify: platform unchanged, bot_token WAS preserved
 	cfg2, err := config.Load(config.ConfigPath())
 	if err != nil {
 		t.Fatalf("reload config: %v", err)
@@ -137,19 +120,15 @@ func TestIssue585_SamePlatformPreservesExtra(t *testing.T) {
 	}
 }
 
-// TestIssue585_TestIMConnectionValidatesRequiredFields verifies that
-// TestIMConnection fails when required fields are missing or empty (Bug I2).
 func TestIssue585_TestIMConnectionValidatesRequiredFields(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create temporary config directory
 	ggcodeDir := filepath.Join(tmpDir, ".ggcode")
 	if err := os.MkdirAll(ggcodeDir, 0o755); err != nil {
 		t.Fatalf("create .ggcode dir: %v", err)
 	}
 	t.Setenv("HOME", tmpDir)
 
-	// Test missing required field
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		t.Fatalf("load config: %v", err)
@@ -160,7 +139,7 @@ func TestIssue585_TestIMConnectionValidatesRequiredFields(t *testing.T) {
 	cfg.IM.Adapters["telegram-missing-token"] = config.IMAdapterConfig{
 		Enabled:  true,
 		Platform: "telegram",
-		Extra:    map[string]interface{}{}, // Empty Extra - bot_token missing
+		Extra:    map[string]interface{}{},
 	}
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("save config: %v", err)
@@ -172,11 +151,10 @@ func TestIssue585_TestIMConnectionValidatesRequiredFields(t *testing.T) {
 	}
 	t.Logf("Expected error for missing bot_token: %v", err)
 
-	// Test empty required field
 	cfg.IM.Adapters["telegram-empty-token"] = config.IMAdapterConfig{
 		Enabled:  true,
 		Platform: "telegram",
-		Extra:    map[string]interface{}{"bot_token": ""}, // Empty string
+		Extra:    map[string]interface{}{"bot_token": ""},
 	}
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("save config: %v", err)
@@ -188,13 +166,10 @@ func TestIssue585_TestIMConnectionValidatesRequiredFields(t *testing.T) {
 	}
 	t.Logf("Expected error for empty bot_token: %v", err)
 
-	// #1026: yaml `bot_token:` (no value) keeps the key with a nil interface
-	// value - previously fmt.Sprintf("%v", nil) produced non-empty "<nil>"
-	// and the required check passed, so Test Connection showed success.
 	cfg.IM.Adapters["telegram-nil-token"] = config.IMAdapterConfig{
 		Enabled:  true,
 		Platform: "telegram",
-		Extra:    map[string]interface{}{"bot_token": nil}, // yaml null
+		Extra:    map[string]interface{}{"bot_token": nil},
 	}
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("save config: %v", err)
@@ -206,8 +181,6 @@ func TestIssue585_TestIMConnectionValidatesRequiredFields(t *testing.T) {
 	}
 	t.Logf("Expected error for nil bot_token: %v", err)
 
-	// Test bogus token (non-empty but invalid) - should PASS field validation
-	// (connectivity validation requires actual adapter runtime)
 	cfg.IM.Adapters["telegram-bogus-token"] = config.IMAdapterConfig{
 		Enabled:  true,
 		Platform: "telegram",
@@ -223,19 +196,15 @@ func TestIssue585_TestIMConnectionValidatesRequiredFields(t *testing.T) {
 	}
 }
 
-// TestIssue585_TestIMConnectionSlackMultipleRequiredFields verifies that
-// TestIMConnection validates multiple required fields for platforms like Slack.
 func TestIssue585_TestIMConnectionSlackMultipleRequiredFields(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create temporary config directory
 	ggcodeDir := filepath.Join(tmpDir, ".ggcode")
 	if err := os.MkdirAll(ggcodeDir, 0o755); err != nil {
 		t.Fatalf("create .ggcode dir: %v", err)
 	}
 	t.Setenv("HOME", tmpDir)
 
-	// Test slack with only bot_token (missing app_token)
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		t.Fatalf("load config: %v", err)
@@ -258,7 +227,6 @@ func TestIssue585_TestIMConnectionSlackMultipleRequiredFields(t *testing.T) {
 	}
 	t.Logf("Expected error for missing app_token: %v", err)
 
-	// Test slack with all required fields present
 	cfg.IM.Adapters["slack-complete"] = config.IMAdapterConfig{
 		Enabled:  true,
 		Platform: "slack",
@@ -277,20 +245,15 @@ func TestIssue585_TestIMConnectionSlackMultipleRequiredFields(t *testing.T) {
 	}
 }
 
-// TestIssue585_PlatformSwitchTelegramToSlackIsolated confirms the
-// specific probe case from issue #585: telegram bot_token should NOT become
-// slack bot_token after platform switch.
 func TestIssue585_PlatformSwitchTelegramToSlackIsolated(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create temporary config directory
 	ggcodeDir := filepath.Join(tmpDir, ".ggcode")
 	if err := os.MkdirAll(ggcodeDir, 0o755); err != nil {
 		t.Fatalf("create .ggcode dir: %v", err)
 	}
 	t.Setenv("HOME", tmpDir)
 
-	// Exact probe scenario: start with telegram adapter
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		t.Fatalf("load config: %v", err)
@@ -307,8 +270,6 @@ func TestIssue585_PlatformSwitchTelegramToSlackIsolated(t *testing.T) {
 		t.Fatalf("save initial config: %v", err)
 	}
 
-	// Switch to slack without any bot_token in the update
-	// (simulates #107 secret field masking behavior)
 	values := map[string]string{
 		"platform": "slack",
 	}
@@ -316,7 +277,6 @@ func TestIssue585_PlatformSwitchTelegramToSlackIsolated(t *testing.T) {
 		t.Fatalf("SaveIMAdapter: %v", err)
 	}
 
-	// Verify: slack has NO bot_token (old telegram token was discarded)
 	cfg2, err := config.Load(config.ConfigPath())
 	if err != nil {
 		t.Fatalf("reload config: %v", err)
@@ -329,7 +289,6 @@ func TestIssue585_PlatformSwitchTelegramToSlackIsolated(t *testing.T) {
 		t.Fatalf("expected platform=slack, got %s", acfg.Platform)
 	}
 
-	// This is the critical check: bot_token should NOT exist
 	if acfg.Extra != nil {
 		if token, exists := acfg.Extra["bot_token"]; exists {
 			t.Fatalf("CROSS-PLATFORM CREDENTIAL LEAK: telegram bot_token=%v became slack bot_token", token)

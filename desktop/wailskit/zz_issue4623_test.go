@@ -24,7 +24,7 @@ func TestIssue4623_SwitchModelSingleCriticalSection(t *testing.T) {
 	}
 	body := text[fn:]
 	if end := strings.Index(body, "\n}\n"); end > 0 {
-		body = body[:end+2] // clamp to the function body; later functions may legitimately read b.currentSes under their own locks
+		body = body[:end+2]
 	}
 	apply := strings.Index(body, "agentruntime.ApplyProviderToAgent")
 	if apply < 0 {
@@ -35,8 +35,7 @@ func TestIssue4623_SwitchModelSingleCriticalSection(t *testing.T) {
 	if unlocks != 1 {
 		t.Fatalf("exactly one Unlock must sit between section start and ApplyProviderToAgent, found %d (#4623)", unlocks)
 	}
-	// The session snapshot must come from under the lock, not from a later
-	// unlocked read of b.currentSes.
+
 	if !strings.Contains(head, "ses := b.currentSes") {
 		t.Fatal("session pointer must be snapshotted under the lock (#4623)")
 	}

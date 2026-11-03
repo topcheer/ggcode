@@ -9,7 +9,7 @@ import (
 // TestC1_BaseURLInstanceWriteback verifies that updating baseURL via UpdateConfig
 // has the correct mapping to trigger instance writeback (#584 C1).
 func TestC1_BaseURLInstanceWriteback(t *testing.T) {
-	// Verify baseURL is in updateConfigInstanceKeys mapping
+
 	if _, ok := updateConfigInstanceKeys["baseURL"]; !ok {
 		t.Error("baseURL must be in updateConfigInstanceKeys mapping (#584 C1)")
 	}

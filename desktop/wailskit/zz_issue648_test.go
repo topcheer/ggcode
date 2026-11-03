@@ -19,17 +19,11 @@ func setupIssue648Home(t *testing.T) {
 	t.Setenv("HOME", tmpDir)
 }
 
-// Issue #648: SaveIMAdapter's case-insensitive platform validation (#591
-// semantics) endorsed "Telegram" — the registry DisplayName the user copies
-// from the UI — but persisted it verbatim. The runtime startup switch
-// (internal/im startConfiguredAdapter) matches platform IDs exactly with no
-// default error branch, so the adapter silently never started. Saving must
-// normalize to the registry's canonical ID.
 func TestIssue648_PlatformNormalizedToCanonicalID(t *testing.T) {
 	setupIssue648Home(t)
 
 	err := SaveIMAdapter("tg", map[string]string{
-		"platform":  "Telegram", // DisplayName casing, passes case-insensitive validation
+		"platform":  "Telegram",
 		"bot_token": "123456:ABC-DEF",
 	})
 	if err != nil {
@@ -49,8 +43,6 @@ func TestIssue648_PlatformNormalizedToCanonicalID(t *testing.T) {
 	}
 }
 
-// Existing canonical input must round-trip unchanged (no spurious rewrite),
-// and mixed case like "DisCord" must also normalize.
 func TestIssue648_CanonicalStaysCanonical(t *testing.T) {
 	setupIssue648Home(t)
 
@@ -72,15 +64,13 @@ func TestIssue648_CanonicalStaysCanonical(t *testing.T) {
 	}
 }
 
-// The normalization must also apply on the UPDATE path of an existing
-// adapter, not just creation.
 func TestIssue648_UpdatePathAlsoNormalizes(t *testing.T) {
 	setupIssue648Home(t)
 
 	if err := SaveIMAdapter("upd", map[string]string{"platform": "telegram", "bot_token": "t1"}); err != nil {
 		t.Fatal(err)
 	}
-	// UI edit that re-submits the DisplayName casing.
+
 	if err := SaveIMAdapter("upd", map[string]string{"platform": "Telegram", "bot_token": "t2"}); err != nil {
 		t.Fatal(err)
 	}
@@ -93,8 +83,6 @@ func TestIssue648_UpdatePathAlsoNormalizes(t *testing.T) {
 	}
 }
 
-// Unknown platforms must still be rejected with the #637 error — the
-// normalization must not weaken validation.
 func TestIssue648_UnknownStillRejected(t *testing.T) {
 	setupIssue648Home(t)
 	err := SaveIMAdapter("bad", map[string]string{"platform": "telegarm"})

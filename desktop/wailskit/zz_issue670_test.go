@@ -22,7 +22,7 @@ func resetOAuthState(t *testing.T) {
 		oauthMu.Unlock()
 		oauthCompleteMu.Lock()
 		if oauthCompleteInFlight != nil {
-			<-oauthCompleteInFlight.done // should already be closed
+			<-oauthCompleteInFlight.done
 			oauthCompleteInFlight = nil
 		}
 		oauthCompleteMu.Unlock()
@@ -44,9 +44,6 @@ func TestIssue670_CompleteSingleFlight_LoserInheritsSuccess(t *testing.T) {
 	resetOAuthState(t)
 	isolateAuthStore(t)
 
-	// Simulate an in-flight winner without any real flow: the loser path
-	// must not touch currentOAuthFlow at all (leave it nil — a loser that
-	// read the flow here would be racy by construction).
 	call := &oauthCompleteCall{done: make(chan struct{})}
 	oauthCompleteMu.Lock()
 	oauthCompleteInFlight = call
@@ -55,7 +52,6 @@ func TestIssue670_CompleteSingleFlight_LoserInheritsSuccess(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- CompleteAnthropicOAuth() }()
 
-	// Let the loser block on done, then publish the winner's success.
 	time.Sleep(100 * time.Millisecond)
 	oauthCompleteMu.Lock()
 	call.err = nil
@@ -135,12 +131,10 @@ func TestIssue670_CompleteSingleFlight_BothCallersUnblockPromptly(t *testing.T) 
 			defer wg.Done()
 			errCh <- CompleteAnthropicOAuth()
 		}()
-		// Give the first caller time to take the winner slot so the second
-		// deterministically exercises the joiner path.
+
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Small settle window, then tear the flow down (logout path).
 	time.Sleep(100 * time.Millisecond)
 	if err := LogoutAnthropicOAuth(); err != nil {
 		t.Fatalf("logout failed: %v", err)
@@ -150,8 +144,7 @@ func TestIssue670_CompleteSingleFlight_BothCallersUnblockPromptly(t *testing.T) 
 	for i := 0; i < callers; i++ {
 		select {
 		case err := <-errCh:
-			// Both callers fail (no real auth code was ever exchanged) —
-			// the assertion is that they RETURN at all, and quickly.
+
 			if err == nil {
 				t.Fatal("unexpected success without a real auth code")
 			}
@@ -162,10 +155,6 @@ func TestIssue670_CompleteSingleFlight_BothCallersUnblockPromptly(t *testing.T) 
 	}
 	wg.Wait()
 
-	// Exactly one caller observed the raw flow error ("oauth flow closed"
-	// wrapped in "waiting for auth code"); the other joined and saw the
-	// concurrent-call wrap of the same outcome. A third state — an
-	// independent unrelated error invented by a racy loser — is forbidden.
 	joined, raw := 0, 0
 	for _, err := range results {
 		switch {
@@ -232,7 +221,6 @@ func TestIssue670_LogoutClearsTokenFlowAndStatus(t *testing.T) {
 		t.Fatal("status must report disconnected after logout")
 	}
 
-	// Second logout is idempotent (no flow, no token).
 	if err := LogoutAnthropicOAuth(); err != nil {
 		t.Fatalf("second logout should be clean, got: %v", err)
 	}

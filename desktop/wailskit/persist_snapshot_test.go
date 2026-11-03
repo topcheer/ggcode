@@ -20,14 +20,12 @@ import (
 func TestPersistSnapshot_SupersededRunDropsIntoVoid(t *testing.T) {
 	b := &ChatBridge{}
 
-	// t0: run starts against session A (snapshot installed).
 	sesA := &session.Session{ID: "run-a"}
 	b.mu.Lock()
 	b.runSes = sesA
 	b.mu.Unlock()
 	b.setRunPersistSnapshot()
 
-	// Snapshot captured A.
 	b.mu.Lock()
 	captured := b.persistSession
 	b.mu.Unlock()
@@ -35,16 +33,12 @@ func TestPersistSnapshot_SupersededRunDropsIntoVoid(t *testing.T) {
 		t.Fatalf("snapshot must capture run-start session A, got %+v", captured)
 	}
 
-	// t1: user hits New — Cancel + ClearCurrentSession bumps generation and
-	// drops the snapshot; a NEW session B is installed.
 	b.ClearCurrentSession()
 	sesB := &session.Session{ID: "new-b"}
 	b.mu.Lock()
 	b.currentSes = sesB
 	b.mu.Unlock()
 
-	// t2: the old run's tail persist fires. With the fix, no snapshot
-	// exists → dropped. (Old code: runSes==nil → fallback currentSes==B.)
 	b.mu.Lock()
 	lateSes := b.persistSession
 	b.mu.Unlock()
@@ -95,9 +89,6 @@ func TestEmitIfCurrent_DropsStaleRunEvents(t *testing.T) {
 		delivered = true
 	}
 
-	// Supersede the run BEFORE its late event drains — this is the one-click
-	// New Session shape: Cancel + ClearCurrentSession while the agent
-	// goroutine still emits tail events.
 	b.ClearCurrentSession()
 
 	b.emitIfCurrent(runGen, provider.StreamEvent{Type: provider.StreamEventText, Text: "ghost"})
@@ -105,7 +96,6 @@ func TestEmitIfCurrent_DropsStaleRunEvents(t *testing.T) {
 		t.Fatal("stale-run event leaked into the new session's stream")
 	}
 
-	// A current-generation event still flows through to the frontend.
 	b.emitIfCurrent(b.currentRunGeneration(), provider.StreamEvent{Type: provider.StreamEventText, Text: "live"})
 	if !delivered {
 		t.Fatal("current-run event was dropped by the stale guard")
@@ -129,7 +119,6 @@ func TestAppendPersistMessage_TargetsCapturedSession(t *testing.T) {
 		Content: []provider.ContentBlock{{Type: "text", Text: "captured"}},
 	})
 
-	// Read back the JSONL.
 	raw, err := os.ReadFile(filepath.Join(dir, "cap-1.jsonl"))
 	if err != nil {
 		t.Fatal(err)

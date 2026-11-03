@@ -45,16 +45,13 @@ func TestIssue630_DeleteCurrentSessionEmitsSessionChanged(t *testing.T) {
 	}
 
 	app := &App{chat: chat}
-	// Observe the buffered channel directly — do NOT start the event-loop
-	// goroutine (startEventLoop); its consumer drains events before this
-	// test's receive loop can see them.
+
 	app.streamEvents = make(chan uiEvent, 4096)
 
 	if err := app.DeleteSession(id); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 
-	// Drain pending events, waiting briefly for the explicit emit.
 	deadline := time.Now().Add(3 * time.Second)
 	sawSessionChanged := false
 	for time.Now().Before(deadline) {

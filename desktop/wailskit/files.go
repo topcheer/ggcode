@@ -44,7 +44,6 @@ func ListDirectory(dir string, recursive bool) ([]FileInfo, error) {
 		return nil, err
 	}
 
-	// Security: verify the path exists and is a directory
 	info, err := os.Stat(abs)
 	if err != nil {
 		return nil, fmt.Errorf("stat path: %w", err)
@@ -66,13 +65,12 @@ func walkDirectoryEntries(abs string) ([]FileInfo, error) {
 	err := filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			debug.Log("files", "walk error at %q: %v", path, err)
-			return nil // skip errors for individual entries, but log them (#580)
+			return nil
 		}
 		if path == abs {
-			return nil // skip root
+			return nil
 		}
-		// Exclude common generated/cache directories to avoid wasting time
-		// and hitting entry limits (#580).
+
 		name := d.Name()
 		if name == "node_modules" || name == ".git" || name == ".vscode" || name == ".idea" {
 			if d.IsDir() {
@@ -86,11 +84,7 @@ func walkDirectoryEntries(abs string) ([]FileInfo, error) {
 			return nil
 		}
 		if len(result) >= maxRecursiveEntries {
-			// #636: hitting the cap must truncate, not fail. Returning an
-			// error aborted the walk and the caller discarded ALL collected
-			// entries — recursive browsing of large repos (>10k entries)
-			// yielded nothing at all. filepath.SkipAll stops the walk
-			// cleanly so the ~10k already-collected entries are returned.
+
 			debug.Log("files", "recursive walk truncated at %d entries", maxRecursiveEntries)
 			return filepath.SkipAll
 		}
@@ -162,16 +156,13 @@ func ResolveContainedPath(root, path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve root: %w", err)
 	}
-	// Resolve symlinks in the root itself too: on macOS t.TempDir()/TMPDIR
-	// lives under /var which is itself a symlink to /private/var, so without
-	// this the resolved target would never "be inside" the unresolved root.
+
 	root, err = filepath.EvalSymlinks(root)
 	if err != nil {
 		return "", fmt.Errorf("resolve root: %w", err)
 	}
 	if !filepath.IsAbs(path) {
-		// Relative paths are anchored at the containment root, not the
-		// process working directory.
+
 		path = filepath.Join(root, path)
 	}
 	abs, err := filepath.Abs(path)
@@ -204,12 +195,6 @@ func ReadFileContent(path string) (string, error) {
 		return "", err
 	}
 
-	// #287: cap text preview size BEFORE reading. os.ReadFile loads the
-	// whole file into memory and ships it across the Wails bridge; without
-	// this check, clicking a multi-GB log file in the browser would hang the
-	// backend. 20MB is a deliberately lower cap than the 150MB binary preview
-	// limit (#253) because text content is passed as an unencoded string and
-	// is always rendered, not just offered for download.
 	info, err := os.Stat(resolved)
 	if err != nil {
 		return "", fmt.Errorf("stat file: %w", err)

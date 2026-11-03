@@ -10,21 +10,14 @@ import (
 	"testing"
 )
 
-// User report: "mcp面板上删除的mcp在瞬间就会被加回来，但是会显示没有配置"
-// (deleting an MCP server in the panel instantly brings it back, shown as
-// "not configured"). Reproduce against the USER-level Claude source
-// (~/.claude.json), which the existing #606 tests do not cover (they only
-// test the workspace .mcp.json).
 func TestUserDeletionResurrectedFromUserClaudeSource(t *testing.T) {
-	mcpTestHome(t) // isolated HOME
+	mcpTestHome(t)
 	ws := t.TempDir()
 	if err := os.WriteFile(filepath.Join(ws, "ggcode.yaml"), []byte("vendor: zai\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	setActiveChatBridge(t, ws)
 
-	// User-level Claude source defines the server (Claude Code writes its
-	// user-scope MCP servers here).
 	home, _ := os.UserHomeDir()
 	userClaude := filepath.Join(home, ".claude.json")
 	payload := map[string]any{
@@ -42,22 +35,18 @@ func TestUserDeletionResurrectedFromUserClaudeSource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Panel shows the migrated server.
 	if !issue606ListHas(t, "pen") {
 		t.Fatal("user-claude migrated server not listed before delete")
 	}
 
-	// User deletes it.
 	if err := RemoveMCPServer("pen"); err != nil {
 		t.Fatalf("RemoveMCPServer(pen): %v", err)
 	}
 
-	// Origin file must be cleaned.
 	if data, err := os.ReadFile(userClaude); err == nil && strings.Contains(string(data), "pen") {
 		t.Fatalf("pen still in ~/.claude.json after removal:\n%s", data)
 	}
 
-	// Anti-resurrect: the panel list must not bring it back.
 	servers, err := ListMCPServers()
 	if err != nil {
 		t.Fatalf("ListMCPServers: %v", err)
@@ -70,11 +59,6 @@ func TestUserDeletionResurrectedFromUserClaudeSource(t *testing.T) {
 	}
 }
 
-// Variant: server defined in workspace yaml (ggcode-native) AND the yaml
-// holds OTHER servers too, so the file survives the delete. Guards the
-// common multi-server case: after deleting one row, the remaining list must
-// not re-merge the deleted name from any source, and the surviving servers
-// must keep their config (not show up as "not configured").
 func TestUserDeletionAmongMultipleServersKeepsOthersConfigured(t *testing.T) {
 	mcpTestHome(t)
 	ws := t.TempDir()

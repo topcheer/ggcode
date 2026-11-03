@@ -1,12 +1,5 @@
 package wailskit
 
-// Issue #690: the #585 platform-switch guard only covered Extra. On a
-// platform switch the transport-layer fields (Transport/Command/Args/Env,
-// plus AllowFrom) were inherited unconditionally, so switching e.g.
-// telegram→discord kept the old stdio bridge command and its env
-// (TELEGRAM_BOT_TOKEN) — the new adapter would launch the OLD platform's
-// bridge process with the OLD platform's credentials.
-
 import (
 	"testing"
 
@@ -59,7 +52,7 @@ func TestIssue690_SamePlatformStillInheritsTransportFields(t *testing.T) {
 	}
 	update := config.IMAdapterConfig{
 		Enabled:  true,
-		Platform: "telegram", // same platform — inheritance must be preserved
+		Platform: "telegram",
 	}
 
 	got := mergeExistingIntoUpdate(update, existing)

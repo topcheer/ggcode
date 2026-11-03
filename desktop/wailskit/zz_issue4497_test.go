@@ -28,14 +28,11 @@ func TestIssue4497_SetConfigRebaselinesOnWorkspaceSwitch(t *testing.T) {
 	if err := os.WriteFile(pathB, []byte(vendorBlockB), 0644); err != nil {
 		t.Fatalf("write b: %v", err)
 	}
-	// The trap: workspace A's baseline is in the FUTURE, workspace B's file
-	// is in the past. Under the old code, no realistic external edit to B
-	// could ever beat A's baseline.
+
 	now := time.Now()
 	future := now.Add(1 * time.Hour)
 	past := now.Add(-1 * time.Hour)
-	// Load BEFORE pinning mtimes: Load normalizes and writes the file
-	// back, which would otherwise refresh the mtime we are about to pin.
+
 	cfgA, err := config.Load(pathA)
 	if err != nil {
 		t.Fatalf("load a: %v", err)
@@ -59,7 +56,6 @@ func TestIssue4497_SetConfigRebaselinesOnWorkspaceSwitch(t *testing.T) {
 		t.Fatalf("baseline after first SetConfig = %v, want A's mtime %v", baselineA, future)
 	}
 
-	// Switch to workspace B: the baseline must move to B's file mtime.
 	SetConfig(cfgB)
 	globalMu.RLock()
 	baselineB := cfgFileLastMod
@@ -68,8 +64,6 @@ func TestIssue4497_SetConfigRebaselinesOnWorkspaceSwitch(t *testing.T) {
 		t.Fatalf("baseline after workspace switch = %v, want B's mtime %v (old baseline kept: #4497)", baselineB, past)
 	}
 
-	// External session patches B with an mtime that only beats B's fresh
-	// baseline - never A's future baseline (this is the exact no-reload trap).
 	mid := now.Add(30 * time.Minute)
 	if err := os.WriteFile(pathB, []byte("vendor: vb\nendpoint: main\ndefault_mode: supervised\nvendors:\n  vb:\n    endpoints:\n      main:\n        base_url: https://example.com\n        protocol: openai\n"), 0644); err != nil {
 		t.Fatalf("external write b: %v", err)

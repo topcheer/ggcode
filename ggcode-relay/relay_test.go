@@ -30,8 +30,6 @@ func testIssuedShareSession(t *testing.T) issuedShareSessionResponse {
 	return issued
 }
 
-// ─── Room tests ───
-
 func TestRoomEventsAfter(t *testing.T) {
 	r := newRoom("token")
 	r.history = []roomEvent{
@@ -40,25 +38,21 @@ func TestRoomEventsAfter(t *testing.T) {
 		{eventID: "ev-000000003"},
 	}
 
-	// Empty cursor → full history.
 	replay := r.eventsAfter("")
 	if len(replay) != 3 {
 		t.Fatalf("expected 3, got %d", len(replay))
 	}
 
-	// Cursor at ev-1 → replay ev-2, ev-3.
 	replay = r.eventsAfter("ev-000000001")
 	if len(replay) != 2 || replay[0].eventID != "ev-000000002" {
 		t.Fatalf("expected [ev-2, ev-3], got %v", eventIDs(replay))
 	}
 
-	// Cursor at ev-3 (tail) → empty.
 	replay = r.eventsAfter("ev-000000003")
 	if len(replay) != 0 {
 		t.Fatalf("expected 0, got %d", len(replay))
 	}
 
-	// Cursor not found → full history.
 	replay = r.eventsAfter("ev-000099999")
 	if len(replay) != 3 {
 		t.Fatalf("expected 3 (cursor not found), got %d", len(replay))
@@ -73,7 +67,6 @@ func TestRoomAppendEventDedupes(t *testing.T) {
 		t.Fatalf("expected 2, got %d", len(r.history))
 	}
 
-	// Upsert last event.
 	r.appendEvent(roomEvent{eventID: "ev-000000002", typ: "c"})
 	if len(r.history) != 2 {
 		t.Fatalf("dedup should keep length 2, got %d", len(r.history))
@@ -82,7 +75,6 @@ func TestRoomAppendEventDedupes(t *testing.T) {
 		t.Fatalf("expected updated type c, got %s", r.history[1].typ)
 	}
 
-	// Ignore empty eventID.
 	r.appendEvent(roomEvent{eventID: "", typ: "d"})
 	if len(r.history) != 2 {
 		t.Fatalf("empty eventID should not append")
@@ -438,7 +430,7 @@ func TestPeerOnActiveSessionBumpsGenerationOnSessionSwitch(t *testing.T) {
 
 	h := newHub(nil)
 	server := newPeer(h, r, "server", nil)
-	r.server = server // authoritative server (issue #539: broadcasts require room.server == p)
+	r.server = server
 	client := newPeer(h, r, "client", nil)
 	r.clients[client] = struct{}{}
 
@@ -467,8 +459,6 @@ func TestPeerOnActiveSessionBumpsGenerationOnSessionSwitch(t *testing.T) {
 	}
 }
 
-// ─── ACK cursor tests ───
-
 func TestPeerOnResumeReplaysFromCursor(t *testing.T) {
 	r := newRoom("token")
 	r.sessionID = "sess-1"
@@ -495,7 +485,6 @@ func TestPeerOnResumeReplaysFromCursor(t *testing.T) {
 		t.Fatalf("peer should be ready after key_ready")
 	}
 
-	// Should have: active_session + resume_ack + 3 replay events = 5 messages.
 	msgs := drainSendCh(p.sendCh)
 	if len(msgs) != 5 {
 		t.Fatalf("expected 5 messages, got %d", len(msgs))
@@ -515,7 +504,7 @@ func TestPeerOnResumeReplaysFromCursor(t *testing.T) {
 	if ack.AuthorityEpoch != 3 {
 		t.Fatalf("expected resume_ack authority_epoch 3, got %d", ack.AuthorityEpoch)
 	}
-	// Since cursor was empty, resume_ack should say full_history.
+
 	if string(ack.Data) != `{"replay_count":3,"resume_mode":"full_history"}` {
 		t.Fatalf("unexpected ack data: %s", string(ack.Data))
 	}
@@ -525,7 +514,7 @@ func TestV3ResumeReplaysBootstrapEventsInHistory(t *testing.T) {
 	r := newRoom("token")
 	h := newHub(nil)
 	server := newPeer(h, r, "server", nil)
-	r.server = server // authoritative server (issue #539: broadcasts require room.server == p)
+	r.server = server
 	server.handleServerBroadcast(nil, relayMessage{
 		Type:      "session_info",
 		SessionID: "sess-1",
@@ -606,13 +595,13 @@ func TestPeerOnResumeWithCursorOnlyReplaysNew(t *testing.T) {
 
 	h := newHub(nil)
 	p := newPeer(h, r, "client", nil)
-	p.cursor = "ev-000000001" // already ACK'd ev-1
+	p.cursor = "ev-000000001"
 
 	p.onResume(relayMessage{ClientID: "client-1"}, h)
 	p.onKeyReady(relayMessage{ClientID: "client-1"}, h)
 
 	msgs := drainSendCh(p.sendCh)
-	if len(msgs) != 4 { // active_session + resume_ack + ev-2 + ev-3
+	if len(msgs) != 4 {
 		t.Fatalf("expected 4 messages, got %d", len(msgs))
 	}
 }
@@ -641,7 +630,7 @@ func TestPeerOnResumeSessionMismatchForcesFullHistory(t *testing.T) {
 	p.onKeyReady(relayMessage{ClientID: "client-1"}, h)
 
 	msgs := drainSendCh(p.sendCh)
-	if len(msgs) != 6 { // active_session + resume_ack + full replay
+	if len(msgs) != 6 {
 		t.Fatalf("expected 6 messages, got %d", len(msgs))
 	}
 
@@ -745,8 +734,7 @@ func TestPeerOnAckUpdatesCursor(t *testing.T) {
 	h := newHub(nil)
 	p := newPeer(h, r, "client", nil)
 	p.clientID = "client-1"
-	// #1354: acks are only honored from the peer that currently owns the
-	// client_id mapping.
+
 	r.clientsByID["client-1"] = p
 
 	p.onAck(relayMessage{EventID: "ev-000000100"}, h)
@@ -769,12 +757,11 @@ func TestPeerOnAckPersistsToDB(t *testing.T) {
 	h := newHub(store)
 	p := newPeer(h, r, "client", nil)
 	p.clientID = "client-1"
-	// #1354: ownership registration (see above).
+
 	r.clientsByID["client-1"] = p
 
 	p.onAck(relayMessage{EventID: "ev-000000100"}, h)
 
-	// Wait for async goroutine.
 	time.Sleep(100 * time.Millisecond)
 
 	cursor, err := store.loadClientCursor(hashToken("token"), "client-1")
@@ -801,19 +788,16 @@ func TestPeerOnAckRejectsSupersededAndRegressed(t *testing.T) {
 	cur.cursor = "ev-000000150"
 	old.cursor = "ev-000000150"
 
-	// Stale ack from the superseded (evicted) connection: dropped.
 	old.onAck(relayMessage{EventID: "ev-000000100"}, h)
 	if old.cursor != "ev-000000150" {
 		t.Fatalf("superseded peer cursor moved: %s", old.cursor)
 	}
 
-	// Regressed ack from the CURRENT holder: also refused.
 	cur.onAck(relayMessage{EventID: "ev-000000120"}, h)
 	if cur.cursor != "ev-000000150" {
 		t.Fatalf("cursor regressed: %s", cur.cursor)
 	}
 
-	// Forward ack from the current holder: accepted.
 	cur.onAck(relayMessage{EventID: "ev-000000200"}, h)
 	if cur.cursor != "ev-000000200" {
 		t.Fatalf("forward ack not accepted: %s", cur.cursor)
@@ -828,7 +812,6 @@ func TestPeerOnResumeLoadsCursorFromDB(t *testing.T) {
 	}
 	defer store.Close()
 
-	// Pre-seed cursor in DB.
 	_ = store.saveClientCursor(hashToken("token"), "client-1", "sess-1", "ev-000000002")
 
 	r := newRoom("token")
@@ -846,9 +829,8 @@ func TestPeerOnResumeLoadsCursorFromDB(t *testing.T) {
 	p.onResume(relayMessage{ClientID: "client-1"}, h)
 	p.onKeyReady(relayMessage{ClientID: "client-1"}, h)
 
-	// Should replay only ev-3 and ev-4 (after cursor ev-2).
 	msgs := drainSendCh(p.sendCh)
-	if len(msgs) != 4 { // active_session + resume_ack + ev-3 + ev-4
+	if len(msgs) != 4 {
 		t.Fatalf("expected 4 messages, got %d", len(msgs))
 	}
 }
@@ -883,26 +865,23 @@ func TestPeerResumeFromOverridesPersistedCursor(t *testing.T) {
 	p.onKeyReady(relayMessage{ClientID: "client-1"}, h)
 
 	msgs := drainSendCh(p.sendCh)
-	if len(msgs) != 5 { // active_session + resume_ack + ev-2 + ev-3 + ev-4
+	if len(msgs) != 5 {
 		t.Fatalf("expected 5 messages, got %d", len(msgs))
 	}
 }
 
-// ─── Peer send tests ───
-
 func TestPeerSendBackpressures(t *testing.T) {
 	p := newPeer(nil, newRoom("t"), "client", nil)
-	// Fill buffer.
+
 	for i := 0; i < cap(p.sendCh); i++ {
 		p.sendRaw([]byte("x"))
 	}
-	// One more send should not block indefinitely because done is open.
-	// (In production it would block until writeLoop drains, but we test non-blocking on done.)
+
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		close(p.done)
 	}()
-	p.sendRaw([]byte("overflow")) // should return via done
+	p.sendRaw([]byte("overflow"))
 }
 
 func TestServerBroadcastBackpressureDoesNotHoldRoomLock(t *testing.T) {
@@ -952,8 +931,6 @@ func TestServerBroadcastBackpressureDoesNotHoldRoomLock(t *testing.T) {
 	}
 }
 
-// ─── Integration: full ACK lifecycle ───
-
 func TestFullACKLifecycle(t *testing.T) {
 	dir := t.TempDir()
 	store, err := openRelayStore(filepath.Join(dir, "test.db"), 72*time.Hour)
@@ -973,26 +950,22 @@ func TestFullACKLifecycle(t *testing.T) {
 	h := newHub(store)
 	p := newPeer(h, r, "client", nil)
 
-	// Step 1: Resume (no cursor → full replay).
 	p.onResume(relayMessage{ClientID: "client-1"}, h)
 	p.onKeyReady(relayMessage{ClientID: "client-1"}, h)
 	drainSendCh(p.sendCh)
 
-	// Step 2: ACK ev-3.
 	p.onAck(relayMessage{EventID: "ev-000000003"}, h)
 	time.Sleep(100 * time.Millisecond)
 
-	// Step 3: New events arrive.
 	r.appendEvent(roomEvent{eventID: "ev-000000004", raw: []byte(`{"type":"encrypted","event_id":"ev-000000004"}`)})
 
-	// Step 4: Disconnect and reconnect (new peer, same clientID).
 	p2 := newPeer(h, r, "client", nil)
 	p2.onResume(relayMessage{ClientID: "client-1"}, h)
 	p2.onKeyReady(relayMessage{ClientID: "client-1"}, h)
 
 	msgs := drainSendCh(p2.sendCh)
-	// Should only replay ev-4 (cursor at ev-3).
-	if len(msgs) != 3 { // active_session + resume_ack + ev-4
+
+	if len(msgs) != 3 {
 		t.Fatalf("expected 3 messages after reconnect, got %d", len(msgs))
 	}
 
@@ -1012,8 +985,6 @@ func TestFullACKLifecycle(t *testing.T) {
 		t.Fatalf("expected replay event ev-000000004, got %+v", replay)
 	}
 }
-
-// ─── Hub tests ───
 
 func TestHubGetOrCreateRoom(t *testing.T) {
 	h := newHub(nil)
@@ -1038,7 +1009,6 @@ func TestHubDestroyRoom(t *testing.T) {
 
 	h.destroyRoom("token")
 
-	// Client should have received sharing_stopped.
 	select {
 	case raw := <-p.sendCh:
 		var msg relayMessage
@@ -1322,8 +1292,6 @@ func TestStatsHandlerIsPublic(t *testing.T) {
 	}
 }
 
-// ─── Helpers ───
-
 func drainSendCh(ch chan []byte) [][]byte {
 	var msgs [][]byte
 	for {
@@ -1345,7 +1313,7 @@ func eventIDs(events []roomEvent) []string {
 }
 
 func TestMain(m *testing.M) {
-	// Set a temp HOME so DB path doesn't collide.
+
 	os.Exit(m.Run())
 }
 
@@ -1367,31 +1335,25 @@ func TestFinishResumeTruncatesReplayWhenBufferFull(t *testing.T) {
 	client.protocolVersion = shareProtocolV3
 	client.waitingForKeyReady = true
 
-	// Simulate a slow client: fill the buffer to just below capacity so
-	// only the headroom slots remain.
 	for len(client.sendCh) < cap(client.sendCh) {
 		client.sendCh <- []byte(`{"type":"filler"}`)
 	}
 
 	client.finishResume("client-1", &hub{})
 
-	// Drain everything the replay managed to enqueue and verify it stayed
-	// within the headroom bound (ack + at most replayTruncationHeadroom-1
-	// events) and that the connection was NOT killed: closeWithReason
-	// closes p.done, so a live done channel proves no 1013.
 	seen := 0
 	for {
 		select {
 		case raw := <-client.sendCh:
 			if !bytes.Contains(raw, []byte(`"filler"`)) {
-				seen++ // resume_ack or a replayed event
+				seen++
 			}
 		default:
 			goto drained
 		}
 	}
 drained:
-	if seen > replayTruncationHeadroom+1 { // +1 for the resume_ack
+	if seen > replayTruncationHeadroom+1 {
 		t.Fatalf("replay overflowed headroom: enqueued %d messages (headroom %d)", seen, replayTruncationHeadroom)
 	}
 	select {
@@ -1414,7 +1376,7 @@ func TestFinishResumeFullBacklogWhenBufferEmpty(t *testing.T) {
 	client.clientID = "client-1"
 	client.protocolVersion = shareProtocolV3
 	client.waitingForKeyReady = true
-	client.cursor = "" // full replay from the top
+	client.cursor = ""
 
 	client.finishResume("client-1", &hub{})
 
@@ -1428,7 +1390,7 @@ func TestFinishResumeFullBacklogWhenBufferEmpty(t *testing.T) {
 		}
 	}
 drained:
-	if seen != backlog+1 { // +1 resume_ack
+	if seen != backlog+1 {
 		t.Fatalf("expected full backlog %d+ack, got %d", backlog, seen-1)
 	}
 }

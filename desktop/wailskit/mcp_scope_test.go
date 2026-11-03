@@ -11,8 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// mcpTestHome redirects HOME to a temp dir so ConfigDir()/ConfigPath() and
-// keys.env land in an isolated location.
 func mcpTestHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -20,8 +18,6 @@ func mcpTestHome(t *testing.T) string {
 	return home
 }
 
-// setActiveChatBridge installs a minimal ChatBridge bound to workDir and
-// restores the previous bridge on cleanup.
 func setActiveChatBridge(t *testing.T, workDir string) {
 	t.Helper()
 	globalMu.Lock()
@@ -44,9 +40,6 @@ func readFile(t *testing.T, path string) string {
 	return string(data)
 }
 
-// TestAddMCPServerWritesWorkspaceScope (#248): when a session is bound to a
-// workspace with its own ggcode.yaml, AddMCPServer must write the workspace's
-// mcp_servers.yaml — not the global one.
 func TestAddMCPServerWritesWorkspaceScope(t *testing.T) {
 	home := mcpTestHome(t)
 	ws := t.TempDir()
@@ -75,7 +68,6 @@ func TestAddMCPServerWritesWorkspaceScope(t *testing.T) {
 		t.Fatalf("global mcp_servers.yaml unexpectedly written: %v", err)
 	}
 
-	// List must read the workspace scope: the just-added server appears.
 	servers, err := ListMCPServers()
 	if err != nil {
 		t.Fatal(err)
@@ -90,9 +82,6 @@ func TestAddMCPServerWritesWorkspaceScope(t *testing.T) {
 		t.Fatalf("workspace server not listed: %+v", servers)
 	}
 
-	// Remove must delete from the workspace scope — and stay deleted (#248
-	// resurrection bug): after removal the server is gone (the file may be
-	// removed entirely when the last server is deleted).
 	if err := RemoveMCPServer("ws-server"); err != nil {
 		t.Fatal(err)
 	}
@@ -101,8 +90,6 @@ func TestAddMCPServerWritesWorkspaceScope(t *testing.T) {
 	}
 }
 
-// TestAddMCPServerFallsBackToGlobalScope (#248): without a bound session the
-// global config is used, preserving the pre-workspace behavior.
 func TestAddMCPServerFallsBackToGlobalScope(t *testing.T) {
 	home := mcpTestHome(t)
 	globalMu.Lock()
@@ -128,9 +115,6 @@ func TestAddMCPServerFallsBackToGlobalScope(t *testing.T) {
 	}
 }
 
-// TestAddMCPServerPatchPreservesUnsetFields (#249): editing an existing server
-// by changing only its URL must keep env/headers/type; an omitted type must
-// not flip an http server to stdio.
 func TestAddMCPServerPatchPreservesUnsetFields(t *testing.T) {
 	mcpTestHome(t)
 	ws := t.TempDir()
@@ -139,7 +123,6 @@ func TestAddMCPServerPatchPreservesUnsetFields(t *testing.T) {
 	}
 	setActiveChatBridge(t, ws)
 
-	// Seed an http server with env and headers.
 	if err := AddMCPServer(map[string]string{
 		"name":            "http-server",
 		"type":            "http",
@@ -150,7 +133,6 @@ func TestAddMCPServerPatchPreservesUnsetFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Edit: new URL only; type omitted, no env/headers provided.
 	if err := AddMCPServer(map[string]string{
 		"name": "http-server",
 		"url":  "https://new.example.com/mcp",
@@ -185,8 +167,6 @@ func TestAddMCPServerPatchPreservesUnsetFields(t *testing.T) {
 	}
 }
 
-// TestAddCustomEndpointStoresKeyInKeysEnv (#250): the API key must go to
-// keys.env with a ${VAR} reference in vendors.yaml — never plaintext on disk.
 func TestAddCustomEndpointStoresKeyInKeysEnv(t *testing.T) {
 	home := mcpTestHome(t)
 	cfg, err := config.Load(config.ConfigPath())

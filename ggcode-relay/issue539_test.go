@@ -1,11 +1,5 @@
 package main
 
-// Feature tests for issue #539 (relay server batch):
-//   A — old-server deferred detach must not evict a newer server
-//   B — deposed server broadcast/active_session must be rejected
-//   C — sendRaw must not block 2s per full-buffer slow consumer
-//   E — onAck must read room.sessionID under room.mu (race-free)
-
 import (
 	"encoding/json"
 	"sync"
@@ -13,8 +7,6 @@ import (
 	"testing"
 	"time"
 )
-
-// ─── Bug A: stale server detach ───
 
 // TestDetachFromRoomStaleServerDetachKeepsNewServer reproduces the probe
 // scenario: a new server takes over, then the deposed old server's deferred
@@ -26,13 +18,11 @@ func TestDetachFromRoomStaleServerDetachKeepsNewServer(t *testing.T) {
 	oldServer := newPeer(h, r, "server", nil)
 	newServer := newPeer(h, r, "server", nil)
 
-	// Takeover: handleWS-style — new server replaces old.
 	r.mu.Lock()
 	r.server = newServer
 	r.serverReady = true
 	r.mu.Unlock()
 
-	// Deferred detach from the deposed old server arrives late.
 	oldServer.detachFromRoom(false, h)
 
 	r.mu.RLock()
@@ -80,8 +70,6 @@ func TestDetachFromRoomCurrentServerDetachStillClears(t *testing.T) {
 	}
 }
 
-// ─── Bug B: deposed server broadcast ───
-
 // TestHandleServerBroadcastRejectedFromDeposedServer reproduces the probe:
 // S2 takes over and binds sess-new; deposed-but-open S1 sends a broadcast
 // carrying sess-old with a foreign epoch and replace semantics — it must be
@@ -104,7 +92,6 @@ func TestHandleServerBroadcastRejectedFromDeposedServer(t *testing.T) {
 	r.history = []roomEvent{{sessionID: "sess-new", eventID: "ev-000000001", typ: "encrypted"}}
 	r.mu.Unlock()
 
-	// Deposed server's residual frame.
 	oldServer.handleServerBroadcast(nil, relayMessage{
 		Type:           "encrypted",
 		SessionID:      "sess-old",
@@ -127,7 +114,7 @@ func TestHandleServerBroadcastRejectedFromDeposedServer(t *testing.T) {
 	if hist != 1 {
 		t.Fatalf("deposed server mutated history: len=%d want 1", hist)
 	}
-	// Client must not have received the stale frame.
+
 	select {
 	case raw := <-client.sendCh:
 		t.Fatalf("stale server frame must not reach clients, got %s", raw)
@@ -223,8 +210,6 @@ func TestOnActiveSessionRejectedFromDeposedServer(t *testing.T) {
 	}
 }
 
-// ─── Bug C: sendRaw non-blocking on full buffer ───
-
 // TestSendRawDoesNotBlockOnFullBuffer proves the fix: a full sendCh no longer
 // stalls the caller for 2s — sendRaw returns promptly, counts the drop, and
 // (with a nil conn) simply skips the close.
@@ -234,20 +219,19 @@ func TestSendRawDoesNotBlockOnFullBuffer(t *testing.T) {
 	p := newPeer(h, r, "client", nil)
 	p.clientID = "slow-client"
 
-	// Fill the 512-slot buffer.
 	for i := 0; i < cap(p.sendCh); i++ {
 		p.sendCh <- []byte("x")
 	}
 
 	done := make(chan struct{})
 	go func() {
-		p.sendRaw([]byte("overflow")) // must not block 2s
+		p.sendRaw([]byte("overflow"))
 		close(done)
 	}()
 
 	select {
 	case <-done:
-		// returned promptly
+
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("sendRaw blocked on full buffer (slow-consumer stall regression)")
 	}
@@ -297,16 +281,13 @@ func TestSendRawFullBufferSerialFanoutNoStall(t *testing.T) {
 	}
 }
 
-// ─── Bug E: onAck sessionID data race ───
-
 // TestOnAckConcurrentWithBindRoomSessionRace exercises onAck concurrently
 // with bindRoomSession (which writes room.sessionID under room.mu). Run with
 // -race: the pre-fix unsynchronized read of room.sessionID in onAck trips
 // the race detector; the fix reads it under the lock, so this test must pass
 // cleanly.
 func TestOnAckConcurrentWithBindRoomSessionRace(t *testing.T) {
-	// A real store is required: the racy read of room.sessionID sits inside
-	// `if h.store != nil` in onAck — with a nil store the code path never runs.
+
 	h := newHub(newStoreForTest(t))
 	r := h.getOrCreateRoom("token-issue539-e")
 	client := newPeer(h, r, "client", nil)
@@ -319,7 +300,6 @@ func TestOnAckConcurrentWithBindRoomSessionRace(t *testing.T) {
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
 
-	// Writer: keeps rebinding the room session (writes room.sessionID).
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -337,8 +317,6 @@ func TestOnAckConcurrentWithBindRoomSessionRace(t *testing.T) {
 		}
 	}()
 
-	// Reader: onAck persists cursor with room.sessionID. Throttled so the
-	// async SQLite writes (one goroutine per ack) stay bounded.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()

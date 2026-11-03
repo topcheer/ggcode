@@ -334,7 +334,7 @@ func TestRefreshShareSessionExpiredTokenRejected(t *testing.T) {
 		ConnectTTL: time.Minute,
 		RenewTTL:   time.Hour,
 	}
-	// Mint a renew ticket that expired a minute ago.
+
 	expired, err := mintShareTicket(cfg.Secret, "room-x", "server", shareTicketKindRenew, time.Now().UTC().Add(-time.Minute))
 	if err != nil {
 		t.Fatal(err)
@@ -343,7 +343,7 @@ func TestRefreshShareSessionExpiredTokenRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expired renew token accepted - refresh path bypasses expiry")
 	}
-	// A valid (unexpired) token still refreshes.
+
 	issued, err := issueShareSession(cfg, shareProtocolV3)
 	if err != nil {
 		t.Fatal(err)
@@ -363,9 +363,7 @@ func TestRefreshShareSessionRejectsOldTicketVersion(t *testing.T) {
 		ConnectTTL: time.Minute,
 		RenewTTL:   time.Hour,
 	}
-	// issueShareSession refuses to mint below V3; craft the legacy token
-	// directly via signShareTicket with an old claims.V (an attacker holds
-	// one minted before the upgrade).
+
 	room := "room-" + t.Name()
 	renew, err := signShareTicket(cfg.Secret, shareTicketClaims{
 		RoomID: room,

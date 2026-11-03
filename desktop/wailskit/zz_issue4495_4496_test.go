@@ -8,10 +8,6 @@ import (
 	"testing"
 )
 
-// #4495 pin: the AttachTunnelBroker session-info push must not dereference
-// the raw currentSes snapshot - it is nil until the first session exists
-// (cold start + phone connecting to the share tunnel panicked on .Title
-// while holding b.mu).
 func TestIssue4495_AttachTunnelBrokerNilSessionGate(t *testing.T) {
 	b, err := os.ReadFile("chat.go")
 	if err != nil {
@@ -21,7 +17,7 @@ func TestIssue4495_AttachTunnelBrokerNilSessionGate(t *testing.T) {
 	if strings.Contains(s, "Title:     currentSes.Title,") {
 		t.Fatal("#4495 regression: bare currentSes.Title deref is back")
 	}
-	// The gate must sit inside the AttachTunnelBroker function.
+
 	idx := strings.Index(s, "func (b *ChatBridge) AttachTunnelBroker(")
 	end := strings.Index(s[idx+1:], "\nfunc ")
 	if end < 0 {
@@ -33,10 +29,6 @@ func TestIssue4495_AttachTunnelBrokerNilSessionGate(t *testing.T) {
 	}
 }
 
-// #4496 pin: AddMCPServer's existing lookup must use the EFFECTIVE server
-// set (yaml ∪ Claude-migrated), not the yaml-only cfg.MCPServers - a
-// migrated-only http server edited with no form type used to default to
-// stdio and get evicted by validation.
 func TestIssue4496_AddMCPServerLookupUsesEffectiveSet(t *testing.T) {
 	b, err := os.ReadFile("mcp.go")
 	if err != nil {

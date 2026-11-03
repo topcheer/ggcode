@@ -29,7 +29,7 @@ func main() {
 	}
 	var conn net.Conn
 	if sockPath != "" {
-		// Main app may not have bound the socket yet - retry briefly.
+
 		for i := 0; i < 50; i++ {
 			c, err := net.Dial("unix", sockPath)
 			if err == nil {
@@ -39,10 +39,7 @@ func main() {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
-	// #1351: all retries exhausted - the main app (or its socket dir) is
-	// gone. Exit instead of running a ghost tray: the socket-death watcher
-	// below only starts when conn != nil, so without this early exit a
-	// racing respawn leaves an orphan icon that responds to nothing.
+
 	if conn == nil {
 		os.Exit(1)
 	}
@@ -71,8 +68,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Watch for main-app death: when the socket closes, tear the tray down
-	// so the icon never outlives the app.
 	if conn != nil {
 		go func() {
 			buf := make([]byte, 16)

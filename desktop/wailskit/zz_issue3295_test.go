@@ -7,10 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// #3295: recordMetric must fill-if-empty, not blanket-overwrite. A sub-agent
-// event already carrying its own model attribution keeps it; only events
-// with no model inherit the parent session's identity.
-
 func newIssue3295Bridge() *ChatBridge {
 	return &ChatBridge{
 		currentSes: &session.Session{

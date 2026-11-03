@@ -9,14 +9,12 @@ import "testing"
 func TestIssue631_MaximizedExitKeepsNormalBounds(t *testing.T) {
 	withTestHome(t)
 	dc := &DesktopConfig{}
-	// Normal-mode usage first: capture real bounds.
+
 	dc.SetWindowState(1440, 900, 120, 80, false)
 	if dc.WindowW != 1440 || dc.WindowH != 900 || dc.WindowX != 120 || dc.WindowY != 80 {
 		t.Fatalf("normal bounds not captured: %+v", dc)
 	}
 
-	// Now maximize and quit: the OS reports fullscreen bounds (e.g. 3008x1692
-	// at 0,0). These must NOT overwrite the remembered normal bounds.
 	dc.SetWindowState(3008, 1692, 0, 0, true)
 	if !dc.WindowMax {
 		t.Fatal("expected maximized flag")
@@ -46,7 +44,6 @@ func TestIssue631_ZeroOriginIsExplicit(t *testing.T) {
 		t.Fatalf("origin mutated: %d,%d", dc.WindowX, dc.WindowY)
 	}
 
-	// A maximized save must not manufacture a position-set flag either.
 	dc2 := &DesktopConfig{}
 	dc2.SetWindowState(3008, 1692, 0, 0, true)
 	if dc2.WindowPosSet {

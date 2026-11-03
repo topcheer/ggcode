@@ -11,8 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/im"
 )
 
-// setupIssue591Home isolates HOME so SaveIMAdapter/TestIMConnection operate
-// on a throwaway config file.
 func setupIssue591Home(t *testing.T) {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -22,10 +20,6 @@ func setupIssue591Home(t *testing.T) {
 	t.Setenv("HOME", tmpDir)
 }
 
-// TestIssue591_C1_PrivateclawInRegistry: the CLI help and platform docs
-// list privateclaw (im_cmd.go passes it through verbatim); the desktop
-// registry must know it or doc-compliant adapters permanently fail Test
-// Connection after #585's strong validation.
 func TestIssue591_C1_PrivateclawInRegistry(t *testing.T) {
 	if imPlatformByID("privateclaw") == nil {
 		t.Fatal("privateclaw missing from registry — doc-compliant adapters fail Test Connection")
@@ -38,8 +32,6 @@ func TestIssue591_C1_PrivateclawInRegistry(t *testing.T) {
 	}
 }
 
-// TestIssue591_C1_PrivateclawAdapterTestable: end-to-end — a privateclaw
-// adapter (no required fields) passes TestIMConnection.
 func TestIssue591_C1_PrivateclawAdapterTestable(t *testing.T) {
 	setupIssue591Home(t)
 	if err := SaveIMAdapter("pc", map[string]string{
@@ -52,13 +44,9 @@ func TestIssue591_C1_PrivateclawAdapterTestable(t *testing.T) {
 	}
 }
 
-// TestIssue591_C2_IntExtraNotMisreported: hand-written YAML parses
-// `appid: 123456789` as int; the required-field check must not call a
-// populated int field "empty or invalid".
 func TestIssue591_C2_IntExtraNotMisreported(t *testing.T) {
 	setupIssue591Home(t)
 
-	// Write a hand-edited config with an int Extra value.
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		t.Fatalf("load config: %v", err)
@@ -87,9 +75,6 @@ func TestIssue591_C2_IntExtraNotMisreported(t *testing.T) {
 	}
 }
 
-// TestIssue591_C3_EmptyWorkspaceNeverMatches: firstBoundWorkspace must not
-// treat an empty binding workspace as matching an empty workingDir
-// (guard dropped in the #587 rewrite, restored per #591).
 func TestIssue591_C3_EmptyWorkspaceNeverMatches(t *testing.T) {
 	ws, isCurrent := firstBoundWorkspace([]string{""}, "", "")
 	if isCurrent {
@@ -98,12 +83,11 @@ func TestIssue591_C3_EmptyWorkspaceNeverMatches(t *testing.T) {
 	if ws != "" {
 		t.Fatalf("empty binding must not surface as display workspace, got %q", ws)
 	}
-	// Sanity: real values still work.
+
 	ws, isCurrent = firstBoundWorkspace([]string{"/proj"}, "/proj", "/proj")
 	if !isCurrent || ws != "/proj" {
 		t.Fatalf("real match broken: ws=%q isCurrent=%v", ws, isCurrent)
 	}
 }
 
-// Silence unused import if im.ChannelBinding stops being referenced.
 var _ = im.ChannelBinding{}

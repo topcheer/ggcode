@@ -2,14 +2,6 @@
 
 package wailskit
 
-// #3855 companions: UpdateConfig's vendor/endpoint existence check was
-// gated on a non-empty baseURL in the SAME batch. The onboarding path
-// (CompleteOnboard) commits {vendor,endpoint,model} WITHOUT baseURL, so a
-// typo'd vendor skipped validation, was written into the resident cfg, and
-// poisoned every in-session ResolveActiveEndpoint call until restart - even
-// though the function contract says a failed update leaves the config
-// exactly as it was (#740 family).
-
 import (
 	"testing"
 
@@ -28,7 +20,7 @@ func issue3855Env(t *testing.T) {
 		},
 		"barevendor": {
 			Endpoints: map[string]config.EndpointConfig{
-				"noprotocol": {}, // exists but protocol-less: Validate would fail
+				"noprotocol": {},
 			},
 		},
 	}
@@ -37,9 +29,6 @@ func issue3855Env(t *testing.T) {
 	SetConfig(cfg)
 }
 
-// A typo'd vendor submitted WITHOUT baseURL (onboarding shape) must be
-// rejected BEFORE mutation - previously the check was skipped and the
-// resident cfg.Vendor was poisoned.
 func TestIssue3855_TypoVendorNoBaseURLRejectedBeforeMutate(t *testing.T) {
 	issue3855Env(t)
 	cfg := GetGlobalConfig()
@@ -55,12 +44,10 @@ func TestIssue3855_TypoVendorNoBaseURLRejectedBeforeMutate(t *testing.T) {
 	}
 }
 
-// The legit onboarding shape (valid vendor/endpoint, no baseURL) must still
-// succeed - the unconditional check must not over-block the normal path.
 func TestIssue3855_ValidPairNoBaseURLStillSucceeds(t *testing.T) {
 	issue3855Env(t)
 	cfg := GetGlobalConfig()
-	cfg.Vendor, cfg.Endpoint = "", "" // simulate a mid-onboard resident state
+	cfg.Vendor, cfg.Endpoint = "", ""
 	SetConfig(cfg)
 
 	if err := UpdateConfig(map[string]interface{}{"vendor": "goodvendor", "endpoint": "ep1"}); err != nil {
@@ -71,9 +58,6 @@ func TestIssue3855_ValidPairNoBaseURLStillSucceeds(t *testing.T) {
 	}
 }
 
-// An endpoint that exists but lacks a protocol passes the existence check
-// yet fails Validate() inside Save() - now caught pre-mutation so the
-// resident cfg is never left holding a Save-rejectable selection.
 func TestIssue3855_ProtocollessEndpointRejectedBeforeMutate(t *testing.T) {
 	issue3855Env(t)
 	cfg := GetGlobalConfig()

@@ -44,7 +44,6 @@ func setupConfigTestEnv(t *testing.T, instanceContent string) (globalPath, works
 func TestUpdateConfigEmptyVendorEndpointGuard(t *testing.T) {
 	_, _ = setupConfigTestEnv(t, "")
 
-	// Simulate an already-selected vendor/endpoint in the live config.
 	cfg := GetGlobalConfig()
 	cfg.Vendor = "testv"
 	cfg.Endpoint = "main"
@@ -54,7 +53,6 @@ func TestUpdateConfigEmptyVendorEndpointGuard(t *testing.T) {
 		"otherv": {Endpoints: map[string]config.EndpointConfig{"alt": {BaseURL: "https://other.example.com", Protocol: "openai"}}},
 	}
 
-	// Empty vendor/endpoint submitted alongside a valid update.
 	if err := UpdateConfig(map[string]interface{}{
 		"vendor":   "",
 		"endpoint": "",
@@ -74,7 +72,6 @@ func TestUpdateConfigEmptyVendorEndpointGuard(t *testing.T) {
 		t.Errorf("cfg.Model = %q, want %q (non-empty values must still apply)", cfg.Model, "newmodel")
 	}
 
-	// Non-empty vendor/endpoint still update normally.
 	if err := UpdateConfig(map[string]interface{}{"vendor": "otherv", "endpoint": "alt"}); err != nil {
 		t.Fatalf("UpdateConfig: %v", err)
 	}
@@ -104,7 +101,6 @@ func TestSetEndpointLimitsKeepsGlobalSaveTarget(t *testing.T) {
 		t.Errorf("saveScope = %q after SetEndpointLimits; sticky scope was dirtied and preference saves will be redirected (#282)", got)
 	}
 
-	// A preference save must land in the global file.
 	if err := SaveDefaultMode("auto"); err != nil {
 		t.Fatalf("SaveDefaultMode: %v", err)
 	}
@@ -116,7 +112,6 @@ func TestSetEndpointLimitsKeepsGlobalSaveTarget(t *testing.T) {
 		t.Errorf("default_mode missing from global config after limits save; got:\n%s", globData)
 	}
 
-	// And the limits themselves must be persisted in the instance file.
 	instPath := filepath.Join(config.InstanceDir(workspace), "ggcode.yaml")
 	instData, err := os.ReadFile(instPath)
 	if err != nil {
@@ -142,7 +137,6 @@ func TestUpdateConfigInstanceFieldWriteBack(t *testing.T) {
 		t.Fatalf("UpdateConfig: %v", err)
 	}
 
-	// Simulated restart: reload from disk and verify the value survived.
 	after, err := config.LoadWithInstance(globalPath, workspace)
 	if err != nil {
 		t.Fatalf("LoadWithInstance after update: %v", err)
@@ -151,7 +145,6 @@ func TestUpdateConfigInstanceFieldWriteBack(t *testing.T) {
 		t.Errorf("default_mode after reload = %q, want %q (instance write-back missing, change lost on restart)", after.DefaultMode, "bypass")
 	}
 
-	// The global file must NOT carry the stripped instance field.
 	globData, _ := os.ReadFile(globalPath)
 	if strings.Contains(string(globData), "default_mode: bypass") {
 		t.Errorf("instance-sourced default_mode leaked into global config file:\n%s", globData)
@@ -188,12 +181,10 @@ func TestSetLimitsWithoutInstancePersistsGlobally(t *testing.T) {
 		t.Fatalf("SetModelLimits: %v", err)
 	}
 
-	// No garbage empty-hash instance directory may be created (#532).
 	if _, err := os.Stat(config.InstanceDir("")); !os.IsNotExist(err) {
 		t.Errorf("garbage instance dir %s exists (stat err=%v); empty-instance save must not run without an attached instance", config.InstanceDir(""), err)
 	}
 
-	// Simulated restart: reload the global config; both edits must survive.
 	after, err := config.Load(config.ConfigPath())
 	if err != nil {
 		t.Fatalf("reload: %v", err)
@@ -225,7 +216,6 @@ func TestSetModelLimitsInstanceSurvivesReload(t *testing.T) {
 		t.Fatalf("SetModelLimits: %v", err)
 	}
 
-	// Written to the correct instance directory.
 	instPath := filepath.Join(config.InstanceDir(workspace), "ggcode.yaml")
 	instData, err := os.ReadFile(instPath)
 	if err != nil {
@@ -235,7 +225,6 @@ func TestSetModelLimitsInstanceSurvivesReload(t *testing.T) {
 		t.Errorf("instance config missing model_limits delta; got:\n%s", instData)
 	}
 
-	// Simulated restart: the instance merge must resurrect the override.
 	after, err := config.LoadWithInstance(globalPath, workspace)
 	if err != nil {
 		t.Fatalf("LoadWithInstance after update: %v", err)

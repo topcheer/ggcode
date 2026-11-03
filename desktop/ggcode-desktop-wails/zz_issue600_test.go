@@ -1,20 +1,10 @@
 package main
 
-// Issue #600 regression tests: five desktop-notification defects.
-// N1: approval dedup key had no request identity (app.go fixed wording).
-// N2: NotifyApprovalNeeded dedup branch skipped unread/setBadge bump.
-// N3: Layout.tsx hardcoded focused=true on mount (frontend; covered by
-//     the Go-side helper behavior plus manual inspection, no TS test runner).
-// N4: Windows toast queue-full drop did not roll back lastShown/unread.
-// N5: error/complete fixed wording merged concurrent sessions.
-
 import (
 	"encoding/json"
 	"testing"
 	"time"
 )
-
-// --- N1/N5 helpers (app.go) ---
 
 func TestNotifyApprovalBodyCarriesIdentity(t *testing.T) {
 	cases := []struct {
@@ -98,13 +88,12 @@ func TestApprovalDedupBranchBumpsUnread(t *testing.T) {
 	if got := nm.GetUnread(); got != 1 {
 		t.Fatalf("unread after first approval = %d, want 1", got)
 	}
-	// Replay the identical request within the dedup window.
+
 	nm.NotifyApprovalNeeded("GGCode", "Approval needed")
 	if got := nm.GetUnread(); got != 2 {
 		t.Fatalf("unread after deduped replay = %d, want 2 (#600 N2: dedup branch previously skipped the bump)", got)
 	}
 
-	// Focused approvals do not bump (unchanged semantics).
 	nm.SetFocused(true)
 	nm.NotifyApprovalNeeded("GGCode", "Approval needed")
 	if got := nm.GetUnread(); got != 0 {
@@ -119,7 +108,6 @@ func TestEnqueueWinToastFullQueueRollsBack(t *testing.T) {
 	nm := NewNotificationManager()
 	nm.SetFocused(false)
 
-	// Fill the 32-slot queue without a draining worker.
 	for i := 0; i < cap(nm.winQueue); i++ {
 		nm.winQueue <- winToast{title: "fill", body: ""}
 	}
@@ -128,7 +116,6 @@ func TestEnqueueWinToastFullQueueRollsBack(t *testing.T) {
 		t.Fatal("enqueueWinToast reported success on a full queue")
 	}
 
-	// Reproduce Notify's commit + rollback sequence for the full-queue case.
 	nm.mu.Lock()
 	key := "GGCode\x00Task completed (turn-1)"
 	nm.lastShown[key] = time.Now()
@@ -156,7 +143,6 @@ func TestEnqueueWinToastFullQueueRollsBack(t *testing.T) {
 		t.Fatal("lastShown still contains the rolled-back key — a retry within 5s would hit dedup and never re-queue")
 	}
 
-	// The rollback frees the dedup key, so a retry can display again.
 	nm.Notify("GGCode", "Task completed (turn-1)")
 	nm.mu.Lock()
 	_, retried := nm.lastShown["GGCode\x00Task completed (turn-1)"]
@@ -173,14 +159,12 @@ func TestEnqueueWinToastAcceptsWhenCapacity(t *testing.T) {
 	if !nm.enqueueWinToast("title", "body") {
 		t.Fatal("enqueueWinToast failed on an empty queue")
 	}
-	// Drain so the background worker doesn't accumulate test noise.
+
 	select {
 	case <-nm.winQueue:
 	default:
 	}
 }
-
-// --- N5 helpers (app.go) ---
 
 func TestNotifyCompleteAndErrorBodiesCarrySessionDimension(t *testing.T) {
 	if got := notifyCompleteBody(json.RawMessage(`{"turn_id":"turn-abc12345","message_id":"m1","error":""}`)); got != "Task completed (turn-abc)" {
@@ -190,8 +174,6 @@ func TestNotifyCompleteAndErrorBodiesCarrySessionDimension(t *testing.T) {
 		t.Fatalf("notifyCompleteBody(nil) = %q, want legacy fallback", got)
 	}
 
-	// Distinct turns must produce distinct bodies so concurrent sessions are
-	// not dedup-merged.
 	b1 := notifyCompleteBody(json.RawMessage(`{"turn_id":"turn-1"}`))
 	b2 := notifyCompleteBody(json.RawMessage(`{"turn_id":"turn-2"}`))
 	if b1 == b2 {
@@ -214,7 +196,6 @@ func TestNotifyCompleteAndErrorBodiesCarrySessionDimension(t *testing.T) {
 		t.Fatalf("notifyErrorBody(empty) = %q, want legacy fallback", got)
 	}
 
-	// Distinct errors must produce distinct bodies.
 	e1 := notifyErrorBody(json.RawMessage(`{"message":"timeout"}`))
 	e2 := notifyErrorBody(json.RawMessage(`{"message":"rate limit"}`))
 	if e1 == e2 {

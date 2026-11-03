@@ -35,8 +35,7 @@ func TestRunMessagesToPersistWatermarkSkipsPersistedPrefix(t *testing.T) {
 		textMsg("assistant", "partial answer"),
 		textMsg("assistant", "tail produced after winner persisted"),
 	}
-	// Winner persisted 2 entries (seed+assistant) as len(runAdded)=2 at that
-	// moment; the duplicate finisher now sees 3 entries.
+
 	got := runMessagesToPersist(runAdded, 2)
 	if len(got) != 1 || !strings.Contains(got[0].Content[0].Text, "tail") {
 		b, _ := json.Marshal(got)
@@ -71,12 +70,12 @@ func TestRunMessagesToPersistNoSeedUserKeepsAll(t *testing.T) {
 func TestFinishRunDuplicateFinisherDoesNotDoubleEmit(t *testing.T) {
 	var emits int64
 	b := &ChatBridge{
-		finished: true, // winner already completed cleanup
+		finished: true,
 		OnStreamEvent: func(_ string, _ json.RawMessage) {
 			atomic.AddInt64(&emits, 1)
 		},
 	}
-	b.finishRun(nil) // duplicate finisher: must hit the finished branch
+	b.finishRun(nil)
 	if n := atomic.LoadInt64(&emits); n != 0 {
 		t.Fatalf("duplicate finisher emitted %d events, want 0 (double run_done)", n)
 	}

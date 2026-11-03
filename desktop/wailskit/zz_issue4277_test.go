@@ -6,13 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// #4277: the mid-run persist-target refresh must (a) rebind persistSession
-// while this run is still the generation owner, and (b) NEVER bump
-// runGeneration - the old unconditional setRunPersistSnapshot bump from a
-// Cancel-blind superseded run pushed the generation past a newer run's
-// captured runGen, so every one of the new run's stream events was
-// stale-dropped by emitIfCurrent (silent UI + reply lost from UI and JSONL).
-
 func TestRefreshPersistTargetIfOwnerRebindsWhenOwner(t *testing.T) {
 	b := &ChatBridge{
 		runGeneration: 7,
@@ -29,14 +22,13 @@ func TestRefreshPersistTargetIfOwnerRebindsWhenOwner(t *testing.T) {
 }
 
 func TestRefreshPersistTargetIfOwnerSupersededRunDoesNotSteal(t *testing.T) {
-	// A newer run already bumped to gen 9; the legacy (Cancel-blind) run
-	// still carries its entry gen 8 when it reaches the refresh point.
+
 	newer := &session.Session{ID: "zz4277-newer"}
 	b := &ChatBridge{
 		runGeneration:  9,
 		activeRunGen:   9,
-		runSes:         &session.Session{ID: "zz4277-legacy"}, // legacy run's target
-		persistSession: newer,                                 // newer run already bound
+		runSes:         &session.Session{ID: "zz4277-legacy"},
+		persistSession: newer,
 	}
 	b.refreshPersistTargetIfOwner(8)
 	if b.persistSession != newer {

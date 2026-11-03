@@ -10,13 +10,8 @@ import (
 	"testing"
 )
 
-// The core resurrect scenario: an external app (e.g. Pen.app) rewrites its
-// registration into the Claude source file BEHIND OUR BACK after the user
-// deleted the server in the ggcode panel. Without a tombstone the merge
-// re-imports the name and the panel shows it again (status unknown, i.e.
-// "没有配置").
 func TestDeletedServerNotResurrectedWhenExternalAppRewritesSource(t *testing.T) {
-	mcpTestHome(t) // isolated HOME
+	mcpTestHome(t)
 	ws := t.TempDir()
 	if err := os.WriteFile(filepath.Join(ws, "ggcode.yaml"), []byte("vendor: zai\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -44,22 +39,17 @@ func TestDeletedServerNotResurrectedWhenExternalAppRewritesSource(t *testing.T) 
 		}
 	}
 
-	// External app registered the server.
 	writeClaude()
 	if !issue606ListHas(t, "pen-app") {
 		t.Fatal("pen-app should be visible before delete")
 	}
 
-	// User deletes it in the panel.
 	if err := RemoveMCPServer("pen-app"); err != nil {
 		t.Fatalf("RemoveMCPServer(pen-app): %v", err)
 	}
 
-	// The external app rewrites its registration right after (this is the
-	// exact resurrect path the user reported).
 	writeClaude()
 
-	// The panel must NOT bring it back.
 	servers, err := ListMCPServers()
 	if err != nil {
 		t.Fatalf("ListMCPServers: %v", err)
@@ -71,7 +61,6 @@ func TestDeletedServerNotResurrectedWhenExternalAppRewritesSource(t *testing.T) 
 	}
 }
 
-// Re-adding a tombstoned name revives it (tombstone cleared on Upsert).
 func TestReaddingClearedTombstoneRevivesServer(t *testing.T) {
 	mcpTestHome(t)
 	ws := t.TempDir()
@@ -95,7 +84,6 @@ func TestReaddingClearedTombstoneRevivesServer(t *testing.T) {
 		t.Fatal("revive should be gone after delete")
 	}
 
-	// Re-add the same name: must come back and stay.
 	if err := AddMCPServer(map[string]string{
 		"name":    "revive",
 		"type":    "stdio",
@@ -109,10 +97,6 @@ func TestReaddingClearedTombstoneRevivesServer(t *testing.T) {
 	}
 }
 
-// Manually re-adding a tombstoned name to mcp_servers.yaml (bypassing the
-// panel's UpsertMCPServer, so the tombstone file still lists the name) must
-// still show the server: the explicit yaml list is an intentional re-add and
-// wins over the tombstone. Tombstones only guard the migration-source side.
 func TestManualYAMLReaddWinsOverTombstone(t *testing.T) {
 	mcpTestHome(t)
 	ws := t.TempDir()
@@ -133,8 +117,6 @@ func TestManualYAMLReaddWinsOverTombstone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// User hand-edits mcp_servers.yaml to bring the name back, WITHOUT the
-	// panel (so mcp_deleted.yaml still contains "manual").
 	wsMCP := filepath.Join(ws, "mcp_servers.yaml")
 	if err := os.WriteFile(wsMCP, []byte("- name: manual\n  type: stdio\n  command: node\n  args: [manual.js]\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -146,7 +128,7 @@ func TestManualYAMLReaddWinsOverTombstone(t *testing.T) {
 	}
 	for _, s := range servers {
 		if s.Name == "manual" && strings.TrimSpace(s.Command) != "" {
-			return // visible with config: explicit re-add won
+			return
 		}
 	}
 	t.Fatal("manually re-added yaml server hidden by stale tombstone")

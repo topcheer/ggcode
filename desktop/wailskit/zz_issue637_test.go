@@ -20,8 +20,6 @@ func setupIssue637Home(t *testing.T) {
 	t.Setenv("HOME", tmpDir)
 }
 
-// saveIssue637Adapters writes adapter configs straight into ggcode.yaml the
-// way a hand-edited file or prior UI save would leave them.
 func saveIssue637Adapters(t *testing.T, adapters map[string]config.IMAdapterConfig) {
 	t.Helper()
 	cfg, err := config.Load(config.ConfigPath())
@@ -34,16 +32,12 @@ func saveIssue637Adapters(t *testing.T, adapters map[string]config.IMAdapterConf
 	}
 }
 
-// Defect 1a: the old `if field.Label == ""` skip was dead (every registry
-// field has a Label), so optionals were hard-required. signal's base_url has
-// a runtime default and irc's channels are optional — both must pass without
-// those keys, while genuinely required keys must still be enforced.
 func TestIssue637_OptionalFieldsNotRequired(t *testing.T) {
 	setupIssue637Home(t)
 	saveIssue637Adapters(t, map[string]config.IMAdapterConfig{
 		"sig": {Enabled: true, Platform: "signal", Extra: map[string]interface{}{"account": "+15550001111"}},
 		"irc": {Enabled: true, Platform: "irc", Extra: map[string]interface{}{"host": "irc.libera.chat:6697", "nick": "bot"}},
-		// Control: a missing REQUIRED field must still fail.
+
 		"qq-missing": {Enabled: true, Platform: "qq", Extra: map[string]interface{}{"appid": "123"}},
 	})
 
@@ -59,8 +53,6 @@ func TestIssue637_OptionalFieldsNotRequired(t *testing.T) {
 	}
 }
 
-// Defect 1b: stdio's Command lives on the adapter struct, not Extra — the
-// Extra-only loop never checked it.
 func TestIssue637_StdioCommandChecked(t *testing.T) {
 	setupIssue637Home(t)
 	saveIssue637Adapters(t, map[string]config.IMAdapterConfig{
@@ -77,8 +69,6 @@ func TestIssue637_StdioCommandChecked(t *testing.T) {
 	}
 }
 
-// Defect 2: SaveIMAdapter only checked non-empty platform; typos and
-// whitespace platforms persisted fine and only blew up at Test time.
 func TestIssue637_SaveValidatesPlatform(t *testing.T) {
 	setupIssue637Home(t)
 
@@ -91,7 +81,6 @@ func TestIssue637_SaveValidatesPlatform(t *testing.T) {
 		t.Fatalf("whitespace platform must be rejected at save time, got: %v", err)
 	}
 
-	// Valid and case-insensitive platforms still save (#591 compat).
 	if err := SaveIMAdapter("ok", map[string]string{"platform": "telegram"}); err != nil {
 		t.Fatalf("valid platform must save: %v", err)
 	}
@@ -99,7 +88,6 @@ func TestIssue637_SaveValidatesPlatform(t *testing.T) {
 		t.Fatalf("case-insensitive platform must save: %v", err)
 	}
 
-	// Nothing was persisted by the rejected saves.
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +100,6 @@ func TestIssue637_SaveValidatesPlatform(t *testing.T) {
 	}
 }
 
-// Registry sanity: the Required flags themselves.
 func TestIssue637_RequiredFlags(t *testing.T) {
 	sig := imPlatformByID("signal")
 	if sig == nil {

@@ -18,7 +18,6 @@ func TestIssue4250_StaleApprovalClickNotifiesBothEnds(t *testing.T) {
 	var events []string
 	b.OnStreamEvent = func(name string, _ json.RawMessage) { events = append(events, name) }
 
-	// No pending approval with this ID -> ResolveApproval fails (stale).
 	b.RespondApproval("req-nonexistent", "allow")
 	found := false
 	for _, e := range events {
@@ -30,8 +29,6 @@ func TestIssue4250_StaleApprovalClickNotifiesBothEnds(t *testing.T) {
 		t.Fatalf("stale desktop click must emit approval:cancel, got events %v", events)
 	}
 
-	// Mobile stale tap: same contract, tunnel push path (nil broker here is
-	// a no-op push; the early return must not skip the push call).
 	b.HandleMobileApprovalResponse(tunnel.ApprovalResponseData{ID: "req-nonexistent", Decision: "allow"})
 	found = false
 	for _, e := range events {
@@ -39,7 +36,7 @@ func TestIssue4250_StaleApprovalClickNotifiesBothEnds(t *testing.T) {
 			found = true
 		}
 	}
-	_ = found // mobile path pushes via tunnel (nil broker = no-op); no crash is the contract here
+	_ = found
 }
 
 var _ = agentruntime.PushTunnelApprovalResult

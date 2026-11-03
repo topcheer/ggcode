@@ -65,7 +65,7 @@ func (b *ChatBridge) GetLSPStatus() LSPStatusResponse {
 		canInstall := false
 		for _, opt := range opts {
 			cmd := strings.TrimSpace(opt.Command)
-			// Filter out pure error messages (unsupported platforms).
+
 			realCommand := cmd != "" &&
 				!strings.HasPrefix(cmd, "echo ") &&
 				!strings.HasPrefix(cmd, "Write-Error ")
@@ -103,10 +103,6 @@ func (b *ChatBridge) InstallLSPServer(languageID, optionID string) LSPInstallRes
 	wd := b.workingDir
 	b.mu.Unlock()
 
-	// #599 L1: an empty workingDir (Getwd swallowed at bridge construction)
-	// would silently install into the process CWD and report Success —
-	// reachable only on that rare construction failure, but when it hits
-	// the install lands somewhere the user never intended. Refuse instead.
 	if wd == "" {
 		return LSPInstallResult{
 			Success: false,
@@ -136,16 +132,13 @@ func (b *ChatBridge) InstallLSPServer(languageID, optionID string) LSPInstallRes
 	}
 	if selected == nil {
 		if optionID != "" {
-			// User explicitly picked an option that no longer exists (option
-			// list regenerated after a workspace switch, stale frontend state).
-			// Silently installing opts[0] would install the WRONG variant with
-			// Success:true — fail loudly instead (#353).
+
 			return LSPInstallResult{
 				Success: false,
 				Output:  fmt.Sprintf("Unknown install option %q for language %s; refresh the language list and retry", optionID, languageID),
 			}
 		}
-		// optionID empty and no Recommended flag: first option is a sane default.
+
 		selected = &opts[0]
 	}
 
@@ -165,9 +158,6 @@ func (b *ChatBridge) InstallLSPServer(languageID, optionID string) LSPInstallRes
 
 	debug.Log("lsp", "installing %s (%s): %s", languageID, selected.ID, cmd)
 
-	// 10-minute timeout: brew/npm/dotnet installs can hang waiting for
-	// interactive input; without a deadline the frontend Promise never
-	// resolves and the button spins forever (#353).
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -178,20 +168,10 @@ func (b *ChatBridge) InstallLSPServer(languageID, optionID string) LSPInstallRes
 		c = exec.CommandContext(ctx, "sh", "-c", cmd)
 	}
 	c.Dir = wd
-	// #360: the 10-min context timeout only kills the direct child ("sh").
-	// Grandchild npm/node processes inherit the stdout pipe write end and
-	// are NOT killed, so CombinedOutput's internal Wait blocks forever waiting
-	// for pipe EOF even after the context fires. WaitDelay forces the pipe
-	// closed (and the call to return) shortly after the kill, bounding the
-	// total wait to ~timeout + WaitDelay.
+
 	c.WaitDelay = 30 * time.Second
 	output, err := c.CombinedOutput()
-	// #1641-2: wailskit is statically linked into the same process and
-	// shares the lsp package-level probeCache - GetLSPStatus primed a
-	// NEGATIVE entry pre-install, and without invalidation the post-install
-	// refresh served 'unavailable' for up to 10 minutes after the button
-	// reported success. Drop the cache on any completed install attempt
-	// (success or failure - one extra probe is cheap).
+
 	lsp.InvalidateProbeCache()
 
 	result := LSPInstallResult{

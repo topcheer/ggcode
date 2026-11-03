@@ -14,14 +14,11 @@ func TestExpireRoomTombstoneBlocksOrphanedRegistration(t *testing.T) {
 	h := newHub(nil)
 	room := h.getOrCreateRoom("token-2898")
 
-	// Simulate the offline timer firing while a new server is mid-way
-	// through the fragmented registration (room fetched, not yet committed).
 	room.mu.Lock()
 	room.lastEventAt = time.Now().Add(-10 * time.Minute)
 	room.mu.Unlock()
 	h.expireRoom("token-2898")
 
-	// Room is gone from the hub...
 	h.mu.Lock()
 	_, inHub := h.rooms["token-2898"]
 	h.mu.Unlock()
@@ -29,8 +26,6 @@ func TestExpireRoomTombstoneBlocksOrphanedRegistration(t *testing.T) {
 		t.Fatal("expireRoom should remove the room from the hub")
 	}
 
-	// ...and the stale room object carries the tombstone the registration
-	// commit point checks (under the same room mutex, no lock inversion).
 	room.mu.RLock()
 	expired := room.expired
 	room.mu.RUnlock()
@@ -38,8 +33,6 @@ func TestExpireRoomTombstoneBlocksOrphanedRegistration(t *testing.T) {
 		t.Fatal("expireRoom must set the tombstone so in-flight registrations abort")
 	}
 
-	// A fresh getOrCreateRoom after expiry creates a NEW room object, so the
-	// tombstone never blocks legitimate re-shares of the same token.
 	fresh := h.getOrCreateRoom("token-2898")
 	if fresh == room {
 		t.Fatal("fresh getOrCreateRoom after expiry must not resurrect the tombstoned room")
@@ -59,7 +52,6 @@ func TestExpireRoomKeepsLiveServerRoom(t *testing.T) {
 	h := newHub(nil)
 	room := h.getOrCreateRoom("token-live")
 
-	// Server registered and connected.
 	room.mu.Lock()
 	room.server = newPeer(h, room, "server", nil)
 	room.mu.Unlock()

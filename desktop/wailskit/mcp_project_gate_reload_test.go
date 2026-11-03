@@ -40,9 +40,6 @@ func TestReloadSessionMCPServersGatesProjectServers(t *testing.T) {
 		payloads = append(payloads, data)
 	}
 
-	// "safe" comes from the user's own yaml config (explicit source), so
-	// the gate must never touch it; "evil" comes from the workspace
-	// .mcp.json (claude-project source) and is blocked pending approval.
 	cfg := &config.Config{MCPServers: []config.MCPServerConfig{
 		{Name: "safe", Type: "stdio", Command: "echo"},
 	}}

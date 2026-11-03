@@ -71,10 +71,7 @@ func (b *ChatBridge) CreateCronJob(cronExpr, prompt string, recurring, queueIfBu
 	if b.cronScheduler == nil {
 		return CronJobInfo{}, fmt.Errorf("cron scheduler not available")
 	}
-	// #1433-C: the comment below used to claim Create 'also rejects empty
-	// prompts' - it never did (only #617's Update-side check exists). A
-	// blank prompt created a permanently-firing no-op job; reject here so
-	// Create and Update agree.
+
 	if strings.TrimSpace(prompt) == "" {
 		return CronJobInfo{}, fmt.Errorf("prompt must not be empty")
 	}
@@ -152,10 +149,7 @@ func (b *ChatBridge) ResumeCronJob(id string) error {
 // cron prompt from a natural-language description. This is a synchronous single-shot
 // Chat call (no agent loop, no tools).
 func (b *ChatBridge) GenerateCronPrompt(description string) (string, error) {
-	// #1433-A: the AI-generate button runs a ~30s chat call; a concurrent
-	// DeleteSession/ResetAgent nil-ed b.agent between the check and the
-	// use - nil deref panic in the Wails binding goroutine. Single
-	// locked read.
+
 	b.mu.Lock()
 	agentSnapshot := b.agent
 	b.mu.Unlock()

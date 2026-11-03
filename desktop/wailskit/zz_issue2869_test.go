@@ -1,14 +1,5 @@
 package wailskit
 
-// Issue #2869: legacy configs can carry non-canonical platform values
-// (hand-written YAML, or persisted by pre-#648 desktop / pre-#2417 CLI -
-// e.g. platform: "Telegram"). SaveIMAdapter normalizes the update payload to
-// the registry canonical ID ("telegram"), but mergeExistingIntoUpdate compared
-// existing.Platform == update.Platform case-sensitively, so a user who only
-// edited another field (e.g. bot_token) was misjudged as switching platforms:
-// Args/Env/AllowFrom were silently cleared and old Extra keys (credentials)
-// dropped - the #585/#690 platform-switch guard fired on a same-platform edit.
-
 import (
 	"testing"
 
@@ -20,7 +11,7 @@ import (
 func TestIssue2869_NonCanonicalExistingPlatformIsNotASwitch(t *testing.T) {
 	existing := config.IMAdapterConfig{
 		Enabled:   true,
-		Platform:  "Telegram", // legacy hand-written / pre-#648 value
+		Platform:  "Telegram",
 		Transport: "stdio",
 		Command:   "/usr/local/bin/tg-bridge",
 		Args:      []string{"--listen", "tg"},
@@ -30,8 +21,7 @@ func TestIssue2869_NonCanonicalExistingPlatformIsNotASwitch(t *testing.T) {
 			"legacy_bot_token": "old-secret",
 		},
 	}
-	// Desktop payload: platform normalized by SaveIMAdapter to canonical ID;
-	// user only edited bot_token (present in Extra), did not touch transport.
+
 	update := config.IMAdapterConfig{
 		Enabled:  true,
 		Platform: "telegram",

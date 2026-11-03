@@ -24,11 +24,11 @@ func TestMarkdownExportRedactsUserAssistantBodies(t *testing.T) {
 	if strings.Contains(out, "API_KEY=abcdefghijklmnopqrstuvWXYZ12345") {
 		t.Fatal("assistant body leaked an unredacted api_key assignment into the Markdown export")
 	}
-	// Redaction must actually run (masked form present), not drop the line.
+
 	if !strings.Contains(out, "sk-a") {
 		t.Fatalf("expected masked key prefix in output, got:\n%s", out)
 	}
-	_ = security.RedactForDisplay // keep import honest if assertions change
+	_ = security.RedactForDisplay
 }
 
 // Truncation parity: bodies longer than 2000 runes are clamped with the
@@ -43,8 +43,8 @@ func TestMarkdownExportTruncatesLongBodies(t *testing.T) {
 	if !strings.Contains(out, "... (truncated)") {
 		t.Fatalf("expected truncation marker, got tail:\n%s", out[len(out)-80:])
 	}
-	// Rune-boundary sanity for multibyte content.
-	cjk := strings.Repeat("密", 1500) // 4500 bytes, 1500 runes - under the rune budget but over 2000 bytes
+
+	cjk := strings.Repeat("密", 1500)
 	out2 := formatMessagesAsMarkdown([]SessionMessage{{Role: "assistant", Content: cjk}}, "t")
 	if !strings.Contains(out2, "密") {
 		t.Fatal("CJK content vanished from the export")

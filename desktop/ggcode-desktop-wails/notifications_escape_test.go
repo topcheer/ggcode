@@ -13,10 +13,7 @@ func TestWindowsToastScriptEscapesQuotes(t *testing.T) {
 	if !containsStr(script, "'it''s broken'") {
 		t.Errorf("body not escaped: %s", script)
 	}
-	// Injection attempt must stay inert inside the literal: the apostrophe
-	// is doubled ('x'''; ...), so the raw unescaped closing sequence 'x';
-	// (quote+semicolon that would terminate the literal early) must not
-	// appear in the script.
+
 	evil := windowsToastScript("x'; Remove-Item -Recurse C:\\; 'y", "")
 	if containsStr(evil, "'x';") {
 		t.Errorf("injection not neutralized: %s", evil)

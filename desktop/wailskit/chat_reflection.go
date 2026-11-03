@@ -25,17 +25,10 @@ func buildReflectionFunc(wd string) func(agent.RunStats) {
 			return
 		}
 		key := "run-insights"
-		// #2715 (same as #1752 case 3 / #1388): LoadAll merges EVERY
-		// active memory key - writing the merge back into run-insights
-		// cross-pollutes all project memories into run-insights, which
-		// is then reinjected with every prompt and snowballs. The TUI
-		// and daemon reflection paths already use LoadKey.
+
 		existing, err := autoMem.LoadKey(key)
 		if err != nil {
-			// #2715 hardening (mirrors TUI #1388): a read error used to be
-			// swallowed and the save below then OVERWROTE the accumulated
-			// insights with the fresh batch (silent loss). Abort this
-			// round - the next reflection retries; old accumulation stays.
+
 			log.Printf("[reflection] failed to load existing insights, skipping save: %v", err)
 			return
 		}
