@@ -6,7 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 )
 
-// TrajConfidenceEntry is one learning projected for UI display.
 type TrajConfidenceEntry struct {
 	Type       string  `json:"type"`
 	Insight    string  `json:"insight"`
@@ -17,15 +16,8 @@ type TrajConfidenceEntry struct {
 	Holdout    bool    `json:"holdout"`
 }
 
-// topTrajEntries caps the Top list so the UI badge stays compact.
 const topTrajEntries = 5
 
-// TrajConfidenceOverview aggregates the workspace's trajectory
-// learnings for confidence signaling. AvgConfidence covers entries
-// that actually inject (Holdout entries are excluded from the average
-// but still counted in Total); 0 when nothing injects. Top lists the
-// highest-confidence injecting entries (max 5) so the UI can show what
-// currently steers the agent.
 type TrajConfidenceOverview struct {
 	Total         int                   `json:"total"`
 	Injecting     int                   `json:"injecting"`
@@ -34,9 +26,6 @@ type TrajConfidenceOverview struct {
 	HasLearnings  bool                  `json:"hasLearnings"`
 }
 
-// TrajConfidenceOverview computes the aggregate from the workspace's
-// learning store. Errors degrade to an empty overview (the UI treats it
-// as "no signal"), matching the advisory nature of the score.
 func (b *ChatBridge) TrajConfidenceOverview() TrajConfidenceOverview {
 	views := agent.TrajListLearnings(b.workingDir)
 	out := TrajConfidenceOverview{Total: len(views), Top: []TrajConfidenceEntry{}}

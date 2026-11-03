@@ -6,12 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// #4123: LoadSession's restore short-circuit must compare the full
-// (vendor, endpoint, model) triple, not the bare model name. Identical model
-// names across vendors are common (gateways re-export official models); the
-// old name-only check silently kept the global provider while the session's
-// Vendor field pointed elsewhere, diverging state and billing the wrong
-// endpoint bucket.
 func TestSessionSelectionMatches(t *testing.T) {
 	official := &config.ResolvedEndpoint{VendorID: "anthropic", EndpointID: "primary", Model: "claude-4"}
 	gateway := &config.ResolvedEndpoint{VendorID: "openrouter", EndpointID: "gw", Model: "claude-4"}

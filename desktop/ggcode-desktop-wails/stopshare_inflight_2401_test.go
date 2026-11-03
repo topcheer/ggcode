@@ -7,10 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
-// TestStoppedStartCannotResurrectSession verifies #2401 ç2: a StartShare
-// that crossed a StopShare mid-flight must NOT wire its session back in -
-// the old setTunnelState resurrected unconditionally, so an explicit user
-// stop left a live session + orphan relay reachable until app exit.
 func TestStoppedStartCannotResurrectSession(t *testing.T) {
 	a := &App{tunnelMu: sync.RWMutex{}}
 
@@ -33,8 +29,6 @@ func TestStoppedStartCannotResurrectSession(t *testing.T) {
 	}
 }
 
-// TestClearTunnelStateRecordsStopIntent verifies the stop-intent bump
-// itself: two stops, two bumps (monotonic guard).
 func TestClearTunnelStateRecordsStopIntent(t *testing.T) {
 	a := &App{tunnelMu: sync.RWMutex{}}
 	before := a.tunnelStopSeq

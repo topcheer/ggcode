@@ -2,10 +2,6 @@ package wailskit
 
 import "testing"
 
-// Issue #631 part 1: quitting while maximized used to persist the fullscreen
-// bounds as the "normal" window size — the remembered normal bounds were
-// destroyed and unmaximizing left a fullscreen-sized normal window. While
-// maximized, only the flag must update.
 func TestIssue631_MaximizedExitKeepsNormalBounds(t *testing.T) {
 	withTestHome(t)
 	dc := &DesktopConfig{}
@@ -27,9 +23,6 @@ func TestIssue631_MaximizedExitKeepsNormalBounds(t *testing.T) {
 	}
 }
 
-// Issue #631 part 2: (0,0) is a legitimate window origin, not an "unset"
-// sentinel. WindowPosSet disambiguates "no normal position ever captured"
-// from "window deliberately parked at the top-left corner".
 func TestIssue631_ZeroOriginIsExplicit(t *testing.T) {
 	withTestHome(t)
 	dc := &DesktopConfig{}
@@ -51,8 +44,6 @@ func TestIssue631_ZeroOriginIsExplicit(t *testing.T) {
 	}
 }
 
-// The position flag must survive the config save/load round-trip so restore
-// on next launch honors a (0,0) origin.
 func TestIssue631_PosSetRoundTrip(t *testing.T) {
 	withTestHome(t)
 	dc := &DesktopConfig{}

@@ -29,8 +29,6 @@ func TestExportSessionToMarkdown_Format(t *testing.T) {
 		{Role: "tool", ToolName: "read_file", ToolDisplay: "Read File", Content: "file content here"},
 	}
 
-	// We can't call ExportSessionToMarkdown directly (needs bridge),
-	// but we can test the formatting logic matches expected patterns.
 	var b strings.Builder
 	b.WriteString("# Test Session\n\n")
 	for _, msg := range msgs {
@@ -72,9 +70,6 @@ func TestExportSessionToMarkdown_Format(t *testing.T) {
 	}
 }
 
-// TestFormatMessagesAsMarkdown_RuneBoundaryTruncation verifies tool message
-// truncation lands on a UTF-8 rune boundary (#301): byte-slicing at 2000
-// would split multi-byte chars and corrupt the exported .md.
 func TestFormatMessagesAsMarkdown_RuneBoundaryTruncation(t *testing.T) {
 
 	content := strings.Repeat("好", 700)

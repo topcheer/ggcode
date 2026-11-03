@@ -2,9 +2,6 @@ package main
 
 import "testing"
 
-// #426: data URI MIME must be parsed from the URI itself and the ;base64
-// marker respected — non-base64 (URL-encoded) URIs must be transcoded, not
-// shipped as raw percent-encoded text labeled base64.
 func TestDataURIMIME(t *testing.T) {
 	cases := []struct{ meta, want string }{
 		{"image/jpeg;base64", "image/jpeg"},

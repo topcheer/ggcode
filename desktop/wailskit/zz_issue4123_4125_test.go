@@ -8,7 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// #4123: table-driven pin of the restore short-circuit predicate.
 func TestIssue4123_RestoreSelectionMatchesRequiresVendorMatch(t *testing.T) {
 	openrouter := &config.ResolvedEndpoint{Model: "claude-4", VendorID: "openrouter", EndpointID: "gw"}
 	cases := []struct {
@@ -16,7 +15,7 @@ func TestIssue4123_RestoreSelectionMatchesRequiresVendorMatch(t *testing.T) {
 		resolved       *config.ResolvedEndpoint
 		model, vendor  string
 		endpoint       string
-		wantActivation bool // want sessionSelectionMatches == false
+		wantActivation bool
 	}{
 		{"nil resolved always activates", nil, "claude-4", "openrouter", "gw", true},
 		{"exact match skips activation", openrouter, "claude-4", "openrouter", "gw", false},
@@ -33,8 +32,6 @@ func TestIssue4123_RestoreSelectionMatchesRequiresVendorMatch(t *testing.T) {
 	}
 }
 
-// #4125: with no session-pinned mode, the fallback must recompute the same
-// default InitAgent arms - never a hardcoded "supervised".
 func TestIssue4125_RuntimePermissionModeFallbackRecomputesDefault(t *testing.T) {
 	b := &ChatBridge{cfg: &config.Config{}}
 	p := &desktopRuntimeProvider{bridge: b}

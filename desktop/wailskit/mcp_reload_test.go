@@ -10,12 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Test #498: AddMCPServer must propagate the new server list to the running
-// session's MCP manager. The hot-reload watcher only polls the GLOBAL
-// mcp_servers.yaml, so a workspace-scoped write is invisible to it — without
-// the explicit Reload, a server added (or edited) for a workspace-bound
-// session never takes effect, and even the UI Reconnect button cannot fix
-// it (MCPPlugin.Connect short-circuits on the cached adapter).
 func newTestBridgeWithMCP(t *testing.T, workingDir string) *ChatBridge {
 	t.Helper()
 	bridge := &ChatBridge{
@@ -56,9 +50,6 @@ func TestAddMCPServerWorkspaceScopeReloadsManager(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The manager must now know the server WITHOUT any file-watcher tick.
-	// Reload marks new plugins pending/connecting — presence, not Connected
-	// status, is the invariant (stdio connect actually spawns echo).
 	var found bool
 	for _, info := range bridge.mcpManager.Snapshot() {
 		if info.Name == "echo-server" {
@@ -94,8 +85,6 @@ func TestAddMCPServerWorkspaceScopeReloadsManager(t *testing.T) {
 	}
 }
 
-// Editing an existing workspace server must REPLACE the manager's plugin
-// (URL/command change), not just rewrite the yaml.
 func TestAddMCPServerEditReplacesManagerPlugin(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

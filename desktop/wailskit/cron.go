@@ -10,7 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// CronJobInfo is the JSON-serializable representation of a cron job for the desktop frontend.
 type CronJobInfo struct {
 	ID          string `json:"id"`
 	CronExpr    string `json:"cronExpr"`
@@ -22,7 +21,6 @@ type CronJobInfo struct {
 	NextFire    string `json:"nextFire"`
 }
 
-// cronJobToInfo converts a cron.Job to the frontend-friendly CronJobInfo.
 func cronJobToInfo(j cron.Job) CronJobInfo {
 	info := CronJobInfo{
 		ID:          j.ID,
@@ -41,7 +39,6 @@ func cronJobToInfo(j cron.Job) CronJobInfo {
 	return info
 }
 
-// ListCronJobs returns all cron jobs for the current session.
 func (b *ChatBridge) ListCronJobs() ([]CronJobInfo, error) {
 	if b.cronScheduler == nil {
 		return nil, fmt.Errorf("cron scheduler not available")
@@ -54,7 +51,6 @@ func (b *ChatBridge) ListCronJobs() ([]CronJobInfo, error) {
 	return result, nil
 }
 
-// GetCronJob returns a single cron job by ID.
 func (b *ChatBridge) GetCronJob(id string) (CronJobInfo, error) {
 	if b.cronScheduler == nil {
 		return CronJobInfo{}, fmt.Errorf("cron scheduler not available")
@@ -66,7 +62,6 @@ func (b *ChatBridge) GetCronJob(id string) (CronJobInfo, error) {
 	return cronJobToInfo(j), nil
 }
 
-// CreateCronJob creates a new cron job.
 func (b *ChatBridge) CreateCronJob(cronExpr, prompt string, recurring, queueIfBusy bool) (CronJobInfo, error) {
 	if b.cronScheduler == nil {
 		return CronJobInfo{}, fmt.Errorf("cron scheduler not available")
@@ -82,21 +77,6 @@ func (b *ChatBridge) CreateCronJob(cronExpr, prompt string, recurring, queueIfBu
 	return cronJobToInfo(job), nil
 }
 
-// UpdateCronJob updates an existing cron job's cron expression, prompt, and queueIfBusy.
-// An empty cronExpr maps to nil (field unchanged), preserving scheduler.Update's
-// partial-update semantics for prompt-only edits. The prompt is REQUIRED:
-// an empty or whitespace-only prompt is a validation error (#617) — the old
-// ""→nil mapping silently kept the previous prompt while reporting success,
-// so a user clearing the field saw "saved" but the UI re-fetched the old
-// value. This aligns with CreateCronJob, which also rejects empty prompts
-// (an empty-prompt job is a dead job). For queueIfBusy, a bool cannot
-// distinguish false from unset, so this bridge uses "true updates, false
-// leaves unchanged" semantics: submitting false never overwrites a stored
-// true. This prevents a frontend edit that only changes the prompt from
-// silently disabling queue_if_busy (and thus skipping the job when the
-// agent is busy) (#288). Consequence: turning QueueIfBusy off is not
-// expressible through this bridge; the frontend would need a tri-state
-// (e.g. *bool) to support that.
 func (b *ChatBridge) UpdateCronJob(id, cronExpr, prompt string, queueIfBusy bool) (CronJobInfo, error) {
 	if b.cronScheduler == nil {
 		return CronJobInfo{}, fmt.Errorf("cron scheduler not available")
@@ -120,7 +100,6 @@ func (b *ChatBridge) UpdateCronJob(id, cronExpr, prompt string, queueIfBusy bool
 	return cronJobToInfo(job), nil
 }
 
-// DeleteCronJob removes a cron job by ID.
 func (b *ChatBridge) DeleteCronJob(id string) error {
 	if b.cronScheduler == nil {
 		return fmt.Errorf("cron scheduler not available")
@@ -129,7 +108,6 @@ func (b *ChatBridge) DeleteCronJob(id string) error {
 	return err
 }
 
-// PauseCronJob suspends a cron job.
 func (b *ChatBridge) PauseCronJob(id string) error {
 	if b.cronScheduler == nil {
 		return fmt.Errorf("cron scheduler not available")
@@ -137,7 +115,6 @@ func (b *ChatBridge) PauseCronJob(id string) error {
 	return b.cronScheduler.Pause(id)
 }
 
-// ResumeCronJob reactivates a paused cron job.
 func (b *ChatBridge) ResumeCronJob(id string) error {
 	if b.cronScheduler == nil {
 		return fmt.Errorf("cron scheduler not available")
@@ -145,9 +122,6 @@ func (b *ChatBridge) ResumeCronJob(id string) error {
 	return b.cronScheduler.Resume(id)
 }
 
-// GenerateCronPrompt uses the current LLM provider to generate a concise, actionable
-// cron prompt from a natural-language description. This is a synchronous single-shot
-// Chat call (no agent loop, no tools).
 func (b *ChatBridge) GenerateCronPrompt(description string) (string, error) {
 
 	b.mu.Lock()
@@ -180,7 +154,6 @@ no explanations or markdown formatting.`
 		return "", fmt.Errorf("LLM call failed: %w", err)
 	}
 
-	// Extract text from the response message content blocks.
 	var text string
 	for _, block := range resp.Message.Content {
 		if block.Type == "text" {

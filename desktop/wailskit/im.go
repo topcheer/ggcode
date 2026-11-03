@@ -10,7 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// IMAdapterInfo is a frontend-friendly representation of an IM adapter config.
 type IMAdapterInfo struct {
 	Name      string                 `json:"name"`
 	Enabled   bool                   `json:"enabled"`
@@ -21,11 +20,10 @@ type IMAdapterInfo struct {
 	Args      []string               `json:"args,omitempty"`
 	Extra     map[string]interface{} `json:"extra,omitempty"`
 	Targets   []string               `json:"targets,omitempty"`
-	Workspace string                 `json:"workspace,omitempty"` // bound workspace path
-	IsCurrent bool                   `json:"isCurrent"`           // bound to current workspace
+	Workspace string                 `json:"workspace,omitempty"`
+	IsCurrent bool                   `json:"isCurrent"`
 }
 
-// IMPlatformMeta describes a supported IM platform for the frontend.
 type IMPlatformMeta struct {
 	ID          string            `json:"id"`
 	DisplayName string            `json:"displayName"`
@@ -33,12 +31,6 @@ type IMPlatformMeta struct {
 	QRAuth      bool              `json:"qrAuth"`
 }
 
-// IMPlatformField describes a configuration field for an IM platform.
-// #637: Required distinguishes credentials the adapter cannot start without
-// from optional fields with runtime defaults. Previously every registry
-// field carried a Label and the validator's `Label == "" → skip` branch was
-// dead code, so optional fields (signal base_url, irc channels) were
-// hard-blocked as required.
 type IMPlatformField struct {
 	Key         string `json:"key"`
 	Label       string `json:"label"`
@@ -47,7 +39,6 @@ type IMPlatformField struct {
 	Required    bool   `json:"required,omitempty"`
 }
 
-// GetIMPlatformRegistry returns the list of supported IM platforms.
 func GetIMPlatformRegistry() []IMPlatformMeta {
 	return []IMPlatformMeta{
 
@@ -68,10 +59,6 @@ func GetIMPlatformRegistry() []IMPlatformMeta {
 	}
 }
 
-// imPlatformByID returns the registry meta for a platform ID,
-// case-insensitively (#591): hand-written YAML and CLI input can carry
-// "Telegram" where the registry says "telegram" — a case mismatch must
-// not turn into "unknown platform".
 func imPlatformByID(platform string) *IMPlatformMeta {
 	registry := GetIMPlatformRegistry()
 	lower := strings.ToLower(platform)
@@ -83,10 +70,6 @@ func imPlatformByID(platform string) *IMPlatformMeta {
 	return nil
 }
 
-// firstBoundWorkspace picks the workspace shown for an adapter from its
-// binding list: the current-workspace match if present (so the UI shows the
-// binding that matters here), else the first binding. IsCurrent is true iff
-// any binding matches the current workspace (#587).
 func firstBoundWorkspace(bindings []string, workingDir, normalizedWS string) (string, bool) {
 	isCurrent := false
 	first := ""
@@ -104,8 +87,6 @@ func firstBoundWorkspace(bindings []string, workingDir, normalizedWS string) (st
 	return first, isCurrent
 }
 
-// ListIMAdapters returns all configured IM adapters with workspace binding info.
-// imManager may be nil (no runtime bindings available).
 func ListIMAdapters(workingDir string, imMgr interface {
 	AllPersistedBindings() []im.ChannelBinding
 	IsMuted(adapterName string) bool
@@ -156,11 +137,6 @@ func ListIMAdapters(workingDir string, imMgr interface {
 	return result, nil
 }
 
-// SaveIMAdapter creates or updates an IM adapter. The cfg map may contain:
-//   - "platform" (required): adapter platform (e.g. "telegram", "discord", "slack")
-//   - "transport": transport type
-//   - "command": command for stdio transport
-//   - other keys are stored in the adapter's Extra map
 func SaveIMAdapter(name string, values map[string]string) error {
 
 	globalMu.Lock()
@@ -224,22 +200,6 @@ func SaveIMAdapter(name string, values map[string]string) error {
 	return cfg.AddIMAdapter(name, adapterCfg)
 }
 
-// mergeExistingIntoUpdate folds an existing adapter config into a UI update
-// payload: fields the desktop payload never carries are preserved (#107;
-// transport/command per #300), and Extra keys absent from the update are
-// kept — but ONLY when the platform is unchanged. On a platform switch the
-// old Extra is discarded to prevent cross-platform credential leakage
-// (#585): telegram and slack share the "bot_token" field name, so a switch
-// would otherwise inherit the old token as the new platform's credential.
-//
-// #690 extends the same guard to the transport-layer field family
-// (Transport/Command/Args/Env, and AllowFrom): on a platform switch the old
-// values are NOT inherited. Args/Env used to be copied unconditionally and
-// Transport/Command were backfilled whenever the update left them empty, so a
-// telegram→discord switch kept the old stdio bridge command and its env
-// (e.g. TELEGRAM_BOT_TOKEN) — the new adapter would launch the OLD platform's
-// bridge process with the OLD platform's credentials. AllowFrom entries are
-// platform-specific user/channel IDs, so they are reset on switch too.
 func mergeExistingIntoUpdate(update, existing config.IMAdapterConfig) config.IMAdapterConfig {
 	update.OutputMode = existing.OutputMode
 	update.Targets = existing.Targets
@@ -269,19 +229,6 @@ func mergeExistingIntoUpdate(update, existing config.IMAdapterConfig) config.IMA
 	return update
 }
 
-// RemoveIMAdapter removes an IM adapter by name. When imMgr is non-nil the
-// adapter's persisted bindings are cascade-deleted in the same operation
-// (#396): without the cascade an orphaned binding keyed by adapter NAME is
-// silently re-inherited when an adapter with the same name is rebuilt later.
-//
-// Ordering (#497): the cascade unbind runs BEFORE the config delete.
-// im.Manager.UnbindAdapter is idempotent (no persisted bindings is a
-// successful no-op), so this order keeps BOTH failure paths retryable: if
-// the unbind fails the adapter config is still intact, and if the config
-// delete fails the retry's unbind is a harmless no-op. The previous
-// delete-then-unbind order made the #460 "retry" advice structurally
-// unreachable — config.RemoveIMAdapter rejects the already-deleted adapter
-// with "not found" before a retry ever reaches the unbind step.
 func RemoveIMAdapter(name string, imMgr interface {
 	UnbindAdapter(adapterName string) error
 }) error {
@@ -305,7 +252,6 @@ func RemoveIMAdapter(name string, imMgr interface {
 	return nil
 }
 
-// SetIMAdapterEnabled toggles the enabled state of an IM adapter.
 func SetIMAdapterEnabled(name string, enabled bool) error {
 
 	globalMu.Lock()
@@ -317,10 +263,6 @@ func SetIMAdapterEnabled(name string, enabled bool) error {
 	return cfg.SetIMAdapterEnabled(name, enabled)
 }
 
-// TestIMConnection performs basic required-field validation for an IM adapter.
-// It checks that all required fields for the platform are non-empty.
-// Note: this is field validation only — full connectivity and authentication
-// requires starting the actual adapter runtime (im.Manager).
 func TestIMConnection(name string) error {
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
@@ -368,8 +310,6 @@ func TestIMConnection(name string) error {
 	return nil
 }
 
-// BindIMAdapter binds an adapter to the current workspace.
-// imMgr may be nil (adapter will be bound but won't be active until manager is initialized).
 func BindIMAdapter(name, workingDir string, imMgr interface{ BindAdapterToWorkspace(string, string) error }) error {
 	if imMgr == nil {
 
@@ -384,9 +324,6 @@ func BindIMAdapter(name, workingDir string, imMgr interface{ BindAdapterToWorksp
 	return imMgr.BindAdapterToWorkspace(name, workspace)
 }
 
-// RebindIMAdapter re-binds an adapter to the current workspace,
-// replacing any existing binding to another workspace.
-// imMgr may be nil (adapter will be rebound but won't be active until manager is initialized).
 func RebindIMAdapter(name, workingDir string, imMgr interface{ BindAdapterToWorkspace(string, string) error }) error {
 	if imMgr == nil {
 
@@ -401,7 +338,6 @@ func RebindIMAdapter(name, workingDir string, imMgr interface{ BindAdapterToWork
 	return imMgr.BindAdapterToWorkspace(name, workspace)
 }
 
-// UnbindIMAdapter removes all bindings for an adapter.
 func UnbindIMAdapter(name string, imMgr interface{ UnbindAdapter(string) error }) error {
 	if imMgr == nil {
 		return fmt.Errorf("IM manager not initialized")
@@ -409,10 +345,6 @@ func UnbindIMAdapter(name string, imMgr interface{ UnbindAdapter(string) error }
 	return imMgr.UnbindAdapter(name)
 }
 
-// imAdapterExistsInConfig verifies that the named adapter has a config entry
-// in the user's ggcode.yaml (#556). Binding an adapter that is absent from
-// config persists a binding the UI cannot show (no adapter list entry),
-// producing a ghost binding on disk.
 func imAdapterExistsInConfig(name string) error {
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {

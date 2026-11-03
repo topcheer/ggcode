@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// Issue #629: the Markdown export wrote tool Content verbatim. #583 fixed the
-// JSON path and Markdown ToolDetail, but a read_file of a .env/config dump
-// lands in tool Content and was exported to .md unredacted.
 func TestIssue629_MarkdownExportRedactsToolContent(t *testing.T) {
 	msgs := []SessionMessage{
 		{
@@ -42,8 +39,6 @@ func TestIssue629_MarkdownExportRedactsToolContent(t *testing.T) {
 	}
 }
 
-// Non-tool roles (plain user/assistant prose) pass through the redaction
-// helper too — verify a secret-free message is exported unchanged.
 func TestIssue629_MarkdownExportPlainContentUntouched(t *testing.T) {
 	msgs := []SessionMessage{
 		{Role: "user", Content: "What is 2+2?"},

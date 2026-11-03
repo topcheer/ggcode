@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// TestIssue580_Bug2_RecursiveWalkErrors verifies that walkDirectoryEntries
-// logs errors instead of silently skipping them, respects entry limits,
-// and excludes common generated directories (#580 Bug 2).
 func TestIssue580_Bug2_RecursiveWalkErrors(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -50,8 +47,6 @@ func TestIssue580_Bug2_RecursiveWalkErrors(t *testing.T) {
 	t.Logf("walkDirectoryEntries returned %d entries (exclusions working)", len(entries))
 }
 
-// TestIssue580_Bug2_RecursiveWalkLimit verifies that walkDirectoryEntries
-// enforces the maxRecursiveEntries limit (#580 Bug 2).
 func TestIssue580_Bug2_RecursiveWalkLimit(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -75,9 +70,6 @@ func TestIssue580_Bug2_RecursiveWalkLimit(t *testing.T) {
 	t.Logf("walkDirectoryEntries correctly handled %d entries (below limit)", len(entries))
 }
 
-// TestIssue580_Bug6_OverflowNoticeSeqPositioning verifies that overflow
-// notices use a Seq positioned before the first retained entry instead
-// of a new maximum value (#580 Bug 6).
 func TestIssue580_Bug6_OverflowNoticeSeqPositioning(t *testing.T) {
 	ls := NewLogStream(10)
 	ls.Enable(true)
@@ -110,9 +102,6 @@ func TestIssue580_Bug6_OverflowNoticeSeqPositioning(t *testing.T) {
 		overflowSeq, firstRetainedSeq)
 }
 
-// TestIssue580_Bug4_ListCronJobsNilScheduler verifies that ListCronJobs
-// returns an error when the scheduler is not available, instead of
-// silently returning nil (#580 Bug 4).
 func TestIssue580_Bug4_ListCronJobsNilScheduler(t *testing.T) {
 	cb := &ChatBridge{}
 
@@ -132,9 +121,6 @@ func TestIssue580_Bug4_ListCronJobsNilScheduler(t *testing.T) {
 	t.Logf("ListCronJobs correctly returns error for nil scheduler: %v", err)
 }
 
-// TestIssue580_Bug1_DeadAPIsConfirmation confirms that the package-level
-// functions (ListDirectory, ReadFileContent, GetWorkingDir) are currently
-// unused in production code and kept as-is per decision (#580 Bug 1).
 func TestIssue580_Bug1_DeadAPIsConfirmation(t *testing.T) {
 
 	entries, err := ListDirectory(".", false)

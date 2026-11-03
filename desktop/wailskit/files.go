@@ -9,28 +9,18 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// maxReadFileTextBytes caps ReadFileContent so a huge text file cannot be
-// fully loaded into memory and shipped across the Wails bridge (#287).
-// Text previews render the whole string, so this is lower than the 150MB
-// binary (base64) preview cap from #253.
-const maxReadFileTextBytes = 20 * 1024 * 1024 // 20MB
+const maxReadFileTextBytes = 20 * 1024 * 1024
 
-// maxRecursiveEntries caps the total number of entries returned by
-// walkDirectoryEntries to prevent unbounded memory growth when walking
-// deep or wide directory trees (#580).
 const maxRecursiveEntries = 10000
 
-// FileInfo describes a file or directory entry.
 type FileInfo struct {
 	Name     string `json:"name"`
 	IsDir    bool   `json:"isDir"`
 	Size     int64  `json:"size"`
-	Modified int64  `json:"modified"` // Unix timestamp
-	Path     string `json:"path"`     // Full path
+	Modified int64  `json:"modified"`
+	Path     string `json:"path"`
 }
 
-// ListDirectory returns entries in the given directory.
-// If recursive is true, it walks subdirectories recursively.
 func ListDirectory(dir string, recursive bool) ([]FileInfo, error) {
 	if dir == "" {
 		dir, _ = os.Getwd()
@@ -58,8 +48,6 @@ func ListDirectory(dir string, recursive bool) ([]FileInfo, error) {
 	return readDirectoryEntries(abs)
 }
 
-// walkDirectoryEntries walks dir recursively and returns one FileInfo per
-// entry below the root (the root itself is skipped), with paths relative to dir.
 func walkDirectoryEntries(abs string) ([]FileInfo, error) {
 	var result []FileInfo
 	err := filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
@@ -104,7 +92,6 @@ func walkDirectoryEntries(abs string) ([]FileInfo, error) {
 	return result, nil
 }
 
-// readDirectoryEntries lists the immediate children of dir (non-recursive).
 func readDirectoryEntries(abs string) ([]FileInfo, error) {
 	entries, err := os.ReadDir(abs)
 	if err != nil {
@@ -127,23 +114,8 @@ func readDirectoryEntries(abs string) ([]FileInfo, error) {
 	return result, nil
 }
 
-// MaxReadFileTextBytes exposes the text preview size cap so callers that
-// share this package's containment logic (e.g. the Wails App file APIs) can
-// enforce the same limit (#329).
 const MaxReadFileTextBytes = maxReadFileTextBytes
 
-// ResolveContainedPath resolves path (relative to root when applicable),
-// follows symlinks, and verifies the fully-resolved path stays within root.
-// It returns the resolved absolute path on success.
-//
-// Security notes (#146/#285/#329):
-//   - filepath.Abs only lexically cleans the path — it does NOT resolve
-//     symlinks. A symlink located inside root but pointing outside would
-//     pass a naive containment check while os.ReadFile follows it to an
-//     arbitrary target. Symlinks are resolved FIRST, then containment is
-//     verified against the resolved path.
-//   - ".." only escapes root when it is a complete path element; a leading
-//     ".." prefix must not falsely deny names like "..cfg" (#285).
 func ResolveContainedPath(root, path string) (string, error) {
 	if root == "" {
 		var err error
@@ -183,8 +155,6 @@ func ResolveContainedPath(root, path string) (string, error) {
 	return resolved, nil
 }
 
-// ReadFileContent reads a text file and returns its content.
-// For security, it restricts file access to the working directory.
 func ReadFileContent(path string) (string, error) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -210,7 +180,6 @@ func ReadFileContent(path string) (string, error) {
 	return string(data), nil
 }
 
-// GetWorkingDir returns the current working directory.
 func GetWorkingDir() string {
 	wd, err := os.Getwd()
 	if err != nil {

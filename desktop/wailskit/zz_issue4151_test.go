@@ -5,11 +5,6 @@ import (
 	"testing"
 )
 
-// #4151: approval/ask_user request IDs must be unique even without a tunnel
-// broker. The old handlers hardcoded "" in the no-broker case, so two
-// concurrent approvals shared one map key in InteractionBroker: the first
-// registration was overwritten (its waiter never woken, timing out after the
-// 15-minute bound) or the first resolution silenced both.
 func TestNextInteractionRequestIDUniqueNoBroker(t *testing.T) {
 	b, err := NewChatBridge()
 	if err != nil {
@@ -36,9 +31,6 @@ func TestNextInteractionRequestIDUniqueNoBroker(t *testing.T) {
 	}
 }
 
-// TestNextInteractionRequestIDConcurrent races the generator from many
-// goroutines: parallel tool calls can fire approval handlers simultaneously,
-// and every issued ID must still be unique.
 func TestNextInteractionRequestIDConcurrent(t *testing.T) {
 	b, err := NewChatBridge()
 	if err != nil {

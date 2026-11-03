@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// LogEntry represents a single debug log line.
 type LogEntry struct {
 	Seq      int64  `json:"seq"`
 	Category string `json:"category"`
@@ -16,28 +15,21 @@ type LogEntry struct {
 	Time     string `json:"time"`
 }
 
-// LogStream is a ring-buffer of recent log entries that can be
-// toggled on/off from the frontend and drained via polling.
 type LogStream struct {
 	mu       sync.Mutex
 	enabled  atomic.Bool
 	buf      []LogEntry
 	cap      int
-	head     int // next write position
-	count    int // number of valid entries
+	head     int
+	count    int
 	seq      int64
-	pending  []LogEntry // entries since last Drain
-	maxPend  int        // pending queue capacity (#286)
-	overflow uint64     // entries dropped from pending since last Drain (#286)
+	pending  []LogEntry
+	maxPend  int
+	overflow uint64
 }
 
-// maxPendingEntries caps the pending queue. Without a cap, a poller (the
-// desktop debug panel) that disappears while the stream stays enabled causes
-// unbounded memory growth: every debug.Log entry is appended to pending and
-// never freed until the next Drain (#286).
 const maxPendingEntries = 5000
 
-// NewLogStream creates a LogStream with the given ring-buffer capacity.
 func NewLogStream(capacity int) *LogStream {
 	if capacity <= 0 {
 		capacity = 2000
@@ -50,20 +42,14 @@ func NewLogStream(capacity int) *LogStream {
 	}
 }
 
-// Enable turns the stream on or off. When enabled, debug.Log output is
-// captured into the ring buffer. When disabled, captures stop but
-// existing entries are preserved.
 func (s *LogStream) Enable(on bool) {
 	s.enabled.Store(on)
 }
 
-// IsEnabled returns whether the stream is currently capturing.
 func (s *LogStream) IsEnabled() bool {
 	return s.enabled.Load()
 }
 
-// Write appends a log entry. Safe to call from any goroutine.
-// If the stream is disabled, the write is silently dropped.
 func (s *LogStream) Write(category, message string) {
 	if !s.enabled.Load() {
 		return
@@ -94,10 +80,6 @@ func (s *LogStream) Write(category, message string) {
 	s.mu.Unlock()
 }
 
-// Drain returns all entries accumulated since the last Drain call,
-// then clears the pending list. Returns empty slice if nothing new.
-// If entries were dropped from the capped pending queue since the last
-// Drain, a synthetic overflow notice is prepended (#286).
 func (s *LogStream) Drain() []LogEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -121,7 +103,6 @@ func (s *LogStream) Drain() []LogEntry {
 	return out
 }
 
-// History returns the last N entries from the ring buffer.
 func (s *LogStream) History(n int) []LogEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -140,7 +121,6 @@ func (s *LogStream) History(n int) []LogEntry {
 	return out
 }
 
-// DrainLogStreamJSON is the Wails binding that returns pending logs as JSON.
 func (s *LogStream) DrainLogStreamJSON() string {
 	entries := s.Drain()
 	if len(entries) == 0 {
@@ -150,7 +130,6 @@ func (s *LogStream) DrainLogStreamJSON() string {
 	return string(data)
 }
 
-// ToggleLogStream is the Wails binding to enable/disable log capture.
 func (s *LogStream) ToggleLogStream(enabled bool) {
 	s.Enable(enabled)
 }

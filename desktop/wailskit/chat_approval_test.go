@@ -13,18 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
-// TestMobileAlwaysAllowGrantsCommandPatternNotWholeTool guards #1038: the
-// mobile always_allow response must grant a fine-grained command pattern
-// (like desktop RespondApproval / TUI / IM paths), NOT a blanket
-// SetOverride(tool, Allow) that auto-approves every future invocation of the
-// tool.
-// TestMobileAlwaysAllowGrantsCommandPatternNotWholeTool guards #1038: the
-// mobile always_allow response must grant a fine-grained command pattern
-// (like desktop RespondApproval / TUI / IM paths), NOT a blanket
-// SetOverride(tool, Allow) that auto-approves every future invocation of the
-// tool. SupervisedMode is the discriminating scenario: commands default to
-// Ask, so a blanket override would silently auto-approve everything, while
-// a pattern grant only covers the approved prefix.
 func TestMobileAlwaysAllowGrantsCommandPatternNotWholeTool(t *testing.T) {
 	broker := agentruntime.NewInteractionBroker()
 	policy := permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.SupervisedMode)
@@ -67,9 +55,6 @@ func TestMobileAlwaysAllowGrantsCommandPatternNotWholeTool(t *testing.T) {
 	}
 }
 
-// TestMobileAlwaysAllowNonCommandToolFallsBackToOverride locks the fallback
-// branch of #1038: tools without an extractable command keep the tool-level
-// override behavior.
 func TestMobileAlwaysAllowNonCommandToolFallsBackToOverride(t *testing.T) {
 	broker := agentruntime.NewInteractionBroker()
 	policy := permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.SupervisedMode)
@@ -102,11 +87,6 @@ func TestMobileAlwaysAllowNonCommandToolFallsBackToOverride(t *testing.T) {
 	}
 }
 
-// TestRequestAskUserSurvivesParentCancel guards #1039: the wait is wrapped in
-// WithoutCancel (bounded by a 15min timeout), so cancelling the parent
-// context must NOT abort a pending ask_user - only an actual response (or
-// the timeout) ends the wait. A plain ctx would have returned
-// context.Canceled immediately.
 func TestRequestAskUserSurvivesParentCancel(t *testing.T) {
 	broker := agentruntime.NewInteractionBroker()
 	bridge := &ChatBridge{interactions: broker}
@@ -169,8 +149,6 @@ func TestRequestAskUserSurvivesParentCancel(t *testing.T) {
 	}
 }
 
-// waitForApprovalPending polls the broker until AwaitApproval has registered
-// the waiter (or fails the test after a short deadline).
 func waitForApprovalPending(t *testing.T, broker *agentruntime.InteractionBroker, id string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

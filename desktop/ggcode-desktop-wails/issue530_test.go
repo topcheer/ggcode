@@ -10,10 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
-// TestDeleteSessionNilChatNoPanic verifies the #530 Bug A fix: a.chat can be
-// nil via the startup onboarding early-return path or NewChatBridge failure,
-// and the unconditional chat.MarkSessionDeleted(id) locked a nil receiver's
-// mutex and panicked the whole process.
 func TestDeleteSessionNilChatNoPanic(t *testing.T) {
 	app := &App{}
 
@@ -22,11 +18,6 @@ func TestDeleteSessionNilChatNoPanic(t *testing.T) {
 	}
 }
 
-// TestStartShareRefreshFailureClearsStaleTunnelState verifies the #530 Bug C
-// fix: when refreshing an existing share's invite fails (relay restart / dead
-// room), the old tunnel session and broker must be fully torn down before a
-// fresh share is created. Pre-fix, only tunnelSession was nil-ed — the old
-// session was never stopped and the dead broker stayed attached.
 func TestStartShareRefreshFailureClearsStaleTunnelState(t *testing.T) {
 
 	t.Setenv("HOME", t.TempDir())
@@ -50,11 +41,6 @@ func TestStartShareRefreshFailureClearsStaleTunnelState(t *testing.T) {
 	}
 }
 
-// TestRespondAskUserInvalidPayloadCancelsWaiter verifies the #530 Bug D fix:
-// a malformed answers payload used to be silently dropped, leaving the
-// pending ask_user waiter blocked forever (RequestAskUser waits on
-// context.WithoutCancel with no timeout). The fix must deliver a cancelled
-// response to unblock the agent run and surface an error event.
 func TestRespondAskUserInvalidPayloadCancelsWaiter(t *testing.T) {
 	chat, err := wailskit.NewChatBridge()
 	if err != nil {

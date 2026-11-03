@@ -6,17 +6,6 @@ import (
 	"time"
 )
 
-// TestIssue680_JoinerRereadsLogoutGenAfterWake verifies defect 2: a joiner
-// parked on a same-generation flight must compare the flight's logoutGen
-// snapshot against the CURRENT logout generation read AFTER waking — not
-// against its own pre-park snapshot. Pre-fix, both snapshots predated the
-// parking, so a logout that ran between done-close and the joiner's wakeup
-// went unnoticed and the joiner returned nil ("connected") for a token that
-// had just been deleted.
-//
-// Determinism: the test holds oauthMu across close(done) and the generation
-// bump, so the joiner — which reads oauthLogoutGen under that same mutex
-// after waking — cannot observe anything but the bumped value.
 func TestIssue680_JoinerRereadsLogoutGenAfterWake(t *testing.T) {
 	resetOAuthState(t)
 	isolateAuthStore(t)
@@ -59,12 +48,6 @@ func TestIssue680_JoinerRereadsLogoutGenAfterWake(t *testing.T) {
 	}
 }
 
-// TestIssue680_ReloginDuringInflightCompletionKeepsNewFlowUsable verifies the
-// user-visible contract of defect 1: when the user re-logins while an older
-// completion is still in flight, the old completion's teardown must not take
-// down the NEW flow — a fresh Complete against the new flow must reach the
-// real auth-code wait (terminated here by logout), never the misleading
-// "no OAuth flow in progress" error while its token path is actually alive.
 func TestIssue680_ReloginDuringInflightCompletionKeepsNewFlowUsable(t *testing.T) {
 	resetOAuthState(t)
 	isolateAuthStore(t)

@@ -9,8 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// Test #155: editing a disabled IM adapter via SaveIMAdapter must not
-// silently re-enable it when the "enabled" key is absent from values.
 func TestSaveIMAdapterPreservesDisabledState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -61,7 +59,6 @@ func TestSaveIMAdapterPreservesDisabledState(t *testing.T) {
 	}
 }
 
-// Editing with an explicit enabled=true must still enable the adapter.
 func TestSaveIMAdapterExplicitEnable(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -97,9 +94,6 @@ func TestSaveIMAdapterExplicitEnable(t *testing.T) {
 	}
 }
 
-// fakeUnbinder simulates im.Manager.UnbindAdapter for RemoveIMAdapter tests.
-// The first `failures` calls return an error; later calls succeed (simulating
-// a transient store failure that a retry clears).
 type fakeUnbinder struct {
 	failures int
 	calls    int
@@ -132,12 +126,6 @@ func seedIMTestConfig(t *testing.T) {
 	}
 }
 
-// Test #497: when the cascade unbind fails, the advertised retry must be
-// structurally reachable. With the old delete-then-unbind order, the first
-// failure left the config already deleted, and every retry died at
-// config.RemoveIMAdapter "not found" before it ever reached the unbind —
-// the leftover binding (#396 ghost scenario) could never be cleared through
-// the advertised path.
 func TestRemoveIMAdapterFailedUnbindRetryWorks(t *testing.T) {
 	seedIMTestConfig(t)
 
@@ -169,8 +157,6 @@ func TestRemoveIMAdapterFailedUnbindRetryWorks(t *testing.T) {
 	}
 }
 
-// The nil-manager path (no runtime bindings available) still removes the
-// adapter config alone.
 func TestRemoveIMAdapterNilManager(t *testing.T) {
 	seedIMTestConfig(t)
 	if err := RemoveIMAdapter("tg", nil); err != nil {

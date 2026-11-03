@@ -12,42 +12,36 @@ import (
 	"github.com/topcheer/ggcode/internal/lsp"
 )
 
-// LSPInstallOption is a single installable language server variant.
 type LSPInstallOption struct {
 	ID          string `json:"id"`
 	Label       string `json:"label"`
 	Binary      string `json:"binary"`
 	Recommended bool   `json:"recommended"`
-	Scope       string `json:"scope"` // "user", "global", "project"
+	Scope       string `json:"scope"`
 }
 
-// LSPServerStatus is the JSON-serializable status of a single language server.
 type LSPServerStatus struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name"`
 	Available   bool   `json:"available"`
 	Binary      string `json:"binary"`
 	InstallHint string `json:"install_hint"`
-	// Override indicates whether the user configured a custom binary path.
+
 	Override       bool               `json:"override"`
 	CanInstall     bool               `json:"can_install"`
 	InstallOptions []LSPInstallOption `json:"install_options"`
 }
 
-// LSPStatusResponse is the full LSP status payload for the frontend.
 type LSPStatusResponse struct {
 	Workspace string            `json:"workspace"`
 	Languages []LSPServerStatus `json:"languages"`
 }
 
-// LSPInstallResult holds the outcome of an install attempt.
 type LSPInstallResult struct {
 	Success bool   `json:"success"`
 	Output  string `json:"output"`
 }
 
-// GetLSPStatus returns the detected language server status for the current workspace.
-// The frontend calls this to populate the Settings > Language Servers panel.
 func (b *ChatBridge) GetLSPStatus() LSPStatusResponse {
 	b.mu.Lock()
 	wd := b.workingDir
@@ -95,9 +89,6 @@ func (b *ChatBridge) GetLSPStatus() LSPStatusResponse {
 	return result
 }
 
-// InstallLSPServer runs the install command for the given language server.
-// If optionID is empty, the recommended option is used.
-// The command runs in the workspace directory.
 func (b *ChatBridge) InstallLSPServer(languageID, optionID string) LSPInstallResult {
 	b.mu.Lock()
 	wd := b.workingDir
@@ -118,7 +109,6 @@ func (b *ChatBridge) InstallLSPServer(languageID, optionID string) LSPInstallRes
 		}
 	}
 
-	// Find the requested option (or recommended default).
 	var selected *lsp.InstallOption
 	for i := range opts {
 		if optionID != "" && opts[i].ID == optionID {

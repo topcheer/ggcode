@@ -22,7 +22,7 @@ func TestIssue2396GuardShortCircuitsInFlight(t *testing.T) {
 	if !(startShare < i && i < thCall) {
 		t.Fatal("busy return must precede the relay call")
 	}
-	// behavioral: starting flag still feeds IsSharing (unchanged #2387 contract)
+
 	var a App
 	a.tunnelStarting = true
 	if !a.IsSharing() {

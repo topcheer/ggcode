@@ -13,8 +13,6 @@ func textMsg(role, text string) provider.Message {
 	return provider.Message{Role: role, Content: []provider.ContentBlock{{Type: "text", Text: text}}}
 }
 
-// #1181: a duplicate finisher (interleaved Cancel race) must persist only
-// the tail after the winner's watermark instead of dropping it.
 func TestRunMessagesToPersistFirstPersistSkipsSeedUser(t *testing.T) {
 	runAdded := []provider.Message{
 		textMsg("user", "seed question"),
@@ -27,8 +25,6 @@ func TestRunMessagesToPersistFirstPersistSkipsSeedUser(t *testing.T) {
 	}
 }
 
-// #1181: the second (duplicate) finisher sees skip>0 and must append only
-// messages produced after the winner's persist - no drops, no duplicates.
 func TestRunMessagesToPersistWatermarkSkipsPersistedPrefix(t *testing.T) {
 	runAdded := []provider.Message{
 		textMsg("user", "seed question"),
@@ -43,8 +39,6 @@ func TestRunMessagesToPersistWatermarkSkipsPersistedPrefix(t *testing.T) {
 	}
 }
 
-// #1181: a watermark larger than the current list (cancel raced ahead) must
-// not panic and must return nothing.
 func TestRunMessagesToPersistWatermarkCapsBeyondLen(t *testing.T) {
 	runAdded := []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "seed"}}}}
 	got := runMessagesToPersist(runAdded, 10)
@@ -53,8 +47,6 @@ func TestRunMessagesToPersistWatermarkCapsBeyondLen(t *testing.T) {
 	}
 }
 
-// #1181: the pre-existing no-seed-user fallback must survive the watermark
-// refactor when skip == 0.
 func TestRunMessagesToPersistNoSeedUserKeepsAll(t *testing.T) {
 	runAdded := []provider.Message{textMsg("assistant", "only assistant")}
 	got := runMessagesToPersist(runAdded, 0)
@@ -63,10 +55,6 @@ func TestRunMessagesToPersistNoSeedUserKeepsAll(t *testing.T) {
 	}
 }
 
-// #1181: the finished-guard duplicate path must not emit run_done again and
-// must not panic on the persist call with an empty bridge (no agent). The
-// real-session tail-persist behavior is covered by the watermark tests and
-// compile-time wiring in finishRun.
 func TestFinishRunDuplicateFinisherDoesNotDoubleEmit(t *testing.T) {
 	var emits int64
 	b := &ChatBridge{

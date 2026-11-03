@@ -10,8 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
-// appMethodBody extracts the source text of one (a *App) method from app.go,
-// spanning from its func line to the next top-level func declaration.
 func appMethodBody(t *testing.T, name string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("app.go"))
@@ -31,8 +29,6 @@ func appMethodBody(t *testing.T, name string) string {
 	return body
 }
 
-// stripLineComments removes // comments so comment mentions cannot fool the
-// static scan below.
 func stripLineComments(s string) string {
 	out := make([]string, 0, 64)
 	for _, line := range strings.Split(s, "\n") {
@@ -44,8 +40,6 @@ func stripLineComments(s string) string {
 	return strings.Join(out, "\n")
 }
 
-// TestIssue1161StartShareChecksChatSnapshotNotField: nil chat must fail fast
-// through the entry snapshot (dynamic contract).
 func TestIssue1161StartShareChecksChatSnapshotNotField(t *testing.T) {
 
 	t.Setenv("HOME", t.TempDir())
@@ -59,8 +53,6 @@ func TestIssue1161StartShareChecksChatSnapshotNotField(t *testing.T) {
 	}
 }
 
-// TestIssue1161TunnelSnapshotNilChatIdleStatus: tunnelSnapshot on a nil chat
-// must return the idle status snapshot and never panic.
 func TestIssue1161TunnelSnapshotNilChatIdleStatus(t *testing.T) {
 	a := NewApp()
 
@@ -71,11 +63,6 @@ func TestIssue1161TunnelSnapshotNilChatIdleStatus(t *testing.T) {
 	}
 }
 
-// TestIssue1161NoAChatRereadsAfterSnapshot: static regression guard. Within
-// StartShare and tunnelSnapshot, after the single
-// "chat := a.chat" snapshot line there must be no further reference to the
-// struct field. Any extra occurrence reintroduces the TOCTOU window fixed by
-// this issue.
 func TestIssue1161NoAChatRereadsAfterSnapshot(t *testing.T) {
 	for _, name := range []string{"StartShare", "tunnelSnapshot"} {
 		code := stripLineComments(appMethodBody(t, name))
@@ -93,10 +80,6 @@ func TestIssue1161NoAChatRereadsAfterSnapshot(t *testing.T) {
 	}
 }
 
-// TestIssue1161BindShareCommandsUsesEntrySnapshot verifies by inspection that
-// the share-command wiring guard no longer gates on the live field: the bind
-// call must be guarded against result.Broker only, because the nil-ness of
-// the snapshotted chat was already established at function entry.
 func TestIssue1161BindShareCommandsUsesEntrySnapshot(t *testing.T) {
 	code := stripLineComments(appMethodBody(t, "StartShare"))
 	if !strings.Contains(code, "if result.Broker != nil {") {

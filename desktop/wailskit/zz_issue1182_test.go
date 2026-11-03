@@ -7,10 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// #1182: emit must not hold b.mu while the tunnel push runs. Before the fix
-// the push ran under b.mu and could block on the broker's projection-sync
-// wait, which needs b.mu on the reconnect snapshot path (CurrentTunnelStatus)
-// - an AB-BA deadlock that froze the desktop including Cancel.
 func TestEmitDoesNotHoldBridgeMutexDuringTunnelPush(t *testing.T) {
 	release := make(chan struct{})
 	b := &ChatBridge{}
@@ -46,7 +42,6 @@ func TestEmitDoesNotHoldBridgeMutexDuringTunnelPush(t *testing.T) {
 	}
 }
 
-// #1182: the default push path (tunnelHost, no test hook) must still fire.
 func TestEmitTunnelPushFallsBackToHost(t *testing.T) {
 	b := &ChatBridge{}
 	done := make(chan struct{})

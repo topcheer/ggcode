@@ -84,7 +84,6 @@ func TestReadFileAsBase64SmallFileOK(t *testing.T) {
 	}
 }
 
-// #329: App.ReadFileContent must enforce workspace-root containment.
 func TestAppReadFileContent_Containment(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("hi"), 0644); err != nil {
@@ -107,8 +106,6 @@ func TestAppReadFileContent_Containment(t *testing.T) {
 	}
 }
 
-// #329: App.ListFiles must enforce workspace-root containment while keeping
-// the []map[string]interface{} shape the frontend expects.
 func TestAppListFiles_Containment(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0644)

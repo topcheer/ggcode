@@ -7,9 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/auth"
 )
 
-// #1805 case 2: the renewal watcher's trigger is a pure disk predicate -
-// oauth + expired + refreshable. Non-oauth, fresh, or unrefreshable
-// credentials must not fire (keeping the ticker a no-op for everyone else).
 func Test1805OAuthNeedsRenewal(t *testing.T) {
 	store := auth.DefaultStore()
 	original, origErr := store.Load(auth.ProviderAnthropic)

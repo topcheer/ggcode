@@ -6,8 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// TestC1_BaseURLInstanceWriteback verifies that updating baseURL via UpdateConfig
-// has the correct mapping to trigger instance writeback (#584 C1).
 func TestC1_BaseURLInstanceWriteback(t *testing.T) {
 
 	if _, ok := updateConfigInstanceKeys["baseURL"]; !ok {
@@ -15,8 +13,6 @@ func TestC1_BaseURLInstanceWriteback(t *testing.T) {
 	}
 }
 
-// TestC3_APIKeySetEnvVarResolution verifies that GetFullConfig resolves
-// ${VAR} references before checking if API key is set (#584 C3).
 func TestC3_APIKeySetEnvVarResolution(t *testing.T) {
 	cfg := &config.Config{
 		Vendor:   "test-vendor",
@@ -46,8 +42,6 @@ func TestC3_APIKeySetEnvVarResolution(t *testing.T) {
 	}
 }
 
-// TestM1_ParseShellArgsUnbalancedQuote verifies that unbalanced quotes
-// are detected and return an error (#584 M1).
 func TestM1_ParseShellArgsUnbalancedQuote(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -89,8 +83,6 @@ func TestM1_ParseShellArgsUnbalancedQuote(t *testing.T) {
 	}
 }
 
-// TestM1_ParseShellArgsEscapedQuotes verifies that escaped quotes
-// are handled correctly (backslash removed, quote not toggled) (#584 M1).
 func TestM1_ParseShellArgsEscapedQuotes(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -133,8 +125,6 @@ func TestM1_ParseShellArgsEscapedQuotes(t *testing.T) {
 	}
 }
 
-// TestC2_GhostEndpointInstantiation verifies that UpdateConfig with
-// baseURL checks endpoint existence before modifying (#584 C2).
 func TestC2_GhostEndpointInstantiation(t *testing.T) {
 	cfg := &config.Config{
 		Vendor:   "test-vendor",
@@ -165,8 +155,6 @@ func TestC2_GhostEndpointInstantiation(t *testing.T) {
 	}
 }
 
-// TestM2_TypeSwitchFieldCleanup verifies that UpsertMCPServer clears
-// type-incompatible fields when switching server types (#584 M2-case2).
 func TestM2_TypeSwitchFieldCleanup(t *testing.T) {
 	base := config.MCPServerConfig{
 		Name:    "test-server",
@@ -215,8 +203,6 @@ func TestM2_TypeSwitchFieldCleanup(t *testing.T) {
 	}
 }
 
-// TestM2_StdioTypeSwitchCleanup verifies switching from http to stdio
-// clears http-specific fields (#584 M2-case2).
 func TestM2_StdioTypeSwitchCleanup(t *testing.T) {
 	base := config.MCPServerConfig{
 		Name:    "test-server",

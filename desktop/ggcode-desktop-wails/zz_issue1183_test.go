@@ -6,11 +6,6 @@ import (
 	"github.com/topcheer/ggcode/desktop/wailskit"
 )
 
-// #1183: CompleteOnboard used to call initWorkspace directly, skipping the
-// old bridge's cleanup. teardownChatBridge (extracted from switchWorkspace)
-// must clear the active bridge and unregister the shared pointer so a
-// re-run of onboarding cannot leak the JSONL session lock, A2A port,
-// tunnel share, IM adapters, or double-emit events.
 func TestTeardownChatBridgeClearsActiveBridge(t *testing.T) {
 	a := &App{chat: mustChatBridge(t)}
 	wailskit.SetChatBridge(a.chat)
@@ -34,8 +29,6 @@ func mustChatBridge(t *testing.T) *wailskit.ChatBridge {
 	return b
 }
 
-// #1183: teardown must be safe when no bridge is active (first onboarding
-// run and shutdown paths both call it unconditionally).
 func TestTeardownChatBridgeNilSafe(t *testing.T) {
 	a := &App{}
 	a.teardownChatBridge()

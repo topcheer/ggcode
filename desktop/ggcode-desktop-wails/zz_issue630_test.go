@@ -11,12 +11,6 @@ import (
 	"github.com/topcheer/ggcode/desktop/wailskit"
 )
 
-// Issue #630: deleting the CURRENT session cleared backend state but the
-// frontend never received a session:changed notification it could act on
-// (the implicit notify fires with an empty sessionId that the Layout handler
-// ignored), so the deleted transcript stayed on screen and the next message
-// silently landed in a brand-new session. DeleteSession must emit an explicit
-// session:changed event.
 func TestIssue630_DeleteCurrentSessionEmitsSessionChanged(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)

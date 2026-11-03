@@ -14,61 +14,34 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// NotificationManager handles OS-level desktop notifications.
-// It tracks whether the app window is focused: notifications are only
-// shown when the window is NOT focused (i.e. the user switched away).
-//
-// Competitor analysis:
-//   - Claude Desktop: shows native notifications when tasks complete
-//   - ChatGPT Desktop: notifications + dock bounce on completion
-//   - Cursor: in-editor toast only (no OS notification)
-//
-// ggcode gap: no notification when agent finishes a long task or needs
-// approval while the user is in another app.
 type NotificationManager struct {
 	mu      sync.Mutex
-	ctx     interface{} // runtime.Context (stored as interface to avoid import cycles in callers)
-	focused bool        // true when the app window has focus
-	enabled bool        // master toggle from desktop config
-	unread  int         // unread notification count for dock badge
+	ctx     interface{}
+	focused bool
+	enabled bool
+	unread  int
 
-	// #1809 case 4: delivery failures (TCC denial, notify-send absent)
-	// were debug.Log-only - a user who enabled notifications and was
-	// denied by the OS had no way to know why nothing arrived. Warn the
-	// frontend ONCE per process instead of per failure.
 	deliveryWarned bool
 
-	// lastShown keyed by title+body for storm dedup (#398): concurrent
-	// sessions completing with identical fixed titles ("Task completed")
-	// used to spawn one OS banner per event.
 	lastShown map[string]time.Time
 
-	// winQueue serializes Windows toasts (#399): each PowerShell toast used
-	// to spawn its own process sleeping 6s; a 10-notification storm held
-	// 10 powershell processes (tens of MB each) simultaneously.
 	winQueue chan winToast
 
-	// unixQueue serializes macOS/Linux notifications (#1431-A) - the
-	// non-Windows twin of winQueue (#399).
 	unixQueue chan unixToast
-	// approvalQueue is the #2411 fast lane (never shared with bulk).
+
 	approvalQueue chan unixToast
 }
 
-// winToast is one queued Windows notification (#399).
 type winToast struct {
 	title string
 	body  string
 }
 
-// unixToast is one queued macOS/Linux notification (#1431-A).
 type unixToast struct {
 	title string
 	body  string
 }
 
-// NewNotificationManager creates a notification manager.
-// Default: enabled=true, focused=true (assume focused until told otherwise).
 func NewNotificationManager() *NotificationManager {
 	nm := &NotificationManager{
 		focused:   true,
@@ -88,9 +61,6 @@ func NewNotificationManager() *NotificationManager {
 	return nm
 }
 
-// drainWinQueue serially executes queued Windows toasts (#399).
-// #701: per-event recover — a panicking toast must skip one notification,
-// not kill the only consumer and block every future notifier on the queue.
 func (nm *NotificationManager) drainWinQueue() {
 	for t := range nm.winQueue {
 		t := t
@@ -100,14 +70,12 @@ func (nm *NotificationManager) drainWinQueue() {
 	}
 }
 
-// SetContext sets the Wails runtime context.
 func (nm *NotificationManager) SetContext(ctx interface{}) {
 	nm.mu.Lock()
 	defer nm.mu.Unlock()
 	nm.ctx = ctx
 }
 
-// SetEnabled toggles the master notification switch.
 func (nm *NotificationManager) SetEnabled(enabled bool) {
 	nm.mu.Lock()
 	nm.enabled = enabled
@@ -122,7 +90,6 @@ func (nm *NotificationManager) SetEnabled(enabled bool) {
 	}
 }
 
-// dropQueuedToasts empties both bounded queues non-blockingly (#1866).
 func (nm *NotificationManager) dropQueuedToasts() {
 
 	for {
@@ -150,8 +117,6 @@ winDone:
 	}
 }
 
-// SetFocused updates the window focus state.
-// Called from the frontend visibility/focus change events.
 func (nm *NotificationManager) SetFocused(focused bool) {
 	nm.mu.Lock()
 	defer nm.mu.Unlock()
@@ -162,16 +127,6 @@ func (nm *NotificationManager) SetFocused(focused bool) {
 	}
 }
 
-// Notify sends a desktop notification if:
-// 1. Notifications are enabled
-// 2. The window is NOT currently focused
-// It also bumps the dock badge count.
-//
-// #1866 case 1: darwin delivery goes through the bounded unix queue, and a
-// full queue must roll back the dedup/unread commits committed above - the
-// same contract Windows already has (#600 N4). Without the rollback the
-// badge counts banners that will never display and a 5s-window retry hits
-// the dedup branch and is never re-queued.
 func (nm *NotificationManager) Notify(title, body string) {
 	nm.mu.Lock()
 	if !nm.enabled {
@@ -263,8 +218,6 @@ func (nm *NotificationManager) Notify(title, body string) {
 	}
 }
 
-// NotifyApprovalNeeded sends a high-priority notification when the agent
-// needs user interaction (approval or ask_user).
 func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 	nm.mu.Lock()
 	if !nm.enabled {
@@ -343,11 +296,8 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 	}
 }
 
-// maxLastShownEntries bounds the dedup map (#427).
 const maxLastShownEntries = 256
 
-// pruneLastShown drops entries older than the dedup window (callers hold
-// nm.mu). If everything is somehow still fresh, evict the oldest entry.
 func (nm *NotificationManager) pruneLastShown() {
 	cutoff := time.Now().Add(-5 * time.Second)
 	for k, t := range nm.lastShown {
@@ -371,7 +321,6 @@ func (nm *NotificationManager) pruneLastShown() {
 	}
 }
 
-// ClearUnread resets the unread counter and clears the badge.
 func (nm *NotificationManager) ClearUnread() {
 	nm.mu.Lock()
 	nm.unread = 0
@@ -379,18 +328,12 @@ func (nm *NotificationManager) ClearUnread() {
 	nm.clearBadge()
 }
 
-// GetUnreadCount returns the current unread notification count.
 func (nm *NotificationManager) GetUnread() int {
 	nm.mu.Lock()
 	defer nm.mu.Unlock()
 	return nm.unread
 }
 
-// showOSNotification delivers an OS notification synchronously-ish (via
-// the platform queue) and reports whether it was accepted for delivery.
-// #2095 bug A: the void return was the rollback-contract gap - Linux
-// shares darwin's unixQueue (and its queue-full failures) but its callers
-// could not roll back without this signal.
 func (nm *NotificationManager) showOSNotification(title, body string) bool {
 	switch runtime.GOOS {
 	case "darwin":
@@ -413,12 +356,6 @@ func (nm *NotificationManager) notifyMacOS(title, body string) bool {
 	return true
 }
 
-// enqueueUnixToast offers a toast to the single unix worker queue and
-// reports whether it was accepted (#1866). Returns false when the queue
-// is full - Notify() must then roll back its lastShown/unread commits,
-// mirroring the Windows contract (#600 N4). Platform-independent by
-// design so the rollback path stays unit-testable on any host.
-// enqueueApproval offers a toast to the dedicated approval lane (#2411).
 func (nm *NotificationManager) enqueueApproval(title, body string) bool {
 	select {
 	case nm.approvalQueue <- unixToast{title: title, body: body}:
@@ -429,17 +366,6 @@ func (nm *NotificationManager) enqueueApproval(title, body string) bool {
 	}
 }
 
-// drainApprovalQueue is the approval-lane worker: one banner at a time,
-// never queued behind Task-completed storms (#2411).
-// #2411 rework (review): deliver DIRECTLY via the per-platform delivery
-// functions, mirroring drainUnixQueue - the previous form routed through
-// showOSNotification, which re-enqueued the approval into the BULK OS
-// queues (enqueueUnixToast/enqueueWinToast): under a Task-completed storm
-// the bulk queue's drop-new silently discarded the banner AND the false
-// return was swallowed here while enqueueApproval had already committed,
-// so the #600 N4/#2095 rollback in NotifyApprovalNeeded never ran - a
-// strictly worse silent loss than the pre-#2411 behavior. #701: per-event
-// recover keeps the only approval worker alive.
 func (nm *NotificationManager) drainApprovalQueue() {
 	for t := range nm.approvalQueue {
 		t := t
@@ -465,8 +391,6 @@ func (nm *NotificationManager) enqueueUnixToast(title, body string) bool {
 	}
 }
 
-// rollbackNotify undoes the dedup-map and unread commits Notify made
-// before handing the banner to a bounded queue (#600 N4 / #1866).
 func (nm *NotificationManager) rollbackNotify(key string) {
 	nm.mu.Lock()
 	delete(nm.lastShown, key)
@@ -477,11 +401,6 @@ func (nm *NotificationManager) rollbackNotify(key string) {
 	nm.mu.Unlock()
 }
 
-// drainUnixQueue serializes non-Windows notifications (#1431-A):
-// at most ONE osascript/notify-send process is alive at a time.
-// #701/#1866: per-event recover - a panicking delivery must skip one
-// notification, not kill the only consumer and block every future
-// macOS Notify caller on a queue nobody drains.
 func (nm *NotificationManager) drainUnixQueue() {
 	for t := range nm.unixQueue {
 		t := t
@@ -491,19 +410,6 @@ func (nm *NotificationManager) drainUnixQueue() {
 	}
 }
 
-// escapeAppleScriptText makes a string safe to embed in an AppleScript
-// double-quoted string literal (#289).
-//
-// Order matters: backslashes first, then double quotes, to prevent script
-// injection via premature quote termination.
-//
-// Newlines/tabs/CRs are NOT valid inside AppleScript string literals — the
-// osascript compiler rejects them ("Expected end of line..."), so a
-// multi-line body would fail to compile at runtime. The issue allows either
-// AppleScript escaping (`" & linefeed & "` concatenation) or plain spaces;
-// we chose single-lining: tab→space, \n→space, \r removed. Notifications
-// render one or two lines in the OS banner anyway, so collapsing whitespace
-// is visually equivalent and keeps the script simple.
 func escapeAppleScriptText(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `"`, `\"`)
@@ -514,8 +420,6 @@ func escapeAppleScriptText(s string) string {
 	return s
 }
 
-// deliverUnix synchronously delivers one non-Windows notification on the
-// queue worker: osascript on macOS, notify-send elsewhere (#1431-A).
 func (nm *NotificationManager) deliverUnix(title, body string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -538,10 +442,6 @@ func (nm *NotificationManager) deliverUnix(title, body string) {
 	}
 }
 
-// warnDeliveryOnce surfaces a delivery failure to the frontend exactly
-// once per process (#1809 case 4): the OS denied us (permissions, missing
-// notifier) and debug.Log alone left the user wondering why nothing
-// arrived.
 func (nm *NotificationManager) warnDeliveryOnce(platform string, err error) {
 	nm.mu.Lock()
 	if nm.deliveryWarned {
@@ -566,12 +466,6 @@ func (nm *NotificationManager) notifyWindows(title, body string) bool {
 	return nm.enqueueWinToast(title, body)
 }
 
-// enqueueWinToast offers a toast to the single worker queue (#399) and
-// reports whether it was accepted. Returns false when the queue is full —
-// the caller must then roll back its lastShown/unread commits (#600 N4).
-// Platform-independent by design (callers gate on GOOS before calling); the
-// queue mechanics are identical everywhere, which keeps the rollback path
-// unit-testable on non-Windows hosts.
 func (nm *NotificationManager) enqueueWinToast(title, body string) bool {
 	select {
 	case nm.winQueue <- winToast{title: title, body: body}:
@@ -582,7 +476,6 @@ func (nm *NotificationManager) enqueueWinToast(title, body string) bool {
 	}
 }
 
-// runWinToast executes one PowerShell toast synchronously (worker context).
 func (nm *NotificationManager) runWinToast(title, body string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -594,14 +487,10 @@ func (nm *NotificationManager) runWinToast(title, body string) {
 	}
 }
 
-// psEscapeSingleQuotes escapes single quotes for PowerShell single-quoted
-// string literals (” doubling). Without this, an apostrophe in the title or
-// body closes the literal early, breaking toast syntax (#409).
 func psEscapeSingleQuotes(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
 }
 
-// windowsToastScript builds the PowerShell balloon-toast script.
 func windowsToastScript(title, body string) string {
 	title = psEscapeSingleQuotes(title)
 	body = psEscapeSingleQuotes(body)

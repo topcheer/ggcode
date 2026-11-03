@@ -64,14 +64,6 @@ func TestIssue2411ApprovalDedicatedLane(t *testing.T) {
 	}
 }
 
-// TestIssue2411ApprovalWorkerNeverReentersBulkLane pins the #2411 rework:
-// the approval worker must DELIVER directly (deliverUnix / runWinToast),
-// never route through showOSNotification -> enqueueUnixToast/enqueueWinToast
-// which re-queued the banner behind Task-completed storms and swallowed the
-// queue-full false return after enqueueApproval had already committed (a
-// silent loss with no rollback). The body-slicing pins on
-// NotifyApprovalNeeded alone missed this - the worker is pinned in its own
-// function body.
 func TestIssue2411ApprovalWorkerNeverReentersBulkLane(t *testing.T) {
 	b, err := os.ReadFile("notifications.go")
 	if err != nil {

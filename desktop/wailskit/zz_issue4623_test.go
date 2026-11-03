@@ -6,12 +6,6 @@ import (
 	"testing"
 )
 
-// #4623: SwitchModel must take the agent pointer, write b.resolved, and
-// snapshot the session inside ONE critical section - the old two-lock
-// sequence let a concurrent ResetAgent (LoadSession/ResumeSession) swap the
-// agent between the sections so ApplyProviderToAgent patched a discarded
-// instance while b.resolved advertised the new model. Unlocked reads of
-// b.currentSes were also a data race against setSessionState.
 func TestIssue4623_SwitchModelSingleCriticalSection(t *testing.T) {
 	data, err := os.ReadFile("chat.go")
 	if err != nil {

@@ -9,9 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// setupConfigTestEnv isolates HOME and loads a global config (with optional
-// instance config content). The returned config has no vendor configured on
-// disk; tests that need an active selection set it in memory.
 func setupConfigTestEnv(t *testing.T, instanceContent string) (globalPath, workspace string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
@@ -38,9 +35,6 @@ func setupConfigTestEnv(t *testing.T, instanceContent string) (globalPath, works
 	return globalPath, workspace
 }
 
-// TestUpdateConfigEmptyVendorEndpointGuard (#284): submitting empty
-// vendor/endpoint strings (e.g. frontend cold-start race where component
-// state hasn't loaded yet) must not clobber the active selection.
 func TestUpdateConfigEmptyVendorEndpointGuard(t *testing.T) {
 	_, _ = setupConfigTestEnv(t, "")
 
@@ -81,9 +75,6 @@ func TestUpdateConfigEmptyVendorEndpointGuard(t *testing.T) {
 	}
 }
 
-// TestSetEndpointLimitsKeepsGlobalSaveTarget (#282): after saving endpoint
-// limits, a preference save must still write to the GLOBAL config file, not
-// be silently redirected to the instance file.
 func TestSetEndpointLimitsKeepsGlobalSaveTarget(t *testing.T) {
 	globalPath, workspace := setupConfigTestEnv(t, "")
 
@@ -122,9 +113,6 @@ func TestSetEndpointLimitsKeepsGlobalSaveTarget(t *testing.T) {
 	}
 }
 
-// TestUpdateConfigInstanceFieldWriteBack (#282): modifying an instance-sourced
-// field via UpdateConfig must persist to the instance file — simulated restart
-// by reloading the config must observe the new value.
 func TestUpdateConfigInstanceFieldWriteBack(t *testing.T) {
 	globalPath, workspace := setupConfigTestEnv(t, "default_mode: auto\n")
 
@@ -151,12 +139,6 @@ func TestUpdateConfigInstanceFieldWriteBack(t *testing.T) {
 	}
 }
 
-// TestSetLimitsWithoutInstancePersistsGlobally (#532): on a global-only config
-// (no instance attached), SetEndpointLimits/SetModelLimits used to call
-// SaveInstanceScoped("") which returned nil while silently creating a garbage
-// instances/e3b0c442… (sha256 of empty string) directory — the edit reached no
-// parsed file and was lost on restart. They must fall back to the global save
-// and survive a reload.
 func TestSetLimitsWithoutInstancePersistsGlobally(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -199,9 +181,6 @@ func TestSetLimitsWithoutInstancePersistsGlobally(t *testing.T) {
 	}
 }
 
-// TestSetModelLimitsInstanceSurvivesReload (#532 companion): with an instance
-// attached, a per-model limit edit must land in the instance override file and
-// survive a simulated restart (LoadWithInstance merge).
 func TestSetModelLimitsInstanceSurvivesReload(t *testing.T) {
 	globalPath, workspace := setupConfigTestEnv(t, "")
 

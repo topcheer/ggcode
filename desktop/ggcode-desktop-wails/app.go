@@ -37,7 +37,6 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// App is the main application struct for the Wails desktop app.
 type App struct {
 	ctx              context.Context
 	chat             *wailskit.ChatBridge
@@ -46,41 +45,29 @@ type App struct {
 	imManager        *im.Manager
 	imController     *im.AdapterController
 	imInstanceDetect *im.InstanceDetect
-	// Mobile tunnel
+
 	tunnelMu       sync.RWMutex
 	tunnelSession  *tunnel.Session
-	tunnelStarting bool // #2387: in-flight StartShare (check-then-act window)
-	// #2401 generation guard: a start snapshots the CURRENT stopSeq;
-	// setTunnelState wires in only while stopSeq is unchanged since that
-	// snapshot - any stop (bumping stopSeq) invalidates in-flight results.
-	tunnelStopSeq     int // bumped by every stop/teardown
-	tunnelStartStopEq int // stopSeq snapshot taken when a start goes in-flight
+	tunnelStarting bool
+
+	tunnelStopSeq     int
+	tunnelStartStopEq int
 	tunnelBroker      *tunnel.Broker
 
-	// Current ask_user request (for mobile response mapping)
 	askUserMu     sync.Mutex
 	askUserReq    tool.AskUserRequest
 	hasAskUserReq bool
 
 	notifications *NotificationManager
 
-	// Close-to-tray support (#700: accessed from four goroutines —
-	// OnBeforeClose, SetWindowFocused, the hotkey poller, and CGO tray
-	// callbacks — so all reads/writes go through atomic Load/Store).
 	lastCloseAttempt atomic.Pointer[time.Time]
 
-	// #615: when non-nil, initGlobalHotkey calls this instead of the real
-	// RegisterEventHotKey (test hook; lets tests simulate both a free combo
-	// and one exclusively owned by another app without C interop — the real
-	// registration can fail in CI/headless runs, e.g. OSStatus -9866 when
-	// the combo is already taken).
 	hotkeyRegisterHook func() error
 
 	streamEvents chan uiEvent
 	streamOnce   sync.Once
 	shutdownOnce sync.Once
 
-	// Runtime debug log stream
 	logStream *wailskit.LogStream
 }
 
@@ -94,12 +81,10 @@ type StreamEventEnvelope struct {
 	Data string `json:"data"`
 }
 
-// NewApp creates a new App application struct.
 func NewApp() *App {
 	return &App{}
 }
 
-// startup is called when the app starts.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.startEventLoop()
@@ -226,11 +211,6 @@ func (a *App) enqueueUIEvent(name string, payload interface{}) {
 	}
 }
 
-// interactiveUIEvent reports whether an event is one-shot interactive traffic
-// whose loss is user-visible and unrecoverable (#706): ask_user/approval
-// requests (the agent blocks on a no-timeout channel waiting for the answer)
-// and their cancels (the dialog must be dismissed), plus pending_consumed.
-// Regenerable stream tokens do NOT belong here.
 func interactiveUIEvent(name string) bool {
 	switch name {
 	case "ask_user:request", "approval:request",
@@ -305,14 +285,12 @@ func (a *App) initWorkspace(dir string) error {
 	return nil
 }
 
-// ToggleLogStream enables or disables the runtime debug log stream.
 func (a *App) ToggleLogStream(enabled bool) {
 	if a.logStream != nil {
 		a.logStream.ToggleLogStream(enabled)
 	}
 }
 
-// DrainLogStream returns new log entries since last call as JSON string.
 func (a *App) DrainLogStream() string {
 	if a.logStream == nil {
 		return "[]"
@@ -362,10 +340,6 @@ func (a *App) emitStreamEvent(eventType string, data json.RawMessage) {
 	}
 }
 
-// streamEventStringField extracts a top-level string field from a stream-event
-// payload. Returns "" for nil payloads, non-JSON payloads, or missing/non-string
-// fields — callers treat "" as "no identity available" and fall back to the
-// legacy fixed wording.
 func streamEventStringField(data json.RawMessage, key string) string {
 	if len(data) == 0 {
 		return ""
@@ -380,7 +354,6 @@ func streamEventStringField(data json.RawMessage, key string) string {
 	return ""
 }
 
-// shortNotifyID trims an opaque request id to its first 8 chars for display.
 func shortNotifyID(id string) string {
 	if len(id) > 8 {
 		return id[:8]
@@ -388,11 +361,6 @@ func shortNotifyID(id string) string {
 	return id
 }
 
-// notifyApprovalBody (#600 N1): fold requestID/toolName into the body so that
-// two DISTINCT approval requests arriving within the 5s dedup window produce
-// distinct dedup keys. The old fixed body ("Approval needed") made the second
-// approval's OS banner silently swallowed — after remotely approving the
-// first, the agent stalled with no banner and no badge change.
 func notifyApprovalBody(data json.RawMessage) string {
 	tool := streamEventStringField(data, "toolName")
 	req := shortNotifyID(streamEventStringField(data, "requestID"))
@@ -407,8 +375,6 @@ func notifyApprovalBody(data json.RawMessage) string {
 	return "Approval needed"
 }
 
-// notifyAskUserBody: same identity treatment for ask_user requests (title +
-// requestID from the chat.go payload).
 func notifyAskUserBody(data json.RawMessage) string {
 	title := streamEventStringField(data, "title")
 	req := shortNotifyID(streamEventStringField(data, "requestID"))
@@ -423,8 +389,6 @@ func notifyAskUserBody(data json.RawMessage) string {
 	return "Question from agent"
 }
 
-// notifyCompleteBody (#600 N5): include the turn id so concurrent sessions
-// completing within the 5s window are not dedup-merged into one banner.
 func notifyCompleteBody(data json.RawMessage) string {
 	if turn := streamEventStringField(data, "turn_id"); turn != "" {
 		return "Task completed (" + shortNotifyID(turn) + ")"
@@ -432,8 +396,6 @@ func notifyCompleteBody(data json.RawMessage) string {
 	return "Task completed"
 }
 
-// notifyErrorBody (#600 N5): include the error text (truncated) so different
-// errors from concurrent sessions are not dedup-merged.
 func notifyErrorBody(data json.RawMessage) string {
 	msg := streamEventStringField(data, "message")
 	if len(msg) > 80 {
@@ -445,12 +407,6 @@ func notifyErrorBody(data json.RawMessage) string {
 	return "An error occurred"
 }
 
-// teardownChatBridge tears down the active chat bridge and its owned
-// resources before the workspace/chat layer is rebuilt (#1183). Shared by
-// switchWorkspace and CompleteOnboard: re-running onboarding without this
-// cleanup leaked the previous bridge's JSONL session lock, A2A server
-// port, tunnel share, and IM adapters, and left OnStreamEvent wired so the
-// frontend received doubled events from old and new bridges.
 func (a *App) teardownChatBridge() {
 	a.stopShare()
 	a.stopIMAdapters()
@@ -480,7 +436,6 @@ func (a *App) switchWorkspace(dir string) error {
 	return a.initWorkspace(dir)
 }
 
-// shutdown is called when the app is closing.
 func (a *App) shutdown(_ context.Context) {
 	a.shutdownOnce.Do(func() {
 
@@ -505,12 +460,10 @@ func (a *App) shutdown(_ context.Context) {
 	})
 }
 
-// NeedsOnboard returns true if the config needs first-time setup.
 func (a *App) NeedsOnboard() bool {
 	return wailskit.NeedsOnboard()
 }
 
-// SelectWorkspace opens a native directory picker and initializes the workspace.
 func (a *App) SelectWorkspace() (string, error) {
 	dir, err := wailsruntime.OpenDirectoryDialog(a.ctx, wailsruntime.OpenDialogOptions{
 		Title: "Select Project Directory",
@@ -524,12 +477,10 @@ func (a *App) SelectWorkspace() (string, error) {
 	return dir, nil
 }
 
-// InitWorkspace initializes the workspace at the given directory.
 func (a *App) InitWorkspace(dir string) error {
 	return a.switchWorkspace(dir)
 }
 
-// CompleteOnboard saves vendor/endpoint/model/apiKey and finishes onboarding.
 func (a *App) CompleteOnboard(vendor, endpoint, model, apiKey string) error {
 	if err := wailskit.UpdateConfig(map[string]interface{}{
 		"vendor":   vendor,
@@ -548,9 +499,6 @@ func (a *App) CompleteOnboard(vendor, endpoint, model, apiKey string) error {
 	return a.initWorkspace(a.workDir)
 }
 
-// GetVendorPresets returns vendor presets for onboarding.
-// TrajConfidenceOverview exposes the workspace's trajectory-learning
-// confidence aggregate for the desktop UI (sa-233 confidence signaling).
 func (a *App) TrajConfidenceOverview() wailskit.TrajConfidenceOverview {
 	return a.chat.TrajConfidenceOverview()
 }
@@ -578,11 +526,6 @@ type ClipboardAttachment struct {
 
 const maxClipboardFileBytes int64 = 10 * 1024 * 1024
 
-// maxClipboardImagePixels bounds pasted-image payloads by PIXEL count
-// (#1866 case 2): the 20MB byte gate alone lets a well-compressed large
-// PNG expand to ~27MB of base64 per copy (Go + JS) after decoding. 8MP
-// (~4K screen) keeps normal screenshots untouched while capping the
-// pathological cases.
 const maxClipboardImagePixels int64 = 8 * 1000 * 1000
 
 func (a *App) ReadClipboardImage() (*PastedImage, error) {
@@ -601,11 +544,6 @@ func (a *App) ReadClipboardImage() (*PastedImage, error) {
 	}, nil
 }
 
-// Clipboard-read budget mirrors the #1807 send-side dual budget
-// (count<=5, total bytes<=30MB). #2386: the send-side budget rejected only
-// AFTER the full transfer - reading 200x10MB from a Finder multi-select
-// already peaked ~5GB on both sides of the webview bridge. Enforcing at
-// the read layer keeps the unbounded array from ever crossing the bridge.
 const (
 	maxClipboardAttachmentCount        = 5
 	maxClipboardAttachmentTotalBytes   = 30 << 20
@@ -620,9 +558,6 @@ func (a *App) ReadClipboardAttachments() ([]ClipboardAttachment, error) {
 	return readClipboardAttachmentsFromPaths(paths), nil
 }
 
-// readClipboardAttachmentsFromPaths is the testable core of
-// ReadClipboardAttachments (#2386): budget-enforcing read of the given
-// clipboard file paths.
 func readClipboardAttachmentsFromPaths(paths []string) []ClipboardAttachment {
 	attachments := make([]ClipboardAttachment, 0, len(paths))
 	seen := map[string]struct{}{}
@@ -792,13 +727,6 @@ func looksLikeText(data []byte) bool {
 	return controls*100/len(data) < 5
 }
 
-// isTextualExtensionMime reports whether an extension-derived MIME type
-// denotes textual content, so the text branch of the clipboard attachment
-// path may keep the extension's richer type instead of the blander sniffed
-// text/plain (#675). RFC 7303: any "…+xml" suffix is XML — textual (this is
-// what keeps image/svg+xml on a pasted .svg). Plus the common textual
-// application/* types whose extensions (.json, .js, .yaml, …) map outside
-// text/.
 func isTextualExtensionMime(m string) bool {
 	if strings.HasPrefix(m, "text/") || strings.HasSuffix(m, "+xml") {
 		return true
@@ -812,7 +740,6 @@ func isTextualExtensionMime(m string) bool {
 	return false
 }
 
-// SendMessage sends a user message to the agent.
 func (a *App) SendMessage(userMsg string) error {
 
 	chat := a.chat
@@ -829,7 +756,6 @@ func (a *App) SendMessage(userMsg string) error {
 	return nil
 }
 
-// LanChatParticipants returns all known LAN chat participants.
 func (a *App) LanChatParticipants() ([]lanchat.Participant, error) {
 	chat := a.chat
 	if chat == nil {
@@ -838,7 +764,6 @@ func (a *App) LanChatParticipants() ([]lanchat.Participant, error) {
 	return chat.LanChatParticipants()
 }
 
-// LanChatMessages returns recent LAN chat messages.
 func (a *App) LanChatMessages() ([]lanchat.Message, error) {
 	chat := a.chat
 	if chat == nil {
@@ -847,7 +772,6 @@ func (a *App) LanChatMessages() ([]lanchat.Message, error) {
 	return chat.LanChatMessages()
 }
 
-// LanChatSend sends a LAN chat message (broadcast if toNodeID is empty).
 func (a *App) LanChatSend(content, toNodeID, toRole string, asAgent bool) error {
 	chat := a.chat
 	if chat == nil {
@@ -856,7 +780,6 @@ func (a *App) LanChatSend(content, toNodeID, toRole string, asAgent bool) error 
 	return chat.LanChatSend(content, toNodeID, toRole, asAgent)
 }
 
-// LanChatSetNick changes the user's nickname.
 func (a *App) LanChatSetNick(nick string) error {
 	chat := a.chat
 	if chat == nil {
@@ -865,7 +788,6 @@ func (a *App) LanChatSetNick(nick string) error {
 	return chat.LanChatSetNick(nick)
 }
 
-// LanChatPendingApprovals returns pending @agent messages.
 func (a *App) LanChatPendingApprovals() ([]lanchat.PendingAgentMsg, error) {
 	chat := a.chat
 	if chat == nil {
@@ -874,7 +796,6 @@ func (a *App) LanChatPendingApprovals() ([]lanchat.PendingAgentMsg, error) {
 	return chat.LanChatPendingApprovals()
 }
 
-// LanChatApprove approves a pending @agent message.
 func (a *App) LanChatApprove(messageID string) error {
 	chat := a.chat
 	if chat == nil {
@@ -883,7 +804,6 @@ func (a *App) LanChatApprove(messageID string) error {
 	return chat.LanChatApprove(messageID)
 }
 
-// LanChatReject rejects a pending @agent message.
 func (a *App) LanChatReject(messageID, reason string) error {
 	chat := a.chat
 	if chat == nil {
@@ -892,7 +812,6 @@ func (a *App) LanChatReject(messageID, reason string) error {
 	return chat.LanChatReject(messageID, reason)
 }
 
-// LanChatSelf returns this node's own participant info.
 func (a *App) LanChatSelf() (lanchat.Participant, error) {
 	chat := a.chat
 	if chat == nil {
@@ -901,8 +820,6 @@ func (a *App) LanChatSelf() (lanchat.Participant, error) {
 	return chat.LanChatSelf()
 }
 
-// LanChatSetApprovalPolicy sets the approval policy for a peer by nick.
-// policy: "always" (auto-approve), "never" (auto-reject), "" (ask).
 func (a *App) LanChatSetApprovalPolicy(peerNick string, policy string) error {
 	chat := a.chat
 	if chat == nil {
@@ -911,7 +828,6 @@ func (a *App) LanChatSetApprovalPolicy(peerNick string, policy string) error {
 	return chat.LanChatSetApprovalPolicy(peerNick, policy)
 }
 
-// LanChatApprovalPolicies returns all persisted approval policies.
 func (a *App) LanChatApprovalPolicies() (map[string]string, error) {
 	chat := a.chat
 	if chat == nil {
@@ -920,10 +836,6 @@ func (a *App) LanChatApprovalPolicies() (map[string]string, error) {
 	return chat.LanChatApprovalPolicies()
 }
 
-// dataURIMIME extracts the declared MIME type from a data URI meta section
-// (the part between "data:" and ","), e.g. "image/jpeg;base64" →
-// "image/jpeg". Returns "" when no MIME is declared ("data:,..." or
-// "data:;base64,..." payloads).
 func dataURIMIME(meta string) string {
 	if i := strings.IndexByte(meta, ';'); i >= 0 {
 		meta = meta[:i]
@@ -942,11 +854,7 @@ func (a *App) SendMessageWithImages(userMsg string, images []PastedImage) error 
 	}
 	text := strings.TrimSpace(userMsg)
 	imgs := append([]PastedImage(nil), images...)
-	// #1807 case 3: a single image is capped at 20MB, but an arbitrary
-	// array reached the agent untouched - 5x15MB originals became a
-	// ~100MB base64 message in context, persisted to the session JSONL
-	// and REPLAYED on every subsequent turn. Budget the entry point:
-	// count and total bytes.
+
 	const maxPasteImages = 5
 	const maxPasteTotalBytes = 30 << 20
 	if len(imgs) > maxPasteImages {
@@ -1014,14 +922,12 @@ func (a *App) SendMessageWithImages(userMsg string, images []PastedImage) error 
 	return nil
 }
 
-// CancelMessage cancels the current agent run.
 func (a *App) CancelMessage() {
 	if a.chat != nil {
 		a.chat.Cancel()
 	}
 }
 
-// GetModelInfo returns current model info for the status bar.
 func (a *App) GetModelInfo() map[string]interface{} {
 	chat := a.chat
 	if chat == nil {
@@ -1047,7 +953,6 @@ func (a *App) GetTeamBoard() []swarm.TeamBoardSnapshot {
 	return chat.GetTeamBoard()
 }
 
-// IsWorking reports whether the agent loop is currently running.
 func (a *App) IsWorking() bool {
 	chat := a.chat
 	if chat == nil {
@@ -1056,7 +961,6 @@ func (a *App) IsWorking() bool {
 	return chat.IsWorking()
 }
 
-// SetPermissionMode changes the agent permission mode at wailsruntime.
 func (a *App) SetPermissionMode(mode string) {
 	chat := a.chat
 	if chat != nil {
@@ -1064,8 +968,6 @@ func (a *App) SetPermissionMode(mode string) {
 	}
 }
 
-// SetWindowFocused tells the backend whether the window currently has focus.
-// Notifications are suppressed when focused, and the unread badge resets.
 func (a *App) SetWindowFocused(focused bool) {
 	if a.notifications != nil {
 		a.notifications.SetFocused(focused)
@@ -1076,7 +978,6 @@ func (a *App) SetWindowFocused(focused bool) {
 	}
 }
 
-// SetNotificationsEnabled toggles the master notification switch and persists to config.
 func (a *App) SetNotificationsEnabled(enabled bool) error {
 	if a.notifications != nil {
 		a.notifications.SetEnabled(enabled)
@@ -1091,7 +992,6 @@ func (a *App) SetNotificationsEnabled(enabled bool) error {
 	return nil
 }
 
-// GetUnreadNotifications returns the current unread notification count.
 func (a *App) GetUnreadNotifications() int {
 	if a.notifications == nil {
 		return 0
@@ -1099,7 +999,6 @@ func (a *App) GetUnreadNotifications() int {
 	return a.notifications.GetUnread()
 }
 
-// GetFontZoom returns the persisted font zoom level (default 1.0 = 100%).
 func (a *App) GetFontZoom() float64 {
 	if a.dc != nil {
 		return a.dc.GetFontZoom()
@@ -1107,7 +1006,6 @@ func (a *App) GetFontZoom() float64 {
 	return 1.0
 }
 
-// SetFontZoom persists the font zoom level and returns the clamped value.
 func (a *App) SetFontZoom(zoom float64) (float64, error) {
 	if zoom < 0.7 {
 		zoom = 0.7
@@ -1125,7 +1023,6 @@ func (a *App) SetFontZoom(zoom float64) (float64, error) {
 	return zoom, nil
 }
 
-// SwitchModel changes the active model at wailsruntime.
 func (a *App) SwitchModel(model string) error {
 	chat := a.chat
 	if chat != nil {
@@ -1134,7 +1031,6 @@ func (a *App) SwitchModel(model string) error {
 	return fmt.Errorf("chat not initialized")
 }
 
-// GetAvailableModels returns models available for current endpoint.
 func (a *App) GetAvailableModels() []string {
 	chat := a.chat
 	if chat != nil {
@@ -1143,12 +1039,10 @@ func (a *App) GetAvailableModels() []string {
 	return nil
 }
 
-// GetConfig returns the current config.
 func (a *App) GetConfig() (*wailskit.FullConfig, error) {
 	return wailskit.GetFullConfig()
 }
 
-// UpdateConfig applies config values and saves.
 func (a *App) UpdateConfig(values map[string]interface{}) error {
 	if err := wailskit.UpdateConfig(values); err != nil {
 		return err
@@ -1160,7 +1054,6 @@ func (a *App) UpdateConfig(values map[string]interface{}) error {
 	return nil
 }
 
-// GetHooks returns the current hooks configuration.
 func (a *App) GetHooks() (wailskit.HookConfigJSON, error) {
 	if bridge := wailskit.GetChatBridge(); bridge != nil {
 		return bridge.GetHooks(), nil
@@ -1168,7 +1061,6 @@ func (a *App) GetHooks() (wailskit.HookConfigJSON, error) {
 	return wailskit.HookConfigJSON{}, nil
 }
 
-// SaveHooks saves the hooks configuration.
 func (a *App) SaveHooks(cfg wailskit.HookConfigJSON) error {
 	if bridge := wailskit.GetChatBridge(); bridge != nil {
 		return bridge.SaveHooks(cfg)
@@ -1176,7 +1068,6 @@ func (a *App) SaveHooks(cfg wailskit.HookConfigJSON) error {
 	return fmt.Errorf("chat bridge not available")
 }
 
-// TestHookMatch tests a hook match pattern against a tool name and raw input.
 func (a *App) TestHookMatch(mode, pattern, toolName, rawInput string) wailskit.TestHookMatchResult {
 	if bridge := wailskit.GetChatBridge(); bridge != nil {
 		return bridge.TestHookMatch(mode, pattern, toolName, rawInput)
@@ -1184,63 +1075,50 @@ func (a *App) TestHookMatch(mode, pattern, toolName, rawInput string) wailskit.T
 	return wailskit.TestHookMatchResult{Error: "chat bridge not available"}
 }
 
-// GetVendors returns available vendor names.
 func (a *App) GetVendors() []string {
 	return wailskit.VendorNames()
 }
 
-// GetEndpoints returns endpoints for the given vendor.
 func (a *App) GetEndpoints(vendor string) []wailskit.EndpointInfo {
 	return wailskit.EndpointsForVendor(vendor)
 }
 
-// GetModels returns models for the given vendor and endpoint.
 func (a *App) GetModels(vendor, endpoint string) []string {
 	return wailskit.ModelsForEndpoint(vendor, endpoint)
 }
 
-// SaveAPIKey saves an API key for a vendor/endpoint.
 func (a *App) SaveAPIKey(vendor, endpoint, apiKey string) error {
 	return wailskit.SaveAPIKey(vendor, endpoint, apiKey)
 }
 
-// GetResolvedEndpoint returns the currently resolved active endpoint info.
 func (a *App) GetResolvedEndpoint() (*wailskit.ResolvedEndpointInfo, error) {
 	return wailskit.GetResolvedEndpoint()
 }
 
-// FetchModels dynamically discovers models from an API endpoint.
 func (a *App) FetchModels(vendor, endpoint, apiKey, baseURL string) ([]string, error) {
 	return wailskit.FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL)
 }
 
-// GetEndpointDetails returns details for a specific vendor endpoint.
 func (a *App) GetEndpointDetails(vendor, endpoint string) *wailskit.EndpointDetails {
 	return wailskit.GetEndpointDetails(vendor, endpoint)
 }
 
-// GetImpersonationPresets returns real presets from provider.
 func (a *App) GetImpersonationPresets() []wailskit.ImpersonationPresetInfo {
 	return wailskit.GetImpersonationPresets()
 }
 
-// ApplyImpersonation applies an impersonation preset.
 func (a *App) ApplyImpersonation(presetID, version string, customHeaders map[string]string) error {
 	return wailskit.ApplyImpersonation(presetID, version, customHeaders)
 }
 
-// TestEndpointConnection tests an endpoint by listing models.
 func (a *App) TestEndpointConnection(protocol, baseURL, apiKey string) (*wailskit.TestEndpointResult, error) {
 	return wailskit.TestEndpointConnection(protocol, baseURL, apiKey)
 }
 
-// AddCustomEndpoint adds a new custom endpoint to a vendor.
 func (a *App) AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 	return wailskit.AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey)
 }
 
-// SetEndpointLimits updates context_window and max_tokens for a vendor/endpoint.
-// A value of 0 means "auto" (clears the override).
 func (a *App) SetEndpointLimits(vendor, endpoint string, contextWindow, maxTokens int) error {
 	if err := wailskit.SetEndpointLimits(vendor, endpoint, contextWindow, maxTokens); err != nil {
 		return err
@@ -1253,9 +1131,6 @@ func (a *App) SetEndpointLimits(vendor, endpoint string, contextWindow, maxToken
 	return nil
 }
 
-// SetModelLimits updates per-model context_window and max_tokens overrides
-// for a vendor/endpoint/model combination. A value of 0 means "auto" (clears
-// the override, falling back to endpoint-level or inference).
 func (a *App) SetModelLimits(vendor, endpoint, model string, contextWindow, maxTokens int) error {
 	if err := wailskit.SetModelLimits(vendor, endpoint, model, contextWindow, maxTokens); err != nil {
 		return err
@@ -1267,7 +1142,6 @@ func (a *App) SetModelLimits(vendor, endpoint, model string, contextWindow, maxT
 	return nil
 }
 
-// GetModelLimits returns all per-model limit overrides for the active endpoint.
 func (a *App) GetModelLimits() []wailskit.ModelLimitInfo {
 	chat := a.chat
 	if chat == nil {
@@ -1276,7 +1150,6 @@ func (a *App) GetModelLimits() []wailskit.ModelLimitInfo {
 	return chat.GetModelLimits()
 }
 
-// GetSessionLimits returns the current session's context_window and max_tokens.
 func (a *App) GetSessionLimits() wailskit.SessionLimitInfo {
 	chat := a.chat
 	if chat == nil {
@@ -1285,8 +1158,6 @@ func (a *App) GetSessionLimits() wailskit.SessionLimitInfo {
 	return chat.GetSessionLimits()
 }
 
-// SetSessionLimits updates the current session's context_window and max_tokens.
-// A value of 0 means "auto" (falls back to endpoint/per-model config).
 func (a *App) SetSessionLimits(contextWindow, maxTokens int) error {
 	chat := a.chat
 	if chat == nil {
@@ -1295,12 +1166,10 @@ func (a *App) SetSessionLimits(contextWindow, maxTokens int) error {
 	return chat.SetSessionLimits(contextWindow, maxTokens)
 }
 
-// GetAnthropicOAuthStatus returns whether the user is logged in via Anthropic OAuth.
 func (a *App) GetAnthropicOAuthStatus() bool {
 	return wailskit.AnthropicOAuthStatus()
 }
 
-// StartAnthropicOAuth initiates the OAuth flow, opens the browser, and returns the URL.
 func (a *App) StartAnthropicOAuth() (string, error) {
 	url, err := wailskit.StartAnthropicOAuth()
 	if err != nil {
@@ -1312,26 +1181,18 @@ func (a *App) StartAnthropicOAuth() (string, error) {
 	return url, nil
 }
 
-// CompleteAnthropicOAuth blocks until the OAuth callback is received and saves the token.
-// Should be called from a goroutine after StartAnthropicOAuth.
 func (a *App) CompleteAnthropicOAuth() error {
 	return wailskit.CompleteAnthropicOAuth()
 }
 
-// LogoutAnthropicOAuth removes the stored Anthropic OAuth token.
 func (a *App) LogoutAnthropicOAuth() error {
 	return wailskit.LogoutAnthropicOAuth()
 }
 
-// ListSessions returns sessions for the current workspace.
 func (a *App) ListSessions() ([]wailskit.SessionInfo, error) {
 	return wailskit.ListSessions(a.workDir, a.chat)
 }
 
-// GetCurrentSessionID returns the ID of the currently active session,
-// or empty string if no session is loaded. Called by the frontend on mount
-// to sync state (the session:changed event may fire before the listener
-// is registered).
 func (a *App) GetCurrentSessionID() (string, error) {
 	chat := a.chat
 	if chat == nil {
@@ -1340,7 +1201,6 @@ func (a *App) GetCurrentSessionID() (string, error) {
 	return chat.CurrentSessionID(), nil
 }
 
-// DeleteSession removes a session by ID.
 func (a *App) DeleteSession(id string) error {
 
 	chat := a.chat
@@ -1359,12 +1219,10 @@ func (a *App) DeleteSession(id string) error {
 	return wailskit.DeleteSession(id)
 }
 
-// RenameSession updates the title of a session by ID.
 func (a *App) RenameSession(id string, title string) error {
 	return wailskit.RenameSession(id, title)
 }
 
-// NewSession creates a fresh initialized session, cancelling any current work.
 func (a *App) NewSession() (string, error) {
 	chat := a.chat
 	if chat == nil {
@@ -1375,8 +1233,6 @@ func (a *App) NewSession() (string, error) {
 	return chat.StartNewSession()
 }
 
-// resumeLatestSession loads the most recent session for the current workspace.
-// Returns the session ID if successful, empty string if no sessions exist.
 func (a *App) resumeLatestSession() string {
 	chat := a.chat
 	if chat == nil {
@@ -1424,7 +1280,6 @@ func (a *App) resumeLatestSession() string {
 	return ""
 }
 
-// LoadSession loads an existing session by ID.
 func (a *App) LoadSession(id string) error {
 	chat := a.chat
 	if chat != nil {
@@ -1435,7 +1290,6 @@ func (a *App) LoadSession(id string) error {
 	return fmt.Errorf("chat not initialized")
 }
 
-// GetSessionHistory returns messages from the current session.
 func (a *App) GetSessionHistory() ([]wailskit.SessionMessage, error) {
 	chat := a.chat
 	if chat == nil {
@@ -1444,19 +1298,14 @@ func (a *App) GetSessionHistory() ([]wailskit.SessionMessage, error) {
 	return chat.CurrentSessionHistory(), nil
 }
 
-// ExportSessionAsMarkdown exports a session to Markdown text.
-// If sessionID is empty, exports the current session.
 func (a *App) ExportSessionAsMarkdown(sessionID string) (string, error) {
 	return wailskit.ExportSessionToMarkdown(sessionID)
 }
 
-// ExportSessionAsJSON exports a session to JSON text.
-// If sessionID is empty, exports the current session.
 func (a *App) ExportSessionAsJSON(sessionID string) (string, error) {
 	return wailskit.ExportSessionToJSON(sessionID)
 }
 
-// SaveExportedFile shows a native save dialog and writes content to the chosen path.
 func (a *App) SaveExportedFile(defaultName string, content string) (string, error) {
 	path, err := wailsruntime.SaveFileDialog(a.ctx, wailsruntime.SaveDialogOptions{
 		Title:           "Export Session",
@@ -1474,12 +1323,10 @@ func (a *App) SaveExportedFile(defaultName string, content string) (string, erro
 	return path, nil
 }
 
-// GetWorkDir returns the current working directory.
 func (a *App) GetWorkDir() string {
 	return a.workDir
 }
 
-// SaveDefaultMode saves the default permission mode.
 func (a *App) SaveDefaultMode(mode string) error {
 	return wailskit.SaveDefaultMode(mode)
 }
@@ -1488,19 +1335,16 @@ func (a *App) SaveA2AEnabled(enabled bool) error {
 	return wailskit.SaveA2AEnabled(enabled)
 }
 
-// SelectDirectory opens a native directory picker.
 func (a *App) SelectDirectory() (string, error) {
 	return wailsruntime.OpenDirectoryDialog(a.ctx, wailsruntime.OpenDialogOptions{
 		Title: "Select Directory",
 	})
 }
 
-// TestIMConnection tests the connection for an IM adapter.
 func (a *App) TestIMConnection(name string) error {
 	return wailskit.TestIMConnection(name)
 }
 
-// ListMCPServers returns all configured MCP servers.
 func (a *App) ListMCPServers() ([]wailskit.MCPServerInfo, error) {
 	return wailskit.ListMCPServers()
 }
@@ -1513,8 +1357,6 @@ func (a *App) ReconnectMCPServer(name string) bool {
 	return wailskit.ReconnectMCPServer(name)
 }
 
-// ForceReauthMCPServer deletes the per-server OAuth credential and triggers
-// a fresh OAuth flow for the named MCP server.
 func (a *App) ForceReauthMCPServer(name string) bool {
 	return wailskit.ForceReauthMCPServer(name)
 }
@@ -1538,21 +1380,14 @@ func (a *App) CompleteMCPOAuth(name string) error {
 	return chat.CompleteMCPOAuth(a.ctx, name)
 }
 
-// AddMCPServer adds a new MCP server.
 func (a *App) AddMCPServer(values map[string]string) error {
 	return wailskit.AddMCPServer(values)
 }
 
-// RemoveMCPServer removes an MCP server.
 func (a *App) RemoveMCPServer(name string) error {
 	return wailskit.RemoveMCPServer(name)
 }
 
-// ListCronJobs returns all cron jobs for the current session.
-// #580: surface bridge/scheduler-unavailable as an error instead of a
-// silent empty list — cron jobs are workspace-persistent, and an empty
-// success state reads as "all jobs lost" after onboarding early-exit or
-// provider-resolution failure paths.
 func (a *App) ListCronJobs() ([]wailskit.CronJobInfo, error) {
 	bridge := wailskit.GetChatBridge()
 	if bridge == nil {
@@ -1561,10 +1396,6 @@ func (a *App) ListCronJobs() ([]wailskit.CronJobInfo, error) {
 	return bridge.ListCronJobs()
 }
 
-// GetUsageInfo returns the active vendor's live balance/rolling-window
-// usage for the status-bar badge (#2150 batch 3). Mirrors the bridge's
-// soft-degradation contract: config/probe failures come back as a result
-// with Error set, never as a thrown Wails error.
 func (a *App) GetUsageInfo() wailskit.UsageInfoResult {
 	if bridge := wailskit.GetChatBridge(); bridge != nil {
 		return bridge.GetUsageInfo()
@@ -1572,7 +1403,6 @@ func (a *App) GetUsageInfo() wailskit.UsageInfoResult {
 	return wailskit.UsageInfoResult{Windows: []wailskit.UsageWindowInfo{}, Error: "chat bridge not available"}
 }
 
-// GetCronJob returns a single cron job by ID.
 func (a *App) GetCronJob(id string) (wailskit.CronJobInfo, error) {
 	if bridge := wailskit.GetChatBridge(); bridge != nil {
 		return bridge.GetCronJob(id)
@@ -1580,7 +1410,6 @@ func (a *App) GetCronJob(id string) (wailskit.CronJobInfo, error) {
 	return wailskit.CronJobInfo{}, fmt.Errorf("chat bridge not available")
 }
 
-// CreateCronJob creates a new cron job.
 func (a *App) CreateCronJob(cronExpr, prompt string, recurring, queueIfBusy bool) (wailskit.CronJobInfo, error) {
 	if bridge := wailskit.GetChatBridge(); bridge != nil {
 		return bridge.CreateCronJob(cronExpr, prompt, recurring, queueIfBusy)
@@ -1588,7 +1417,6 @@ func (a *App) CreateCronJob(cronExpr, prompt string, recurring, queueIfBusy bool
 	return wailskit.CronJobInfo{}, fmt.Errorf("chat bridge not available")
 }
 
-// UpdateCronJob updates an existing cron job.
 func (a *App) UpdateCronJob(id, cronExpr, prompt string, queueIfBusy bool) (wailskit.CronJobInfo, error) {
 	if bridge := wailskit.GetChatBridge(); bridge != nil {
 		return bridge.UpdateCronJob(id, cronExpr, prompt, queueIfBusy)
@@ -1596,7 +1424,6 @@ func (a *App) UpdateCronJob(id, cronExpr, prompt string, queueIfBusy bool) (wail
 	return wailskit.CronJobInfo{}, fmt.Errorf("chat bridge not available")
 }
 
-// DeleteCronJob removes a cron job by ID.
 func (a *App) DeleteCronJob(id string) error {
 	if bridge := wailskit.GetChatBridge(); bridge != nil {
 		return bridge.DeleteCronJob(id)
@@ -1604,7 +1431,6 @@ func (a *App) DeleteCronJob(id string) error {
 	return fmt.Errorf("chat bridge not available")
 }
 
-// PauseCronJob suspends a cron job.
 func (a *App) PauseCronJob(id string) error {
 	if bridge := wailskit.GetChatBridge(); bridge != nil {
 		return bridge.PauseCronJob(id)
@@ -1612,7 +1438,6 @@ func (a *App) PauseCronJob(id string) error {
 	return fmt.Errorf("chat bridge not available")
 }
 
-// ResumeCronJob reactivates a paused cron job.
 func (a *App) ResumeCronJob(id string) error {
 	if bridge := wailskit.GetChatBridge(); bridge != nil {
 		return bridge.ResumeCronJob(id)
@@ -1620,7 +1445,6 @@ func (a *App) ResumeCronJob(id string) error {
 	return fmt.Errorf("chat bridge not available")
 }
 
-// GenerateCronPrompt uses the current LLM provider to generate a cron prompt from a description.
 func (a *App) GenerateCronPrompt(description string) (string, error) {
 	if bridge := wailskit.GetChatBridge(); bridge != nil {
 		return bridge.GenerateCronPrompt(description)
@@ -1628,12 +1452,10 @@ func (a *App) GenerateCronPrompt(description string) (string, error) {
 	return "", fmt.Errorf("chat bridge not available")
 }
 
-// GetVersion returns the application version.
 func (a *App) GetVersion() string {
 	return version.Version
 }
 
-// CheckForUpdates checks GitHub for the latest release.
 func (a *App) CheckForUpdates() (map[string]interface{}, error) {
 	svc := update.NewService(a.GetVersion(), "", "", "")
 	result, err := svc.Check(a.ctx)
@@ -1651,13 +1473,10 @@ func (a *App) CheckForUpdates() (map[string]interface{}, error) {
 	}, nil
 }
 
-// GetPlatform returns the current platform.
 func (a *App) GetPlatform() string {
 	return wailsruntime.Environment(a.ctx).Platform
 }
 
-// ToggleAlwaysOnTop toggles the window's always-on-top state.
-// When enabled, the window floats above all other application windows.
 func (a *App) ToggleAlwaysOnTop() (bool, error) {
 	if a.ctx == nil || a.dc == nil {
 		return false, fmt.Errorf("app not initialized")
@@ -1673,7 +1492,6 @@ func (a *App) ToggleAlwaysOnTop() (bool, error) {
 	return newState, nil
 }
 
-// IsAlwaysOnTop returns the current always-on-top state.
 func (a *App) IsAlwaysOnTop() bool {
 	if a.dc == nil {
 		return false
@@ -1681,13 +1499,6 @@ func (a *App) IsAlwaysOnTop() bool {
 	return a.dc.IsAlwaysOnTop()
 }
 
-// SetGlobalHotkeyEnabled toggles the system-wide global hotkey.
-// When enabled, Option+Command+G shows/hides the window from any app.
-// #615: if OS registration fails (e.g. the combo is exclusively owned by
-// another application), the persisted preference is rolled back and an
-// error is returned — previously SetGlobalHotkey+Save succeeded first and
-// the dropped RegisterEventHotKey OSStatus left the UI showing "enabled"
-// with a dead hotkey.
 func (a *App) SetGlobalHotkeyEnabled(enabled bool) error {
 	if a.dc == nil {
 		return fmt.Errorf("app not initialized")
@@ -1727,7 +1538,6 @@ func (a *App) SetGlobalHotkeyEnabled(enabled bool) error {
 	return nil
 }
 
-// IsGlobalHotkeyEnabled returns the current global hotkey state.
 func (a *App) IsGlobalHotkeyEnabled() bool {
 	if a.dc == nil {
 		return false
@@ -1735,9 +1545,6 @@ func (a *App) IsGlobalHotkeyEnabled() bool {
 	return a.dc.IsGlobalHotkeyEnabled()
 }
 
-// workspaceRoot returns the containment root for file-browsing APIs. It
-// prefers the configured workspace directory (a.workDir) and falls back to
-// the process working directory when unset (#329).
 func (a *App) workspaceRoot() string {
 	if a.workDir != "" {
 		return a.workDir
@@ -1749,9 +1556,6 @@ func (a *App) workspaceRoot() string {
 	return wd
 }
 
-// ListFiles returns files in the given directory (1 level deep).
-// #329: resolves symlinks and enforces containment within the workspace root
-// (same policy as wailskit.ListDirectory) before listing.
 func (a *App) ListFiles(dir string) []map[string]interface{} {
 	if dir == "" {
 		dir = a.workspaceRoot()
@@ -1781,10 +1585,6 @@ func (a *App) ListFiles(dir string) []map[string]interface{} {
 	return result
 }
 
-// ReadFileContent reads a text file and returns its content.
-// #329: delegates to wailskit.ReadFileContent's policy — symlink resolution,
-// workspace-root containment, and the 20MB text preview cap — anchored at the
-// app workspace root instead of os.Getwd().
 func (a *App) ReadFileContent(path string) (string, error) {
 	resolved, err := wailskit.ResolveContainedPath(a.workspaceRoot(), path)
 	if err != nil {
@@ -1804,21 +1604,13 @@ func (a *App) ReadFileContent(path string) (string, error) {
 	return string(data), nil
 }
 
-// FileBinaryData holds base64-encoded file content with its MIME type.
 type FileBinaryData struct {
 	MimeType string `json:"mimeType"`
-	Data     string `json:"data"` // base64 encoded
+	Data     string `json:"data"`
 }
 
-// maxReadFileBase64Bytes caps files returned by ReadFileAsBase64 (FileBrowser
-// PDF/media preview). Rationale: Wails bridge memory peak is roughly
-// size*1.33 (base64) plus the JS string copy; 150MB (~200MB after base64)
-// balances protection against legitimate large media previews.
 const maxReadFileBase64Bytes = 150 << 20
 
-// ReadFileAsBase64 reads a binary file (image, PDF, etc.) and returns base64 data.
-// #329: resolves symlinks and enforces workspace-root containment (same policy
-// as the other file APIs) in addition to the 150MB preview cap.
 func (a *App) ReadFileAsBase64(path string) (*FileBinaryData, error) {
 	abs, err := wailskit.ResolveContainedPath(a.workspaceRoot(), path)
 	if err != nil {
@@ -1882,7 +1674,6 @@ func mimeTypeFromExt(path string) string {
 	}
 }
 
-// RespondApproval is called from the frontend when the user responds to an approval request.
 func (a *App) RespondApproval(requestID string, decision string) {
 	chat := a.chat
 	if chat != nil {
@@ -1890,14 +1681,12 @@ func (a *App) RespondApproval(requestID string, decision string) {
 	}
 }
 
-// RespondAskUser is called from the frontend when the user responds to an ask_user request.
 func (a *App) RespondAskUser(requestID string, answersJSON string) {
 	chat := a.chat
 	if chat == nil {
 		return
 	}
 
-	// Frontend sends {"status":"submitted","answers":[...]}
 	var payload struct {
 		Status  string               `json:"status"`
 		Answers []tool.AskUserAnswer `json:"answers"`
@@ -1933,8 +1722,6 @@ func (a *App) RespondAskUser(requestID string, answersJSON string) {
 	chat.RespondAskUser(requestID, response)
 }
 
-// initIMRuntime initializes the IM manager once at app startup.
-// Direct port of Fyne's App.initIMRuntime().
 func (a *App) initIMRuntime() {
 	if a.imManager != nil {
 		return
@@ -1994,7 +1781,6 @@ func (a *App) initIMRuntime() {
 	}
 }
 
-// startIMAdapters starts all enabled adapters bound to the current workspace.
 func (a *App) startIMAdapters() {
 	if a.imManager == nil {
 		debug.Log("desktop", "IM start: manager not initialized, skipping")
@@ -2064,7 +1850,6 @@ func (a *App) startIMAdapters() {
 
 }
 
-// stopIMAdapters stops all running IM adapters.
 func (a *App) stopIMAdapters() {
 	debug.Log("desktop", "IM stop: shutting down adapters")
 	if a.imController != nil {
@@ -2077,17 +1862,14 @@ func (a *App) stopIMAdapters() {
 	}
 }
 
-// ListIMAdapters returns all configured IM adapters with binding info.
 func (a *App) ListIMAdapters() ([]wailskit.IMAdapterInfo, error) {
 	return wailskit.ListIMAdapters(a.workDir, a.imManager)
 }
 
-// GetIMPlatformRegistry returns supported IM platforms.
 func (a *App) GetIMPlatformRegistry() []wailskit.IMPlatformMeta {
 	return wailskit.GetIMPlatformRegistry()
 }
 
-// GetLSPStatus returns detected language server status for the current workspace.
 func (a *App) GetLSPStatus() wailskit.LSPStatusResponse {
 	chat := a.chat
 	if chat == nil {
@@ -2096,7 +1878,6 @@ func (a *App) GetLSPStatus() wailskit.LSPStatusResponse {
 	return chat.GetLSPStatus()
 }
 
-// InstallLSPServer installs a language server for the given language.
 func (a *App) InstallLSPServer(languageID, optionID string) wailskit.LSPInstallResult {
 	chat := a.chat
 	if chat == nil {
@@ -2105,7 +1886,6 @@ func (a *App) InstallLSPServer(languageID, optionID string) wailskit.LSPInstallR
 	return chat.InstallLSPServer(languageID, optionID)
 }
 
-// SaveIMAdapter creates or updates an IM adapter.
 func (a *App) SaveIMAdapter(name string, values map[string]string) error {
 	debug.Log("desktop", "IM SaveAdapter: name=%s platform=%s", name, values["platform"])
 
@@ -2123,7 +1903,6 @@ func (a *App) SaveIMAdapter(name string, values map[string]string) error {
 	return nil
 }
 
-// RemoveIMAdapter removes an IM adapter by name.
 func (a *App) RemoveIMAdapter(name string) error {
 	debug.Log("desktop", "IM RemoveAdapter: name=%s", name)
 	a.imStopAdapter(name)
@@ -2136,10 +1915,6 @@ func (a *App) RemoveIMAdapter(name string) error {
 	return nil
 }
 
-// bindCurrentIMSession binds the current session to the IM manager and
-// registers this instance for auto-mute detection. This must be called
-// AFTER a session is available so that session-scoped binding ownership
-// (LastSessionID) works correctly.
 func (a *App) bindCurrentIMSession() {
 	chat := a.chat
 	if a.imManager == nil || chat == nil {
@@ -2204,13 +1979,10 @@ func (a *App) imStartAdapter(name string) {
 	}
 }
 
-// emitIMAdapterNotice surfaces adapter lifecycle problems to the frontend
-// event log (#1811 case 3) instead of debug-only logging.
 func (a *App) emitIMAdapterNotice(name, msg string) {
 	a.enqueueUIEvent(fmt.Sprintf("im:adapter:%s", name), map[string]string{"name": name, "message": msg})
 }
 
-// imStopAdapter stops a single adapter by name.
 func (a *App) imStopAdapter(name string) {
 	if a.imManager == nil {
 		debug.Log("desktop", "IM stop %s: manager not initialized", name)
@@ -2221,7 +1993,6 @@ func (a *App) imStopAdapter(name string) {
 	debug.Log("desktop", "IM stop %s: ok", name)
 }
 
-// SetIMAdapterEnabled enables or disables an IM adapter.
 func (a *App) SetIMAdapterEnabled(name string, enabled bool) error {
 	debug.Log("desktop", "IM SetEnabled: name=%s enabled=%v", name, enabled)
 	err := wailskit.SetIMAdapterEnabled(name, enabled)
@@ -2238,8 +2009,6 @@ func (a *App) SetIMAdapterEnabled(name string, enabled bool) error {
 	return nil
 }
 
-// MuteIMAdapter mutes or unmutes an adapter channel.
-// Muting stops the adapter runtime; unmuting restarts it.
 func (a *App) MuteIMAdapter(name string, muted bool) error {
 	debug.Log("desktop", "IM Mute: name=%s muted=%v", name, muted)
 	if a.imManager == nil {
@@ -2265,7 +2034,6 @@ func (a *App) MuteIMAdapter(name string, muted bool) error {
 	return nil
 }
 
-// BindIMAdapter binds an adapter to the current workspace.
 func (a *App) BindIMAdapter(name string) error {
 	debug.Log("desktop", "IM Bind: name=%s workDir=%s", name, a.workDir)
 
@@ -2280,7 +2048,6 @@ func (a *App) BindIMAdapter(name string) error {
 	return nil
 }
 
-// RebindIMAdapter re-binds an adapter to the current workspace.
 func (a *App) RebindIMAdapter(name string) error {
 	debug.Log("desktop", "IM Rebind: name=%s workDir=%s", name, a.workDir)
 
@@ -2302,7 +2069,6 @@ func (a *App) RebindIMAdapter(name string) error {
 	return nil
 }
 
-// UnbindIMAdapter removes all bindings for an adapter.
 func (a *App) UnbindIMAdapter(name string) error {
 	debug.Log("desktop", "IM Unbind: name=%s", name)
 	a.imStopAdapter(name)
@@ -2313,7 +2079,6 @@ func (a *App) UnbindIMAdapter(name string) error {
 	return err
 }
 
-// ShareInfo is returned to the frontend with connection details.
 type ShareInfo struct {
 	ConnectURL   string `json:"connectURL"`
 	QRCodeBase64 string `json:"qrCodeBase64"`
@@ -2372,19 +2137,12 @@ func (a *App) clearTunnelState() {
 	a.tunnelStopSeq++
 }
 
-// tunnelStartStale reports whether a stop was issued after the in-flight
-// start snapshotted its stop generation (#2401 semantics, read side for
-// #2404: the caller tears the stale result down instead of wiring it).
 func (a *App) tunnelStartStale() bool {
 	a.tunnelMu.RLock()
 	defer a.tunnelMu.RUnlock()
 	return a.tunnelStopSeq != a.tunnelStartStopEq
 }
 
-// IsSharing returns whether a tunnel is active. An in-flight StartShare
-// counts as sharing (#2387): during the relay round-trip the old code
-// reported a false negative, letting the ShareDialog background/X button
-// and every dialog remount re-enter StartShare and race a second session.
 func (a *App) IsSharing() bool {
 	a.tunnelMu.RLock()
 	sess := a.tunnelSession
@@ -2393,7 +2151,6 @@ func (a *App) IsSharing() bool {
 	return sess != nil || starting
 }
 
-// StartShare starts a tunnel session and returns connection info for the frontend.
 func (a *App) StartShare() (*ShareInfo, error) {
 
 	a.tunnelMu.Lock()
@@ -2517,7 +2274,6 @@ func (a *App) StartShare() (*ShareInfo, error) {
 	}, nil
 }
 
-// StopShare stops the active tunnel session.
 func (a *App) StopShare() {
 	a.stopShare()
 	wailsruntime.EventsEmit(a.ctx, "tunnel:disconnected", nil)
@@ -2534,8 +2290,6 @@ func (a *App) stopShare() {
 	a.clearTunnelState()
 }
 
-// onTunnelCommand routes inbound mobile commands to the appropriate handler.
-// tunnelSnapshot builds a complete snapshot for the mobile client.
 func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 	snapshot := tunnel.BrokerSnapshot{
 		SessionInfo: tunnel.SessionInfoData{
@@ -2573,9 +2327,6 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 	return snapshot
 }
 
-// messagesToTunnelHistory converts provider messages to tunnel history entries.
-// This mirrors the TUI's tunnelMessagesToHistory function so mobile clients
-// receive the same conversation snapshot regardless of host frontend.
 func messagesToTunnelHistory(msgs []provider.Message) []tunnel.HistoryEntry {
 	var history []tunnel.HistoryEntry
 	for _, msg := range msgs {
@@ -2654,14 +2405,12 @@ func truncateRunesDesktop(s string, maxRunes int, suffix string) string {
 	return string(runes[:maxRunes]) + suffix
 }
 
-// currentAskUserRequest returns the stored ask_user request for mobile response mapping.
 func (a *App) currentAskUserRequest() tool.AskUserRequest {
 	a.askUserMu.Lock()
 	defer a.askUserMu.Unlock()
 	return a.askUserReq
 }
 
-// clearAskUserRequest clears the stored ask_user request after processing.
 func (a *App) clearAskUserRequest() {
 	a.askUserMu.Lock()
 	defer a.askUserMu.Unlock()
@@ -2676,9 +2425,6 @@ func encodeQRBase64(pngData []byte) string {
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngData)
 }
 
-// SystemAppearance returns the OS-level appearance preference.
-// Returns "dark" or "light". Used by the frontend to set initial window
-// background before React mounts, preventing a flash of wrong theme.
 func (a *App) SystemAppearance() string {
 	if isSystemDark() {
 		return "dark"
@@ -2686,9 +2432,6 @@ func (a *App) SystemAppearance() string {
 	return "light"
 }
 
-// isSystemDark detects whether the OS is in dark mode.
-// macOS: uses NSUserDefaults via CGO.
-// Linux/Windows: falls back to "dark" (our default UI is dark-themed).
 func isSystemDark() bool {
 	return detectMacDarkMode()
 }

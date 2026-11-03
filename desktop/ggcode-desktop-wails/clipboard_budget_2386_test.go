@@ -7,13 +7,9 @@ import (
 	"testing"
 )
 
-// TestReadClipboardAttachmentsBudget verifies #2386: the read layer enforces
-// the #1807 dual budget (max 5 files, 30MB total) BEFORE the payload crosses
-// the webview bridge. A Finder multi-select used to read every file fully -
-// 200x10MB peaked ~5GB across Go heap + JSON copy + webview parse.
 func TestReadClipboardAttachmentsBudget(t *testing.T) {
 	dir := t.TempDir()
-	// 7 distinct files: over the 5-file cap.
+
 	var paths []string
 	for i := 0; i < 7; i++ {
 		p := filepath.Join(dir, "f"+string(rune('a'+i))+".txt")
@@ -41,10 +37,6 @@ func TestReadClipboardAttachmentsBudget(t *testing.T) {
 	}
 }
 
-// TestReadClipboardAttachmentsByteBudget verifies the total-bytes gate.
-// Each file stays under the per-file 10MB cap (that gate is older); four
-// 9MB files together cross the 30MB total and the fourth is rejected with
-// its data dropped (no partial payload across the bridge).
 func TestReadClipboardAttachmentsByteBudget(t *testing.T) {
 	dir := t.TempDir()
 	var paths []string

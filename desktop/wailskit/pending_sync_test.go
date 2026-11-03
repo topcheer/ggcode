@@ -6,11 +6,6 @@ import (
 	"testing"
 )
 
-// TestPendingSlicesInterruptDrainSync (#477): drainPendingInterrupt consumes
-// a VISIBLE queued message at the agent iteration boundary — the parallel
-// pendingSource/pendingExclude slices must be popped in the same step, or
-// every later defer-drain shifts by one (desktop message misattributed
-// source=im, Telegram misses echoes, slices grow unboundedly).
 func TestPendingSlicesInterruptDrainSync(t *testing.T) {
 	b, err := NewChatBridge()
 	if err != nil {
@@ -54,9 +49,6 @@ func TestPendingSlicesInterruptDrainSync(t *testing.T) {
 	}
 }
 
-// TestQueueMessageAppendsPair (#477): the QueueMessage entry point enqueues a
-// VISIBLE message — it must append a parallel pair like the sendMessageData
-// busy branch, or the FIFO alignment breaks from that entry too.
 func TestQueueMessageAppendsPair(t *testing.T) {
 	b, err := NewChatBridge()
 	if err != nil {
@@ -81,8 +73,6 @@ func TestQueueMessageAppendsPair(t *testing.T) {
 	}
 }
 
-// providerBlocksText flattens content blocks for substring assertions
-// (#1472-A: drain returns blocks now).
 func providerBlocksText(blocks []provider.ContentBlock) string {
 	out := ""
 	for _, b := range blocks {

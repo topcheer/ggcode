@@ -9,8 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// TestMergeTunnelUserMessages verifies tunnel-recorded user messages are
-// merged into session history (#242), with ID-based dedup (#268).
 func TestMergeTunnelUserMessages(t *testing.T) {
 	mkEvent := func(text string) session.TunnelEvent {
 		data, _ := json.Marshal(map[string]string{"text": text, "message_id": "tm-" + text})
@@ -44,9 +42,6 @@ func TestMergeTunnelUserMessages(t *testing.T) {
 	}
 }
 
-// TestMergeTunnelUserMessages_SameTextDistinctIDsKept verifies that tunnel
-// events with identical text but distinct message IDs are all preserved —
-// the user may legitimately send "yes" twice (#268).
 func TestMergeTunnelUserMessages_SameTextDistinctIDsKept(t *testing.T) {
 	mkEvent := func(text, id string) session.TunnelEvent {
 		data, _ := json.Marshal(map[string]string{"text": text, "message_id": id})
@@ -71,9 +66,6 @@ func TestMergeTunnelUserMessages_SameTextDistinctIDsKept(t *testing.T) {
 	}
 }
 
-// TestMergeTunnelUserMessages_NoIDFallsBackToTextDedup verifies the text
-// fallback when a tunnel event carries no message_id (#268): such an event
-// matching a persisted user message is deduped, while new text is kept.
 func TestMergeTunnelUserMessages_NoIDFallsBackToTextDedup(t *testing.T) {
 	mkNoIDEvent := func(text string) session.TunnelEvent {
 		data, _ := json.Marshal(map[string]string{"text": text})

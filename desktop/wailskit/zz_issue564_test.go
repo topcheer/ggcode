@@ -9,10 +9,6 @@ import (
 	"time"
 )
 
-// Issue #564 Bug D: by-ID export used the windowed store.Load, silently
-// truncating long-running sessions to the 24h window (probe: 500 messages
-// → 1) with no truncation marker. The fix mirrors #538's RenameSession
-// treatment: LoadWithOptions(id, true) for the full transcript.
 func TestIssue564_ExportLoadsFullHistoryNotWindow(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)

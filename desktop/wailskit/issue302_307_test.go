@@ -11,8 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// #305: persisting to a tombstoned (deleted) session must be refused —
-// the file must not be re-created on disk by a draining run goroutine.
 func TestAppendPersistMessage_DeletedSessionRefused(t *testing.T) {
 	dir := t.TempDir()
 	store, err := session.NewJSONLStore(dir)
@@ -33,7 +31,6 @@ func TestAppendPersistMessage_DeletedSessionRefused(t *testing.T) {
 	}
 }
 
-// #305: MarkSessionDeleted must be idempotent and tolerate empty IDs.
 func TestMarkSessionDeleted_Idempotent(t *testing.T) {
 	b, err := NewChatBridge()
 	if err != nil {
@@ -50,8 +47,6 @@ func TestMarkSessionDeleted_Idempotent(t *testing.T) {
 	}
 }
 
-// #305: ClearCurrentSession must drop the run-start snapshot so a late
-// persist from a draining run cannot target the deleted session.
 func TestClearCurrentSession_NilsRunSes(t *testing.T) {
 	b, err := NewChatBridge()
 	if err != nil {
@@ -69,9 +64,6 @@ func TestClearCurrentSession_NilsRunSes(t *testing.T) {
 	}
 }
 
-// #307: truncation must be valid UTF-8 for every crossing layout of a
-// 3-byte CJK char (E6 B1 89) across the 2000-byte boundary, plus a 4-byte
-// emoji (F0 9F 98 80) across the boundary in 4 layouts.
 func TestFormatMessagesAsMarkdown_TruncationRuneBoundary(t *testing.T) {
 	mk := func(fill int, tail string) SessionMessage {
 		return SessionMessage{

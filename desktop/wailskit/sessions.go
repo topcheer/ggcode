@@ -16,7 +16,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// SessionInfo is a lightweight session record for the frontend.
 type SessionInfo struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
@@ -29,10 +28,6 @@ type SessionInfo struct {
 	LastMessage string `json:"lastMessage"`
 }
 
-// ListSessions returns sessions for the given workspace, sorted by UpdatedAt descending.
-// If workingDir is empty, returns all sessions.
-// The session currently held by the provided ChatBridge (if non-nil) is never
-// reported as locked, since TryAcquireSessionLock would see the current process's own flock.
 func ListSessions(workingDir string, bridge *ChatBridge) ([]SessionInfo, error) {
 	store, err := session.NewDefaultStore()
 	if err != nil {
@@ -78,7 +73,6 @@ func ListSessions(workingDir string, bridge *ChatBridge) ([]SessionInfo, error) 
 	return result, nil
 }
 
-// DeleteSession removes a session by ID.
 func DeleteSession(id string) error {
 	store, err := session.NewDefaultStore()
 	if err != nil {
@@ -112,7 +106,6 @@ func DeleteSession(id string) error {
 	}
 }
 
-// RenameSession updates the title of a session by ID.
 func RenameSession(id string, title string) error {
 	store, err := session.NewDefaultStore()
 	if err != nil {
@@ -144,22 +137,15 @@ func RenameSession(id string, title string) error {
 	return nil
 }
 
-// NewSession clears the current session so next chat creates a fresh one.
-// The chat bridge must be set via SetChatBridge before calling.
 var activeChatBridge *ChatBridge
 var activeChatBridgeMu sync.RWMutex
 
-// SetChatBridge stores the active chat bridge for session management.
-// Guarded by its own RWMutex: teardown (workspace switch / shutdown) runs
-// on a different goroutine than the frontend-bound App methods that read
-// the bridge - an unguarded write raced every borrowed-lock read below.
 func SetChatBridge(cb *ChatBridge) {
 	activeChatBridgeMu.Lock()
 	defer activeChatBridgeMu.Unlock()
 	activeChatBridge = cb
 }
 
-// GetChatBridge returns the active chat bridge.
 func GetChatBridge() *ChatBridge {
 	activeChatBridgeMu.RLock()
 	defer activeChatBridgeMu.RUnlock()
@@ -174,7 +160,6 @@ func LoadSession(id string) error {
 	return bridge.LoadSession(id)
 }
 
-// SessionMessage is a message from session history for the frontend.
 type SessionMessage struct {
 	ID          string `json:"id,omitempty"`
 	TurnID      string `json:"turn_id,omitempty"`
@@ -189,9 +174,6 @@ type SessionMessage struct {
 	Streaming   bool   `json:"streaming,omitempty"`
 }
 
-// shouldSkipHistoryTool mirrors the skip logic in the real-time streaming path.
-// These tools create no visible chat item during streaming, so they should
-// also be omitted when loading historical messages.
 func shouldSkipHistoryTool(toolName string) bool {
 	switch toolName {
 	case "read_command_output", "wait_command", "stop_command",
@@ -206,8 +188,6 @@ func shouldSkipHistoryTool(toolName string) bool {
 	return false
 }
 
-// suppressHistoryToolResult applies the same result formatting as the real-time
-// streaming path (chat_bridge.go suppressToolResult + tool.DescribeToolResult).
 func suppressHistoryToolResult(toolName, rawArgs, result string, isError bool) string {
 	switch toolName {
 	case "web_fetch", "web_search", "stop_command", "todo_write", "list_agents":
@@ -230,7 +210,6 @@ func suppressHistoryToolResult(toolName, rawArgs, result string, isError bool) s
 	return result
 }
 
-// resolvedToolCall caches tool_use info for later tool_result matching.
 type resolvedToolCall struct {
 	toolName string
 	rawArgs  string
@@ -333,7 +312,6 @@ func buildSessionHistoryFromMessages(msgs []provider.Message) []SessionMessage {
 	return result
 }
 
-// GetSessionHistory loads messages from the current session.
 func GetSessionHistory() ([]SessionMessage, error) {
 	chat := GetChatBridge()
 	if chat == nil {
@@ -342,8 +320,6 @@ func GetSessionHistory() ([]SessionMessage, error) {
 	return chat.CurrentSessionHistory(), nil
 }
 
-// ExportSessionToMarkdown converts a session's messages into a readable
-// Markdown document. If sessionID is empty, exports the current session.
 func ExportSessionToMarkdown(sessionID string) (string, error) {
 	msgs, title, err := loadSessionForExport(sessionID)
 	if err != nil {
@@ -352,14 +328,6 @@ func ExportSessionToMarkdown(sessionID string) (string, error) {
 	return formatMessagesAsMarkdown(msgs, title), nil
 }
 
-// formatMessagesAsMarkdown converts session messages into a Markdown document.
-// Extracted for testability (no session store dependency).
-// redactAndClamp applies the export body protection (#2381): the Markdown
-// export used to write user/assistant message bodies verbatim while the
-// JSON export redacted and truncated every role - pasted API keys and log
-// dumps landed in shared .md files in plaintext. Same treatment as the
-// tool branch: RedactForDisplay first (mask secrets), then a 2000-rune
-// truncation on a rune boundary (#301).
 func redactAndClamp(s string) string {
 	out := security.RedactForDisplay(s)
 	if len(out) > 2000 {
@@ -425,8 +393,6 @@ func formatMessagesAsMarkdown(msgs []SessionMessage, title string) string {
 	return b.String()
 }
 
-// ExportSessionToJSON converts a session's messages into a JSON document.
-// If sessionID is empty, exports the current session.
 func ExportSessionToJSON(sessionID string) (string, error) {
 	msgs, title, err := loadSessionForExport(sessionID)
 	if err != nil {
@@ -435,12 +401,6 @@ func ExportSessionToJSON(sessionID string) (string, error) {
 	return formatMessagesAsJSON(msgs, title)
 }
 
-// formatMessagesAsJSON converts session messages into a JSON document.
-// #583 (Bug 1): Applies truncation (2000 runes) and secret redaction to
-// ToolArgs, ToolDetail, and Content fields before marshaling. This matches
-// the Markdown export protection level and prevents credential leakage in
-// exported JSON files (users actively save/share these artifacts).
-// Extracted for testability.
 func formatMessagesAsJSON(msgs []SessionMessage, title string) (string, error) {
 
 	cleanMsgs := make([]SessionMessage, 0, len(msgs))
@@ -479,8 +439,6 @@ func formatMessagesAsJSON(msgs []SessionMessage, title string) (string, error) {
 	return string(data), nil
 }
 
-// loadSessionForExport retrieves messages and title for export.
-// If sessionID is empty, uses the current active session.
 func loadSessionForExport(sessionID string) ([]SessionMessage, string, error) {
 	if sessionID == "" {
 		chat := GetChatBridge()
