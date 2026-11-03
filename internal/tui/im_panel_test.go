@@ -35,7 +35,6 @@ func TestIMPanelNavigateEmpty(t *testing.T) {
 	m := Model{}
 	m.openIMPanel()
 
-	// Navigate with no entries should not crash
 	updated, _ := m.handleIMPanelKey(tea.KeyPressMsg{Text: "j"})
 	if updated.imPanel == nil {
 		t.Fatal("imPanel should still be open")
@@ -49,12 +48,12 @@ func TestIMPanelNavigateEmpty(t *testing.T) {
 func TestIMPanelDisableNoRuntime(t *testing.T) {
 	m := Model{}
 	m.openIMPanel()
-	// Without imManager, disable should show error message
+
 	updated, _ := m.handleIMPanelKey(tea.KeyPressMsg{Text: "d"})
 	if updated.imPanel == nil {
 		t.Fatal("imPanel should still be open")
 	}
-	// message should be set (no channels available)
+
 	if updated.imPanel.message == "" {
 		t.Fatal("message should be set when no channels")
 	}
@@ -103,7 +102,7 @@ func TestIMPanelMuteAllNoRuntime(t *testing.T) {
 	if updated.imPanel == nil {
 		t.Fatal("imPanel should still be open")
 	}
-	// MuteAll returns a command even without runtime
+
 	if cmd == nil {
 		t.Fatal("expected a command for MuteAll")
 	}
@@ -154,7 +153,6 @@ func TestFirstNonEmptyIM(t *testing.T) {
 func TestIMPanelOutputModeKeysReturnMessages(t *testing.T) {
 	m := Model{}
 	m.openIMPanel()
-	// imEmitter is nil — setIMOutputMode should still return a result msg
 
 	for _, key := range []string{"v", "q", "s"} {
 		_, cmd := m.handleIMPanelKey(tea.KeyPressMsg{Text: key})
@@ -178,7 +176,7 @@ func TestIMPanelOutputModeDisplayNilEmitter(t *testing.T) {
 	m.openIMPanel()
 
 	panel := m.renderIMPanel()
-	// Should show "verbose" as default when emitter is nil
+
 	if !strings.Contains(panel, "verbose") {
 		t.Errorf("expected 'verbose' in panel output, got:\n%s", panel)
 	}
@@ -189,15 +187,14 @@ func TestIMPanelOutputModeDisplayContainsHint(t *testing.T) {
 	m.openIMPanel()
 
 	panel := m.renderIMPanel()
-	// Should contain output mode hint (en or zh-CN depending on default lang)
+
 	if !strings.Contains(panel, "v verbose") && !strings.Contains(panel, "v 详细") {
 		t.Errorf("expected output mode hint in panel, got:\n%s", panel)
 	}
 }
 
 func TestIMPanelEntries_ConfigDisabled(t *testing.T) {
-	// Verify that imChannelEntries reads disabled state from config,
-	// not just from runtime disabledBindings.
+
 	cfg := &config.Config{
 		IM: config.IMConfig{
 			Enabled: true,
@@ -248,9 +245,7 @@ func TestIMPanelEntries_ConfigDisabled(t *testing.T) {
 }
 
 func TestIMPanelEntries_ConfigDisabledOverridesRuntime(t *testing.T) {
-	// Verify that config disabled=true overrides runtime disabled=false.
-	// This simulates the scenario where a second instance reads config
-	// but runtime hasn't run ApplyAdapterConfig yet.
+
 	cfg := &config.Config{
 		IM: config.IMConfig{
 			Enabled: true,
@@ -271,7 +266,6 @@ func TestIMPanelEntries_ConfigDisabledOverridesRuntime(t *testing.T) {
 		Adapter:   "qq-bot-1",
 		ChannelID: "channel-1",
 	})
-	// NOT calling ApplyAdapterConfig — runtime still has qq-bot-1 active
 
 	m := Model{config: cfg, imManager: mgr}
 
@@ -288,8 +282,7 @@ func TestIMPanelEntries_ConfigDisabledOverridesRuntime(t *testing.T) {
 }
 
 func TestIMPanelEntries_MutedNotShownWhenDisabled(t *testing.T) {
-	// When an adapter is disabled, muted should be false —
-	// disabled takes precedence.
+
 	cfg := &config.Config{
 		IM: config.IMConfig{
 			Enabled: true,
@@ -310,7 +303,7 @@ func TestIMPanelEntries_MutedNotShownWhenDisabled(t *testing.T) {
 		Adapter:   "qq-bot-1",
 		ChannelID: "channel-1",
 	})
-	_ = mgr.MuteBinding("qq-bot-1") // mute in runtime
+	_ = mgr.MuteBinding("qq-bot-1")
 
 	m := Model{config: cfg, imManager: mgr}
 
@@ -327,10 +320,6 @@ func TestIMPanelEntries_MutedNotShownWhenDisabled(t *testing.T) {
 	}
 }
 
-// TestDisableAllIMChannelsMutationFlow pins #1377-A: the range-while-
-// writing loop (family's worst shape - iterate Adapters AND write per
-// entry) moved inside configMutationMsg.apply; the Update loop executes
-// it and the success message still carries the count.
 func TestDisableAllIMChannelsMutationFlow(t *testing.T) {
 	m := newTestModel()
 	m.config = config.DefaultConfig()
@@ -341,8 +330,7 @@ func TestDisableAllIMChannelsMutationFlow(t *testing.T) {
 	m.SetIMManager(imMgr)
 
 	msg := m.disableAllIMChannels()()
-	// No manager bindings: DisableAll errors first - assert the early
-	// error still routes as imPanelResultMsg (no config touch).
+
 	if res, ok := msg.(imPanelResultMsg); ok && res.err != nil {
 		if len(m.config.IM.Adapters) != 2 {
 			t.Fatal("config mutated despite manager error")
@@ -365,10 +353,6 @@ func TestDisableAllIMChannelsMutationFlow(t *testing.T) {
 	}
 }
 
-// TestToggleIMAdapterEnabledMutationFlow pins #1763 case 1: the SHARED
-// toggle (15 panels' 'd' key) must return configMutationMsg - not write
-// the config map on the Cmd goroutine (the last direct-write root of the
-// #1367 family).
 func TestToggleIMAdapterEnabledMutationFlow(t *testing.T) {
 	m, _ := newTestModelWithIM(t)
 	if m.config == nil {
@@ -377,8 +361,7 @@ func TestToggleIMAdapterEnabledMutationFlow(t *testing.T) {
 	if m.imManager == nil {
 		t.Skip("fixture manager unavailable")
 	}
-	// A registered binding exists in the fixture; pick its platform name so
-	// the toggle's success branch (and thus the mutation flow) runs.
+
 	entries := m.imChannelEntries()
 	if len(entries) == 0 {
 		t.Skip("no bound channel in fixture")
@@ -387,14 +370,13 @@ func TestToggleIMAdapterEnabledMutationFlow(t *testing.T) {
 	msg := m.toggleIMAdapterEnabled(name)()
 	mut, ok := msg.(configMutationMsg)
 	if !ok {
-		// No config or no manager -> result msg; with both set the mutation
-		// path is mandatory.
+
 		t.Fatalf("expected configMutationMsg from the shared toggle, got %#v", msg)
 	}
 	if _, has := m.config.IM.Adapters[name]; has {
 		t.Fatal("config mutated on Cmd goroutine - race regression (#1763)")
 	}
-	// Route through Update: the write happens on the main loop.
+
 	m2, _ := m.handleConfigMutationMsg(mut)
 	_ = m2
 	if _, has := m.config.IM.Adapters[name]; !has {

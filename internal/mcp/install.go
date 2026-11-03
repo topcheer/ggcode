@@ -59,11 +59,7 @@ func parseLegacyInstallArgs(args []string) (config.MCPServerConfig, error) {
 	if transport == "" {
 		if len(args) >= 2 {
 			if trailingTransport := normalizeInstallTransport(args[len(args)-1]); trailingTransport == "stdio" {
-				// #1589-B: the trailing "stdio" is lexically ambiguous -
-				// it may be a real subcommand argument (docker run ... serve
-				// stdio). We still strip it (the convenience form is the
-				// common case) but say so; use `--` or an explicit transport
-				// to keep a literal trailing stdio argument.
+
 				debug.Log("mcp-install", "stripped trailing %q as the transport hint; if it was a real command argument, re-run with an explicit transport or -- separator", args[len(args)-1])
 				return config.MCPServerConfig{
 					Name:    normalizeServerName(inferCommandServerName(args[0], args[1:len(args)-1])),
@@ -99,12 +95,7 @@ func parseLegacyInstallArgs(args []string) (config.MCPServerConfig, error) {
 		if name == "" {
 			name = inferCommandServerName(server.Command, server.Args)
 		} else if isKnownRunnerCommand(name) {
-			// #1633: the #1611-B guard required name==server.Command,
-			// which real inputs never satisfy ('mcp install -t stdio npx
-			// -y @scope/server' has name="npx" but Command="-y") - the
-			// fix's own repro still produced command="-y". If the leading
-			// token is a known runner, the WHOLE arg list is the command
-			// line and there is no explicit server name.
+
 			server.Command = name
 			server.Args = append([]string(nil), rest...)
 			name = inferCommandServerName(server.Command, server.Args)
@@ -127,9 +118,6 @@ func parseLegacyInstallArgs(args []string) (config.MCPServerConfig, error) {
 	return server, nil
 }
 
-// looksLikeURLScheme reports whether the token starts with a URL scheme
-// (http://, https://, ws://, wss://) - such a first argument in a
-// multi-arg install is a URL, not a server name (#3869 B).
 func looksLikeURLScheme(s string) bool {
 	for _, p := range []string{"http://", "https://", "ws://", "wss://"} {
 		if strings.HasPrefix(s, p) {
@@ -139,11 +127,6 @@ func looksLikeURLScheme(s string) bool {
 	return false
 }
 
-// looksLikeExecutable reports whether the token names a runnable command
-// in PATH (#3916). Used to disambiguate `mcp install -t stdio docker run
-// ...` (docker = command) from `mcp install -t stdio my-server docker
-// run ...` (my-server = name; a genuine server name never resolves on
-// PATH).
 func looksLikeExecutable(token string) bool {
 	if token == "" || strings.ContainsAny(token, "/\\ \t") {
 		return false
@@ -169,25 +152,12 @@ func parseOptionTransportInstallArgs(args []string, transport string) (config.MC
 	server := config.MCPServerConfig{Type: transport}
 	switch transport {
 	case "stdio":
-		// #1633: same runner guard as the legacy path. 'mcp install -t
-		// stdio npx -y @scope/server' routed HERE (option transport),
-		// which had no guard at all: name="npx", target=["-y",
-		// "@scope/server"], command="-y" - a broken config written into
-		// the user's yaml (the exact repro the #1611-B fix claimed to
-		// solve). If the leading token is a known runner, the whole arg
-		// list is the command line.
+
 		if len(args) > 1 && isKnownRunnerCommand(strings.TrimSpace(args[0])) {
 			name = ""
 			target = args
 		}
-		// #3916: a non-runner FIRST TOKEN that is an actual executable on
-		// PATH (docker run -i --rm mcp/weather - the MCP docs' mainstream
-		// container form; podman/go/gradlew same shape) was taken as the
-		// server NAME: Name="docker", Command="run" landed in the yaml
-		// silently and every later call failed with "exec: run: not
-		// found". Disambiguate by PATH: a genuine name is not an
-		// executable, an executable is not a name. Runner whitelist stays
-		// first (no PATH probe for the common forms).
+
 		if len(args) > 1 && name != "" && looksLikeExecutable(strings.TrimSpace(args[0])) {
 			name = ""
 			target = args
@@ -200,12 +170,7 @@ func parseOptionTransportInstallArgs(args []string, transport string) (config.MC
 			name = inferCommandServerName(server.Command, server.Args)
 		}
 	case "http", "ws":
-		// #3869 B: `mcp install -t http https://a.com https://b.com` used
-		// to swallow a.com as the SERVER NAME and keep b.com as the URL -
-		// zero-error, and the user's intended endpoint silently became a
-		// config key. The target-count check below validated the post-strip
-		// slice, not the raw args. If the first raw arg looks like a URL
-		// there is no name at all - fail loudly like the legacy path does.
+
 		if len(args) > 1 && looksLikeURLScheme(strings.TrimSpace(args[0])) {
 			return config.MCPServerConfig{}, fmt.Errorf("%s install expects a single URL (got %d args, and %q looks like a URL, not a server name)", transport, len(args), args[0])
 		}
@@ -288,14 +253,7 @@ func parseInstallOptions(args []string) ([]string, installOptions, error) {
 	var opts installOptions
 	for i := 0; i < len(args); i++ {
 		token := strings.TrimSpace(args[i])
-		// #3765: installer flags after the server NAME may belong to the
-		// COMMAND the user is wrapping (`docker run --env FOO=bar myimage`
-		// without `--`). The greedy parse must keep supporting the canonical
-		// interleaved shapes (name ... flags ... URL ... flags), so we cannot
-		// simply stop at the first positional - but swallowing silently rewrote
-		// BOTH semantics with zero signal. Keep the parse, WARN loudly whenever
-		// a token is consumed as an installer flag while the command region has
-		// already started, telling the user to quote the command with `--`.
+
 		warnFlagSwallowedInCommandRegion(token, len(positionals) > 1)
 		switch token {
 		case "--env":
@@ -345,12 +303,6 @@ func parseInstallOptions(args []string) ([]string, installOptions, error) {
 	return positionals, opts, nil
 }
 
-// warnFlagSwallowedInCommandRegion fires when an installer flag token is
-// consumed while the command region has already started (more than one
-// positional seen). Such a token may be the WRAPPED COMMAND's own flag -
-// the user should quote the command with `--` (#3765). Returns whether a
-// warning was emitted (pure function of the inputs; kept as a func so
-// probes can pin the trigger condition).
 func warnFlagSwallowedInCommandRegion(token string, inCommandRegion bool) bool {
 	if !inCommandRegion {
 		return false
@@ -365,10 +317,7 @@ func warnFlagSwallowedInCommandRegion(token string, inCommandRegion bool) bool {
 
 func parseInstallMapValue(raw, flag string) (string, string, error) {
 	trimmed := strings.TrimSpace(raw)
-	// #773: --header values legitimately contain '=' (base64 padding, Basic
-	// credentials, presigned tokens); cutting on '=' first silently produced
-	// key="X-Api-Key: abc", value="=" and wrote a broken auth config. For
-	// headers, cut on the first ':' (RFC separator) and only fall back to '='.
+
 	if flag == "--header" {
 		if key, value, ok := strings.Cut(trimmed, ":"); ok && strings.TrimSpace(key) != "" {
 			return strings.TrimSpace(key), strings.TrimSpace(value), nil
@@ -409,8 +358,6 @@ func installSeparatorIndex(args []string) int {
 	return -1
 }
 
-// isKnownRunnerCommand reports whether name is a package-runner the
-// install table already special-cases (#1611-B).
 func isKnownRunnerCommand(name string) bool {
 	switch name {
 	case "npx", "pnpm", "bunx", "uvx", "uv", "yarn", "node", "python", "python3", "pipx":
@@ -481,10 +428,7 @@ func inferURLServerName(raw string) string {
 	if host == "" {
 		return ""
 	}
-	// #3765-B: an IP host must not be truncated to its first octet -
-	// 192.168.1.5 and 192.168.1.6 both inferred "192" and silently
-	// overwrote each other's config (Name is the yaml key). Use the full
-	// IP (colons omitted by Hostname) as the inferred name.
+
 	if net.ParseIP(host) != nil {
 		return host
 	}

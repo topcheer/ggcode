@@ -1,14 +1,5 @@
 package memory
 
-// Regression probes for #3049:
-//   - C1: complementary values (one a token-subset of the other) must NOT be
-//     judged contradictory - "go" vs "go+typescript" overlaps 2/3, the old
-//     band's middle, and deleted/marked the earlier memory as contradicted.
-//   - C2: an include-only Makefile must produce ZERO drift findings.
-//   - C3: an exact-key duplicate hit must carry ITS OWN entry content, not
-//     the similarity-loop leftover from a different key.
-//   - C4: truncation must be rune-safe (no split CJK runes).
-
 import (
 	"os"
 	"path/filepath"
@@ -23,16 +14,15 @@ func TestIssue3049_C1_SubsetValuesAreNotContradictions(t *testing.T) {
 	if claimsConflict("make build", "make build+test+lint") {
 		t.Fatal("#3049-C1: '+'-list enrichment judged as contradiction")
 	}
-	// Token-subset WITHOUT '+' grouping is a rephrased command - must keep
-	// conflicting (pinned by existing BuildCommandConflict tests).
+
 	if !claimsConflict("go build ./...", "go build -tags goolm ./...") {
 		t.Fatal("#3049-C1: non-list token-subset must still conflict (regression guard)")
 	}
-	// Genuine divergent values must still conflict.
+
 	if !claimsConflict("build command: go build ./cmd/app", "build command: go build ./internal/...") {
 		t.Fatal("divergent same-domain values must still conflict")
 	}
-	// Opposite values keep conflicting.
+
 	if !claimsConflict("enabled", "disabled") {
 		t.Fatal("opposite values must still conflict")
 	}
@@ -50,7 +40,7 @@ func TestIssue3049_C2_IncludeOnlyMakefileNoFalseDrift(t *testing.T) {
 			t.Fatalf("#3049-C2: include-only Makefile produced a false drift finding: %s", f)
 		}
 	}
-	// A Makefile WITH targets still scans (guard against over-disabling).
+
 	if err := os.WriteFile(filepath.Join(dir, "Makefile"), []byte("build:\n\tgo build ./...\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -68,9 +58,7 @@ func TestIssue3049_C2_IncludeOnlyMakefileNoFalseDrift(t *testing.T) {
 
 func TestIssue3049_C3_ExactMatchCarriesOwnContent(t *testing.T) {
 	dir := t.TempDir()
-	// Two entries with identical token sets but different keys; the
-	// similarity loop hits 1.0 on the FIRST one, and the exact match is the
-	// second - the old code returned the first one's content.
+
 	if err := os.WriteFile(filepath.Join(dir, "cmd-build.md"), []byte("WRONG ENTRY"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +76,7 @@ func TestIssue3049_C3_ExactMatchCarriesOwnContent(t *testing.T) {
 }
 
 func TestIssue3049_C4_RuneSafeTruncation(t *testing.T) {
-	cjk := strings.Repeat("构建命令", 30) // 4 bytes per pair, 120 bytes total
+	cjk := strings.Repeat("构建命令", 30)
 	got := truncate(cjk, 40)
 	if !strings.HasSuffix(got, "...") {
 		t.Fatal("truncate must keep the ellipsis suffix")

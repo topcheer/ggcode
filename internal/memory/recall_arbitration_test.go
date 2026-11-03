@@ -40,7 +40,7 @@ func TestArbitrateInline_ConflictPrefersHigherTrust(t *testing.T) {
 		Content: "build command: go build ./...",
 		Meta:    MemoryMeta{Key: "build-setup-impl", Category: CategoryPersistent, CreatedAt: now.Add(-90 * 24 * time.Hour)},
 	}
-	// Same category, newer modtime -> wins the tie on trust.
+
 	newer := MemoryEntry{
 		Key:     "build-tags-impl",
 		Content: "build command: go build -tags goolm ./...",
@@ -74,10 +74,7 @@ func TestArbitrateInline_ConflictPrefersHigherTrust(t *testing.T) {
 
 func TestArbitrateInline_CategoryBeatsRecency(t *testing.T) {
 	now := time.Now()
-	// Default-category but ancient vs persistent-category but slightly older
-	// in absolute terms: the persistent bonus (+0.2) must outweigh the
-	// ancient penalty (-0.3) applied to the opponent... here the ancient
-	// penalty lands ON the newer default entry, proving category wins.
+
 	ancientPersistent := MemoryEntry{
 		Key:     "arch-decision",
 		Content: "database engine: postgres",
@@ -88,7 +85,7 @@ func TestArbitrateInline_CategoryBeatsRecency(t *testing.T) {
 		Content: "database engine: sqlite",
 		Meta:    MemoryMeta{Category: CategoryDefault, CreatedAt: now.Add(-80 * 24 * time.Hour)},
 	}
-	// scores: persistent 1.2-0=1.2 (ancient only above 180d); default 1.0.
+
 	arb := ArbitrateInline([]MemoryEntry{recentDefault, ancientPersistent}, now)
 	if !arb.HasConflicts() {
 		t.Fatal("expected conflict between same-subject single-token values")
@@ -109,13 +106,13 @@ func TestArbitrateInline_NoFalsePositives(t *testing.T) {
 	if arb.HasConflicts() {
 		t.Fatalf("unexpected conflicts: %+v", arb.Conflicts)
 	}
-	// Identical values are duplicates, not conflicts.
+
 	dup := MemoryEntry{Key: "d", Content: "framework: gin", Meta: MemoryMeta{Category: CategoryDefault, CreatedAt: now}}
 	arb = ArbitrateInline([]MemoryEntry{entries[2], dup}, now)
 	if arb.HasConflicts() {
 		t.Fatalf("identical values must not conflict: %+v", arb.Conflicts)
 	}
-	// Single entry: no arbitration possible.
+
 	arb = ArbitrateInline(entries[:1], now)
 	if arb.HasConflicts() {
 		t.Fatal("single entry cannot conflict")
@@ -127,8 +124,7 @@ func TestLoadForPrompt_RecallArbitrationEndToEnd(t *testing.T) {
 	am := &AutoMemory{dir: dir}
 	writeMem(t, dir, "build-old-impl", "build command: go build ./...")
 	writeMem(t, dir, "build-new-impl", "build command: go build -tags goolm ./...")
-	// Both entries are persistent-category, so both inline. Backdate the
-	// older one so the newer (same trust tier) wins the tie-break.
+
 	oldPath := filepath.Join(dir, "build-old-impl.md")
 	past := time.Now().Add(-90 * 24 * time.Hour)
 	if err := os.Chtimes(oldPath, past, past); err != nil {
@@ -158,7 +154,7 @@ func TestLoadForPrompt_RecallArbitrationEndToEnd(t *testing.T) {
 func TestRecallArbitration_Cap(t *testing.T) {
 	now := time.Now()
 	var entries []MemoryEntry
-	// One hub entry conflicting with many peers on the same subject.
+
 	entries = append(entries, MemoryEntry{
 		Key:     "hub",
 		Content: "database engine: postgres",
@@ -166,7 +162,7 @@ func TestRecallArbitration_Cap(t *testing.T) {
 	})
 	for i := 0; i < maxRecallConflicts+3; i++ {
 		entries = append(entries, MemoryEntry{
-			Key:     fmt.Sprintf("peer-%d", i), // unique keys so loser dedup cannot collapse them
+			Key:     fmt.Sprintf("peer-%d", i),
 			Content: "database engine: sqlite",
 			Meta:    MemoryMeta{Category: CategoryDefault, CreatedAt: now.Add(-2 * 24 * time.Hour)},
 		})

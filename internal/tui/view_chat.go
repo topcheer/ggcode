@@ -11,19 +11,12 @@ import (
 )
 
 func (m Model) renderConversationPanel(panelHeight int) string {
-	// Sync the spinner's animation frame to the chat package so that running
-	// tool icons (◐◓◑◒) animate on every tick. This must happen before any
-	// chat item rendering.
+
 	chat.SetToolAnimFrame(m.spinner.CurrentFrame())
 
 	innerW := m.conversationInnerWidth()
 	innerH := conversationInnerHeight(panelHeight)
 
-	// Follow mode: render followed agent/teammate view instead of main conversation.
-	// IMPORTANT: We only render the cached entry.list here — the actual list rebuild
-	// happens in Update() via rebuildActiveView(). This avoids rebuilding on every
-	// View() frame and prevents the "fall through to main view" path that causes
-	// rendering artifacts when the snapshot is temporarily unavailable.
 	if m.subAgentFollow.isActive() {
 		width := m.boxInnerWidth(m.mainColumnWidth())
 		style := lipgloss.NewStyle().
@@ -37,16 +30,10 @@ func (m Model) renderConversationPanel(panelHeight int) string {
 		entry := m.subAgentFollow.getOrCreateView(m.subAgentFollow.activeID, innerW, innerH)
 		entry.list.SetSize(innerW, innerH)
 
-		// If the entry list has been populated (by rebuildActiveView in Update()),
-		// render it. Otherwise show a loading placeholder.
 		if entry.list.Len() > 0 {
 			return style.Render(entry.list.Render())
 		}
 
-		// List hasn't been built yet (first frame before Update fires) —
-		// show a placeholder instead of falling through to the main chat list.
-		// Falling through causes rendering artifacts because the main chat content
-		// has different line widths than the follow view content.
 		placeholder := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8")).
 			Render(m.t("follow.loading"))
@@ -124,8 +111,6 @@ func (m Model) renderAutoComplete() string {
 		return ""
 	}
 
-	// Dynamic max visible based on available panel height.
-	// Reserve ~4 lines for input line, hint, and padding.
 	maxVisible := m.panelAvailableHeight() - 4
 	if maxVisible < 8 {
 		maxVisible = 8

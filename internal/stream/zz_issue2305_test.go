@@ -9,8 +9,6 @@ func validTarget() []StreamTarget {
 	return []StreamTarget{{Name: "t", URL: "rtmp://a.example.com/live", Key: "k"}}
 }
 
-// #2305: srt:// promised support but failed 100% at runtime (path-append
-// key + -f flv). Validate must reject it honestly at config time.
 func TestIssue2305SrtRejectedAtConfigTime(t *testing.T) {
 	c := &StreamConfig{Width: 1920, Height: 1080, Quality: 26, Targets: []StreamTarget{
 		{Name: "s", URL: "srt://host:9000", Key: "k"},
@@ -21,7 +19,6 @@ func TestIssue2305SrtRejectedAtConfigTime(t *testing.T) {
 	}
 }
 
-// rtmp/rtmps stay first-class
 func TestIssue2305RtmpRtmpsStillValid(t *testing.T) {
 	for _, scheme := range []string{"rtmp://", "rtmps://"} {
 		c := &StreamConfig{Width: 1920, Height: 1080, Quality: 26, Targets: []StreamTarget{
@@ -33,7 +30,6 @@ func TestIssue2305RtmpRtmpsStillValid(t *testing.T) {
 	}
 }
 
-// #2305: odd dimensions must fail at config time, not in ffmpeg
 func TestIssue2305OddDimensionsRejected(t *testing.T) {
 	c := &StreamConfig{Width: 1281, Height: 720, Targets: validTarget()}
 	err := c.Validate()
@@ -46,7 +42,6 @@ func TestIssue2305OddDimensionsRejected(t *testing.T) {
 	}
 }
 
-// #2305: FullURL trims whitespace, matching Validate's trimmed check
 func TestIssue2305FullURLTrimsWhitespace(t *testing.T) {
 	tgt := StreamTarget{URL: " rtmp://a.example.com/live/ ", Key: "k"}
 	if got := tgt.FullURL(); got != "rtmp://a.example.com/live/k" {

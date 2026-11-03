@@ -5,15 +5,8 @@ import (
 	"strings"
 )
 
-// maxDiffLines is the safety limit for LCS computation. Files exceeding this
-// combined line count get a truncated diff instead of running the O(n*m)
-// algorithm, which would freeze the TUI on very large files.
 const maxDiffLines = 5000
 
-// UnifiedDiff generates a unified diff string between old and new content.
-// contextLines controls how many unchanged lines surround each change.
-// For very large files (>5000 combined lines), falls back to showing only
-// the first N changed lines to avoid OOM and TUI freeze.
 func UnifiedDiff(old, new string, contextLines int) string {
 	if old == new {
 		return ""
@@ -22,17 +15,12 @@ func UnifiedDiff(old, new string, contextLines int) string {
 	oldLines, oldNoNL := splitLinesEOF(old)
 	newLines, newNoNL := splitLinesEOF(new)
 
-	// Safety: if the combined input is too large, use a line-based fallback
-	// that avoids the O(n*m) LCS table allocation.
 	if len(oldLines)+len(newLines) > maxDiffLines {
 		return fastDiffFallback(oldLines, newLines, contextLines, oldNoNL, newNoNL)
 	}
 
 	editScript := computeEditScript(oldLines, newLines)
 
-	// EOF-newline-only change: line content is identical, only the trailing
-	// newline differs. Render it explicitly (git semantics) instead of an
-	// empty diff while HasChanges reports a change (#555).
 	if !scriptHasChanges(editScript) {
 		if oldNoNL != newNoNL && len(oldLines) > 0 && len(newLines) > 0 {
 			return formatEOFNewlineDiff(oldLines, newLines, oldNoNL, newNoNL)
@@ -43,7 +31,6 @@ func UnifiedDiff(old, new string, contextLines int) string {
 	return formatUnifiedDiff(oldLines, newLines, editScript, contextLines, oldNoNL, newNoNL)
 }
 
-// scriptHasChanges reports whether the edit script contains any +/- op.
 func scriptHasChanges(script []op) bool {
 	for _, s := range script {
 		if s.kind == '+' || s.kind == '-' {
@@ -53,9 +40,6 @@ func scriptHasChanges(script []op) bool {
 	return false
 }
 
-// formatEOFNewlineDiff renders a trailing-newline-only change the way git
-// does: the last line shown for each side followed by the standard marker
-// for the side(s) lacking the newline (#555).
 func formatEOFNewlineDiff(oldLines, newLines []string, oldNoNL, newNoNL bool) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("@@ -%d,1 +%d,1 @@\n", len(oldLines), len(newLines)))
@@ -70,11 +54,8 @@ func formatEOFNewlineDiff(oldLines, newLines []string, oldNoNL, newNoNL bool) st
 	return sb.String()
 }
 
-// fastDiffFallback produces a diff for large files without the O(n*m) LCS
-// table. It uses a simple prefix/suffix matching approach to find the common
-// header and trailer, then shows only the changed middle section.
 func fastDiffFallback(oldLines, newLines []string, contextLines int, oldNoNL, newNoNL bool) string {
-	// Find common prefix
+
 	prefix := 0
 	minLen := len(oldLines)
 	if len(newLines) < minLen {
@@ -84,7 +65,6 @@ func fastDiffFallback(oldLines, newLines []string, contextLines int, oldNoNL, ne
 		prefix++
 	}
 
-	// Find common suffix
 	suffix := 0
 	for suffix < (len(oldLines)-prefix) && suffix < (len(newLines)-prefix) &&
 		oldLines[len(oldLines)-1-suffix] == newLines[len(newLines)-1-suffix] {
@@ -122,9 +102,6 @@ func fastDiffFallback(oldLines, newLines []string, contextLines int, oldNoNL, ne
 		}
 	}
 
-	// EOF-newline-only change: the line content is identical, only the
-	// trailing newline differs. Without this the fallback renders as a
-	// no-diff while HasChanges/CountChanges report a change (#555).
 	if oldNoNL != newNoNL && len(oldLines) > 0 && len(newLines) > 0 &&
 		prefix+suffix == len(oldLines) && prefix+suffix == len(newLines) {
 		sb.WriteString("- " + oldLines[len(oldLines)-1] + "\n")
@@ -140,29 +117,20 @@ func fastDiffFallback(oldLines, newLines []string, contextLines int, oldNoNL, ne
 	return sb.String()
 }
 
-// splitLines splits text into lines, preserving a trailing newline indicator.
-// Empty input yields no lines: an empty file is zero lines, not one empty
-// line, so diffs/stats for file creation don't report a phantom deletion
-// of an empty line (#537).
 func splitLines(text string) []string {
 	if text == "" {
 		return nil
 	}
 	lines := strings.Split(text, "\n")
-	// Remove trailing empty string from final newline
+
 	if len(lines) > 0 && lines[len(lines)-1] == "" && strings.HasSuffix(text, "\n") {
 		lines = lines[:len(lines)-1]
 	}
 	return lines
 }
 
-// noNewlineMarker is the standard unified diff marker emitted after the last
-// line of a file that lacks a trailing newline.
 const noNewlineMarker = "\\ No newline at end of file"
 
-// splitLinesEOF is splitLines plus whether text lacks a trailing newline
-// (i.e. its last line is not newline-terminated). Empty text has no lines,
-// so it carries no EOF-newline state.
 func splitLinesEOF(text string) (lines []string, noNewline bool) {
 	if text == "" {
 		return nil, false
@@ -170,17 +138,14 @@ func splitLinesEOF(text string) (lines []string, noNewline bool) {
 	return splitLines(text), !strings.HasSuffix(text, "\n")
 }
 
-// op represents a line operation in the edit script.
 type op struct {
-	kind byte // ' ', '-', '+', '='
+	kind byte
 	text string
 }
 
-// computeEditScript computes a simple LCS-based edit script.
 func computeEditScript(old, new []string) []op {
 	m, n := len(old), len(new)
 
-	// Build LCS table
 	dp := make([][]int, m+1)
 	for i := range dp {
 		dp[i] = make([]int, n+1)
@@ -197,7 +162,6 @@ func computeEditScript(old, new []string) []op {
 		}
 	}
 
-	// Backtrack to build edit script
 	var script []op
 	i, j := m, n
 	for i > 0 || j > 0 {
@@ -214,7 +178,6 @@ func computeEditScript(old, new []string) []op {
 		}
 	}
 
-	// Reverse to get forward order
 	for l, r := 0, len(script)-1; l < r; l, r = l+1, r-1 {
 		script[l], script[r] = script[r], script[l]
 	}
@@ -222,9 +185,6 @@ func computeEditScript(old, new []string) []op {
 	return script
 }
 
-// lineEntry is one rendered line of a unified diff: a content line (kind
-// ' ', '+', '-') with its old/new file line numbers, or a hunk marker
-// (kind '~').
 type lineEntry struct {
 	kind    byte
 	text    string
@@ -233,13 +193,11 @@ type lineEntry struct {
 	inGroup bool
 }
 
-// formatUnifiedDiff formats an edit script as unified diff.
 func formatUnifiedDiff(oldLines, newLines []string, script []op, contextLines int, oldNoNL, newNoNL bool) string {
-	// First pass: mark which lines are in change groups
+
 	oldLine, newLine := 1, 1
 	var entries []lineEntry
 
-	// Identify change positions
 	changePositions := make(map[int]bool)
 	for idx, s := range script {
 		if s.kind != '=' {
@@ -247,12 +205,10 @@ func formatUnifiedDiff(oldLines, newLines []string, script []op, contextLines in
 		}
 	}
 
-	// Expand context around changes
 	inChange := false
 	for idx, s := range script {
 		isChange := changePositions[idx]
 
-		// Check if within context of any change
 		nearChange := false
 		if isChange {
 			nearChange = true
@@ -271,8 +227,7 @@ func formatUnifiedDiff(oldLines, newLines []string, script []op, contextLines in
 
 		if nearChange {
 			if !inChange {
-				// Hunk start marker. Also fires at idx 0 so a hunk beginning at
-				// the first line still gets a header (#537).
+
 				entries = append(entries, lineEntry{kind: '~', text: "@@"})
 			}
 			inChange = true
@@ -310,18 +265,12 @@ func formatUnifiedDiff(oldLines, newLines []string, script []op, contextLines in
 		entries = append(entries, lineEntry{kind: '~', text: "@@"})
 	}
 
-	// Format output. Hunk markers get a standard unified diff header
-	// "@@ -start,count +start,count @@" computed from the lines that follow
-	// up to the next marker. Bare "@@" markers are not a valid unified diff
-	// and left LLM/consumers without line-number anchors (#537).
 	var sb strings.Builder
 	for i := 0; i < len(entries); i++ {
 		e := entries[i]
 		if e.kind != '~' {
 			sb.WriteString(fmt.Sprintf("%c %s\n", e.kind, e.text))
-			// Emit the no-newline marker after the final line of a side that
-			// lacks a trailing newline, even when other content changed too
-			// (#555). A context line that ends both files gets one marker.
+
 			oldEOF := oldNoNL && e.oldNum == len(oldLines) && (e.kind == '-' || e.kind == ' ')
 			newEOF := newNoNL && e.newNum == len(newLines) && (e.kind == '+' || e.kind == ' ')
 			if oldEOF || newEOF {
@@ -337,13 +286,6 @@ func formatUnifiedDiff(oldLines, newLines []string, script []op, contextLines in
 	return sb.String()
 }
 
-// hunkHeader computes the standard unified diff header "@@ -l,s +l,s @@"
-// for the hunk marker at index markerIdx. It scans the entries that follow
-// the marker (up to the next marker or end), anchoring on the first old/new
-// line numbers and counting context and change lines on each side. It
-// returns ok=false for a stray marker with no following lines (adjacent
-// markers around a one-line gap, or the trailing marker), which gets no
-// header.
 func hunkHeader(entries []lineEntry, markerIdx int) (string, bool) {
 	oldStart, newStart, oldCount, newCount := 0, 0, 0, 0
 	for j := markerIdx + 1; j < len(entries) && entries[j].kind != '~'; j++ {
@@ -367,17 +309,15 @@ func hunkHeader(entries []lineEntry, markerIdx int) (string, bool) {
 	return fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", oldStart, oldCount, newStart, newCount), true
 }
 
-// HasChanges returns true if old and new content differ.
 func HasChanges(old, new string) bool {
 	return old != new
 }
 
-// CountChanges returns the number of added and deleted lines.
 func CountChanges(old, new string) (additions, deletions int) {
 	oldLines, oldNoNL := splitLinesEOF(old)
 	newLines, newNoNL := splitLinesEOF(new)
 	if len(oldLines)+len(newLines) > maxDiffLines {
-		// For large files, count prefix/suffix matching
+
 		prefix := 0
 		minLen := len(oldLines)
 		if len(newLines) < minLen {
@@ -413,25 +353,18 @@ func CountChanges(old, new string) (additions, deletions int) {
 			deletions++
 		}
 	}
-	// EOF-newline-only change: line content identical, only the trailing
-	// newline differs. Count it so CountChanges agrees with HasChanges and
-	// UnifiedDiff renders it explicitly (#555).
+
 	if isEOFNewlineOnlyChange(oldLines, newLines, oldNoNL, newNoNL) {
 		return 1, 1
 	}
 	return
 }
 
-// isEOFNewlineOnlyChange reports that both sides have identical line content
-// but differ in whether the file ends with a newline. Such a change still
-// counts/renders as +1/-1 so CountChanges, HasChanges and UnifiedDiff stay
-// consistent on both the LCS and the large-file fallback path (#555).
 func isEOFNewlineOnlyChange(oldLines, newLines []string, oldNoNL, newNoNL bool) bool {
 	return oldNoNL != newNoNL && len(oldLines) > 0 && len(newLines) > 0 &&
 		equalLines(oldLines, newLines)
 }
 
-// equalLines compares two line slices for element-wise equality.
 func equalLines(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -444,7 +377,6 @@ func equalLines(a, b []string) bool {
 	return true
 }
 
-// Stats returns a human-readable summary of changes.
 func Stats(old, new string) string {
 	additions, deletions := CountChanges(old, new)
 	return fmt.Sprintf("+%d additions, -%d deletions", additions, deletions)

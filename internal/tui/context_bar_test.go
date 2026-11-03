@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// TestContextUsageHint_ProgressBar verifies that the visual progress bar
-// is rendered with the correct number of filled/empty segments.
 func TestContextUsageHint_ProgressBar(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -14,7 +12,7 @@ func TestContextUsageHint_ProgressBar(t *testing.T) {
 		wantFill int
 	}{
 		{"empty", 0.0, 0},
-		{"low", 0.12, 0}, // 12% of 8 = 0.96 -> 0
+		{"low", 0.12, 0},
 		{"quarter", 0.25, 2},
 		{"half", 0.50, 4},
 		{"three_quarter", 0.75, 6},
@@ -35,7 +33,6 @@ func TestContextUsageHint_ProgressBar(t *testing.T) {
 	}
 }
 
-// TestContextUsageHint_BarCharacters verifies the bar uses correct Unicode chars.
 func TestContextUsageHint_BarCharacters(t *testing.T) {
 	tokens := 64000
 	cw := 128000
@@ -46,9 +43,9 @@ func TestContextUsageHint_BarCharacters(t *testing.T) {
 	var barBuilder strings.Builder
 	for i := 0; i < barWidth; i++ {
 		if i < filled {
-			barBuilder.WriteRune('\u2588') // full block
+			barBuilder.WriteRune('\u2588')
 		} else {
-			barBuilder.WriteRune('\u2591') // light shade
+			barBuilder.WriteRune('\u2591')
 		}
 	}
 
@@ -61,9 +58,8 @@ func TestContextUsageHint_BarCharacters(t *testing.T) {
 	}
 }
 
-// TestContextUsageHint_CompactWarning verifies the compaction warning logic.
 func TestContextUsageHint_CompactWarning(t *testing.T) {
-	// When threshold is exceeded, warning should appear
+
 	tokens := 100000
 	threshold := 80000
 	compactRatio := float64(tokens) / float64(threshold)
@@ -72,11 +68,10 @@ func TestContextUsageHint_CompactWarning(t *testing.T) {
 		t.Error("expected compact ratio >= 1.0 when tokens exceed threshold")
 	}
 
-	// When approaching but not exceeding threshold
 	tokens2 := 70000
 	compactRatio2 := float64(tokens2) / float64(threshold)
 	if compactRatio2 >= 0.85 && compactRatio2 < 1.0 {
-		// This should show "soon" warning - correct
+
 	}
 	if compactRatio2 >= 1.0 {
 		t.Error("should not show exceeded warning when below threshold")

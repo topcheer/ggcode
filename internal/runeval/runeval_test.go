@@ -72,7 +72,7 @@ func TestIdenticalReadOnlyRepeatIsWasted(t *testing.T) {
 	if r.WastedRepeatCalls != 2 {
 		t.Fatalf("wasted=%d, want 2", r.WastedRepeatCalls)
 	}
-	// "package main" is 12 bytes; only the two repeats count.
+
 	if r.WastedResultBytes != 24 {
 		t.Fatalf("bytes=%d, want 24", r.WastedResultBytes)
 	}
@@ -88,8 +88,7 @@ func TestIdenticalReadOnlyRepeatIsWasted(t *testing.T) {
 }
 
 func TestVaryingRepeatIsReportedNotWasted(t *testing.T) {
-	// Same input, different results (file changed between reads): a
-	// read-only repeat with NEW information is not waste.
+
 	msgs := []provider.Message{
 		msg("assistant", toolUse("t1", "read_file", `{"path":"x.go"}`)),
 		msg("user", toolResult("t1", "v1", false)),
@@ -109,8 +108,7 @@ func TestVaryingRepeatIsReportedNotWasted(t *testing.T) {
 }
 
 func TestWriteToolRepeatsNeverCountedWasted(t *testing.T) {
-	// edit_file with identical args twice can be legitimate (retry after
-	// failure path, or a real re-edit); it is reported, never auto-wasted.
+
 	msgs := []provider.Message{
 		msg("assistant", toolUse("t1", "edit_file", `{"path":"a.go","old":"x","new":"y"}`)),
 		msg("user", toolResult("t1", "ok", false)),
@@ -146,7 +144,7 @@ func TestFailedCallsAreWasted(t *testing.T) {
 }
 
 func TestErrorRatePenalty(t *testing.T) {
-	// 1 error in 4 calls = 25% error rate => -10 points.
+
 	msgs := []provider.Message{
 		msg("assistant", toolUse("t1", "grep", `{"pattern":"a"}`)),
 		msg("user", toolResult("t1", "err", true)),
@@ -188,7 +186,7 @@ func TestOverheadUsageShare(t *testing.T) {
 	if r.OverheadTokens != 450 {
 		t.Fatalf("overhead=%d, want 450", r.OverheadTokens)
 	}
-	// overhead share ~31% > 15% threshold with 5 calls => -20*0.3103 = -6.2
+
 	if r.EfficiencyScore != 94 {
 		t.Fatalf("score=%d, want 94", r.EfficiencyScore)
 	}

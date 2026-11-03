@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// #411: LockFilePath must sanitize session IDs the same way as
-// sessionPath (#401) — a traversal ID via --resume must not create or
-// remove .lock files outside the store directory.
 func TestLockFilePathSanitization(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "sessions")
 

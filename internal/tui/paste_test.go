@@ -13,15 +13,12 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// setupModelForPaste creates a minimal model ready to accept paste events.
 func setupModelForPaste() Model {
 	m := NewModel(nil, nil)
 	m.inputReady = true
 	m.loading = false
 	return m
 }
-
-// --- QQ panel paste ---
 
 func TestQQPanelCreateModePaste(t *testing.T) {
 	m := setupModelForPaste()
@@ -53,7 +50,6 @@ func TestQQPanelCreateModePasteAppends(t *testing.T) {
 func TestQQPanelNotCreateModePasteFallsToMainInput(t *testing.T) {
 	m := setupModelForPaste()
 	m.openQQPanel()
-	// createMode is false (default)
 
 	updated, _ := m.Update(tea.PasteMsg{Content: "should-go-to-main"})
 	m = updated.(Model)
@@ -65,8 +61,6 @@ func TestQQPanelNotCreateModePasteFallsToMainInput(t *testing.T) {
 		t.Fatalf("expected paste to go to main input, got %q", m.input.Value())
 	}
 }
-
-// --- TG panel paste ---
 
 func TestTGPanelCreateModePaste(t *testing.T) {
 	m := setupModelForPaste()
@@ -81,8 +75,6 @@ func TestTGPanelCreateModePaste(t *testing.T) {
 	}
 }
 
-// --- Discord panel paste ---
-
 func TestDiscordPanelCreateModePaste(t *testing.T) {
 	m := setupModelForPaste()
 	m.openDiscordPanel()
@@ -95,8 +87,6 @@ func TestDiscordPanelCreateModePaste(t *testing.T) {
 		t.Fatalf("expected createInput to contain pasted text, got %q", m.discordPanel.createInput)
 	}
 }
-
-// --- Slack panel paste ---
 
 func TestSlackPanelCreateModePaste(t *testing.T) {
 	m := setupModelForPaste()
@@ -111,8 +101,6 @@ func TestSlackPanelCreateModePaste(t *testing.T) {
 	}
 }
 
-// --- Feishu panel paste ---
-
 func TestFeishuPanelCreateModePaste(t *testing.T) {
 	m := setupModelForPaste()
 	m.openFeishuPanel()
@@ -126,8 +114,6 @@ func TestFeishuPanelCreateModePaste(t *testing.T) {
 	}
 }
 
-// --- Dingtalk panel paste ---
-
 func TestDingtalkPanelCreateModePaste(t *testing.T) {
 	m := setupModelForPaste()
 	m.openDingtalkPanel()
@@ -140,8 +126,6 @@ func TestDingtalkPanelCreateModePaste(t *testing.T) {
 		t.Fatalf("expected createInput to contain pasted text, got %q", m.dingtalkPanel.createInput)
 	}
 }
-
-// --- Provider panel paste (existing path, regression test) ---
 
 func TestProviderPanelEditInputPaste(t *testing.T) {
 	m := setupModelForPaste()
@@ -157,7 +141,7 @@ func TestProviderPanelEditInputPaste(t *testing.T) {
 		},
 	})
 	m.openProviderPanel()
-	// Simulate entering edit mode (which creates a textinput)
+
 	ti := textinput.New()
 	ti.Focus()
 	m.providerPanel.editInput = ti
@@ -185,7 +169,7 @@ func TestProviderPanelNewVendorWizardPaste(t *testing.T) {
 		},
 	})
 	m.openProviderPanel()
-	// Simulate entering the new-vendor API key step.
+
 	ti := textinput.New()
 	ti.Focus()
 	m.providerPanel.newVendorInput = ti
@@ -213,7 +197,7 @@ func TestProviderPanelNewEndpointWizardPaste(t *testing.T) {
 		},
 	})
 	m.openProviderPanel()
-	// Simulate entering the new-endpoint API key step.
+
 	ti := textinput.New()
 	ti.Focus()
 	m.providerPanel.newVendorInput = ti
@@ -241,19 +225,17 @@ func TestProviderPanelProtocolStepPasteIgnored(t *testing.T) {
 		},
 	})
 	m.openProviderPanel()
-	// On the protocol step there is no text input to receive paste.
+
 	m.providerPanel.newVendorStep = newVendorStepProtocol
 	m.input.Focus()
 
 	updated, _ := m.Update(tea.PasteMsg{Content: "should-not-crash"})
 	m = updated.(Model)
-	// Reaching here without panic is sufficient; paste should fall through to main input.
+
 	if !strings.Contains(m.input.Value(), "should-not-crash") {
 		t.Fatalf("expected paste to fall through to main input, got %q", m.input.Value())
 	}
 }
-
-// --- Impersonate panel paste (existing path, regression test) ---
 
 func TestImpersonatePanelVersionInputPaste(t *testing.T) {
 	m := setupModelForPaste()
@@ -270,11 +252,8 @@ func TestImpersonatePanelVersionInputPaste(t *testing.T) {
 	}
 }
 
-// --- Main input paste (fallback) ---
-
 func TestPasteFallsToMainInput(t *testing.T) {
 	m := setupModelForPaste()
-	// No panels open
 
 	updated, _ := m.Update(tea.PasteMsg{Content: "hello world"})
 	m = updated.(Model)
@@ -283,8 +262,6 @@ func TestPasteFallsToMainInput(t *testing.T) {
 		t.Fatalf("expected main input to contain pasted text, got %q", m.input.Value())
 	}
 }
-
-// --- Loading state blocks paste ---
 
 func TestPasteAllowedWhenLoading(t *testing.T) {
 	m := setupModelForPaste()
@@ -297,8 +274,6 @@ func TestPasteAllowedWhenLoading(t *testing.T) {
 		t.Fatal("expected paste to be allowed during loading for interleaved messages")
 	}
 }
-
-// --- inputReady blocks paste ---
 
 func TestPasteBlockedBeforeInputReady(t *testing.T) {
 	m := NewModel(nil, nil)
@@ -313,8 +288,6 @@ func TestPasteBlockedBeforeInputReady(t *testing.T) {
 	}
 }
 
-// --- Priority: active panel takes paste over main input ---
-
 func TestIMPanelPasteTakesPriorityOverMainInput(t *testing.T) {
 	m := setupModelForPaste()
 	m.openQQPanel()
@@ -323,24 +296,16 @@ func TestIMPanelPasteTakesPriorityOverMainInput(t *testing.T) {
 	updated, _ := m.Update(tea.PasteMsg{Content: "bot-token"})
 	m = updated.(Model)
 
-	// QQ panel should get the paste
 	if !strings.Contains(m.qqPanel.createInput, "bot-token") {
 		t.Fatal("expected QQ panel to receive paste")
 	}
-	// Main input should NOT get it
+
 	if strings.Contains(m.input.Value(), "bot-token") {
 		t.Fatal("expected main input to NOT receive paste when QQ panel is active")
 	}
 }
 
-// ensure im import is used
 var _ im.AdapterState
-
-// ============================================================
-// Tests for paths originally fixed by Claude's paste commit
-// ============================================================
-
-// --- Provider panel modelFilter paste ---
 
 func TestProviderPanelModelFilterPaste(t *testing.T) {
 	m := setupModelForPaste()
@@ -369,8 +334,6 @@ func TestProviderPanelModelFilterPaste(t *testing.T) {
 	}
 }
 
-// --- Model panel filter paste ---
-
 func TestModelPanelFilterPaste(t *testing.T) {
 	m := setupModelForPaste()
 	m.modelPanel = &modelPanelState{
@@ -389,15 +352,13 @@ func TestModelPanelFilterPaste(t *testing.T) {
 	}
 }
 
-// --- Impersonate panel header key input paste ---
-
 func TestImpersonatePanelHeaderKeyInputPaste(t *testing.T) {
 	m := setupModelForPaste()
 	m.openImpersonatePanel()
 	ti := textinput.New()
 	ti.Focus()
 	m.impersonatePanel.headerKeyInput = ti
-	m.impersonatePanel.editingHeader = 0 // >= 0 means editing a header
+	m.impersonatePanel.editingHeader = 0
 
 	updated, _ := m.Update(tea.PasteMsg{Content: "Authorization"})
 	m = updated.(Model)
@@ -407,12 +368,10 @@ func TestImpersonatePanelHeaderKeyInputPaste(t *testing.T) {
 	}
 }
 
-// --- Impersonate panel header value input paste ---
-
 func TestImpersonatePanelHeaderValueInputPaste(t *testing.T) {
 	m := setupModelForPaste()
 	m.openImpersonatePanel()
-	// headerKeyInput NOT focused, headerValueInput focused
+
 	m.impersonatePanel.headerKeyInput = textinput.New()
 	vi := textinput.New()
 	vi.Focus()
@@ -427,8 +386,6 @@ func TestImpersonatePanelHeaderValueInputPaste(t *testing.T) {
 	}
 }
 
-// --- Questionnaire input paste ---
-
 func TestQuestionnaireInputPaste(t *testing.T) {
 	m := setupModelForPaste()
 	ti := textinput.New()
@@ -441,7 +398,7 @@ func TestQuestionnaireInputPaste(t *testing.T) {
 		},
 		input: ti,
 	}
-	// Must initialize answers slice to match questions length
+
 	m.pendingQuestionnaire.answers = make([]questionnaireAnswerState, 1)
 	m.pendingQuestionnaire.answers[0].selected = make(map[string]struct{})
 
@@ -452,8 +409,6 @@ func TestQuestionnaireInputPaste(t *testing.T) {
 		t.Fatalf("expected questionnaire input to contain pasted text, got %q", m.pendingQuestionnaire.input.Value())
 	}
 }
-
-// --- IM adapter edit mode paste ---
 
 func TestQQPanelEditModePaste(t *testing.T) {
 	m := setupModelForPaste()
@@ -534,8 +489,6 @@ func TestWechatPanelEditModePaste(t *testing.T) {
 	}
 }
 
-// --- PC panel create mode paste ---
-
 func TestPCPanelCreateModePaste(t *testing.T) {
 	m := setupModelForPaste()
 	m.openPCPanel()
@@ -551,8 +504,6 @@ func TestPCPanelCreateModePaste(t *testing.T) {
 		t.Fatal("expected main input to NOT receive paste when PC panel create mode is active")
 	}
 }
-
-// --- Windows main input image-paste fallback ---
 
 func TestHandleClipboardPasteFallback_AttachesImage(t *testing.T) {
 	m := setupModelForPaste()

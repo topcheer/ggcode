@@ -10,20 +10,17 @@ import (
 func TestRestartArgs(t *testing.T) {
 	svc := NewService("v1.0.0", "/tmp/ggcode", "", t.TempDir())
 
-	// No config, no resume
 	args := svc.restartArgs("")
 	if len(args) != 0 {
 		t.Errorf("expected empty args, got %v", args)
 	}
 
-	// With config
 	svc.ConfigPath = "/tmp/ggcode.yaml"
 	args = svc.restartArgs("")
 	if len(args) != 2 || args[0] != "--config" {
 		t.Errorf("expected --config arg, got %v", args)
 	}
 
-	// With resume
 	args = svc.restartArgs("session-123")
 	found := false
 	for i, a := range args {

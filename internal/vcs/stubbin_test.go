@@ -10,14 +10,6 @@ import (
 	"testing"
 )
 
-// This file covers the hg/jj/svn backends and the git error/edge branches that
-// the integration tests cannot reach without the real binaries installed.
-// Strategy: install fake `git`/`hg`/`jj`/`svn` executables at the front of
-// PATH. The stub records each invocation ("$*") into $STUB_LOG, prints a
-// subcommand-specific canned output from $STUB_* environment variables, and
-// exits with the matching $STUB_*_CODE. This makes command construction and
-// output parsing fully deterministic and binary-independent.
-
 const stubSh = `#!/bin/sh
 printf '%s\n' "$*" >> "$STUB_LOG"
 out=""
@@ -68,8 +60,6 @@ fi
 exit "$code"
 `
 
-// installStub puts a fake executable with the given name at the front of PATH
-// and returns the path of its invocation log.
 func installStub(t *testing.T, name string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -102,8 +92,6 @@ func readCalls(t *testing.T, logPath string) []string {
 
 func stubCtx() context.Context { return context.Background() }
 
-// --- Mercurial ---
-
 func TestHgMetadata(t *testing.T) {
 	hg := Mercurial{}
 	if hg.Name() != "hg" || hg.DisplayName() != "Mercurial" {
@@ -129,7 +117,7 @@ func TestHgStatus(t *testing.T) {
 func TestHgDiffFileFilter(t *testing.T) {
 	log := installStub(t, "hg")
 	t.Setenv("STUB_DIFF", "patch\n")
-	// hg has no staging area: cached must be ignored, file must be passed.
+
 	out, err := (Mercurial{}).Diff(stubCtx(), t.TempDir(), true, "a.txt")
 	if err != nil || out != "patch\n" {
 		t.Fatalf("Diff = %q, %v", out, err)
@@ -242,8 +230,6 @@ func TestHgCheckoutBookmarkFailureAbortsUpdate(t *testing.T) {
 		t.Errorf("update must not run after bookmark failure, calls = %v", calls)
 	}
 }
-
-// --- Jujutsu ---
 
 func TestJjMetadata(t *testing.T) {
 	jj := Jujutsu{}
@@ -379,8 +365,6 @@ func TestJjIsCleanAllPaths(t *testing.T) {
 		t.Fatalf("summary dirty: clean=%v err=%v, want false/nil", clean, err)
 	}
 
-	// Old jj (<0.26): --summary unsupported; both historical wordings of the
-	// clean marker must be accepted (#1853).
 	t.Setenv("STUB_DIFF_CODE", "1")
 	for _, wording := range []string{
 		"Working copy changes: The working copy has no changes",
@@ -393,14 +377,12 @@ func TestJjIsCleanAllPaths(t *testing.T) {
 		}
 	}
 
-	// Fallback path with a non-clean prose output stays dirty.
 	t.Setenv("STUB_OUT", "Working copy changes:\nM file\n")
 	clean, err = (Jujutsu{}).IsClean(stubCtx(), dir)
 	if err != nil || clean {
 		t.Fatalf("fallback dirty prose: clean=%v err=%v, want false/nil", clean, err)
 	}
 
-	// Both commands failing is an error, never a silent clean.
 	t.Setenv("STUB_OUT", "")
 	t.Setenv("STUB_CODE", "1")
 	t.Setenv("STUB_ERR", "no repo")
@@ -440,8 +422,6 @@ func TestJjCheckoutBookmarkFailure(t *testing.T) {
 		t.Errorf("switch must not run after bookmark failure, calls = %v", calls)
 	}
 }
-
-// --- Subversion ---
 
 func TestSvnMetadata(t *testing.T) {
 	svn := Subversion{}
@@ -581,8 +561,6 @@ func TestSvnCheckoutNotSupported(t *testing.T) {
 	}
 }
 
-// --- Git branches not covered by the integration tests ---
-
 func TestGitCheckout(t *testing.T) {
 	log := installStub(t, "git")
 
@@ -615,7 +593,6 @@ func TestGitAheadBehind(t *testing.T) {
 	installStub(t, "git")
 	dir := t.TempDir()
 
-	// rev-list --left-right --count @{upstream}...HEAD prints "<behind>\t<ahead>".
 	cases := []struct {
 		out           string
 		ahead, behind int
@@ -628,7 +605,7 @@ func TestGitAheadBehind(t *testing.T) {
 		{out: "0\t0\n", ahead: 0, behind: 0, ok: true},
 		{out: "only-one-field\n", ok: false},
 		{out: "a\tb\n", ok: false},
-		{code: "1", ok: false}, // no upstream configured
+		{code: "1", ok: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.out, func(t *testing.T) {
@@ -686,15 +663,12 @@ func TestGitCurrentBranchDetachedHead(t *testing.T) {
 		t.Fatalf("detached HEAD = %q, %v; want short sha", branch, err)
 	}
 
-	// Empty short sha keeps the literal HEAD label rather than an empty one.
 	t.Setenv("STUB_SHA", "")
 	branch, err = (Git{}).CurrentBranch(stubCtx(), t.TempDir())
 	if err != nil || branch != "HEAD" {
 		t.Fatalf("empty sha fallback = %q, %v; want HEAD", branch, err)
 	}
 }
-
-// --- runVCSCmd error paths ---
 
 func TestRunVCSCmdExitErrorIncludesStderr(t *testing.T) {
 	installStub(t, "git")
@@ -711,7 +685,7 @@ func TestRunVCSCmdExitErrorIncludesStderr(t *testing.T) {
 }
 
 func TestRunVCSCmdMissingBinary(t *testing.T) {
-	// Not on PATH: exec fails with a non-ExitError, which must wrap the cause.
+
 	_, err := runVCSCmd(stubCtx(), t.TempDir(), "definitely-not-a-real-vcs-binary", "status")
 	if err == nil {
 		t.Fatal("want error")
@@ -720,8 +694,6 @@ func TestRunVCSCmdMissingBinary(t *testing.T) {
 		t.Errorf("err = %v, want wrapped lookup failure", err)
 	}
 }
-
-// --- Summary branches ---
 
 func TestSummaryNotARepo(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -746,7 +718,6 @@ func TestSummaryGitAheadBehind(t *testing.T) {
 	t.Setenv("STUB_STATUS_PORCELAIN", "")
 	t.Setenv("STUB_AB", "3\t2\n")
 
-	// rev-list --left-right --count @{upstream}...HEAD prints "<behind>\t<ahead>".
 	got := Summary(stubCtx(), dir)
 	for _, want := range []string{"in a Git repository", "on main", "clean working tree", "3 behind", "2 ahead"} {
 		if !strings.Contains(got, want) {
@@ -767,7 +738,7 @@ func TestSummaryGitDirtyCount(t *testing.T) {
 	t.Setenv("STUB_BRANCH", "main\n")
 	t.Setenv("STUB_STATUS_PORCELAIN", " M a.go\n?? b.txt\n")
 	t.Setenv("STUB_STATUS", " M a.go\n?? b.txt\n")
-	t.Setenv("STUB_AB_CODE", "1") // no upstream
+	t.Setenv("STUB_AB_CODE", "1")
 
 	got := Summary(stubCtx(), dir)
 	if !strings.Contains(got, "2 uncommitted file(s)") {

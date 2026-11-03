@@ -34,7 +34,7 @@ func (m *onboardModel) View() tea.View {
 	}
 
 	header := lipgloss.NewStyle().Bold(true).Render(m.tr("title"))
-	stepLabel := fmt.Sprintf("[%d/%d]", int(m.step)+1, int(onboardStepDone)+1) // #909: IM step rendered [7/6]
+	stepLabel := fmt.Sprintf("[%d/%d]", int(m.step)+1, int(onboardStepDone)+1)
 
 	top := lipgloss.NewStyle().
 		Width(m.width).
@@ -86,7 +86,7 @@ func (m *onboardModel) viewVendor() string {
 	if len(m.vendorFiltered) == 0 {
 		b.WriteString("  No matching vendors.\n")
 	}
-	// Custom provider entry (always shown)
+
 	{
 		cursor := "  "
 		if m.vendorCursor == len(m.vendorFiltered) {
@@ -141,7 +141,7 @@ func (m *onboardModel) viewEndpoint() string {
 
 func (m *onboardModel) viewModel() string {
 	var b strings.Builder
-	// For custom providers, use the custom name instead of endpoint display name
+
 	if m.selectedVendor.ID == "" && m.customResolved != nil {
 		b.WriteString(m.trf("step_model", m.customResolved.EndpointName) + ":\n\n")
 	} else {
@@ -157,9 +157,6 @@ func (m *onboardModel) viewModel() string {
 		b.WriteString(fmt.Sprintf("%s %s\n\n", m.tr("filter"), m.modelFilter.View()))
 	}
 
-	// #1749: the list used to hard-cut at the first 20 items while the
-	// cursor could navigate to ANY index - past 20 the user selected blind.
-	// Render a 20-row window that FOLLOWS the cursor instead.
 	const maxModelRows = 20
 	start := 0
 	if m.modelCursor >= maxModelRows {
@@ -195,7 +192,6 @@ func (m *onboardModel) viewOptional() string {
 	var b strings.Builder
 	b.WriteString(m.tr("step_optional") + ":\n\n")
 
-	// Permission mode with color + description
 	cursor := "  "
 	if m.optCursor == 0 {
 		cursor = "> "
@@ -204,7 +200,6 @@ func (m *onboardModel) viewOptional() string {
 	modeDesc := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.tr("mode_" + modeLabels[m.optMode]))
 	b.WriteString(fmt.Sprintf("  %s%s %s  %s\n", cursor, m.tr("permission_mode"), modeLabel, modeDesc))
 
-	// Knight
 	cursor = "  "
 	if m.optCursor == 1 {
 		cursor = "> "
@@ -215,7 +210,6 @@ func (m *onboardModel) viewOptional() string {
 	}
 	b.WriteString(fmt.Sprintf("  %s%s %s\n", cursor, m.tr("knight"), onOff))
 
-	// A2A
 	cursor = "  "
 	if m.optCursor == 2 {
 		cursor = "> "
@@ -232,13 +226,10 @@ func (m *onboardModel) viewIM() string {
 	var b strings.Builder
 	b.WriteString(m.tr("step_im") + ":\n\n")
 
-	// Telegram — single bot_token input
 	b.WriteString(m.viewIMChannel(0, m.tr("im_telegram"), m.tr("im_telegram_hint")))
 
-	// Discord — single bot_token input
 	b.WriteString(m.viewIMChannel(1, m.tr("im_discord"), m.tr("im_discord_hint")))
 
-	// QQ — app_id + app_secret
 	focus := "  "
 	if m.imCursor == 2 {
 		focus = "▸ "
@@ -248,7 +239,6 @@ func (m *onboardModel) viewIM() string {
 	b.WriteString("  " + m.tr("im_qq_secret") + " " + m.imInputs[3].View() + "\n")
 	b.WriteString("  " + lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.tr("im_qq_hint")) + "\n\n")
 
-	// WeChat — QR scan only, no input
 	focus = "  "
 	if m.imCursor == 3 {
 		focus = "> "
@@ -279,7 +269,6 @@ func (m *onboardModel) viewCustom() string {
 	var b strings.Builder
 	b.WriteString(m.tr("step_custom") + ":\n\n")
 
-	// Protocol selector
 	protoCursor := "  "
 	if m.customCursor == 0 {
 		protoCursor = "> "
@@ -287,7 +276,6 @@ func (m *onboardModel) viewCustom() string {
 	protoName := customProtocols[m.customProtocolIdx]
 	b.WriteString(fmt.Sprintf("  %s%s %s ←→\n", protoCursor, m.tr("custom_protocol"), protoName))
 
-	// Name
 	nameCursor := "  "
 	if m.customCursor == 1 {
 		nameCursor = "▸ "
@@ -295,7 +283,6 @@ func (m *onboardModel) viewCustom() string {
 	b.WriteString(fmt.Sprintf("\n  %s%s\n", nameCursor, m.tr("custom_name")))
 	b.WriteString("    " + m.customFields[0].View() + "\n")
 
-	// URL
 	urlCursor := "  "
 	if m.customCursor == 2 {
 		urlCursor = "▸ "
@@ -303,7 +290,6 @@ func (m *onboardModel) viewCustom() string {
 	b.WriteString(fmt.Sprintf("\n  %s%s\n", urlCursor, m.tr("custom_url")))
 	b.WriteString("    " + m.customFields[1].View() + "\n")
 
-	// API Key
 	keyCursor := "  "
 	if m.customCursor == 3 {
 		keyCursor = "▸ "
@@ -311,7 +297,6 @@ func (m *onboardModel) viewCustom() string {
 	b.WriteString(fmt.Sprintf("\n  %s%s\n", keyCursor, m.tr("custom_apikey")))
 	b.WriteString("    " + m.customFields[2].View() + "\n")
 
-	// Model
 	modelCursor := "  "
 	if m.customCursor == 4 {
 		modelCursor = "▸ "
@@ -319,7 +304,6 @@ func (m *onboardModel) viewCustom() string {
 	b.WriteString(fmt.Sprintf("\n  %s%s\n", modelCursor, m.tr("custom_model")))
 	b.WriteString("    " + m.customFields[3].View() + "\n")
 
-	// Submit
 	submitCursor := "  "
 	if m.customCursor == 5 {
 		submitCursor = "> "

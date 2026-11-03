@@ -72,7 +72,6 @@ func TestMultipleSessionsSameWorkspace(t *testing.T) {
 	}
 	t.Cleanup(func() { Remove("sess-a"); Remove("sess-b") })
 
-	// Both files should exist independently
 	got1, err := Read("sess-a")
 	if err != nil {
 		t.Fatalf("Read sess-a: %v", err)
@@ -183,16 +182,14 @@ func TestProcessExists(t *testing.T) {
 }
 
 func TestReadAllAutoCleansStaleAndLegacy(t *testing.T) {
-	// Write a stale-PID file
+
 	stale := PortFile{Addr: "127.0.0.1:1", Token: "stale", PID: 999999, SessionID: "auto-stale", Workspace: "/tmp/ws", Mode: "auto"}
 	Write(stale)
 
-	// Write a legacy file (no session_id) manually
 	home := homeDir()
 	legacyPath := filepath.Join(home, ".ggcode", "run", "legacy-no-session.json")
 	os.WriteFile(legacyPath, []byte(`{"addr":"127.0.0.1:2","token":"legacy","pid":`+fmt.Sprintf("%d", os.Getpid())+`,"workspace":"/tmp","mode":"auto"}`), 0o600)
 
-	// Write a valid file
 	valid := PortFile{Addr: "127.0.0.1:3", Token: "valid", PID: os.Getpid(), SessionID: "auto-valid", Workspace: "/tmp/ws", Mode: "auto"}
 	Write(valid)
 	t.Cleanup(func() {
@@ -205,7 +202,7 @@ func TestReadAllAutoCleansStaleAndLegacy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
 	}
-	// The valid one should be present
+
 	foundValid := false
 	for _, pf := range all {
 		if pf.SessionID == "auto-valid" {
@@ -215,11 +212,11 @@ func TestReadAllAutoCleansStaleAndLegacy(t *testing.T) {
 	if !foundValid {
 		t.Error("expected valid port file in ReadAll results")
 	}
-	// The stale file should have been auto-removed
+
 	if _, err := os.Stat(path("auto-stale")); err == nil {
 		t.Error("stale port file should have been auto-removed")
 	}
-	// The legacy file should have been auto-removed
+
 	if _, err := os.Stat(legacyPath); err == nil {
 		t.Error("legacy port file should have been auto-removed")
 	}

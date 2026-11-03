@@ -60,7 +60,7 @@ func TestSummary_GitDetachedHead(t *testing.T) {
 		t.Skip("git not installed")
 	}
 	dir := setupGitRepo(t)
-	// Add a second commit then detach to first
+
 	c := exec.Command("git", "add", "f2.txt")
 	c.Dir = dir
 	setGitEnv(c)
@@ -75,7 +75,6 @@ func TestSummary_GitDetachedHead(t *testing.T) {
 	setGitEnv(c)
 	c.Run()
 
-	// Detach to first commit
 	c = exec.Command("git", "rev-parse", "HEAD~1")
 	c.Dir = dir
 	out, _ := c.Output()
@@ -87,7 +86,7 @@ func TestSummary_GitDetachedHead(t *testing.T) {
 	c.Run()
 
 	got := Summary(context.Background(), dir)
-	// Should not crash and should still mention Git repository
+
 	if !strings.Contains(got, "Git repository") {
 		t.Errorf("expected Git repository in %q", got)
 	}

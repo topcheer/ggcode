@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-// SkillActionRecommendation is a deterministic governance suggestion Knight can
-// surface to the operator without taking any destructive action on its own.
 type SkillActionRecommendation struct {
 	Ref      string
 	Action   string
@@ -28,8 +26,6 @@ func (r SkillActionRecommendation) formatHuman() string {
 	return strings.Join(parts, " ")
 }
 
-// SkillGovernanceAudit summarizes active/staging scope health and the strongest
-// operator-facing recommendations for pruning or tightening the skill set.
 type SkillGovernanceAudit struct {
 	Window              time.Duration
 	GeneratedAt         time.Time
@@ -64,8 +60,6 @@ func (a SkillGovernanceAudit) FormatHuman() string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// RunGovernanceAudit generates a read-only governance summary. Unlike
-// RunSelfReflection, it does not write back to semantic memory.
 func (k *Knight) RunGovernanceAudit(window time.Duration) (SkillGovernanceAudit, error) {
 	if k == nil {
 		return SkillGovernanceAudit{}, fmt.Errorf("knight: nil receiver")
@@ -75,10 +69,7 @@ func (k *Knight) RunGovernanceAudit(window time.Duration) (SkillGovernanceAudit,
 	}
 	active, err := k.index.ActiveSkills()
 	if err != nil {
-		// #1262: Scan() failures must not surface as "0 skills, healthy" -
-		// that is exactly the empty-list illusion #770 banned for the index
-		// paths. Propagate so the caller shows an error instead of a fake
-		// clean report.
+
 		return SkillGovernanceAudit{}, fmt.Errorf("knight: governance audit: active skill index unavailable: %w", err)
 	}
 	staging, err := k.index.StagingSkills()
@@ -243,12 +234,7 @@ func (k *Knight) findOverlapRecommendations(active []*SkillEntry) []SkillActionR
 			contentByRef[formatSkillRef(entry.Scope, entry.Name)] = string(body)
 		}
 	}
-	// #1263: two different active entries declaring the same (scope, name)
-	// is duplicate registration - the exact condition the pairwise check
-	// below cannot report, because computeRuleBasedOverlap deliberately
-	// self-skips same-scope-same-name comparisons (that skip exists for the
-	// staging-revision flow, where a staging skill rewrites its active twin).
-	// Detect it up front from the raw entry list.
+
 	type dupEntryRef struct{ ref, path string }
 	byName := make(map[string][]dupEntryRef, len(active))
 	for _, entry := range active {

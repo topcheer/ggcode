@@ -8,13 +8,12 @@ import (
 )
 
 var (
-	diffAddStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // green
-	diffRemoveStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // red
-	diffHeaderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))  // cyan
-	diffContextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))  // gray
+	diffAddStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	diffRemoveStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	diffHeaderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	diffContextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 )
 
-// FormatDiff formats a unified diff for TUI display.
 func FormatDiff(diff string) string {
 	if diff == "" {
 		return ""
@@ -45,7 +44,6 @@ func FormatDiff(diff string) string {
 		return ""
 	}
 
-	// Wrap with border
 	result := sb.String()
 	border := diffHeaderStyle.Render(strings.Repeat("─", 40))
 	return fmt.Sprintf("%s\n%s%s", border, result, border)

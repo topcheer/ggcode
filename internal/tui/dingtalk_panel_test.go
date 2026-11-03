@@ -209,11 +209,6 @@ func TestDingTalkBindingLabelsMutedActiveAvailable(t *testing.T) {
 	}
 }
 
-// TestCreateDingtalkAdapterMutationFlow pins the #1367 batch-1 migration:
-// createDingtalkAdapterCmd no longer touches config on the Cmd goroutine -
-// it returns configMutationMsg; routing it through Update performs the
-// write on the main loop and the follow-up chain still reaches
-// dingtalkBindResultMsg.
 func TestCreateDingtalkAdapterMutationFlow(t *testing.T) {
 	m := newTestModel()
 	if m.config == nil {
@@ -239,7 +234,7 @@ func TestCreateDingtalkAdapterMutationFlow(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("follow-up Cmd missing")
 	}
-	// The follow-up chain must end in the panel's result message.
+
 	final := cmd()
 	if _, ok := final.(dingtalkBindResultMsg); !ok {
 		t.Fatalf("follow-up chain ended in %#v, want dingtalkBindResultMsg", final)

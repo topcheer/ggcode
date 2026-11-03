@@ -36,8 +36,7 @@ When changing exported APIs, run ` + "`go vet ./...`" + ` before pushing.`,
 		},
 		{
 			name: "make-target-flagged",
-			// #982: make detection is line-anchored; inline prose mention
-			// alone does not hit, the command form does.
+
 			body:     "Build gate:\n\n```make\nmake verify-ci\n```\nbefore declaring success.",
 			wantHit:  true,
 			wantSubs: "make",
@@ -83,14 +82,14 @@ scope: global
 # Generic rule
 
 Always prefer composition over inheritance.`
-	// frontmatter mentions "ggcode" but body does not — should NOT downgrade.
+
 	if reason := scopeDowngradeReason(projDir, content); reason != "" {
 		t.Fatalf("frontmatter-only mention should not downgrade, got %q", reason)
 	}
 }
 
 func TestScopeDowngradeIgnoresGenericBasename(t *testing.T) {
-	// "src" is too generic to be a project signal.
+
 	projDir := filepath.Join("/tmp", "src")
 	body := "Always wrap errors with fmt.Errorf for src maintainability."
 	if reason := scopeDowngradeReason(projDir, body); reason != "" {

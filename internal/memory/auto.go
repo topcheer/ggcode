@@ -15,33 +15,18 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// AutoMemory manages automatic memory persistence in ~/.ggcode/memory/.
 type AutoMemory struct {
 	dir string
-	// projectRoot is set only for project-scoped instances (NewProjectAutoMemory).
-	// It anchors injection-time staleness checks (annotateStaleInline) so that
-	// relative paths inside memory entries are resolved against the right
-	// workspace. Global memory leaves it empty and the check degrades to a no-op
-	// (HOME would be a meaningless anchor for repo-style paths).
+
 	projectRoot string
-	// #1752 case 2: Load/Merge/Save read-modify-write cycles from concurrent
-	// goroutines (reflection, /reflect, daemon) raced and the later write
-	// silently dropped the earlier one; a bare WriteFile also let a reader
-	// see a torn file. A package-level per-path mutex serializes writers,
-	// and writes go through temp+rename so readers never see partial files.
+
 	mu sync.Mutex
-	// useOnce debounces RecordUse per key per process (sa-85): prompt
-	// refresh storms rebuild the index on every save; without the debounce
-	// one burst would multiply usage counters.
+
 	useOnce sync.Map
 }
 
-// writeMu serializes writes to the same memory FILE path across separate
-// AutoMemory instances (global + project memory share nothing, but two
-// project instances for the same dir can exist in one process).
-var writeMu sync.Map // path -> *sync.Mutex
+var writeMu sync.Map
 
-// NewAutoMemory creates an AutoMemory instance for global memory (~/.ggcode/memory/).
 func NewAutoMemory() *AutoMemory {
 	home := config.HomeDir()
 	dir := filepath.Join(home, ".ggcode", "memory")
@@ -49,12 +34,9 @@ func NewAutoMemory() *AutoMemory {
 	return &AutoMemory{dir: dir}
 }
 
-// NewProjectAutoMemory creates an AutoMemory instance for project-scoped memory.
-// Uses <workingDir>/.ggcode/memory/ directly — no parent directory traversal.
-// Returns nil only if workingDir is the user's HOME directory.
 func NewProjectAutoMemory(workingDir string) *AutoMemory {
 	home := config.HomeDir()
-	// Never treat HOME as a project root to avoid polluting ~/.ggcode/
+
 	if strings.EqualFold(workingDir, home) {
 		return nil
 	}
@@ -63,54 +45,26 @@ func NewProjectAutoMemory(workingDir string) *AutoMemory {
 	return &AutoMemory{dir: dir, projectRoot: workingDir}
 }
 
-// SaveMemory saves a memory entry to ~/.ggcode/memory/{key}.md.
 func (am *AutoMemory) SaveMemory(key, content string) error {
 	return am.SaveMemoryWithSource(key, content, "save_memory")
 }
 
-// SaveMemoryWithSource saves a memory entry and records its PROVENANCE
-// (sa-85): which subsystem created it. The source label lands in the
-// .usage.json sidecar on first write of the key and survives later
-// overwrites, so every prompt-injected memory can be traced to its origin
-// (arXiv:2608.29606 provenance-aware memory).
 func (am *AutoMemory) SaveMemoryWithSource(key, content, source string) error {
 	return am.SaveMemoryWithSourceActor(key, content, source, "")
 }
 
-// SaveMemoryWithSourceActor (r29) is SaveMemoryWithSource with the WRITER
-// identity recorded alongside the source label (actor-aware provenance,
-// completing the arXiv:2608.29606 actor dimension: sub-agents and swarm
-// teammates share this AutoMemory, and without an actor field a
-// sub-agent's overwrite of a main-agent memory left zero trace of who
-// wrote it). Empty actor = legacy callers, byte-identical behavior.
 func (am *AutoMemory) SaveMemoryWithSourceActor(key, content, source, actor string) error {
-	// #775: sanitizeKey is not injective ("a/b"/"a.b"/"a b" all -> "a-b";
-	// pure-CJK keys -> "" -> untitled.md, so ALL Chinese memories shared one
-	// file and silently overwrote each other). disambiguateKey appends a short
-	// stable hash for keys whose sanitization collides.
+
 	safe := disambiguateKey(key, sanitizeKey(key))
 	path := filepath.Join(am.dir, safe+".md")
 
-	// r401 GAP-B: cross-process write safety. writeMu below only serializes
-	// writers within ONE process; two ggcode instances (a seat process plus a
-	// subagent process, or a daemon reflecting while a session saves) share
-	// this dir and raced last-write-wins, with .usage.json sidecar updates
-	// interleaving between the two. util.FileLock (flock / LockFileEx, shared
-	// with auth store and knight) serializes across processes; on lock
-	// failure we degrade to the previous single-process behavior rather than
-	// blocking memory writes on lock-infrastructure faults (knight
-	// semantic_memory.go precedent).
 	if unlock, err := util.FileLock(am.dir + ".lock"); err == nil {
 		defer unlock()
 	} else {
-		// #3120 V4: fail-open is deliberate (memory writes must not block
-		// on lock-infrastructure faults) but must be observable.
+
 		debug.Log("memory", "automemory filelock failed, degraded to unlocked write: %v", err)
 	}
 
-	// #1752 case 2: atomic write - temp file in the same directory, then
-	// rename (atomic on POSIX and Windows-NT). Concurrent readers see
-	// either the old or the new content, never a torn file.
 	tmp, err := os.CreateTemp(am.dir, safe+".tmp-*")
 	if err != nil {
 		return err
@@ -134,20 +88,13 @@ func (am *AutoMemory) SaveMemoryWithSourceActor(key, content, source, actor stri
 	mu := muAny.(*sync.Mutex)
 	mu.Lock()
 	defer mu.Unlock()
-	// r488 non-destructive overwrite (Mem++, arXiv:2610.02002): archive the
-	// outgoing version into .history/ before the rename below destroys it.
-	// Fail-open per #3120 precedent - a save must not block on archive
-	// faults - but the potential loss stays observable via debug.Log.
+
 	archived, archErr := am.archiveVersion(safe, path)
 	if archErr != nil {
 		debug.Log("memory", "history archive failed for %q (continuing overwrite): %v", safe, archErr)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		// #3818: archiveVersion already MOVED the live file away; a failed
-		// swap-in used to leave both gone (old only in .history, new content
-		// deleted below) - the key vanished from prompts until the next
-		// successful save. Roll the archived version back into place first;
-		// the tmp file is then cleaned up as before.
+
 		if archived != "" {
 			if rbErr := os.Rename(archived, path); rbErr != nil {
 				debug.Log("memory", "history rollback failed for %q (live file lost, archived copy at %s): %v", safe, archived, rbErr)
@@ -158,15 +105,6 @@ func (am *AutoMemory) SaveMemoryWithSourceActor(key, content, source, actor stri
 	}
 	am.RecordProvenanceActor(safe, source, actor)
 
-	// r409 memory-poisoning defense (MINJA arXiv 2601.05504, sleeper
-	// poisoning arXiv 2605.15338): a poisoned entry persisted here would be
-	// inlined raw into EVERY future system prompt via loadForPrompt - one
-	// successful injection buys a persistent, unreviewed channel. Scan at the
-	// AutoMemory layer so every writer (save_memory tool, run-reflection,
-	// preference distill) is covered. Never blocks the save (a legitimate
-	// security writeup must still persist) - it marks a quarantine sidecar
-	// that loadForPrompt demotes to index-only. A clean re-save of the same
-	// key clears the flag so a fixed entry recovers.
 	if pat := DetectInjectionTaint(key, content); pat != "" {
 		if err := am.MarkTainted(safe, pat); err != nil {
 			debug.Log("memory", "taint sidecar write failed for %q: %v", safe, err)
@@ -177,11 +115,6 @@ func (am *AutoMemory) SaveMemoryWithSourceActor(key, content, source, actor stri
 	return nil
 }
 
-// LoadKey reads a single memory key's content (#1388). LoadAll merges EVERY
-// active key - callers that only own one key (e.g. reflection's
-// run-insights) must not use it: the merged text re-enters their own key on
-// save and cross-pollutes unrelated memories into every prompt injection.
-// Returns ("", nil) when the key has no file yet (first write).
 func (am *AutoMemory) LoadKey(key string) (string, error) {
 	safe := disambiguateKey(key, sanitizeKey(key))
 	path := filepath.Join(am.dir, safe+".md")
@@ -195,9 +128,6 @@ func (am *AutoMemory) LoadKey(key string) (string, error) {
 	return string(data), nil
 }
 
-// LoadIndex loads all memory file keys and returns a formatted index (titles
-// only) plus the list of file paths. Applies curation filtering (expiry +
-// dedup) so the system prompt only shows active memories.
 func (am *AutoMemory) LoadIndex() (string, []string, error) {
 	metas, err := am.collectMetas()
 	if err != nil {
@@ -214,10 +144,6 @@ func (am *AutoMemory) LoadIndex() (string, []string, error) {
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
 
-	// sa-85 provenance display + usage feedback: inject the compact
-	// provenance marker for entries with recorded usage so the model can
-	// weigh each memory's track record, and count this injection as one
-	// use per key (debounced).
 	var builder strings.Builder
 	for _, key := range keys {
 		line := fmt.Sprintf("- %s", key)
@@ -231,9 +157,6 @@ func (am *AutoMemory) LoadIndex() (string, []string, error) {
 	return strings.TrimSpace(builder.String()), files, nil
 }
 
-// LoadAll loads all memory files and returns their combined content.
-// Applies curation filtering (expiry + dedup) so only active memories
-// are injected into the LLM context.
 func (am *AutoMemory) LoadAll() (string, []string, error) {
 	metas, err := am.collectMetas()
 	if err != nil {
@@ -258,7 +181,6 @@ func (am *AutoMemory) LoadAll() (string, []string, error) {
 	return strings.TrimSpace(builder.String()), files, nil
 }
 
-// List returns all memory keys (unfiltered — includes expired/deduped).
 func (am *AutoMemory) List() ([]string, error) {
 	entries, err := os.ReadDir(am.dir)
 	if err != nil {
@@ -278,9 +200,6 @@ func (am *AutoMemory) List() ([]string, error) {
 	return keys, nil
 }
 
-// collectMetas reads the memory directory and returns MemoryMeta for each .md file.
-// sa-85: each meta carries its recorded provenance/usage from the sidecar
-// so consumers (HealthReport) can surface usage signals without re-reading.
 func (am *AutoMemory) collectMetas() ([]MemoryMeta, error) {
 	entries, err := os.ReadDir(am.dir)
 	if err != nil {
@@ -305,31 +224,22 @@ func (am *AutoMemory) collectMetas() ([]MemoryMeta, error) {
 			meta.Uses = rec.Uses
 			meta.LastUsedAt = rec.LastUsed
 			meta.Source = rec.Source
-			meta.Outcome = rec.Outcome     // sa-139 MemGuard lifecycle metadata
-			meta.Conflicts = rec.Conflicts // sa-146 REALM reconsolidation signal
+			meta.Outcome = rec.Outcome
+			meta.Conflicts = rec.Conflicts
 		}
 		metas = append(metas, meta)
 	}
 	return metas, nil
 }
 
-// MemoryEntryInfo is the read-only projection returned by ListDetailed:
-// enough for the agent to decide which entries to re-save, supersede, or
-// delete, without loading full contents.
 type MemoryEntryInfo struct {
 	Key       string
 	SizeBytes int64
 	Uses      int
 	LastUsed  time.Time
-	Preview   string // first content line, markdown stripped, capped
+	Preview   string
 }
 
-// ListDetailed returns key/size/usage/preview for every stored entry
-// (including expired/deduped ones — visibility first, the agent judges).
-// This is the read side of the memory lifecycle: save_memory writes,
-// delete_memory removes, but until now the agent had no way to SEE what
-// is stored, so outdated entries persisted silently (SelfMem gap: agent
-// as memory curator needs an inventory view).
 func (am *AutoMemory) ListDetailed() ([]MemoryEntryInfo, error) {
 	metas, err := am.collectMetas()
 	if err != nil {
@@ -349,13 +259,11 @@ func (am *AutoMemory) ListDetailed() ([]MemoryEntryInfo, error) {
 	return out, nil
 }
 
-// previewLine returns the first non-heading, non-empty line of a memory
-// body, capped to max runes.
 func previewLine(body string, max int) string {
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
-			continue // skip blank and markdown heading lines
+			continue
 		}
 		runes := []rune(line)
 		if len(runes) > max {
@@ -366,7 +274,6 @@ func previewLine(body string, max int) string {
 	return ""
 }
 
-// Clear removes all memory files.
 func (am *AutoMemory) Clear() error {
 	entries, err := os.ReadDir(am.dir)
 	if err != nil {
@@ -381,57 +288,24 @@ func (am *AutoMemory) Clear() error {
 	return nil
 }
 
-// Dir returns the memory directory path.
 func (am *AutoMemory) Dir() string {
 	return am.dir
 }
 
-// maxInlineBytes is the per-entry size limit for inlining memory content
-// directly into the system prompt. Entries larger than this are kept as
-// title-only index entries. 1200 bytes ~ 300 tokens - enough for a concise
-// build-process note or architecture decision, small enough to stay cheap.
 const maxInlineBytes = 1200
 
-// maxTotalInlineBytes is the combined size budget for all inlined memory
-// entries. This prevents memory content from consuming too much of the
-// context window. 6000 bytes ≈ 1500 tokens.
 const maxTotalInlineBytes = 6000
 
-// MemoryEntry pairs a curated memory's metadata with its file content.
 type MemoryEntry struct {
 	Key     string
 	Content string
 	Meta    MemoryMeta
 }
 
-// LoadForPrompt returns curated memory entries split into two groups:
-//
-//   - inline: entries whose full content should be injected directly into the
-//     system prompt. These are persistent-category entries (architecture
-//     decisions, build processes, design docs) that are small enough to fit
-//     within the inline budget.
-//   - indexOnly: entries whose titles should be listed as a reference index.
-//     The LLM can read_file these when needed. This includes transient,
-//     evolving, and oversized persistent entries.
-//
-// This implements relevance-free auto-injection: persistent knowledge from
-// previous sessions is immediately available in context without requiring the
-// LLM to manually read_file each memory entry.
-//
-// sa-85: each call records one prompt-injection "use" per injected key
-// (inline entries count more strongly - their content was actually served).
-// Diagnostics-only callers (HealthReport) use loadForPrompt(false) so a
-// health check does not inflate the usage telemetry it reports.
 func (am *AutoMemory) LoadForPrompt() (inline []MemoryEntry, indexOnly []string, err error) {
 	return am.loadForPrompt(true, "")
 }
 
-// LoadForPromptForTask is LoadForPrompt with a task-relevance gate
-// (sa-113, Self-RAG [IsRel] deterministic equivalent): when task is
-// non-empty, persistent entries lexically unrelated to the task degrade
-// from inline to index-only instead of occupying the system prompt.
-// Callers that have a concrete task (sub-agent prompts) should prefer
-// this; callers without one keep LoadForPrompt and the gate stays off.
 func (am *AutoMemory) LoadForPromptForTask(task string) (inline []MemoryEntry, indexOnly []string, err error) {
 	return am.loadForPrompt(true, task)
 }
@@ -443,10 +317,6 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 	}
 	now := time.Now()
 
-	// Superseded entries (memory evolution, supersede.go): retired from
-	// prompt injection and recall arbitration, but kept on disk for history
-	// (read_file still works). This also stops the ghost-context guard from
-	// re-annotating a conflict that has already been structurally resolved.
 	if sup := am.SupersededSet(); len(sup) > 0 {
 		filtered := make([]MemoryMeta, 0, len(metas))
 		for _, m := range metas {
@@ -458,10 +328,6 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 		metas = filtered
 	}
 
-	// r10 user-forgotten entries (forget.go): the user explicitly asked to
-	// forget these - stronger than supersession: excluded from both the
-	// inline channel AND the index list (an index entry would invite the
-	// model to read it back). Disk file remains until GC digests it.
 	if fg := am.ForgottenSet(); len(fg) > 0 {
 		filtered := make([]MemoryMeta, 0, len(metas))
 		for _, m := range metas {
@@ -475,8 +341,6 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 
 	active, _, _, _ := curateEntries(metas, now)
 
-	// Sort active entries: persistent first (inline priority), then by key
-	// for deterministic output.
 	sort.Slice(active, func(i, j int) bool {
 		if active[i].Category == CategoryPersistent && active[j].Category != CategoryPersistent {
 			return true
@@ -488,16 +352,9 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 	})
 
 	totalInline := 0
-	// sa-147 (LIMBO arXiv:2609.14138, inference-time memory allocation):
-	// the total inline budget is not a constant. The store-wide
-	// Consumed/Uses ratio (consumption.go) scales it between the floor
-	// (25%) and the ceiling (100%); fail-open returns the full constant
-	// when no consumption signal exists yet, so fresh stores and legacy
-	// sidecars behave exactly as before.
+
 	totalBudget := am.EffectiveInlineBudget()
-	// sa-113 task-relevance gate: pre-read persistent candidates once to
-	// build the IDF statistics, then score each inline decision. Only the
-	// persistent channel is gated - the index list always stays complete.
+
 	var relGate *relevanceGate
 	if task != "" {
 		var cands []relCandidate
@@ -512,11 +369,7 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 		relGate = newRelevanceGate(task, cands)
 	}
 	for _, m := range active {
-		// r409: quarantined entries (injection-pattern match at write time)
-		// are never auto-inlined into the system prompt - the persistent
-		// channel MINJA demonstrated. They stay index-only so the model can
-		// still retrieve them via read_file, which runs through the
-		// externalContentTools wrap (agent guard) - closed loop.
+
 		if pat, tainted := am.TaintOf(m.Key); tainted {
 			indexOnly = append(indexOnly, m.Key+" [tainted: "+pat+"]")
 			debug.Log("memory", "skipping inline of tainted entry %q (pattern %q)", m.Key, pat)
@@ -529,14 +382,6 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 			content = strings.TrimSpace(string(data))
 		}
 
-		// #3137: read-time content backstop for legacy stock and bypass
-		// writes. The write-time scan (SaveMemoryWithSource) only covers
-		// entries that went through THIS process's save path; entries
-		// persisted before r409, or written by another instance / a plain
-		// os.WriteFile, carry no .taint sidecar and would be inlined raw.
-		// One pattern scan per inline candidate is negligible next to the
-		// file read itself; a hit backfills the sidecar so the next startup
-		// takes the fast TaintOf path.
 		if pat := DetectInjectionTaint(m.Key, content); pat != "" {
 			indexOnly = append(indexOnly, m.Key+" [tainted: "+pat+"]")
 			debug.Log("memory", "read-time backstop tainted entry %q (pattern %q)", m.Key, pat)
@@ -546,7 +391,6 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 			continue
 		}
 
-		// Inline persistent entries that are small enough and within budget.
 		if m.Category == CategoryPersistent && len(content) > 0 && len(content) <= maxInlineBytes && totalInline+len(content) <= totalBudget && relGate.relevant(m.Key, content) {
 			inline = append(inline, MemoryEntry{
 				Key:     m.Key,
@@ -559,32 +403,16 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 		}
 	}
 
-	// Recall-time conflict arbitration ("ghost context" guard, sa-84):
-	// write-time CheckContradiction cannot catch pairs that drifted apart
-	// offline, so conflicting entries would otherwise be injected together
-	// with no warning. Arbitrate among the inline set and annotate the
-	// lower-trust side; winners stay clean. Annotation happens after
-	// budget accounting and is capped by maxRecallConflicts.
 	arb := ArbitrateInline(inline, now)
 	if arb.HasConflicts() {
 		arb.Annotate(inline)
 		debug.Log("memory", "recall arbitration: %d conflict(s) among %d inline entries", len(arb.Conflicts), len(inline))
 	}
 
-	// Injection-time staleness annotation (STALE, arXiv:2605.06527 "Implicit
-	// Conflict"): ArbitrateInline only fires when two conflicting entries are
-	// inline simultaneously; a single entry whose referenced paths have since
-	// disappeared (broken-path) would otherwise be injected as an unflagged
-	// false premise. ScanStaleness feeds only the offline repair loop, so this
-	// is the inline-side front line: deterministic, annotation-only, capped.
 	am.annotateStaleInline(inline)
 
 	if record {
-		// sa-146 (REALM arXiv:2609.33226 retrieval-driven reconsolidation):
-		// the recall episode itself revises the activated entries' standing -
-		// persist high-confidence losses so curation eviction and trust
-		// scoring can consume retrieval-time conflict signal. Ties and thin
-		// margins (< recallConflictLossGap) stay ephemeral annotations.
+
 		var losers []string
 		for _, c := range arb.Conflicts {
 			if c.WinnerTrust-c.LoserTrust >= recallConflictLossGap {
@@ -610,30 +438,19 @@ func sanitizeKey(key string) string {
 		}
 		return '-'
 	}, key)
-	// Collapse consecutive dashes and trim
+
 	for strings.Contains(safe, "--") {
 		safe = strings.ReplaceAll(safe, "--", "-")
 	}
 	return strings.Trim(safe, "-")
 }
 
-// disambiguateKey makes the sanitized filename injective on the original
-// key: clean ASCII keys keep their readable form; anything containing other
-// characters (spaces, punctuation, CJK) gets a short stable hash suffix so
-// distinct keys never map to the same file (#775).
 func disambiguateKey(key, safe string) string {
 	if safe == "" {
-		// Pure non-ASCII key (e.g. Chinese): keep "untitled" readable base,
-		// hash still separates different keys.
+
 		safe = "untitled"
 	}
-	// #1279: injective means sanitize(key) == key VERBATIM. The old charset
-	// loop passed keys like "a--b" or "-build-" as injective even though
-	// sanitizeKey folds "--"→"-" and trims edges - so "a--b" and "a-b"
-	// both landed on a-b.md and the later write silently overwrote the
-	// earlier (#775's "distinct keys never map to the same file" promise).
-	// Comparing against the folded result catches every mutation: charset
-	// replacements, dash collapses, and edge trims all change the string.
+
 	if safe == key {
 		return safe
 	}

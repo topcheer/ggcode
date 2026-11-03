@@ -5,15 +5,10 @@ import (
 	"testing"
 )
 
-// Spread Activation card (research-loop): one-hop spreading activation in
-// RetrieveExcluding - cases with no direct lexical hit but a strong
-// associative tie to a direct hit are recalled at a decayed score.
-
 func spreadStore(t *testing.T) (*ExperienceStore, string, string) {
 	t.Helper()
 	es := NewExperienceStore(spreadTempDir(t))
-	// A: direct hit for the query. B: zero lexical overlap with the query,
-	// but shares the file path token with A (structural co-edit tie). C: noise.
+
 	aID, _, err := es.Record("fix flaky cron retry", "restart with backoff", "success", []string{"internal/cron/runner.go"})
 	if err != nil {
 		t.Fatal(err)
@@ -33,8 +28,6 @@ func spreadTempDir(t *testing.T) string {
 	return t.TempDir()
 }
 
-// Case 1: zero-lexical-overlap case sharing a file with the direct hit is
-// recalled, ranked BELOW the direct hit, with a Via audit marker.
 func TestSpreadActivationSharedFileRecall(t *testing.T) {
 	es, aID, bID := spreadStore(t)
 	res, err := es.Retrieve("fix flaky cron retry", 5)
@@ -67,7 +60,6 @@ func TestSpreadActivationSharedFileRecall(t *testing.T) {
 	}
 }
 
-// Case 2: no direct hit -> no spread (no source, no activation).
 func TestSpreadRequiresDirectHit(t *testing.T) {
 	es, _, _ := spreadStore(t)
 	res, err := es.Retrieve("completely unrelated quantum tokens", 5)
@@ -79,8 +71,6 @@ func TestSpreadRequiresDirectHit(t *testing.T) {
 	}
 }
 
-// Case 3: excluding the linker kills the spread (excludeIDs applies to the
-// spread path too).
 func TestSpreadExcludesIDs(t *testing.T) {
 	es, aID, _ := spreadStore(t)
 	res, err := es.RetrieveExcluding("fix flaky cron retry", 5, map[string]bool{aID: true})

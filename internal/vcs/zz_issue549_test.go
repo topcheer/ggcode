@@ -1,9 +1,5 @@
 package vcs
 
-// Issue #549 bug E: detached HEAD must display the short commit SHA instead
-// of the literal "HEAD" that `git rev-parse --abbrev-ref HEAD` returns with
-// exit code 0.
-
 import (
 	"context"
 	"os/exec"

@@ -27,10 +27,6 @@ func snapshotReasoningChunk(t *testing.T, texts ...string) string {
 	return ""
 }
 
-// #1808: snapshot replay must preserve pure-whitespace separator chunks
-// (the runner keeps them deliberately - trimming glues words together);
-// routing them through NormalizeReasoningChunk returned "" and replay
-// rebuilt the text with words glued.
 func Test1808ReplayPreservesWhitespaceChunks(t *testing.T) {
 	got := snapshotReasoningChunk(t, "hello ", " ", "world")
 	if got != "hello  world" {
@@ -38,9 +34,6 @@ func Test1808ReplayPreservesWhitespaceChunks(t *testing.T) {
 	}
 }
 
-// #1808: sentinel replacement still works on the replay path, including
-// whitespace-padded forms (exact-match leaked them in the runner's stream
-// path; the replay path must not regress either direction).
 func Test1808ReplayReplacesSentinel(t *testing.T) {
 	for _, pad := range []string{"", "\n", " "} {
 		got := snapshotReasoningChunk(t, "before ", tunnel.RedactedReasoningSentinel+pad, " after")

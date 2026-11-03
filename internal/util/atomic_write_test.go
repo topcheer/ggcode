@@ -38,12 +38,10 @@ func TestAtomicWriteFile_Overwrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
 
-	// Create with 0600
 	if err := os.WriteFile(path, []byte("first"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
-	// Overwrite — should preserve 0600
 	err := AtomicWriteFile(path, []byte("second"), 0644)
 	if err != nil {
 		t.Fatalf("AtomicWriteFile error: %v", err)
@@ -67,12 +65,7 @@ func TestAtomicWriteFile_Overwrite(t *testing.T) {
 }
 
 func TestAtomicWriteFile_BadDir(t *testing.T) {
-	// The path uses an EXISTING FILE as a parent directory component: every
-	// platform fails this with ENOTDIR (or the Windows equivalent) and nothing
-	// is created on disk. A literal "/nonexistent/dir/..." path is wrong on
-	// Windows — the C:\ root is writable, so MkdirAll-style parents would
-	// actually create the tree (polluting the machine and making this test
-	// fail only depending on what ran before).
+
 	f := filepath.Join(t.TempDir(), "afile")
 	if err := os.WriteFile(f, []byte("x"), 0644); err != nil {
 		t.Fatal(err)
@@ -126,7 +119,7 @@ func TestDetectShell(t *testing.T) {
 }
 
 func TestDetectShell_Windows_Fallback(t *testing.T) {
-	// Test Windows fallback path (no shell found)
+
 	_, err := detectShell("windows",
 		func(name string) (string, error) { return "", os.ErrNotExist },
 		func(path string) (os.FileInfo, error) { return nil, os.ErrNotExist },
@@ -140,10 +133,10 @@ func TestDetectShell_Windows_Fallback(t *testing.T) {
 func TestDetectShell_Windows_GitBash(t *testing.T) {
 	spec, err := detectShell("windows",
 		func(name string) (string, error) { return "", os.ErrNotExist },
-		func(path string) (os.FileInfo, error) { return nil, nil }, // all paths exist
+		func(path string) (os.FileInfo, error) { return nil, nil },
 		func(key string) string { return "/fake" },
 	)
-	_ = spec // ignore unused
+	_ = spec
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -167,9 +160,6 @@ func TestAtomicWriteFile_EmptyData(t *testing.T) {
 	}
 }
 
-// TestAtomicWriteFileFollowsSymlink pins #1359: writing through a symlink
-// must update the real TARGET and leave the link intact. The old temp+rename
-// replaced the link with a regular file (target stale, repo forked).
 func TestAtomicWriteFileFollowsSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "real.txt")

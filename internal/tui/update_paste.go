@@ -11,21 +11,15 @@ type textPasteMsg struct {
 	Content string
 }
 
-// handlePaste handles the tea.PasteMsg case.
 func (m Model) handlePaste(msg tea.PasteMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {
 	if !m.inputReady {
 		return m, spinnerCmd
 	}
-	// #1775 case 1 (tmux sibling): the tmux menu intercepts KEY presses
-	// (update_keys L31) but had no paste gate - a paste while the menu is
-	// open fell through to whatever input lies beneath. The menu is
-	// transient; dropping the paste matches the key-channel semantics.
+
 	if m.tmuxMenuOpen {
 		return m, nil
 	}
-	// Paste is allowed while loading — the agent loop supports
-	// interleaving user messages mid-run.
-	// Forward paste to active panel inputs.
+
 	if m.providerPanel != nil {
 		if m.providerPanel.editingField != "" {
 			var cmd tea.Cmd
@@ -71,7 +65,7 @@ func (m Model) handlePaste(msg tea.PasteMsg, spinnerCmd tea.Cmd) (tea.Model, tea
 		m.mcpPanel.installInput += msg.Content
 		return m, nil
 	}
-	// Forward paste to IM panel create-input fields (manual string inputs).
+
 	if m.qqPanel != nil && m.qqPanel.createMode {
 		m.qqPanel.createInput += msg.Content
 		return m, nil
@@ -128,12 +122,12 @@ func (m Model) handlePaste(msg tea.PasteMsg, spinnerCmd tea.Cmd) (tea.Model, tea
 		m.whatsappPanel.createInput += msg.Content
 		return m, nil
 	}
-	// Forward paste to PC panel create-input.
+
 	if m.pcPanel != nil && m.pcPanel.createMode {
 		m.pcPanel.createInput += msg.Content
 		return m, nil
 	}
-	// Forward paste to IM adapter edit mode (shared editInput).
+
 	if m.qqPanel != nil && m.qqPanel.editState.mode == imEditInput {
 		m.qqPanel.editState.editInput += msg.Content
 		return m, nil
@@ -198,14 +192,9 @@ func (m Model) handlePaste(msg tea.PasteMsg, spinnerCmd tea.Cmd) (tea.Model, tea
 		m.pcPanel.editState.editInput += msg.Content
 		return m, nil
 	}
-	// Forward paste to questionnaire input if active.
+
 	if m.pendingQuestionnaire != nil {
-		// #1775 case 1: key presses are intercepted by handleQuestionnaireKey
-		// whenever a questionnaire is active, but PasteMsg had no such gate
-		// - pasted text silently fell through to the (fully covered) main
-		// input and haunted the NEXT message after the questionnaire closed.
-		// Gate pastes the same way: route when the active question allows
-		// freeform, drop otherwise.
+
 		if !m.pendingQuestionnaire.activeQuestionAllowsFreeform() {
 			return m, nil
 		}
@@ -214,7 +203,7 @@ func (m Model) handlePaste(msg tea.PasteMsg, spinnerCmd tea.Cmd) (tea.Model, tea
 		m.pendingQuestionnaire.saveActiveQuestionInput()
 		return m, cmd
 	}
-	// Forward paste to stream panel editing inputs.
+
 	if m.streamPanel != nil && m.streamPanel.editingField != "" {
 		var cmd tea.Cmd
 		switch m.streamPanel.editingField {
@@ -229,21 +218,15 @@ func (m Model) handlePaste(msg tea.PasteMsg, spinnerCmd tea.Cmd) (tea.Model, tea
 		}
 		return m, cmd
 	}
-	// Forward paste to main input.
-	// Large paste protection: warn when pasting content that exceeds
-	// reasonable size (#917: the check used to live only in the non-Windows
-	// branch - Windows returns early via handleClipboardPasteFallback and
-	// huge pastes inserted with no warning).
-	const maxPasteBytes = 100 * 1024 // 100KB
+
+	const maxPasteBytes = 100 * 1024
 	if len(msg.Content) > maxPasteBytes {
-		// Still paste it, but warn the user.
+
 		warning := fmt.Sprintf("\n[Warning: pasted %d bytes (%.1f KB). Consider using a file or /review for large content.]\n", len(msg.Content), float64(len(msg.Content))/1024)
 		msg.Content = msg.Content + warning
 	}
 	if runtime.GOOS == "windows" {
-		// On Windows terminals Ctrl+V is usually intercepted and delivered as a
-		// PasteMsg. Try reading a clipboard image first; if the clipboard holds
-		// text instead, fall back to a plain text paste.
+
 		return m, m.handleClipboardPasteFallback(msg)
 	}
 	var cmd tea.Cmd

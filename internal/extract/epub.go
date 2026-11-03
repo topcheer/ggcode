@@ -14,7 +14,6 @@ import (
 	"golang.org/x/net/html"
 )
 
-// epubExtractor extracts text from EPUB files.
 type epubExtractor struct{}
 
 func (epubExtractor) Format() string { return "epub" }
@@ -25,19 +24,16 @@ func (epubExtractor) Extract(data []byte) (TextResult, error) {
 		return TextResult{}, fmt.Errorf("open EPUB archive: %w", err)
 	}
 
-	// 1. Parse META-INF/container.xml to find the OPF path
 	opfPath, err := findOPFPath(r)
 	if err != nil {
 		return TextResult{}, err
 	}
 
-	// 2. Parse the OPF to get spine order
 	spine, err := parseOPFSpine(r, opfPath)
 	if err != nil {
 		return TextResult{}, err
 	}
 
-	// 3. Extract text from each spine item in order
 	opfDir := ""
 	if idx := strings.LastIndex(opfPath, "/"); idx >= 0 {
 		opfDir = opfPath[:idx+1]
@@ -45,12 +41,12 @@ func (epubExtractor) Extract(data []byte) (TextResult, error) {
 
 	var buf strings.Builder
 	chapters := 0
-	missing := 0 // spine items whose ZIP entry could not be found/read
+	missing := 0
 	for _, itemPath := range spine {
 		fullPath := resolvePath(opfDir, itemPath)
 		text, err := extractHTMLFromZip(r, fullPath)
 		if err != nil {
-			missing++ // skip unreadable chapters
+			missing++
 			continue
 		}
 		text = strings.TrimSpace(text)
@@ -62,18 +58,13 @@ func (epubExtractor) Extract(data []byte) (TextResult, error) {
 		}
 		buf.WriteString(text)
 		chapters++
-		// Cap total extracted text to prevent OOM from crafted archives
+
 		if buf.Len() > 50*1024*1024 {
 			buf.WriteString("\n\n... (truncated at 50MB)")
 			break
 		}
 	}
 
-	// #566(G): an EPUB that yields no text must not be reported as an
-	// empty-book success (Text:"" err:nil) — that is indistinguishable
-	// from a genuinely blank book and hides broken spines (e.g. Windows
-	// tools emitting backslash-separated hrefs that never match ZIP
-	// entry names). Return an explicit, diagnostic error instead.
 	if chapters == 0 {
 		switch {
 		case len(spine) == 0:
@@ -96,7 +87,6 @@ func (epubExtractor) Extract(data []byte) (TextResult, error) {
 	}, nil
 }
 
-// findOPFPath parses META-INF/container.xml to find the OPF file path.
 func findOPFPath(r *zip.Reader) (string, error) {
 	for _, f := range r.File {
 		if f.Name == "META-INF/container.xml" {
@@ -116,9 +106,7 @@ func findOPFPath(r *zip.Reader) (string, error) {
 					break
 				}
 				if err != nil {
-					// #2732: a real parse failure must surface with context;
-					// breaking here used to report the misleading "missing
-					// container.xml or rootfile" verdict for a file we opened.
+
 					return "", fmt.Errorf("parse container.xml: %w", err)
 				}
 				if se, ok := token.(xml.StartElement); ok {
@@ -136,7 +124,6 @@ func findOPFPath(r *zip.Reader) (string, error) {
 	return "", fmt.Errorf("EPUB missing META-INF/container.xml or rootfile")
 }
 
-// parseOPFSpine reads the OPF file and returns content document paths in spine order.
 func parseOPFSpine(r *zip.Reader, opfPath string) ([]string, error) {
 	var opfData []byte
 	for _, f := range r.File {
@@ -157,9 +144,8 @@ func parseOPFSpine(r *zip.Reader, opfPath string) ([]string, error) {
 		return nil, fmt.Errorf("OPF file not found: %s", opfPath)
 	}
 
-	// Parse manifest: id -> href
 	manifest := make(map[string]string)
-	// Parse spine: ordered list of idrefs
+
 	var spineIDRefs []string
 
 	decoder := xml.NewDecoder(strings.NewReader(string(opfData)))
@@ -169,9 +155,7 @@ func parseOPFSpine(r *zip.Reader, opfPath string) ([]string, error) {
 			break
 		}
 		if err != nil {
-			// #2732: a real parse failure must surface with context;
-			// breaking here used to report the misleading "empty spine"
-			// verdict for a manifest corrupted before the spine.
+
 			return nil, fmt.Errorf("parse OPF: %w", err)
 		}
 		if se, ok := token.(xml.StartElement); ok {
@@ -186,11 +170,7 @@ func parseOPFSpine(r *zip.Reader, opfPath string) ([]string, error) {
 					}
 				}
 				if id != "" && href != "" {
-					// OPF hrefs are URI path references (RFC 3986): a literal
-					// '+' is a legal sub-delim with no encoding meaning, so
-					// only %XX escapes may decode. QueryUnescape turned
-					// "C++_basics.xhtml" into "C  _basics.xhtml" and silently
-					// dropped the chapter (#2713).
+
 					if decoded, err := url.PathUnescape(href); err == nil {
 						href = decoded
 					}
@@ -210,7 +190,6 @@ func parseOPFSpine(r *zip.Reader, opfPath string) ([]string, error) {
 		}
 	}
 
-	// Resolve spine idrefs to paths
 	result := make([]string, 0, len(spineIDRefs))
 	for _, idref := range spineIDRefs {
 		if href, ok := manifest[idref]; ok {
@@ -220,11 +199,6 @@ func parseOPFSpine(r *zip.Reader, opfPath string) ([]string, error) {
 	return result, nil
 }
 
-// resolvePath resolves a relative path against a base directory within the ZIP.
-// ".." and "." segments are normalized (path.Clean) so an OPF nested in a
-// subdirectory (e.g. OEBPS/) with spine hrefs like "../text/chap1.xhtml" —
-// allowed by OCF and common in Sigil/InDesign layouts — resolves to the real
-// ZIP entry instead of a nonexistent "OEBPS/../text/chap1.xhtml" (#547).
 func resolvePath(baseDir, relPath string) string {
 	joined := relPath
 	if !strings.HasPrefix(relPath, "/") {
@@ -233,7 +207,6 @@ func resolvePath(baseDir, relPath string) string {
 	return strings.TrimPrefix(path.Clean(joined), "/")
 }
 
-// extractHTMLFromZip reads an HTML/XHTML file from the ZIP and extracts text.
 func extractHTMLFromZip(r *zip.Reader, path string) (string, error) {
 	for _, f := range r.File {
 		if f.Name == path {
@@ -249,7 +222,7 @@ func extractHTMLFromZip(r *zip.Reader, path string) (string, error) {
 			return extractHTMLText(string(data)), nil
 		}
 	}
-	// Try case-insensitive match as fallback
+
 	lowerPath := strings.ToLower(path)
 	for _, f := range r.File {
 		if strings.ToLower(f.Name) == lowerPath {
@@ -268,7 +241,6 @@ func extractHTMLFromZip(r *zip.Reader, path string) (string, error) {
 	return "", fmt.Errorf("file not found in EPUB: %s", path)
 }
 
-// extractHTMLText extracts visible text from HTML content.
 func extractHTMLText(htmlContent string) string {
 	doc, err := html.Parse(strings.NewReader(htmlContent))
 	if err != nil {
@@ -309,7 +281,6 @@ func extractHTMLText(htmlContent string) string {
 	return strings.TrimSpace(buf.String())
 }
 
-// stripTags is a naive HTML tag stripper fallback.
 func stripTags(s string) string {
 	var buf strings.Builder
 	inTag := false

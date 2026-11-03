@@ -61,7 +61,7 @@ func TestSortStrings(t *testing.T) {
 			break
 		}
 	}
-	// Verify original is unchanged
+
 	if input[0] != "c" {
 		t.Errorf("sortStrings modified the input slice")
 	}
@@ -69,59 +69,48 @@ func TestSortStrings(t *testing.T) {
 
 func TestDiffCountChanges(t *testing.T) {
 	added, deleted := diff.CountChanges("a\nb\nc\n", "a\nx\nc\n")
-	// 1 line changed = 1 addition + 1 deletion (line-level diff)
+
 	if added == 0 && deleted == 0 {
 		t.Errorf("CountChanges returned 0,0 for different content")
 	}
 }
 
-// TestShortenPathBoundary pins #1361: prefix matches need real path
-// boundaries - /Users/alicebox must not render as ~box (alice's home), and
-// a working-dir file named ..hidden.go must not be misjudged as outside.
 func TestShortenPathBoundary(t *testing.T) {
 	t.Setenv("HOME", "/Users/alice")
 
-	// Same-prefix sibling of home: must NOT shorten.
 	if got := shortenPath("/Users/alicebox/x.go", ""); got != "/Users/alicebox/x.go" {
 		t.Errorf("sibling dir shortened to nonexistent path: %q", got)
 	}
-	// Real home child: still shortens.
+
 	if got := shortenPath("/Users/alice/proj/main.go", ""); got != "~/proj/main.go" {
 		t.Errorf("home child not shortened: %q", got)
 	}
 
-	// Dot-prefixed file inside the working dir: relative, not absolute.
 	if got := shortenPath("/work/repo/..hidden.go", "/work/repo"); got != "..hidden.go" {
 		t.Errorf("dotfile inside working dir misjudged as outside: %q", got)
 	}
-	// A REAL parent escape still falls through to home/absolute display.
+
 	if got := shortenPath("/work/other/x.go", "/work/repo"); got != "/work/other/x.go" {
 		t.Errorf("outside path not kept absolute: %q", got)
 	}
 }
 
-// TestApplyTodoWriteIdenticalAfterClear pins #1360: an IDENTICAL todo_write
-// after chatReset (/clear) must rebuild the missing chat card. chatReset
-// empties chatList but keeps todoSnapshot, so the diff is empty - the
-// no-changes branch used to skip card creation entirely.
 func TestApplyTodoWriteIdenticalAfterClear(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
 
 	raw := `{"todos":[{"id":"1","content":"first","status":"in_progress"},{"id":"2","content":"second","status":"pending"}]}`
-	// First write: card created, snapshot populated.
+
 	m.applyTodoWrite(ToolStatusMsg{ToolName: "todo_write", RawArgs: raw})
 	if m.chatList.FindByID(todoToolItemID) == nil {
 		t.Fatal("first todo_write did not create the chat card")
 	}
 
-	// /clear empties the chat, keeps the snapshot.
 	m.chatReset()
 	if m.chatList.FindByID(todoToolItemID) != nil {
 		t.Fatal("chatReset did not clear the card (precondition)")
 	}
 
-	// IDENTICAL re-write: diff is empty, but the card must come back.
 	m.applyTodoWrite(ToolStatusMsg{ToolName: "todo_write", RawArgs: raw})
 	if m.chatList.FindByID(todoToolItemID) == nil {
 		t.Fatal("identical todo_write after /clear did not rebuild the chat card (#1360)")

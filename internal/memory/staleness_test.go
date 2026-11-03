@@ -11,11 +11,9 @@ func TestStalenessBrokenPath(t *testing.T) {
 	dir := t.TempDir()
 	am := &AutoMemory{dir: dir}
 
-	// Create a memory entry that references a non-existent file path.
 	content := "Use the config loader from internal/config/loader.go to parse settings."
 	am.SaveMemory("test-broken-path", content)
 
-	// Use a workingDir where the path doesn't exist.
 	report := am.ScanStaleness("/nonexistent/project/root")
 	if report.Scanned != 1 {
 		t.Fatalf("expected 1 scanned, got %d", report.Scanned)
@@ -29,7 +27,6 @@ func TestStalenessValidPath(t *testing.T) {
 	dir := t.TempDir()
 	workingDir := t.TempDir()
 
-	// Create an actual file in workingDir.
 	realFile := filepath.Join(workingDir, "src", "main.go")
 	os.MkdirAll(filepath.Dir(realFile), 0755)
 	os.WriteFile(realFile, []byte("package main"), 0644)
@@ -48,7 +45,6 @@ func TestStalenessOversized(t *testing.T) {
 	dir := t.TempDir()
 	am := &AutoMemory{dir: dir}
 
-	// Create an entry exceeding maxInlineBytes.
 	big := make([]byte, maxInlineBytes+100)
 	for i := range big {
 		big[i] = 'x'
@@ -65,7 +61,6 @@ func TestStalenessAncient(t *testing.T) {
 	dir := t.TempDir()
 	am := &AutoMemory{dir: dir}
 
-	// Create a persistent entry and set its modtime to 200 days ago.
 	am.SaveMemory("ancient-impl", "old architecture note")
 	path := filepath.Join(dir, "ancient-impl.md")
 	oldTime := time.Now().Add(-200 * 24 * time.Hour)

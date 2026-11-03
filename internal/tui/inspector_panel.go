@@ -36,18 +36,18 @@ const (
 
 type inspectorPanelState struct {
 	kind              inspectorPanelKind
-	allWorkspaces     bool // sessions: A-key toggle; default lists ONLY the current workspace's sessions
+	allWorkspaces     bool
 	cursor            int
 	message           string
-	loadSeq           int // sessions: generation marker - stale async loads are dropped on arrival
+	loadSeq           int
 	lspLanguageID     string
 	lspLanguageName   string
 	lspInstallOptions []lsp.InstallOption
-	cachedItems       []inspectorPanelItem // cached items to avoid sync loading on every render
-	itemsLoaded       bool                 // true once items have been loaded (or async load started)
-	loading           bool                 // true while async loading is in progress
-	filter            string               // sessions panel: current type-to-filter query
-	filtering         bool                 // sessions panel: true while '/' filter input mode is active
+	cachedItems       []inspectorPanelItem
+	itemsLoaded       bool
+	loading           bool
+	filter            string
+	filtering         bool
 }
 
 type inspectorPanelItem struct {
@@ -60,17 +60,12 @@ type inspectorPanelItem struct {
 
 func (m *Model) openInspectorPanel(kind inspectorPanelKind) {
 	m.inspectorPanel = &inspectorPanelState{kind: kind}
-	// For sessions panel, load items asynchronously to avoid blocking the UI.
-	// Set itemsLoaded=true immediately so inspectorPanelItems() never falls through
-	// to the synchronous inspectorSessionItems() path.
+
 	if kind == inspectorPanelSessions && m.sessionStore != nil {
 		m.startSessionItemsLoad()
 	}
 }
 
-// startSessionItemsLoad (re)loads the sessions panel items, honoring the
-// allWorkspaces toggle. Called at panel open and when the user toggles the
-// workspace scope with A.
 func (m *Model) startSessionItemsLoad() {
 	if m.inspectorPanel == nil || m.sessionStore == nil {
 		return
@@ -84,14 +79,10 @@ func (m *Model) startSessionItemsLoad() {
 	} else {
 		storeDir, _ = session.DefaultDir()
 	}
-	// R248: generation marker. The A-key toggle reloads the panel while a
-	// prior load's goroutine may still be in store.List(); without a seq,
-	// a LATE old result (previous allWorkspaces scope) wins the race and
-	// leaves stale items on screen with the toggle already flipped.
+
 	m.inspectorPanel.loadSeq++
 	seq := m.inspectorPanel.loadSeq
-	// When we have a program, load asynchronously to avoid blocking the UI.
-	// When program is nil (tests), load synchronously since there's no event loop.
+
 	if m.program != nil {
 		m.inspectorPanel.itemsLoaded = true
 		m.inspectorPanel.loading = true
@@ -106,7 +97,7 @@ func (m *Model) startSessionItemsLoad() {
 			m.program.Send(inspectorItemsLoadedMsg{kind: inspectorPanelSessions, seq: seq, items: items})
 		}()
 	} else {
-		// Synchronous fallback for headless/test mode
+
 		sessions, err := store.List()
 		if err != nil {
 			m.inspectorPanel.cachedItems = []inspectorPanelItem{{Title: inspectorText(lang, "sessions_error"), Detail: err.Error(), Disabled: true}}
@@ -122,8 +113,6 @@ func (m *Model) closeInspectorPanel() {
 	m.inspectorPanel = nil
 }
 
-// openInspectorPanelWithFilter opens the panel and presets the sessions
-// type-to-filter query (e.g. from "/sessions <filter>").
 func (m *Model) openInspectorPanelWithFilter(kind inspectorPanelKind, filter string) {
 	m.openInspectorPanel(kind)
 	if m.inspectorPanel != nil && filter != "" {
@@ -131,8 +120,6 @@ func (m *Model) openInspectorPanelWithFilter(kind inspectorPanelKind, filter str
 	}
 }
 
-// filterInspectorItems narrows inspector items by a case-insensitive
-// substring match on title and summary. Empty filter returns items as-is.
 func filterInspectorItems(items []inspectorPanelItem, filter string) []inspectorPanelItem {
 	filter = strings.TrimSpace(filter)
 	if filter == "" {
@@ -149,10 +136,6 @@ func filterInspectorItems(items []inspectorPanelItem, filter string) []inspector
 	return out
 }
 
-// handleSessionFilterKey implements less/vim-style filtering for the sessions
-// panel: '/' enters filter input mode; while active, printable characters are
-// appended to the filter, backspace deletes, Esc clears the filter and exits
-// filter mode. Returns true if the key was consumed.
 func (m *Model) handleSessionFilterKey(msg tea.KeyPressMsg) bool {
 	p := m.inspectorPanel
 	if p.filtering {
@@ -194,10 +177,9 @@ func (m *Model) setInspectorMessage(message string) {
 	m.inspectorPanel.message = message
 }
 
-// inspectorItemsLoadedMsg is sent asynchronously when session items are loaded.
 type inspectorItemsLoadedMsg struct {
 	kind    inspectorPanelKind
-	seq     int // generation at dispatch time - consumer drops stale generations
+	seq     int
 	items   []inspectorPanelItem
 	loadErr error
 }
@@ -207,7 +189,7 @@ func (m Model) renderInspectorPanel() string {
 		return ""
 	}
 	title := m.inspectorPanelTitle(m.inspectorPanel.kind)
-	// Show loading placeholder while async session loading is in progress
+
 	if m.inspectorPanel.loading {
 		items := []inspectorPanelItem{{Title: inspectorText(m.currentLanguage(), "sessions_loading"), Disabled: true}}
 		width := m.boxInnerWidth(m.mainColumnWidth())
@@ -320,7 +302,7 @@ func (m *Model) handleInspectorPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.inspectorPanel == nil {
 		return *m, nil
 	}
-	// While loading, only allow closing the panel
+
 	if m.inspectorPanel.loading {
 		switch msg.String() {
 		case "esc", "ctrl+c":
@@ -352,10 +334,7 @@ func (m *Model) handleInspectorPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "enter":
 		return m.handleInspectorPrimaryAction(items)
 	case "a", "A":
-		// Sessions panel: toggle between "current workspace only" (default)
-		// and "all workspaces". The global store holds every workspace's
-		// sessions; listing them all by default mixed unrelated workspaces'
-		// sessions (each locked by its own live instance) into the list.
+
 		if m.inspectorPanel.kind == inspectorPanelSessions {
 			m.inspectorPanel.allWorkspaces = !m.inspectorPanel.allWorkspaces
 			m.inspectorPanel.cursor = 0
@@ -417,13 +396,9 @@ func (m *Model) handleInspectorPrimaryAction(items []inspectorPanelItem) (Model,
 			m.setInspectorMessage(inspectorText(m.currentLanguage(), "revert_failed", err))
 			return *m, nil
 		}
-		// Invalidate tool caches (same as /undo) to prevent stale results.
+
 		m.agent.InvalidateToolCaches()
-		// #685: a multi-file span revert restores EVERY file after the target
-		// checkpoint, not just the checkpoint's own file — showing a single
-		// filename understated the rollback and could lure the user into
-		// editing other files that were silently reverted. List all restored
-		// files (same honesty as the agent-side message).
+
 		restored := cpMgr.ModifiedFiles()
 		var names []string
 		for _, fs := range restored {
@@ -463,13 +438,7 @@ func (m *Model) handleInspectorLSPStatusAction(items []inspectorPanelItem) (Mode
 		}
 		if len(lang.InstallOptions) == 1 {
 			m.closeInspectorPanel()
-			// #1586-A/#1653: a toolchain install landing outside PATH must not
-			// sit out the 10-minute negative probe TTL. Dropping at submission
-			// (the original #1586-A fix) was wrong on the TUI side: the install
-			// runs asynchronously, and merely reopening the inspector panel (or
-			// post-edit diagnostics) re-primes a negative entry mid-install that
-			// then outlives it. Align with the desktop side (wailskit lsp.go):
-			// mark in-flight and drop when the shell command completes.
+
 			m.lspInstallInFlight = true
 			return *m, m.submitInspectorShellCommand(lang.InstallOptions[0].Command)
 		}
@@ -493,11 +462,7 @@ func (m *Model) handleInspectorLSPInstallAction(items []inspectorPanelItem) (Mod
 		return *m, nil
 	}
 	m.closeInspectorPanel()
-	// #1641-1/#1653: the multi-option install path (python/yaml/json/dockerfile/
-	// shell/csharp - the mainstream languages) missed the single-option
-	// path's cache drop. Like the single-option path, drop at completion
-	// (not submission) so the async install window cannot re-prime a
-	// negative probe entry that outlives the install.
+
 	m.lspInstallInFlight = true
 	return *m, m.submitInspectorShellCommand(command)
 }
@@ -560,7 +525,7 @@ func (m *Model) handleInspectorTodoClear() (Model, tea.Cmd) {
 }
 
 func (m Model) inspectorPanelItems(kind inspectorPanelKind) []inspectorPanelItem {
-	// Return cached items if available (avoids sync List() on every render/keypress)
+
 	if m.inspectorPanel != nil && m.inspectorPanel.itemsLoaded {
 		return m.inspectorPanel.cachedItems
 	}
@@ -606,18 +571,11 @@ func (m Model) inspectorSessionItems() []inspectorPanelItem {
 	return buildSessionInspectorItems(sessions, m.currentLanguage(), storeDir, m.config.ResolveDisplayName, all)
 }
 
-// buildSessionInspectorItems converts session list to inspector items.
-// Extracted so it can be called from a goroutine without holding the Model.
-// storeDir is used to check session locks.
-// displayNameResolver converts vendor/endpoint keys to display names (may be nil).
 func buildSessionInspectorItems(sessions []*session.Session, lang Language, storeDir string, displayNameResolver func(vendor, endpoint string) (string, string), allWorkspaces bool) []inspectorPanelItem {
 	currentWD, _ := os.Getwd()
 	currentWS := session.NormalizeWorkspacePath(currentWD)
 	if !allWorkspaces {
-		// Default scope: only this workspace's sessions. The store is global
-		// (every workspace's sessions in one directory); without the filter the
-		// panel mixed unrelated workspaces' sessions into the list, each shown
-		// "locked" by the live instance working in that workspace.
+
 		kept := make([]*session.Session, 0, len(sessions))
 		for _, ses := range sessions {
 			if ses != nil && session.NormalizeWorkspacePath(ses.Workspace) == currentWS {
@@ -638,7 +596,7 @@ func buildSessionInspectorItems(sessions []*session.Session, lang Language, stor
 			}
 			return 1
 		}
-		// Pinned sessions float to the top within each workspace group.
+
 		aPinned := a != nil && a.Pinned
 		bPinned := b != nil && b.Pinned
 		if aPinned != bPinned {
@@ -1598,20 +1556,12 @@ func inspectorText(lang Language, key string, args ...any) string {
 	return fmt.Sprintf(msg, args...)
 }
 
-// openSearchPanel opens the inspector panel showing cross-session search results.
-// The search runs asynchronously to avoid blocking the UI on large session stores.
 func (m *Model) openSearchPanel(query string) {
 	if m.sessionStore == nil {
 		return
 	}
 	kind := inspectorPanelSearch
-	// #3383: same R248 seq discipline as startSessionItemsLoad - each
-	// search bumps loadSeq and carries it, so a slower EARLIER query cannot
-	// pass the consumer's seq guard and overwrite a newer result (the
-	// pre-fix seq=0 == loadSeq 0 coincidence let both generations land).
-	// The generation counter is inherited from the previous panel state:
-	// openSearchPanel rebuilds the state from scratch, so a per-state zero
-	// reset would hand every query seq=1 and re-open the race.
+
 	base := 0
 	if m.inspectorPanel != nil {
 		base = m.inspectorPanel.loadSeq
@@ -1633,14 +1583,13 @@ func (m *Model) openSearchPanel(query string) {
 			m.program.Send(inspectorItemsLoadedMsg{kind: kind, seq: seq, items: items})
 		}()
 	} else {
-		// Synchronous fallback for test/headless mode
+
 		items := executeSessionSearch(store, query, lang)
 		m.inspectorPanel.cachedItems = items
 		m.inspectorPanel.loading = false
 	}
 }
 
-// executeSessionSearch runs the search and converts results to inspector items.
 func executeSessionSearch(store session.Store, query string, lang Language) []inspectorPanelItem {
 	results, err := searchSessionsFromStore(store, query)
 	if err != nil {
@@ -1650,7 +1599,6 @@ func executeSessionSearch(store session.Store, query string, lang Language) []in
 		return []inspectorPanelItem{{Title: inspectorText(lang, "search_no_results"), Disabled: true}}
 	}
 
-	// Count unique sessions
 	sessionSet := map[string]bool{}
 	for _, r := range results {
 		sessionSet[r.SessionID] = true
@@ -1680,8 +1628,6 @@ func executeSessionSearch(store session.Store, query string, lang Language) []in
 	return items
 }
 
-// searchSessionsFromStore calls SearchSessions on a JSONLStore.
-// For non-JSONLStore backends (tests), it returns an error.
 func searchSessionsFromStore(store session.Store, query string) ([]session.SearchResult, error) {
 	if js, ok := store.(*session.JSONLStore); ok {
 		return js.SearchSessions(query, 100)

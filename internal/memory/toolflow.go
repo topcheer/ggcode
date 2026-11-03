@@ -13,39 +13,21 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// ToolFlow mining (r449, AWM-style workflow memory): cross-session tool-call
-// sequence statistics. Where the experience store (experience.go) distills
-// single cases, this finds RECURRING multi-tool workflows - the prefix→next
-// transitions the user's actual usage keeps repeating - so the agent can
-// treat them as established playbooks instead of re-deriving the order every
-// run. Deliberately lexical/statistical (n-gram counting): no embeddings, no
-// LLM, no IO beyond reading session JSONL.
-
-// ToolFlowPattern is a high-support, high-confidence tool transition:
-// after seeing Prefix (in order, within one session), Next followed in
-// Confidence of the observed cases.
 type ToolFlowPattern struct {
-	Prefix     []string // 1 or 2 tool names
-	Next       string   // the statistically dominant continuation
-	Count      int      // how often Prefix→Next occurred (support)
-	Confidence float64  // Count / total continuations of Prefix
+	Prefix     []string
+	Next       string
+	Count      int
+	Confidence float64
 }
 
-// toolFlowMinSupport / toolFlowMinConfidence gate what counts as a pattern.
-// Requiring repetition is the truth filter (same rationale as r444's
-// userEditPromoteTurns=2): one-off sequences are noise, not workflow.
 const (
 	toolFlowMinSupport     = 5
 	toolFlowMinConfidence  = 0.7
-	toolFlowScanSessionCap = 50 // newest N session files
+	toolFlowScanSessionCap = 50
 
-	// toolNameToken is the JSONL field marker both extractors scan for.
 	toolNameToken = `"tool_name":"`
 )
 
-// ExtractToolSequence returns the ordered tool names recorded in one session
-// JSONL body. Tool calls are emitted as `"tool_name":"x"` fields in call
-// order; line and in-line ordering both reflect execution order.
 func ExtractToolSequence(body string) []string {
 	var seq []string
 	for {
@@ -90,11 +72,6 @@ func appendToolNamesFromLine(seq []string, line []byte) []string {
 	}
 }
 
-// AnalyzeToolFlows scans the newest session files under sessionsDir and
-// returns recurring tool transitions ranked by support then confidence.
-// Sessions are independent sequences - transitions never span file
-// boundaries, so an unrelated next-session opener cannot masquerade as a
-// continuation.
 func AnalyzeToolFlows(sessionsDir string, maxPatterns int) ([]ToolFlowPattern, error) {
 	if maxPatterns <= 0 {
 		maxPatterns = 5
@@ -129,15 +106,7 @@ func AnalyzeToolFlows(sessionsDir string, maxPatterns int) ([]ToolFlowPattern, e
 		if err != nil {
 			continue
 		}
-		// #3699: stream line-by-line. The previous shape slurped the ENTIRE
-		// session file into one strings.Builder before extracting tool names
-		// - on a multi-hundred-MB session store (real-world long-lived
-		// workspaces) each analysis pass retained the full file text in the
-		// heap, which profiled as GBs of live strings.Builder allocations
-		// and was the dominant term of the "agent loop eats several GB of
-		// RSS" regression. The token `"tool_name":"` can never straddle a
-		// JSONL line boundary, so per-line extraction is semantically
-		// identical to the old whole-body scan (ExtractToolSequence).
+
 		var seq []string
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -174,7 +143,7 @@ func AnalyzeToolFlows(sessionsDir string, maxPatterns int) ([]ToolFlowPattern, e
 			continue
 		}
 		conf := float64(n) / float64(total)
-		// self-loop exclusion, see bigram loop below
+
 		if n >= toolFlowMinSupport && conf >= toolFlowMinConfidence && key[1] != key[2] {
 			pats = append(pats, ToolFlowPattern{
 				Prefix: []string{key[0], key[1]}, Next: key[2],
@@ -188,11 +157,7 @@ func AnalyzeToolFlows(sessionsDir string, maxPatterns int) ([]ToolFlowPattern, e
 			continue
 		}
 		conf := float64(n) / float64(total)
-		// Self-loops (X→X) are statistically real but carry no playbook
-		// value - "after run_command, likely another run_command" tells the
-		// agent nothing it does not know. Real-data smoke on this very
-		// machine surfaced 642k run_command→run_command swamping every
-		// cross-tool transition, so they are excluded outright.
+
 		if n >= toolFlowMinSupport && conf >= toolFlowMinConfidence && key[0] != key[1] {
 			pats = append(pats, ToolFlowPattern{
 				Prefix: []string{key[0]}, Next: key[1],
@@ -200,7 +165,7 @@ func AnalyzeToolFlows(sessionsDir string, maxPatterns int) ([]ToolFlowPattern, e
 			})
 		}
 	}
-	// Rank by support first (breadth of the habit), then confidence.
+
 	sort.Slice(pats, func(i, j int) bool {
 		if pats[i].Count != pats[j].Count {
 			return pats[i].Count > pats[j].Count
@@ -210,8 +175,7 @@ func AnalyzeToolFlows(sessionsDir string, maxPatterns int) ([]ToolFlowPattern, e
 		}
 		return strings.Join(pats[i].Prefix, ">") < strings.Join(pats[j].Prefix, ">")
 	})
-	// Drop a bigram when a trigram with the same last prefix step and next
-	// already carries the information at higher specificity.
+
 	if len(pats) > maxPatterns {
 		pats = pats[:maxPatterns]
 	}
@@ -219,7 +183,6 @@ func AnalyzeToolFlows(sessionsDir string, maxPatterns int) ([]ToolFlowPattern, e
 	return pats, nil
 }
 
-// FormatToolFlowPatterns renders patterns for agent consumption.
 func FormatToolFlowPatterns(pats []ToolFlowPattern, generated time.Time) string {
 	if len(pats) == 0 {
 		return ""

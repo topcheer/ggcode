@@ -14,8 +14,8 @@ func TestComposerHeight(t *testing.T) {
 		{"", 1},
 		{"hello", 1},
 		{"hello\nworld", 2},
-		{"a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl", 10}, // capped at 10
-		{"a\nb\nc\nd\ne\nf\ng\nh\ni\nj", 10},       // exactly 10
+		{"a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl", 10},
+		{"a\nb\nc\nd\ne\nf\ng\nh\ni\nj", 10},
 		{"a\nb\nc\nd\ne", 5},
 	}
 	for _, tc := range cases {
@@ -31,7 +31,7 @@ func TestInputCursor(t *testing.T) {
 	ta.Focus()
 	ta.SetHeight(5)
 	ta.SetValue("hello world")
-	// Cursor should be at end after SetValue
+
 	got := inputCursor(&ta)
 	if got != 11 {
 		t.Errorf("inputCursor after SetValue(hello world) = %d, want 11", got)
@@ -68,7 +68,7 @@ func TestComposerCursorEnd(t *testing.T) {
 	ta.SetHeight(5)
 	ta.SetValue("line1\nline2")
 	composerCursorEnd(&ta)
-	// After composerCursorEnd, cursor should be at the end
+
 	got := inputCursor(&ta)
 	if got != 11 {
 		t.Errorf("cursor after composerCursorEnd = %d, want 11", got)
@@ -76,9 +76,7 @@ func TestComposerCursorEnd(t *testing.T) {
 }
 
 func TestComposerCursorEndCJKMultiline(t *testing.T) {
-	// CJK multiline: cursor must land at the byte end of the value and the
-	// scroll must follow it (tail visible). Guards the composerCursorEnd
-	// View()+MoveToEnd() rework - see cjk_repro_test.go for the full story.
+
 	ta := textarea.New()
 	ta.Focus()
 	ta.SetHeight(5)
@@ -93,12 +91,6 @@ func TestComposerCursorEndCJKMultiline(t *testing.T) {
 	}
 }
 
-// TestRelayoutAfterSidebarChangeNoPanic pins #1390: the sidebar-toggle
-// relayout must run the full sync set (chatList caches items by width).
-// chat.List's width is unexported, so the direct width assertion lives in
-// code review; here we pin the observable contract - mainColumnWidth
-// shifts with the toggle and relayout completes without panic on a model
-// wired like production (chatList, questionnaire and stats present).
 func TestRelayoutAfterSidebarChangeNoPanic(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(140, 40)

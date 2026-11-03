@@ -38,14 +38,11 @@ type providerPanelState struct {
 	authBusy      bool
 	enterpriseURL string
 
-	// New vendor creation wizard
-	newVendorStep     int // 0=inactive, 1=vendor name, 2=endpoint name, 3=protocol, 4=base url, 5=api key
+	newVendorStep     int
 	newVendorInput    textinput.Model
 	newVendorData     newVendorFormData
 	newVendorProtoIdx int
 
-	// New endpoint creation wizard (adds endpoint to existing vendor)
-	// Steps: 1=endpoint name, 2=protocol, 3=base url, 4=api key
 	newEndpointStep int
 	newEndpointData newEndpointFormData
 }
@@ -65,11 +62,6 @@ type newEndpointFormData struct {
 	apiKey       string
 }
 
-// newVendorProtocols drives the protocol cycler in BOTH the new-vendor and
-// new-endpoint flows. It must stay in sync with provider registry's supported
-// set (registry.go): "openai-responses" was missing here, so the entire
-// Responses stack (sa-40 adapter, server tools, verbosity, encrypted
-// reasoning round-trip) was unreachable from the UI - yaml-only entry.
 var newVendorProtocols = []string{"openai", "openai-responses", "anthropic", "gemini", "copilot"}
 
 type providerModelsRefreshResultMsg struct {
@@ -79,9 +71,7 @@ type providerModelsRefreshResultMsg struct {
 	skipped     int
 	saveErr     error
 	discoverErr error
-	// #1387-A: endpointID+models discovered on the Cmd goroutine; the
-	// SetEndpointModels write + saveConfig execute on the Update loop via
-	// configMutationMsg when the handler consumes this message.
+
 	endpointID    string
 	pendingModels []string
 }
@@ -214,11 +204,7 @@ func (p *providerPanelState) selectedModel() string {
 func (p *providerPanelState) startEditing(field, initialValue string) {
 	ti := textinput.New()
 	ti.Prompt = "❯ "
-	// #2173: API-key-class fields echo masked - the repo's own convention
-	// (onboard.go, stream_panel.go) is EchoPassword for secret inputs; this
-	// panel echoed every typed character in cleartext (shoulder-surfing /
-	// screen-recording over /provider edit and the wizards). The buffer
-	// still holds the real value for saving.
+
 	if isProviderSecretField(field) {
 		ti.EchoMode = textinput.EchoPassword
 	}
@@ -229,10 +215,6 @@ func (p *providerPanelState) startEditing(field, initialValue string) {
 	p.editInput = ti
 }
 
-// isProviderSecretField reports whether an edit field holds key
-// material (#2173/#2180): an explicit auditable list for the panel's
-// FIXED field set first, then the single-source wide table as fallback
-// so any future key-bearing field name is covered without a copy.
 func isProviderSecretField(field string) bool {
 	switch field {
 	case "api_key", "apikey", "secret", "token", "password":
@@ -306,23 +288,11 @@ func indexOf(values []string, target string) int {
 	return -1
 }
 
-// reloadProviderConfigFromDisk merges vendor/endpoint definitions and API keys
-// from disk into the live config so changes made by other ggcode instances
-// (a new endpoint added elsewhere, an API key set elsewhere) become visible
-// when this instance opens the provider panel.
-//
-// It performs a shallow merge: entries that already exist in memory are kept
-// untouched (runtime may have updated models/selection), while vendor/endpoint
-// definitions that exist on disk but not in memory are added. The current
-// runtime selection (Vendor/Endpoint/Model) driven by the session is NEVER
-// overwritten — we only reconcile the structural diff.
 func (m *Model) reloadProviderConfigFromDisk() {
 	if m.config == nil || m.config.FilePath == "" {
 		return
 	}
-	// Only reload if a config file actually exists on disk. If the path is a
-	// synthetic/in-memory path (e.g. tests or unsaved config), there is nothing
-	// to reconcile against and we must keep the live config untouched.
+
 	if _, err := os.Stat(m.config.FilePath); err != nil {
 		return
 	}
@@ -332,10 +302,7 @@ func (m *Model) reloadProviderConfigFromDisk() {
 		debug.Log("config", "reloadProviderConfigFromDisk: load failed: %v", err)
 		return
 	}
-	// API keys from keys.env were loaded into os.Setenv by LoadWithInstance
-	// (via loadRuntimeEnv), so ${VAR} references now resolve for this process.
 
-	// Shallow-merge vendor/endpoint definitions into the live config.
 	for vendor, fvc := range fresh.Vendors {
 		vc, exists := m.config.Vendors[vendor]
 		if !exists {
@@ -350,7 +317,7 @@ func (m *Model) reloadProviderConfigFromDisk() {
 				vc.Endpoints[epName] = fep
 			}
 		}
-		// Pick up a vendor-level API key from disk if memory has none.
+
 		if vc.APIKey == "" && fvc.APIKey != "" {
 			vc.APIKey = fvc.APIKey
 		}
@@ -363,7 +330,7 @@ func (m *Model) openProviderPanel() {
 	if m.config == nil {
 		return
 	}
-	// Pull in vendor/endpoint defs and API keys authored by other instances.
+
 	m.reloadProviderConfigFromDisk()
 	m.modelPanel = nil
 	m.providerPanel = newProviderPanelFromConfig(m.configView())
@@ -417,10 +384,9 @@ func (m *Model) renderProviderPanel() string {
 	wizardActive := panel.newVendorStep > 0 || panel.newEndpointStep > 0
 	footerHeight := providerPanelFooterHeight(envVar != "")
 	if wizardActive {
-		footerHeight = 12 // give wizard enough room without info lines
+		footerHeight = 12
 	}
 
-	// Vendor list: resolve IDs to display names for built-in vendors
 	vendorDisplayNames := make([]string, len(panel.vendorIDs))
 	for i, id := range panel.vendorIDs {
 		if m.config != nil {
@@ -437,7 +403,6 @@ func (m *Model) renderProviderPanel() string {
 		vendorHeight,
 	)
 
-	// Endpoint list: resolve IDs to display names for built-in endpoints
 	vendorID := panel.selectedVendor()
 	endpointDisplayNames := make([]string, len(panel.endpointIDs))
 	for i, id := range panel.endpointIDs {
@@ -551,7 +516,7 @@ func renderProviderPanelSection(title, body string, width, height int) string {
 }
 
 func providerPanelVendorBodyRows(vendorCount int) int {
-	return providerPanelListBodyRows(vendorCount, 4, 24, 1) // doubled max from 12→24
+	return providerPanelListBodyRows(vendorCount, 4, 24, 1)
 }
 
 func providerPanelVendorHeight(vendorCount int) int {
@@ -559,12 +524,11 @@ func providerPanelVendorHeight(vendorCount int) int {
 }
 
 func providerPanelEndpointBodyRows(endpointCount int) int {
-	return providerPanelListBodyRows(endpointCount, 3, 10, 2) // doubled max from 5→10
+	return providerPanelListBodyRows(endpointCount, 3, 10, 2)
 }
 
 func providerPanelEndpointHeight(endpointCount int) int {
-	// #909: the old -2 always clipped the bottom two list rows (body renders
-	// count+2 rows; container gave bodyRows-1 with MaxHeight(bodyRows-2)).
+
 	return max(3, providerPanelEndpointBodyRows(endpointCount)+1)
 }
 
@@ -683,7 +647,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if panel == nil {
 		return *m, nil
 	}
-	// Handle new endpoint wizard input
+
 	if panel.newEndpointStep > 0 {
 		switch msg.String() {
 		case "esc", "ctrl+c":
@@ -712,7 +676,6 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 	}
 
-	// Handle new vendor wizard input
 	if panel.newVendorStep > 0 {
 		switch msg.String() {
 		case "esc", "ctrl+c":
@@ -732,7 +695,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		case "enter":
 			return m.handleNewVendorStep()
 		default:
-			// Route text input to the wizard's textinput field
+
 			if panel.newVendorStep != newVendorStepProtocol {
 				var cmd tea.Cmd
 				panel.newVendorInput, cmd = panel.newVendorInput.Update(msg)
@@ -806,8 +769,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				panel.message = err.Error()
 				return *m, nil
 			}
-			// If the user just saved an API key, rebuild the provider
-			// immediately so the new key takes effect.
+
 			if editedField == "vendor api key" || editedField == "endpoint api key" {
 				m.ensureProviderSync()
 			}
@@ -933,11 +895,9 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			panel.startEditing("enterprise url", panel.enterpriseURL)
 			return *m, nil
 		}
-		// #1387-C: with an EMPTY config (no vendors) these edit entries used
-		// Vendors[""] zero-values and the enter-commit persisted a phantom
-		// "" vendor into the yaml.
+
 		if panel.selectedVendor() == "" {
-			panel.message = m.t("panel.provider.no_vendor_selected") // #1735: the defined key is panel.provider.* - the reversed prefix never matched
+			panel.message = m.t("panel.provider.no_vendor_selected")
 			return *m, nil
 		}
 		vc := m.config.Vendors[panel.selectedVendor()]
@@ -945,7 +905,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		panel.startEditing("endpoint base url", ep.BaseURL)
 		return *m, nil
 	case "e":
-		// Start new endpoint creation wizard for the current vendor
+
 		panel.newEndpointStep = newEndpointStepEndpointName
 		panel.newEndpointData = newEndpointFormData{}
 		panel.newVendorProtoIdx = 0
@@ -956,9 +916,9 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		panel.message = ""
 		return *m, nil
 	case "m":
-		// #1387-C: same empty-state guard as "b".
+
 		if panel.selectedVendor() == "" {
-			panel.message = m.t("panel.provider.no_vendor_selected") // #1735: the defined key is panel.provider.* - the reversed prefix never matched
+			panel.message = m.t("panel.provider.no_vendor_selected")
 			return *m, nil
 		}
 		panel.startEditing("custom model", panel.selectedModel())
@@ -1000,7 +960,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return *m, nil
 	case "n":
-		// Start new vendor creation wizard
+
 		panel.newVendorStep = newVendorStepVendorName
 		panel.newVendorData = newVendorFormData{}
 		panel.newVendorProtoIdx = 0
@@ -1011,7 +971,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		panel.message = ""
 		return *m, nil
 	case "enter", "s":
-		// If new vendor wizard is active, handle step progression
+
 		if panel.newVendorStep > 0 {
 			return m.handleNewVendorStep()
 		}
@@ -1030,7 +990,6 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return *m, nil
 }
 
-// handleNewVendorStep processes the current wizard step on Enter.
 func (m *Model) handleNewVendorStep() (Model, tea.Cmd) {
 	panel := m.providerPanel
 	value := strings.TrimSpace(panel.newVendorInput.Value())
@@ -1080,7 +1039,7 @@ func (m *Model) handleNewVendorStep() (Model, tea.Cmd) {
 		panel.newVendorStep = newVendorStepAPIKey
 		ti := textinput.New()
 		ti.Prompt = "❯ "
-		ti.EchoMode = textinput.EchoPassword // #2173: secret input echo
+		ti.EchoMode = textinput.EchoPassword
 		ti.Focus()
 		panel.newVendorInput = ti
 		panel.message = ""
@@ -1088,7 +1047,7 @@ func (m *Model) handleNewVendorStep() (Model, tea.Cmd) {
 
 	case newVendorStepAPIKey:
 		panel.newVendorData.apiKey = value
-		// Create the vendor and endpoint
+
 		d := panel.newVendorData
 		if err := m.config.AddVendor(d.vendorName, "", ""); err != nil {
 			panel.message = err.Error()
@@ -1096,8 +1055,7 @@ func (m *Model) handleNewVendorStep() (Model, tea.Cmd) {
 			return *m, nil
 		}
 		if err := m.config.AddEndpoint(d.vendorName, d.endpointName, d.protocol, d.baseURL, d.apiKey); err != nil {
-			// #1387-D: without the rollback the half-created vendor stayed
-			// and the retry hit 'vendor already exists' forever.
+
 			if rerr := m.config.RemoveVendor(d.vendorName); rerr != nil {
 				debug.Log("provider", "wizard rollback failed: %v", rerr)
 			}
@@ -1106,10 +1064,7 @@ func (m *Model) handleNewVendorStep() (Model, tea.Cmd) {
 			return *m, nil
 		}
 		if err := m.saveConfig(); err != nil {
-			// #4153: mirror the #1387-D rollback above - AddVendor/AddEndpoint
-			// already mutated the in-memory config, so a failed persist must
-			// undo it or the name is stuck as a phantom "already exists" until
-			// restart (and the next successful saveConfig would flush it).
+
 			if rerr := m.config.RemoveVendor(d.vendorName); rerr != nil {
 				debug.Log("provider", "saveConfig-failure rollback failed: %v", rerr)
 			}
@@ -1117,7 +1072,7 @@ func (m *Model) handleNewVendorStep() (Model, tea.Cmd) {
 			panel.newVendorStep = 0
 			return *m, nil
 		}
-		// Select the new vendor+endpoint
+
 		panel.vendorIDs = m.config.VendorNames()
 		panel.vendorIndex = indexOf(panel.vendorIDs, d.vendorName)
 		if panel.vendorIndex < 0 {
@@ -1132,7 +1087,7 @@ func (m *Model) handleNewVendorStep() (Model, tea.Cmd) {
 		panel.modelIndex = 0
 		panel.newVendorStep = 0
 		panel.message = m.t("panel.provider.new_vendor.created", d.vendorName, d.endpointName)
-		// Auto-discover models if base URL is present (API key optional for local endpoints like Ollama)
+
 		if d.baseURL != "" {
 			return *m, m.refreshProviderModelsForVendor(d.vendorName)
 		}
@@ -1142,7 +1097,6 @@ func (m *Model) handleNewVendorStep() (Model, tea.Cmd) {
 	return *m, nil
 }
 
-// handleNewEndpointStep processes the current new-endpoint wizard step on Enter.
 func (m *Model) handleNewEndpointStep() (Model, tea.Cmd) {
 	panel := m.providerPanel
 	value := strings.TrimSpace(panel.newVendorInput.Value())
@@ -1179,7 +1133,7 @@ func (m *Model) handleNewEndpointStep() (Model, tea.Cmd) {
 		panel.newEndpointStep = newEndpointStepAPIKey
 		ti := textinput.New()
 		ti.Prompt = "❯ "
-		ti.EchoMode = textinput.EchoPassword // #2173: secret input echo
+		ti.EchoMode = textinput.EchoPassword
 		ti.Focus()
 		panel.newVendorInput = ti
 		panel.message = ""
@@ -1194,8 +1148,7 @@ func (m *Model) handleNewEndpointStep() (Model, tea.Cmd) {
 			return *m, nil
 		}
 		if err := m.saveConfig(); err != nil {
-			// #4153: AddEndpoint mutated in-memory state; roll it back so the
-			// retry is not permanently blocked by "endpoint already exists".
+
 			if rerr := m.config.RemoveEndpoint(panel.selectedVendor(), d.endpointName); rerr != nil {
 				debug.Log("provider", "saveConfig-failure rollback failed: %v", rerr)
 			}
@@ -1230,7 +1183,6 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 		return nil
 	}
 
-	// Only refresh the currently selected endpoint, not all endpoints.
 	endpointID := ""
 	if m.providerPanel != nil {
 		endpointID = m.providerPanel.selectedEndpoint()
@@ -1243,14 +1195,12 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 		return nil
 	}
 
-	// Skip API key requirement for local endpoints (e.g., Ollama on localhost)
 	isLocal := isLocalBaseURL(endpoint.BaseURL)
 	if !isLocal {
-		// AI Gateway vendors should not use vendor-level API key — each endpoint
-		// must have its own key.
+
 		isGateway := vendor == "ai-gateway"
 		if !providerHasUsableCredential(vendor, endpointID, endpoint, vc, m.providerPanel) {
-			// For gateway vendors, don't fall back to vendor-level key
+
 			if isGateway || !providerHasUsableAPIKey(resolveAPIKey(endpoint.APIKey, "")) {
 				return nil
 			}
@@ -1262,10 +1212,6 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 	if endpoint.Protocol != "openai" && endpoint.Protocol != "openai-responses" && endpoint.Protocol != "anthropic" && endpoint.Protocol != "gemini" && endpoint.Protocol != "copilot" {
 		return nil
 	}
-	// Note: we intentionally do NOT call ResolveEndpoint here because it
-	// requires a model to be set, and we're discovering models precisely
-	// because there may not be one yet. The checks above (vendor/endpoint
-	// existence, API key, baseURL, protocol) are sufficient.
 
 	if m.providerPanel != nil {
 		m.providerPanel.refreshing = true
@@ -1273,11 +1219,6 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 		m.providerPanel.message = m.t("panel.provider.refreshing_vendor", vendor)
 	}
 
-	// #1750 case 1: ResolveEndpoint reads the shared Vendors MAP - it ran
-	// inside the Cmd goroutine, so a user edit during the 20s discovery
-	// window was a concurrent map read/write fatal. #1387-A moved the
-	// WRITES back to the Update loop but left this READ behind. Snapshot
-	// the resolution HERE (Update loop) and let the closure capture values.
 	resolved, resolveErr := m.config.ResolveEndpoint(vendor, endpointID)
 	if resolveErr != nil {
 		resolved = &config.ResolvedEndpoint{
@@ -1285,9 +1226,7 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 			EndpointID: endpointID,
 			Protocol:   endpoint.Protocol,
 			BaseURL:    endpoint.BaseURL,
-			// Expand ${VAR} references so the actual key value (set via
-			// os.Setenv when the user saved it) is used for discovery,
-			// not the raw "${...}" reference string.
+
 			APIKey: config.ExpandEnv(resolveAPIKey(endpoint.APIKey, vc.APIKey)),
 		}
 	}
@@ -1297,20 +1236,13 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 
-		// (resolved snapshot taken on the Update loop - see above.)
 		models, err := provider.DiscoverModels(ctx, resolved)
 		if err != nil {
 			result.skipped++
 			result.discoverErr = fmt.Errorf("%s: %w", endpointID, err)
 			return result
 		}
-		// #1387-A (family site 13, Vendors map): SetEndpointModels writes the
-		// Vendors map and saveConfig hits disk - both ran HERE on the Cmd
-		// goroutine while the render loop reads VendorNames/Models every
-		// frame (20s network window). The write + persist now ride the
-		// result message and land on the Update loop; the mutation goes
-		// through configMutationMsg (family standard) so ordering with
-		// other config writes is preserved.
+
 		result.updated++
 		result.discovered += len(models)
 		result.pendingModels = models
@@ -1375,7 +1307,7 @@ func (m *Model) waitForClaudeAuthCode(flow *auth.ClaudeOAuthFlow) tea.Cmd {
 		if err != nil {
 			return providerAuthResultMsg{vendor: auth.ProviderAnthropic, err: err}
 		}
-		// Exchange code for tokens
+
 		tokenResp, exchangeErr := auth.ExchangeClaudeCodeForTokens(ctx, code, flow.CodeVerifier, !isAutomatic, flow.Port)
 		if exchangeErr != nil {
 			return providerAuthResultMsg{vendor: auth.ProviderAnthropic, err: exchangeErr}
@@ -1406,26 +1338,21 @@ func providerHasUsableAPIKey(value string) bool {
 	return !(strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}"))
 }
 
-// isLocalBaseURL returns true for localhost/127.0.0.1 base URLs that don't
-// require an API key (e.g., Ollama, LM Studio, vLLM local deployments).
 func isLocalBaseURL(baseURL string) bool {
 	u := strings.TrimSpace(baseURL)
 	u = strings.TrimPrefix(u, "http://")
 	u = strings.TrimPrefix(u, "https://")
-	// #906: IndexByte(u, ':') hits index 0 for '::1' and index 1 for
-	// '[::1]' — both IPv6 branches were dead. Use net.SplitHostPort/
-	// url.Parse semantics instead of manual slicing.
+
 	host := u
 	if i := strings.IndexByte(u, '/'); i >= 0 {
 		host = host[:i]
 	}
 	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h // strip :port (SplitHostPort also unbrackets [::1])
+		host = h
 	} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
-		host = host[1 : len(host)-1] // bracketed host without port
+		host = host[1 : len(host)-1]
 	} else if strings.Count(host, ":") > 1 {
-		// #906: bare IPv6 with port ('::1:11434') — SplitHostPort rejects
-		// it (too many colons); strip the last colon-group as the port.
+
 		if i := strings.LastIndexByte(host, ':'); i >= 0 {
 			host = host[:i]
 		}
@@ -1458,8 +1385,6 @@ func providerHasUsableCredential(vendor, endpoint string, ep config.EndpointConf
 	return providerHasUsableAPIKey(resolveAPIKey(ep.APIKey, vc.APIKey))
 }
 
-// resolveAPIKey picks the effective API key: endpoint key first,
-// but falls back to vendor key if the endpoint key is an unresolvable ${VAR} reference.
 func resolveAPIKey(epKey, vcKey string) string {
 	key := util.FirstNonEmpty(epKey, vcKey)
 	if !providerHasUsableAPIKey(key) && vcKey != "" {
@@ -1481,8 +1406,7 @@ func providerCredentialStatus(m *Model, vendor, endpoint string, ep config.Endpo
 		}
 		return m.t("panel.provider.auth.not_connected")
 	}
-	// Try endpoint key first; if it's an unresolvable ${VAR} reference,
-	// fall back to vendor key — the user may have set only the vendor key.
+
 	key := resolveAPIKey(ep.APIKey, vc.APIKey)
 	if providerHasUsableAPIKey(key) {
 		return m.t("panel.provider.api_key.configured")
@@ -1525,7 +1449,6 @@ func providerEditFieldLabel(lang Language, field string) string {
 	}
 }
 
-// renderNewVendorWizard renders the multi-step new vendor creation wizard footer.
 func (m *Model) renderNewVendorWizard() []string {
 	panel := m.providerPanel
 	lang := m.currentLanguage()
@@ -1594,7 +1517,6 @@ func (m *Model) renderNewVendorWizard() []string {
 	return lines
 }
 
-// renderNewEndpointWizard renders the multi-step new endpoint creation wizard footer.
 func (m *Model) renderNewEndpointWizard() []string {
 	panel := m.providerPanel
 	lang := m.currentLanguage()

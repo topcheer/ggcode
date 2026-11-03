@@ -11,23 +11,6 @@ import (
 	"time"
 )
 
-// ExportTraceOTLP renders the session execution trace as an OTLP/HTTP
-// (protobuf-JSON) trace document following the OpenTelemetry GenAI semantic
-// conventions (stable gen_ai.* attribute namespace, 2026). The output can be
-// POSTed directly to any OTLP/HTTP traces endpoint — OpenTelemetry Collector
-// (:4318), Jaeger, Grafana Tempo/Cloud, Langfuse — with no conversion step,
-// unlike the custom TraceDocument produced by ExportTrace.
-//
-// Span mapping (kind / attributes per SpanNode kind):
-//   - session root: agent span -> gen_ai.agent.name, session.id
-//   - "turn": plain span -> session.id
-//   - "llm": client span -> gen_ai.operation.name=chat, gen_ai.system,
-//     gen_ai.request.model / gen_ai.response.model,
-//     gen_ai.usage.input_tokens / output_tokens, gen_ai.conversation.id;
-//     ggcode-specific extras keep a "ggcode." prefix (ttft, think time,
-//     cache tokens)
-//   - "tool": span -> gen_ai.operation.name=execute_tool, gen_ai.tool.name;
-//     failures carry error.type=tool_failure and an ERROR span status
 func ExportTraceOTLP(sessionID, vendor, endpoint, model string, createdAt time.Time, events []MetricEvent) ([]byte, error) {
 	tree := BuildSpanTree(sessionID, events)
 	traceID := otlpTraceID(sessionID)
@@ -59,16 +42,11 @@ func ExportTraceOTLP(sessionID, vendor, endpoint, model string, createdAt time.T
 	return json.MarshalIndent(doc, "", "  ")
 }
 
-// otlpTraceID derives a deterministic 16-byte trace ID (32 hex chars) from the
-// session ID so re-exports of the same session stay comparable and diff-able.
 func otlpTraceID(sessionID string) string {
 	h := sha1.Sum([]byte(sessionID))
 	return hex.EncodeToString(h[:16])
 }
 
-// genAISystem maps a ggcode vendor id to the OTel GenAI gen_ai.system value.
-// Unknown vendors are passed through lowercased, per the semconv guidance for
-// custom systems.
 func genAISystem(vendor string) string {
 	v := strings.ToLower(strings.TrimSpace(vendor))
 	switch v {
@@ -79,7 +57,6 @@ func genAISystem(vendor string) string {
 	}
 }
 
-// otlpSpan converts one SpanNode into an OTLP span (protobuf-JSON shape).
 func otlpSpan(sn SpanNode, traceID, sessionID, system string) map[string]any {
 	span := map[string]any{
 		"traceId":           traceID,
@@ -115,9 +92,7 @@ func otlpSpan(sn SpanNode, traceID, sessionID, system string) map[string]any {
 			otlpAttr("gen_ai.operation.name", "chat"),
 			otlpAttr("gen_ai.conversation.id", sessionID),
 		)
-		// sa-218: attribute sub-agent LLM spans (OTel GenAI nested-agent
-		// convention) so multi-agent sessions stay distinguishable in the
-		// exported trace.
+
 		if agentID, _ := sn.Attributes["agent_id"].(string); agentID != "" {
 			attrs = append(attrs, otlpAttr("gen_ai.agent.name", "ggcode:subagent:"+agentID))
 		}
@@ -165,7 +140,7 @@ func otlpSpan(sn SpanNode, traceID, sessionID, system string) map[string]any {
 			span["status"] = map[string]any{"code": "STATUS_CODE_ERROR", "message": msg}
 		}
 	default:
-		// Unknown kinds: preserve their attributes under the ggcode.* namespace.
+
 		for k, v := range sn.Attributes {
 			attrs = append(attrs, otlpAttr("ggcode."+k, v))
 		}
@@ -179,8 +154,6 @@ func otlpSpan(sn SpanNode, traceID, sessionID, system string) map[string]any {
 	return span
 }
 
-// otlpNano formats a timestamp as unix nanoseconds (protobuf-JSON encodes
-// fixed 64-bit integers as decimal strings).
 func otlpNano(t time.Time) string {
 	if t.IsZero() {
 		return "0"
@@ -188,8 +161,6 @@ func otlpNano(t time.Time) string {
 	return strconv.FormatInt(t.UnixNano(), 10)
 }
 
-// otlpAttr builds one OTLP key-value attribute. Integer values are encoded as
-// decimal strings per the protobuf-JSON mapping for 64-bit integers.
 func otlpAttr(key string, value any) map[string]any {
 	var val map[string]any
 	switch v := value.(type) {

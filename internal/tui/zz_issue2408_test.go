@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// TestStreamConfigNonEmptyResponse pins #2408: the /stream config branch must
-// return non-empty text - update_remote.go only emits non-empty responses, so
-// an empty return left the IM side with zero feedback while the local TUI
-// popped its config panel.
 func TestStreamConfigNonEmptyResponse(t *testing.T) {
 	m := &Model{}
 	resp, _ := m.handleStreamSlash("config")

@@ -1,10 +1,8 @@
 package tui
 
-// deCatalog returns the German translation for the given key.
-// Keys not yet translated fall through to enCatalog.
 func deCatalog(key string) string {
 	switch key {
-	// --- Workspace & header ---
+
 	case "workspace.tagline":
 		return "Geek-AI-Arbeitsumgebung"
 	case "header.terminal_native":
@@ -12,13 +10,11 @@ func deCatalog(key string) string {
 	case "session.ephemeral":
 		return "flüchtig"
 
-	// --- Agents ---
 	case "agents.idle":
 		return "inaktiv"
 	case "cron.firing":
 		return "⏰ Cron-Job ausgelöst"
 
-	// --- Panel ---
 	case "panel.commands":
 		return "Befehle:"
 	case "panel.files":
@@ -74,7 +70,6 @@ func deCatalog(key string) string {
 	case "panel.review_file_change":
 		return "Dateiänderung prüfen"
 
-	// --- Labels ---
 	case "label.vendor":
 		return "Anbieter"
 	case "label.endpoint":
@@ -114,7 +109,6 @@ func deCatalog(key string) string {
 	case "label.directory":
 		return "Verzeichnis"
 
-	// --- Context & metrics ---
 	case "im.none":
 		return "Keine Adapter konfiguriert"
 	case "im.summary":
@@ -130,7 +124,6 @@ func deCatalog(key string) string {
 	case "im.status.not_started":
 		return "nicht gestartet"
 
-	// --- Empty ---
 	case "empty.ask":
 		return "Fragen Sie nach einem Refactor, Bugfix, Erklärung oder Tests."
 	case "empty.tips":
@@ -143,9 +136,6 @@ func deCatalog(key string) string {
 	case "hint.mode":
 		return "Modus"
 
-	// --- Mode approval ---
-
-	// --- Hints ---
 	case "hint.ctrlr_sidebar":
 		return "Ctrl+R Seitenleiste"
 	case "hint.help":
@@ -163,13 +153,11 @@ func deCatalog(key string) string {
 	case "hint.unfollow_panel":
 		return "Ctrl+N nicht mehr folgen"
 
-	// --- Queued ---
 	case "queued.count":
 		return "%d eingereiht"
 	case "interrupt.delivered":
 		return "[an aktiven Lauf geliefert; Plan wird überarbeitet]\n"
 
-	// --- Status ---
 	case "status.thinking":
 		return "Denke nach..."
 	case "status.writing":
@@ -189,7 +177,6 @@ func deCatalog(key string) string {
 	case "reasoning.effort.unsupported":
 		return "Denkanstrengung wird vom aktuellen Anbieter nicht unterstützt"
 
-	// --- Follow ---
 	case "follow.loading":
 		return "  Folgen-Ansicht wird geladen..."
 	case "follow.active_agent":
@@ -205,11 +192,9 @@ func deCatalog(key string) string {
 	case "follow.hint":
 		return "  ↑↓←→ wechseln  Esc schließen"
 
-	// --- Tools ---
 	case "status.tools_used":
 		return "%d Werkzeuge verwendet"
 
-	// --- Approval ---
 	case "approval.rejected":
 		return "  Abgelehnt.\n"
 	case "approval.allow":
@@ -223,7 +208,6 @@ func deCatalog(key string) string {
 	case "approval.reject":
 		return "Ablehnen"
 
-	// --- Exit ---
 	case "exit.confirm":
 		return "Ctrl-C erneut drücken zum Beenden.\n\n"
 	case "cancel.confirm":
@@ -231,7 +215,6 @@ func deCatalog(key string) string {
 	case "interrupted":
 		return "[unterbrochen]\n\n"
 
-	// --- Language ---
 	case "lang.current":
 		return "Aktuelle Sprache: %s\n/lang für interaktive Auswahl verwenden, oder /lang <en|zh-CN> zum direkten Wechseln.\n%s\n\n"
 	case "lang.invalid":
@@ -249,17 +232,14 @@ func deCatalog(key string) string {
 	case "lang.first_use.hint":
 		return " Tab/j/k bewegen • Enter bestätigen • e/z Kurzbefehle"
 
-	// --- Mode ---
 	case "mode.current":
 		return "Aktueller Modus: %s\nVerwendung: /mode <supervised|bypass>\n  supervised  Standard; die meisten Aufrufe laufen ohne Nachfrage - nur Sicherheitsboeden fragen (Systemzerstoerung, Credential-Exfil, Backdoor-Schreiben)\n  bypass      Cruise-Flaeche; fast alles erlaubt, ausser Systemzerstoerung und Backdoor-Schreiben\n  (auto/autopilot sind Legacy-Aliase)\n"
 	case "mode.persist_failed":
 		return "Modus-Einstellung konnte nicht gespeichert werden: %v"
 
-	// --- Input ---
 	case "input.placeholder":
 		return "Nachricht eingeben... ($ Shell, # Chat)"
 
-	// --- Model panel ---
 	case "panel.model_filter.prompt":
 		return "Filter> "
 	case "panel.model_filter.placeholder":
@@ -275,7 +255,6 @@ func deCatalog(key string) string {
 	case "panel.model_list.hidden_more":
 		return "%d mehr"
 
-	// --- Provider panel ---
 	case "panel.provider.vendors":
 		return "Anbieter"
 	case "panel.provider.endpoints":
@@ -365,7 +344,6 @@ func deCatalog(key string) string {
 	case "panel.provider.no_vendor_selected":
 		return "Kein Vendor ausgewählt - zuerst hinzufügen"
 
-	// --- Model panel details ---
 	case "panel.model.models":
 		return "Modelle"
 	case "panel.model.vendor":
@@ -417,7 +395,6 @@ func deCatalog(key string) string {
 	case "panel.model.endpoint_save_failed":
 		return "Speichern der Endpunktkonfiguration fehlgeschlagen: %s"
 
-	// --- Commands ---
 	case "command.unknown":
 		return "Unbekannter Befehl: %s\n"
 	case "command.retry_empty":
@@ -441,7 +418,6 @@ func deCatalog(key string) string {
 	case "command.usage.allow":
 		return "Verwendung: /allow <werkzeugname>\n\n"
 
-	// --- Init ---
 	case "init.resolve_failed":
 		return "Init-Ziel konnte nicht aufgelöst werden: %v\n\n"
 	case "init.generate_failed":
@@ -459,7 +435,6 @@ func deCatalog(key string) string {
 	case "init.prompt.hint":
 		return " y = AGENTS.md erstellen • n/Esc = überspringen"
 
-	// --- Model commands ---
 	case "command.model_switched":
 		return "Modell gewechselt zu: %s (Anbieter: %s)\n\n"
 	case "command.model_failed":
@@ -479,7 +454,6 @@ func deCatalog(key string) string {
 	case "command.custom":
 		return "Benutzerdefinierter Befehl /%s:\n"
 
-	// --- Sessions ---
 	case "session.untitled":
 		return "unbenannt"
 	case "session.store_missing":
@@ -499,7 +473,6 @@ func deCatalog(key string) string {
 	case "session.exported":
 		return "Sitzung %s nach %s exportiert\n\n"
 
-	// --- Checkpoints ---
 	case "checkpoint.disabled":
 		return "Checkpointing nicht aktiviert.\n\n"
 	case "checkpoint.undo_failed":
@@ -507,7 +480,6 @@ func deCatalog(key string) string {
 	case "checkpoint.undid":
 		return "Rückgängig gemacht: %s auf %s (Checkpoint %s)\n"
 
-	// --- Files ---
 	case "files.disabled":
 		return "Checkpointing nicht aktiviert.\n\n"
 	case "files.none":
@@ -519,7 +491,6 @@ func deCatalog(key string) string {
 	case "files.hint":
 		return "\n/undo verwenden, um die letzte Bearbeitung rückgängig zu machen, /checkpoints für Details.\n\n"
 
-	// --- Memory ---
 	case "memory.auto_unavailable":
 		return "Auto-Memory nicht initialisiert.\n\n"
 	case "memory.clear_failed":
@@ -541,7 +512,6 @@ func deCatalog(key string) string {
 	case "memory.restore_failed":
 		return "Error restoring memory: %v\n\n"
 
-	// --- Compact ---
 	case "compact.unavailable":
 		return "Kontext-Manager nicht verfügbar.\n\n"
 	case "compact.failed":
@@ -549,13 +519,11 @@ func deCatalog(key string) string {
 	case "compact.done_with_stats":
 		return "Unterhaltungsverlauf komprimiert (%d → %d Tokens).\n\n"
 
-	// --- Todo ---
 	case "todo.cleared":
 		return "Todo-Liste gelöscht.\n\n"
 	case "todo.clear_failed":
 		return "Fehler beim Löschen der Todos: %v\n\n"
 
-	// --- Bug report ---
 	case "bug.title":
 		return "=== Fehlerbericht-Diagnose ===\n\n"
 	case "bug.version":
@@ -577,7 +545,6 @@ func deCatalog(key string) string {
 	case "bug.hint":
 		return "\nBitte geben Sie diese Informationen beim Melden eines Fehlers an.\n\n"
 
-	// --- Config ---
 	case "config.usage":
 		return "Verwendung: /config set <key> <value>\n\nKeys: model, vendor, endpoint, language, apikey [--vendor]\n\nEndpunkte: /config add-endpoint <name> <base_url> [--protocol openai] [--apikey sk-xxx]\n          /config remove-endpoint <name>\n\n"
 	case "config.not_loaded":
@@ -589,7 +556,6 @@ func deCatalog(key string) string {
 	case "config.unknown_key":
 		return "Unbekannter Konfig-Schlüssel: %s\nUnterstützt: model, provider, language\n\n"
 
-	// --- Update ---
 	case "panel.update":
 		return "Update"
 	case "label.version":
@@ -627,9 +593,6 @@ func deCatalog(key string) string {
 	case "update.dual_scope":
 		return "Warnung: Sowohl Benutzer- als auch systemweite ggcode-Installationen gefunden:\n  Benutzer: %s\n  System: %s\nDies kann zu PATH-Konflikten führen. Erwägen Sie, eine über Einstellungen > Apps zu deinstallieren.\n\n"
 
-	// --- Plugins ---
-
-	// --- MCP ---
 	case "mcp.none":
 		return "Keine MCP-Server konfiguriert.\n\n"
 	case "mcp.active_tools":
@@ -637,7 +600,6 @@ func deCatalog(key string) string {
 	case "mcp.more":
 		return "… %d mehr • /mcp"
 
-	// --- Image ---
 	case "image.usage":
 		return "Verwendung: /image <pfad/zur/datei.png> oder /image paste\n"
 	case "image.formats":
@@ -647,9 +609,6 @@ func deCatalog(key string) string {
 	case "image.clipboard_no_image_windows":
 		return "Kein Bild in der Zwischenablage gefunden. Unter Windows wird Ctrl+V oft vom Terminal abgefangen. Versuchen Sie Ctrl+Shift+V oder /image paste."
 
-	// --- Agents ---
-
-	// --- Slash command descriptions ---
 	case "slash.help":
 		return "Hilfemeldung anzeigen"
 	case "slash.sessions":
@@ -751,7 +710,6 @@ func deCatalog(key string) string {
 	case "slash.im":
 		return "Einheitliches IM-Kanal-Panel öffnen"
 
-	// --- QQ panel ---
 	case "panel.qq.directory":
 		return "Verzeichnis"
 	case "panel.qq.bots":
@@ -847,7 +805,6 @@ func deCatalog(key string) string {
 	case "panel.qq.status.unknown":
 		return "unbekannt"
 
-	// --- More slash commands ---
 	case "slash.status":
 		return "Aktuellen Status anzeigen"
 	case "slash.update":
@@ -897,7 +854,6 @@ func deCatalog(key string) string {
 	case "slash.unshare":
 		return "Sitzungsfreigabe über Tunnel stoppen"
 
-	// --- Regenerate ---
 	case "regenerate.busy":
 		return "Neugenerierung nicht möglich, während der Agent läuft. Zuerst Ctrl+C drücken zum Abbrechen."
 	case "regenerate.no_agent":
@@ -907,7 +863,6 @@ func deCatalog(key string) string {
 	case "regenerate.no_response":
 		return "Keine Assistenten-Antwort zum Neu generieren."
 
-	// --- Branch ---
 	case "rewind.bad_arg":
 		return "Verwendung: /rewind [N], wobei N >= 1 die Anzahl der zurueckzuspulenden Nutzer-Runden ist."
 	case "rewind.revert_failed":
@@ -931,7 +886,6 @@ func deCatalog(key string) string {
 	case "branch.success":
 		return "Abgezweigt zu neuer Sitzung %s (von: %s). Ursprüngliche Sitzung bleibt erhalten."
 
-	// --- Help text ---
 	case "help.text":
 		return `Verfügbare Befehle:
 
@@ -1016,7 +970,6 @@ Maus:
 	case "tunnel.mobile_connected":
 		return "Mobile-Client verbunden."
 
-	// --- Config save scope ---
 	case "config.save_scope_global":
 		return "Speicherziel → Global"
 	case "config.save_scope_instance":
@@ -1034,17 +987,14 @@ Maus:
 	case "config.save_target_line":
 		return " Speicherziel: %s%s  [Ctrl+T umschalten]"
 
-	// --- Shell ---
 	case "shell.empty":
 		return "Shell-Befehl ist leer."
 	case "shell.already_running":
 		return "Ein Shell-Befehl laeuft bereits - warten oder mit Esc abbrechen."
 
-	// --- LAN Chat ---
 	case "lanchat.unavailable":
 		return "LAN-Chat ist nicht verfügbar."
 
-	// --- Reflect ---
 	case "reflect.no_agent":
 		return "Agent nicht initialisiert."
 	case "reflect.no_workdir":
@@ -1060,11 +1010,9 @@ Maus:
 	case "reflect.memory_location":
 		return "Memory-Speicherort: %s\n"
 
-	// --- Knight ---
 	case "knight.unavailable":
 		return "Knight ist nicht verfügbar"
 
-	// --- Pairing ---
 	case "pairing.rejected":
 		return "Die aktuelle Pairing-Anfrage wurde abgelehnt. Bitte neu initiieren, um fortzufahren."
 	case "pairing.blacklisted":

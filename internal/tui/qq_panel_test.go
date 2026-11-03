@@ -75,7 +75,6 @@ func TestQQPanelShareQROpensOverlay(t *testing.T) {
 	m.height = 40
 	m.openQQPanel()
 
-	// Simulate a successful share link result — should open QR overlay
 	updated, _ := m.Update(qqBindResultMsg{
 		message:      "Link generated",
 		shareAdapter: "ggcodetest",
@@ -134,9 +133,7 @@ func TestQQPanelCreateAdapterPersistsCredentials(t *testing.T) {
 		t.Fatal("expected create adapter command")
 	}
 	msg := cmd()
-	// #1367 batch 2: create routes through configMutationMsg - config
-	// write lands on the Update loop, then next() chains the runtime
-	// start which ends in qqBindResultMsg.
+
 	mut, ok := msg.(configMutationMsg)
 	if !ok {
 		t.Fatalf("expected configMutationMsg, got %#v", msg)
@@ -213,9 +210,7 @@ func TestQQPanelBindUsesCurrentDirectoryTargetByDefault(t *testing.T) {
 
 func TestQQPanelRenderCreateHint(t *testing.T) {
 	m := NewModel(nil, nil)
-	// #1374: the actions hint now carries d/e/q keys and is longer - give
-	// the panel a realistic width or the hint line wraps the assertions
-	// out of the rendered output.
+
 	m.handleResize(160, 50)
 	m.SetConfig(&config.Config{
 		IM: config.IMConfig{
@@ -234,9 +229,6 @@ func TestQQPanelRenderCreateHint(t *testing.T) {
 	}
 }
 
-// #2178 family: the qq create echo must mask the appsecret field at the
-// render layer (wiring pin - the family test pins the helper, this pins
-// that renderQQPanel actually routes createInput through it).
 func TestQQPanelRenderMasksCreateEchoSecret(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.handleResize(160, 50)
@@ -414,7 +406,7 @@ func TestQQBindingLabelsMutedActiveAvailable(t *testing.T) {
 		{Adapter: "c", OccupiedBy: "/other", Muted: false},
 		{Adapter: "d", Muted: false},
 	}
-	// Set session so currentWorkspacePath returns /ws
+
 	m.session = &session.Session{Workspace: "/ws"}
 	labels := m.qqBindingLabels(entries)
 	if len(labels) != 4 {
@@ -434,10 +426,6 @@ func TestQQBindingLabelsMutedActiveAvailable(t *testing.T) {
 	}
 }
 
-// TestQQBindDisabledAdapterRoutesMutation pins #1387-B: binding a
-// DISABLED adapter no longer writes config on the Cmd goroutine - the
-// auto-enable rides configMutationMsg and the bind chain continues on
-// the Update loop.
 func TestQQBindDisabledAdapterRoutesMutation(t *testing.T) {
 	m := NewModel(nil, nil)
 	cfg := config.DefaultConfig()

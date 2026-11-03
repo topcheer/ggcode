@@ -7,12 +7,6 @@ import (
 	"testing"
 )
 
-// zz_issue2844_test.go - probe for #2844: the onResult closure passed to
-// provider.ProbeContextWindow runs on a background goroutine; it must not
-// touch shared Model state (m.session, m.currentProbeKey, m.sessionStore,
-// m.agent) directly - it may only forward via m.tuiSend. Application logic
-// lives in applyProbeResult, invoked from the UI goroutine via the
-// contextProbeResultMsg registration.
 func TestIssue2844ProbeCallbackIsMessageOnly(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "model.go", nil, 0)
@@ -29,7 +23,7 @@ func TestIssue2844ProbeCallbackIsMessageOnly(t *testing.T) {
 		if sel, ok := call.Fun.(*ast.SelectorExpr); !ok || sel.Sel.Name != "ProbeContextWindow" {
 			return true
 		}
-		// The last argument is the callback closure.
+
 		cl, ok := call.Args[len(call.Args)-1].(*ast.FuncLit)
 		if !ok {
 			return true
@@ -54,7 +48,6 @@ func TestIssue2844ProbeCallbackIsMessageOnly(t *testing.T) {
 		t.Fatal("ProbeContextWindow call not found - probe is stale")
 	}
 
-	// applyProbeResult must exist and be referenced from the dispatch table.
 	foundApply := false
 	ast.Inspect(f, func(n ast.Node) bool {
 		if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name == "applyProbeResult" {

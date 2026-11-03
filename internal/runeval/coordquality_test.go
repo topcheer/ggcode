@@ -6,8 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// TestEvaluateCoordinationGate verifies the section stays hidden for
-// single-agent streams with no swarm/subagent activity.
 func TestEvaluateCoordinationGate(t *testing.T) {
 	if got := EvaluateCoordination(nil); got != nil {
 		t.Fatalf("empty stream: want nil report, got %+v", got)
@@ -21,17 +19,15 @@ func TestEvaluateCoordinationGate(t *testing.T) {
 	}
 }
 
-// TestEvaluateCoordinationMultiAgent exercises all five dimensions with a
-// deterministic two-agent stream.
 func TestEvaluateCoordinationMultiAgent(t *testing.T) {
 	events := []CoordEvent{
-		// main delegates two units of work.
+
 		{Seq: 1, Kind: CoordDelegation, AgentID: "main", Tool: "spawn_agent", Tokens: 50},
 		{Seq: 2, Kind: CoordDelegation, AgentID: "main", Tool: "spawn_agent", Tokens: 50},
-		// both agents grep the same file concurrently (overlap 1000-2000ms).
+
 		{Seq: 3, Kind: CoordTool, AgentID: "main", Tool: "grep", InputKey: "k", ResultHash: "h1", StartMS: 1000, EndMS: 2000, Tokens: 100},
 		{Seq: 4, Kind: CoordTool, AgentID: "sub1", Tool: "grep", InputKey: "k", ResultHash: "h1", StartMS: 1500, EndMS: 2500, Tokens: 100},
-		// only one delegation returns, successfully, and is read back once.
+
 		{Seq: 5, Kind: CoordDelegationResult, AgentID: "main", Success: true, Tokens: 200},
 		{Seq: 6, Kind: CoordReadBack, AgentID: "main", Tokens: 30},
 		{Seq: 7, Kind: CoordMessage, AgentID: "sub1", Tokens: 20},
@@ -62,7 +58,7 @@ func TestEvaluateCoordinationMultiAgent(t *testing.T) {
 	if q.ParallelLayerWasteMS != 500 {
 		t.Errorf("ParallelLayerWasteMS = %d, want 500 (overlap 1500-2000)", q.ParallelLayerWasteMS)
 	}
-	// tokens: coord = 50+50+200+30+20 = 350; total = 550.
+
 	if q.CoordinationTokens != 350 || q.TotalTokens != 550 {
 		t.Errorf("coord tokens = %d/%d, want 350/550", q.CoordinationTokens, q.TotalTokens)
 	}
@@ -74,8 +70,6 @@ func TestEvaluateCoordinationMultiAgent(t *testing.T) {
 	}
 }
 
-// TestEvaluateCoordinationSeqOrder verifies Seq reorders an out-of-order
-// stream before counting round trips.
 func TestEvaluateCoordinationSeqOrder(t *testing.T) {
 	q := EvaluateCoordination([]CoordEvent{
 		{Seq: 3, Kind: CoordDelegationResult, AgentID: "main", Success: true},
@@ -89,8 +83,6 @@ func TestEvaluateCoordinationSeqOrder(t *testing.T) {
 	}
 }
 
-// TestCoordEventsFromMessages verifies log-derived delegation sequences feed
-// the same pipeline, and that plain sessions yield no coordination section.
 func TestCoordEventsFromMessages(t *testing.T) {
 	msgsWithDelegation := []provider.Message{
 		{Role: "assistant", Content: []provider.ContentBlock{
@@ -133,8 +125,6 @@ func TestCoordEventsFromMessages(t *testing.T) {
 	}
 }
 
-// TestRenderCoordinationSection verifies the /runreport output gates on the
-// coordination report being present.
 func TestRenderCoordinationSection(t *testing.T) {
 	base := []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "go"}}},

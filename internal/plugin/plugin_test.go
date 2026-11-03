@@ -13,7 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// mockPlugin is a test plugin.
 type mockPlugin struct {
 	name  string
 	tools []tool.Tool
@@ -119,7 +118,6 @@ func TestLoadAll_CommandPlugin(t *testing.T) {
 		t.Fatalf("expected 2 tools, got %d", len(results[0].Tools))
 	}
 
-	// Verify tools are registerable
 	reg := tool.NewRegistry()
 	if err := m.RegisterTools(reg); err != nil {
 		t.Fatalf("RegisterTools failed: %v", err)
@@ -155,7 +153,6 @@ func TestLoadAll_MissingGoPlugin(t *testing.T) {
 	}
 	m.LoadAll(entries)
 
-	// Should not block — failure recorded
 	if len(m.Plugins()) != 0 {
 		t.Fatalf("expected 0 plugins, got %d", len(m.Plugins()))
 	}
@@ -213,7 +210,7 @@ func TestScanDir_JSONDescriptor(t *testing.T) {
 func TestScanDir_NonExistentDir(t *testing.T) {
 	m := NewManager()
 	m.scanDir("/nonexistent/path")
-	// Should not panic or error
+
 	if len(m.Results()) != 0 {
 		t.Fatalf("expected 0 results for non-existent dir, got %d", len(m.Results()))
 	}
@@ -252,7 +249,7 @@ func TestCommandTool_Execute_Success(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("expected IsError=false, got error content: %s", result.Content)
 	}
-	// echo with no args prints a newline
+
 	if !strings.Contains(result.Content, "\n") {
 		t.Fatalf("expected output to contain newline, got %q", result.Content)
 	}
@@ -296,7 +293,6 @@ func TestCommandTool_Execute_EmptyInput(t *testing.T) {
 
 	ct := NewCommandTool("echo-empty", "Echo empty", "echo", []string{"default"})
 
-	// nil input should work using default args
 	result, err := ct.Execute(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("Execute with nil input returned unexpected error: %v", err)
@@ -308,7 +304,6 @@ func TestCommandTool_Execute_EmptyInput(t *testing.T) {
 		t.Fatalf("expected output to contain 'default', got %q", result.Content)
 	}
 
-	// Empty byte slice should also work
 	result2, err := ct.Execute(context.Background(), json.RawMessage{})
 	if err != nil {
 		t.Fatalf("Execute with empty raw message returned unexpected error: %v", err)
@@ -348,7 +343,7 @@ func TestCommandTool_Execute_CommandFailure(t *testing.T) {
 	if !strings.Contains(result.Content, "failed") {
 		t.Fatalf("expected error message to contain 'failed', got %q", result.Content)
 	}
-	// stderr output should be captured in the error message
+
 	if !strings.Contains(result.Content, "oops") {
 		t.Fatalf("expected error message to contain stderr output 'oops', got %q", result.Content)
 	}
@@ -360,7 +355,7 @@ func TestCommandTool_Execute_ContextCancellation(t *testing.T) {
 	ct := NewCommandTool("slow-cmd", "Slow command", "sh", []string{"-c", "sleep 30"})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	// Cancel immediately so the command context is already done
+
 	cancel()
 
 	result, err := ct.Execute(ctx, json.RawMessage(`{}`))

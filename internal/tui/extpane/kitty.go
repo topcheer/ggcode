@@ -9,10 +9,8 @@ import (
 	"time"
 )
 
-// kittyBackend implements Backend using kitty remote control.
-// Each agent gets its own tab in the current kitty window running `tail -f`.
 type kittyBackend struct {
-	selfWindowID string // KITTY_WINDOW_ID — never close
+	selfWindowID string
 }
 
 func newKittyBackend() *kittyBackend {
@@ -26,7 +24,6 @@ func newKittyBackend() *kittyBackend {
 
 func (k *kittyBackend) Name() string { return "kitty" }
 
-// CreateTab creates a new kitty tab in the current window running `tail -f`.
 func (k *kittyBackend) CreateTab(ctx context.Context, title, logfile string) (string, error) {
 	args := []string{
 		"@", "launch", "--type=tab", "--title", title,
@@ -43,7 +40,6 @@ func (k *kittyBackend) CreateTab(ctx context.Context, title, logfile string) (st
 	return windowID, nil
 }
 
-// CloseTab closes the kitty tab. Refuses to close our own window/tab.
 func (k *kittyBackend) CloseTab(tabID string) error {
 	if tabID == "" || tabID == k.selfWindowID {
 		return nil
@@ -54,7 +50,6 @@ func (k *kittyBackend) CloseTab(tabID string) error {
 	return err
 }
 
-// SetTitle sets the tab title.
 func (k *kittyBackend) SetTitle(tabID, title string) error {
 	if tabID == "" || tabID == k.selfWindowID {
 		return nil

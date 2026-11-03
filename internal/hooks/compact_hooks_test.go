@@ -7,16 +7,6 @@ import (
 	"testing"
 )
 
-// sa-159: pre_compact / on_compaction lifecycle tests.
-//
-// Design contract being pinned:
-//   - pre_compact runs SYNCHRONOUSLY (state must be persisted before the
-//     summarizer condenses older turns) but is NON-BLOCKING (a hook can never
-//     veto compaction - refusing to compact strands the session at PTL).
-//   - on_compaction stays async fire-and-forget.
-//   - The payload carries a trigger field: "auto", "reactive", or "manual".
-
-// writeMarkerHook returns a command hook that appends a marker line to path.
 func writeMarkerHook(path string) Hook {
 	return Hook{
 		Match:   "*",
@@ -68,13 +58,11 @@ func TestDispatchPreCompactRoutesConfigNotOtherEvents(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "marker.txt")
 	cfg := HookConfig{PreCompact: []Hook{writeMarkerHook(marker)}}
 
-	// A tool event must not fire pre_compact hooks.
 	Dispatch(cfg, HookEnv{Event: EventPreToolUse, ToolName: "write_file"})
 	if got := readMarker(t, marker); got != "" {
 		t.Fatalf("pre_compact hooks fired on pre_tool_use event (marker=%q)", got)
 	}
 
-	// And the configured pre_compact hooks do fire on the compact event.
 	Dispatch(cfg, HookEnv{Event: EventPreCompact, TokenBefore: 5, CompactTrigger: "manual"})
 	if got := readMarker(t, marker); got != "fired" {
 		t.Fatalf("pre_compact hooks did not fire on pre_compact event (marker=%q)", got)

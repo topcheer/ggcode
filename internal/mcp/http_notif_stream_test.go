@@ -11,8 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// The standalone GET SSE stream must deliver server-initiated notifications
-// (e.g. tools/list_changed) while the client is idle - no in-flight POST.
 func TestHTTPNotificationStreamDelivers(t *testing.T) {
 	got := make(chan string, 4)
 	mux := http.NewServeMux()
@@ -26,7 +24,7 @@ func TestHTTPNotificationStreamDelivers(t *testing.T) {
 			}
 			_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}\n\n"))
 			flusher.Flush()
-			// Hold the stream open; the client reads events as they arrive.
+
 			<-r.Context().Done()
 			return
 		}
@@ -74,9 +72,6 @@ func TestHTTPNotificationStreamDelivers(t *testing.T) {
 	}
 }
 
-// A server that answers GET with 405 does not offer the standalone stream
-// (spec-allowed); the client must disable it permanently instead of
-// retry-hammering.
 func TestHTTPNotificationStream405Disables(t *testing.T) {
 	var getCalls int
 	mux := http.NewServeMux()
@@ -123,15 +118,13 @@ func TestHTTPNotificationStream405Disables(t *testing.T) {
 	if !client.httpNotifDisabled.Load() {
 		t.Fatal("405 must permanently disable the notification stream")
 	}
-	// Give any would-be retry loop a moment, then assert no hammering.
+
 	time.Sleep(300 * time.Millisecond)
 	if getCalls > 2 {
 		t.Fatalf("stream retried after 405: %d GET calls", getCalls)
 	}
 }
 
-// sleepUntilClosed must return false promptly once the client is closed,
-// even mid-backoff.
 func TestHTTPSleepUntilClosed(t *testing.T) {
 	c := &Client{}
 	go func() {

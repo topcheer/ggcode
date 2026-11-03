@@ -1,13 +1,3 @@
-// Package runfile manages JSON port files at ~/.ggcode/run/<sessionID>.json
-// that allow external processes to discover and query running ggcode instances.
-//
-// Each port file is keyed by session ID (not workspace), so multiple instances
-// in the same workspace each get their own file. The port file contains the
-// WebUI listen address, auth token, PID, session ID, and workspace.
-//
-// External tools read these files, then query the WebUI's /api/status endpoint:
-//
-//	curl -H "Authorization: Bearer <token>" http://<addr>/api/status
 package runfile
 
 import (
@@ -22,34 +12,21 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// PortFile is the JSON structure written to disk.
 type PortFile struct {
-	Addr      string `json:"addr"`       // WebUI listen address (e.g. "127.0.0.1:54321")
-	Token     string `json:"token"`      // Bearer auth token for WebUI API
-	PID       int    `json:"pid"`        // OS process ID
-	SessionID string `json:"session_id"` // ggcode session ID
-	Workspace string `json:"workspace"`  // working directory
-	Mode      string `json:"mode"`       // startup permission mode (supervised, auto, etc.)
-	// StartTime is the kernel start time of the PID (unix /proc stat
-	// field 22) - the process-identity half of the #1624 case C fix: a
-	// recycled PID passes signal-0 liveness forever, so ghost port files
-	// of dead owners were never cleaned. Empty on platforms without
-	// /proc (identity check degrades to liveness-only).
+	Addr      string `json:"addr"`
+	Token     string `json:"token"`
+	PID       int    `json:"pid"`
+	SessionID string `json:"session_id"`
+	Workspace string `json:"workspace"`
+	Mode      string `json:"mode"`
+
 	StartTime string `json:"start_time,omitempty"`
 }
 
-// runDir is the subdirectory under ~/.ggcode/ for port files.
 const runDir = "run"
 
-// staleAfter is the mtime fallback: a port file whose modification time is
-// older than this is treated as stale even if its PID happens to be alive,
-// because a live-looking PID may be an unrelated recycled process (issue
-// #549 bug F). Port files are rewritten on every session start, so an old
-// mtime cannot belong to a currently running instance.
 const staleAfter = 24 * time.Hour
 
-// path returns the port file path for the given session ID.
-// Format: ~/.ggcode/run/<sessionID>.json
 func path(sessionID string) string {
 	home := homeDir()
 	if home == "" || sessionID == "" {
@@ -58,13 +35,11 @@ func path(sessionID string) string {
 	return filepath.Join(home, ".ggcode", runDir, sessionID+".json")
 }
 
-// Write creates or overwrites the port file for the given session atomically.
 func Write(pf PortFile) error {
 	if pf.SessionID == "" {
 		return fmt.Errorf("session ID is required")
 	}
-	// #1624 case C: stamp the owner's identity so a later reader can tell
-	// this PID from an unrelated process that recycled it.
+
 	if pf.PID > 0 && pf.StartTime == "" {
 		pf.StartTime = procStartTime(pf.PID)
 	}
@@ -81,7 +56,7 @@ func Write(pf PortFile) error {
 	if err != nil {
 		return fmt.Errorf("marshal port file: %w", err)
 	}
-	// Write to temp file then rename for atomicity.
+
 	tmp := p + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		debug.Log("runfile", "Write: failed to write port file for session %s: %v", pf.SessionID, err)
@@ -95,7 +70,6 @@ func Write(pf PortFile) error {
 	return nil
 }
 
-// Remove deletes the port file for the given session ID if it exists.
 func Remove(sessionID string) {
 	p := path(sessionID)
 	if p == "" {
@@ -104,14 +78,10 @@ func Remove(sessionID string) {
 	_ = os.Remove(p)
 }
 
-// Read reads and parses the port file for the given session ID.
-// Returns an error if the file doesn't exist or is stale (PID not alive).
 func Read(sessionID string) (*PortFile, error) {
 	return readAtPath(path(sessionID))
 }
 
-// ReadForWorkspace reads all non-stale port files matching the given workspace.
-// Returns all instances running in that workspace.
 func ReadForWorkspace(workspace string) ([]PortFile, error) {
 	all, err := ReadAll()
 	if err != nil {
@@ -127,8 +97,6 @@ func ReadForWorkspace(workspace string) ([]PortFile, error) {
 	return result, nil
 }
 
-// ReadAll reads all non-stale port files in ~/.ggcode/run/.
-// Useful for listing all running instances.
 func ReadAll() ([]PortFile, error) {
 	home := homeDir()
 	if home == "" {
@@ -146,14 +114,13 @@ func ReadAll() ([]PortFile, error) {
 		}
 		pf, err := readAtPath(filepath.Join(dir, entry.Name()))
 		if err != nil {
-			continue // skip unreadable/stale files
+			continue
 		}
 		result = append(result, *pf)
 	}
 	return result, nil
 }
 
-// readAtPath reads a port file at the given path and validates liveness.
 func readAtPath(p string) (*PortFile, error) {
 	data, err := os.ReadFile(p)
 	if err != nil {
@@ -164,19 +131,13 @@ func readAtPath(p string) (*PortFile, error) {
 		debug.Log("runfile", "readAtPath: failed to parse port file %s: %v", p, err)
 		return nil, fmt.Errorf("parse port file: %w", err)
 	}
-	// Auto-clean legacy port files that lack session_id (old workspace-hash format)
+
 	if pf.SessionID == "" {
 		_ = os.Remove(p)
 		debug.Log("runfile", "readAtPath: removed legacy port file without session_id: %s", p)
 		return nil, fmt.Errorf("legacy port file without session_id, removed")
 	}
-	// #1624 case C: PID-identity check. A live-looking PID may be an
-	// unrelated recycled process (the original owner died, the OS reused
-	// the number) - signal-0 cannot tell them apart, so the ghost entry
-	// pointed clients at a port nobody listens on, forever. When the
-	// recorded start time disagrees with the current one, the owner is
-	// certainly gone: remove. When /proc is unavailable ("" on both
-	// sides) this degrades to the pre-existing liveness rule.
+
 	if pf.StartTime != "" {
 		if now := procStartTime(pf.PID); now != "" && now != pf.StartTime {
 			_ = os.Remove(p)
@@ -189,20 +150,13 @@ func readAtPath(p string) (*PortFile, error) {
 		debug.Log("runfile", "readAtPath: removed stale port file for dead pid %d: %s", pf.PID, p)
 		return nil, fmt.Errorf("process %d is not running (stale port file, removed)", pf.PID)
 	}
-	// Mtime fallback for PID reuse: signal-0 liveness cannot distinguish a
-	// recycled PID from the original owner. #791: the old rule DELETED any
-	// file older than 24h, but port files are written only at process start
-	// (no heartbeat), so a healthy daemon past 24h was wiped from discovery
-	// while still running. Now a stale mtime with a LIVE pid only logs a
-	// warning -- deletion happens exclusively in the dead-pid branch above,
-	// which is the only case where recycling is certain.
+
 	if info, err := os.Stat(p); err == nil && time.Since(info.ModTime()) > staleAfter {
 		debug.Log("runfile", "readAtPath: port file for pid %d is older than %v but pid is alive (no heartbeat; kept): %s", pf.PID, staleAfter, p)
 	}
 	return &pf, nil
 }
 
-// homeDir returns the user home directory, tolerating errors.
 func homeDir() string {
 	h, err := os.UserHomeDir()
 	if err != nil {
@@ -211,7 +165,6 @@ func homeDir() string {
 	return h
 }
 
-// normalizeWorkspace resolves symlinks and cleans the path.
 func normalizeWorkspace(workspace string) string {
 	trimmed := strings.TrimSpace(workspace)
 	if trimmed == "" {
@@ -222,17 +175,13 @@ func normalizeWorkspace(workspace string) string {
 		resolved = r
 	}
 	resolved = filepath.Clean(resolved)
-	// #795: case-insensitive filesystems (darwin/windows default volumes)
-	// treat /tmp/Proj and /tmp/proj as the same workspace, but the string
-	// comparison missed the live instance. Fold case there; Linux
-	// case-sensitive volumes keep exact spelling.
+
 	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
 		return strings.ToLower(resolved)
 	}
 	return resolved
 }
 
-// isAlive checks whether a process with the given PID exists.
 func isAlive(pid int) bool {
 	return processExists(pid)
 }

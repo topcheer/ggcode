@@ -28,19 +28,17 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// RunPipe executes the agent in non-interactive pipe mode.
-// Returns the exit code (0=success, 1=failure).
 func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, readOnlyAllowedDirs []string, outputSchemaPath string) int {
-	// Crash-leftover sweep (mirrors root.run; sa-242 runtime audit).
+
 	if wd, wdErr := os.Getwd(); wdErr == nil {
 		if n, sweepErr := util.SweepStaleTempFiles(filepath.Join(wd, ".ggcode"), time.Hour); sweepErr == nil && n > 0 {
 			debug.Log("pipe", "swept %d stale atomic-write temp file(s)", n)
 		}
-		// #3343: config root shares the same crash-orphan exposure (see root.run).
+
 		if n, sweepErr := util.SweepStaleTempFiles(config.ConfigDir(), time.Hour); sweepErr == nil && n > 0 {
 			debug.Log("pipe", "swept %d stale atomic-write temp file(s) in config dir", n)
 		}
-		// #3346: HOME-level todo files share the same unbounded growth (see root.run).
+
 		tool.SweepStaleTodoFiles(30 * 24 * time.Hour)
 	}
 
@@ -50,10 +48,6 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		return 1
 	}
 
-	// --output-schema: constrain the final response to a JSON Schema
-	// (structured outputs). Providers implementing ResponseSchemaSetter
-	// get constrained decoding; others fall back to prompt guidance +
-	// JSON-validity check at the end of the run.
 	var outputSchema json.RawMessage
 	if outputSchemaPath != "" {
 		raw, readErr := os.ReadFile(outputSchemaPath)
@@ -80,9 +74,6 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		return 1
 	}
 
-	// Setup permission: non-interactive, but honor explicit bypass mode and
-	// always include the live workspace so worker subprocesses can fully operate
-	// inside their assigned directory even when the config lives elsewhere.
 	allowedDirs = effectivePipeAllowedDirs(cfg, cfgPath, workingDir, allowedDirs)
 	rules := make(map[string]permission.Decision)
 	for name, perm := range cfg.ToolPerms {
@@ -96,18 +87,16 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	mode := pipePermissionMode(bypass, cfg.DefaultMode)
 	policy := permission.NewConfigPolicyWithModeAndReadOnlyDirs(rules, allowedDirs, readOnlyAllowedDirs, mode)
 
-	// Apply allowedTools filter
 	if len(allowedTools) > 0 {
 		for _, t := range allowedTools {
 			policy.SetOverride(t, permission.Allow)
 		}
 	}
 
-	// Setup tools (after policy so sandbox checks can be wired)
 	var ag *agent.Agent
 	core, err := agentruntime.BuildInteractiveRuntimeCore(cfg, workingDir, policy)
 	if err == nil {
-		core.SetConfigPath(cfgPath) // #763: enable config hot-reload watch
+		core.SetConfigPath(cfgPath)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "building runtime core: %v\n", err)
@@ -115,14 +104,12 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	}
 	registry := core.Registry
 	core.StartBackgroundServices()
-	// r71: reap managed background jobs (detach=true included) when the pipe
-	// run ends so its children do not outlive the process as orphans.
+
 	if jm := registry.JobManager(); jm != nil {
 		defer jm.ShutdownAll(2 * time.Second)
 	}
 	defer core.Close()
 
-	// Load project memory file list (for path-triggered dynamic loading).
 	projectMemFiles, _ := memory.ProjectMemoryFilesForPath(workingDir)
 
 	autoMem := core.AutoMemory
@@ -166,7 +153,6 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	}
 	systemPrompt := buildCurrentSystemPrompt()
 
-	// Setup agent
 	maxIter := cfg.MaxIterations
 	ag = agent.NewAgent(prov, registry, systemPrompt, maxIter)
 	agentruntime.RegisterCompactContextTool(registry, ag)
@@ -181,9 +167,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	ag.SetHookConfig(cfg.Hooks)
 	ag.SetAuxModel(resolved, cfg.AuxModel)
 	ag.SetWorkingDir(workingDir)
-	// Pipe mode has no session JSONL, but todo_write needs a session ID.
-	// Use a PID-based pseudo ID so todos work during pipe execution and are
-	// cleaned up automatically when the run ends (agent defer ClearTodos).
+
 	ag.SetSessionID(fmt.Sprintf("pipe-%d", os.Getpid()))
 	ag.SetCheckpointManager(checkpoint.NewPersistentManager(50, workingDir))
 	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))
@@ -193,23 +177,20 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		ag.UpdateSystemPrompt(systemPrompt)
 	})
 
-	// Read stdin if available
 	stdinData, err := readStdin()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reading stdin: %v\n", err)
 		return 1
 	}
 
-	// Compose the full prompt (may include image from stdin)
 	fullPrompt, imageBlocks, err := buildPipePrompt(prompt, stdinData)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
 	}
 
-	// Output destination
 	var w io.Writer = os.Stdout
-	var outFile *os.File // #1531: hoisted so the exit path can Close-check
+	var outFile *os.File
 	if outputPath != "" {
 		f, err := os.Create(outputPath)
 		if err != nil {
@@ -217,23 +198,15 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 			return 1
 		}
 		outFile = f
-		defer func() { // safety net only; the real check is before return 0
+		defer func() {
 			if outFile != nil {
 				_ = outFile.Close()
 			}
 		}()
-		// Tee instead of redirect: stdout keeps streaming the model text
-		// exactly as without --output (orchestrators watching the pipe stay
-		// live), while the file receives the same bytes. Write errors from
-		// either side still surface via writeErr (MultiWriter fails on the
-		// first failing writer).
+
 		w = io.MultiWriter(os.Stdout, f)
 	}
 
-	// Run agent non-interactively. Watch SIGINT/SIGTERM so CI-style stop
-	// signals (`timeout --signal=TERM ... ggcode -p ...`) cancel the context
-	// and let the deferred cleanup below (core.Close, ACP clients, output
-	// file, checkpoints) run instead of killing the process outright (#722).
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	ctx, cancel := context.WithCancel(sigCtx)
@@ -241,15 +214,9 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 
 	var hasError bool
 	var agentErr error
-	// #1444-B: local write errors (ENOSPC on a full disk, EACCES) were
-	// silently dropped - `ggcode -p ... -o /mnt/full/report.txt` produced
-	// exit 0 with a truncated/empty file and no stderr hint, and CI
-	// scripts consuming the exit code took the broken artifact as good.
-	// Fprint errors now set writeErr and feed the exit code; the output
-	// file is Close-checked too (NFS commit/flush).
+
 	var writeErr error
-	// --output-schema: accumulate the streamed response text so the JSON
-	// validity check can run after the stream completes.
+
 	var schemaOut strings.Builder
 	writeText := func(text string) {
 		if outputSchema != nil {
@@ -266,8 +233,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 			case provider.StreamEventText:
 				writeText(event.Text)
 			case provider.StreamEventReasoning:
-				// Stream thinking to stderr as it arrives (rationale in the
-				// RunStream twin below).
+
 				fmt.Fprint(os.Stderr, event.Text)
 			case provider.StreamEventToolCallDone:
 				if line := formatPipeProgressEvent(event); line != "" {
@@ -288,10 +254,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 			case provider.StreamEventText:
 				writeText(event.Text)
 			case provider.StreamEventReasoning:
-				// Stream thinking to stderr as it arrives: orchestrators
-				// watching the pipe see the model's reasoning live (same
-				// visibility as the TUI reasoning panel), while stdout and the
-				// --output file keep only the answer text.
+
 				fmt.Fprint(os.Stderr, event.Text)
 			case provider.StreamEventToolCallDone:
 				if line := formatPipeProgressEvent(event); line != "" {
@@ -308,15 +271,8 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		}, "human")
 	}
 
-	// r414: preference capture aligned with the TUI reflection path
-	// (run/RunPipe behavioral-parity convention). Same memory.CapturePreferences
-	// sink, keyed to the pipe working dir; skipped on cancellation to mirror
-	// the TUI's non-cancelled guard. Must never disturb the exit-code path.
 	if ctx.Err() == nil {
-		// #4237: the image-stdin branch of buildPipePrompt returns "" as
-		// fullPrompt (the text rides in blocks[0]) - capturing "" was a
-		// no-op, so "-p <image + 'answer in Chinese from now on'" never
-		// persisted the preference. Fall back to the block text.
+
 		captureText := fullPrompt
 		if strings.TrimSpace(captureText) == "" {
 			for _, blk := range imageBlocks {
@@ -336,31 +292,21 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	if hasError {
 		return 1
 	}
-	// --output-schema contract: the final response must be parseable JSON
-	// (after markdown-fence stripping for the fallback path). Structured-
-	// output endpoints guarantee this server-side; the check catches
-	// fallback-path drift and gives CI a trustworthy exit code.
+
 	if outputSchema != nil && !pipeOutputIsValidJSON(schemaOut.String()) {
 		fmt.Fprintln(os.Stderr, "ggcode pipe: --output-schema set but the final response is not valid JSON (after fence stripping)")
 		return 1
 	}
-	// #1531: Fprint to *os.File lands in the page cache and returns nil -
-	// ENOSPC/NFS-async-commit/FUSE-flush errors only surface at Close.
-	// The comment above has promised Close-checking since #1444-B; do it
-	// here (before the exit-code decision) instead of a bare defer whose
-	// error was discarded after the return value was already fixed.
+
 	if outFile != nil {
 		if err := outFile.Close(); err != nil {
-			// #1719 case 2: Close is where ENOSPC/NFS flush failures surface
-			// (Fprint already sat in page cache) - exit 1 with zero stderr
-			// gave CI nothing to go on (#1444-B/#1531's exact scenario).
+
 			fmt.Fprintf(os.Stderr, "ggcode pipe: closing output file: %v\n", err)
 			writeErr = err
 		}
-		outFile = nil // the deferred Close is then a harmless no-op on nil
+		outFile = nil
 	}
-	// #1444-B: a failed write means the output artifact is truncated or
-	// empty - never exit 0 for it.
+
 	if writeErr != nil {
 		return 1
 	}
@@ -387,9 +333,6 @@ func effectivePipeAllowedDirs(cfg *config.Config, cfgPath, workingDir string, al
 	return pipeAllowedDirs(cfg, cfgPath, workingDir)
 }
 
-// pipeOutputIsValidJSON reports whether the final response body is valid
-// JSON, tolerating a single markdown-fenced block (the fallback path asks
-// for raw JSON but models sometimes wrap it).
 func pipeOutputIsValidJSON(s string) bool {
 	if json.Valid([]byte(s)) {
 		return true
@@ -433,44 +376,22 @@ func dedupeStrings(values []string) []string {
 	return out
 }
 
-// stdinIdleTimeout bounds how long readStdin waits for the *next* chunk of
-// stdin data before giving up. A pipe whose writer never closes (e.g.
-// `tail -f x | ggcode -p`, or a parent holding the write-end open) used to
-// block io.ReadAll — and therefore all of startup — forever (#537).
-// A var (not const) so tests can shorten it.
 var stdinIdleTimeout = 30 * time.Second
 
-// stdinChunkSize is the per-read buffer size for readStdin.
 const stdinChunkSize = 32 * 1024
 
-// stdinMaxBytes caps total buffered stdin data. Aligned with
-// util.ReadLimitGeneral (the repo's generic-input limit family) so pipe mode
-// gets the same "prevents unbounded memory allocation" guarantee (#722).
-// A var (not const) so tests can shrink it.
 var stdinMaxBytes int64 = util.ReadLimitGeneral
 
-// readStdin reads all data from stdin if it's a pipe, otherwise returns nil.
-// Empty piped input returns nil (not []byte{}) so buildPipePrompt's nil check
-// correctly treats it as "no stdin data" (#537).
 func readStdin() ([]byte, error) {
-	// #402: a closed stdin fd (parent close(0) before exec — common in
-	// cron/daemon/CI callers) makes Stat return EBADF with a nil stat;
-	// dereferencing it panicked at startup. Treat as "no stdin data".
+
 	stat, err := os.Stdin.Stat()
 	if err != nil || (stat.Mode()&os.ModeCharDevice) != 0 {
 		return nil, nil
 	}
-	// Read manually with a per-read idle deadline instead of io.ReadAll so a
-	// stalled writer can't block startup indefinitely. A slow but flowing
-	// stream (data arriving at least once per window) still completes.
-	// The cumulative size is also capped (#722): `cat 4GB.bin | ggcode -p`
-	// used to buffer everything (then copy it again into the prompt string),
-	// ballooning RSS until the process got OOM-killed with no diagnosis.
+
 	var buf []byte
 	for {
-		// Fresh chunk per iteration: on idle-timeout a reader goroutine stays
-		// parked in os.Stdin.Read holding this buffer, so chunks must never be
-		// reused across reads (#722).
+
 		chunk := make([]byte, stdinChunkSize)
 		n, readErr := readStdinChunk(chunk, stdinIdleTimeout)
 		buf = append(buf, chunk[:n]...)
@@ -482,7 +403,7 @@ func readStdin() ([]byte, error) {
 		}
 		if readErr != nil {
 			if os.IsTimeout(readErr) {
-				// Stalled pipe: keep whatever arrived so far and move on.
+
 				fmt.Fprintf(os.Stderr, "stdin read timed out after %v; continuing with %d bytes\n", stdinIdleTimeout, len(buf))
 				break
 			}
@@ -495,9 +416,6 @@ func readStdin() ([]byte, error) {
 	return buf, nil
 }
 
-// readStdinChunk reads once from stdin with an idle timeout. On timeout the
-// reader goroutine remains parked holding buf, so callers must pass a buffer
-// that is not reused across calls (see readStdin).
 func readStdinChunk(buf []byte, timeout time.Duration) (int, error) {
 	type readResult struct {
 		n   int
@@ -516,15 +434,11 @@ func readStdinChunk(buf []byte, timeout time.Duration) (int, error) {
 	}
 }
 
-// buildPipePrompt builds the prompt with optional image from stdin. Non-image
-// stdin must be valid UTF-8 text; raw binaries are rejected with an error
-// instead of being silently mangled into the prompt (#722).
 func buildPipePrompt(prompt string, stdinData []byte) (string, []provider.ContentBlock, error) {
 	if stdinData == nil {
 		return prompt, nil, nil
 	}
 
-	// Check if stdin is an image
 	mime := image.DetectMIME(stdinData)
 	if mime != "" {
 		img, err := image.Decode(stdinData)
@@ -539,7 +453,6 @@ func buildPipePrompt(prompt string, stdinData []byte) (string, []provider.Conten
 		}
 	}
 
-	// Plain text: reject binary input before it becomes a lossy string.
 	if !utf8.Valid(stdinData) {
 		return "", nil, fmt.Errorf("stdin data is not valid UTF-8 text (looks like binary); pipe plain text or a recognized image format instead")
 	}

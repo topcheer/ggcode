@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// TestSuggestionTaskKeyStripsDatePrefix (#4178): the dedup key must be the
-// day-stable task text, not "- [YYYY-MM-DD] task". With the date left in
-// the key, a workflow re-suggested on a later day never matched its
-// earlier line and suggestions accumulated day-variants.
 func TestSuggestionTaskKeyStripsDatePrefix(t *testing.T) {
 	day1 := `- [2026-10-14] release the app (tools: run_command×5, edit_file×2) — recurring workflow; consider create_skill to persist it as an invocable skill`
 	day3 := `- [2026-10-16] release the app (tools: git_commit×3) — recurring workflow; consider create_skill to persist it as an invocable skill`
@@ -24,25 +20,20 @@ func TestSuggestionTaskKeyStripsDatePrefix(t *testing.T) {
 		t.Fatalf("key must not carry the date prefix: %q", k1)
 	}
 
-	// Lines without a date prefix keep the old semantics.
 	plain := `release the app (tools: run_command×5)`
 	if got := suggestionTaskKey(plain); got != "release the app" {
 		t.Fatalf("plain line key: got %q", got)
 	}
-	// Bare line without tools tail is its own key.
+
 	if got := suggestionTaskKey("  release the app  "); got != "release the app" {
 		t.Fatalf("bare line key: got %q", got)
 	}
-	// Malformed "- [" without closing bracket degrades gracefully:
-	// no strip is attempted, the raw line is the key.
+
 	if got := suggestionTaskKey("- [unterminated task text"); got != "- [unterminated task text" {
 		t.Fatalf("malformed prefix should keep the raw line, got %q", got)
 	}
 }
 
-// TestMergeSkillSuggestionsCrossDayReplace (#4178): a fresh suggestion for
-// the same workflow recorded on a later day must REPLACE the old line, not
-// append a day-variant.
 func TestMergeSkillSuggestionsCrossDayReplace(t *testing.T) {
 	existing := "- [2026-10-14] release the app (tools: run_command×5) — recurring workflow; consider create_skill to persist it as an invocable skill"
 	fresh := "- [2026-10-16] release the app (tools: git_commit×3) — recurring workflow; consider create_skill to persist it as an invocable skill"

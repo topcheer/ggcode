@@ -1,10 +1,5 @@
 package lsp
 
-// #3731 probe: readRPCMessage must refuse a Content-Length header beyond
-// maxRPCContentLength instead of attempting the allocation - a misbehaving
-// third-party server emitting `Content-Length: 4000000000` used to trigger
-// a multi-GB make() (or a makeslice panic inside the readLoop goroutine).
-
 import (
 	"bufio"
 	"strings"

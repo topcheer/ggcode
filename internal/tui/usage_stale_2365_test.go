@@ -7,10 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/usage"
 )
 
-// TestRefreshUsagePanelClearsStale verifies #2365-①a: the r-refresh must
-// evict round-1 results. The old code kept infos/errs, so a vendor whose
-// round-2 result flipped to an error kept rendering its round-1 balance
-// forever (render prefers infos; the fresh error was permanently masked).
 func TestRefreshUsagePanelClearsStale(t *testing.T) {
 	m := newTestModel()
 	m.usagePanel = &usagePanelState{
@@ -31,9 +27,7 @@ func TestRefreshUsagePanelClearsStale(t *testing.T) {
 	if !m.usagePanel.fetching {
 		t.Fatal("refresh did not set fetching")
 	}
-	// #2366-① inverted the cache policy: the Service instance is now KEPT
-	// (singleflight + negative/429 pacing survive); only success entries
-	// are dropped via RefreshInvalidate.
+
 	if m.usageService != oldSvc {
 		t.Fatal("refresh dropped the Service instance (429 pacing lost)")
 	}
@@ -42,10 +36,6 @@ func TestRefreshUsagePanelClearsStale(t *testing.T) {
 	}
 }
 
-// TestUsageUpdateFlipEvictsOpposite verifies #2365-①b: infos/errs are
-// mutually exclusive per vendor - a flipped probe result must delete its
-// opposite entry, or the completion count double-counts (fetching flips
-// false early) and a stale info masks a fresh error.
 func TestUsageUpdateFlipEvictsOpposite(t *testing.T) {
 	m := newTestModel()
 	m.activeVendor = "zai"
@@ -55,13 +45,13 @@ func TestUsageUpdateFlipEvictsOpposite(t *testing.T) {
 	if out, _ := m.handleUsageInfoUpdated(usageInfoUpdatedMsg{vendor: "zai", info: info}); out.usagePanel.infos["zai"] != info {
 		t.Fatal("ok result not recorded")
 	}
-	// Flip to error: infos entry must go.
+
 	if out, _ := m.handleUsageInfoUpdated(usageInfoUpdatedMsg{vendor: "zai", err: errors.New("down")}); out.usagePanel.infos["zai"] != nil {
 		t.Fatal("flip to error kept the stale info entry")
 	} else if out.usagePanel.errs["zai"] == "" {
 		t.Fatal("flip to error did not record the error")
 	}
-	// Flip back to ok: errs entry must go.
+
 	if out, _ := m.handleUsageInfoUpdated(usageInfoUpdatedMsg{vendor: "zai", info: info}); out.usagePanel.errs["zai"] != "" {
 		t.Fatal("flip to ok kept the stale error entry")
 	} else if out.usagePanel.infos["zai"] != info {
@@ -69,10 +59,6 @@ func TestUsageUpdateFlipEvictsOpposite(t *testing.T) {
 	}
 }
 
-// TestVendorSwitchClearsSidebarUsage verifies #2365-②: switching the
-// active vendor drops the sidebar snapshot - the section renders no
-// vendor name, so the previous vendor's balance/quota must not present
-// as the new vendor's numbers.
 func TestVendorSwitchClearsSidebarUsage(t *testing.T) {
 	m := newTestModel()
 	m.activeVendor = "zai"

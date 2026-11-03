@@ -6,14 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// zz_issue4537_test.go pins the human-origin dedupe carve-out.
-//
-// The #2324 storm (machine re-fires of the same prompt, NON-consecutive) must
-// keep collapsing globally; the #4537 regression (a human re-typing a
-// byte-identical "yes"/"continue" across turns) must survive on both the
-// render history and the LLM context, so the assistant reply that answers it
-// is never orphaned.
-
 func zz4537Msg(origin, text string) provider.Message {
 	return provider.Message{Role: "user", Origin: origin, Content: []provider.ContentBlock{{Type: "text", Text: text}}}
 }
@@ -22,13 +14,11 @@ func zz4537Assistant(text string) provider.Message {
 	return provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: text}}}
 }
 
-// TestIssue4537HumanConfirmationSurvivesAcrossTurns: u(yes,human) a u(yes,human) a
-// -- BOTH "yes" turns must survive; each assistant reply keeps its user turn.
 func TestIssue4537HumanConfirmationSurvivesAcrossTurns(t *testing.T) {
 	in := []provider.Message{
 		zz4537Msg("human", "yes"),
 		zz4537Assistant("proceeding with step 1"),
-		zz4537Msg("human", "yes"), // re-typed confirmation, later turn
+		zz4537Msg("human", "yes"),
 		zz4537Assistant("proceeding with step 2"),
 	}
 	out := dedupeUserMsgs(in)
@@ -46,16 +36,13 @@ func TestIssue4537HumanConfirmationSurvivesAcrossTurns(t *testing.T) {
 	}
 }
 
-// TestIssue4537MachineReFireStillCollapses: untagged (machine/legacy) identical
-// user turns separated by an assistant run keep the #2324 global-collapse
-// behavior -- the guard semantics the retry-storm tests pin.
 func TestIssue4537MachineReFireStillCollapses(t *testing.T) {
 	in := []provider.Message{
 		zz4537Msg("", "run the sweep"),
 		zz4537Assistant("partial"),
-		zz4537Msg("", "run the sweep"), // cron/strategist re-fire, non-consecutive
+		zz4537Msg("", "run the sweep"),
 		zz4537Assistant("partial 2"),
-		zz4537Msg("", "run the sweep"), // third re-fire
+		zz4537Msg("", "run the sweep"),
 	}
 	out := dedupeUserMsgs(in)
 	sweep := 0
@@ -69,16 +56,13 @@ func TestIssue4537MachineReFireStillCollapses(t *testing.T) {
 	}
 }
 
-// TestIssue4537MixedOriginsIndependent: a human confirmation and an untagged
-// machine copy of the same text must not interfere -- the machine copy still
-// collapses against earlier untagged copies, the human copy is kept.
 func TestIssue4537MixedOriginsIndependent(t *testing.T) {
 	in := []provider.Message{
-		zz4537Msg("", "continue"), // original (machine-injected)
+		zz4537Msg("", "continue"),
 		zz4537Assistant("ok"),
-		zz4537Msg("", "continue"), // machine re-fire -> collapses
+		zz4537Msg("", "continue"),
 		zz4537Assistant("ok2"),
-		zz4537Msg("human", "continue"), // human typed later -> kept
+		zz4537Msg("human", "continue"),
 	}
 	out := dedupeUserMsgs(in)
 	total := 0

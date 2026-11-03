@@ -1,10 +1,5 @@
 package memory
 
-// #4334 probes: a delete->recreate->delete sequence must keep BOTH deleted
-// gaps - the old single-tombstone overwrite lost the first deletion
-// instant, so an as_of inside the first gap time-traveled back to the
-// already-deleted v1.
-
 import (
 	"os"
 	"path/filepath"
@@ -23,43 +18,39 @@ func TestIssue4334_DoubleDeleteKeepsFirstGap(t *testing.T) {
 	}
 	preDelete := time.Now()
 	time.Sleep(10 * time.Millisecond)
-	if err := am.DeleteMemory("dd"); err != nil { // T1
+	if err := am.DeleteMemory("dd"); err != nil {
 		t.Fatal(err)
 	}
 	firstGapAt := time.Now()
 	time.Sleep(10 * time.Millisecond)
-	if err := am.SaveMemory("dd", "v2"); err != nil { // recreate
+	if err := am.SaveMemory("dd", "v2"); err != nil {
 		t.Fatal(err)
 	}
 	midV2 := time.Now()
 	time.Sleep(10 * time.Millisecond)
-	if err := am.DeleteMemory("dd"); err != nil { // T2
+	if err := am.DeleteMemory("dd"); err != nil {
 		t.Fatal(err)
 	}
 	afterSecond := time.Now()
 	time.Sleep(10 * time.Millisecond)
 
-	// The core regression: as_of inside the FIRST deleted gap [T1, recreate)
-	// must find nothing - the single-tombstone bug returned v1 here.
 	if _, _, found, _ := am.ReadMemoryAsOf("dd", firstGapAt); found {
 		t.Fatal("as_of in the first deleted gap must find nothing (tombstone overwrite regression)")
 	}
-	// After the second deletion: also nothing.
+
 	if _, _, found, _ := am.ReadMemoryAsOf("dd", afterSecond); found {
 		t.Fatal("as_of after the second delete must find nothing")
 	}
-	// Before the first deletion: v1 is exact.
+
 	if content, _, found, _ := am.ReadMemoryAsOf("dd", preDelete); !found || content != "v1" {
 		t.Fatalf("pre-delete as_of = (%q, %v), want (v1, true)", content, found)
 	}
-	// Between the recreate and the second deletion: v2 is exact.
+
 	if content, _, found, _ := am.ReadMemoryAsOf("dd", midV2); !found || content != "v2" {
 		t.Fatalf("recreated-interval as_of = (%q, %v), want (v2, true)", content, found)
 	}
 }
 
-// Legacy compatibility: a pre-#4334 single tombstone (no timestamp suffix)
-// must still cut the interval after its deletion instant.
 func TestIssue4334_LegacySingleTombstoneStillHonored(t *testing.T) {
 	dir := t.TempDir()
 	am := NewProjectAutoMemory(dir)
@@ -77,8 +68,6 @@ func TestIssue4334_LegacySingleTombstoneStillHonored(t *testing.T) {
 	delAt := time.Now()
 	time.Sleep(10 * time.Millisecond)
 
-	// Reshape to pre-#4334 on-disk state: replace every timestamp-suffixed
-	// tombstone with one legacy single-path file carrying the same mtime.
 	hdir := filepath.Join(am.dir, historyDirName)
 	safe := disambiguateKey("legacy-tomb", sanitizeKey("legacy-tomb"))
 	matches, _ := filepath.Glob(filepath.Join(hdir, safe+".tombstone.*"))
@@ -102,11 +91,10 @@ func TestIssue4334_LegacySingleTombstoneStillHonored(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// After the deletion instant (legacy tombstone only): found=false.
 	if _, _, found, _ := am.ReadMemoryAsOf("legacy-tomb", delAt); found {
 		t.Fatal("legacy single tombstone must still cut the interval after deletion")
 	}
-	// Before the deletion instant: v1 resolves exactly.
+
 	if content, _, found, _ := am.ReadMemoryAsOf("legacy-tomb", midAt); !found || content != "v1" {
 		t.Fatalf("pre-delete as_of = (%q, %v), want (v1, true)", content, found)
 	}

@@ -7,13 +7,6 @@ import (
 	"testing"
 )
 
-// #4393: adhocInt must WARN on stderr when an explicitly-set env value is
-// invalid (unparseable or non-positive) instead of silently falling back to
-// the default. Flag override and unset/blank env stay silent; valid values
-// return without warning.
-
-// captureStderrInt runs fn with os.Stderr swapped to a pipe and returns
-// fn's result plus everything fn wrote to stderr.
 func captureStderrInt(t *testing.T, fn func() int) (int, string) {
 	t.Helper()
 	old := os.Stderr

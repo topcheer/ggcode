@@ -1,6 +1,5 @@
 package tui
 
-// jaCatalog returns the Japanese translation for the given key.
 func jaCatalog(key string) string {
 	switch key {
 	case "workspace.tagline":
@@ -212,12 +211,7 @@ func jaCatalog(key string) string {
 	case "interrupted":
 		return "中断されました"
 	case "lang.current":
-		// #1372: en baseline takes the language name; keep the verb so the
-		// argument is not silently dropped if this key is wired up.
-		// #2259: en carries TWO %s (name + interactive-hint block) - the ja
-		// catalog's single %s made this the one REAL verb mismatch the
-		// #2259 regex blindspot was hiding; wiring it up would have
-		// printed %!(EXTRA ...) garbage.
+
 		return "現在の言語: %s\n/lang で対話的に選択、または /lang <en|ja> で直接切り替え。\n%s\n\n"
 	case "lang.invalid":
 		return "サポートされていない言語: %s\n%s\n\n"
@@ -472,8 +466,7 @@ func jaCatalog(key string) string {
 	case "command.provider_current":
 		return "現在のベンダー: %s（エンドポイント: %s、モデル: %s）\n利用可能なベンダー: %s\n利用可能なエンドポイント: %s\n使用法: /provider [ベンダー] [エンドポイント]\n\n"
 	case "command.allow_set":
-		// #1372: en baseline (i18n_command.go) takes ONE %%s; the old ja text
-		// had two, so commands.go:398's single arg printed %!s(MISSING).
+
 		return "✓ %s を永久許可に設定しました\n\n"
 	case "command.custom":
 		return "カスタムコマンド /%s:\n"
@@ -500,8 +493,7 @@ func jaCatalog(key string) string {
 	case "checkpoint.undo_failed":
 		return "チェックポイントのロールバックに失敗: %v"
 	case "checkpoint.undid":
-		// #1372: call site passes three STRINGS (tool, file, id); the old
-		// ja %d coerced the first to a number and dropped the other two.
+
 		return "%s を取り消しました（%s・チェックポイント %s）\n"
 	case "files.disabled":
 		return "ファイルブラウザ無効"
@@ -1010,11 +1002,7 @@ func jaCatalog(key string) string {
 		return "複数回の拒否により、このチャネルはブラックリストに登録されました。"
 
 	default:
-		// #1372: delegate to enCatalog instead of only probing module
-		// catalogs - enCatalog's own default covers the main switch AND
-		// module fallback, so keys missing from ja (39 of them: hooks.*,
-		// trace.*, slash.*) show English instead of the raw key. Same
-		// pattern ko already uses (nested delegation is safe).
+
 		return enCatalog(key)
 	}
 }

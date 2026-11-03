@@ -1,8 +1,5 @@
 package tui
 
-// #2422 knife F (misc long-tail): extracted verbatim from Model.Update's
-// inline case bodies - zero behavior change.
-
 import (
 	"fmt"
 	"strings"
@@ -16,7 +13,7 @@ import (
 )
 
 func (m Model) handleWebuiReadyMsg(msg webuiReadyMsg) (tea.Model, tea.Cmd) {
-	// Display webui URL as a subtle system message in the chat area
+
 	if msg.Addr != "" {
 		url := "http://" + msg.Addr
 		if msg.Token != "" {
@@ -29,10 +26,7 @@ func (m Model) handleWebuiReadyMsg(msg webuiReadyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handlePcResultMsg(msg pcResultMsg) (tea.Model, tea.Cmd) {
-	// #1386-A: pcResultMsg had NO Update case - every PC panel
-	// operation result (create/QR/renew/close/bind) was silently
-	// dropped by bubbletea: QR never shown, success/error feedback
-	// never updated. Routed to the panel fields like signal's results.
+
 	if m.pcPanel != nil {
 		if msg.err != nil {
 			m.pcPanel.message = fmt.Sprintf("Error: %v", msg.err)
@@ -50,9 +44,9 @@ func (m Model) handlePcResultMsg(msg pcResultMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleRestorePendingImagesMsg(msg restorePendingImagesMsg) (tea.Model, tea.Cmd) {
-	// #1393-A: the aborted run's captured attachments come home.
+
 	if msg.RunID != m.activeAgentRunID {
-		return m, nil // a newer run started; don't interleave its state
+		return m, nil
 	}
 	m.pendingImages = append(m.pendingImages, msg.Images...)
 	debug.Log("tui", "restored %d pending image(s) from aborted submit (expand failure)", len(msg.Images))
@@ -98,8 +92,7 @@ func (m Model) handleSystemNotifyMsg(msg systemNotifyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		// Item not found yet — create it with the provided ItemID so
-		// subsequent retries with the same ItemID can find and append.
+
 		m.chatWriteSystem(msg.ItemID, msg.Text)
 		m.chatListFollowOutput()
 		return m, nil
@@ -117,7 +110,7 @@ func (m Model) handleGitBranchTickMsg(msg gitBranchTickMsg) (tea.Model, tea.Cmd)
 }
 
 func (m Model) handleWechatPollDueMsg(msg wechatPollDueMsg) (tea.Model, tea.Cmd) {
-	// #1792 case 2: the paced re-poll fired - run the real poll.
+
 	if m.wechatPanel != nil {
 		return m, m.pollWechatQRStatus(msg.token)
 	}

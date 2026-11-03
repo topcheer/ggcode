@@ -42,19 +42,11 @@ type rawTextEdit struct {
 type rawWorkspaceEdit struct {
 	Changes         map[string][]rawTextEdit `json:"changes"`
 	DocumentChanges []struct {
-		// #1588-B: rename/delete entries carry NO edits key - the typed
-		// struct had no kind field, so those entries silently parsed to
-		// empty Edits and the loop skipped them, leaving callers with
-		// "No rename edits returned" that masked "the server returned an
-		// unsupported change form" (typescript-language-server
-		// Move-to-file class). Track kind so unsupported forms surface.
 		Kind         string `json:"kind"`
 		TextDocument struct {
 			URI string `json:"uri"`
 		} `json:"textDocument"`
-		// #1769: rename/create/delete carry the TARGET uri at the TOP level
-		// (LSP WorkspaceEdit_structure) - without these the unsupported-kind
-		// note could not say which file was involved.
+
 		URI    string        `json:"uri"`
 		OldURI string        `json:"oldUri"`
 		NewURI string        `json:"newUri"`
@@ -80,10 +72,6 @@ func WorkspaceSymbols(ctx context.Context, workspace, query string) ([]Workspace
 	return parseWorkspaceSymbols(raw), nil
 }
 
-// renameResult carries a rename reply: the applied edits plus the
-// unsupported-kinds note from parseWorkspaceEdit (#3037: the note travels as
-// a return value; the old package-global channel raced between concurrent
-// callers, letting workspace B's Take swallow workspace A's note).
 type renameResult struct {
 	edits []FileEdit
 	note  string
@@ -167,10 +155,6 @@ func parseWorkspaceSymbols(raw json.RawMessage) []WorkspaceSymbol {
 	return out
 }
 
-// parseWorkspaceEdit extracts file edits from a WorkspaceEdit reply. The
-// second return carries the unsupported documentChanges kinds note (#1769);
-// it travels as a return value (#3037) so concurrent callers cannot swallow
-// each other's notes the way the old package-global channel did.
 func parseWorkspaceEdit(raw json.RawMessage) ([]FileEdit, string) {
 	var edit rawWorkspaceEdit
 	if err := json.Unmarshal(raw, &edit); err != nil {
@@ -194,13 +178,9 @@ func parseWorkspaceEdit(raw json.RawMessage) ([]FileEdit, string) {
 		}
 	}
 	for _, change := range edit.DocumentChanges {
-		// #1588-B: kind-bearing entries without edits (rename, delete)
-		// previously parsed to empty Edits and skipped silently; surface
-		// them so callers can report the unsupported change form instead
-		// of a bare "no edits returned".
+
 		if change.Kind != "" && change.Kind != "edit" && len(change.Edits) == 0 {
-			// #1769: prefer the top-level uri fields (rename uses oldUri/newUri,
-			// create/delete use uri) - TextDocument.URI is absent for these kinds.
+
 			target := firstNonEmptyStr(change.NewURI, change.OldURI, change.URI, change.TextDocument.URI)
 			unsupportedWorkspaceChangeKinds = append(unsupportedWorkspaceChangeKinds,
 				fmt.Sprintf("%s %s", change.Kind, uriToPath(target)))
@@ -223,10 +203,7 @@ func parseWorkspaceEdit(raw json.RawMessage) ([]FileEdit, string) {
 	for _, path := range paths {
 		out = append(out, FileEdit{Path: path, Edits: grouped[path]})
 	}
-	// #1588-B/#1769: make unsupported documentChanges kinds observable.
-	// debug.Log alone was invisible to the agent (ring buffer; /debug only)
-	// - the TypeScript Move-to-file case still got the misleading bare
-	// "no edits returned". RenameEdits now surfaces the note to the caller.
+
 	note := ""
 	if len(unsupportedWorkspaceChangeKinds) > 0 {
 		note = strings.Join(unsupportedWorkspaceChangeKinds, ", ")
@@ -244,9 +221,6 @@ func firstNonEmptyStr(vals ...string) string {
 	return ""
 }
 
-// editKey builds a dedup key for a TextEdit: range start/end positions plus
-// the replacement text. Servers that populate both WorkspaceEdit.changes and
-// WorkspaceEdit.documentChanges with the same edit must not produce duplicates.
 func editKey(edit TextEdit) string {
 	return fmt.Sprintf("%d:%d-%d:%d:%s",
 		edit.Range.Start.Line, edit.Range.Start.Character,
@@ -324,8 +298,6 @@ func mustRaw(v any) json.RawMessage {
 	return data
 }
 
-// codeActionEdits adapts parseWorkspaceEdit's dual return (#3037) for the
-// CodeActions list builder, which only consumes the edits.
 func codeActionEdits(raw rawWorkspaceEdit) []FileEdit {
 	edits, _ := parseWorkspaceEdit(mustRaw(raw))
 	return edits

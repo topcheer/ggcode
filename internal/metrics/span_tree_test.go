@@ -39,7 +39,6 @@ func TestBuildSpanTree_Hierarchy(t *testing.T) {
 		t.Fatalf("expected 2 turn children, got %d", len(tree.Children))
 	}
 
-	// First child should be turn 1.
 	turn1 := tree.Children[0]
 	if turn1.Kind != "turn" {
 		t.Errorf("expected turn kind, got %q", turn1.Kind)
@@ -48,7 +47,6 @@ func TestBuildSpanTree_Hierarchy(t *testing.T) {
 		t.Fatalf("expected 2 children in turn 1, got %d", len(turn1.Children))
 	}
 
-	// Children should be llm and tool.
 	if turn1.Children[0].Kind != "llm" {
 		t.Errorf("expected first child kind 'llm', got %q", turn1.Children[0].Kind)
 	}
@@ -56,7 +54,6 @@ func TestBuildSpanTree_Hierarchy(t *testing.T) {
 		t.Errorf("expected second child kind 'tool', got %q", turn1.Children[1].Kind)
 	}
 
-	// LLM span should have model in attributes.
 	llmSpan := turn1.Children[0]
 	if llmSpan.Attributes["model"] != "test-model" {
 		t.Errorf("expected model attr 'test-model', got %v", llmSpan.Attributes["model"])
@@ -65,7 +62,6 @@ func TestBuildSpanTree_Hierarchy(t *testing.T) {
 		t.Errorf("expected input_tokens 1000, got %v", llmSpan.Attributes["input_tokens"])
 	}
 
-	// Tool span should have tool_name in attributes.
 	toolSpan := turn1.Children[1]
 	if toolSpan.Attributes["tool_name"] != "read_file" {
 		t.Errorf("expected tool_name 'read_file', got %v", toolSpan.Attributes["tool_name"])

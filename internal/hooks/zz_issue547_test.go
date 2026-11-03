@@ -1,9 +1,5 @@
 package hooks
 
-// Issue #547 characteristic tests: runSync error propagation (E), async hook
-// survival across caller ctx cancellation (F), and structured-field-only path
-// extraction (G).
-
 import (
 	"context"
 	"fmt"
@@ -14,12 +10,10 @@ import (
 	"time"
 )
 
-// --- Bug E: runSync must propagate hook errors ---
-
 func TestIssue547_RunSyncPropagatesHookError(t *testing.T) {
 	h := Hook{
 		Match:   "write_file",
-		Command: "echo boom >&2; exit 1", // failing hook command
+		Command: "echo boom >&2; exit 1",
 	}
 	env := HookEnv{Event: EventPostToolUse, ToolName: "write_file", RawInput: `{}`}
 	result := RunPostHooks([]Hook{h}, env)
@@ -63,14 +57,12 @@ func TestIssue547_RunSyncSuccessKeepsErrNil(t *testing.T) {
 	}
 }
 
-// --- Bug F: async stop hooks must survive caller ctx cancellation ---
-
 func TestIssue547_AsyncStopHookSurvivesCallerCtxCancel(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker.txt")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // caller cancels BEFORE the stop hook runs (teardown ordering)
+	cancel()
 
 	cfg := HookConfig{
 		OnAgentStop: []Hook{
@@ -79,7 +71,7 @@ func TestIssue547_AsyncStopHookSurvivesCallerCtxCancel(t *testing.T) {
 	}
 	env := HookEnv{
 		Event:     EventOnAgentStop,
-		Ctx:       ctx, // pre-cancelled — must not kill the async hook
+		Ctx:       ctx,
 		SessionID: "issue547",
 	}
 	Dispatch(cfg, env)
@@ -87,18 +79,15 @@ func TestIssue547_AsyncStopHookSurvivesCallerCtxCancel(t *testing.T) {
 	deadline := time.Now().Add(6 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(marker); err == nil {
-			return // hook completed despite ctx cancellation
+			return
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Errorf("marker file not written within 6s — async on_agent_stop hook was killed by cancelled ctx (bug F)")
 }
 
-// --- Bug G: ExtractFilePath must not scan content values ---
-
 func TestIssue547_ExtractFilePathIgnoresContentPaths(t *testing.T) {
-	// write_file whose content embeds a JSON config example containing a
-	// "path" key. The real target is file_path; the example must not win.
+
 	raw := `{"file_path":"/real/target.go","content":"{\n  \"path\": \"/etc/example/config.yaml\",\n  \"level\": 2\n}\n"}`
 	got := ExtractFilePath("write_file", raw)
 	if got != "/real/target.go" {
@@ -107,7 +96,7 @@ func TestIssue547_ExtractFilePathIgnoresContentPaths(t *testing.T) {
 }
 
 func TestIssue547_ExtractFilePathContentOnlyReturnsEmpty(t *testing.T) {
-	// No real path field at all — only an example inside content.
+
 	raw := `{"content":"write config to \"path\": \"/etc/example\" then reload"}`
 	if got := ExtractFilePath("write_file", raw); got != "" {
 		t.Errorf("ExtractFilePath = %q, want empty — content substring must not be scanned", got)
@@ -138,8 +127,7 @@ func TestIssue547_ExtractFilePathStructuredFields(t *testing.T) {
 }
 
 func TestIssue547_ExtractFilePathEditOldNewText(t *testing.T) {
-	// edit_file old_text/new_text may legitimately contain path-like strings;
-	// they are content, not the target. file_path must win.
+
 	raw := `{"file_path":"/app/main.go","old_text":"open(\"path\": \"/old\")","new_text":"open(\"path\": \"/new\")"}`
 	if got := ExtractFilePath("edit_file", raw); got != "/app/main.go" {
 		t.Errorf("ExtractFilePath = %q, want /app/main.go", got)

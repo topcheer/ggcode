@@ -1,12 +1,5 @@
 package swarm
 
-// Regression test for GitHub issue #4474: providers/relays may surface a
-// non-fatal failure as an in-stream StreamEventError while RunStream still
-// returns nil. The idle runner previously left err nil in that case, so the
-// claim path marked the task Completed and persistTaskResult stored the
-// "[error: ...]" text as findings for dependent tasks to inherit. The
-// in-stream error must promote to the returned error.
-
 import (
 	"context"
 	"errors"
@@ -20,7 +13,7 @@ type streamErrAgent struct{}
 
 func (a *streamErrAgent) RunStream(_ context.Context, _ string, onEvent func(provider.StreamEvent), origin ...string) error {
 	onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "partial work"})
-	// Relay-style non-fatal in-stream failure, then a clean stream return.
+
 	onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: errors.New("upstream 429, degraded")})
 	return nil
 }
@@ -37,14 +30,12 @@ func TestIssue4474_StreamErrorEventPromotesToTaskError(t *testing.T) {
 	if !strings.Contains(err.Error(), "upstream 429") {
 		t.Errorf("promoted error should carry the stream error text, got %v", err)
 	}
-	// The [error: ...] line must appear exactly once (in-stream append, not
-	// duplicated by the err != nil branch).
+
 	if n := strings.Count(out, "[error: upstream 429, degraded]"); n != 1 {
 		t.Errorf("output should contain exactly one [error: ...] line, got %d in %q", n, out)
 	}
 }
 
-// Clean streams must stay unaffected: no error, no injected markers.
 type okAgent struct{}
 
 func (a *okAgent) RunStream(_ context.Context, _ string, onEvent func(provider.StreamEvent), origin ...string) error {

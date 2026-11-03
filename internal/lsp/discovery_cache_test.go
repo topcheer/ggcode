@@ -5,8 +5,6 @@ import (
 	"time"
 )
 
-// The cache must serve unexpired entries verbatim (no probe re-run) and
-// route expired entries back through probeExternalToolchain.
 func TestCachedExternalProbeTTL(t *testing.T) {
 	probeCache.Lock()
 	probeCache.m = make(map[string]probeCacheEntry)
@@ -20,14 +18,11 @@ func TestCachedExternalProbeTTL(t *testing.T) {
 	spec := serverSpec{id: "definitely-unknown-spec"}
 	ws := t.TempDir()
 
-	// Unknown spec id probes to (","",false) and caches the negative.
 	d, c, ok := cachedExternalProbe(spec, ws)
 	if ok || d != "" || c != "" {
 		t.Fatalf("unknown spec must probe negative, got (%q,%q,%v)", d, c, ok)
 	}
 
-	// Inject a fresh positive entry for the same key: must be served as-is,
-	// proving the probe is not re-run (probe would return the negative above).
 	probeCache.Lock()
 	probeCache.m[spec.id+"\x00"+ws] = probeCacheEntry{
 		display: "cached-bin", command: "/cached/path", ok: true,
@@ -38,8 +33,6 @@ func TestCachedExternalProbeTTL(t *testing.T) {
 		t.Fatalf("unexpired entry must be served verbatim, got (%q,%q,%v)", d, c, ok)
 	}
 
-	// Expired entry: probe runs again and the negative overwrites the stale
-	// positive.
 	probeCache.Lock()
 	e := probeCache.m[spec.id+"\x00"+ws]
 	e.expiry = time.Now().Add(-time.Second)
@@ -50,7 +43,6 @@ func TestCachedExternalProbeTTL(t *testing.T) {
 	}
 }
 
-// Distinct workspaces must never share probe results (per-project installs).
 func TestCachedExternalProbeWorkspaceIsolation(t *testing.T) {
 	probeCache.Lock()
 	probeCache.m = make(map[string]probeCacheEntry)

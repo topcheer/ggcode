@@ -1,35 +1,29 @@
 package mcp
 
-// #3765 probes: greedy flag parsing is preserved for canonical interleaved
-// shapes, but a flag consumed INSIDE the command region now emits a loud
-// warning pointing at `--` (#3765: zero-signal double rewrite was the bug;
-// changing the parse itself breaks name-flags-URL-flags ordering).
-
 import (
 	"reflect"
 	"testing"
 )
 
 func TestIssue3765_WarnTriggersOnlyInCommandRegion(t *testing.T) {
-	// Before the command region (only the name seen): no warning.
+
 	if warnFlagSwallowedInCommandRegion("--env", false) {
 		t.Fatal("flag while only the name is present must not warn")
 	}
-	// Inside the command region: every installer flag warns.
+
 	for _, tok := range []string{"--env", "--header", "-t", "--transport"} {
 		if !warnFlagSwallowedInCommandRegion(tok, true) {
 			t.Fatalf("%s in command region must warn", tok)
 		}
 	}
-	// Non-flag tokens never warn.
+
 	if warnFlagSwallowedInCommandRegion("myimage", true) {
 		t.Fatal("non-flag token must not warn")
 	}
 }
 
 func TestIssue3765_CanonicalShapesUnchanged(t *testing.T) {
-	// Name-first with flags around the URL: parse result must be identical
-	// to the pre-fix behavior (the warning is additive only).
+
 	positionals, opts, err := parseInstallOptions([]string{
 		"http-demo", "-t", "http", "https://mcp.example.com/api",
 		"--header", "Authorization: Bearer abc",
@@ -43,9 +37,7 @@ func TestIssue3765_CanonicalShapesUnchanged(t *testing.T) {
 	if opts.transport != "http" || opts.headers["Authorization"] != "Bearer abc" {
 		t.Fatalf("canonical parse changed: %+v", opts)
 	}
-	// Command-first WITHOUT `--`: the greedy parse consumes --env into
-	// installer env (the #3765 behavior under complaint) - the warning now
-	// fires for it; the parse result itself is the documented greedy shape.
+
 	positionals, opts, err = parseInstallOptions([]string{"stdio", "docker", "run", "--env", "FOO=bar", "myimage"})
 	if err != nil {
 		t.Fatal(err)
@@ -59,9 +51,7 @@ func TestIssue3765_CanonicalShapesUnchanged(t *testing.T) {
 }
 
 func TestIssue3765_SeparatorStillWorks(t *testing.T) {
-	// The `--` escape hatch is handled at the ParseInstallArgs layer
-	// (separator stripping, L342) - verify end-to-end that a quoted
-	// command keeps its own flags out of installer env.
+
 	server, err := ParseInstallArgs([]string{
 		"docker-demo",
 		"--env", "API_KEY=secret",
@@ -86,16 +76,14 @@ func TestIssue3765_SeparatorStillWorks(t *testing.T) {
 }
 
 func TestIssue3765_IPHostInferredFullName(t *testing.T) {
-	// #3765-B: IP hosts must not be truncated to the first octet -
-	// 192.168.1.5 and 192.168.1.6 would both infer "192" and silently
-	// overwrite each other in the yaml.
+
 	if got := inferURLServerName("http://192.168.1.5:8080/mcp"); got != "192.168.1.5" {
 		t.Fatalf("IP host inferred name = %q, want full IP", got)
 	}
 	if got := inferURLServerName("http://192.168.1.6:8080/mcp"); got != "192.168.1.6" {
 		t.Fatalf("neighbor IP inferred name = %q, want full IP (no collision)", got)
 	}
-	// Domain hosts keep the first-label inference.
+
 	if got := inferURLServerName("https://api.example.com/mcp"); got != "api" {
 		t.Fatalf("domain inference changed: %q", got)
 	}

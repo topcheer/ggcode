@@ -6,10 +6,8 @@ import (
 	"testing"
 )
 
-// #1731: ghost hint keys + unwired i18n catalog on the mattermost/pc panels.
-
 func TestIssue1731MattermostHintNoGhostQR(t *testing.T) {
-	// the panel has NO q case and no QR state - the hint must not advertise one
+
 	var m Model
 	en := m.t("panel.mattermost.actions_hint")
 	if strings.Contains(en, "QR") {
@@ -23,10 +21,7 @@ func TestIssue1731MattermostHintNoGhostQR(t *testing.T) {
 }
 
 func TestIssue1731PCHintNoGhostGroupKey(t *testing.T) {
-	// the idle-mode hint literal lives in pc_panel.go's render; g only
-	// works inside create mode, so the idle hint must not list g:group.
-	// Assert via the source file to keep this a ghost-key regression pin
-	// even if the hint later gains i18n keys.
+
 	src, err := os.ReadFile("pc_panel.go")
 	if err != nil {
 		t.Skipf("source layout changed: %v", err)
@@ -39,8 +34,7 @@ func TestIssue1731PCHintNoGhostGroupKey(t *testing.T) {
 }
 
 func TestIssue1731PCStatusWired(t *testing.T) {
-	// no adapter: must resolve the localized starting key, not leak the
-	// key itself or fall back to hardcoded English
+
 	m := newTestModel()
 	got := m.pcConnectionStatus()
 	if got == "" {

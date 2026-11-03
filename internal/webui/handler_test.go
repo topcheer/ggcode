@@ -25,7 +25,7 @@ func newTestServerWithSave(t *testing.T) (*Server, string) {
 			},
 		},
 	}
-	// Point active vendor to one that exists so Validate passes
+
 	cfg.Vendor = "testvendor"
 	cfg.Endpoint = "prod"
 	if err := cfg.Save(); err != nil {
@@ -42,8 +42,6 @@ func jsonBody(method, target, body string) *http.Request {
 	}
 	return req
 }
-
-// ── Endpoints ────────────────────────────────────────────────────────
 
 func TestHandleEndpoints_Get(t *testing.T) {
 	s, _ := newTestServerWithSave(t)
@@ -106,8 +104,6 @@ func TestHandleEndpoints_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-// ── EndpointDetail ───────────────────────────────────────────────────
-
 func TestHandleEndpointDetail_Get(t *testing.T) {
 	s, _ := newTestServerWithSave(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/vendors/testvendor/endpoints/prod", nil)
@@ -149,7 +145,7 @@ func TestHandleEndpointDetail_Get_EndpointNotFound(t *testing.T) {
 
 func TestHandleEndpointDetail_Delete(t *testing.T) {
 	s, _ := newTestServerWithSave(t)
-	// First add an endpoint
+
 	addReq := jsonBody(http.MethodPost, "/api/vendors/testvendor/endpoints",
 		`{"name":"staging","protocol":"openai","base_url":"https://staging.test.com"}`)
 	addReq.SetPathValue("vendor", "testvendor")
@@ -159,7 +155,6 @@ func TestHandleEndpointDetail_Delete(t *testing.T) {
 		t.Fatalf("add: expected 200, got %d", w.Code)
 	}
 
-	// Now delete it
 	delReq := httptest.NewRequest(http.MethodDelete, "/api/vendors/testvendor/endpoints/staging", nil)
 	delReq.SetPathValue("vendor", "testvendor")
 	delReq.SetPathValue("endpoint", "staging")
@@ -184,8 +179,6 @@ func TestHandleEndpointDetail_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-// ── APIKey ───────────────────────────────────────────────────────────
-
 func TestHandleAPIKey_Get(t *testing.T) {
 	s, _ := newTestServerWithSave(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/vendors/testvendor/endpoints/prod/apikey", nil)
@@ -206,8 +199,6 @@ func TestHandleAPIKey_Put(t *testing.T) {
 	s.handleAPIKey(w, req)
 	t.Logf("APIKey PUT: status=%d body=%s", w.Code, w.Body.String())
 }
-
-// ── General ──────────────────────────────────────────────────────────
 
 func TestHandleGeneral_Get(t *testing.T) {
 	s, _ := newTestServerWithSave(t)
@@ -243,8 +234,6 @@ func TestHandleGeneral_MethodNotAllowed(t *testing.T) {
 		t.Fatalf("expected 405, got %d", w.Code)
 	}
 }
-
-// ── VendorDetail ─────────────────────────────────────────────────────
 
 func TestHandleVendorDetail_Get(t *testing.T) {
 	s, _ := newTestServerWithSave(t)
@@ -291,8 +280,6 @@ func TestHandleVendorDetail_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-// ── Vendors ──────────────────────────────────────────────────────────
-
 func TestHandleVendors_Post(t *testing.T) {
 	s, _ := newTestServerWithSave(t)
 	req := jsonBody(http.MethodPost, "/api/vendors",
@@ -313,14 +300,12 @@ func TestHandleVendors_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-// ── SPA ──────────────────────────────────────────────────────────────
-
 func TestServeSPA_Index(t *testing.T) {
 	s, _ := newTestServerWithSave(t)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	s.serveSPA(w, req)
-	// SPA returns embedded index.html
+
 	t.Logf("SPA /: status=%d", w.Code)
 }
 
@@ -331,8 +316,6 @@ func TestServeSPA_SubPath(t *testing.T) {
 	s.serveSPA(w, req)
 	t.Logf("SPA /some/path: status=%d", w.Code)
 }
-
-// ── Active Selection ─────────────────────────────────────────────────
 
 func TestHandleActiveSelection_Put(t *testing.T) {
 	s, _ := newTestServerWithSave(t)
@@ -353,8 +336,6 @@ func TestHandleActiveSelection_MethodNotAllowed(t *testing.T) {
 		t.Fatalf("expected 405, got %d", w.Code)
 	}
 }
-
-// ── MCP ──────────────────────────────────────────────────────────────
 
 func TestHandleMCP_Get(t *testing.T) {
 	s, _ := newTestServerWithSave(t)
@@ -380,8 +361,6 @@ func TestHandleMCPStatus_Get(t *testing.T) {
 	}
 }
 
-// ── IM ───────────────────────────────────────────────────────────────
-
 func TestHandleIM_Get(t *testing.T) {
 	s, _ := newTestServerWithSave(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/im", nil)
@@ -401,8 +380,6 @@ func TestHandleIMStatus_Get(t *testing.T) {
 	}
 }
 
-// ── A2A ──────────────────────────────────────────────────────────────
-
 func TestHandleA2A_Get(t *testing.T) {
 	s, _ := newTestServerWithSave(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/a2a", nil)
@@ -420,8 +397,6 @@ func TestHandleA2ADiscover_Post(t *testing.T) {
 	t.Logf("A2A Discover: status=%d", w.Code)
 }
 
-// ── Config ───────────────────────────────────────────────────────────
-
 func TestHandleConfig_Get(t *testing.T) {
 	s, _ := newTestServerWithSave(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
@@ -433,8 +408,6 @@ func TestHandleConfig_Get(t *testing.T) {
 	}
 }
 
-// ── Restarts ─────────────────────────────────────────────────────────
-
 func TestHandleRestart_Post(t *testing.T) {
 	s, _ := newTestServerWithSave(t)
 	restarted := false
@@ -445,8 +418,6 @@ func TestHandleRestart_Post(t *testing.T) {
 
 	t.Logf("Restart: status=%d restarted=%v", w.Code, restarted)
 }
-
-// ── file existence ───────────────────────────────────────────────────
 
 func TestWriteJSON(t *testing.T) {
 	w := httptest.NewRecorder()
@@ -465,6 +436,6 @@ func TestWriteError(t *testing.T) {
 }
 
 func init() {
-	// Ensure os.NopCloser is available via io.NopCloser
+
 	_ = os.DevNull
 }

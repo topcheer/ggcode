@@ -8,9 +8,6 @@ import (
 	"time"
 )
 
-// #4469 mechanism pin: the fix must archive the FINAL live version and
-// write a #4334-suffixed tombstone (not the legacy single path the repro
-// logs about) - found=false must come from the contract, not from absence.
 func TestGCForgottenDigestArchivesFinalAndWritesSuffixedTombstone(t *testing.T) {
 	dir := t.TempDir()
 	am := &AutoMemory{dir: dir}

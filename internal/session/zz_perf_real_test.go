@@ -7,14 +7,6 @@ import (
 	"time"
 )
 
-// TestRealStoreStartupLoad measures the exact startup path this fix targets:
-// maintenance triggered (like any startup List()) while a Load(resumeID) for
-// the real 500MB+ session comes in. Build tag keeps it out of normal runs.
-//
-//	go test -tags 'goolm perfreal' -run TestRealStoreStartupLoad ./internal/session/ -v -count=3
-//
-// Requires GGCODE_REAL_STORE=1 to touch the real store (read-only + index
-// reconciliation, same as production maintenance).
 func TestRealStoreStartupLoad(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -47,8 +39,6 @@ func TestRealStoreStartupLoad(t *testing.T) {
 		t.Logf("List (triggers maintenance) took %v", time.Since(start))
 	}()
 
-	// Let the maintenance goroutine enter its scan, like a real startup where
-	// UI warmup fires List() before repl.Load(resumeID).
 	time.Sleep(10 * time.Millisecond)
 
 	start := time.Now()

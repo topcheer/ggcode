@@ -22,11 +22,6 @@ func combineCmds(cmds ...tea.Cmd) tea.Cmd {
 	return tea.Batch(filtered...)
 }
 
-// looksLikeStartupGarbage checks whether the input value accumulated before
-// setProgramMsg looks like terminal response garbage rather than legitimate
-// user input. Terminal responses contain ASCII control characters ([, ], digits,
-// and punctuation like ;, :, /) that don't appear in normal typing.
-// Normal pre-set values like "ping" contain only alphabetic characters.
 func looksLikeStartupGarbage(val string) bool {
 	for _, r := range val {
 		switch {
@@ -34,10 +29,9 @@ func looksLikeStartupGarbage(val string) bool {
 		case r >= 'A' && r <= 'Z':
 		case r >= '0' && r <= '9':
 		case r == ' ' || r == '-' || r == '_':
-			// Common in normal text, keep going
+
 		default:
-			// Contains characters not found in normal typing:
-			// ; : / [ ] $ ? = etc. — terminal response artifacts
+
 			return true
 		}
 	}

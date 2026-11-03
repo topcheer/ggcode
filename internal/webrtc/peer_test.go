@@ -48,7 +48,6 @@ func TestEncodeDecodeSDP(t *testing.T) {
 		t.Fatalf("CreateOffer failed: %v", err)
 	}
 
-	// Round-trip: encode then decode should produce a valid SDP.
 	desc, err := decodeSDP(offer)
 	if err != nil {
 		t.Fatalf("decodeSDP failed: %v", err)
@@ -77,7 +76,6 @@ func TestHostPeerFactory(t *testing.T) {
 		t.Fatal("startNegotiation should not be nil")
 	}
 
-	// Transport should report not connected before ICE.
 	if transport.IsConnected() {
 		t.Error("transport should not be connected before ICE")
 	}
@@ -92,7 +90,6 @@ func TestDataChannelTransportInterface(t *testing.T) {
 
 	tpt := NewDataChannelTransport(peer)
 
-	// Verify it implements the Transport interface by calling methods.
 	tpt.OnMessage(func(data []byte) {})
 	tpt.OnDisconnect(func() {})
 
@@ -101,11 +98,6 @@ func TestDataChannelTransportInterface(t *testing.T) {
 	}
 }
 
-// #1827 case 2: four distinct trigger points (PeerConnectionState
-// Disconnected/Failed, DataChannel OnClose/OnError) can all observe the
-// same link failure within milliseconds; handleDisconnect must fire the
-// callback exactly once per Peer lifecycle - every pre-fix invocation
-// spawned its own goroutine, driving duplicate retry/Start cycles.
 func TestHandleDisconnectFiresExactlyOnce(t *testing.T) {
 	peer, err := NewPeer()
 	if err != nil {
@@ -116,8 +108,6 @@ func TestHandleDisconnectFiresExactlyOnce(t *testing.T) {
 	var calls int32
 	peer.OnDisconnect(func() { atomic.AddInt32(&calls, 1) })
 
-	// Simulate the double-fire: state-change callback + DataChannel close
-	// arriving back to back for the same link failure.
 	peer.handleDisconnect()
 	peer.handleDisconnect()
 	peer.handleDisconnect()
@@ -132,10 +122,6 @@ func TestHandleDisconnectFiresExactlyOnce(t *testing.T) {
 	t.Fatalf("disconnect callback fired %d times, want exactly 1", atomic.LoadInt32(&calls))
 }
 
-// #1854: only the terminal Failed state triggers teardown; Disconnected is
-// a transient state that pion often self-heals (regathering), and treating
-// it like Failed tore down the DataChannel on every wifi hiccup, costing a
-// full re-negotiation (~50MB per PeerConnection on the mobile side).
 func TestStateTriggersTeardown(t *testing.T) {
 	if stateTriggersTeardown(webrtc.PeerConnectionStateDisconnected) {
 		t.Error("Disconnected is transient self-heal territory and must NOT tear down")

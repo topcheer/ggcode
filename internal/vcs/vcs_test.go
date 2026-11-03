@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// --- Detection tests ---
-
 func TestDetectGit(t *testing.T) {
 	dir := t.TempDir()
 	os.Mkdir(filepath.Join(dir, ".git"), 0755)
@@ -89,14 +87,11 @@ func TestGitPreferenceOverHg(t *testing.T) {
 	}
 }
 
-// --- Helpers ---
-
 func hasBinary(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
 }
 
-// setGitEnv sets a minimal git identity so commit works without global config.
 func setGitEnv(cmd *exec.Cmd) {
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
@@ -110,10 +105,6 @@ func writeFile(t *testing.T, dir, name, content string) {
 		t.Fatal(err)
 	}
 }
-
-// =====================================================================
-// Git Integration Tests
-// =====================================================================
 
 func setupGitRepo(t *testing.T) string {
 	t.Helper()
@@ -130,7 +121,7 @@ func setupGitRepo(t *testing.T) string {
 		}
 	}
 	run("init")
-	// Set repo-local identity so commits work even without global git config (CI).
+
 	run("config", "user.name", "Test")
 	run("config", "user.email", "test@test.com")
 	writeFile(t, dir, "README.md", "# test repo\n")
@@ -207,7 +198,7 @@ func TestGitDiff_Cached(t *testing.T) {
 func TestGitLog(t *testing.T) {
 	dir := setupGitRepo(t)
 	v := Git{}
-	// Add second commit
+
 	writeFile(t, dir, "file2.txt", "content\n")
 	cmd := exec.Command("git", "add", "file2.txt")
 	cmd.Dir = dir
@@ -307,10 +298,6 @@ func TestGitStatus_NotARepo(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// Mercurial Integration Tests
-// =====================================================================
-
 func setupHgRepo(t *testing.T) string {
 	t.Helper()
 	if !hasBinary("hg") {
@@ -325,8 +312,7 @@ func setupHgRepo(t *testing.T) string {
 		}
 	}
 	run("init")
-	// Set repo-local identity so commits work without global hg config (CI).
-	// Write hgrc with username.
+
 	os.MkdirAll(filepath.Join(dir, ".hg"), 0755)
 	os.WriteFile(filepath.Join(dir, ".hg", "hgrc"), []byte("[ui]\nusername = Test <test@test.com>\n"), 0644)
 	writeFile(t, dir, "README.md", "# hg repo\n")

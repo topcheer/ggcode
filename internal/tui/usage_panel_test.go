@@ -8,10 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/usage"
 )
 
-// TestUsagePanelRendersAnchors verifies the #2150 batch-2 acceptance
-// anchors on rendered output: percentage coloring thresholds live in
-// usagePercentColorCode (>=95 red, >=80 yellow, else green), the summary
-// table renders balance + windows, and fetching state is visible.
 func TestUsagePanelRendersAnchors(t *testing.T) {
 	if got := usagePercentColorCode(79); got != "10" {
 		t.Errorf("79%% = %s, want green(10)", got)
@@ -57,19 +53,15 @@ func TestUsagePanelRendersAnchors(t *testing.T) {
 			t.Errorf("usage panel missing %q:\n%s", want, out)
 		}
 	}
-	// fetching vendor renders the refreshing marker
+
 	m.usagePanel.fetching = true
 	out = m.renderUsagePanel()
 	if !strings.Contains(out, "deepseek") || !strings.Contains(out, "fetching") {
-		// deepseek row only appears if probeable; without config it won't.
-		// The anchor then reduces to: no panic, valid box.
+
 		t.Logf("no probeable vendors configured in test model; panel=%q", strings.SplitN(out, "\n", 2)[0])
 	}
 }
 
-// TestSidebarUsageSectionOnlyWithData verifies the anchor "render nothing
-// until data arrived": nil sidebarUsage produces an empty section, and a
-// populated one renders balance + window rows.
 func TestSidebarUsageSectionOnlyWithData(t *testing.T) {
 	m := newTestModel()
 	m.width = 120
@@ -91,9 +83,6 @@ func TestSidebarUsageSectionOnlyWithData(t *testing.T) {
 	}
 }
 
-// TestUsageInfoUpdatedMsgFlowsPanelAndSidebar verifies the Update-loop
-// handler: probe results land in the panel table, the active vendor's
-// result also feeds the sidebar snapshot, and errors clear the sidebar.
 func TestUsageInfoUpdatedMsgFlowsPanelAndSidebar(t *testing.T) {
 	m := newTestModel()
 	m.activeVendor = "zai"

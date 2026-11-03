@@ -2,13 +2,6 @@ package tunnel
 
 import "testing"
 
-// TestSortReplayEventsUnknownSortsFirst pins #1401-A: the old comparator
-// returned false whenever either id was unknown - "equivalent to everything"
-// without transitivity, violating strict weak ordering. Under SliceStable an
-// unknown element became a sort BARRIER that known events after it could
-// never cross. Unknown ids (production: bootstrap events like session-info)
-// now sort FIRST - the documented replay contract - and known ids sort
-// ascending past them.
 func TestSortReplayEventsUnknownSortsFirst(t *testing.T) {
 	events := []GatewayMessage{
 		{EventID: "ev-000000002"},

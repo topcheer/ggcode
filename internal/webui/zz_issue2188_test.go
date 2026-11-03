@@ -1,11 +1,5 @@
 package webui
 
-// #2188 regression: sensitiveExtraKey was a local THREE-word list while
-// the single source has five - nostr private_key and dingtalk app_key
-// rendered in cleartext over GET /api/im (same asset and shape as
-// #2167, surface moved to webui); and maskIMConfig only handled
-// top-level strings, so nested stt.api_key maps came back whole.
-
 import (
 	"encoding/json"
 	"testing"
@@ -43,14 +37,11 @@ func TestMaskIMConfigNestedAndKeyFamily(t *testing.T) {
 		t.Fatalf("nested benign value must pass, got %v", stt["model"])
 	}
 
-	// JSON-shape sanity FIRST: restore mutates in place (by design).
 	blob, _ := json.Marshal(out)
 	if zz2188contains(string(blob), "nsec1secret") || zz2188contains(string(blob), "sk-stt") {
 		t.Fatalf("masked JSON still carries secrets: %s", blob)
 	}
 
-	// Round-trip: a full-replace PUT of the masked blob must restore the
-	// real values (deep sentinel revert).
 	prev := in
 	restored := restoreMaskedIMCredentials(prev, out)
 	ra := restored.Adapters["nostr"]

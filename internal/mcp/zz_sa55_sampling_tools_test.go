@@ -1,8 +1,5 @@
 package mcp
 
-// SEP-1577 (MCP 2025-11-25) sampling-with-tools: wire types, array-form
-// content, structural validation, and capability advertisement.
-
 import (
 	"encoding/json"
 	"strings"
@@ -38,11 +35,11 @@ func TestSEP1577_ParseToolSamplingRequest(t *testing.T) {
 	if p.ToolChoice == nil || p.ToolChoice.Mode != ToolChoiceAuto {
 		t.Fatalf("toolChoice not parsed: %+v", p.ToolChoice)
 	}
-	// Assistant turn: array-form content lands in Blocks.
+
 	if len(p.Messages[1].Blocks) != 1 || p.Messages[1].Blocks[0].ID != "call_1" {
 		t.Fatalf("tool_use block not parsed: %+v", p.Messages[1])
 	}
-	// tool_result turn keeps nested result content.
+
 	res := p.Messages[2].Blocks[0]
 	if res.ToolUseID != "call_1" || len(res.ResultContent) != 1 || res.ResultContent[0].Text != "18C sunny" {
 		t.Fatalf("tool_result block not parsed: %+v", res)
@@ -76,7 +73,7 @@ func TestSEP1577_ResultToolUseMarshalArrayContent(t *testing.T) {
 	if len(content) != 1 || wire["stopReason"] != "toolUse" {
 		t.Fatalf("unexpected wire result: %s", data)
 	}
-	// Single-block results keep the historical object shape.
+
 	r2 := SamplingResult{Model: "m", Role: "assistant", StopReason: "end_turn", Content: SamplingContent{Type: "text", Text: "hi"}}
 	data2, _ := json.Marshal(r2)
 	if strings.Contains(string(data2), `"content":[`) {
@@ -136,12 +133,12 @@ func TestSEP1577_ValidateErrors(t *testing.T) {
 			t.Errorf("%s: want error containing %q, got %v", tc.name, tc.wantSub, err)
 		}
 	}
-	// Empty toolChoice mode defaults to auto.
+
 	ok := SamplingParams{Tools: []SamplingTool{tool}, ToolChoice: &SamplingToolChoice{}}
 	if err := ValidateSamplingParams(ok); err != nil {
 		t.Errorf("empty toolChoice mode should default to auto, got %v", err)
 	}
-	// Plain text-only request stays valid (pre-SEP-1577 servers).
+
 	plain := SamplingParams{Messages: []SamplingMessage{{Role: "user", Content: SamplingContent{Type: "text", Text: "hi"}}}}
 	if err := ValidateSamplingParams(plain); err != nil {
 		t.Errorf("plain request rejected: %v", err)

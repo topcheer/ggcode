@@ -7,7 +7,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// handleCronCommand handles /cron subcommands: list, pause, resume, pauseall, resumeall, get
 func (m Model) handleCronCommand(parts []string) tea.Cmd {
 	if m.cronScheduler == nil {
 		m.chatWriteSystem(nextSystemID(), "Cron scheduler not available")

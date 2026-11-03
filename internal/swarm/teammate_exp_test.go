@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// r457: teammate experience ledger probes (write side).
-
 func TestAppendTeammateExperience_Basics(t *testing.T) {
 	dir := t.TempDir()
 	appendTeammateExperience(dir, "team-1", "tm-1", "coder", "fixed the login bug")
@@ -60,12 +58,12 @@ func TestAppendTeammateExperience_RollingBound(t *testing.T) {
 	if got != maxTeammateExpEntries {
 		t.Fatalf("rolling window broken: %d entries", got)
 	}
-	// No empty-dir write for empty input.
-	appendTeammateExperience(dir, "", "tm", "", "x") // no workingDir -> no-op
+
+	appendTeammateExperience(dir, "", "tm", "", "x")
 }
 
 func TestSplitJSONL_DropsPartialTrailingLine(t *testing.T) {
-	got := splitJSONL([]byte("{\"a\":1}\n{\"b\":2}\n{\"c\":")) // last line partial
+	got := splitJSONL([]byte("{\"a\":1}\n{\"b\":2}\n{\"c\":"))
 	if len(got) != 2 {
 		t.Fatalf("partial trailing line must be dropped, got %d", len(got))
 	}
@@ -80,5 +78,5 @@ func TestLedgerAtomicNoResidue(t *testing.T) {
 			t.Fatalf("tmp residue: %s", e.Name())
 		}
 	}
-	_ = time.Now // keep time import if probes evolve
+	_ = time.Now
 }

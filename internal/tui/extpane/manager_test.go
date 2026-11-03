@@ -20,7 +20,6 @@ func TestDetectBackendPriority(t *testing.T) {
 		os.Setenv("LC_TERMINAL", origLCTerm)
 	})
 
-	// Case 1: tmux wins over all
 	os.Setenv("TMUX", "/tmp/tmux-1000/default,1234,0")
 	os.Setenv("TERM_PROGRAM", "iTerm.app")
 	os.Setenv("KITTY_WINDOW_ID", "123")
@@ -28,7 +27,6 @@ func TestDetectBackendPriority(t *testing.T) {
 		t.Errorf("expected tmux, got %s", b.Name())
 	}
 
-	// Case 2: nothing detected
 	os.Setenv("TMUX", "")
 	os.Setenv("TERM_PROGRAM", "")
 	os.Setenv("KITTY_WINDOW_ID", "")
@@ -145,17 +143,13 @@ func TestShortID(t *testing.T) {
 }
 
 func TestExtPaneLogPath(t *testing.T) {
-	// Verify log path is constructed correctly
+
 	path := filepath.Join("/tmp/test", "agent-abc12345.log")
 	if !strings.HasSuffix(path, ".log") {
 		t.Error("should end with .log")
 	}
 }
 
-// TestEnsurePaneRetryBudget pins #1369: transient failures (log-file
-// errors) consume a bounded retry budget instead of instantly marking the
-// agent permanently dark; exhausting the budget still goes permanent.
-// Uses a broken tmpDir so the log-file open fails deterministically.
 func TestEnsurePaneRetryBudget(t *testing.T) {
 	os.Setenv("TMUX", "")
 	os.Setenv("TERM_PROGRAM", "")
@@ -164,20 +158,15 @@ func TestEnsurePaneRetryBudget(t *testing.T) {
 
 	m := NewManager()
 	m.mu.Lock()
-	m.retries["a1"] = maxCreateRetries - 1 // one transient failure left
+	m.retries["a1"] = maxCreateRetries - 1
 	m.mu.Unlock()
 
-	// Directly exercise the fail path's bookkeeping via the maps (the
-	// end-to-end path needs a real backend; the semantic under test is
-	// the budget arithmetic in the fail helper).
 	m.mu.Lock()
 	if m.retries["a1"] != maxCreateRetries-1 {
 		t.Fatalf("precondition: retries = %d", m.retries["a1"])
 	}
 	m.mu.Unlock()
 
-	// Simulate the fail() body's arithmetic without a backend: the
-	// helper increments then checks the bound.
 	bump := func(agent string) bool {
 		m.mu.Lock()
 		defer m.mu.Unlock()

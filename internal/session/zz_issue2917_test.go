@@ -5,15 +5,6 @@ import (
 	"testing"
 )
 
-// zz_issue2917_test.go - regression probes for #2917: TunnelHost.recordEvent
-// appended to Session.TunnelEvents from multiple publisher goroutines (agent
-// stream callback, tunnel/IM inbound) while desktop/TUI readers walked the
-// same slice on the bound *Session pointer with no common lock. All access
-// now goes through the session-scoped TunnelEventsMu leaf lock. Run with
-// -race to make the original unsynchronized form fail.
-
-// appendRecorded mirrors TunnelHost.recordEvent's append+prune protocol
-// (the caller-side discipline, not the production code path itself).
 func appendRecorded(ses *Session, ev TunnelEvent) {
 	ses.TunnelEventsMu.Lock()
 	defer ses.TunnelEventsMu.Unlock()
@@ -27,7 +18,7 @@ func appendRecorded(ses *Session, ev TunnelEvent) {
 func TestIssue2917TunnelEventsConcurrentSnapshot(t *testing.T) {
 	ses := &Session{ID: "race-2917"}
 	var wg sync.WaitGroup
-	// 4 publisher goroutines, recordEvent-protocol appends.
+
 	for w := 0; w < 4; w++ {
 		wg.Add(1)
 		go func() {
@@ -37,7 +28,7 @@ func TestIssue2917TunnelEventsConcurrentSnapshot(t *testing.T) {
 			}
 		}()
 	}
-	// 4 reader goroutines, frontend-poll-protocol snapshots.
+
 	for r := 0; r < 4; r++ {
 		wg.Add(1)
 		go func() {
@@ -77,7 +68,7 @@ func TestIssue2917SnapshotNilAndEmptySafe(t *testing.T) {
 	if len(snap) != 1 || snap[0].EventID != "a" {
 		t.Fatalf("snapshot = %+v, want one event a", snap)
 	}
-	// Snapshot must be a copy: mutating it must not leak into the session.
+
 	snap[0].EventID = "mutated"
 	if s.SnapshotTunnelEvents()[0].EventID != "a" {
 		t.Fatalf("snapshot is not an independent copy")

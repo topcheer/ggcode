@@ -16,13 +16,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// sessionIdleTTL controls how long an idle LSP session (and its server
-// process) is kept alive. Server cold starts dominate per-edit latency on
-// Windows: gopls/tsserver load the full project graph on startup (10-60s on
-// large repos). A 2-minute TTL meant ordinary reading/thinking gaps evicted
-// the session and the next edit re-paid the whole cold start. 10 minutes
-// keeps sessions warm across typical agent turn gaps; reapIdle still reclaims
-// genuinely abandoned sessions every 30s.
 const sessionIdleTTL = 10 * time.Minute
 const csharpWarmupRetryDelay = 400 * time.Millisecond
 const csharpWarmupRetryAttempts = 8
@@ -34,7 +27,7 @@ type documentState struct {
 }
 
 type diagnosticsState struct {
-	version     int // document version these diagnostics were computed against (#1642-1; 0 = untagged)
+	version     int
 	seen        bool
 	diagnostics []Diagnostic
 }
@@ -67,10 +60,7 @@ type sessionManager struct {
 	sessions map[string]*sessionClient
 	once     sync.Once
 	stopCh   chan struct{}
-	// closed is set under mu by shutdownAll; acquire rejects once set
-	// (#2144): a quit-path tool call racing ShutdownAll used to start a
-	// NEW server, insert it into the drained map, and leave it orphaned
-	// (shutdownOnce already spent, reaper stopped).
+
 	closed bool
 }
 
@@ -110,19 +100,13 @@ func (m *sessionManager) acquire(ctx context.Context, workspace string, resolved
 	key := workspace + "\x00" + resolved.Binary + "\x00" + strings.Join(resolved.Args, "\x1f")
 	var session *sessionClient
 	m.mu.Lock()
-	// #2144: reject once shutdownAll has drained - otherwise an in-flight
-	// tool call on the quit path (agent ctx is NOT cancelled by quit)
-	// spawned a fresh server AFTER the drain, orphaning it forever.
+
 	if m.closed {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("LSP sessions are shut down")
 	}
 	if existing := m.sessions[key]; existing != nil && !existing.isClosed() {
-		// A cached session whose server process died is worse than no
-		// session: call() would fail fast (#992) while touch() below keeps
-		// refreshing lastUsed, so reapIdle would never evict it and this
-		// workspace+binary stays effectively unusable for LSP until the
-		// caller stops using it for >=2 minutes. Evict and rebuild instead.
+
 		if existing.client == nil || existing.client.isFailed() {
 			delete(m.sessions, key)
 			stale := existing
@@ -136,15 +120,7 @@ func (m *sessionManager) acquire(ctx context.Context, workspace string, resolved
 	} else {
 		m.mu.Unlock()
 	}
-	// The notification handler is created before startClient so it is
-	// installed prior to the initialize handshake (see startClient comment).
-	// markProjectReady below races benignly with notifications arriving
-	// during the handshake - sync.Once makes first close win.
-	//
-	// #3037: startClient (process spawn + initialize handshake, seconds)
-	// runs OUTSIDE m.mu - the old defer-unlock serialized every concurrent
-	// LSP call and reapIdle behind one workspace's cold start. Classic
-	// double-check below re-takes the lock and reconciles the race.
+
 	session = &sessionClient{
 		workspace:             workspace,
 		resolved:              resolved,
@@ -171,7 +147,7 @@ func (m *sessionManager) acquire(ctx context.Context, workspace string, resolved
 	}
 	if existing := m.sessions[key]; existing != nil && existing != session && !existing.isClosed() &&
 		existing.client != nil && !existing.client.isFailed() {
-		// Another goroutine won the race and installed a live session.
+
 		m.mu.Unlock()
 		dup := session
 		safego.Go("lsp.discardDuplicateSession", func() { dup.close() })
@@ -208,21 +184,8 @@ func (m *sessionManager) reapIdle() {
 	}
 }
 
-// shutdownOnce guards ShutdownAll's one-shot semantics: the app-exit path
-// may race a second Close (TUI quit + defer chains), and a double close of
-// stopCh would panic.
 var shutdownOnce sync.Once
 
-// ShutdownAll closes every live LSP session with the proper shutdown/exit
-// handshake and stops the idle reaper. Exit-path review (#R192): the TUI's
-// defer chain closed MCP clients, the browser, and the tunnel, but LSP
-// sessions were never torn down - globalSessions had no shutdown caller
-// (the lsp tools do not implement tool.Closer, so Registry.CloseAll skipped
-// them), and at process death the servers were left to notice stdin EOF on
-// their own: no LSP shutdown handshake, and any server that does not exit
-// on EOF lingered as an orphan. Sessions close in parallel because each
-// handshake is bounded (~2.5s worst case) and sequential N×2.5s would delay
-// app exit unacceptably.
 func ShutdownAll() {
 	shutdownOnce.Do(func() {
 		globalSessions.shutdownAll()
@@ -230,14 +193,10 @@ func ShutdownAll() {
 }
 
 func (m *sessionManager) shutdownAll() {
-	// Stop the reaper first so it cannot race us re-keying the map. If the
-	// reaper never started, closing stopCh is harmless (nothing selects on
-	// it).
+
 	close(m.stopCh)
 	m.mu.Lock()
-	// #2144: set closed IN the same critical section as the drain so
-	// acquire either sees closed and rejects, or completes fully inside
-	// the lock before we drain (no interleave window).
+
 	m.closed = true
 	sessions := make([]*sessionClient, 0, len(m.sessions))
 	for key, s := range m.sessions {
@@ -344,12 +303,6 @@ func (s *sessionClient) markProjectReady() {
 	})
 }
 
-// awaitProjectReadyTimeout bounds the wait for the project-ready signal
-// (#3037): csharp-ls variants with localized or reformatted log messages
-// may never emit the expected string, and a caller ctx without a deadline
-// would block primeProject forever. Timing out treats the project as ready
-// (best-effort retry semantics are preserved by shouldRetryEmptyResults).
-// Var (not const) so tests can shrink it (fileLockTimeout precedent).
 var awaitProjectReadyTimeout = 30 * time.Second
 
 func (s *sessionClient) awaitProjectReady(ctx context.Context) error {
@@ -399,10 +352,7 @@ func (s *sessionClient) refreshDocument(ctx context.Context, uri string) error {
 	defer s.opMu.Unlock()
 	s.mu.Lock()
 	state, ok := s.docs[uri]
-	// #1654-1: the delete ran OUTSIDE the lock (mu released above) - a
-	// data race with setPublishedDiagnostics on the shared map that can
-	// go fatal under -race and corrupt concurrent readers. Read AND
-	// delete atomically in one critical section.
+
 	if ok {
 		delete(s.diagnostics, uri)
 	}
@@ -411,10 +361,7 @@ func (s *sessionClient) refreshDocument(ctx context.Context, uri string) error {
 		return nil
 	}
 	nextVersion := state.version + 1
-	// #1642-1: didChange must drop the cached diagnostics - the next poll
-	// after an edit returned the PRE-EDIT set on first hit (didOpen already
-	// cleared; the asymmetry made the 'still reported after fix' race the
-	// MAIN path, not the out-of-order-push corner).
+
 	if err := s.client.notify(ctx, "textDocument/didChange", map[string]any{
 		"textDocument": map[string]any{
 			"uri":     uri,
@@ -454,9 +401,7 @@ func (s *sessionClient) handleNotification(method string, params json.RawMessage
 	case "textDocument/publishDiagnostics":
 		var payload struct {
 			URI string `json:"uri"`
-			// #1642-1: LSP 3.15+ publishes the document version the
-			// diagnostics were computed against - the field exists FOR this
-			// race. 0 = absent (servers may omit).
+
 			Version     int `json:"version"`
 			Diagnostics []struct {
 				Severity int      `json:"severity"`
@@ -478,15 +423,7 @@ func (s *sessionClient) handleNotification(method string, params json.RawMessage
 			})
 		}
 		s.mu.Lock()
-		// #1642-1/#1654-2: reject STALE pushes - a publish tagged with an
-		// older document version must not overwrite newer diagnostics.
-		// The reference is the DOCUMENT's current version (s.docs), not the
-		// stored diagnostics entry: prepareDocument wipes that entry's
-		// version to 0 on every edit, so the old prev.version>0 check
-		// short-circuited exactly when it mattered - the common
-		// stale-first ordering (previous edit's push still in flight while
-		// the newer analysis is slower) sailed through and the 500ms poll
-		// window returned pre-fix diagnostics.
+
 		if docState, known := s.docs[payload.URI]; known && payload.Version > 0 && docState.version > 0 && payload.Version < docState.version {
 			s.mu.Unlock()
 			return
@@ -538,9 +475,6 @@ func (s *sessionClient) setPublishedDiagnostics(uri string, diagnostics []Diagno
 	s.lastUsed = time.Now()
 }
 
-// cachedDiagnostics returns the diagnostics for a URI from the session cache
-// without waiting for new pushes. The seen flag indicates whether any
-// publishDiagnostics notification has been received for this URI.
 func (s *sessionClient) cachedDiagnostics(uri string) ([]Diagnostic, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

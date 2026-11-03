@@ -72,7 +72,6 @@ func TestRelayClientSendEncryptsMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Drain the send channel and verify it's a valid encrypted relay message.
 	select {
 	case raw := <-rc.sendCh:
 		var relayMsg map[string]interface{}
@@ -162,8 +161,6 @@ func TestRelayClientOnAck(t *testing.T) {
 		ackMu.Unlock()
 	})
 
-	// Simulate relay_ack by directly invoking the onAck callback
-	// (same path as readPump's relay_ack case).
 	rc.mu.RLock()
 	fn := rc.onAck
 	rc.mu.RUnlock()
@@ -268,10 +265,6 @@ func TestRelayClientHandleKeyOfferRespondsWithWrappedKey(t *testing.T) {
 	}
 }
 
-// TestParseRetryAfterMsClamp pins #1816 case 1: a remote relay's value is
-// untrusted - overflow (negative Duration -> zero-backoff dial storm) and
-// absurd magnitudes (~31 years -> never reconnect) both clamp into the
-// ladder's ceiling.
 func TestParseRetryAfterMsClamp(t *testing.T) {
 	if got := parseRetryAfterMs("retry_after_ms=1000"); got != 1000 {
 		t.Fatalf("normal value must pass through, got %d", got)

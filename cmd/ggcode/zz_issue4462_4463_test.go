@@ -5,8 +5,6 @@ import (
 	"time"
 )
 
-// #4462: a successfully parsed non-positive duration must fall back to the
-// 5m default instead of flowing into time.NewTimer and expiring instantly.
 func TestParseA2ATimeoutNonPositive(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -27,20 +25,18 @@ func TestParseA2ATimeoutNonPositive(t *testing.T) {
 	}
 }
 
-// #4463: record_effectiveness score must be clamped-rejected outside 1-5
-// (usage_tracker scale) so knight statistics cannot be poisoned.
 func TestKnightScoreFromParamsBounds(t *testing.T) {
-	// in-range values pass (with rounding).
+
 	for _, tc := range []struct {
 		params map[string]any
 		want   int
 	}{
-		{nil, 3}, // default
+		{nil, 3},
 		{map[string]any{"score": float64(1)}, 1},
 		{map[string]any{"score": float64(5)}, 5},
-		{map[string]any{"score": float64(4.9)}, 5}, // rounded, not truncated to 4
+		{map[string]any{"score": float64(4.9)}, 5},
 		{map[string]any{"score": float64(1.4)}, 1},
-		{map[string]any{"score": "4"}, 3}, // non-float ignored -> default
+		{map[string]any{"score": "4"}, 3},
 	} {
 		got, err := knightScoreFromParams(tc.params)
 		if err != nil {
@@ -52,7 +48,6 @@ func TestKnightScoreFromParamsBounds(t *testing.T) {
 		}
 	}
 
-	// out-of-range values are rejected.
 	for _, bad := range []map[string]any{
 		{"score": float64(-100)},
 		{"score": float64(0)},

@@ -26,7 +26,7 @@ type imChannelEntry struct {
 	LastError string
 	Disabled  bool
 	Muted     bool
-	Bound     bool // has a ChannelID
+	Bound     bool
 }
 
 type imPanelResultMsg struct {
@@ -50,7 +50,6 @@ func (m Model) renderIMPanel() string {
 
 	entries := m.imChannelEntries()
 
-	// Header
 	body := []string{
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.im.title")),
 		fmt.Sprintf(" %s", m.t("panel.im.directory")),
@@ -58,14 +57,12 @@ func (m Model) renderIMPanel() string {
 		"",
 	}
 
-	// Runtime status
 	body = append(body,
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.im.runtime")),
 		fmt.Sprintf("  %s", m.imRuntimeStatus()),
 		"",
 	)
 
-	// Output mode
 	currentMode := "verbose"
 	if m.imEmitter != nil {
 		currentMode = m.imEmitter.OutputMode()
@@ -88,7 +85,6 @@ func (m Model) renderIMPanel() string {
 		"",
 	)
 
-	// Channels summary
 	activeCount := 0
 	disabledCount := 0
 	mutedCount := 0
@@ -111,7 +107,6 @@ func (m Model) renderIMPanel() string {
 		"",
 	)
 
-	// Channel list
 	body = append(body, lipgloss.NewStyle().Bold(true).Render(m.t("panel.im.channel_list")))
 	if len(entries) == 0 {
 		body = append(body, fmt.Sprintf("  %s", m.t("panel.im.no_channels")))
@@ -123,7 +118,6 @@ func (m Model) renderIMPanel() string {
 		entry := entries[selected]
 		body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.im.details")))
 
-		// Status
 		statusLabel := m.t("panel.im.status.active")
 		if entry.Disabled {
 			statusLabel = m.t("panel.im.status.disabled")
@@ -154,7 +148,6 @@ func (m Model) renderIMPanel() string {
 		}
 	}
 
-	// Actions hint
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.im.actions")))
 	if len(entries) > 0 {
 		selected := clampIMSelection(panel.selected, len(entries))
@@ -170,10 +163,9 @@ func (m Model) renderIMPanel() string {
 	} else {
 		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  "+m.t("panel.im.hints.empty")))
 	}
-	// Batch actions
+
 	body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  "+m.t("panel.im.hints.batch")))
 
-	// Instances section
 	if m.instanceDetect != nil {
 		instances := m.instanceDetect.ListInstances()
 		if len(instances) > 0 {
@@ -274,8 +266,7 @@ func (m *Model) disableIMChannel(entry imChannelEntry) tea.Cmd {
 		if err := m.imManager.DisableBinding(entry.Adapter); err != nil {
 			return imPanelResultMsg{err: err}
 		}
-		// #1367 family + #1377-A: SetIMAdapterEnabled is a map write - it
-		// runs on the Update loop via configMutationMsg.
+
 		if m.config != nil {
 			return configMutationMsg{
 				apply: func(m *Model) error {
@@ -303,7 +294,7 @@ func (m *Model) enableIMChannel(entry imChannelEntry) tea.Cmd {
 		if err := m.imManager.EnableBinding(entry.Adapter); err != nil {
 			return imPanelResultMsg{err: err}
 		}
-		// #1367 family + #1377-A: map write -> Update loop.
+
 		if m.config != nil {
 			return configMutationMsg{
 				apply: func(m *Model) error {
@@ -352,10 +343,7 @@ func (m *Model) setIMOutputMode(mode string) tea.Cmd {
 		if m.imEmitter != nil {
 			m.imEmitter.SetOutputMode(mode)
 		}
-		// #1736 case 2: disable/enable in this panel persist via
-		// configMutationMsg and the agent path persists the same key
-		// (im.output_mode) via saveAndPatch - the runtime-only set here
-		// lost the user's choice on restart. Persist like the siblings.
+
 		if m.config != nil {
 			return configMutationMsg{
 				apply: func(m *Model) error {
@@ -411,10 +399,7 @@ func (m *Model) disableAllIMChannels() tea.Cmd {
 		if err != nil {
 			return imPanelResultMsg{err: err}
 		}
-		// #1377-A: ranging the Adapters map while WRITING per entry on a
-		// Cmd goroutine is the worst variant of the family (read+write in
-		// the same loop, off the Update loop). The whole loop moves into
-		// configMutationMsg.apply.
+
 		if m.config != nil {
 			return configMutationMsg{
 				apply: func(m *Model) error {
@@ -448,7 +433,7 @@ func (m *Model) enableAllIMChannels() tea.Cmd {
 		if err != nil {
 			return imPanelResultMsg{err: err}
 		}
-		// #1377-A: same range-while-writing variant - loop moved to apply.
+
 		if m.config != nil {
 			return configMutationMsg{
 				apply: func(m *Model) error {
@@ -473,13 +458,6 @@ func (m *Model) enableAllIMChannels() tea.Cmd {
 	}
 }
 
-// toggleIMAdapterEnabled disables or enables an adapter with config persistence.
-// Shared by all channel-specific panels.
-// #1763 case 1: this SHARED root is the last direct-write path of the
-// #1367/#1377/#1745/#1750/#1751/#1758 family - six rounds fixed individual
-// panels' private paths while their common 'd'-key entry point kept writing
-// the config map from a Cmd goroutine (fatal concurrent map read/write against
-// the render loop). One fix here heals all 15 panel call sites.
 func (m *Model) toggleIMAdapterEnabled(adapterName string) tea.Cmd {
 	return func() tea.Msg {
 		if m.imManager == nil {
@@ -539,7 +517,6 @@ func (m Model) imChannelEntries() []imChannelEntry {
 		adapterStates[state.Name] = state
 	}
 
-	// Collect all bindings: active + disabled
 	type bindingInfo struct {
 		binding  im.ChannelBinding
 		disabled bool
@@ -547,19 +524,16 @@ func (m Model) imChannelEntries() []imChannelEntry {
 	}
 	allBindings := make(map[string]bindingInfo)
 
-	// Add active bindings for current workspace (may include muted ones)
 	for _, b := range snapshot.CurrentBindings {
 		allBindings[b.Adapter] = bindingInfo{binding: b, disabled: false, muted: b.Muted}
 	}
 
-	// Add disabled bindings
 	for _, b := range snapshot.DisabledBindings {
 		if _, exists := allBindings[b.Adapter]; !exists {
 			allBindings[b.Adapter] = bindingInfo{binding: b, disabled: true}
 		}
 	}
 
-	// Sort by adapter name for stable ordering
 	keys := make([]string, 0, len(allBindings))
 	for k := range allBindings {
 		keys = append(keys, k)
@@ -571,9 +545,6 @@ func (m Model) imChannelEntries() []imChannelEntry {
 		info := allBindings[adapterName]
 		state := adapterStates[adapterName]
 
-		// Config is the source of truth for disabled state.
-		// Runtime disabledBindings may not reflect config if another
-		// instance changed it, or ApplyAdapterConfig hasn't run yet.
 		configDisabled := false
 		if m.config != nil {
 			if ac, ok := m.config.GetIMAdapter(adapterName); ok {
@@ -639,7 +610,6 @@ func clampIMSelection(selected, total int) int {
 	return selected
 }
 
-// renderContactQRCode renders a QR code string from a contact URI.
 func renderContactQRCode(uri string) string {
 	if uri == "" {
 		return ""

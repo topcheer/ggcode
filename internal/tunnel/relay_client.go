@@ -17,8 +17,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// RelayClient connects to the ggcode-relay server as the "server" role.
-// It auto-reconnects on disconnect with exponential backoff.
 type RelayClient struct {
 	relayURL string
 	token    string
@@ -40,9 +38,6 @@ type RelayClient struct {
 	stopOnce       sync.Once
 	gracefulOnce   sync.Once
 
-	// relayRestartDelayMs stores the retry_after_ms from relay's close reason.
-	// When >0, the first reconnect attempt waits this long instead of using
-	// the default exponential backoff. Reset to 0 after the first use.
 	relayRestartDelayMs atomic.Int64
 
 	onMessage   func(msg GatewayMessage)
@@ -97,9 +92,7 @@ func relayReconnectDelay(attempt int) time.Duration {
 	case attempt <= 12:
 		return 2 * time.Minute
 	default:
-		// Persistent failure (relay down >24 min): keep trying every 5 min.
-		// Messages are buffered in the broker outbound queue and replayed
-		// once the connection is restored.
+
 		return 5 * time.Minute
 	}
 }
@@ -139,7 +132,6 @@ func NewRelayClientWithDescriptor(relayURL string, desc ShareDescriptor, role st
 	}, nil
 }
 
-// Connect starts the connection loop. It connects, runs pumps, and auto-reconnects.
 func (rc *RelayClient) Connect() error {
 	conn, err := rc.dial()
 	if err != nil {
@@ -156,8 +148,7 @@ func (rc *RelayClient) dial() (*websocket.Conn, error) {
 	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, url, http.Header{})
 	if err != nil {
 		if resp != nil {
-			// Limit error body to prevent memory exhaustion from a
-			// misconfigured relay that sends large HTML error pages.
+
 			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			_ = resp.Body.Close()
 			reason := strings.TrimSpace(string(body))
@@ -207,7 +198,7 @@ func (rc *RelayClient) run(conn *websocket.Conn) {
 			rc.readPump(curConn, closeDone)
 		})
 
-		<-done // Wait for either pump to exit
+		<-done
 		_ = conn.Close()
 		wg.Wait()
 		rc.clearConn(conn)
@@ -219,7 +210,6 @@ func (rc *RelayClient) run(conn *websocket.Conn) {
 		}
 		rc.closeMu.Unlock()
 
-		// Reconnect with backoff
 		debug.Log("tunnel", "relay-client: disconnected, reconnecting...")
 		for attempt := 0; ; attempt++ {
 			rc.closeMu.Lock()
@@ -229,8 +219,6 @@ func (rc *RelayClient) run(conn *websocket.Conn) {
 			}
 			rc.closeMu.Unlock()
 
-			// On the first attempt after a relay restart, honor the
-			// retry_after_ms from the close reason if present.
 			var backoff time.Duration
 			if attempt == 0 {
 				if ms := rc.relayRestartDelayMs.Swap(0); ms > 0 {
@@ -265,12 +253,10 @@ func (rc *RelayClient) writePump(conn *websocket.Conn, done func()) {
 	ticker := time.NewTicker(relayPingInterval)
 	defer ticker.Stop()
 
-	// writeMsg writes a message with a write deadline. On failure it pushes
-	// the message back to pendingFront and returns false.
 	writeMsg := func(msg []byte) bool {
 		_ = conn.SetWriteDeadline(time.Now().Add(relayWriteTimeout))
 		if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-			conn.SetWriteDeadline(time.Time{}) // clear deadline
+			conn.SetWriteDeadline(time.Time{})
 			rc.pushPendingFront(msg)
 			return false
 		}
@@ -300,12 +286,7 @@ func (rc *RelayClient) writePump(conn *websocket.Conn, done func()) {
 			}
 		case <-rc.gracefulStopCh:
 			for {
-				// Drain pendingFront (writes that failed and were queued
-				// for retry) first, mirroring the main loop. Otherwise a
-				// control message such as stop_sharing that previously
-				// failed to write is silently discarded during graceful
-				// shutdown — the relay room is never destroyed and mobile
-				// hangs until the relay TTL reaps it.
+
 				if msg, ok := rc.popPendingFront(); ok {
 					if !writeMsg(msg) {
 						return
@@ -335,9 +316,6 @@ func (rc *RelayClient) writePump(conn *websocket.Conn, done func()) {
 	}
 }
 
-// pendingFrontMax caps the reconnection retry queue to prevent unbounded
-// memory growth when the relay is persistently unreachable. At 256 entries
-// (matching sendCh capacity), excess messages are dropped with a debug log.
 const pendingFrontMax = 256
 
 func (rc *RelayClient) pushPendingFront(msg []byte) {
@@ -350,10 +328,7 @@ func (rc *RelayClient) pushPendingFront(msg []byte) {
 		debug.Log("tunnel", "relay-client: pendingFront full (%d), dropping message", pendingFrontMax)
 		return
 	}
-	// Append to end — O(1). The pop also takes from the end, making this
-	// a LIFO retry queue (most recent failure retried first). This is
-	// equivalent to the previous prepend semantics but avoids O(n) copies
-	// and slice header leaks.
+
 	rc.pendingFront = append(rc.pendingFront, append([]byte(nil), msg...))
 }
 
@@ -364,7 +339,7 @@ func (rc *RelayClient) popPendingFront() ([]byte, bool) {
 	if n == 0 {
 		return nil, false
 	}
-	// Pop from end — O(1), no slice leak (nil the slot for GC).
+
 	msg := rc.pendingFront[n-1]
 	rc.pendingFront[n-1] = nil
 	rc.pendingFront = rc.pendingFront[:n-1]
@@ -387,8 +362,7 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 			if err != io.EOF {
 				debug.Log("tunnel", "relay-client: read error: %v", err)
 			}
-			// Extract retry_after_ms from WebSocket close reason for
-			// relay restart coordination (host waits 10s, mobile 30s).
+
 			if ce, ok := err.(*websocket.CloseError); ok {
 				if ms := parseRetryAfterMs(ce.Text); ms > 0 {
 					rc.relayRestartDelayMs.Store(ms)
@@ -505,7 +479,6 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 			}
 
 		case "pong":
-			// keepalive
 
 		case "encrypted":
 			if rc.crypto == nil {
@@ -522,7 +495,7 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 				debug.Log("tunnel", "relay-client: unmarshal error for plaintext len=%d", len(plaintext))
 				continue
 			}
-			// Log RTC signal messages for P2P debugging
+
 			if msg.Type == EventRTCOffer || msg.Type == EventRTCAnswer || msg.Type == EventRTCCandidate {
 				debug.Log("tunnel", "relay-client: received RTC signal type=%s from relay", msg.Type)
 			}
@@ -539,7 +512,6 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 				msg.AuthorityEpoch = relayMsg.AuthorityEpoch
 			}
 
-			// Handle server_ack specially — deliver to ack callback, not general message handler.
 			if msg.Type == EventServerAck {
 				rc.mu.RLock()
 				fn := rc.onAck
@@ -556,7 +528,7 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 			rc.deliver(msg)
 
 		case "language_change":
-			// Forward to desktop as a plaintext command
+
 			rc.deliver(GatewayMessage{
 				Type:      CmdLanguageChange,
 				EventID:   relayMsg.EventID,
@@ -652,7 +624,6 @@ func mustRawJSON(v interface{}) json.RawMessage {
 	return data
 }
 
-// deliver calls the onMessage callback safely.
 func (rc *RelayClient) deliver(msg GatewayMessage) {
 	rc.mu.RLock()
 	fn := rc.onMessage
@@ -662,10 +633,6 @@ func (rc *RelayClient) deliver(msg GatewayMessage) {
 	}
 }
 
-// Send encrypts and enqueues a GatewayMessage for delivery to the relay.
-// It applies backpressure instead of dropping when the relay is reconnecting
-// or the write pump is briefly saturated.
-// Safe to call after Close — returns error instead of panicking.
 func (rc *RelayClient) Send(msg GatewayMessage) error {
 	rc.closeMu.Lock()
 	if rc.closed {
@@ -744,20 +711,12 @@ func (rc *RelayClient) enqueueRaw(data []byte) error {
 		return nil
 	case <-rc.stopCh:
 		return fmt.Errorf("relay client closed")
-	// #920: during a long relay outage both pumps have exited and nothing
-	// drains sendCh (cap 256) - enqueueRaw used to block forever, stalling
-	// the broker's senderLoop while outbound kept growing unbounded,
-	// contradicting the documented backpressure design. Bounded wait:
-	// callers treat this like a closed client and the queue discipline
-	// (drop-oldest at the broker) decides what survives.
+
 	case <-time.After(rc.enqueueTimeout()):
 		return fmt.Errorf("relay client send queue stalled (relay disconnected?)")
 	}
 }
 
-// enqueueTimeout bounds how long enqueueRaw waits for a drained send queue.
-// Generous enough that a healthy-but-slow relay never trips it; short
-// enough that a prolonged outage surfaces as an error instead of a stall.
 func (rc *RelayClient) enqueueTimeout() time.Duration {
 	return 30 * time.Second
 }
@@ -883,8 +842,6 @@ func (rc *RelayClient) handleKeyOffer(clientID string, raw json.RawMessage) erro
 	return rc.enqueueRaw(payload)
 }
 
-// parseRetryAfterMs extracts retry_after_ms=NNNN from a WebSocket close reason.
-// Returns 0 if not found or invalid.
 func parseRetryAfterMs(closeText string) int64 {
 	idx := strings.Index(closeText, "retry_after_ms=")
 	if idx < 0 {
@@ -897,13 +854,8 @@ func parseRetryAfterMs(closeText string) int64 {
 	}
 	var ms int64
 	fmt.Sscanf(s, "%d", &ms)
-	// #1816 case 1: the relay is a REMOTE party - a poisoned or malicious
-	// value had two failure modes: ms > ~9.2e12 overflows time.Duration
-	// NEGATIVE (time.After(negative) fires immediately -> a zero-backoff
-	// dial storm against a restarting relay), and ms ~ 1e12 (~31 years)
-	// silenced reconnection for the process lifetime. Clamp to the same
-	// ceiling the exponential ladder uses.
-	const maxRetryAfterMs = 5 * 60 * 1000 // 5 min, matches the ladder cap
+
+	const maxRetryAfterMs = 5 * 60 * 1000
 	if ms < 0 {
 		return 0
 	}

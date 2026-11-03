@@ -1,10 +1,5 @@
 package session
 
-// #1628 case A: the ID-less content fingerprint used to dedupe GLOBALLY,
-// swallowing legitimate repeats (user sends "continue" twice, identical
-// build outputs) in legacy ID-less sessions. Adjacent-only now: the
-// double-append race still collapses, distant repeats survive.
-
 import (
 	"testing"
 

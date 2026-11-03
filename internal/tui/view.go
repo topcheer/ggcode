@@ -27,20 +27,12 @@ func (m Model) View() tea.View {
 	segs := segmentTimers{}
 	v := m.renderView(&segs)
 	if d := time.Since(start); d > slowUpdateLogThreshold {
-		// Same threshold/rationale as dispatchUpdate's handler meter
-		// (#2538): the 2026-09-18 reproductions showed a 10.008s first
-		// frame with handler meters attributing only 1.4s - the segment
-		// breakdown names the offending section directly from the debug
-		// log on the NEXT reproduction (bench at chat.List level with
-		// 1946 items + 1.4MB summary pinned 0ms, so the stall is not the
-		// chat viewport itself).
+
 		debug.Log("tui", fmt.Sprintf("slow view render: %s %s", d.Round(time.Millisecond), segsSummary(segs)))
 	}
 	return v
 }
 
-// segmentTimers accumulates per-section render costs for the slow-view
-// meter. Sections under slowUpdateLogThreshold are omitted from the log.
 type segmentTimers map[string]time.Duration
 
 func (s segmentTimers) run(name string, f func()) {
@@ -73,9 +65,6 @@ func (m Model) renderView(segs *segmentTimers) tea.View {
 		segs.run("header", func() { header = m.renderHeader() })
 	}
 
-	// Pre-calculate the full panel height so that renderContextBox can use
-	// it without recursively calling render functions (which causes stack
-	// overflow). We compute it from the same elements View() uses.
 	var statusBar, deviceBanner, composer, lanChatBar string
 	segs.run("statusBar", func() { statusBar = m.renderStatusBar() })
 	segs.run("deviceBanner", func() { deviceBanner = m.renderDeviceCodeBanner() })
@@ -117,9 +106,6 @@ func (m Model) renderView(segs *segmentTimers) tea.View {
 		availableHeight -= lipgloss.Height(lanChatBar)
 	}
 
-	// #917: clamp AFTER subtracting the LAN bar - clamping before left the
-	// conversation below the intended floor in short windows (the panelH
-	// path already subtracted first, clamping at >=6).
 	if availableHeight < 8 {
 		availableHeight = 8
 	}
@@ -132,9 +118,6 @@ func (m Model) renderView(segs *segmentTimers) tea.View {
 		debug.Log("layout", "avail=%d", availableHeight)
 	}
 
-	// When a panel is open, hide the conversation entirely and give all
-	// vertical space to the panel. This prevents content-rich panels from
-	// being squeezed and avoids split-screen rendering complexity.
 	var conversation string
 	if actionPanel != "" {
 		conversation = ""
@@ -163,7 +146,6 @@ func (m Model) renderView(segs *segmentTimers) tea.View {
 	}
 	sections = append(sections, composer)
 
-	// Pet row: rendered right-aligned on its own line below the composer.
 	pet := m.renderPet()
 	if pet != "" {
 		leftWidth := m.mainColumnWidth()
@@ -179,7 +161,6 @@ func (m Model) renderView(segs *segmentTimers) tea.View {
 		content = lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 	}
 
-	// Cache view snapshot for streaming goroutine (thread-safe via pointer)
 	if m.streamViewState != nil {
 		m.streamViewState.setSnapshot(content)
 	}
@@ -240,21 +221,12 @@ func (m Model) conversationPanelHeight() int {
 	return availableHeight
 }
 
-// panelAvailableHeight returns the height available for a context panel's
-// content area when the conversation is hidden. It accounts for header,
-// status bar, device banner, composer, and lanChat bar, plus a small
-// padding for the panel's own border (2 lines) and footer spacing (2 lines).
 func (m Model) panelAvailableHeight() int {
 	return m.fullPanelHeight() - 4
 }
 
-// fullPanelHeight returns the total height available for a context panel
-// including its border and padding (i.e. the full main content area when
-// conversation is hidden). Use this to set the Height on the panel's
-// outer style so it fills the space and keeps the composer position fixed.
 func (m Model) fullPanelHeight() int {
-	// Use cached value if set (avoids recursion: renderContextBox →
-	// fullPanelHeight → renderComposerPanel → ... → renderContextBox).
+
 	if m.cachedPanelHeight > 0 {
 		return m.cachedPanelHeight
 	}
@@ -274,13 +246,13 @@ func (m Model) renderContextBox(title, body string, accent color.Color) string {
 	if strings.TrimSpace(title) != "" {
 		content = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" "+title) + "\n" + body
 	}
-	// Add scope indicator if any panel is open
+
 	scopeLine := ""
 	if m.config != nil && m.config.HasInstanceConfigAttached() && m.isAnyPanelOpen() {
 		scopeLabel := m.configSaveScopeLabel()
-		scopeColor := lipgloss.Color("8") // gray for global
+		scopeColor := lipgloss.Color("8")
 		if m.configSaveScope == "instance" {
-			scopeColor = lipgloss.Color("14") // cyan for instance
+			scopeColor = lipgloss.Color("14")
 		}
 		hint := ""
 		if m.configSaveScope == "instance" {
@@ -293,9 +265,6 @@ func (m Model) renderContextBox(title, body string, accent color.Color) string {
 	}
 	content += scopeLine
 
-	// Calculate total available height for the panel (including border+padding).
-	// This ensures the box always fills the main content area, keeping the
-	// composer position fixed regardless of panel content height.
 	availH := m.fullPanelHeight()
 
 	style := lipgloss.NewStyle().
@@ -311,8 +280,6 @@ func (m Model) renderContextBox(title, body string, accent color.Color) string {
 	return style.Render(content)
 }
 
-// renderContextBoxAuto renders a context box without forcing full height.
-// Used by compact UI elements like the status bar that should size to content.
 func (m Model) renderContextBoxAuto(title, body string, accent color.Color) string {
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	content := body
@@ -339,8 +306,7 @@ func (m Model) isAnyPanelOpen() bool {
 		m.nostrPanel != nil || m.twitchPanel != nil ||
 		m.whatsappPanel != nil || m.streamPanel != nil ||
 		m.skillsPanel != nil || m.hooksPanel != nil ||
-		// #922: renderContextPanel renders these four - the config-scope
-		// indicator never showed when they were open.
+
 		m.statsPanel != nil || m.knightPanel != nil ||
 		m.inspectorPanel != nil || m.lanChatPanel != nil
 }
@@ -432,7 +398,7 @@ func (m Model) sidebarEnabled() bool {
 }
 
 func (m Model) topHeaderEnabled() bool {
-	// No longer show the two-box header; logo is embedded in conversation.
+
 	return false
 }
 
@@ -456,7 +422,6 @@ func (m Model) mainColumnWidth() int {
 	return width
 }
 
-// formatDuration renders a duration in a compact form: 5s, 1m12s, 2h03m
 func formatDuration(d time.Duration) string {
 	d = d.Truncate(time.Second)
 	if d < time.Minute {

@@ -1,10 +1,5 @@
 package tui
 
-// #2224: pcConnectionStatus had three more hardcoded/raw sites beyond the
-// four keys #1731 case 3 wired - error (the key diagnostic surface),
-// the default branch (idle/connecting/reconnecting raw English), and the
-// tail fallback (bypassing the existing starting key).
-
 import (
 	"os"
 	"strings"
@@ -23,9 +18,9 @@ func TestIssue2224PCStatusFullyInternationalized(t *testing.T) {
 	}
 	body := src[i:]
 	for _, bad := range []string{
-		`fmt.Sprintf("error: %s"`, // raw error
-		`return a.Status`,         // raw default
-		`return "starting..."`,    // hardcoded tail
+		`fmt.Sprintf("error: %s"`,
+		`return a.Status`,
+		`return "starting..."`,
 	} {
 		if strings.Contains(body, bad) {
 			t.Errorf("pcConnectionStatus still contains %q", bad)
@@ -38,7 +33,7 @@ func TestIssue2224PCStatusFullyInternationalized(t *testing.T) {
 			t.Errorf("pcConnectionStatus must use %s", key)
 		}
 	}
-	// Both locales carry the new keys.
+
 	ib, _ := os.ReadFile("i18n_pc.go")
 	cat := string(ib)
 	for _, k := range []string{"panel.pc.status.error", "panel.pc.status.raw"} {

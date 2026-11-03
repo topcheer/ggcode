@@ -8,12 +8,6 @@ import (
 	"testing"
 )
 
-// TestPanelRegistryMirrorsModelFields is the structural pin for #2422's
-// closeActivePanel/hasActivePanel mirror-table: every *Panel pointer field on
-// Model MUST be registered in panelRegistry exactly once, and every registry
-// entry must reference a real field. #904 (hooksPanel) and #2363 (usagePanel)
-// were both born as drift between the two hand-maintained lists - a future
-// panel field added without a registry entry fails here before it can drift.
 func TestPanelRegistryMirrorsModelFields(t *testing.T) {
 	m := &Model{}
 	regNames := map[string]bool{}
@@ -49,9 +43,6 @@ func TestPanelRegistryMirrorsModelFields(t *testing.T) {
 	}
 }
 
-// TestPanelRegistryMirrorsLangOptions pins the non-pointer slot: langOptions
-// is the one active-panel state without a *Panel field, so it gets its own
-// case in both predicates.
 func TestPanelRegistryMirrorsLangOptions(t *testing.T) {
 	m := &Model{langOptions: []languageOption{{}}}
 	if !m.hasActivePanel() {
@@ -65,11 +56,6 @@ func TestPanelRegistryMirrorsLangOptions(t *testing.T) {
 	}
 }
 
-// TestPanelRegistryPriorityOrder pins the resolution order: the original
-// switch (now the registry slice order) resolved modelPanel before
-// hooksPanel when both were open. Behavioral parity requires the first
-// entry to win. closeModelPanel refocuses the main input, so the Model must
-// carry an initialized textarea (zero-value cursor panics on Focus).
 func TestPanelRegistryPriorityOrder(t *testing.T) {
 	m := &Model{
 		modelPanel: &modelPanelState{},
@@ -87,7 +73,6 @@ func TestPanelRegistryPriorityOrder(t *testing.T) {
 	}
 }
 
-// TestPanelRegistryEmptyModel pins the no-panel default branch.
 func TestPanelRegistryEmptyModel(t *testing.T) {
 	m := &Model{}
 	if m.hasActivePanel() {
@@ -98,18 +83,12 @@ func TestPanelRegistryEmptyModel(t *testing.T) {
 	}
 }
 
-// TestPanelRegistryWechatWecomCascade pins the two IM cascade slots: closing
-// wechat or wecom must ALSO close the shared IM panel (original switch ran
-// both closers). Note the registry order: imPanel itself sorts BEFORE the
-// wechat/wecom slots, so when both are open Ctrl+C closes im first and the
-// channel panel on the next press - this table order mirrors the original
-// switch exactly.
 func TestPanelRegistryWechatWecomCascade(t *testing.T) {
 	m := &Model{
 		wechatPanel: &wechatPanelState{},
 		imPanel:     &imPanelState{},
 	}
-	// First close: imPanel wins (earlier in the table).
+
 	if !m.closeActivePanel() {
 		t.Fatal("closeActivePanel()==false with wechat+im open")
 	}
@@ -119,7 +98,7 @@ func TestPanelRegistryWechatWecomCascade(t *testing.T) {
 	if m.wechatPanel == nil {
 		t.Error("wechatPanel must remain open after first close - only the FIRST hit closes")
 	}
-	// Second close: wechat slot fires the cascade.
+
 	if !m.closeActivePanel() {
 		t.Fatal("closeActivePanel()==false with wechat open")
 	}
@@ -134,7 +113,7 @@ func TestPanelRegistryWechatWecomCascade(t *testing.T) {
 	if !m.closeActivePanel() {
 		t.Fatal("closeActivePanel()==false with wecom+im open")
 	}
-	// imPanel first again.
+
 	if m.imPanel != nil || m.wecomPanel == nil {
 		t.Errorf("expected im closed, wecom still open: im=%v wecom=%v", m.imPanel != nil, m.wecomPanel != nil)
 	}

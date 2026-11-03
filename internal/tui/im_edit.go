@@ -14,30 +14,26 @@ import (
 	"github.com/topcheer/ggcode/internal/secretfield"
 )
 
-// imAdapterEditMode represents the current editing sub-state.
 type imAdapterEditMode int
 
 const (
-	imEditNone   imAdapterEditMode = iota // not editing
-	imEditSelect                          // selecting a field to edit
-	imEditInput                           // typing a new value
+	imEditNone imAdapterEditMode = iota
+	imEditSelect
+	imEditInput
 )
 
-// imAdapterEditState is shared state for editing an adapter's Extra fields.
-// Each platform panel embeds this and delegates edit key/render calls.
 type imAdapterEditState struct {
 	mode          imAdapterEditMode
 	adapterName   string
-	fieldKeys     []string          // sorted extra field names
-	fieldValues   map[string]string // current display values (masked for secrets)
-	editSelected  int               // selected field index in editSelect mode
-	editField     string            // field being edited in editInput mode
-	editInput     string            // current input buffer
-	editMessage   string            // success/error message
-	originalExtra map[string]string // original (unmasked) values for non-secret fields
+	fieldKeys     []string
+	fieldValues   map[string]string
+	editSelected  int
+	editField     string
+	editInput     string
+	editMessage   string
+	originalExtra map[string]string
 }
 
-// imEditResultMsg is the tea.Msg returned after saving an edited field.
 type imEditResultMsg struct {
 	adapterName string
 	field       string
@@ -45,7 +41,6 @@ type imEditResultMsg struct {
 	err         error
 }
 
-// resetIMEdit resets the edit state.
 func (s *imAdapterEditState) resetIMEdit() {
 	s.mode = imEditNone
 	s.adapterName = ""
@@ -58,7 +53,6 @@ func (s *imAdapterEditState) resetIMEdit() {
 	s.originalExtra = nil
 }
 
-// enterIMEditSelect populates the edit state from the adapter config.
 func (m *Model) enterIMEditSelect(adapterName string) imAdapterEditState {
 	s := imAdapterEditState{
 		mode:          imEditSelect,
@@ -82,14 +76,11 @@ func (m *Model) enterIMEditSelect(adapterName string) imAdapterEditState {
 			s.fieldValues[k] = val
 		}
 	}
-	// Also add Env fields
+
 	for k, v := range adapter.Env {
 		key := "env." + k
 		s.originalExtra[key] = v
-		// #2158: the Extra loop five lines up masks secret-looking keys,
-		// this loop stored the plaintext outright - opening the edit
-		// panel alone leaked every env secret (BOT_TOKEN/API_KEY...),
-		// already ExpandEnv-resolved to real values at load time.
+
 		if looksLikeSecretField(k) {
 			s.fieldValues[key] = maskSecret(v)
 		} else {
@@ -106,7 +97,6 @@ func (m *Model) enterIMEditSelect(adapterName string) imAdapterEditState {
 	return s
 }
 
-// renderIMEditSelect renders the field selection view.
 func (m *Model) renderIMEditSelect(s *imAdapterEditState) string {
 	if s == nil || s.mode != imEditSelect {
 		return ""
@@ -146,12 +136,6 @@ func (m *Model) renderIMEditSelect(s *imAdapterEditState) string {
 	return strings.Join(body, "\n")
 }
 
-// maskedEditValue masks the edit-input ECHO for secret-looking fields
-// (#2169): the input buffer keeps the real value (saving semantics
-// unchanged), but the rendered frame showed the whole plaintext -
-// Enter means "edit", not "reveal", and scrollback keeps the leak for
-// the session's lifetime. Mirrors the list view's #2158 masking; the
-// same-repo precedent (stream_panel/onboard) masks secret echoes too.
 func maskedEditValue(field, value string) string {
 	name := strings.TrimPrefix(field, "env.")
 	if looksLikeSecretField(name) {
@@ -160,11 +144,6 @@ func maskedEditValue(field, value string) string {
 	return value
 }
 
-// maskedNewFieldEcho masks the ADD-NEW-FIELD mode echo (#2177): that
-// mode shares the render path with editField=="" and the buffer holds
-// `name=value` - maskedEditValue("") always passed the plaintext
-// through. The '=' separator is the structural handle: a secret-looking
-// name masks only the value half, the name stays readable for review.
 func maskedNewFieldEcho(input string) string {
 	eq := strings.Index(input, "=")
 	if eq < 0 {
@@ -177,9 +156,6 @@ func maskedNewFieldEcho(input string) string {
 	return input
 }
 
-// imEditEcho picks the right echo mask for the edit-input view: the
-// edit mode masks by field name (#2169), the add-new-field mode masks
-// by the `name=value` buffer's name half (#2177).
 func imEditEcho(s *imAdapterEditState) string {
 	if s.editField == "" {
 		return maskedNewFieldEcho(s.editInput)
@@ -187,7 +163,6 @@ func imEditEcho(s *imAdapterEditState) string {
 	return maskedEditValue(s.editField, s.editInput)
 }
 
-// renderIMEditInput renders the text input view for editing a field value.
 func (m *Model) renderIMEditInput(s *imAdapterEditState) string {
 	if s == nil || s.mode != imEditInput {
 		return ""
@@ -208,8 +183,6 @@ func (m *Model) renderIMEditInput(s *imAdapterEditState) string {
 	return strings.Join(body, "\n")
 }
 
-// handleIMEditKey handles key events for the adapter edit mode.
-// Returns the updated edit state and a tea.Cmd.
 func (m *Model) handleIMEditKey(s *imAdapterEditState, msg tea.KeyPressMsg) (*imAdapterEditState, tea.Cmd) {
 	if s == nil || s.mode == imEditNone {
 		return s, nil
@@ -257,7 +230,7 @@ func (m *Model) handleIMEditSelectKey(s *imAdapterEditState, msg tea.KeyPressMsg
 		s.editMessage = ""
 		return s, nil
 	case "n", "N":
-		// Add new field: enter input mode with empty field name prompt
+
 		s.mode = imEditInput
 		s.editField = ""
 		s.editInput = ""
@@ -278,7 +251,7 @@ func (m *Model) handleIMEditInputKey(s *imAdapterEditState, msg tea.KeyPressMsg)
 	case "enter":
 		input := strings.TrimSpace(s.editInput)
 		if s.editField == "" {
-			// New field mode: input is "field_name=value"
+
 			parts := strings.SplitN(input, "=", 2)
 			if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
 				s.editMessage = m.t("panel.im.edit.invalid_format")
@@ -296,7 +269,7 @@ func (m *Model) handleIMEditInputKey(s *imAdapterEditState, msg tea.KeyPressMsg)
 		}
 		adapterName := s.adapterName
 		field := s.editField
-		// Return to select mode immediately; result comes via imEditResultMsg
+
 		s.mode = imEditSelect
 		s.editField = ""
 		s.editInput = ""
@@ -318,20 +291,12 @@ func (m *Model) handleIMEditInputKey(s *imAdapterEditState, msg tea.KeyPressMsg)
 	return s, nil
 }
 
-// saveIMEditField creates a tea.Cmd that persists an edited field,
-// writes the secret to keys.env, and hot-reloads the adapter.
 func (m *Model) saveIMEditField(adapterName, field, value string) tea.Cmd {
 	return func() tea.Msg {
 		if m.config == nil {
 			return imEditResultMsg{adapterName: adapterName, field: field, err: errors.New("config unavailable")}
 		}
-		// 1. Persist to config struct + YAML + keys.env (via Save's post-migration).
-		// #897: 'env.'-prefixed fields must write adapter.Env, not Extra —
-		// SetIMAdapterExtra would store a literal 'env.FOO' key, never apply
-		// #1367 family + #1377-A/B: the Set* writes are nested-map writes and
-		// used to run HERE on the Cmd goroutine (View ranges the same map);
-		// the hot-reload's restart error was silently discarded (`_ =`).
-		// Both the write and the error now flow through configMutationMsg.
+
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				if strings.HasPrefix(field, "env.") {
@@ -345,10 +310,7 @@ func (m *Model) saveIMEditField(adapterName, field, value string) tea.Cmd {
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
-					// 2. Hot-reload: if the adapter is running, stop it and restart
-					// with new config. #1377-B: a failed restart used to be swallowed
-					// (`_ =`) - the field was saved but the IM channel silently went
-					// down while the user saw "saved".
+
 					if m.imManager != nil && m.isAdapterRunning(adapterName) {
 						m.imManager.StopAdapter(adapterName)
 						if err := im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), adapterName, m.imManager); err != nil {
@@ -365,25 +327,19 @@ func (m *Model) saveIMEditField(adapterName, field, value string) tea.Cmd {
 	}
 }
 
-// isAdapterRunning checks if an adapter is currently active in the IM manager.
 func (m *Model) isAdapterRunning(name string) bool {
 	if m.imManager == nil {
 		return false
 	}
 	for _, state := range m.imManager.Snapshot().Adapters {
 		if state.Name == name {
-			// #1735 case 2: stopAdapter leaves the entry with
-			// Status="disconnected" (nothing deletes it) - a name-only
-			// match treated a STOPPED adapter as running, so editing any
-			// field of a manually-stopped (or crash-marked) adapter
-			// silently restarted it. Only live entries hot-reload.
+
 			return state.Status != "disconnected"
 		}
 	}
 	return false
 }
 
-// applyIMEditResult applies an imEditResultMsg to the edit state and refreshes it.
 func (m *Model) applyIMEditResult(s *imAdapterEditState, msg imEditResultMsg) {
 	if s == nil || s.adapterName != msg.adapterName {
 		return
@@ -393,19 +349,15 @@ func (m *Model) applyIMEditResult(s *imAdapterEditState, msg imEditResultMsg) {
 		return
 	}
 	s.editMessage = m.t("panel.im.edit.saved", msg.field)
-	// Refresh the field list from config
+
 	refreshed := m.enterIMEditSelect(s.adapterName)
-	// Preserve the mode and selected index (#2610: the comment always
-	// promised this but the copy was missing, so every successful save
-	// snapped the cursor back to the first field; render clamps a stale
-	// index if the refreshed list is shorter).
+
 	refreshed.mode = imEditSelect
 	refreshed.editMessage = s.editMessage
 	refreshed.editSelected = s.editSelected
 	*s = refreshed
 }
 
-// maskSecret masks a secret value, showing only the last 4 characters.
 func maskSecret(value string) string {
 	runes := []rune(value)
 	if len(runes) <= 4 {
@@ -414,12 +366,6 @@ func maskSecret(value string) string {
 	return "****" + string(runes[len(runes)-4:])
 }
 
-// maskPositionalCreateEcho masks the create-input echo for positional
-// (space-separated) IM panel specs (#2178 family): fields are POSITIONAL,
-// so field names are unknown at render time. Fields before secretFrom
-// (typically just the adapter name) stay readable for review; every field
-// from secretFrom on is secret material and is masked. The buffer keeps
-// the real value for the Enter parse.
 func maskPositionalCreateEcho(input string, secretFrom int) string {
 	fields := strings.Fields(input)
 	if secretFrom < 0 {
@@ -435,10 +381,6 @@ func maskPositionalCreateEcho(input string, secretFrom int) string {
 	return strings.Join(masked, " ")
 }
 
-// maskCreateEchoIndices masks only the listed field indices of a
-// positional create-input echo (#2178 family): for interleaved specs
-// (e.g. `name token nick channels`) where secret fields sit between
-// non-sensitive ones. Unlisted fields stay readable.
 func maskCreateEchoIndices(input string, indices ...int) string {
 	fields := strings.Fields(input)
 	if len(fields) == 0 {
@@ -457,11 +399,7 @@ func maskCreateEchoIndices(input string, indices ...int) string {
 	return strings.Join(masked, " ")
 }
 
-// looksLikeSecretField checks if a key name suggests it holds a secret.
-// Duplicated from config package to avoid import cycle concerns.
 func looksLikeSecretField(key string) bool {
-	// #2180: single source - the former "Duplicated from config package
-	// to avoid import cycle concerns" copy is gone; secretfield is a
-	// leaf package with no cycle risk.
+
 	return secretfield.LooksLikeSecretField(key)
 }

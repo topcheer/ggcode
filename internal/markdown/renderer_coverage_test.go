@@ -9,7 +9,7 @@ import (
 )
 
 func TestWarmup(t *testing.T) {
-	// Must not panic; seeds the 80 and 120 renderers.
+
 	Warmup()
 	if Renderer(80) == nil {
 		t.Fatal("Warmup should leave a usable renderer for width 80")
@@ -20,7 +20,7 @@ func TestWarmup(t *testing.T) {
 }
 
 func TestRendererWrapFallbackAndCache(t *testing.T) {
-	r1 := Renderer(0) // wrap <= 0 falls back to 80
+	r1 := Renderer(0)
 	if r1 == nil {
 		t.Fatal("Renderer(0) should fall back to width 80 and succeed")
 	}
@@ -28,7 +28,7 @@ func TestRendererWrapFallbackAndCache(t *testing.T) {
 	if r2 == nil {
 		t.Fatal("Renderer(-5) should fall back to width 80 and succeed")
 	}
-	r3 := Renderer(80) // cache hit
+	r3 := Renderer(80)
 	if r3 != r1 {
 		t.Fatalf("Renderer(80) should return the cached instance, got %p vs %p", r3, r1)
 	}
@@ -61,7 +61,7 @@ func TestRenderRealOutput(t *testing.T) {
 	if !strings.Contains(out, "Title") {
 		t.Fatalf("Render output should keep heading text, got %q", out)
 	}
-	// Leading/trailing newlines added by glamour must be trimmed.
+
 	if strings.HasPrefix(out, "\n") || strings.HasSuffix(out, "\n") {
 		t.Fatalf("Render output must be trimmed of leading/trailing newlines, got %q", out)
 	}
@@ -99,7 +99,7 @@ func TestHasDarkBackground(t *testing.T) {
 }
 
 func TestStyleConfigNonTerminal(t *testing.T) {
-	// In tests stdout is not a terminal, so the fast NoTTY path is taken.
+
 	cfg := StyleConfig()
 	if !reflect.DeepEqual(cfg, glamourstyles.NoTTYStyleConfig) {
 		t.Fatal("StyleConfig on non-terminal stdout should return NoTTYStyleConfig")
@@ -121,7 +121,7 @@ func TestStyleConfigForDarkMode(t *testing.T) {
 	if light.Code.BackgroundColor != nil {
 		t.Fatal("light config should clear Code.BackgroundColor")
 	}
-	// Chroma entries must be colored when present.
+
 	if dark.CodeBlock.Chroma != nil {
 		if dark.CodeBlock.Chroma.Comment.Color == nil {
 			t.Fatal("dark config should color chroma comments")
@@ -133,10 +133,9 @@ func TestStyleConfigForDarkMode(t *testing.T) {
 }
 
 func TestApplyPaletteNilSafe(t *testing.T) {
-	// Must not panic on nil config.
+
 	applyPalette(nil, "#000000", "#111111", "#222222", "#333333", "#444444")
 
-	// Config without chroma: early return after base colors.
 	cfg := glamourstyles.NoTTYStyleConfig
 	applyPalette(&cfg, "#000000", "#111111", "#222222", "#333333", "#444444")
 	if cfg.Code.Color == nil || *cfg.Code.Color != "#000000" {
@@ -218,9 +217,7 @@ func TestNormalizeFences(t *testing.T) {
 			"```text\n## not a heading\n```",
 		},
 		{
-			// Fence tracking toggles per fence-prefixed line regardless of
-			// fence character: the "```" line closes the "~~~" fence, so the
-			// final "~~~" is treated as a new opening fence and gains a lang.
+
 			"fence toggle does not distinguish fence characters",
 			"~~~\n```\n~~~",
 			"~~~text\n```\n~~~text",
@@ -236,7 +233,7 @@ func TestNormalizeFences(t *testing.T) {
 }
 
 func TestNormalizeHeadingLastLineReset(t *testing.T) {
-	// Single heading line: the trailing-line reset path executes.
+
 	got := Normalize("## only")
 	if got != "## only" {
 		t.Fatalf("Normalize single heading = %q", got)
@@ -249,7 +246,7 @@ func TestNormalizeHeadingVariants(t *testing.T) {
 		in   string
 		want string
 	}{
-		// normalizeHeading reconstruction
+
 		{"simple h1", "# hello", "# hello"},
 		{"simple h2", "## hello", "## hello"},
 		{"h6", "###### hello", "###### hello"},
@@ -261,7 +258,7 @@ func TestNormalizeHeadingVariants(t *testing.T) {
 		{"hash with trailing space only not heading", "# ", "# "},
 		{"seven hashes not heading", "####### deep", "####### deep"},
 		{"tab after hashes", "#\thello", "# hello"},
-		// closing sequences
+
 		{"closing sequence stripped", "## hello ##", "## hello"},
 		{"closing sequence with tab delimiter", "## heading\t#", "## heading"},
 		{"word char before hashes kept", "## C#", "## C#"},

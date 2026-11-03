@@ -6,8 +6,7 @@ func init() {
 
 func enPCModule() map[string]string {
 	return map[string]string{
-		// #1731: the connection status used to be hardcoded English - the
-		// catalog shipped in the same commit as the panel but was never wired.
+
 		"panel.pc.status.starting":           "starting...",
 		"panel.pc.status.connected_none":     "connected (no sessions)",
 		"panel.pc.status.connected_sessions": "connected (%d session(s))",

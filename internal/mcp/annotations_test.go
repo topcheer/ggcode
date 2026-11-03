@@ -14,7 +14,6 @@ func okCaller() *mockCaller {
 	return &mockCaller{result: &CallToolResult{Content: []ToolContent{{Type: "text", Text: "ok"}}}}
 }
 
-// The 2025-06-18 annotations object must survive tools/list JSON decoding.
 func TestToolDefinitionAnnotationsJSON(t *testing.T) {
 	var td ToolDefinition
 	in := `{"name":"query","description":"q","inputSchema":{"type":"object"},
@@ -35,7 +34,6 @@ func TestToolDefinitionAnnotationsJSON(t *testing.T) {
 		t.Fatal("clean declarations must not be contradictory")
 	}
 
-	// Absent annotations: defaults (not read-only, destructive per spec).
 	var bare ToolDefinition
 	if err := json.Unmarshal([]byte(`{"name":"x","inputSchema":{}}`), &bare); err != nil {
 		t.Fatal(err)
@@ -48,12 +46,10 @@ func TestToolDefinitionAnnotationsJSON(t *testing.T) {
 	}
 }
 
-// #998 follow-up: a read-only server whose tool carries an explicit
-// readOnlyHint=true is allowed even though the name heuristic would block it.
 func TestReadOnlyAdapter_AnnotationOverridesWriteName(t *testing.T) {
 	tools := []ToolDefinition{
 		{Name: "SET_CONFIG_CACHE", Annotations: &ToolAnnotations{ReadOnlyHint: boolPtr(true)}},
-		{Name: "delete_file", Annotations: &ToolAnnotations{ReadOnlyHint: boolPtr(true)}}, // lying server: allowed by declaration
+		{Name: "delete_file", Annotations: &ToolAnnotations{ReadOnlyHint: boolPtr(true)}},
 	}
 	adapter := NewReadOnlyAdapter("srv", okCaller(), tools)
 	registry := tool.NewRegistry()
@@ -75,8 +71,6 @@ func TestReadOnlyAdapter_AnnotationOverridesWriteName(t *testing.T) {
 	}
 }
 
-// Contradictory declarations (readOnlyHint=true + destructiveHint=true):
-// the more dangerous hint wins; the name heuristic stays in force.
 func TestReadOnlyAdapter_ContradictoryHintsStayBlocked(t *testing.T) {
 	tools := []ToolDefinition{
 		{Name: "delete_file", Annotations: &ToolAnnotations{ReadOnlyHint: boolPtr(true), DestructiveHint: boolPtr(true)}},
@@ -96,7 +90,6 @@ func TestReadOnlyAdapter_ContradictoryHintsStayBlocked(t *testing.T) {
 	}
 }
 
-// Without annotations, read-only blocking behaves exactly as before (#996/#998).
 func TestReadOnlyAdapter_NoAnnotationsUnchanged(t *testing.T) {
 	tools := []ToolDefinition{
 		{Name: "write_file"},
@@ -115,8 +108,6 @@ func TestReadOnlyAdapter_NoAnnotationsUnchanged(t *testing.T) {
 	}
 }
 
-// On a NON read-only server, annotations must not change execution, but the
-// model-facing description carries the server's read-only declaration.
 func TestAdapter_AnnotationDescriptionOnly(t *testing.T) {
 	tools := []ToolDefinition{
 		{Name: "query", Description: "run a query", Annotations: &ToolAnnotations{ReadOnlyHint: boolPtr(true)}},

@@ -112,6 +112,6 @@ func TestStripAnsiForChat(t *testing.T) {
 
 func TestExtractAgentID(t *testing.T) {
 	got := extractAgentID("  [agent-123] doing work")
-	// May return empty if format doesn't match, just verify no panic
+
 	_ = got
 }

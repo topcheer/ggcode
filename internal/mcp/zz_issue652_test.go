@@ -8,10 +8,6 @@ import (
 	"time"
 )
 
-// newHangingStdioClient builds a stdio client whose server never produces
-// output: the read pipe's write end is held open but never written to, so
-// Peek(1) parks indefinitely — the "process alive, no output" hang from #652.
-// The returned closer unblocks the parked read goroutines at test end.
 func newHangingStdioClient(t *testing.T, name string) (*Client, func()) {
 	t.Helper()
 	pr, pw, err := os.Pipe()
@@ -31,21 +27,13 @@ func newHangingStdioClient(t *testing.T, name string) (*Client, func()) {
 		reader:    bufio.NewReader(pr),
 	}
 	cleanup := func() {
-		pw.Close() // unblocks Peek with EOF
+		pw.Close()
 		pr.Close()
 		devnull.Close()
 	}
 	return c, cleanup
 }
 
-// TestIssue652GhostWaiterDoesNotBlockAbort reproduces the hang: two concurrent
-// requests against a hanging stdio server, both ctx-cancelled. With the #644
-// gate alone each request's waiter stayed registered until its read goroutine
-// exited — but that goroutine was parked forever behind readMu in Peek — so
-// hasOtherWaiters was permanently true, Abort never fired, and every later
-// request wedged. The #652 fix unregisters the waiter synchronously on ctx
-// cancellation, so the last cancelled request sees zero live waiters, aborts
-// the transport, and later requests return promptly instead of hanging.
 func TestIssue652GhostWaiterDoesNotBlockAbort(t *testing.T) {
 	c, cleanup := newHangingStdioClient(t, "hang-issue652")
 	defer cleanup()
@@ -62,7 +50,7 @@ func TestIssue652GhostWaiterDoesNotBlockAbort(t *testing.T) {
 		_, e := c.sendRequestUnlocked(Request{JSONRPC: "2.0", ID: &id1, Method: "ping"}, ctx1)
 		errCh <- e
 	}()
-	time.Sleep(40 * time.Millisecond) // waiter #1 is registered, read goroutine parks in Peek
+	time.Sleep(40 * time.Millisecond)
 	go func() {
 		_, e := c.sendRequestUnlocked(Request{JSONRPC: "2.0", ID: &id2, Method: "ping"}, ctx2)
 		errCh <- e
@@ -76,8 +64,6 @@ func TestIssue652GhostWaiterDoesNotBlockAbort(t *testing.T) {
 		}
 	}
 
-	// No waiter may remain registered: both cancelled requests unregistered
-	// synchronously even though their read goroutines are still parked.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		c.mu.Lock()
@@ -95,7 +81,6 @@ func TestIssue652GhostWaiterDoesNotBlockAbort(t *testing.T) {
 		t.Fatalf("expected 0 registered waiters after both requests cancelled, got %d (ghost waiter)", remaining)
 	}
 
-	// A later request must fail fast with its ctx error, not wedge for good.
 	id3 := NewIntID(3)
 	ctx3, cancel3 := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel3()
@@ -117,9 +102,6 @@ func TestIssue652GhostWaiterDoesNotBlockAbort(t *testing.T) {
 	}
 }
 
-// TestIssue652CancelUnregistersWaiter checks the synchronous unregistration
-// directly: after a single cancelled request returns, its waiter entry is
-// gone from the map even while the read goroutine remains parked in Peek.
 func TestIssue652CancelUnregistersWaiter(t *testing.T) {
 	c, cleanup := newHangingStdioClient(t, "hang2-issue652")
 	defer cleanup()

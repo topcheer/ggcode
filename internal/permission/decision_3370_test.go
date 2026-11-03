@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// #3370: approval handlers classify a fired ctx.Done() into a non-decision
-// outcome - deadline means the prompt expired; anything else is a
-// cancellation. Neither may ever be attributed to the user downstream.
 func TestDecisionFromContext(t *testing.T) {
 	if got := DecisionFromContext(context.DeadlineExceeded); got != Timeout {
 		t.Errorf("DeadlineExceeded -> %v, want Timeout", got)
@@ -37,7 +34,6 @@ func TestDecisionIsNonDecision(t *testing.T) {
 	}
 }
 
-// String labels must be stable for logs/audit.
 func TestDecisionStringNewValues(t *testing.T) {
 	if Timeout.String() != "timeout" || Cancelled.String() != "cancelled" {
 		t.Errorf("String labels drifted: timeout=%q cancelled=%q", Timeout.String(), Cancelled.String())

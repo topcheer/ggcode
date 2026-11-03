@@ -9,18 +9,12 @@ import (
 	"testing"
 )
 
-// TestIssue4850_BackendNilWhenNotRunning pins #4850: when the iTerm2 process
-// is not running, the backend constructor must return nil WITHOUT ever
-// sending `tell application "iTerm2"` to osascript - that AppleScript form
-// launches a non-running app, which is how surviving daemon probes
-// resurrected a terminal the user had deliberately quit (~30-60s after
-// quit, matching the inbound-trigger cycle).
 func TestIssue4850_BackendNilWhenNotRunning(t *testing.T) {
 	var scripts []string
 	restore := stubOsa(t, func(_ context.Context, script string) (string, error) {
 		scripts = append(scripts, script)
 		if strings.Contains(script, `exists process "iTerm2"`) {
-			return "false\n", nil // System Events probe: not running
+			return "false\n", nil
 		}
 		return "", errors.New("stub: must not be reached")
 	})
@@ -41,11 +35,6 @@ func TestIssue4850_BackendNilWhenNotRunning(t *testing.T) {
 	}
 }
 
-// TestIssue4850_CreateTabRefusesQuitTerminal pins the CreateTab half of
-// #4850: the create script begins with `activate`, so running it against a
-// quit iTerm2 would relaunch it. CreateTab must guard at the boundary and
-// return an error instead - the Manager failed-map then marks the pane
-// permanently dark, never a resurrection.
 func TestIssue4850_CreateTabRefusesQuitTerminal(t *testing.T) {
 	restore := stubOsa(t, func(_ context.Context, script string) (string, error) {
 		if strings.Contains(script, `exists process "iTerm2"`) {
@@ -65,9 +54,6 @@ func TestIssue4850_CreateTabRefusesQuitTerminal(t *testing.T) {
 	}
 }
 
-// TestIssue4850_CreateTabProceedsWhenRunning pins that a live iTerm2 still
-// gets its tab: the guard must not break the normal path. The stub fakes a
-// running process and a plausible session ID.
 func TestIssue4850_CreateTabProceedsWhenRunning(t *testing.T) {
 	restore := stubOsa(t, func(_ context.Context, script string) (string, error) {
 		if strings.Contains(script, `exists process "iTerm2"`) {
@@ -90,9 +76,6 @@ func TestIssue4850_CreateTabProceedsWhenRunning(t *testing.T) {
 	}
 }
 
-// stubOsa swaps the package osascript runner for the test duration so no
-// real osascript ever spawns from these tests (which on macOS would launch
-// iTerm2 - the very defect #4850 describes, from the test side).
 func stubOsa(t *testing.T, fn func(ctx context.Context, script string) (string, error)) func() {
 	t.Helper()
 	old := osascriptCommand

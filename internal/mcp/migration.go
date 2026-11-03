@@ -19,9 +19,7 @@ type migrationSource struct {
 	Path     string
 	Source   string
 	Priority int
-	// pluginRoot/pluginDataDir are non-empty only for Agent Plugins
-	// (agent-plugins.org) sources; they carry the ${PLUGIN_ROOT}/
-	// ${PLUGIN_DATA} expansion context (Args/Env only, per spec).
+
 	pluginRoot    string
 	pluginDataDir string
 }
@@ -30,11 +28,6 @@ func MergeStartupServers(workingDir string, explicit []config.MCPServerConfig) (
 	return mergeServers(explicit, knownClaudeSources(workingDir), nil)
 }
 
-// MergeStartupServersWithDeleted is MergeStartupServers with deletion
-// tombstones: names the user explicitly deleted are filtered out of BOTH
-// the explicit list and the migrated sources, so a Claude source file
-// rewritten behind our back (e.g. Pen.app re-adding its registration)
-// cannot resurrect them.
 func MergeStartupServersWithDeleted(workingDir string, explicit []config.MCPServerConfig, deleted []string) ([]config.MCPServerConfig, []string) {
 	return mergeServers(explicit, knownClaudeSources(workingDir), deleted)
 }
@@ -65,12 +58,7 @@ func mergeServers(explicit []config.MCPServerConfig, sources []migrationSource, 
 	usedSigs := make(map[string]string, len(explicit))
 
 	for _, server := range explicit {
-		// NOTE: no tombstone filter here, deliberately. The explicit list is
-		// ggcode's own yaml: RemoveMCPServer already removed the name from it
-		// at delete time, so a name appearing here again is an explicit
-		// re-add (panel Add via UpsertMCPServer, which also clears the
-		// tombstone, or a manual yaml edit) and must win over the tombstone.
-		// Tombstones only guard the migration-source side below.
+
 		cfg := server
 		if strings.TrimSpace(cfg.Source) == "" {
 			cfg.Source = "ggcode"
@@ -91,7 +79,7 @@ func mergeServers(explicit []config.MCPServerConfig, sources []migrationSource, 
 		warnings = append(warnings, srcWarnings...)
 		for _, server := range servers {
 			if deletedSet[strings.TrimSpace(server.Name)] {
-				// User deleted this name; do not resurrect from migration sources.
+
 				continue
 			}
 			if owner, exists := usedNames[server.Name]; exists {
@@ -116,10 +104,7 @@ func knownClaudeSources(workingDir string) []migrationSource {
 	sources := []migrationSource{
 		{Path: filepath.Join(workingDir, ".mcp.json"), Source: "claude-project", Priority: 3},
 	}
-	// Agent Plugins (sa-114): each plugin's mcp.json joins at priority 2 -
-	// below the repo's own .mcp.json (3) but alongside user config, so a
-	// plugin never overrides an explicit workspace or user server
-	// (signature/name dedup in mergeServers arbitrates collisions).
+
 	for _, plugin := range DiscoverAgentPlugins(workingDir) {
 		sources = append(sources, migrationSource{
 			Path:          plugin.MCPConfigPath(),
@@ -177,9 +162,7 @@ func loadClaudeServers(source migrationSource) ([]config.MCPServerConfig, []stri
 		cfg.Source = source.Source
 		cfg.OriginPath = source.Path
 		cfg.Migrated = true
-		// Agent Plugins (sa-114): expand ${PLUGIN_ROOT}/${PLUGIN_DATA} in
-		// Args and Env ONLY - the spec forbids carrying plugin filesystem
-		// state in command/url/headers, so those fields are left alone.
+
 		if source.pluginRoot != "" || source.pluginDataDir != "" {
 			for i, arg := range cfg.Args {
 				cfg.Args[i] = expandPluginVars(arg, source.pluginRoot, source.pluginDataDir)
@@ -188,11 +171,7 @@ func loadClaudeServers(source migrationSource) ([]config.MCPServerConfig, []stri
 				cfg.Env[key] = expandPluginVars(value, source.pluginRoot, source.pluginDataDir)
 			}
 		}
-		// #1276: every dropped entry must be VISIBLE - the old switch dropped
-		// ws (fully supported by client+install!) and sse (unsupported) with a
-		// bare default:continue, and even the stdio/http field checks failed
-		// silently: users migrated, saw "success", and the server was simply
-		// gone. Warnings name the entry, the transport, and the reason.
+
 		switch cfg.Type {
 		case "stdio":
 			if strings.TrimSpace(cfg.Command) == "" {
@@ -200,13 +179,7 @@ func loadClaudeServers(source migrationSource) ([]config.MCPServerConfig, []stri
 				continue
 			}
 		case "http", "ws", "sse":
-			// ws is a first-class transport (install.go accepts stdio|http|ws,
-			// client.go runs a full WS implementation) - it used to fall into
-			// default:continue and vanish. Same URL requirement as http.
-			// #1848: sse migrates too - the client normalizes sse -> http at
-			// construction (Start's case only built the httpClient and the
-			// send path fell to stdio/"stdin closed"), so a migrated sse
-			// server now works end-to-end instead of being dropped.
+
 			if strings.TrimSpace(cfg.URL) == "" {
 				warnings = append(warnings, fmt.Sprintf("warning: skipped MCP server %q from %s (%s transport requires a URL)", cfg.Name, source.Source, cfg.Type))
 				continue
@@ -225,8 +198,7 @@ func normalizedTransport(transport string) string {
 	if normalized == "" {
 		return "stdio"
 	}
-	// Agent Plugins spec (sa-114) spells the modern HTTP transport
-	// "streamable-http"; ggcode's native spelling is "http".
+
 	if normalized == "streamable-http" {
 		return "http"
 	}
@@ -236,34 +208,15 @@ func normalizedTransport(transport string) string {
 func serverSignature(cfg config.MCPServerConfig) string {
 	normalized := normalizedTransport(cfg.Type)
 	switch normalized {
-	case "http", "ws", "sse": // #1276: ws/sse are URL-identified like http
-		// Prefix with the NORMALIZED transport: an explicit yaml entry with
-		// Type: "HTTP" and a migrated lowercase "http" entry describe the
-		// same server and must collide for dedup (review of #1276 caught
-		// cfg.Type leaking the raw case here).
-		//
-		// #3467: headers are part of the executed identity (Authorization
-		// etc. are really sent, client.go) and must be signed - a repo
-		// silently swapping a header would otherwise keep the grant.
-		// sig-v2 prefix: grants stored under the v1 scheme (URL-only /
-		// command-only) no longer match, forcing one re-approval.
-		//
-		// #3790: sse was accepted at the migration entry (transport
-		// normalizer returns it) but fell to the stdio default here - its
-		// Command/Args are empty, so EVERY sse server signed as
-		// `sig-v2:stdio:[""]` and the dedup pass silently dropped all but
-		// the first of multiple different-URL sse servers. sse is
-		// URL-identified exactly like http/ws (#1848).
+	case "http", "ws", "sse":
+
 		sig := "sig-v2:" + normalized + ":" + strings.TrimSpace(cfg.URL)
 		if kv := canonicalKVPairs(cfg.Headers); kv != "" {
 			sig += "|" + kv
 		}
 		return sig
 	default:
-		// #3467: env participates in the executed identity (client.go
-		// flattens it straight into cmd.Env - NODE_OPTIONS/LD_PRELOAD/
-		// PATH overrides are code-execution vectors) and must be signed.
-		// sig-v2 prefix forces re-approval of every pre-existing grant.
+
 		parts := append([]string{strings.TrimSpace(cfg.Command)}, cfg.Args...)
 		data, _ := json.Marshal(parts)
 		sig := "sig-v2:stdio:" + string(data)
@@ -274,10 +227,6 @@ func serverSignature(cfg config.MCPServerConfig) string {
 	}
 }
 
-// canonicalKVPairs renders a map for signing: keys sorted (Go map
-// iteration order is random - the SAME env must always produce the SAME
-// signature), k=v pairs joined with ';'. Empty map -> "" (no suffix, so
-// a server without env keeps the bare signature).
 func canonicalKVPairs(m map[string]string) string {
 	if len(m) == 0 {
 		return ""

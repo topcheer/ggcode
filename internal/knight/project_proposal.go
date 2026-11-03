@@ -25,8 +25,8 @@ type ProjectImprovementProposal struct {
 	Summary   string    `json:"summary,omitempty"`
 	Path      string    `json:"path"`
 	CreatedBy string    `json:"created_by"`
-	// Lifecycle
-	Status     string    `json:"status,omitempty"` // proposed | approved | rejected
+
+	Status     string    `json:"status,omitempty"`
 	StatusNote string    `json:"status_note,omitempty"`
 	StatusBy   string    `json:"status_by,omitempty"`
 	StatusAt   time.Time `json:"status_at,omitempty"`
@@ -34,34 +34,18 @@ type ProjectImprovementProposal struct {
 
 var projectProposalSlugPattern = regexp.MustCompile(`[^a-z0-9._-]+`)
 
-// filterKnightBookkeeping drops porcelain status lines whose path is inside
-// `.ggcode/` — knight's own bookkeeping domain (budget usage jsonl appended
-// per LLM call DURING the run, staging/queue/semantic-memory writes from the
-// background tick racing a user-initiated proposal). Most repos are unaffected
-// (.ggcode gitignored or collapsed into one `?? .ggcode/` line that appends
-// cannot change), but repos where `.ggcode/` was committed list new jsonl
-// files line-by-line, and the proposal's own budget recording would trip the
-// guardrail. Paths outside `.ggcode/` keep full protection.
 func filterKnightBookkeeping(snapshot string) string {
 	var kept []string
 	for _, line := range strings.Split(snapshot, "\n") {
 		if line == "" {
 			continue
 		}
-		// porcelain: "XY <path>" (or "XY <orig> -> <path>"); strip the 2-char
-		// status plus space, keep quoting intact for paths with spaces.
+
 		rest := line
 		if len(rest) > 3 {
 			rest = rest[3:]
 		}
-		// #1576-C / #1617-A: the exemption exists for INTERNAL bookkeeping
-		// writes only (the proposal's own budget/usage appends). A rename
-		// crosses the boundary when EITHER side is outside .ggcode:
-		//   '.ggcode/x -> out'  - the write LANDS in the project (visible);
-		//   'tracked.txt -> .ggcode/h' - a project file is MOVED INTO the
-		//    bookkeeping dir (a stash-the-changes channel the guard must
-		//    see; the original DESTINATION-only test swallowed the line).
-		// Filter only when BOTH source and destination are inside .ggcode.
+
 		src := rest
 		dst := rest
 		if idx := strings.Index(rest, " -> "); idx >= 0 {
@@ -79,10 +63,6 @@ func filterKnightBookkeeping(snapshot string) string {
 	return strings.Join(kept, "\n")
 }
 
-// countStatusDiff counts status lines present in exactly one of the two
-// porcelain snapshots (set difference both ways) for the violation message.
-// Bookkeeping-domain lines are filtered out first (#1261 review: the
-// proposal's own budget/usage appends must not read as violations).
 func countStatusDiff(before, after string) int {
 	drop := func(s string) map[string]bool {
 		m := map[string]bool{}
@@ -109,21 +89,12 @@ func countStatusDiff(before, after string) int {
 	return n
 }
 
-// gitStatusSnapshot returns the working-tree status of dir as porcelain
-// lines, or "" when git is unavailable or dir is not a repository (in that
-// case the post-run comparison degenerates to a no-op and the prompt rules
-// remain the only guard).
 func gitStatusSnapshot(dir string) string {
 	out, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
 	if err != nil {
 		return ""
 	}
-	// #1639-1: porcelain paths are relative to the GIT ROOT, but the guard
-	// runs with dir = a repo SUBDIRECTORY (monorepo workspace) - lines
-	// arrive as 'AM mobile/.ggcode/budget.jsonl', miss the .ggcode/
-	// prefix, and the proposal's own bookkeeping reads as a violation
-	// (every proposal dropped). Normalize to dir-relative: strip the
-	// show-prefix from each path (both sides of 'R old -> new').
+
 	prefix := ""
 	if p, err := exec.Command("git", "-C", dir, "rev-parse", "--show-prefix").Output(); err == nil {
 		prefix = strings.TrimSpace(string(p))
@@ -135,12 +106,7 @@ func gitStatusSnapshot(dir string) string {
 	for _, line := range strings.Split(string(out), "\n") {
 		if len(line) > 3 && strings.HasPrefix(line[3:], prefix) {
 			rest := strings.TrimPrefix(line[3:], prefix)
-			// #2755: a staged rename reads "R old -> new" and BOTH sides are
-			// root-relative. The old whole-line strip left the dst side
-			// prefixed ("R .ggcode/a.md -> mobile/.ggcode/b.md"), so the pure
-			// .ggcode rename exemption (which requires both sides in .ggcode)
-			// failed in monorepo subdirs and fired a false guardrail
-			// violation. Strip the dst side too.
+
 			if arrow := strings.Index(rest, " -> "); arrow >= 0 {
 				rest = rest[:arrow] + " -> " + strings.TrimPrefix(rest[arrow+4:], prefix)
 			}
@@ -182,13 +148,6 @@ Return Markdown with these sections:
 ## Validation Plan
 ## Risks and Rollback`, goal)
 
-	// #1261: the "do not modify the project" guardrail used to live in the
-	// prompt only, while the factory injected the full interactive tool
-	// registry - a real unauthorized-write path. Snapshot the working tree
-	// before and after the run; any drift means the LLM wrote despite the
-	// rules, so the proposal is discarded and the violation surfaced loudly
-	// (no automatic rollback - reverting user-visible state automatically
-	// from a background agent would be its own hazard).
 	treeBefore := gitStatusSnapshot(k.projDir)
 	result := k.RunTaskWithTurns(ctx, "project-improvement-proposal", prompt, factory, 6)
 	if result.Error != nil {
@@ -198,9 +157,7 @@ Return Markdown with these sections:
 	if content == "" {
 		return ProjectImprovementProposal{}, result, fmt.Errorf("knight: proposal output is empty")
 	}
-	// Compare BEFORE writing our own proposal artifact below - knight's own
-	// .ggcode write is expected and must not trip the guardrail. Both sides
-	// are filtered to the non-bookkeeping domain (#1261 review).
+
 	treeAfter := filterKnightBookkeeping(gitStatusSnapshot(k.projDir))
 	if treeAfter != filterKnightBookkeeping(treeBefore) {
 		diffLines := countStatusDiff(treeBefore, gitStatusSnapshot(k.projDir))
@@ -224,9 +181,7 @@ func (k *Knight) RecentProjectImprovementProposals(limit int) ([]ProjectImprovem
 	if err != nil {
 		return nil, err
 	}
-	// Collapse multiple log entries per id to the latest one so lifecycle
-	// transitions (proposed → approved/rejected) are reflected without
-	// rewriting the append-only log.
+
 	latest := map[string]ProjectImprovementProposal{}
 	order := []string{}
 	for _, item := range items {
@@ -239,8 +194,7 @@ func (k *Knight) RecentProjectImprovementProposals(limit int) ([]ProjectImprovem
 			continue
 		}
 		if item.StatusAt.After(prev.StatusAt) || (item.StatusAt.IsZero() && item.Time.After(prev.Time)) {
-			// Preserve original creation time/path even when later status entries
-			// omit them.
+
 			merged := item
 			if merged.Time.IsZero() {
 				merged.Time = prev.Time
@@ -273,10 +227,6 @@ func (k *Knight) RecentProjectImprovementProposals(limit int) ([]ProjectImprovem
 	return collapsed, nil
 }
 
-// ApproveProposal marks a stored proposal as user-approved. Knight does not
-// implement approved proposals on its own; the user runs implementation as a
-// separate normal agent task. Approved proposals also seed semantic memory so
-// future Knight runs remember the lesson across sessions.
 func (k *Knight) ApproveProposal(id, note string) (ProjectImprovementProposal, error) {
 	prop, err := k.transitionProposal(id, "approved", note, "user")
 	if err != nil {
@@ -293,8 +243,6 @@ func (k *Knight) ApproveProposal(id, note string) (ProjectImprovementProposal, e
 	return prop, nil
 }
 
-// RejectProposal marks a stored proposal as user-rejected and prevents future
-// proposal listings from showing it as still pending.
 func (k *Knight) RejectProposal(id, note string) (ProjectImprovementProposal, error) {
 	prop, err := k.transitionProposal(id, "rejected", note, "user")
 	if err != nil {
@@ -326,10 +274,7 @@ func (k *Knight) transitionProposal(id, status, note, by string) (ProjectImprove
 		if item.ID != id {
 			continue
 		}
-		// #1576-A: terminal states are terminal - a REJECTED proposal
-		// (e.g. delete-skill) must not flip to approved by one stray
-		// command, and vice versa. Re-applying the SAME terminal state is
-		// idempotent (returns the current record untouched).
+
 		if item.Status == "approved" || item.Status == "rejected" {
 			if item.Status != status {
 				return ProjectImprovementProposal{}, fmt.Errorf("proposal %q is already %s (terminal); create a new proposal instead", id, item.Status)
@@ -378,19 +323,11 @@ func (k *Knight) writeProjectImprovementProposal(goal, content string) (ProjectI
 		title = "Project Improvement Proposal"
 		content = "# " + title + "\n\n" + content
 	}
-	// #1576-B: second-resolution IDs collided for same-second same-title
-	// proposals - AtomicWriteFile overwrote the first .md and the jsonl
-	// collapse kept only the latest, silently losing the first proposal.
-	// Millisecond suffix disambiguates.
-	//
-	// #3024: the slug must be truncated BEFORE assembling the id. The old
-	// whole-id [:80] cut ate the disambiguating suffix first whenever the
-	// slug ran past 53 chars, deterministically re-creating the #1576-B
-	// collision for long titles generated in the same second.
+
 	const proposalIDMaxLen = 80
 	timestamp := now.Format("20060102-150405")
 	suffix := now.Format("150405.000000000")[9:]
-	slugBudget := proposalIDMaxLen - len(timestamp) - 2 /* separators */ - len(suffix)
+	slugBudget := proposalIDMaxLen - len(timestamp) - 2 - len(suffix)
 	if slugBudget < 1 {
 		slugBudget = 1
 	}

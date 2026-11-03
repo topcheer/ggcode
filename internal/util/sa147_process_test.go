@@ -2,10 +2,6 @@
 
 package util
 
-// sa-147 process.go coverage: edge branches of the PID-liveness helpers.
-// Windows ships its own IsProcessAlive (process_windows.go); itoa and
-// isZombieUnix only exist on this side of the build tag.
-
 import "testing"
 
 func TestItoaEdgeCases(t *testing.T) {
@@ -35,15 +31,12 @@ func TestIsZombieUnixNonPositivePID(t *testing.T) {
 }
 
 func TestIsZombieUnixMissingProcess(t *testing.T) {
-	// Missing /proc entry (or no /proc at all, e.g. darwin): the signal-0
-	// verdict stays authoritative - must report not-zombie, never hang.
+
 	if isZombieUnix(1 << 22) {
 		t.Fatal("nonexistent pid reported as zombie")
 	}
 }
 
-// EPERM companion (#2190): PID 1 always answers signal 0 - success (root)
-// or EPERM (unprivileged) - and must be reported alive either way.
 func TestIsProcessAlivePid1(t *testing.T) {
 	if !IsProcessAlive(1) {
 		t.Fatal("pid 1 must be reported alive (EPERM and success both mean existing)")

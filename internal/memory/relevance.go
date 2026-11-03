@@ -1,33 +1,12 @@
 package memory
 
-// Task-relevance gate for persistent-memory inline injection (sa-113).
-//
-// Frontier basis: Self-RAG (Asai et al., ICLR 2024) reflection-token
-// [Retrieve]/[IsRel] decisions and SPARKLE (ACL 2026) Retrieval Decision
-// Agent - an agent should decide whether retrieved knowledge is relevant
-// to the CURRENT task before letting it occupy context. ggcode's
-// experience channel already gates on lexical relevance
-// (experience.go score>=0.5, minDistinct>=2); the auto-memory channel
-// inlined EVERY active persistent entry into every system prompt with no
-// task signal at all (loadForPrompt took no task argument), so a sub-agent
-// spawned for one focused task still paid for - and was distracted by -
-// every standing memory of the workspace.
-//
-// This gate is the deterministic (zero-LLM) IsRel equivalent for the
-// memory channel: entries below the relevance threshold degrade from
-// inline to index-only (the key list stays, read_file still works - the
-// retrieval loop stays closed). Task=="" bypasses the gate entirely,
-// preserving the standing-rules semantics of interactive sessions.
-
 import "math"
 
-// relCandidate is one persistent-entry candidate for relevance scoring.
 type relCandidate struct {
 	key     string
 	content string
 }
 
-// relevanceGate holds the IDF statistics for one scoring pass.
 type relevanceGate struct {
 	qSet        map[string]int
 	df          map[string]int
@@ -35,9 +14,6 @@ type relevanceGate struct {
 	minDistinct int
 }
 
-// newRelevanceGate builds the gate: task tokens vs the document frequency
-// across all persistent candidates. Returns nil when the task carries no
-// usable tokens (gate disabled - everything stays relevant).
 func newRelevanceGate(task string, cands []relCandidate) *relevanceGate {
 	qSet := tokenSet(expTokenize(task))
 	if len(qSet) == 0 {
@@ -56,9 +32,6 @@ func newRelevanceGate(task string, cands []relCandidate) *relevanceGate {
 	return &relevanceGate{qSet: qSet, df: df, n: float64(len(cands)), minDistinct: minDistinct}
 }
 
-// relevant scores one entry with the same BM25-lite weighting the
-// experience channel uses (idf * tf-saturation * query-term cap): two
-// distinct shared tokens, or one shared rare token, clear the bar.
 func (g *relevanceGate) relevant(key, content string) bool {
 	if g == nil {
 		return true

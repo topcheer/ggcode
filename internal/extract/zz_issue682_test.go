@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-// buildTar builds a tar archive from name→content pairs.
 func buildTar(t *testing.T, entries [][2]string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -30,8 +29,6 @@ func buildTar(t *testing.T, entries [][2]string) []byte {
 	return buf.Bytes()
 }
 
-// zz682a: >500 entries → tar listing must carry a "[Showing first 500 of N]"
-// truncation marker (zip path had it, tar path did not).
 func TestZZ682_TarEntryCapMarksTruncation(t *testing.T) {
 	var entries [][2]string
 	for i := 0; i < 520; i++ {
@@ -48,10 +45,9 @@ func TestZZ682_TarEntryCapMarksTruncation(t *testing.T) {
 	if !strings.Contains(res.Text, "[Archive: tar format, 500 files]") {
 		t.Errorf("header should report 500 listed files: %q", firstLine(res.Text, 1))
 	}
-	// The truncation marker is what carries the total (zip-path semantics).
+
 }
 
-// zz682a: same for tar.gz.
 func TestZZ682_TarGzEntryCapMarksTruncation(t *testing.T) {
 	var entries [][2]string
 	for i := 0; i < 505; i++ {
@@ -81,7 +77,6 @@ func TestZZ682_TarGzEntryCapMarksTruncation(t *testing.T) {
 	}
 }
 
-// zz682a: small archive — no marker, total == file count.
 func TestZZ682_TarNoFalseTruncationMarker(t *testing.T) {
 	e := &archiveExtractor{subFormat: "tar"}
 	res, err := e.Extract(buildTar(t, [][2]string{{"a.txt", "hello"}, {"b.txt", "world"}}))
@@ -96,10 +91,6 @@ func TestZZ682_TarNoFalseTruncationMarker(t *testing.T) {
 	}
 }
 
-// zz682b: SVG decode error must surface — updated by #686: the original
-// hard-error path dropped ALL extracted text ("partial text flagged" was
-// promised but never shipped). The contract is now: partial text is
-// returned AND explicitly flagged, never silently success-looking.
 func TestZZ682_SVGDecodeErrorPropagates(t *testing.T) {
 	bad := `<svg xmlns="http://www.w3.org/2000/svg"><text>good part</text> bad &entity <text>more</text></svg>`
 	res, err := Extract("t.svg", []byte(bad))
@@ -114,7 +105,6 @@ func TestZZ682_SVGDecodeErrorPropagates(t *testing.T) {
 	}
 }
 
-// zz682b: script/style content must not leak into extracted text.
 func TestZZ682_SVGScriptStyleExcluded(t *testing.T) {
 	svg := `<svg xmlns="http://www.w3.org/2000/svg">` +
 		`<script>alert("evil()");</script>` +
@@ -134,7 +124,6 @@ func TestZZ682_SVGScriptStyleExcluded(t *testing.T) {
 	}
 }
 
-// zz682b: aria-label on whitelisted elements still extracted.
 func TestZZ682_SVGAriaLabelStillWorks(t *testing.T) {
 	svg := `<svg xmlns="http://www.w3.org/2000/svg"><text aria-label="labeled">x</text></svg>`
 	res, err := Extract("t.svg", []byte(svg))

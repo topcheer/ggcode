@@ -14,51 +14,35 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// AgentEventType identifies the kind of event recorded during sub-agent execution.
 type AgentEventType int
 
 const (
-	AgentEventText       AgentEventType = iota // LLM text output
-	AgentEventToolCall                         // tool invocation started
-	AgentEventToolResult                       // tool execution result
-	AgentEventError                            // error encountered
-	AgentEventReasoning                        // LLM thinking/reasoning content
+	AgentEventText AgentEventType = iota
+	AgentEventToolCall
+	AgentEventToolResult
+	AgentEventError
+	AgentEventReasoning
 )
 
-// AgentEvent is a single recorded event from a sub-agent's execution.
 type AgentEvent struct {
 	Type            AgentEventType
-	Text            string    // AgentEventText / AgentEventError
-	ToolName        string    // AgentEventToolCall / AgentEventToolResult
-	ToolID          string    // AgentEventToolCall / AgentEventToolResult — unique ID for precise matching
-	ToolArgs        string    // AgentEventToolCall / AgentEventToolResult
-	ToolDisplayName string    // AgentEventToolCall / AgentEventToolResult
-	ToolDetail      string    // AgentEventToolCall / AgentEventToolResult
-	Result          string    // AgentEventToolResult
-	IsError         bool      // AgentEventToolResult / AgentEventError
-	Time            time.Time // when the event was recorded
+	Text            string
+	ToolName        string
+	ToolID          string
+	ToolArgs        string
+	ToolDisplayName string
+	ToolDetail      string
+	Result          string
+	IsError         bool
+	Time            time.Time
 }
 
 const maxAgentEvents = 400
 
-// Sub-agent concurrency is limited by Manager.maxConcurrent (from
-// cfg.MaxConcurrent, default 16). Each sub-agent consumes a goroutine, an LLM
-// API connection, and context window tokens; the limit prevents an agent
-// from spawning dozens of sub-agents in parallel, exhausting API rate
-// limits and memory.
-
-// maxSubAgentResultBytes caps the result text stored and returned by a
-// sub-agent. Without this, a sub-agent that reads large files can produce
-// megabytes of output that floods the parent agent's context window.
-// 100KB is generous enough for normal results while preventing abuse.
 const maxSubAgentResultBytes = 100 * 1024
 
-// cancelAllTimeout is the maximum time CancelAll waits for each sub-agent to
-// actually terminate after its context is cancelled. Sub-agents running long
-// LLM streams or external tool calls may not finish instantly.
 const cancelAllTimeout = 5 * time.Second
 
-// Status represents the lifecycle state of a sub-agent.
 type Status string
 
 const (
@@ -69,21 +53,19 @@ const (
 	StatusCancelled Status = "cancelled"
 )
 
-// AgentMessage represents a message sent to a sub-agent.
 type AgentMessage struct {
 	From    string
 	Message string
 	Summary string
 }
 
-// SubAgent represents a spawned child agent.
 type SubAgent struct {
 	ID               string
-	Name             string // short, meaningful label (required)
+	Name             string
 	Task             string
 	DisplayTask      string
 	Model            string
-	Worktree         string // isolation worktree path (spawn_agent isolation=worktree); "" when not isolated
+	Worktree         string
 	Tools            []string
 	ToolCallCount    int
 	Status           Status
@@ -99,18 +81,18 @@ type SubAgent struct {
 	Mailbox          chan AgentMessage
 	events           []AgentEvent
 	eventsDropped    int
-	externalSources  map[string]int // per-tool external-source call counts (provenance)
+	externalSources  map[string]int
 	cancel           context.CancelFunc
-	done             chan struct{} // closed when the sub-agent reaches any terminal state
-	goroutineStarted bool          // true once Run() has started the goroutine (SetCancel alone doesn't set this)
-	lastActivity     time.Time     // updated on every LLM chunk / tool call; used by watchdog
-	toolExecuting    bool          // true while a tool is running; watchdog skips reap
+	done             chan struct{}
+	goroutineStarted bool
+	lastActivity     time.Time
+	toolExecuting    bool
 	mu               sync.Mutex
 }
 
 type Snapshot struct {
 	ID              string
-	Name            string // short, meaningful label
+	Name            string
 	Task            string
 	DisplayTask     string
 	Model           string
@@ -125,9 +107,7 @@ type Snapshot struct {
 	Result          string
 	Error           string
 	EventsDropped   int
-	// ExternalSources counts calls to external-source tools (web/peer
-	// channels) - surfaced at the delegation boundary so the parent can
-	// weigh the result's provenance (trust-cascade defense).
+
 	ExternalSources map[string]int
 	CreatedAt       time.Time
 	StartedAt       time.Time
@@ -135,9 +115,6 @@ type Snapshot struct {
 	Events          []AgentEvent
 }
 
-// StatusInfo is a lightweight copy of a sub-agent's identity and status.
-// Unlike Snapshot, it does NOT copy events, making it safe for high-frequency
-// calls (e.g. strip display refresh) without O(maxAgentEvents) copy overhead.
 type StatusInfo struct {
 	ID           string
 	Name         string
@@ -147,31 +124,18 @@ type StatusInfo struct {
 	EndedAt      time.Time
 }
 
-// RecordEvent appends an event to the sub-agent's event log.
-// This is the exported version for external callers (e.g., tests).
 func (s *SubAgent) RecordEvent(ev AgentEvent) {
 	s.appendEvent(ev)
 }
 
-// AppendEvent adds an event to the sub-agent's history (thread-safe).
-// Used for testing and for external event injection.
 func (s *SubAgent) AppendEvent(ev AgentEvent) {
 	s.appendEvent(ev)
 }
 
-// textMergeInterval is the maximum gap between consecutive text events
-// before they are flushed as separate events. Events arriving within this
-// window are coalesced into one, reducing event spam from fine-grained
-// streaming providers (e.g., GLM sends 3-5 token chunks).
 const textMergeInterval = 50 * time.Millisecond
 
-// textMergeMaxChars is the maximum accumulated text before a merged event
-// is flushed, even if more text is still arriving. This ensures the follow
-// panel shows progressive output rather than waiting indefinitely.
 const textMergeMaxChars = 2000
 
-// isTurnBoundary returns true if the event marks a boundary between LLM turns
-// (tool calls/results), meaning any text before it represents a complete turn.
 func isTurnBoundary(ev AgentEvent) bool {
 	return ev.Type == AgentEventToolCall || ev.Type == AgentEventToolResult
 }
@@ -183,10 +147,6 @@ func (s *SubAgent) appendEvent(ev AgentEvent) {
 	now := time.Now()
 	ev.Time = now
 
-	// Text and reasoning event coalescing: if the last event has the same
-	// type (text or reasoning) and arrived within textMergeInterval, merge
-	// into it. This prevents hundreds of tiny streaming chunks from filling
-	// the event buffer. Flush if accumulated text exceeds textMergeMaxChars.
 	isCoalescable := ev.Type == AgentEventText || ev.Type == AgentEventReasoning
 	if isCoalescable && len(s.events) > 0 {
 		last := &s.events[len(s.events)-1]
@@ -200,9 +160,6 @@ func (s *SubAgent) appendEvent(ev AgentEvent) {
 		}
 	}
 
-	// Turn-aware eviction: when the event buffer is full, drop events up to
-	// the next turn boundary (tool_call/tool_result) so the oldest visible
-	// text is always a complete LLM turn, not a fragment.
 	if len(s.events) >= maxAgentEvents {
 		dropIdx := 0
 		for i, e := range s.events {
@@ -212,10 +169,7 @@ func (s *SubAgent) appendEvent(ev AgentEvent) {
 			}
 		}
 		if dropIdx == 0 {
-			// All-text scenario: no turn boundaries found.
-			// Drop 10% but PRESERVE content by prepending dropped text
-			// to the first remaining event. This prevents word boundary
-			// corruption (e.g. "Letmereadlines" instead of "Let me read lines").
+
 			dropIdx = len(s.events) / 10
 			if dropIdx < 1 {
 				dropIdx = 1
@@ -229,15 +183,10 @@ func (s *SubAgent) appendEvent(ev AgentEvent) {
 			remaining := s.events[dropIdx:]
 			if savedText.Len() > 0 && len(remaining) > 0 {
 				if remaining[0].Type == AgentEventText {
-					// Merge dropped text into the first remaining text event.
+
 					remaining[0].Text = savedText.String() + remaining[0].Text
 				} else {
-					// #4359: the first remaining event is not text (e.g.
-					// Reasoning in an interleaved text/reasoning stream with
-					// no tool calls - isTurnBoundary never fires). Merging
-					// was skipped and the rescued text silently dropped,
-					// defeating the PRESERVE promise above. Insert a
-					// standalone text event carrying it instead.
+
 					anchor := remaining[0].Time
 					rescue := AgentEvent{Type: AgentEventText, Text: savedText.String(), Time: anchor}
 					kept := make([]AgentEvent, 0, len(remaining)+1)
@@ -255,7 +204,6 @@ func (s *SubAgent) appendEvent(ev AgentEvent) {
 	s.events = append(s.events, ev)
 }
 
-// Events returns a copy of the recorded events.
 func (s *SubAgent) Events() []AgentEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -264,14 +212,6 @@ func (s *SubAgent) Events() []AgentEvent {
 	return out
 }
 
-// EventsSince returns only events with ABSOLUTE index >= fromIdx.
-// This avoids copying the full event history when only incremental events
-// are needed (e.g. GUI agent panel updates). Returns the next absolute
-// cursor (len(events)+eventsDropped) so callers can track their position
-// across ring eviction - a relative cursor (plain len) fell BACKWARD when
-// the ring dropped old events, and a caller holding the old total then
-// saw fromIdx >= total and silently received nothing forever (#1636's
-// exact twin, fixed here before the first GUI consumer hits it).
 func (s *SubAgent) EventsSince(fromIdx int) ([]AgentEvent, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -280,8 +220,7 @@ func (s *SubAgent) EventsSince(fromIdx int) ([]AgentEvent, int) {
 		return nil, total
 	}
 	if fromIdx < s.eventsDropped {
-		// Cursor predates the surviving window: replay from the oldest
-		// surviving event (repeatable, never a loss).
+
 		fromIdx = s.eventsDropped
 	}
 	out := make([]AgentEvent, total-fromIdx)
@@ -295,10 +234,6 @@ func (s *SubAgent) IncrementToolCalls() {
 	s.ToolCallCount++
 }
 
-// RecordExternalSource tracks a call to an external-source tool (web/peer
-// channels) by this sub-agent (trust-cascade defense, EMNLP 2026 provenance-
-// erasure finding): the delegation boundary (wait_agent) surfaces the
-// aggregate so the parent knows what provenance the result carries.
 func (s *SubAgent) RecordExternalSource(toolName string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -311,11 +246,7 @@ func (s *SubAgent) RecordExternalSource(toolName string) {
 func (s *SubAgent) setStatus(st Status) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Terminal-state protection (#551-A): never regress from a terminal
-	// state (cancelled/completed/failed) back to pending/running. A Cancel()
-	// that lands between SetCancel() and the runner's setStatus(StatusRunning)
-	// used to be silently overwritten back to running, leaving a cancelled
-	// agent stuck in a non-terminal state. Mirrors Complete()'s guard.
+
 	switch s.Status {
 	case StatusCompleted, StatusFailed, StatusCancelled:
 		debug.Log("subagent", "setStatus: ignore %s transition, id=%s already terminal %s", st, s.ID, s.Status)
@@ -339,9 +270,6 @@ func (s *SubAgent) setActivity(phase, toolName, args string) {
 	s.lastActivity = time.Now()
 }
 
-// refreshActivity bumps lastActivity without changing the current phase or
-// tool fields. Used for stream events that prove liveness but not a new phase
-// (e.g. tool-argument chunks during a long generation, #620).
 func (s *SubAgent) refreshActivity() {
 	s.mu.Lock()
 	s.lastActivity = time.Now()
@@ -352,7 +280,7 @@ func (s *SubAgent) setToolExecuting(executing bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.toolExecuting = executing
-	// Refresh activity when tool starts so watchdog timer resets
+
 	if executing {
 		s.lastActivity = time.Now()
 	}
@@ -401,8 +329,6 @@ func (s *SubAgent) snapshot() Snapshot {
 	return snap
 }
 
-// statusInfo returns a lightweight copy with only identity + status.
-// Unlike snapshot(), it does NOT copy events.
 func (s *SubAgent) statusInfo() StatusInfo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -416,11 +342,6 @@ func (s *SubAgent) statusInfo() StatusInfo {
 	}
 }
 
-// Manager manages spawning, tracking, and collecting results from sub-agents.
-// streamBatchInterval controls how often accumulated sub-agent stream text
-// and reasoning chunks are flushed to the TUI. Without batching, each LLM
-// token (~50-100/s per agent) triggers a separate program.Send → Bubble Tea
-// Update(), flooding the event loop and causing severe TUI stuttering.
 const streamBatchInterval = 500 * time.Millisecond
 
 type Manager struct {
@@ -431,59 +352,35 @@ type Manager struct {
 	showOutput   bool
 	onUpdate     func(*SubAgent)
 	onComplete   func(*SubAgent)
-	onStreamText func(agentID, text string)                                                        // called on batched text
-	onReasoning  func(agentID, text string)                                                        // called on batched reasoning
-	onToolCall   func(agentID, toolID, toolName, displayName, args, detail string)                 // called on tool call
-	onToolResult func(agentID, toolID, toolName, displayName, detail, result string, isError bool) // called on tool result
-	onSystem     func(agentID, text string)                                                        // called on system events (retry, compaction)
-	lastNotify   map[string]time.Time                                                              // per-agent throttle watermark (#2784): last onUpdate time per agent ID
+	onStreamText func(agentID, text string)
+	onReasoning  func(agentID, text string)
+	onToolCall   func(agentID, toolID, toolName, displayName, args, detail string)
+	onToolResult func(agentID, toolID, toolName, displayName, detail, result string, isError bool)
+	onSystem     func(agentID, text string)
+	lastNotify   map[string]time.Time
 	nextID       int
-	// maxConcurrent is the configured concurrency limit (cfg.MaxConcurrent,
-	// default 16). Spawn's early-reject check uses this instead of a hardcoded
-	// constant so the semaphore capacity and the Spawn check never diverge
-	// when the user configures max_concurrent > 5 (#226).
+
 	maxConcurrent int
 
-	// maxTotal is the configured lifetime spawn budget (cfg.MaxTotal,
-	// default 0 = unlimited). Unlike maxConcurrent, completed agents do
-	// NOT release budget: it bounds the total number of agent calls a
-	// session can make (2026 production "maxAgentCalls" cost control),
-	// because a runaway loop can otherwise burn unlimited calls in
-	// 16-wide waves. totalSpawned counts every accepted Spawn and never
-	// decreases. Both guarded by m.mu.
 	maxTotal     int
 	totalSpawned int
-	// cancelAllTimeout is the max time CancelAll waits for each Running sub-agent's
-	// goroutine to actually terminate after context cancellation. Each agent gets
-	// the full budget (per-agent, not shared — #619). Default: 5s.
-	// Overridable for tests.
+
 	cancelAllTimeout time.Duration
-	// rootCtx is the lifecycle ctx for sub-agents. It is independent of any
-	// per-call/per-submit ctx so that sub-agents survive the parent agent
-	// turn that spawned them. It is cancelled by Shutdown(). See locks.md S6.
+
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
 
-	// streamBatch accumulates text/reasoning chunks per agent and flushes
-	// them at streamBatchInterval. This prevents the TUI event loop from
-	// being flooded with per-token messages when multiple sub-agents stream
-	// concurrently. Guarded by streamBatchMu.
 	streamBatchMu     sync.Mutex
-	streamTextBuf     map[string]*strings.Builder // agentID → accumulated text
-	streamRsnBuf      map[string]*strings.Builder // agentID → accumulated reasoning
-	streamBatchDone   chan struct{}               // closed to stop the ticker goroutine
+	streamTextBuf     map[string]*strings.Builder
+	streamRsnBuf      map[string]*strings.Builder
+	streamBatchDone   chan struct{}
 	shutdownOnce      sync.Once
-	watchdogDone      chan struct{} // closed to stop the watchdog goroutine
-	inactivityTimeout time.Duration // max time without activity before cancelling
-	// semOwners tracks which agent IDs currently hold a semaphore slot (#619).
-	// It lets the manager force-reclaim a slot when its owning goroutine is
-	// stuck in a non-cancellable RunStream: CancelAll's timeout path and the
-	// watchdog drain the token here so new agents are not permanently Pending.
-	// Guarded by m.mu.
+	watchdogDone      chan struct{}
+	inactivityTimeout time.Duration
+
 	semOwners map[string]bool
 }
 
-// NewManager creates a Manager with the given config.
 func NewManager(cfg config.SubAgentConfig) *Manager {
 	max := cfg.MaxConcurrent
 	if max <= 0 {
@@ -514,10 +411,6 @@ func NewManager(cfg config.SubAgentConfig) *Manager {
 	return m
 }
 
-// startWatchdog launches a background goroutine that periodically checks all
-// running sub-agents for inactivity. If a sub-agent has not updated its
-// lastActivity timestamp within the inactivity timeout, it is cancelled
-// to prevent zombie processes from consuming concurrency slots indefinitely.
 func (m *Manager) startWatchdog() {
 	safego.Go("subagent.watchdog", func() {
 		ticker := time.NewTicker(30 * time.Second)
@@ -533,8 +426,6 @@ func (m *Manager) startWatchdog() {
 	})
 }
 
-// reapInactiveAgents cancels any running sub-agent whose lastActivity
-// timestamp is older than the inactivity timeout.
 func (m *Manager) reapInactiveAgents() {
 	threshold := time.Now().Add(-m.inactivityTimeout)
 	m.mu.Lock()
@@ -551,13 +442,7 @@ func (m *Manager) reapInactiveAgents() {
 			stale = append(stale, id)
 			continue
 		}
-		// #2119: a Pending entry whose goroutine never started has NO other
-		// reclamation path - probe-verified: it holds a concurrency slot
-		// (Spawn counts Pending) and Wait blocks forever. Current callers
-		// start Run immediately after Spawn, so this only fires on future
-		// contract violations - the watchdog then fails the entry visibly
-		// instead of leaking the slot. Pending entries have zero
-		// lastActivity; use CreatedAt as the age clock.
+
 		if isPending && sa.CreatedAt.Before(threshold) {
 			stalePending = append(stalePending, id)
 		}
@@ -566,18 +451,13 @@ func (m *Manager) reapInactiveAgents() {
 	for _, id := range stale {
 		debug.Log("subagent", "watchdog: cancelling stale sub-agent %s (no activity for %v)", id, m.inactivityTimeout)
 		m.Cancel(id)
-		// The cancelled agent's goroutine normally exits on its own and
-		// releases its slot via Run's defer. If it is stuck (RunStream ignores
-		// ctx), reclaim the slot after a grace period so the concurrency slot
-		// does not leak permanently (#619).
+
 		staleID := id
 		safego.Go("subagent.watchdog.reclaim", func() {
 			m.ensureSlotReclaimed(staleID, m.reclaimGrace())
 		})
 	}
-	// #2119: fail never-started Pending entries so the slot frees and a
-	// blocked Wait unblocks. No goroutine exists, so there is nothing to
-	// cancel - flip the entry terminal directly.
+
 	for _, id := range stalePending {
 		m.mu.Lock()
 		sa, ok := m.agents[id]
@@ -596,19 +476,14 @@ func (m *Manager) reapInactiveAgents() {
 		}
 		sa.mu.Unlock()
 		m.mu.Unlock()
-		// #2785: the started-but-stuck path goes through Cancel() (which
-		// notifies); this direct flip used to be silent, leaving TUI and
-		// desktop collectors showing the agent as pending forever.
+
 		m.notifyUpdate(sa)
 		debug.Log("subagent", "watchdog: failed never-started pending sub-agent %s (slot reclaimed)", id)
 	}
-	// Also purge old terminal agents to bound memory growth
+
 	m.purgeTerminalAgents()
 }
 
-// RootContext returns the manager's lifecycle context. spawn_agent uses this
-// (instead of the per-tool-call ctx) so that sub-agents are not cancelled the
-// moment the parent agent's current turn ends.
 func (m *Manager) RootContext() context.Context {
 	if m.rootCtx == nil {
 		return context.Background()
@@ -616,25 +491,20 @@ func (m *Manager) RootContext() context.Context {
 	return m.rootCtx
 }
 
-// Shutdown cancels every running sub-agent. Call once during app shutdown.
-// Safe to call multiple times (idempotent).
 func (m *Manager) Shutdown() {
 	m.shutdownOnce.Do(func() {
 		close(m.streamBatchDone)
 		close(m.watchdogDone)
 	})
-	// Flush any remaining buffered text before shutdown.
+
 	m.flushStreamBatch()
 	if m.rootCancel != nil {
 		m.rootCancel()
 	}
 }
 
-// Spawn creates a new sub-agent with the given task and returns its ID.
 func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx context.Context) string {
-	// #2119: after Shutdown cancelled rootCtx there is no run loop left -
-	// a late Spawn used to register a permanently-Pending entry that held
-	// a concurrency slot forever and made Wait block indefinitely.
+
 	select {
 	case <-m.rootCtx.Done():
 		errID := fmt.Sprintf("sa-shutdown-%d", time.Now().UnixNano())
@@ -656,10 +526,9 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 		return errID
 	default:
 	}
-	// Enforce concurrent sub-agent limit to prevent resource exhaustion.
+
 	m.mu.Lock()
-	// Lifetime budget first: unlike the concurrency limit, this is NOT
-	// released when agents finish - it bounds total agent calls per session.
+
 	if m.maxTotal > 0 && m.totalSpawned >= m.maxTotal {
 		errID := fmt.Sprintf("sa-budget-%d", time.Now().UnixNano())
 		sa := &SubAgent{
@@ -687,7 +556,7 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 		sa.mu.Unlock()
 	}
 	if running >= m.maxConcurrent {
-		// Return a synthetic error ID that wait_agent will report as failed.
+
 		errID := fmt.Sprintf("sa-limit-%d", time.Now().UnixNano())
 		sa := &SubAgent{
 			ID:           errID,
@@ -709,10 +578,6 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 	id := fmt.Sprintf("sa-%d", m.nextID)
 	m.totalSpawned++
 
-	// Construct outside the lock, then insert in the SAME critical section as
-	// the limit check above (the unlock/relock window between check and insert
-	// allowed two parallel spawns to both pass the check, transiently
-	// exceeding the limit). The semaphore still backstops true concurrency.
 	sa := &SubAgent{
 		ID:           id,
 		Name:         name,
@@ -732,10 +597,6 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 	return id
 }
 
-// SetWorktree records the isolation worktree path for a sub-agent.
-// Called by spawn_agent after the worktree has been created; the path is
-// surfaced through Snapshot so the parent can inspect or merge the
-// sub-agent's edits after the run completes.
 func (m *Manager) SetWorktree(id, path string) {
 	m.mu.Lock()
 	sa, ok := m.agents[id]
@@ -748,7 +609,6 @@ func (m *Manager) SetWorktree(id, path string) {
 	sa.mu.Unlock()
 }
 
-// Get retrieves a sub-agent by ID.
 func (m *Manager) Get(id string) (*SubAgent, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -756,7 +616,6 @@ func (m *Manager) Get(id string) (*SubAgent, bool) {
 	return sa, ok
 }
 
-// SnapshotByID returns a stable copy of a sub-agent snapshot.
 func (m *Manager) SnapshotByID(id string) (Snapshot, bool) {
 	sa, ok := m.Get(id)
 	if !ok || sa == nil {
@@ -765,15 +624,6 @@ func (m *Manager) SnapshotByID(id string) (Snapshot, bool) {
 	return sa.snapshot(), true
 }
 
-// GetOutput returns the result of a completed (or in-progress) sub-agent.
-// Returns (result, true) if the agent exists, ("", false) otherwise.
-// GetTaskText returns the original task text of a COMPLETED sub-agent run
-// with a non-empty result. task_output uses it to attach the acceptance
-// checkpoint (delegation validation, same as wait_agent) when the parent
-// retrieves a delegation result through that side path instead of wait_agent.
-// Returns ok=false for pending/running agents (result still changing), failed
-// runs, and agents without task text - callers must treat that as "nothing to
-// validate against", never as an error.
 func (m *Manager) GetTaskText(id string) (string, bool) {
 	sa, ok := m.Get(id)
 	if !ok {
@@ -786,10 +636,6 @@ func (m *Manager) GetTaskText(id string) (string, bool) {
 	return snap.Task, true
 }
 
-// Failed/cancelled/limit-rejected agents surface their error as
-// "[failed] <err>" (#351): previously they returned an empty string with
-// ok=true, making them indistinguishable from "no output yet" and hiding
-// spawn-limit rejections from the calling LLM.
 func (m *Manager) GetTaskOutput(id string) (string, bool) {
 	sa, ok := m.Get(id)
 	if !ok {
@@ -800,9 +646,7 @@ func (m *Manager) GetTaskOutput(id string) (string, bool) {
 		return snap.Result, true
 	}
 	if snap.Error != "" {
-		// Failed / cancelled / spawn-limit-rejected: the error IS the output.
-		// Written by Complete on failure, Cancel, and the sa-limit-* synthetic
-		// agents created at spawn-limit rejection time.
+
 		return fmt.Sprintf("[failed] %s", snap.Error), true
 	}
 	if snap.ProgressSummary != "" {
@@ -817,7 +661,6 @@ func (m *Manager) GetTaskOutput(id string) (string, bool) {
 	return "", true
 }
 
-// List returns all sub-agents.
 func (m *Manager) List() []*SubAgent {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -838,9 +681,6 @@ func (m *Manager) Snapshot(id string) (Snapshot, bool) {
 	return sa.snapshot(), true
 }
 
-// Statuses returns lightweight status info for all sub-agents.
-// Unlike List() + Snapshot(), this does NOT copy events and is safe to call
-// at high frequency (e.g. strip display refresh).
 func (m *Manager) Statuses() []StatusInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -851,7 +691,6 @@ func (m *Manager) Statuses() []StatusInfo {
 	return out
 }
 
-// RunningCount returns the number of currently running agents.
 func (m *Manager) RunningCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -864,7 +703,6 @@ func (m *Manager) RunningCount() int {
 	return count
 }
 
-// Cancel cancels a running sub-agent.
 func (m *Manager) Cancel(id string) bool {
 	m.mu.Lock()
 	sa, ok := m.agents[id]
@@ -888,13 +726,9 @@ func (m *Manager) Cancel(id string) bool {
 	sa.CurrentPhase = "cancelled"
 	sa.Error = context.Canceled
 	sa.EndedAt = time.Now()
-	sa.toolExecuting = false // #713: cancelled is terminal; a stuck tool flag must not keep suppressing the watchdog.
+	sa.toolExecuting = false
 	debug.Log("cancel", "Cancel: set Status=Cancelled id=%s goroutineStarted=%v", id, sa.goroutineStarted)
-	// #713: if the goroutine never started (pending agent cancelled before
-	// Spawn), no one will ever call Complete() to close `done`. Production
-	// callers currently run an unconditional follow-up Wait after Spawn,
-	// so this is contract hardening rather than a live bug — close it here
-	// so the channel reflects reality in every path.
+
 	if !sa.goroutineStarted {
 		sa.closeDone()
 	}
@@ -903,24 +737,12 @@ func (m *Manager) Cancel(id string) bool {
 	return true
 }
 
-// closeDone closes the done channel if not already closed. Caller must hold sa.mu.
-// CurrentStatus returns the agent's status under its lock. Status is
-// mutated from multiple goroutines (Cancel/Complete/watchdog); readers
-// outside the package must use this accessor instead of reading the field
-// directly - a bare read races with locked writes.
-// SetModel updates the display model under sa.mu. Every Model writer must
-// go through this - snapshot()/statusInfo() read the field inside the lock,
-// so a bare assignment from another goroutine is a data race (#4161).
 func (sa *SubAgent) SetModel(model string) {
 	sa.mu.Lock()
 	sa.Model = model
 	sa.mu.Unlock()
 }
 
-// IsSyntheticID reports whether id is one of the pre-failed synthetic IDs
-// returned by Spawn (sa-shutdown-*, sa-budget-*, sa-limit-*). Such entries
-// never run a goroutine, so callers must not allocate resources (worktrees,
-// branches) for them - the entry is purged with no cleanup hook (#4160).
 func IsSyntheticID(id string) bool {
 	return strings.HasPrefix(id, "sa-shutdown-") ||
 		strings.HasPrefix(id, "sa-budget-") ||
@@ -943,24 +765,18 @@ func (sa *SubAgent) closeDone() {
 	}
 }
 
-// doneChan returns the done channel (nil if unset). Caller must NOT hold sa.mu.
 func (sa *SubAgent) doneChan() <-chan struct{} {
 	sa.mu.Lock()
 	defer sa.mu.Unlock()
 	return sa.done
 }
 
-// isGoroutineStarted reports whether the agent's goroutine has actually started.
-// Caller must NOT hold sa.mu.
 func (sa *SubAgent) isGoroutineStarted() bool {
 	sa.mu.Lock()
 	defer sa.mu.Unlock()
 	return sa.goroutineStarted
 }
 
-// reclaimGrace is how long the watchdog waits after cancelling a stale
-// sub-agent before force-reclaiming its semaphore slot. Matches CancelAll's
-// per-agent termination budget.
 func (m *Manager) reclaimGrace() time.Duration {
 	if m.cancelAllTimeout > 0 {
 		return m.cancelAllTimeout
@@ -968,9 +784,6 @@ func (m *Manager) reclaimGrace() time.Duration {
 	return cancelAllTimeout
 }
 
-// ensureSlotReclaimed waits up to grace for the agent's goroutine to finish
-// (done closed). If it does not, the agent's semaphore slot is force-reclaimed
-// so a stuck goroutine cannot hold concurrency forever (#619).
 func (m *Manager) ensureSlotReclaimed(id string, grace time.Duration) {
 	sa, ok := m.Get(id)
 	if !ok || sa == nil {
@@ -994,9 +807,6 @@ func (m *Manager) ensureSlotReclaimed(id string, grace time.Duration) {
 	}
 }
 
-// forceReclaimSlot drains the semaphore token owned by agent id and clears
-// its ownership so the eventual late releaseSlot call becomes a no-op (#619).
-// Returns true if a slot was reclaimed.
 func (m *Manager) forceReclaimSlot(id string) bool {
 	m.mu.Lock()
 	held := m.semOwners[id]
@@ -1010,18 +820,11 @@ func (m *Manager) forceReclaimSlot(id string) bool {
 	select {
 	case <-m.sem:
 	default:
-		// Token already returned (raced with a normal release); nothing to do.
+
 	}
 	return true
 }
 
-// CancelAll cancels all pending or running sub-agents, then waits up to
-// cancelAllTimeout for each Running sub-agent's goroutine to actually
-// terminate. Returns the number cancelled.
-//
-// Only Running agents (which have an active goroutine) are waited on.
-// Pending agents (no goroutine started yet) are cancelled but not waited
-// on, since there is nothing to wait for.
 func (m *Manager) CancelAll() int {
 	timeout := m.cancelAllTimeout
 	if timeout == 0 {
@@ -1031,10 +834,7 @@ func (m *Manager) CancelAll() int {
 
 	m.mu.Lock()
 	ids := make([]string, 0)
-	// Collect done channels for Running agents BEFORE calling Cancel().
-	// Cancel() no longer closes done (it lets Complete() do that when the
-	// goroutine actually exits), so we must grab the channels while we can
-	// still distinguish Running (has goroutine) from Pending (no goroutine).
+
 	type doneEntry struct {
 		id string
 		ch <-chan struct{}
@@ -1044,9 +844,7 @@ func (m *Manager) CancelAll() int {
 		status := sa.getStatus()
 		if status == StatusPending || status == StatusRunning {
 			ids = append(ids, id)
-			// Only wait on agents whose goroutine was actually started by Run().
-			// SetCancel() transitions Pending→Running but doesn't start a goroutine;
-			// only Run() sets goroutineStarted=true.
+
 			if sa.isGoroutineStarted() && sa.done != nil {
 				doneChs = append(doneChs, doneEntry{id: id, ch: sa.done})
 			}
@@ -1062,11 +860,6 @@ func (m *Manager) CancelAll() int {
 	}
 	debug.Log("cancel", "CancelAll: cancelled %d agents, waiting on %d goroutines", cancelled, len(doneChs))
 
-	// Wait for Running agents' goroutines to actually terminate. Each agent
-	// gets its own full timeout budget (#619): a single timer shared across the
-	// loop made the first slow agent eat everyone else's budget. On timeout the
-	// stuck agent's semaphore slot is force-reclaimed so a zombie goroutine
-	// cannot leave new agents permanently Pending (#619).
 	timedOut := 0
 	for _, ent := range doneChs {
 		timer := time.NewTimer(timeout)
@@ -1076,14 +869,12 @@ func (m *Manager) CancelAll() int {
 			debug.Log("cancel", "CancelAll: goroutine %s terminated normally", ent.id)
 		case <-timer.C:
 			timer.Stop()
-			// Timed out waiting — the sub-agent's goroutine may still be
-			// finishing. We've already set Status=Cancelled and cancelled its
-			// context; force-reclaim its slot so concurrency isn't leaked.
+
 			timedOut++
 			if m.forceReclaimSlot(ent.id) {
 				debug.Log("cancel", "CancelAll: TIMEOUT waiting for %s, force-reclaimed its semaphore slot", ent.id)
 			}
-			// Continue with remaining agents so they still get their budget.
+
 		}
 	}
 	if timedOut > 0 {
@@ -1094,8 +885,6 @@ func (m *Manager) CancelAll() int {
 	return cancelled
 }
 
-// SetCancel stores the cancel function for a sub-agent.
-// Returns false if the sub-agent is already terminal and must not be started.
 func (m *Manager) SetCancel(id string, cancel context.CancelFunc) bool {
 	m.mu.Lock()
 	sa, ok := m.agents[id]
@@ -1125,7 +914,6 @@ func (m *Manager) SetCancel(id string, cancel context.CancelFunc) bool {
 	return true
 }
 
-// Complete marks a sub-agent as completed or failed.
 func (m *Manager) Complete(id string, result string, err error) {
 	m.mu.Lock()
 	sa, ok := m.agents[id]
@@ -1135,17 +923,10 @@ func (m *Manager) Complete(id string, result string, err error) {
 		return
 	}
 	sa.mu.Lock()
-	// Terminal state check: don't overwrite cancelled/completed/failed
+
 	switch sa.Status {
 	case StatusCancelled, StatusCompleted, StatusFailed:
-		// Backfill the result (#551-B, #621): when Cancel() won the race and
-		// set the terminal state first, the runner's Complete still carries the
-		// full output computed before the cancel. Previously only the error
-		// path (err != nil, partial result) was backfilled; a late *successful*
-		// Complete after a user cancel dropped its full result, losing all
-		// completed work. Now any non-empty result is backfilled when sa.Result
-		// is empty; the terminal status and error stay untouched so the parent
-		// still sees the cancellation.
+
 		backfilled := false
 		if result != "" && sa.Result == "" {
 			sa.Result = result
@@ -1153,11 +934,7 @@ func (m *Manager) Complete(id string, result string, err error) {
 		}
 		sa.closeDone()
 		sa.mu.Unlock()
-		// #2783: the backfilled result is new information the UI collectors
-		// have never seen - the terminal branch used to return silently, so
-		// a successful output computed before the cancel was invisible (no
-		// TUI subAgentDoneMsg, no desktop onComplete collection). Cancel's
-		// own notifyUpdate already covered the terminal transition itself.
+
 		if backfilled {
 			if onComplete != nil {
 				onComplete(sa)
@@ -1180,7 +957,7 @@ func (m *Manager) Complete(id string, result string, err error) {
 	}
 	sa.Result = result
 	sa.EndedAt = time.Now()
-	sa.toolExecuting = false // #713: Complete is terminal; a stuck tool flag must not keep suppressing the watchdog.
+	sa.toolExecuting = false
 	sa.closeDone()
 	sa.mu.Unlock()
 
@@ -1221,8 +998,6 @@ func (m *Manager) Notify(id string) {
 	}
 }
 
-// SetOnStreamText sets a callback invoked on each text chunk from any sub-agent.
-// Unlike OnUpdate, this is NOT throttled.
 func (m *Manager) SetOnStreamText(fn func(agentID, text string)) {
 	m.mu.Lock()
 	m.onStreamText = fn
@@ -1280,9 +1055,6 @@ func (m *Manager) NotifyToolResult(agentID, toolID, toolName, displayName, detai
 	}
 }
 
-// NotifyStreamText buffers a text chunk for batched delivery to the
-// onStreamText callback. Chunks are accumulated per-agent and flushed
-// at streamBatchInterval to avoid flooding the TUI event loop.
 func (m *Manager) NotifyStreamText(agentID, text string) {
 	m.mu.Lock()
 	fn := m.onStreamText
@@ -1300,7 +1072,6 @@ func (m *Manager) NotifyStreamText(agentID, text string) {
 	m.streamBatchMu.Unlock()
 }
 
-// NotifyReasoning buffers a reasoning chunk for batched delivery.
 func (m *Manager) NotifyReasoning(agentID, text string) {
 	m.mu.Lock()
 	fn := m.onReasoning
@@ -1318,9 +1089,6 @@ func (m *Manager) NotifyReasoning(agentID, text string) {
 	m.streamBatchMu.Unlock()
 }
 
-// StartStreamBatcher starts the background goroutine that periodically
-// flushes accumulated stream text/reasoning to the registered callbacks.
-// Must be called after SetOnStreamText/SetOnReasoning.
 func (m *Manager) StartStreamBatcher() {
 	safego.Go("subagent.streamBatcher", func() {
 		ticker := time.NewTicker(streamBatchInterval)
@@ -1339,8 +1107,6 @@ func (m *Manager) StartStreamBatcher() {
 	})
 }
 
-// flushStreamBatch delivers all accumulated text/reasoning chunks to
-// their respective callbacks in a single burst, then clears the buffers.
 func (m *Manager) flushStreamBatch() {
 	m.streamBatchMu.Lock()
 	textBufs := m.streamTextBuf
@@ -1370,20 +1136,16 @@ func (m *Manager) flushStreamBatch() {
 	}
 }
 
-// FlushStreamBatch exports flushStreamBatch for use in tests that need
-// synchronous delivery of buffered stream events.
 func (m *Manager) FlushStreamBatch() {
 	m.flushStreamBatch()
 }
 
-// SetOnComplete sets a callback invoked when any sub-agent completes.
 func (m *Manager) SetOnComplete(fn func(*SubAgent)) {
 	m.mu.Lock()
 	m.onComplete = fn
 	m.mu.Unlock()
 }
 
-// SendToAgent sends a message to a specific sub-agent's mailbox.
 func (m *Manager) SendToAgent(id string, msg AgentMessage) error {
 	m.mu.Lock()
 	sa, ok := m.agents[id]
@@ -1399,7 +1161,6 @@ func (m *Manager) SendToAgent(id string, msg AgentMessage) error {
 	}
 }
 
-// Broadcast sends a message to all running sub-agents.
 func (m *Manager) Broadcast(msg AgentMessage) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1410,21 +1171,19 @@ func (m *Manager) Broadcast(msg AgentMessage) []string {
 			case sa.Mailbox <- msg:
 				sent = append(sent, sa.ID)
 			default:
-				// mailbox full, skip
+
 			}
 		}
 	}
 	return sent
 }
 
-// SetOnUpdate sets a callback invoked when any sub-agent activity changes.
 func (m *Manager) SetOnUpdate(fn func(*SubAgent)) {
 	m.mu.Lock()
 	m.onUpdate = fn
 	m.mu.Unlock()
 }
 
-// AcquireSemaphore blocks until a slot is available for a new sub-agent to run.
 func (m *Manager) AcquireSemaphore(ctx context.Context) error {
 	select {
 	case m.sem <- struct{}{}:
@@ -1434,8 +1193,6 @@ func (m *Manager) AcquireSemaphore(ctx context.Context) error {
 	}
 }
 
-// acquireSlot is AcquireSemaphore with slot ownership recorded under id so
-// the manager can force-reclaim the slot if this goroutine gets stuck (#619).
 func (m *Manager) acquireSlot(ctx context.Context, id string) error {
 	if err := m.AcquireSemaphore(ctx); err != nil {
 		return err
@@ -1446,14 +1203,10 @@ func (m *Manager) acquireSlot(ctx context.Context, id string) error {
 	return nil
 }
 
-// ReleaseSemaphore releases a slot.
 func (m *Manager) ReleaseSemaphore() {
 	<-m.sem
 }
 
-// releaseSlot is ReleaseSemaphore for a named owner. If the slot was already
-// force-reclaimed (stuck goroutine, #619), this is a no-op so the semaphore
-// is not double-drained.
 func (m *Manager) releaseSlot(id string) {
 	m.mu.Lock()
 	held, ok := m.semOwners[id]
@@ -1467,20 +1220,14 @@ func (m *Manager) releaseSlot(id string) {
 	<-m.sem
 }
 
-// Timeout returns the configured timeout.
 func (m *Manager) Timeout() time.Duration {
 	return m.timeout
 }
 
-// ShowOutput returns whether to show sub-agent output.
 func (m *Manager) ShowOutput() bool {
 	return m.showOutput
 }
 
-// notifyUpdate invokes the onUpdate callback. This is called frequently
-// during streaming (every token), so we throttle to ~10 Hz to avoid
-// flooding Bubble Tea's unbuffered message channel, which would starve
-// the spinner and other UI updates.
 func (m *Manager) notifyUpdate(sa *SubAgent) {
 	m.mu.Lock()
 	fn := m.onUpdate
@@ -1493,14 +1240,7 @@ func (m *Manager) notifyUpdate(sa *SubAgent) {
 		m.lastNotify = make(map[string]time.Time)
 	}
 	last := m.lastNotify[sa.ID]
-	// #2784: the throttle watermark is PER AGENT. A Manager-level single
-	// timestamp meant one streaming agent suppressed every other agent's
-	// notifications within the 100ms window - including low-frequency
-	// terminal states that have no follow-up event to recover with.
-	// Terminal-state transitions are additionally EXEMPT from throttling:
-	// they are rare, and dropping one (e.g. a terminal-branch backfill
-	// arriving right after the cancel notification, #2783) leaves the UI
-	// stale indefinitely.
+
 	sa.mu.Lock()
 	terminal := sa.Status == StatusCompleted || sa.Status == StatusFailed || sa.Status == StatusCancelled
 	sa.mu.Unlock()
@@ -1513,14 +1253,8 @@ func (m *Manager) notifyUpdate(sa *SubAgent) {
 	fn(sa)
 }
 
-// maxTerminalAgents is the maximum number of terminal (completed/failed/
-// cancelled) sub-agents retained in the map. Older terminal entries are
-// purged to prevent unbounded memory growth in long-running sessions.
 const maxTerminalAgents = 20
 
-// purgeTerminalAgents removes the oldest terminal sub-agents when the
-// count exceeds maxTerminalAgents. Called from reapInactiveAgents to
-// piggyback on the watchdog's periodic sweep.
 func (m *Manager) purgeTerminalAgents() {
 	type terminalEntry struct {
 		id      string
@@ -1537,14 +1271,13 @@ func (m *Manager) purgeTerminalAgents() {
 		if !isTerminal {
 			continue
 		}
-		// Skip agents whose goroutine hasn't finished yet — purging them
-		// before Complete() runs leaves the done channel open forever.
+
 		if doneCh != nil {
 			select {
 			case <-doneCh:
-				// goroutine confirmed exited — safe to purge
+
 			default:
-				continue // goroutine still running — skip
+				continue
 			}
 		}
 		terminals = append(terminals, terminalEntry{id: id, endedAt: ended})
@@ -1553,11 +1286,11 @@ func (m *Manager) purgeTerminalAgents() {
 		m.mu.Unlock()
 		return
 	}
-	// Sort by EndedAt ascending (oldest first)
+
 	sort.Slice(terminals, func(i, j int) bool {
 		return terminals[i].endedAt.Before(terminals[j].endedAt)
 	})
-	// Delete oldest entries until we're at the limit
+
 	toDelete := len(terminals) - maxTerminalAgents
 	for i := 0; i < toDelete; i++ {
 		delete(m.agents, terminals[i].id)

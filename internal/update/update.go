@@ -121,9 +121,6 @@ func (s *Service) Prepare(ctx context.Context, resumeID string) (PreparedUpdate,
 		return PreparedUpdate{}, ErrAlreadyUpToDate
 	}
 
-	// Pre-flight: verify write permissions BEFORE downloading.
-	// On Windows, the target binary dir and the helper staging dir must
-	// both be writable, otherwise the update will fail after a large download.
 	_, err = s.checkWritable()
 	if err != nil {
 		return PreparedUpdate{}, err
@@ -179,11 +176,6 @@ func (s *Service) Prepare(ctx context.Context, resumeID string) (PreparedUpdate,
 	}, nil
 }
 
-// ApplyBinary replaces the binary files directly without spawning a helper
-// process or starting a new instance. This is used on Unix where the running
-// binary can be overwritten in place. After ApplyBinary returns, the caller
-// should use restart.ExecSelf (syscall.Exec) to load the new binary, keeping
-// the same PID, process group, and terminal control.
 func (s *Service) ApplyBinary(prepared PreparedUpdate) error {
 	data, err := os.ReadFile(prepared.ManifestPath)
 	if err != nil {
@@ -197,14 +189,7 @@ func (s *Service) ApplyBinary(prepared PreparedUpdate) error {
 	if err != nil {
 		return fmt.Errorf("read staged binary: %w", err)
 	}
-	// #1832 case 1: mirror RunHelper's #1402/#1423 backup+rollback. This
-	// Unix path used to write every target bare, so a failure writing the
-	// second of two targets (npm/python wrapper installs) left the first
-	// already overwritten - a half-updated install with no repair entry
-	// point, exactly the state #1402 promised to eliminate on the helper
-	// path. Restore failures are reported but do not mask the original
-	// error. Unlike RunHelper there is no AV-lock retry loop - on Unix the
-	// running binary can be replaced directly, a single attempt is enough.
+
 	type applyBackup struct {
 		path    string
 		data    []byte
@@ -239,11 +224,10 @@ func (s *Service) ApplyBinary(prepared PreparedUpdate) error {
 		if old, err := os.ReadFile(target); err == nil {
 			prev, existed = old, true
 		} else if !errors.Is(err, fs.ErrNotExist) {
-			// Mirror #1423-A: an existing-but-unreadable target cannot be
-			// backed up; replacing it would leave no rollback path.
+
 			return rollbackAll(fmt.Errorf("target %s exists but is unreadable (no backup possible, refusing to replace): %w", target, err))
 		}
-		// On Unix, the running binary can be overwritten directly — no retry needed.
+
 		if err := install.WriteExecutable(target, sourceData); err != nil {
 			return rollbackAll(fmt.Errorf("replace %s: %w", target, err))
 		}
@@ -267,14 +251,7 @@ func RunHelper(manifestPath string) error {
 	if err != nil {
 		return fmt.Errorf("read staged binary: %w", err)
 	}
-	// #1402-A: targets are replaced one by one; a failure halfway (target
-	// locked by antivirus/indexer past the 30s deadline) used to leave the
-	// EARLIER targets on the new version with no rollback - a half-updated
-	// install (npm/python wrappers carry 2 target paths) with no repair
-	// entry point. Back up each target's previous bytes (nil = did not
-	// exist) and restore them best-effort on failure. A restore that also
-	// fails is reported but does not mask the original error; the manifest
-	// is kept so the helper can simply be re-run.
+
 	deadline := time.Now().Add(30 * time.Second)
 	var lastErr error
 	type backup struct {
@@ -283,11 +260,7 @@ func RunHelper(manifestPath string) error {
 		existed bool
 	}
 	var written []backup
-	// #1423-A/U-D2: EVERY abort path must roll back the targets this
-	// run already replaced - the old code only rolled back from the
-	// deadline branch; an unreadable target (this fix) or a MkdirAll
-	// failure (U-D2) returned early and left a half-updated install,
-	// exactly the state #1402 promised to eliminate.
+
 	rollbackAll := func(curErr error) error {
 		var restoreErrs []string
 		for i := len(written) - 1; i >= 0; i-- {
@@ -309,7 +282,7 @@ func RunHelper(manifestPath string) error {
 	}
 	for _, target := range manifest.TargetPaths {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			// U-D2: used to return WITHOUT rolling back earlier targets.
+
 			return rollbackAll(fmt.Errorf("create target dir for %s: %w", target, err))
 		}
 		var prev []byte
@@ -317,15 +290,7 @@ func RunHelper(manifestPath string) error {
 		if old, err := os.ReadFile(target); err == nil {
 			prev, existed = old, true
 		} else if !errors.Is(err, fs.ErrNotExist) {
-			// #1423-A: ANY read error (AV scan lock, ACL deny, mode 0o200
-			// exists-but-unreadable) used to be conflated with 'does not
-			// exist'. The replace itself is tmp+rename and only needs
-			// DIRECTORY write - it succeeds where read failed - and the
-			// rollback then os.Remove'd the never-backed-up original: the
-			// user's binary deleted forever. Unreadable-but-present ABORTS
-			// the run (with rollback of earlier targets); os.Remove
-			// rollback is only correct for targets that truly did not
-			// exist.
+
 			return rollbackAll(fmt.Errorf("target %s exists but is unreadable (no backup possible, refusing to replace): %w", target, err))
 		}
 		for {
@@ -453,9 +418,7 @@ func (s *Service) httpClient() *http.Client {
 	if s.HTTPClient != nil {
 		return s.HTTPClient
 	}
-	// Fall back to the install package default (bounded Timeout) instead of
-	// http.DefaultClient (Timeout == 0): a half-open or black-holed mirror
-	// must not hang /update forever (#976).
+
 	return install.DefaultHTTPClient()
 }
 
@@ -553,12 +516,8 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	return os.WriteFile(dst, data, mode)
 }
 
-// checkWritable verifies that all paths needed for a self-update are writable.
-// Returns (needsElevation=true) if the staging dir is writable but the target
-// dir is not — the caller can then relaunch the helper with elevation.
-// Returns a hard error only if even the staging dir is inaccessible.
 func (s *Service) checkWritable() (bool, error) {
-	// 1. Helper staging dir (~/.ggcode/update-helper/) — must be writable.
+
 	helperDir := filepath.Join(config.ConfigDir(), "update-helper")
 	if err := os.MkdirAll(helperDir, 0o755); err != nil {
 		return false, fmt.Errorf("update: cannot create staging directory %s: %w\n"+
@@ -571,7 +530,6 @@ func (s *Service) checkWritable() (bool, error) {
 	}
 	_ = os.Remove(probe)
 
-	// 2. Target executable directory — may need elevation.
 	execDir := filepath.Dir(s.ExecPath)
 	if execDir == "." || execDir == "" {
 		execDir = mustGetwd()
@@ -579,7 +537,7 @@ func (s *Service) checkWritable() (bool, error) {
 	probe2 := filepath.Join(execDir, ".ggcode-update-probe")
 	if err := os.WriteFile(probe2, []byte("x"), 0o644); err != nil {
 		if runtime.GOOS == "windows" {
-			// On Windows we can request UAC elevation for the helper.
+
 			return true, nil
 		}
 		return false, fmt.Errorf("update: target directory %s is not writable: %w\n"+

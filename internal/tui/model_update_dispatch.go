@@ -1,23 +1,5 @@
 package tui
 
-// Exact-type dispatch table for Model.Update (#2422, phase 2 of #2357).
-//
-// The 133-case type switch in model_update.go is replaced by a
-// reflect.Type-keyed table. Semantics are identical to a type switch over
-// concrete (non-interface) cases: exact dynamic-type match only. The ONLY
-// case that cannot live here is tea.MouseMsg, which is an interface type -
-// it stays as a residual switch in Update after the table lookup misses.
-//
-// Every entry preserves the original switch's case order (declaration
-// order here mirrors the old top-to-bottom order for reviewability);
-// order is irrelevant for correctness because exact-type matching is
-// disjoint, which the original switch's structure already guaranteed
-// (a concrete case always preceded the interface case that could also
-// match it: MouseWheelMsg before tea.MouseMsg).
-//
-// Zero behavior change - each closure body is the verbatim statement
-// sequence of the original inline case.
-
 import (
 	"fmt"
 	"reflect"
@@ -28,29 +10,20 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// updateHandler is one table entry: it receives the model, the asserted
-// message, and the spinner command the original switch computed up front.
 type updateHandler func(m Model, msg tea.Msg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd)
 
-// updateHandlers maps reflect.TypeOf(msg) -> handler. Populated once in
-// init() below.
 var updateHandlers = map[reflect.Type]updateHandler{}
 
-// regUpdate registers an exact-type dispatch entry whose handler wants
-// the spinner command.
 func regUpdate[M tea.Msg](h func(m Model, msg M, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd)) {
 	updateHandlers[reflect.TypeOf(*new(M))] = func(m Model, msg tea.Msg, sc tea.Cmd) (tea.Model, tea.Cmd) {
 		return h(m, msg.(M), sc)
 	}
 }
 
-// regUpdatePlain registers an exact-type dispatch entry for handlers that
-// do not need the spinner command.
 func regUpdatePlain[M tea.Msg](h func(m Model, msg M) (tea.Model, tea.Cmd)) {
 	regUpdate(func(m Model, msg M, _ tea.Cmd) (tea.Model, tea.Cmd) { return h(m, msg) })
 }
 
-// regNoop registers a no-op entry (original case was `return m, nil`).
 func regNoop[M tea.Msg]() {
 	regUpdatePlain(func(m Model, _ M) (tea.Model, tea.Cmd) { return m, nil })
 }
@@ -64,8 +37,7 @@ func init() {
 	})
 	regUpdatePlain(func(m Model, msg tmuxStartupSetupMsg) (tea.Model, tea.Cmd) { return m.handleTmuxStartupSetupMsg(msg) })
 	regUpdatePlain(func(m Model, msg providerChangedMsg) (tea.Model, tea.Cmd) { return m.handleProviderChangedMsg(msg) })
-	// #2844: probe results arrive from the probe goroutine as messages and
-	// are applied on the UI goroutine (see startContextProbe).
+
 	regUpdatePlain(func(m Model, msg contextProbeResultMsg) (tea.Model, tea.Cmd) {
 		m.applyProbeResult(msg.result)
 		return m, nil
@@ -118,12 +90,10 @@ func init() {
 	regUpdate(func(m Model, msg remoteInboundMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {
 		return m.handleRemoteInbound(msg, spinnerCmd)
 	})
-	// stdout is dead (display sleep / terminal closed). Nothing renderable
-	// to do while the fd is dead - displayWakeMsg does the recovery work.
+
 	regNoop[displaySleepMsg]()
 	regUpdatePlain(func(m Model, msg displayWakeMsg) (tea.Model, tea.Cmd) {
-		// stdout recovered - force a full redraw; ClearScreen discards the
-		// terminal's arbitrarily stale visible state.
+
 		return m, tea.ClearScreen
 	})
 	regUpdate(func(m Model, msg agentStreamMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {
@@ -313,19 +283,15 @@ func init() {
 	})
 	regNoop[agentRoundProgressMsg]()
 	regUpdatePlain(func(m Model, msg agentRoundSummaryMsg) (tea.Model, tea.Cmd) { return m.handleAgentRoundSummaryMsg(msg) })
-	// Don't emit IM here — AskUserMsg handler will emit the first question
-	// after creating the questionnaire state.
+
 	regNoop[agentAskUserMsg]()
 	regUpdatePlain(func(m Model, msg verifyProgressMsg) (tea.Model, tea.Cmd) { return m.handleVerifyProgressMsg(msg) })
 	regUpdatePlain(func(m Model, msg toolProgressMsg) (tea.Model, tea.Cmd) { return m.handleToolProgressMsg(msg) })
 	regUpdatePlain(func(m Model, msg verifyResultMsg) (tea.Model, tea.Cmd) { return m.handleVerifyResultMsg(msg) })
-	// LAN chat family (the original multi-label case): all seven message
-	// types share handleLanChatPanelUpdate.
+
 	regLanChatFamily()
 }
 
-// regLanChatFamily registers the seven LAN chat message types that the
-// original switch handled in one multi-label case.
 func regLanChatFamily() {
 	regUpdatePlain(func(m Model, msg lanchatMsg) (tea.Model, tea.Cmd) { return m.handleLanChatPanelUpdate(msg) })
 	regUpdatePlain(func(m Model, msg lanchatReceiptMsg) (tea.Model, tea.Cmd) { return m.handleLanChatPanelUpdate(msg) })
@@ -336,17 +302,6 @@ func regLanChatFamily() {
 	regUpdatePlain(func(m Model, msg lanchatAutoApproveMsg) (tea.Model, tea.Cmd) { return m.handleLanChatPanelUpdate(msg) })
 }
 
-// dispatchUpdate looks up the exact dynamic type of msg in the table.
-// Second return is false when no exact-type handler exists (the caller
-// then runs the interface-typed residual switch / fall-through tail).
-//
-// Slow-handler instrumentation: the Bubble Tea loop is single-threaded, so
-// any handler (or the View frame it triggers) blocking for seconds freezes
-// input and the cursor — the user-reported startup freeze (2026-09-18)
-// showed a 250ms input-drain tick landing 17s late with no attribution.
-// Handlers over slowUpdateLogThreshold are logged with their message type
-// so the next reproduction identifies the culprit directly from the debug
-// log instead of requiring a profiler attach.
 func (m Model) dispatchUpdate(msg tea.Msg, spinnerCmd tea.Cmd) (tea.Model, bool, tea.Cmd) {
 	h, ok := updateHandlers[reflect.TypeOf(msg)]
 	if !ok {
@@ -360,7 +315,4 @@ func (m Model) dispatchUpdate(msg tea.Msg, spinnerCmd tea.Cmd) (tea.Model, bool,
 	return model, true, cmd
 }
 
-// slowUpdateLogThreshold bounds normal handler cost with generous headroom:
-// regular handlers run in microseconds; anything past 100ms is a startup
-// stall worth attributing.
 const slowUpdateLogThreshold = 100 * time.Millisecond

@@ -19,7 +19,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// endpointRef identifies a vendor/endpoint pair for testing.
 type endpointRef struct {
 	vendor   string
 	endpoint string
@@ -32,10 +31,10 @@ type probeResult struct {
 	BaseURL  string
 	Model    string
 
-	AuthStatus string // OK, FAIL, TIMEOUT
+	AuthStatus string
 	AuthErr    string
 
-	ChatStatus   string // OK, FAIL, TIMEOUT, SKIP
+	ChatStatus   string
 	ChatInput    int
 	ChatOutput   int
 	ChatText     string
@@ -44,7 +43,7 @@ type probeResult struct {
 	ChatReqBody  string
 	ChatRespBody string
 
-	StreamStatus  string // OK, FAIL, TIMEOUT, SKIP
+	StreamStatus  string
 	StreamInput   int
 	StreamOutput  int
 	StreamLatency time.Duration
@@ -92,7 +91,7 @@ Examples:
 }
 
 func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, listModels bool, verbose bool, timeoutSec int) error {
-	// Load keys into environment
+
 	if err := config.LoadKeysEnv(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: LoadKeysEnv: %v\n", err)
 	}
@@ -102,7 +101,6 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, li
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Collect all endpoints to test
 	var refs []endpointRef
 
 	for vname, vendor := range cfg.Vendors {
@@ -124,7 +122,6 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, li
 		return fmt.Errorf("no endpoints configured")
 	}
 
-	// Sort by vendor/endpoint name
 	sort.Slice(refs, func(i, j int) bool {
 		if refs[i].vendor != refs[j].vendor {
 			return refs[i].vendor < refs[j].vendor
@@ -132,7 +129,6 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, li
 		return refs[i].endpoint < refs[j].endpoint
 	})
 
-	// --list-models mode: just list models, don't run API call tests
 	if listModels {
 		return runListModels(cfg, refs, timeoutSec)
 	}
@@ -167,6 +163,7 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, li
 		// wrong conclusions. Applying the override BEFORE the NO_MODEL
 		// check also lets --model rescue endpoints with no configured
 		// model, which is exactly what "for all endpoints" promises.
+
 		if modelOverride != "" {
 			resolved.Model = modelOverride
 		}
@@ -192,10 +189,6 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, li
 			Model:    resolved.Model,
 		}
 
-		// Each API call gets its own timeoutSec budget (#746): the help text
-		// promises "per API call", and a diagnostic tool must not let a slow
-		// Chat eat the budget and misreport Stream as TIMEOUT. We rebuild the
-		// context before each call instead of sharing one per-endpoint ctx.
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
 
 		prov, perr := provider.NewProvider(resolved)
@@ -207,11 +200,9 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, li
 			continue
 		}
 
-		// Estimate tokens
 		ctx, cancel = perCallTimeout(ctx, cancel, timeoutSec)
 		r.Estimate, _ = prov.CountTokens(ctx, msgs)
 
-		// Test Chat (non-streaming)
 		ctx, cancel = perCallTimeout(ctx, cancel, timeoutSec)
 		start := time.Now()
 		resp, err := prov.Chat(ctx, msgs, nil)
@@ -219,7 +210,7 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, li
 		if err != nil {
 			r.ChatStatus = classifyError(err)
 			r.ChatErr = truncateErr(err.Error(), 120)
-			// If auth error, mark auth status too
+
 			if isAuthError(err) {
 				r.AuthStatus = "FAIL"
 				r.AuthErr = truncateErr(err.Error(), 80)
@@ -240,7 +231,6 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, li
 			}
 		}
 
-		// Test ChatStream
 		ctx, cancel = perCallTimeout(ctx, cancel, timeoutSec)
 		start = time.Now()
 		ch, err := prov.ChatStream(ctx, msgs, nil)
@@ -272,7 +262,6 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, li
 			}
 		}
 
-		// If chat failed but stream might have worked, infer auth
 		if r.AuthStatus == "" && r.StreamStatus == "OK" {
 			r.AuthStatus = "OK"
 		} else if r.AuthStatus == "" {
@@ -283,23 +272,17 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, li
 		cancel()
 	}
 
-	fmt.Fprintln(os.Stderr, "\r"+strings.Repeat(" ", 80)+"\r") // clear progress line
+	fmt.Fprintln(os.Stderr, "\r"+strings.Repeat(" ", 80)+"\r")
 
-	// Print results
 	printProbeResults(results, verbose)
 	return nil
 }
 
-// perCallTimeout replaces the current probe context with a fresh one carrying
-// a full timeoutSec budget, cancelling the previous context so no timer leaks
-// (#746: help promises "Timeout per API call"; sharing one per-endpoint ctx
-// made a slow Chat systematically misreport Stream as TIMEOUT).
 func perCallTimeout(_ context.Context, cancel context.CancelFunc, timeoutSec int) (context.Context, context.CancelFunc) {
 	cancel()
 	return context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
 }
 
-// runListModels lists available models for each endpoint using the provider's ListModels API.
 func runListModels(cfg *config.Config, refs []endpointRef, timeoutSec int) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "VENDOR/ENDPOINT	PROTOCOL	STATUS	MODEL_ID	DISPLAY_NAME")
@@ -337,13 +320,11 @@ func runListModels(cfg *config.Config, refs []endpointRef, timeoutSec int) error
 	return nil
 }
 
-// modelInfo is a simplified model representation.
 type modelInfo struct {
 	ID          string
 	DisplayName string
 }
 
-// listModelsFromAPI calls the appropriate ListModels API based on protocol.
 func listModelsFromAPI(ctx context.Context, resolved *config.ResolvedEndpoint) ([]modelInfo, error) {
 	switch resolved.Protocol {
 	case "openai", "copilot":
@@ -423,7 +404,7 @@ func extractModelID(name string) string {
 
 func printProbeResults(results []*probeResult, verbose bool) {
 	if verbose {
-		// Verbose: detailed per-endpoint output
+
 		for _, r := range results {
 			label := fmt.Sprintf("%s/%s", r.Vendor, r.Endpoint)
 			fmt.Printf("\n═══════════════════════════════════════════════════════════════\n")
@@ -462,12 +443,6 @@ func printProbeResults(results []*probeResult, verbose bool) {
 		return
 	}
 
-	// Table mode
-	// #2419 follow-up: a MODEL column makes the actually-probed model
-	// visible in the default output - without it the table could not show
-	// whether --model took effect, which is exactly how the silently-
-	// ignored flag (fixed in #2420) hid for so long: only -v verbose
-	// printed the model. NO_MODEL rows show an empty cell.
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "VENDOR/ENDPOINT\tPROTOCOL\tMODEL\tAUTH\tCHAT\tSTREAM\tCHAT_IN\tCHAT_OUT\tSTREAM_IN\tSTREAM_OUT\tESTIMATE\tRATIO\tLATENCY")
 
@@ -493,7 +468,6 @@ func printProbeResults(results []*probeResult, verbose bool) {
 	}
 	w.Flush()
 
-	// Summary
 	ok, fail, timeout, other := 0, 0, 0, 0
 	for _, r := range results {
 		switch r.AuthStatus {
@@ -510,7 +484,6 @@ func printProbeResults(results []*probeResult, verbose bool) {
 	fmt.Printf("\nSummary: %d endpoints tested, %d OK, %d failed, %d timeout, %d other\n",
 		len(results), ok, fail, timeout, other)
 
-	// Show failures detail
 	hasFails := false
 	for _, r := range results {
 		if r.AuthStatus != "OK" {
@@ -522,7 +495,6 @@ func printProbeResults(results []*probeResult, verbose bool) {
 		}
 	}
 
-	// Show usage gaps
 	fmt.Println("\nUsage accuracy (estimate vs real input tokens):")
 	for _, r := range results {
 		if r.ChatInput > 0 {

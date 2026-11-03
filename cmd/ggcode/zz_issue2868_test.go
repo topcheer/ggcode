@@ -7,11 +7,6 @@ import (
 	"testing"
 )
 
-// zz_issue2868_test.go - probe for #2868: the provider-switch hook closure
-// must not shadow the outer `resolved` (its := left the daemon's tunnel
-// SessionInfo/BrokerSnapshot reporting the startup model forever); it must
-// reassign the outer variable under resolvedMu, and both tunnel snapshot
-// paths must read via currentResolved().
 func TestIssue2868NoShadowAndLockedReassign(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "daemon.go", nil, 0)
@@ -26,12 +21,7 @@ func TestIssue2868NoShadowAndLockedReassign(t *testing.T) {
 		if !ok {
 			return true
 		}
-		// Heuristic: the provider-switch hook is the FuncLit whose params
-		// are exactly (vendor, endpoint, model string) - note Go groups
-		// them into ONE ast.Field with three Names - and that assigns from
-		// agentruntime.ActivateCurrentSelection. The vision-turn hook (1
-		// param) also calls Activate with an intentional turn-scoped shadow
-		// - it must NOT write the session identity, so it is out of scope.
+
 		paramNames := 0
 		if fn.Type.Params != nil {
 			for _, p := range fn.Type.Params.List {
@@ -54,7 +44,7 @@ func TestIssue2868NoShadowAndLockedReassign(t *testing.T) {
 			return true
 		}
 		foundHook = true
-		// (a) no `resolved` declared inside the closure (shadow shape gone)
+
 		for _, st := range fn.Body.List {
 			if assign, ok := st.(*ast.AssignStmt); ok && assign.Tok == token.DEFINE {
 				for _, lhs := range assign.Lhs {
@@ -64,7 +54,7 @@ func TestIssue2868NoShadowAndLockedReassign(t *testing.T) {
 				}
 			}
 		}
-		// (b) plain assignment `resolved = <ident>` present (outer reassign)
+
 		ast.Inspect(fn.Body, func(inner ast.Node) bool {
 			if assign, ok := inner.(*ast.AssignStmt); ok && assign.Tok == token.ASSIGN && len(assign.Lhs) == 1 {
 				if id, ok := assign.Lhs[0].(*ast.Ident); ok && id.Name == "resolved" {

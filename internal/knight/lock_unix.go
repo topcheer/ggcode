@@ -12,20 +12,11 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// instanceLock provides cross-process mutual exclusion for Knight instances
-// running in the same project directory. Only one ggcode process can hold
-// the lock at a time; others gracefully skip Knight startup.
 type instanceLock struct {
 	file *os.File
 	path string
 }
 
-// tryAcquireLock attempts to acquire an exclusive flock on the Knight lock file
-// in the project's .ggcode/ directory. Returns the lock on success, or nil if
-// another process already holds it (or on error).
-//
-// The lock is automatically released when the process exits (kernel releases
-// all flocks on file descriptor close), so it's crash-safe.
 func tryAcquireLock(projDir string) *instanceLock {
 	lockDir := filepath.Join(projDir, ".ggcode")
 	if err := os.MkdirAll(lockDir, 0755); err != nil {
@@ -40,16 +31,14 @@ func tryAcquireLock(projDir string) *instanceLock {
 		return nil
 	}
 
-	// Non-blocking exclusive lock. If another process holds it, we get EWOULDBLOCK.
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		// Another instance holds the lock — read its PID for the message
+
 		pid := readLockPID(f)
 		f.Close()
 		debug.Log("knight", "lock: another instance already running (pid=%d)", pid)
 		return nil
 	}
 
-	// Write our PID so other instances can report who holds the lock.
 	f.Truncate(0)
 	f.Seek(0, 0)
 	f.WriteString(strconv.Itoa(os.Getpid()))
@@ -59,7 +48,6 @@ func tryAcquireLock(projDir string) *instanceLock {
 	return &instanceLock{file: f, path: lockPath}
 }
 
-// release unlocks and closes the lock file.
 func (l *instanceLock) release() {
 	if l.file != nil {
 		syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
@@ -68,10 +56,6 @@ func (l *instanceLock) release() {
 	}
 }
 
-// readLockPID reads the PID from a lock file for informational purposes.
-// Understands both platform layouts: unix offset-0 first, then the
-// windows offset-32 layout for lock files written on the other side of a
-// shared tree (#3020).
 func readLockPID(f *os.File) int {
 	data, err := os.ReadFile(f.Name())
 	if err != nil {
@@ -80,41 +64,34 @@ func readLockPID(f *os.File) int {
 	return parseLockFileData(data)
 }
 
-// LockHeldBy returns the PID of the process holding the Knight lock for the
-// given project directory, or 0 if the lock is not held.
 func LockHeldBy(projDir string) (int, error) {
 	lockPath := filepath.Join(projDir, ".ggcode", "knight.lock")
 	data, err := os.ReadFile(lockPath)
 	if err != nil {
-		return 0, nil // no lock file
+		return 0, nil
 	}
 	pid := parseLockFileData(data)
 	if pid <= 0 {
 		return 0, nil
 	}
-	// Verify the lock is actually held by checking with a non-blocking attempt
+
 	f, err := os.OpenFile(lockPath, os.O_RDWR, 0600)
 	if err != nil {
-		// #1576-E: the old comment claimed "can't open = stale" while the
-		// code returned (pid, nil) - callers read that as "ANOTHER INSTANCE
-		// IS RUNNING" and blamed a permission error on a live PID (the
-		// Windows branch correctly returns 0). Report the failure as a
-		// failure; only a real flock win proves liveness.
+
 		return 0, fmt.Errorf("cannot verify knight lock %s: %w", lockPath, err)
 	}
 	defer f.Close()
 
 	err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	if err != nil {
-		// Lock IS held — return the PID
+
 		return pid, nil
 	}
-	// Lock is NOT held (stale file) — release and clean up
+
 	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return 0, nil
 }
 
-// FormatLockMessage returns a human-readable message about why Knight didn't start.
 func FormatLockMessage(pid int) string {
 	if pid > 0 {
 		return fmt.Sprintf("knight: skipped — another instance (PID %d) already running in this workspace", pid)

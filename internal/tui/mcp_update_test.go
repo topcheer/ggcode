@@ -2,16 +2,12 @@ package tui
 
 import "testing"
 
-// applyMCPServersUpdate must upgrade the panel's static "reconnecting"
-// message to a terminal result as soon as the pending server settles, and
-// must keep it while the server is still dialing or awaiting OAuth.
 func TestApplyMCPServersUpdateReconnectSettles(t *testing.T) {
 	m := &Model{mcpPanel: &mcpPanelState{
 		pendingReconnect: "http-server",
 		message:          "Reconnecting http-server...",
 	}}
 
-	// Still dialing / awaiting OAuth: message stays.
 	m.applyMCPServersUpdate(mcpServersUpdatedMsg{servers: []MCPInfo{
 		{Name: "http-server", Pending: true},
 	}})
@@ -22,7 +18,6 @@ func TestApplyMCPServersUpdateReconnectSettles(t *testing.T) {
 		t.Fatalf("pendingReconnect must survive a pending update, got %q", m.mcpPanel.pendingReconnect)
 	}
 
-	// Connected: message upgrades and the latch clears.
 	m.applyMCPServersUpdate(mcpServersUpdatedMsg{servers: []MCPInfo{
 		{Name: "http-server", Connected: true, ToolNames: []string{"a", "b", "c"}},
 	}})
@@ -50,7 +45,6 @@ func TestApplyMCPServersUpdateReconnectFailure(t *testing.T) {
 	}
 }
 
-// Other servers settling must not consume the latch.
 func TestApplyMCPServersUpdateIgnoresOtherServers(t *testing.T) {
 	m := &Model{mcpPanel: &mcpPanelState{pendingReconnect: "a"}}
 	m.applyMCPServersUpdate(mcpServersUpdatedMsg{servers: []MCPInfo{
@@ -59,9 +53,7 @@ func TestApplyMCPServersUpdateIgnoresOtherServers(t *testing.T) {
 	if m.mcpPanel.pendingReconnect != "a" {
 		t.Fatalf("latch must survive unrelated server updates, got %q", m.mcpPanel.pendingReconnect)
 	}
-	// #1812: but when the pending server WAS listed and VANISHES from the
-	// update (uninstalled mid-reconnect), the latch must clear - the panel
-	// used to hang on "reconnecting..." until reopened.
+
 	m2 := &Model{mcpPanel: &mcpPanelState{pendingReconnect: "a"}, mcpServers: []MCPInfo{{Name: "a"}}}
 	m2.applyMCPServersUpdate(mcpServersUpdatedMsg{servers: []MCPInfo{}})
 	if m2.mcpPanel.pendingReconnect != "" {
@@ -69,7 +61,6 @@ func TestApplyMCPServersUpdateIgnoresOtherServers(t *testing.T) {
 	}
 }
 
-// With no panel open the fresh list still lands in m.mcpServers.
 func TestApplyMCPServersUpdateWithoutPanel(t *testing.T) {
 	m := &Model{}
 	m.applyMCPServersUpdate(mcpServersUpdatedMsg{servers: []MCPInfo{
@@ -80,12 +71,8 @@ func TestApplyMCPServersUpdateWithoutPanel(t *testing.T) {
 	}
 }
 
-// #2348: every m.mcpServers swap must converge the panel cursor. The
-// action keys r/f/space/a/x index m.mcpServers[panel.selected] with only a
-// len==0 guard; a stale selected after the list shrank crashed Update with
-// index-out-of-range (bubbletea does not recover panics).
 func TestApplyMCPServersUpdateConvergesShrunkSelection(t *testing.T) {
-	m := &Model{mcpPanel: &mcpPanelState{selected: 3}} // cursor beyond a 2-item list
+	m := &Model{mcpPanel: &mcpPanelState{selected: 3}}
 	m.mcpServers = []MCPInfo{{Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "d"}}
 
 	m.applyMCPServersUpdate(mcpServersUpdatedMsg{servers: []MCPInfo{
@@ -95,13 +82,11 @@ func TestApplyMCPServersUpdateConvergesShrunkSelection(t *testing.T) {
 		t.Fatalf("selection must clamp to len-1 after shrink, got %d", got)
 	}
 
-	// Shrinking to empty clamps to 0, never -1.
 	m.applyMCPServersUpdate(mcpServersUpdatedMsg{servers: nil})
 	if got := m.mcpPanel.selected; got != 0 {
 		t.Fatalf("selection must clamp to 0 on empty list, got %d", got)
 	}
 
-	// SetMCPServers (external setter) converges too.
 	m.mcpServers = []MCPInfo{{Name: "a"}, {Name: "b"}, {Name: "c"}}
 	m.mcpPanel.selected = 2
 	m.SetMCPServers([]MCPInfo{{Name: "a"}})

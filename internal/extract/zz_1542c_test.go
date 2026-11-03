@@ -5,15 +5,8 @@ import (
 	"testing"
 )
 
-// #1542-C pins:
-//   - rtf: an invalid hex escape (\' followed by non-hex) must only consume
-//     the escape prefix + one char, never the two bytes after the quote.
-//   - svg: textPath and anchor text are visible text, not script/style noise.
-
 func Test1542C_RTFInvalidHexOnlyConsumesEscape(t *testing.T) {
-	// \' :x — invalid hex (space is not a hex digit). Old code ate 3 bytes
-	// (":x" included); the fix consumes only \' plus the space, so "x"
-	// survives in the output.
+
 	got, err := Extract("t.rtf", []byte("{\\rtf1\\': x}"))
 	if err != nil {
 		t.Fatal(err)

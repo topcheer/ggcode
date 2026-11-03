@@ -13,11 +13,8 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// ffmpegGracefulExitTimeout is how long Stop() waits after stdin EOF for
-// ffmpeg to flush its tail frames + FLV trailer before killing it (#1292).
 const ffmpegGracefulExitTimeout = 5 * time.Second
 
-// Encoder wraps an FFmpeg subprocess that encodes raw RGBA frames into FLV.
 type Encoder struct {
 	width     int
 	height    int
@@ -29,13 +26,11 @@ type Encoder struct {
 	stdin   io.WriteCloser
 	stdout  io.ReadCloser
 	running bool
-	// exitCh is closed by the monitor goroutine once ffmpeg has exited and
-	// been reaped (#1292). Stop waits on it (bounded) instead of killing.
+
 	exitCh chan struct{}
 	mu     sync.Mutex
 }
 
-// NewEncoder creates a new encoder for the given resolution and quality.
 func NewEncoder(width, height, quality, fps int, hwEncoder string) *Encoder {
 	return &Encoder{
 		width:     width,
@@ -46,7 +41,6 @@ func NewEncoder(width, height, quality, fps int, hwEncoder string) *Encoder {
 	}
 }
 
-// Start launches the FFmpeg encoder subprocess.
 func (e *Encoder) Start() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -63,7 +57,6 @@ func (e *Encoder) Start() error {
 
 	e.cmd = exec.Command(ffmpegPath, args...)
 
-	// Pipes for stdin (raw frames in) and stdout (FLV out)
 	stdin, err := e.cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("stream: ffmpeg stdin pipe: %w", err)
@@ -77,7 +70,6 @@ func (e *Encoder) Start() error {
 	}
 	e.stdout = stdout
 
-	// Capture stderr via pipe for diagnostics
 	stderrPipe, err := e.cmd.StderrPipe()
 	if err != nil {
 		stdin.Close()
@@ -94,20 +86,13 @@ func (e *Encoder) Start() error {
 
 	e.running = true
 
-	// #1292: single owner for cmd.Wait — reaps the process on ANY exit path
-	// (crash, OOM, EOF graceful finish), clearing running so IsRunning stops
-	// reporting a dead/zombie encoder as alive, and closing stdout to unblock
-	// fan-out readers stuck in Read.
 	cmd := e.cmd
 	exitCh := make(chan struct{})
 	e.exitCh = exitCh
-	// #2578: exec.Cmd contract - Wait must not run before stderr reads
-	// complete (os.File-type pipes get no copy goroutine, Wait closes the
-	// read fd immediately after Process.Wait). Signal drain completion so
-	// the monitor can wait for it BEFORE calling cmd.Wait().
+
 	stderrDone := make(chan struct{})
 	safego.Go("stream.encoderMonitor", func() {
-		<-stderrDone // #2578: drain stderr first, then reap
+		<-stderrDone
 		err := cmd.Wait()
 		debug.Log("stream", "ffmpeg exited: %v", err)
 		e.mu.Lock()
@@ -122,11 +107,10 @@ func (e *Encoder) Start() error {
 		close(exitCh)
 	})
 
-	// Monitor stderr in background — log any errors
 	safego.Go("stream.encoderStderr", func() {
 		defer close(stderrDone)
 		scanner := bufio.NewScanner(stderrPipe)
-		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024) // #2578: ffmpeg error lines can exceed the 64KB default
+		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
 		for scanner.Scan() {
 			debug.Log("stream", "ffmpeg stderr: %s", scanner.Text())
 		}
@@ -138,16 +122,6 @@ func (e *Encoder) Start() error {
 	return nil
 }
 
-// WriteFrame writes a single raw RGBA frame to the encoder.
-// #4352: like Read (#1294), never hold e.mu across the blocking stdin
-// write: raw frames (~8.3MB at 1080p) dwarf the 64KB pipe buffer, so a
-// frame write blocks until ffmpeg drains it; holding the lock meanwhile
-// wedges Read (fan-out consumers), IsRunning, and the monitor's reap
-// path (which needs the same lock before close(exitCh)), turning Stop's
-// graceful flush window into a full timeout wait. Snapshot under the
-// lock, write outside it; e.stdin is only nilled by Stop, and a write
-// racing Stop's Close gets the standard EPIPE/"file already closed"
-// error - same failure surface the old code already had.
 func (e *Encoder) WriteFrame(data []byte) error {
 	e.mu.Lock()
 	running := e.running
@@ -160,13 +134,6 @@ func (e *Encoder) WriteFrame(data []byte) error {
 	return err
 }
 
-// Read reads encoded FLV data from the encoder stdout.
-// Implements io.Reader for fan-out consumers.
-// #1294: the monitor goroutine sets e.stdout = nil after reaping ffmpeg.
-// Snapshot the reader under the lock (never hold the lock across the
-// blocking read — the monitor needs it to shut down) and fail cleanly
-// once nil. A racing nil read here was a data race + nil-deref panic in
-// the broadcaster, which safego swallowed into a silent dead stream.
 func (e *Encoder) Read(p []byte) (int, error) {
 	e.mu.Lock()
 	stdout := e.stdout
@@ -176,20 +143,12 @@ func (e *Encoder) Read(p []byte) (int, error) {
 	}
 	n, err := stdout.Read(p)
 	if err != nil {
-		// Process exited (monitor closed stdout): surface EOF so the
-		// broadcaster loop terminates on the reader, not only on stopCh.
+
 		return n, err
 	}
 	return n, nil
 }
 
-// Stop signals the encoder to finish and waits for the process to exit.
-// #1292: the previous version closed stdin (EOF) but then IMMEDIATELY
-// closed stdout and Killed the process — the Kill almost always landed
-// before ffmpeg could flush tail frames and the FLV trailer, truncating
-// every recording on every normal stop, and the early stdout close fed
-// ffmpeg an EPIPE on its output side. Now: stdin EOF, then a bounded wait
-// for the monitor-goroutine reap; Kill only on timeout.
 func (e *Encoder) Stop() error {
 	e.mu.Lock()
 	ch := e.exitCh
@@ -201,10 +160,10 @@ func (e *Encoder) Stop() error {
 	e.mu.Unlock()
 
 	if ch == nil {
-		return nil // never started, or already fully stopped and reaped
+		return nil
 	}
 	if wasRunning && stdin != nil {
-		_ = stdin.Close() // EOF: ffmpeg flushes and exits on its own
+		_ = stdin.Close()
 	}
 	select {
 	case <-ch:
@@ -212,41 +171,38 @@ func (e *Encoder) Stop() error {
 		if cmd != nil && cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
-		<-ch // monitor reaps promptly after Kill
+		<-ch
 	}
 	return nil
 }
 
-// IsRunning returns whether the encoder subprocess is active.
 func (e *Encoder) IsRunning() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.running
 }
 
-// ExpectedFrameSize returns the expected raw RGBA frame size in bytes.
 func (e *Encoder) ExpectedFrameSize() int {
 	return e.width * e.height * 4
 }
 
-// buildArgs constructs FFmpeg args based on the selected encoder.
 func (e *Encoder) buildArgs(encoderName string, isHW bool) []string {
 	args := []string{
 		"-hide_banner",
 		"-loglevel", "error",
-		// Video input: raw RGBA from stdin
+
 		"-f", "rawvideo",
 		"-pixel_format", "rgba",
 		"-video_size", fmt.Sprintf("%dx%d", e.width, e.height),
 		"-framerate", fmt.Sprintf("%d", e.fps),
 		"-i", "pipe:0",
-		// Audio input: silent (platforms require audio track)
+
 		"-f", "lavfi",
 		"-i", "anullsrc=r=44100:cl=stereo",
 	}
 
 	if isHW {
-		// Hardware encoder args
+
 		hwArgs := []string{
 			"-c:v", encoderName,
 			"-b:v", "5000k",
@@ -255,7 +211,7 @@ func (e *Encoder) buildArgs(encoderName string, isHW bool) []string {
 			"-pix_fmt", "yuv420p",
 			"-g", fmt.Sprintf("%d", e.fps*2),
 		}
-		// VideoToolbox (macOS) supports -profile and -quality
+
 		if strings.Contains(encoderName, "videotoolbox") {
 			hwArgs = append(hwArgs,
 				"-profile", "high",
@@ -264,8 +220,7 @@ func (e *Encoder) buildArgs(encoderName string, isHW bool) []string {
 		}
 		args = append(args, hwArgs...)
 	} else {
-		// Software encoder (libx264) — CBR for stable live bitrate.
-		// CRF produces very low bitrate on static terminal screens.
+
 		args = append(args,
 			"-c:v", encoderName,
 			"-preset", "fast",
@@ -280,7 +235,6 @@ func (e *Encoder) buildArgs(encoderName string, isHW bool) []string {
 		)
 	}
 
-	// Audio + output
 	args = append(args,
 		"-c:a", "aac",
 		"-b:a", "128k",
@@ -293,31 +247,27 @@ func (e *Encoder) buildArgs(encoderName string, isHW bool) []string {
 	return args
 }
 
-// selectEncoder picks the best available encoder.
 func (e *Encoder) selectEncoder() (name string, isHW bool) {
 	if e.hwEncoder != "" {
-		// #790: normalize through BestEncoder -- the documented config values
-		// 'auto'/'software' were passed verbatim to ffmpeg ('-c:v auto'), which
-		// fails with Unknown encoder AFTER cmd.Start() already set running=true.
+
 		name := BestEncoder(e.hwEncoder)
 		return name, EncoderIsHardware(name)
 	}
-	// Auto-detect hardware encoder
+
 	if hw := detectHWEncoder(); hw != "" {
 		return hw, true
 	}
 	return "libx264", false
 }
 
-// detectHWEncoder probes FFmpeg for available hardware encoders.
 func detectHWEncoder() string {
 	candidates := []string{
-		"h264_videotoolbox", // macOS (Apple Silicon + Intel)
-		"hevc_videotoolbox", // macOS HEVC
-		"h264_vaapi",        // Linux (VA-API)
-		"h264_nvenc",        // NVIDIA
-		"h264_amf",          // Windows (AMD)
-		"h264_qsv",          // Intel Quick Sync
+		"h264_videotoolbox",
+		"hevc_videotoolbox",
+		"h264_vaapi",
+		"h264_nvenc",
+		"h264_amf",
+		"h264_qsv",
 	}
 	for _, enc := range candidates {
 		if probeEncoder(enc) {
@@ -327,7 +277,6 @@ func detectHWEncoder() string {
 	return ""
 }
 
-// probeEncoder checks if FFmpeg supports a given encoder.
 func probeEncoder(name string) bool {
 	cmd := exec.Command("ffmpeg", "-hide_banner", "-encoders")
 	out, err := cmd.CombinedOutput()

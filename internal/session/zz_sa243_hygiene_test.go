@@ -1,14 +1,5 @@
 package session
 
-// #3337 (sa-243 runtime audit): two store hygiene gaps pinned here.
-//
-// 1. Delete() must drop the .flock sidecar together with the .jsonl -
-//    previously the sidecar leaked forever on every deleted session
-//    (~35 orphans observed in a real profile).
-// 2. CleanupOlderThan keeps Pinned sessions and removes only expired
-//    ones; the wiring test pins the 90d default contract used by the
-//    root.run() startup sweep.
-
 import (
 	"os"
 	"path/filepath"
@@ -63,7 +54,7 @@ func TestDeleteToleratesMissingFlockSidecar(t *testing.T) {
 }
 
 func TestCleanupOlderThanKeepsPinnedAndFresh(t *testing.T) {
-	// sa146TempDir (not t.TempDir): store async goroutines race cleanup.
+
 	dir := sa146TempDir(t)
 	store, err := NewJSONLStore(dir)
 	if err != nil {
@@ -82,8 +73,7 @@ func TestCleanupOlderThanKeepsPinnedAndFresh(t *testing.T) {
 	old.Messages = []provider.Message{userMsg}
 	oldPinned.Messages = []provider.Message{func() provider.Message { m := userMsg; m.ID = "sa243-msg-2"; return m }()}
 	fresh.Messages = []provider.Message{func() provider.Message { m := userMsg; m.ID = "sa243-msg-3"; return m }()}
-	// Save() stamps UpdatedAt=now itself, so the age must be injected via
-	// the metadata record afterwards (same discovery path as the pin tests).
+
 	mkAge := func(s *Session, age time.Duration) {
 		if err := store.Save(s); err != nil {
 			t.Fatal(err)

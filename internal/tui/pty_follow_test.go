@@ -12,17 +12,13 @@ import (
 	"time"
 )
 
-// createTestProject creates a multi-file Go project in dir for sub-agents to work on.
-// Contains enough files and complexity to keep sub-agents busy for several minutes.
 func createTestProject(t *testing.T, dir string) {
 	t.Helper()
 
-	// go.mod
 	writeFile(t, dir, "go.mod", `module example.com/calculator
 
 go 1.22`)
 
-	// Main package — a simple CLI calculator
 	writeFile(t, dir, "main.go", `package main
 
 import (
@@ -58,7 +54,6 @@ func main() {
 }
 `)
 
-	// arithmetic package — intentionally has issues for sub-agent to find
 	writeFile(t, dir, "arithmetic/add.go", `package arithmetic
 
 // Add returns the sum of two numbers.
@@ -127,7 +122,6 @@ func Mod(a, b int) int {
 }
 `)
 
-	// parser package — handles parsing input strings
 	writeFile(t, dir, "parser/parser.go", `package parser
 
 import (
@@ -165,7 +159,6 @@ func ValidateOperator(op string) bool {
 }
 `)
 
-	// history package — tracks calculation history
 	writeFile(t, dir, "history/history.go", `package history
 
 import (
@@ -225,7 +218,6 @@ func (h *History) Recent(n int) []Entry {
 }
 `)
 
-	// formatter package — formats output
 	writeFile(t, dir, "formatter/formatter.go", `package formatter
 
 import (
@@ -267,7 +259,6 @@ func PadRight(s string, width int) string {
 }
 `)
 
-	// README
 	writeFile(t, dir, "README.md", `# Calculator
 
 A simple CLI calculator written in Go.
@@ -284,7 +275,6 @@ A simple CLI calculator written in Go.
 - History loading does not handle corrupt files
 `)
 
-	// Tests — intentionally have some issues
 	writeFile(t, dir, "arithmetic/add_test.go", `package arithmetic
 
 import "testing"
@@ -328,7 +318,6 @@ func TestFactorial(t *testing.T) {
 }
 `)
 
-	// Git init so ggcode sees it as a project
 	os.MkdirAll(filepath.Join(dir, ".git"), 0755)
 }
 
@@ -341,45 +330,28 @@ func writeFile(t *testing.T, baseDir, relPath, content string) {
 	}
 }
 
-// startFollowTestGGCode starts ggcode with a test project workspace and real user config.
 func startFollowTestGGCode(t *testing.T) *ptyHarness {
 	t.Helper()
 
 	h := startGGCodeLive(t)
 
-	// Populate workspace with test project
 	createTestProject(t, h.cmd.Dir)
 	t.Logf("Test project created in %s", h.cmd.Dir)
 
 	return h
 }
 
-// isBrewing checks if the recent output shows the agent is still processing.
 func isBrewing(output string) bool {
 	tail := lastN(output, 300)
 	brewRe := regexp.MustCompile(`(?i)brewing|thinking|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏`)
 	return brewRe.MatchString(tail)
 }
 
-// recentOutput returns the last N characters of stripped output (with ANSI removed but spaces preserved).
 func recentOutput(h *ptyHarness, n int) string {
 	h.readAll()
 	return stripAnsi(lastN(h.getOutput(), n))
 }
 
-// TestPTY_SubAgentFollowDeepWorkout is the comprehensive follow mode test.
-//
-// It creates a multi-file Go project, spawns a sub-agent to do a substantial
-// code review + improvement task, and verifies the full follow mode lifecycle:
-//
-//	Phase 1: Setup — TUI ready, test project populated
-//	Phase 2: Spawn — prompt LLM to create sub-agent with heavy task
-//	Phase 3: Strip — verify follow strip renders with correct slots
-//	Phase 4: Follow — press ! to enter follow mode, verify panel switches
-//	Phase 5: Live rendering — verify tool calls and text render in follow panel
-//	Phase 6: Resize — resize terminal during active sub-agent work
-//	Phase 7: Auto-return — verify auto-return when sub-agent completes
-//	Phase 8: Restore — verify main conversation panel is restored
 func TestPTY_SubAgentFollowDeepWorkout(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping PTY test in short mode")
@@ -388,18 +360,14 @@ func TestPTY_SubAgentFollowDeepWorkout(t *testing.T) {
 	h := startFollowTestGGCode(t)
 	defer h.quit()
 
-	// ━━ Phase 1: TUI Ready ━━
 	h.waitForText("Type a message", 15*time.Second)
 	h.drainOutput()
 	time.Sleep(1 * time.Second)
 	t.Log("━━━ Phase 1: TUI ready, test project created ━━━")
 
-	// Count files in the test project
 	files, _ := filepath.Glob(filepath.Join(h.cmd.Dir, "**/*.go"))
 	t.Logf("Test project has %d .go files", len(files))
 
-	// ━━ Phase 2: Spawn sub-agent with heavy task ━━
-	// Ask for a thorough review + fix cycle — this should generate many tool calls
 	prompt := "Use spawn_agent to create a sub-agent named 'reviewer' with this detailed task: " +
 		"1) Read ALL .go files in the project one by one (there are about 12 files). " +
 		"2) For each file, identify bugs, issues, and improvements. " +
@@ -413,12 +381,9 @@ func TestPTY_SubAgentFollowDeepWorkout(t *testing.T) {
 	h.sendKey("enter")
 	t.Log("━━━ Phase 2: Prompt sent, waiting for LLM to call spawn_agent... ━━━")
 
-	// Wait for spawn_agent to appear
 	h.waitForText("spawn_agent", 180*time.Second)
 	t.Log("━━━ Phase 2: spawn_agent tool call detected ━━━")
 
-	// Wait for main agent turn to complete — the LLM should return text after spawning
-	// We poll until "brewing" disappears from recent output AND "Type a message" appears
 	deadline := time.Now().Add(3 * time.Minute)
 	for time.Now().Before(deadline) {
 		time.Sleep(3 * time.Second)
@@ -432,11 +397,9 @@ func TestPTY_SubAgentFollowDeepWorkout(t *testing.T) {
 	h.drainOutput()
 	t.Log("━━━ Phase 2: Main agent turn complete ━━━")
 
-	// ━━ Phase 3: Verify follow strip ━━
 	output := recentOutput(h, 1500)
 	t.Logf("Phase 3 — Recent output:\n%s", output)
 
-	// The strip should show Ctrl+N and Esc hints
 	if !strings.Contains(output, "Ctrl+N") {
 		t.Error("Phase 3 FAILED: expected 'Ctrl+N' in follow strip")
 	}
@@ -445,7 +408,6 @@ func TestPTY_SubAgentFollowDeepWorkout(t *testing.T) {
 	}
 	t.Log("━━━ Phase 3: Follow strip visible — Ctrl+N and Esc hints present ━━━")
 
-	// ━━ Phase 4: Enter follow mode with Ctrl+N ━━
 	t.Log("━━━ Phase 4: Pressing Ctrl+N to enter follow mode... ━━━")
 	h.sendKey("ctrl+n")
 	time.Sleep(5 * time.Second)
@@ -453,9 +415,8 @@ func TestPTY_SubAgentFollowDeepWorkout(t *testing.T) {
 	output = recentOutput(h, 1500)
 	t.Logf("Phase 4 — Recent output after !:\n%s", output)
 
-	// Should show "input paused" or "Following sub-agent"
 	if !strings.Contains(output, "input paused") && !strings.Contains(output, "Following") && !strings.Contains(output, "following") {
-		// Sub-agent might have already completed. Check if we see sub-agent content instead.
+
 		if strings.Contains(output, "read_file") || strings.Contains(output, "Add") || strings.Contains(output, "Divide") {
 			t.Log("Phase 4: Follow mode may have already auto-returned, but sub-agent content was visible")
 		} else {
@@ -465,10 +426,8 @@ func TestPTY_SubAgentFollowDeepWorkout(t *testing.T) {
 		t.Log("━━━ Phase 4: Follow mode active — input paused, sub-agent panel shown ━━━")
 	}
 
-	// ━━ Phase 5: Verify live rendering of tool calls ━━
 	t.Log("━━━ Phase 5: Monitoring sub-agent tool calls in follow panel... ━━━")
 
-	// Poll for up to 3 minutes looking for tool call evidence
 	toolPatterns := []struct {
 		name    string
 		pattern string
@@ -496,13 +455,11 @@ func TestPTY_SubAgentFollowDeepWorkout(t *testing.T) {
 			}
 		}
 
-		// Once we have 3+ tool types, that's solid evidence
 		if len(foundTools) >= 3 {
 			phase5Done = true
 			break
 		}
 
-		// Check if sub-agent completed early
 		if strings.Contains(output, "returned to main view") || strings.Contains(output, "completed") {
 			t.Log("Phase 5: Sub-agent completed during monitoring")
 			phase5Done = true
@@ -516,7 +473,6 @@ func TestPTY_SubAgentFollowDeepWorkout(t *testing.T) {
 		t.Logf("━━━ Phase 5: Found %d tool types rendering in follow panel: %v ━━━", len(foundTools), foundTools)
 	}
 
-	// ━━ Phase 6: Resize during active work ━━
 	if phase5Done && len(foundTools) >= 3 {
 		t.Log("━━━ Phase 6: Sub-agent already completed, skipping resize during active work ━━━")
 	} else {
@@ -546,10 +502,8 @@ func TestPTY_SubAgentFollowDeepWorkout(t *testing.T) {
 		t.Log("━━━ Phase 6: Resize stress test passed ━━━")
 	}
 
-	// ━━ Phase 7: Wait for auto-return ━━
 	t.Log("━━━ Phase 7: Waiting for sub-agent to complete and auto-return... ━━━")
 
-	// Restore standard size first
 	h.resize(120, 40)
 	time.Sleep(2 * time.Second)
 
@@ -566,7 +520,6 @@ func TestPTY_SubAgentFollowDeepWorkout(t *testing.T) {
 			break
 		}
 
-		// Check if follow mode ended: "input paused" no longer in recent output
 		if !strings.Contains(output, "input paused") &&
 			!strings.Contains(output, "Following sub-agent") &&
 			strings.Contains(output, "Type a message") {
@@ -580,7 +533,6 @@ func TestPTY_SubAgentFollowDeepWorkout(t *testing.T) {
 		t.Error("Phase 7 FAILED: sub-agent did not auto-return after 5 minutes")
 	}
 
-	// ━━ Phase 8: Verify main view restored ━━
 	time.Sleep(3 * time.Second)
 	output = recentOutput(h, 800)
 	t.Logf("Phase 8 — Final output:\n%s", output)
@@ -591,7 +543,6 @@ func TestPTY_SubAgentFollowDeepWorkout(t *testing.T) {
 		t.Log("━━━ Phase 8: Main conversation panel restored ✓ ━━━")
 	}
 
-	// Summary
 	t.Log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	t.Log(fmt.Sprintf("SUMMARY: found=%d tools, autoReturned=%v", len(foundTools), autoReturned))
 	t.Log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

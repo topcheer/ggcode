@@ -14,17 +14,14 @@ func TestDeleteMemory(t *testing.T) {
 	am.SaveMemory("alpha", "alpha content")
 	am.SaveMemory("beta", "beta content")
 
-	// Delete existing memory
 	if err := am.DeleteMemory("alpha"); err != nil {
 		t.Fatalf("DeleteMemory: %v", err)
 	}
 
-	// Verify file is gone
 	if _, err := os.Stat(filepath.Join(tmpDir, "alpha.md")); !os.IsNotExist(err) {
 		t.Error("file should not exist after delete")
 	}
 
-	// Beta should still exist
 	keys, _ := am.List()
 	if len(keys) != 1 || keys[0] != "beta" {
 		t.Errorf("expected only [beta], got %v", keys)
@@ -55,7 +52,6 @@ func TestGarbageCollect_RemovesExpired(t *testing.T) {
 	tmpDir := t.TempDir()
 	am := &AutoMemory{dir: tmpDir}
 
-	// Create a transient memory file (matches impl-task- pattern)
 	path := filepath.Join(tmpDir, "impl-task-old.md")
 	oldTime := time.Now().Add(-31 * 24 * time.Hour)
 	if err := os.WriteFile(path, []byte("old task"), 0644); err != nil {
@@ -65,7 +61,6 @@ func TestGarbageCollect_RemovesExpired(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create a persistent memory that should survive
 	am.SaveMemory("build-process-impl", "persists")
 
 	stats := am.GarbageCollect()
@@ -73,12 +68,10 @@ func TestGarbageCollect_RemovesExpired(t *testing.T) {
 		t.Errorf("expected 1 expired removed, got %d", stats.ExpiredRemoved)
 	}
 
-	// Verify expired file is gone
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Error("expired file should have been removed")
 	}
 
-	// Verify persistent file survives
 	if _, err := os.Stat(filepath.Join(tmpDir, "build-process-impl.md")); err != nil {
 		t.Error("persistent file should survive GC")
 	}
@@ -88,7 +81,6 @@ func TestGarbageCollect_RemovesDeduped(t *testing.T) {
 	tmpDir := t.TempDir()
 	am := &AutoMemory{dir: tmpDir}
 
-	// Create two evolving entries with same dedup key
 	older := filepath.Join(tmpDir, "competitor-analysis-2026-07-01-r1.md")
 	newer := filepath.Join(tmpDir, "competitor-analysis-2026-07-13-r3.md")
 
@@ -103,7 +95,6 @@ func TestGarbageCollect_RemovesDeduped(t *testing.T) {
 		t.Errorf("expected 1 deduped removed, got %d", stats.DedupRemoved)
 	}
 
-	// Older should be removed, newer should survive
 	if _, err := os.Stat(older); !os.IsNotExist(err) {
 		t.Error("older evolving file should have been removed")
 	}
@@ -127,7 +118,6 @@ func TestGarbageCollect_KeepsPersistent(t *testing.T) {
 		t.Errorf("expected 0 removed, got expired=%d deduped=%d", stats.ExpiredRemoved, stats.DedupRemoved)
 	}
 
-	// All files should still exist
 	keys, _ := am.List()
 	if len(keys) != 2 {
 		t.Errorf("expected 2 files remaining, got %d", len(keys))

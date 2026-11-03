@@ -22,7 +22,6 @@ func scheduleFollowGraceTick(hasTerminal bool) tea.Cmd {
 	})
 }
 
-// handleSubAgentUpdateMsg handles the corresponding message case.
 func (m Model) handleSubAgentUpdateMsg(msg subAgentUpdateMsg) (Model, tea.Cmd) {
 	if msg.AgentID != "" && m.subAgentMgr != nil {
 		if snap, ok := m.subAgentMgr.Snapshot(msg.AgentID); ok {
@@ -44,25 +43,23 @@ func (m Model) handleSubAgentUpdateMsg(msg subAgentUpdateMsg) (Model, tea.Cmd) {
 	m.subAgentFollow.markDirty(msg.AgentID)
 
 	if m.subAgentFollow.isActive() {
-		// Follow panel open: only rebuild the active agent's view.
-		// Strip is refreshed less frequently (on spawn/complete via other paths).
+
 		if msg.AgentID == m.subAgentFollow.activeID && m.subAgentFollow.shouldRebuild(m.subAgentFollow.activeID) {
 			m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
 			m.chatListFollowOutput()
 		} else if msg.AgentID == m.subAgentFollow.activeID {
-			// Throttled — schedule delayed retry to ensure eventual render.
+
 			return m, tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
 				return subAgentFollowRefreshMsg{}
 			})
 		}
-		// Also mark strip dirty for non-active slots (status changes).
+
 		m.subAgentFollow.markStripDirty()
 	} else {
-		// No follow panel — defer strip refresh to the throttled path.
-		// This avoids calling refreshSlots/refreshSwarmSlots on every streaming token.
+
 		m.subAgentFollow.markStripDirty()
 		if !m.subAgentFollow.refreshStripIfNeeded(m.subAgentMgr, m.swarmMgr) {
-			// Still throttled — schedule a delayed tick to pick it up.
+
 			return m, tea.Tick(stripRefreshInterval, func(t time.Time) tea.Msg {
 				return subAgentFollowRefreshMsg{}
 			})
@@ -136,20 +133,16 @@ func (m Model) handleSwarmTunnelEventMsg(msg swarmTunnelEventMsg) (Model, tea.Cm
 	return m, nil
 }
 
-// handleSubAgentDoneMsg handles the corresponding message case.
 func (m Model) handleSubAgentDoneMsg(msg subAgentDoneMsg) (Model, tea.Cmd) {
-	// A sub-agent or swarm teammate finished its task.
-	// Show a human-readable system message and wake the main agent.
+
 	m.chatWriteSystem(nextSystemID(), m.formatSubAgentDoneNotice(msg))
 	m.chatListFollowOutput()
 	m.extPaneHandleDone(msg)
 
-	// Force immediate strip refresh on completion (status changed).
 	m.subAgentFollow.refreshSlots(m.subAgentMgr)
 	m.subAgentFollow.refreshSwarmSlots(m.swarmMgr)
 	graceCmd := scheduleFollowGraceTick(m.subAgentFollow.hasTerminalSlots())
 
-	// Build prompt for the main agent.
 	var agentHint string
 	if msg.IsError {
 		agentHint = fmt.Sprintf("%s failed with an error. Do NOT start another agent run yet. Investigate or retry directly.", msg.AgentName)
@@ -158,46 +151,40 @@ func (m Model) handleSubAgentDoneMsg(msg subAgentDoneMsg) (Model, tea.Cmd) {
 	}
 
 	if !m.loading {
-		// If sub-agents are still being cancelled (async CancelAll in progress),
-		// don't start a new agent run. A sub-agent that completed just before
-		// CancelAll() reached it would otherwise trigger an unwanted new run.
+
 		if m.subAgentsCanceling {
 			debug.Log("cancel", "handleSubAgentDoneMsg: suppressing new agent run (subAgentsCanceling=true) agent=%s", msg.AgentID)
 			return m, graceCmd
 		}
-		// Agent is idle — start a new loop to process the notification.
+
 		return m, tea.Batch(graceCmd, m.submitText(agentHint, true))
 	}
-	// Agent is busy — don't inject the completion notification into the
-	// main agent's conversation. The system message and follow strip above
-	// are sufficient for the user to see the result.
+
 	return m, graceCmd
 
 }
 
-// handleSubAgentFollowRefreshMsg handles the corresponding message case.
 func (m Model) handleSubAgentFollowRefreshMsg(msg subAgentFollowRefreshMsg) (Model, tea.Cmd) {
-	// Delayed rebuild after throttle window (for follow panel)
+
 	if m.subAgentFollow.isActive() && m.subAgentFollow.shouldRebuild(m.subAgentFollow.activeID) {
 		m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
 	} else if m.subAgentFollow.isActive() && m.subAgentFollow.dirty[m.subAgentFollow.activeID] {
-		// Still dirty but throttled — reschedule
+
 		return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 			return subAgentFollowRefreshMsg{}
 		})
 	}
 
-	// Also handle deferred strip refresh
 	if m.subAgentFollow.stripDirty {
 		if m.subAgentFollow.refreshStripIfNeeded(m.subAgentMgr, m.swarmMgr) {
-			// Refreshed now, but if still dirty, schedule next check
+
 			if m.subAgentFollow.stripDirty {
 				return m, tea.Tick(stripRefreshInterval, func(t time.Time) tea.Msg {
 					return subAgentFollowRefreshMsg{}
 				})
 			}
 		} else {
-			// Still throttled — reschedule
+
 			return m, tea.Tick(stripRefreshInterval, func(t time.Time) tea.Msg {
 				return subAgentFollowRefreshMsg{}
 			})
@@ -208,26 +195,20 @@ func (m Model) handleSubAgentFollowRefreshMsg(msg subAgentFollowRefreshMsg) (Mod
 
 }
 
-// handleFollowGraceTickMsg handles the corresponding message case.
 func (m Model) handleFollowGraceTickMsg(msg followGraceTickMsg) (Model, tea.Cmd) {
-	// Re-evaluate grace period: refresh slots and remove expired terminal ones
+
 	m.subAgentFollow.refreshSlots(m.subAgentMgr)
 	m.subAgentFollow.refreshSwarmSlots(m.swarmMgr)
 	m.subAgentFollow.cleanup(m.subAgentMgr, m.swarmMgr)
 
-	// Auto-deactivate if the followed agent was removed
 	if m.subAgentFollow.isActive() && m.subAgentFollow.currentSlotIndex() == -1 {
 		m.subAgentFollow.deactivate()
 	}
 
-	// Continue ticking only while terminal slots still exist
 	return m, scheduleFollowGraceTick(m.subAgentFollow.hasTerminalSlots())
 
 }
 
-// ── External pane helpers ──
-
-// extPaneResolveName looks up the agent/teammate name from the follow slots.
 func (m Model) extPaneResolveName(agentID string) (name, kind string) {
 	for _, slot := range m.subAgentFollow.slots {
 		if slot.ID == agentID {
@@ -241,8 +222,6 @@ func (m Model) extPaneResolveName(agentID string) (name, kind string) {
 	return agentID, "subagent"
 }
 
-// extPaneWriteText writes streaming text to the agent's external pane,
-// creating the pane lazily if needed.
 func (m Model) extPaneWriteText(agentID, text string) {
 	if !m.extPaneMgr.Available() {
 		return
@@ -252,7 +231,6 @@ func (m Model) extPaneWriteText(agentID, text string) {
 	m.extPaneMgr.WriteText(agentID, text)
 }
 
-// extPaneWriteToolCall writes a tool call line to the external pane.
 func (m Model) extPaneWriteToolCall(agentID, toolName, detail string) {
 	if !m.extPaneMgr.Available() {
 		return
@@ -262,7 +240,6 @@ func (m Model) extPaneWriteToolCall(agentID, toolName, detail string) {
 	m.extPaneMgr.WriteToolCall(agentID, toolName, detail)
 }
 
-// extPaneWriteToolResult writes a tool result line to the external pane.
 func (m Model) extPaneWriteToolResult(agentID, toolName, result string, isError bool) {
 	if !m.extPaneMgr.Available() {
 		return
@@ -270,12 +247,11 @@ func (m Model) extPaneWriteToolResult(agentID, toolName, result string, isError 
 	m.extPaneMgr.WriteToolResult(agentID, toolName, result, isError)
 }
 
-// extPaneHandleSwarmEvent routes swarm events to the external pane.
 func (m Model) extPaneHandleSwarmEvent(ev swarm.Event) {
 	if !m.extPaneMgr.Available() {
 		return
 	}
-	// For teammate spawn/idle events, ensure the pane exists
+
 	teammateID := ev.TeammateID
 	name := ev.TeammateName
 	if name == "" {
@@ -295,7 +271,7 @@ func (m Model) extPaneHandleSwarmEvent(ev swarm.Event) {
 		m.extPaneMgr.EnsurePane(teammateID, name, "teammate")
 		m.extPaneMgr.WriteToolCall(teammateID, ev.CurrentTool, ev.ToolArgs)
 	case "teammate_tool_result":
-		// Tool result text is stored in ToolArgs (see idle_runner.go:403)
+
 		m.extPaneMgr.WriteToolResult(teammateID, ev.CurrentTool, ev.ToolArgs, ev.IsError)
 	case "teammate_done":
 		m.extPaneMgr.HandleDone(teammateID, name, false)
@@ -308,7 +284,6 @@ func (m Model) extPaneHandleSwarmEvent(ev swarm.Event) {
 	}
 }
 
-// extPaneHandleDone handles agent completion for external panes.
 func (m Model) extPaneHandleDone(msg subAgentDoneMsg) {
 	if !m.extPaneMgr.Available() {
 		return
@@ -317,26 +292,18 @@ func (m Model) extPaneHandleDone(msg subAgentDoneMsg) {
 	m.extPaneMgr.HandleDone(msg.AgentID, name, msg.IsError)
 }
 
-// handleSubAgentSystemMsg displays sub-agent system events (retry,
-// compaction) in the main panel (#2357 slice 4: extracted from
-// Model.Update - body moved verbatim, zero behavior change). Consecutive
-// retry events from the same LLM turn group into one item; a new retry
-// sequence (detected by "[Retry 1/") allocates a new item.
 func (m *Model) handleSubAgentSystemMsg(msg subAgentSystemMsg) (Model, tea.Cmd) {
 	if m.saSysItemIDs == nil {
 		m.saSysItemIDs = make(map[string]string)
 	}
 	itemID := m.saSysItemIDs[msg.AgentID]
-	// New retry sequence: "Retry 1/" signals the start of a fresh
-	// provider retry chain - allocate a new item ID. The text may be
-	// prefixed with "[agentName] " so we use Contains, not HasPrefix.
+
 	if strings.Contains(msg.Text, "[Retry 1/") || itemID == "" {
 		itemID = nextSystemID()
 		m.saSysItemIDs[msg.AgentID] = itemID
 		m.chatWriteSystem(itemID, msg.Text)
 	} else {
-		// Replace (not append) so only the latest retry status is shown,
-		// matching how the main agent renders retry messages.
+
 		if item := m.chatList.FindByID(itemID); item != nil {
 			if sys, ok := item.(*chat.SystemItem); ok {
 				sys.SetText(msg.Text)

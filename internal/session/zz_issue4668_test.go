@@ -5,15 +5,6 @@ import (
 	"testing"
 )
 
-// #4668 companion tests: session store maintenance must respect the
-// per-session flock and other processes' deletions.
-//   A. prune/repair must NOT unlink a session whose flock is held by a
-//      concurrent writer (pre-first-user-text window: append lands in an
-//      orphaned fd, data silently lost).
-//   B. the maintenance index merge must NOT resurrect an entry another
-//      process Deleted while we scanned (ghost rows in List that cannot
-//      be opened).
-
 func newIssue4668Store(t *testing.T) *JSONLStore {
 	t.Helper()
 	store, err := NewJSONLStore(t.TempDir())
@@ -23,11 +14,6 @@ func newIssue4668Store(t *testing.T) *JSONLStore {
 	return store
 }
 
-// newIssue4668EmptySession persists a session with NO user text - the prune
-// target (HasUserInteractionOnDisk == false, file exists). NewSession/Save
-// seeds the index row; the file is then rewritten to a single tool_result-only
-// user record (role=user, content has no text block) - exactly the
-// pre-first-user-text window from the issue.
 func newIssue4668EmptySession(t *testing.T, store *JSONLStore, id string) *Session {
 	t.Helper()
 	ses := NewSession("zai", "default", "glm-5")
@@ -50,10 +36,6 @@ func TestIssue4668PruneKeepsFlockHeldSession(t *testing.T) {
 	store := newIssue4668Store(t)
 	ses := newIssue4668EmptySession(t, store, "held-4668")
 
-	// Simulate a cross-process writer holding the per-session flock. On macOS
-	// a same-process second flock CONVERTS the lock (flock(2)) instead of
-	// conflicting, so the real SessionLock cannot exercise the guard from
-	// inside the test process; the probe var stands in for the other process.
 	orig := sessionLockProbe
 	sessionLockProbe = func(storeDir, sessionID string) bool {
 		return sessionID == "held-4668"
@@ -63,7 +45,6 @@ func TestIssue4668PruneKeepsFlockHeldSession(t *testing.T) {
 	idx := []indexEntry{sessionToIndexEntry(ses)}
 	valid, cleaned := store.pruneInvalidIndexEntries(idx)
 
-	// The flock-held session must survive BOTH the file and the index row.
 	if _, statErr := os.Stat(store.sessionPath("held-4668")); statErr != nil {
 		t.Fatalf("flock-held session unlinked during prune: %v", statErr)
 	}
@@ -85,7 +66,6 @@ func TestIssue4668RepairKeepsFlockHeldOrphan(t *testing.T) {
 	store := newIssue4668Store(t)
 	newIssue4668EmptySession(t, store, "orphan-held-4668")
 
-	// Drop it from the index so repairIndex sees it as a disk orphan.
 	idx, _ := store.loadIndexNoRepair()
 	filtered := make([]indexEntry, 0, len(idx))
 	for _, e := range idx {
@@ -97,8 +77,6 @@ func TestIssue4668RepairKeepsFlockHeldOrphan(t *testing.T) {
 		t.Fatalf("rewrite index: %v", err)
 	}
 
-	// Same cross-process simulation as the prune test (macOS flock converts
-	// same-process locks instead of conflicting).
 	orig := sessionLockProbe
 	sessionLockProbe = func(storeDir, sessionID string) bool {
 		return sessionID == "orphan-held-4668"
@@ -117,13 +95,9 @@ func TestIssue4668MergeDoesNotResurrectDeletedEntry(t *testing.T) {
 	store := newIssue4668Store(t)
 	ses := newIssue4668EmptySession(t, store, "ghost-4668")
 
-	// Pre-scan snapshot: entry present and valid (a session that HAD user
-	// interaction when scanned - simulated by the untouched index row).
 	idx := []indexEntry{sessionToIndexEntry(ses)}
-	validIdx := idx // survived the prune
+	validIdx := idx
 
-	// Another process Deletes while we scanned: row gone AND file gone. The
-	// locked reload (currentIdx) reflects the delete.
 	if err := store.Delete("ghost-4668"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -138,15 +112,13 @@ func TestIssue4668MergeDoesNotResurrectDeletedEntry(t *testing.T) {
 }
 
 func TestIssue4668MergeKeepsValidEntryMissingFromReload(t *testing.T) {
-	// The opposite direction: the entry's file still exists on disk but the
-	// locked reload lost the row (e.g. another process rewrote the index for
-	// its own reasons). The merge must keep it - do not over-drop.
+
 	store := newIssue4668Store(t)
 	ses := newIssue4668EmptySession(t, store, "alive-4668")
 
 	idx := []indexEntry{sessionToIndexEntry(ses)}
 	validIdx := idx
-	currentIdx := []indexEntry{} // row lost from reload, file still on disk
+	currentIdx := []indexEntry{}
 
 	merged := store.mergeMaintainedIndex(idx, validIdx, currentIdx)
 	found := false

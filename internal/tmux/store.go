@@ -72,15 +72,11 @@ func loadWorkspaceState(path, workspace string) ([]Pane, map[string][]LayoutPane
 }
 
 func saveWorkspaceState(path, workspace string, panes []Pane, layouts map[string][]LayoutPane) error {
-	// #4373: the store directory must exist BEFORE the lock file is opened —
-	// FileLock's O_CREATE on path+".flock" needs the parent dir and returns
-	// ENOENT otherwise, making every Save fail permanently (the MkdirAll that
-	// used to live below the lock was unreachable on the first Save with a
-	// custom store path or a fresh environment).
+
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create tmux pane store directory: %w", err)
 	}
-	// Acquire cross-process lock — multiple workspaces share the same store file.
+
 	unlock, err := lockTmuxStore(path)
 	if err != nil {
 		return fmt.Errorf("lock tmux pane store: %w", err)
@@ -114,10 +110,7 @@ func saveWorkspaceState(path, workspace string, panes []Pane, layouts map[string
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create tmux pane store directory: %w", err)
 	}
-	// Use temp+rename for atomic write — os.WriteFile truncates first,
-	// concurrent readers could see empty/partial JSON. Unique temp name
-	// (#1313): the fixed path+".tmp" let one process rename away another
-	// process's half-written temp file.
+
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
 	if err != nil {
 		return fmt.Errorf("create tmux pane store temp: %w", err)
@@ -169,14 +162,7 @@ func readPaneStore(path string) (paneStoreFile, error) {
 		return store, nil
 	}
 	if err := json.Unmarshal(data, &store); err != nil {
-		// #4681: quarantine-and-rebuild instead of wedging forever. A
-		// corrupt store (disk-full truncation, editor mishap, legacy
-		// non-atomic write) used to fail every Load/Save on the machine
-		// with no self-healing path - even a workspace that only wanted to
-		// overwrite its OWN key was blocked. Rename the file aside
-		// (preserving it for manual recovery) and rebuild from empty; the
-		// #1313 wipe concern is bounded because the quarantined copy keeps
-		// every workspace's data recoverable by hand.
+
 		quarantine := fmt.Sprintf("%s.corrupt-%d", path, time.Now().Unix())
 		if rerr := os.Rename(path, quarantine); rerr == nil {
 			debug.Log("tmux", "pane store unparseable (%v); quarantined to %s, rebuilding from empty (#4681)", err, quarantine)
@@ -191,12 +177,6 @@ func readPaneStore(path string) (paneStoreFile, error) {
 	return store, nil
 }
 
-// lockTmuxStore serializes read-modify-write on the shared pane store
-// file across PROCESSES (#1313). The previous implementation was a
-// package-level sync.Mutex that ignored path — fine for multiple in-process
-// Managers, useless for two ggcode terminals saving the shared
-// ~/.ggcode/tmux-panes.json concurrently (last writer's full-file rewrite
-// silently dropped the other's workspace panes).
 func lockTmuxStore(path string) (func(), error) {
 	return lockStoreFileCrossProc(path)
 }

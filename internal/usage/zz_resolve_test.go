@@ -1,8 +1,5 @@
 package usage
 
-// Owner ruling 2026-09-15: adapter selection is BY URL. Resolve maps a
-// base URL host to the owning probe; unknown hosts resolve empty.
-
 import "testing"
 
 func TestResolveByURL(t *testing.T) {
@@ -10,7 +7,7 @@ func TestResolveByURL(t *testing.T) {
 	cases := map[string]string{
 		"https://open.bigmodel.cn/api/coding/paas/v4": "zai",
 		"https://open.bigmodel.cn/api/anthropic":      "zai",
-		"https://open.bigmodel.cn/api/paas/v4":        "", // metered: no plan window
+		"https://open.bigmodel.cn/api/paas/v4":        "",
 		"https://api.deepseek.com":                    "deepseek",
 		"https://api.moonshot.cn/v1":                  "moonshot",
 		"https://api.moonshot.ai/v1":                  "moonshot",

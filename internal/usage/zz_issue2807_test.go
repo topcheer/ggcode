@@ -8,11 +8,6 @@ import (
 	"testing"
 )
 
-// zz_issue2807_test.go guards against the DeepSeek balance drop (#2807):
-// the Fetch loop only returned on a USD hit or a single-entry table, so a
-// multi-currency table without USD fell through with Balance=nil and the UI
-// showed "balance: -" despite the API returning data.
-
 func issue2807BalanceServer(t *testing.T, body string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -24,9 +19,6 @@ func issue2807BalanceServer(t *testing.T, body string) *httptest.Server {
 	}))
 }
 
-// TestIssue2807MultiCurrencyNoUSDFallsBackToFirst: the documented contract
-// ("USD first, else the first entry") must hold for multi-currency tables
-// without USD.
 func TestIssue2807MultiCurrencyNoUSDFallsBackToFirst(t *testing.T) {
 	srv := issue2807BalanceServer(t, `{"balance_infos":[{"currency":"CNY","total_balance":42.5},{"currency":"EUR","total_balance":7}]}`)
 	defer srv.Close()
@@ -39,7 +31,6 @@ func TestIssue2807MultiCurrencyNoUSDFallsBackToFirst(t *testing.T) {
 	}
 }
 
-// TestIssue2807USDStillPreferred: USD keeps priority over earlier entries.
 func TestIssue2807USDStillPreferred(t *testing.T) {
 	srv := issue2807BalanceServer(t, `{"balance_infos":[{"currency":"CNY","total_balance":88.5},{"currency":"USD","total_balance":12.34}]}`)
 	defer srv.Close()
@@ -52,8 +43,6 @@ func TestIssue2807USDStillPreferred(t *testing.T) {
 	}
 }
 
-// TestIssue2807SingleEntryAndEmpty: single-entry behavior unchanged; empty
-// table keeps Balance=nil (no data to show).
 func TestIssue2807SingleEntryAndEmpty(t *testing.T) {
 	srv := issue2807BalanceServer(t, `{"balance_infos":[{"currency":"CNY","total_balance":3.25}]}`)
 	defer srv.Close()

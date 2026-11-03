@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// #1537: report family fixes - llmCalls on turnJSON (case B display layer),
-// zero-TTFT exclusion from AvgTTFT (case D), and the exactly-once channel
-// send in the scan collect loop (case C, source-level pin).
-
 func TestIssue1537TurnJSONCarriesLLMCalls(t *testing.T) {
 	src := mustRead1537(t, "report_data.go")
 	if !strings.Contains(src, `json:"llmCalls"`) {

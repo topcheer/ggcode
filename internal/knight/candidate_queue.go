@@ -12,23 +12,19 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// CandidateQueue persists deferred high-value skill candidates between runs.
 type CandidateQueue struct {
 	mu   sync.Mutex
 	path string
 }
 
-// NewCandidateQueue creates a queue backed by the given JSON file path.
 func NewCandidateQueue(path string) *CandidateQueue {
 	return &CandidateQueue{path: path}
 }
 
-// EnsureDir creates the parent directory for the queue file.
 func (q *CandidateQueue) EnsureDir() error {
 	return os.MkdirAll(filepath.Dir(q.path), 0o755)
 }
 
-// List returns the current deferred candidates sorted by priority.
 func (q *CandidateQueue) List() ([]SkillCandidate, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -40,7 +36,6 @@ func (q *CandidateQueue) List() ([]SkillCandidate, error) {
 	return items, nil
 }
 
-// Upsert stores or updates a deferred candidate.
 func (q *CandidateQueue) Upsert(candidate SkillCandidate) error {
 	cleanName := sanitizeCandidateName(candidate.Name)
 	if !candidateNameAcceptable(cleanName) {
@@ -73,12 +68,6 @@ func (q *CandidateQueue) Upsert(candidate SkillCandidate) error {
 	return q.saveLocked(items)
 }
 
-// Remove deletes a candidate from the queue if present. The candidate name
-// is sanitized the same way as Upsert so a caller passing a raw (unsanitized)
-// name still targets the stored key. If no stored entry matches, the queue is
-// left unchanged and the miss is logged via debug.Log — current callers
-// discard the return on benign paths, and silent tolerance hid key mismatches
-// (issue #978).
 func (q *CandidateQueue) Remove(candidate SkillCandidate) error {
 	candidate.Name = sanitizeCandidateName(candidate.Name)
 	q.mu.Lock()

@@ -1,11 +1,5 @@
 package memory
 
-// #3602 probe: ForgetUsage must hold the #3120 cross-process FileLock
-// around its sidecar read-modify-write (FileLock outer, am.mu inner -
-// the same contract RecordUse/RecordConsumption follow). The functional
-// ghost-drop behavior is pinned here; the lock contract is pinned by the
-// source-scan probe below (AST-free: direct structural checks).
-
 import (
 	"os"
 	"strings"
@@ -22,7 +16,7 @@ func TestIssue3602_ForgetUsageDropsGhostOnDisk(t *testing.T) {
 	if _, ok := am.UsageOf("ghost-impl"); ok {
 		t.Fatal("ghost entry still served after ForgetUsage")
 	}
-	// The sidecar on disk must reflect the drop (fresh process view).
+
 	fresh := &AutoMemory{dir: dir}
 	if _, ok := fresh.UsageOf("ghost-impl"); ok {
 		t.Fatal("ghost entry resurrected from disk after ForgetUsage")

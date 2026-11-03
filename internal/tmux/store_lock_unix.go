@@ -16,6 +16,7 @@ import (
 // the saver forever. Delegated to util.FileLock (#1834 case 2 pattern:
 // LOCK_NB + bounded retry, error on timeout; saveWorkspaceState degrades
 // via its existing error path).
+
 func lockStoreFileCrossProc(path string) (func(), error) {
 	return util.FileLock(path + ".flock")
 }

@@ -10,17 +10,8 @@ import (
 	"github.com/topcheer/ggcode/internal/audit"
 )
 
-// auditLedgerEnvPath mirrors internal/agent's auditLedgerEnv: the ledger is
-// opt-in via GGCODE_AUDIT_LEDGER, so the same variable is the default source
-// for reading one back.
 const auditCmdEnv = "GGCODE_AUDIT_LEDGER"
 
-// newAuditCmd exposes the audit ledger's reader side. The ledger itself has
-// existed since the governance-audit work (hash-chained, append-only), but
-// nothing in the product consumed it after the fact: "the log exists, the
-// reader is missing". `audit report` reconstructs what a run actually did
-// (approvals, invariant rejections, A2A handoffs, error clusters, per-tool
-// rollups) together with the chain's tamper state.
 func newAuditCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "audit",

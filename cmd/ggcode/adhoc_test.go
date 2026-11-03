@@ -7,9 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// #4117 ad-hoc provider mode: flag/env resolution, protocol inference, config
-// synthesis, and the partial-pair error contract.
-
 func TestAdhocActiveRequiresBothBaseURLAndModel(t *testing.T) {
 	t.Setenv(adhocEnvBaseURL, "")
 	t.Setenv(adhocEnvModel, "")
@@ -72,7 +69,7 @@ func TestAdhocProtocolInference(t *testing.T) {
 		"https://api.anthropic.com/v1/messages":      "anthropic",
 		"https://generativelanguage.googleapis.com/": "gemini",
 		"https://api.openai.com/v1":                  "openai",
-		"https://my-gateway.local/v1":                "openai", // unknown -> openai-compatible default
+		"https://my-gateway.local/v1":                "openai",
 	}
 	for url, want := range cases {
 		if got := adhocInferProtocol(url); got != want {
@@ -114,8 +111,7 @@ func TestAdhocContextWindowAndMaxTokensFromEnv(t *testing.T) {
 }
 
 func TestAdhocConfigIsResolvable(t *testing.T) {
-	// The synthesized config must survive the real resolution pipeline the
-	// pipe entry point uses (ResolveProvider -> ResolveCurrentSelection).
+
 	t.Setenv(adhocEnvBaseURL, "")
 	t.Setenv(adhocEnvModel, "")
 	f := adhocLLMFlags{BaseURL: "https://api.example.com/v1", Model: "gpt-test", APIKey: "sk-test"}
@@ -134,10 +130,6 @@ func TestAdhocConfigIsResolvable(t *testing.T) {
 		t.Errorf("resolved endpoint mismatch: %+v", resolved)
 	}
 }
-
-// --llm-retry-always (#ad-hoc): bool flag/env resolution and the process-wide
-// retry-always activation contract (ad-hoc mode only; never leaks into normal
-// file-config runs).
 
 func TestAdhocBoolFlagAndEnv(t *testing.T) {
 	t.Setenv(adhocEnvRetryAlways, "")
@@ -165,7 +157,6 @@ func TestAdhocRetryAlwaysActivatesOnlyInAdhocMode(t *testing.T) {
 	provider.SetRetryAlways(false)
 	t.Cleanup(func() { provider.SetRetryAlways(false) })
 
-	// Ad-hoc active + retry-always set: process-wide mode flips on.
 	t.Setenv(adhocEnvBaseURL, "https://api.example.com/v1")
 	t.Setenv(adhocEnvModel, "m")
 	t.Setenv(adhocEnvRetryAlways, "true")
@@ -176,7 +167,6 @@ func TestAdhocRetryAlwaysActivatesOnlyInAdhocMode(t *testing.T) {
 		t.Fatal("retry-always must activate in ad-hoc mode")
 	}
 
-	// Ad-hoc active WITHOUT retry-always: mode stays off.
 	provider.SetRetryAlways(false)
 	t.Setenv(adhocEnvRetryAlways, "")
 	if _, err := loadConfigForRun("", &adhocLLMFlags{}); err != nil {
@@ -186,8 +176,6 @@ func TestAdhocRetryAlwaysActivatesOnlyInAdhocMode(t *testing.T) {
 		t.Fatal("retry-always must stay off when not requested")
 	}
 
-	// Retry-always requested but ad-hoc mode NOT active (no base URL/model):
-	// the escape hatch must not leak into normal file-config runs.
 	t.Setenv(adhocEnvBaseURL, "")
 	t.Setenv(adhocEnvModel, "")
 	t.Setenv(adhocEnvRetryAlways, "true")

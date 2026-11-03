@@ -18,8 +18,6 @@ func newTestQS(questions ...toolpkg.AskUserQuestion) *questionnaireState {
 	return qs
 }
 
-// ── activity_groups.go ──────────────────────────────────────────────
-
 func TestLocalizeTodoHeading(t *testing.T) {
 	en := localizeTodoHeading(LangEnglish, "fix the bug")
 	if en != "Todo: fix the bug" {
@@ -59,8 +57,6 @@ func TestIsSubAgentLifecycleTool(t *testing.T) {
 		}
 	}
 }
-
-// ── ask_user.go ─────────────────────────────────────────────────────
 
 func TestQuestionnaireState_MoveChoice(t *testing.T) {
 	qs := newTestQS(toolpkg.AskUserQuestion{
@@ -161,8 +157,6 @@ func TestQuestionnaireState_TabNavigation(t *testing.T) {
 	}
 }
 
-// ── chat_bridge.go ──────────────────────────────────────────────────
-
 func TestExtractRecentOutput(t *testing.T) {
 	for _, tt := range []struct {
 		input string
@@ -192,8 +186,6 @@ func TestFormatAskUserResult(t *testing.T) {
 		t.Errorf("expected raw string back, got %q", got2)
 	}
 }
-
-// ── ask_user localization helpers ───────────────────────────────────
 
 func TestQuestionnaireLabelsAll(t *testing.T) {
 	for _, tt := range []struct {

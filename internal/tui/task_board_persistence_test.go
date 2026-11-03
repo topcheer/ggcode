@@ -7,9 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/task"
 )
 
-// TestTaskBoardHelpersRoundTrip verifies the TUI-side snapshot/restore
-// helpers: snapshot serializes the live board into the session, restore
-// brings it back into a fresh manager (simulating restart + /resume).
 func TestTaskBoardHelpersRoundTrip(t *testing.T) {
 	m := &Model{taskMgr: task.NewManager()}
 	created := m.taskMgr.Create("step one", "detail", "doing", nil)
@@ -19,9 +16,7 @@ func TestTaskBoardHelpersRoundTrip(t *testing.T) {
 	if len(ses.TasksJSON) == 0 {
 		t.Fatal("snapshotTasksInto did not populate session.TasksJSON")
 	}
-	// The workspace fingerprint must be captured alongside the board (used
-	// by resume reconciliation). The package dir lives inside the ggcode git
-	// checkout, so capture should succeed here.
+
 	if len(ses.TasksEnvJSON) == 0 {
 		t.Fatal("snapshotTasksInto did not populate session.TasksEnvJSON")
 	}
@@ -37,17 +32,14 @@ func TestTaskBoardHelpersRoundTrip(t *testing.T) {
 	}
 }
 
-// TestTaskBoardHelpersEmptyAndNilSafety: an empty session field resets the
-// board (new session semantics), and nil taskMgr/nil session must not panic.
 func TestTaskBoardHelpersEmptyAndNilSafety(t *testing.T) {
 	m := &Model{taskMgr: task.NewManager()}
 	m.taskMgr.Create("t", "", "", nil)
-	m.restoreTasksFromSession(&session.Session{}) // empty -> reset
+	m.restoreTasksFromSession(&session.Session{})
 	if got := m.taskMgr.List(); len(got) != 0 {
 		t.Errorf("expected board reset on empty session, got %d tasks", len(got))
 	}
 
-	// Nil receivers: helpers are no-ops, never panics.
 	nilMgr := &Model{}
 	nilMgr.snapshotTasksInto(&session.Session{})
 	nilMgr.restoreTasksFromSession(&session.Session{})

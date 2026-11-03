@@ -1,14 +1,5 @@
 package session
 
-// #4200: the desktop vision-fallback retry path calls
-// Manager.RemoveLastUserMessage to drop the original image content from the
-// live context, but the JSONL journal kept it — on resume the agent replayed
-// BOTH the original and the text-only projection turns and the vision error
-// recurred. These tests pin the journal-side compensation:
-// AppendUserMessageRemovalToDisk writes a "message_remove" tombstone, and
-// loadSession applies it in scan order to BOTH ses.Messages (rendering) and
-// ses.ContextMessages (agent context).
-
 import (
 	"testing"
 
@@ -19,9 +10,6 @@ func issue4200Msg(role, text string) provider.Message {
 	return provider.Message{Role: role, Content: []provider.ContentBlock{{Type: "text", Text: text}}}
 }
 
-// Original turn replay: after the tombstone, resume must render and replay
-// only the projection turn — the original (image) user message must be gone
-// from both Messages and ContextMessages.
 func TestIssue4200_TombstoneRemovesOriginalFromLoad(t *testing.T) {
 	store, err := NewJSONLStore(t.TempDir())
 	if err != nil {
@@ -63,9 +51,6 @@ func TestIssue4200_TombstoneRemovesOriginalFromLoad(t *testing.T) {
 	}
 }
 
-// The tombstone must reach the user record even when the failed turn already
-// recorded its assistant reply (pop scans backward past non-user records),
-// and must NOT touch an earlier user turn.
 func TestIssue4200_TombstonePopsNewestUserOnly(t *testing.T) {
 	store, err := NewJSONLStore(t.TempDir())
 	if err != nil {
@@ -104,8 +89,6 @@ func TestIssue4200_TombstonePopsNewestUserOnly(t *testing.T) {
 	}
 }
 
-// Defensive no-ops: tombstone with no user record on disk, and a duplicate
-// tombstone, must never corrupt or drop unrelated records.
 func TestIssue4200_TombstoneNoUserAndDuplicateNoOp(t *testing.T) {
 	store, err := NewJSONLStore(t.TempDir())
 	if err != nil {
@@ -121,7 +104,7 @@ func TestIssue4200_TombstoneNoUserAndDuplicateNoOp(t *testing.T) {
 	if err := store.AppendMessageToDisk(ses, issue4200Msg("user", "only user")); err != nil {
 		t.Fatal(err)
 	}
-	// duplicate tombstone: the second one has no remaining user before it to pop
+
 	if err := store.AppendUserMessageRemovalToDisk(ses); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +118,6 @@ func TestIssue4200_TombstoneNoUserAndDuplicateNoOp(t *testing.T) {
 	}
 }
 
-// AppendUserMessageRemovalToDisk(nil) must not panic or write.
 func TestIssue4200_AppendRemovalNilSession(t *testing.T) {
 	store, err := NewJSONLStore(t.TempDir())
 	if err != nil {

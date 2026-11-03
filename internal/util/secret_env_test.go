@@ -25,7 +25,7 @@ func TestSecretEnvRegistry(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("strip mismatch:\n got %v\nwant %v", got, want)
 	}
-	// Input untouched
+
 	if len(env) != 4 {
 		t.Errorf("input slice mutated")
 	}

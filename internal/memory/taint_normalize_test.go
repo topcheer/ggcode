@@ -2,10 +2,6 @@ package memory
 
 import "testing"
 
-// G1/G2 (sa-157): the memory-layer taint check shares the normalized match
-// key with the agent-side guard - obfuscated and Chinese injection
-// directives must taint, benign bilingual notes must not.
-
 func TestDetectInjectionTaintObfuscation(t *testing.T) {
 	cases := []struct {
 		name, content string
@@ -38,11 +34,11 @@ func TestDetectInjectionTaintBenignControl(t *testing.T) {
 
 func TestNormalizeForInjectionMatch(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"ignore\u200b", "ignore"}, // ZWSP stripped
-		{"іgnore", "ignore"},       // Cyrillic dotted I folded
-		{"ＩＧ", "IG"},               // full-width via NFKC
-		{"İ", "İ"},                 // NFKC-stable (U+0130 composes closed); its length change happens in caller-side ToLower, and the fingerprint path now indexes and slices the same string (#3572 lesson)
-		{"", ""},                   // empty passthrough
+		{"ignore\u200b", "ignore"},
+		{"іgnore", "ignore"},
+		{"ＩＧ", "IG"},
+		{"İ", "İ"},
+		{"", ""},
 		{"plain ascii text", "plain ascii text"},
 	}
 	for _, tc := range cases {

@@ -5,13 +5,6 @@ import (
 	"testing"
 )
 
-// sa-117: /continue-task confirm-to-resume for crashed runs. The handler is
-// deliberately modeled on /retry (three-state guard), with two semantic
-// differences pinned here: the captured task is one-shot (consumed on
-// dispatch, NOT on the busy rejection) and the busy state must NOT consume
-// the task (otherwise a momentary load spike would silently eat the only
-// chance to resume the crashed task).
-
 func TestContinueTaskEmpty(t *testing.T) {
 	m := newTestModel()
 	m.crashResumeTask = ""
@@ -52,9 +45,7 @@ func TestContinueTaskInSlashCommandList(t *testing.T) {
 			if !strings.Contains(SlashCommandDescriptions["/continue-task"], "crash") {
 				t.Fatalf("/continue-task description missing 'crash': %q", SlashCommandDescriptions["/continue-task"])
 			}
-			// Empty placeholder = Tab completion triggers the command
-			// immediately (same as /reflect, /rules) - /continue-task takes
-			// no arguments by design.
+
 			if ph, ok := SlashCommandPlaceholders["/continue-task"]; !ok || ph != "" {
 				t.Fatalf("/continue-task placeholder must exist and be empty (no-arg command), got %q ok=%v", ph, ok)
 			}

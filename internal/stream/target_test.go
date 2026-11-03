@@ -26,12 +26,10 @@ func TestTargetMaskURL(t *testing.T) {
 func TestTargetStateTransitions(t *testing.T) {
 	target := NewTarget("test", "rtmp://example.com/app/key")
 
-	// Initial state
 	if target.State() != TargetIdle {
 		t.Errorf("initial state = %q, want idle", target.State())
 	}
 
-	// Status snapshot
 	status := target.Status()
 	if status.Name != "test" {
 		t.Errorf("status.Name = %q, want test", status.Name)
@@ -39,7 +37,7 @@ func TestTargetStateTransitions(t *testing.T) {
 	if status.State != TargetIdle {
 		t.Errorf("status.State = %q, want idle", status.State)
 	}
-	// URL should be masked
+
 	if status.URL == "rtmp://example.com/app/key" {
 		t.Error("status URL should be masked")
 	}
@@ -47,7 +45,7 @@ func TestTargetStateTransitions(t *testing.T) {
 
 func TestTargetStopFromIdle(t *testing.T) {
 	target := NewTarget("test", "rtmp://example.com/app/key")
-	// Stopping from idle should be a no-op
+
 	target.Stop()
 	if target.State() != TargetIdle {
 		t.Errorf("state after stop from idle = %q, want idle", target.State())
@@ -63,28 +61,19 @@ func TestTargetWriteNotLive(t *testing.T) {
 }
 
 func TestTargetArgsNoReFlag(t *testing.T) {
-	// Verify that Connect() does NOT use -re flag (removed for live streaming)
-	// We can't easily test the actual FFmpeg args, but we can verify the
-	// target doesn't have -re in its expected behavior by checking that
-	// a Connect attempt uses the right URL.
+
 	target := NewTarget("test", "rtmp://example.com/app/key")
 
-	// State should be idle before connect
 	if target.State() != TargetIdle {
 		t.Errorf("initial state = %q, want idle", target.State())
 	}
 
-	// Connect will likely fail without FFmpeg, but should not panic
-	// The key test is that the -re flag was removed from the args
 }
 
 func TestTargetWriteCountsBytes(t *testing.T) {
-	// When target is live, Write should increment bytesSent.
-	// We can't start a real FFmpeg, but we can test the Write logic
-	// by setting state directly.
+
 	target := NewTarget("test", "rtmp://example.com/app/key")
 
-	// Writing to idle target should error and not count
 	_, err := target.Write([]byte("data"))
 	if err == nil {
 		t.Error("expected error for idle target write")
@@ -114,7 +103,7 @@ func TestTargetStatusFields(t *testing.T) {
 	if status.BytesSent != 0 {
 		t.Errorf("BytesSent = %d, want 0", status.BytesSent)
 	}
-	// URL should be masked
+
 	if status.URL == "rtmp://live.twitch.tv/app/mystreamkey" {
 		t.Error("status URL should be masked")
 	}

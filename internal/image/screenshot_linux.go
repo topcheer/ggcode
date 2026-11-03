@@ -12,8 +12,6 @@ import (
 	"strings"
 )
 
-// CaptureScreen captures a screenshot on Linux by auto-detecting an
-// available screenshot tool.
 func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 	tools := candidateLinuxScreenshotTools()
 	if len(tools) == 0 {
@@ -28,16 +26,8 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 	}
 	defer cleanup()
 
-	// #1571-A: try every installed candidate - a session-mismatched tool
-	// (grim on X11, scrot-only on Wayland) no longer aborts the capture;
-	// the next usable tool takes over. Normalize options per tool: translate
-	// unsupported modes (window, multi-display) into what the tool can do,
-	// or skip that tool (#555, #975).
 	toolSucceeded, lastErr := runLinuxToolCandidates(tools, rawPath, opts)
-	// #3002: when every candidate failed (lastErr != nil, no success), a
-	// pre-existing file at rawPath (e.g. a stale capture from a previous run
-	// at the same OutputPath) must NOT be mistaken for this round's output:
-	// return the tool error instead of serving stale bytes as success (#1259).
+
 	if !toolSucceeded && lastErr != nil {
 		return ScreenshotResult{}, lastErr
 	}
@@ -54,9 +44,6 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 	return result, nil
 }
 
-// runLinuxToolCandidates tries each candidate tool in order and returns
-// whether one of them succeeded (exited 0 and wrote rawPath) this round.
-// lastErr keeps the most recent failure for callers to report (#1571-A, #3002).
 func runLinuxToolCandidates(tools []string, rawPath string, opts ScreenshotOptions) (bool, error) {
 	var lastErr error
 	for _, tool := range tools {
@@ -91,25 +78,12 @@ func runLinuxToolCandidates(tools []string, rawPath string, opts ScreenshotOptio
 			lastErr = fmt.Errorf("%s failed: %w\n%s", tool, err, strings.TrimSpace(string(out)))
 			continue
 		}
-		// Found a working tool - finalize below re-reads the file.
+
 		return true, nil
 	}
 	return false, lastErr
 }
 
-// prepareLinuxCaptureOpts normalizes opts for the detected tool:
-//
-//   - Window capture (#555): grim resolves the window geometry via hyprctl
-//     into a Region; tools that cannot target a window by title fail with an
-//     explicit, actionable error instead of returning the wrong image.
-//   - gnome-screenshot limits (#975): no CLI region capture and no per-output
-//     selection, so Display>=1/Region fail explicitly (same treatment; the
-//     gate is kept in sync with the Region-translation gate, #3013).
-//   - Best-effort display selection (#555): most tools cannot select an
-//     output by index, so translate the 1-based display index into a region
-//     covering that output (geometry from xrandr/wlr-randr). Region and
-//     Window take precedence; resolution failure falls back to the default
-//     output.
 func prepareLinuxCaptureOpts(tool string, opts ScreenshotOptions) (ScreenshotOptions, error) {
 	if opts.Window != "" {
 		switch tool {
@@ -133,22 +107,12 @@ func prepareLinuxCaptureOpts(tool string, opts ScreenshotOptions) (ScreenshotOpt
 		}
 	}
 
-	// #3003: Display is a 1-based monitor index (screenshot_common.go:
-	// "1-based monitor index, 0=primary"), matching darwin/windows. The old
-	// `> 1` gate left Display==1 without a region, and grim without -g
-	// composites ALL outputs - a 3-monitor setup returned a panoramic shot
-	// when the primary screen was requested. linuxDisplayBounds accepts
-	// index 1 (it only rejects <1), so >= 1 is the correct gate.
 	if opts.Window == "" && opts.Region == nil && opts.Display >= 1 {
 		if region, err := linuxDisplayBounds(opts.Display); err == nil {
 			opts.Region = &region
 		}
 	} else if opts.Window == "" && opts.Region == nil && opts.Display == 0 {
-		// #3003 follow-up: 0=primary (the documented default) still fell
-		// through to grim's all-outputs composite after the >=1 fix. Resolve
-		// the primary output explicitly so a plain capture (no Display set)
-		// on a multi-monitor setup captures the primary screen, not a
-		// panorama. Resolution failure keeps the best-effort fallback (#555).
+
 		if region, err := linuxDisplayRegionForFn(0); err == nil {
 			opts.Region = &region
 		}
@@ -156,9 +120,6 @@ func prepareLinuxCaptureOpts(tool string, opts ScreenshotOptions) (ScreenshotOpt
 	return opts, nil
 }
 
-// primaryDisplayIndex returns the 1-based index of the primary output in
-// displays, falling back to the first display when none is flagged primary
-// (single-head setups and some wlr-randr versions) (#3003).
 func primaryDisplayIndex(displays []DisplayInfo) int {
 	for i, d := range displays {
 		if d.IsPrimary {
@@ -168,9 +129,6 @@ func primaryDisplayIndex(displays []DisplayInfo) int {
 	return 1
 }
 
-// linuxDisplayRegionFor resolves the capture region for display index 0
-// (the primary output). Index >= 1 keeps going through linuxDisplayBounds
-// directly (#3003).
 func linuxDisplayRegionFor(_ int) (ScreenshotRegion, error) {
 	displays, err := ListDisplays()
 	if err != nil {
@@ -182,18 +140,8 @@ func linuxDisplayRegionFor(_ int) (ScreenshotRegion, error) {
 	return linuxDisplayBounds(primaryDisplayIndex(displays))
 }
 
-// linuxDisplayRegionForFn is the test seam for prepareLinuxCaptureOpts
-// (#3003): probes stub the primary-output resolver instead of shelling
-// out to xrandr/wlr-randr.
 var linuxDisplayRegionForFn = linuxDisplayRegionFor
 
-// candidateLinuxScreenshotTools returns installed screenshot tools ordered
-// for the current session type (#1571-A): on X11, an incidental grim
-// (pulled in by distro deps) was tried first and its guaranteed failure
-// (no wlroots connection) aborted the whole capture even though scrot/
-// import were perfectly usable; the mirror on Wayland with only scrot
-// installed silently grabbed the XWayland virtual screen. Preferred set
-// first, then everything else as fallback.
 func candidateLinuxScreenshotTools() []string {
 	installed := func(names ...string) []string {
 		var out []string
@@ -227,13 +175,8 @@ func linuxScreenshotToolsMissingError() error {
 	}
 }
 
-// ListDisplays returns display information on Linux using xrandr or wlr-randr.
 func ListDisplays() ([]DisplayInfo, error) {
-	// #1571-B: on Wayland, xrandr (XWayland) reports the single virtual
-	// screen's PHYSICAL geometry while grim -g wants wlroots LOGICAL
-	// coordinates - the geometry handed to grim was wrong for any
-	// multi-display setup (the #1258 wlr-randr class, resurrected by the
-	// xrandr-first ordering). Wayland sessions try wlr-randr first.
+
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("XDG_SESSION_TYPE")), "wayland") {
 		if _, err := exec.LookPath("wlr-randr"); err == nil {
 			return listDisplaysWlrrandr()
@@ -298,7 +241,6 @@ func listDisplaysWlrrandr() ([]DisplayInfo, error) {
 	return parseWlrrandrOutput(string(out)), nil
 }
 
-// ListWindows returns capturable windows on Linux using wmctrl.
 func ListWindows() ([]WindowInfo, error) {
 	if _, err := exec.LookPath("wmctrl"); err != nil {
 		return nil, fmt.Errorf("window listing requires wmctrl. Install wmctrl, then try again")
@@ -307,8 +249,7 @@ func ListWindows() ([]WindowInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("wmctrl failed: %w", err)
 	}
-	// #975: parse the padded fixed-width columns with strings.Fields, not a
-	// single-space SplitN (which broke App/Title alignment and dropped lines).
+
 	return parseWmctrlOutput(string(out)), nil
 }
 
@@ -323,10 +264,7 @@ func buildGrimCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
 }
 
 func buildGnomeScreenshotCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
-	// #975: no --display= is passed anymore. The flag is a GDK/X11 connection
-	// name (host:D.S like ":0"), not an xrandr output name — passing "HDMI-A-1"
-	// made gnome-screenshot fail with "cannot open display". Display/Region
-	// requests are rejected earlier by gnomeScreenshotUnsupportedOpts.
+
 	_ = opts
 	return exec.Command("gnome-screenshot", "-f", outPath)
 }
@@ -334,18 +272,11 @@ func buildScrotCommand(outPath string, opts ScreenshotOptions) (*exec.Cmd, error
 	args := []string{"-z"}
 	if opts.Region != nil {
 		r := opts.Region
-		// #762: scrot -a takes X,Y,W,H (width/height), not bottom-right
-		// coordinates. Passing X+W/Y+H overshot every region and fell off
-		// multi-monitor edges; X=Y=0 masked it in the full-screen test path.
+
 		args = append(args, "-a", fmt.Sprintf("%d,%d,%d,%d", r.X, r.Y, r.Width, r.Height))
 	}
 	if opts.Window != "" {
-		// #555: resolve the title to a concrete window ID via wmctrl.
-		// #1259: a resolution failure used to silently append "-u" (the
-		// CURRENTLY FOCUSED window) — the agent asked for "Firefox", got a
-		// screenshot of the terminal, and reasoned from the wrong image with
-		// a success status. Fail explicitly like the grim path instead; there
-		// is no "focused window" request semantic that could justify -u.
+
 		wid, err := matchLinuxWindowID(opts.Window)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -359,9 +290,7 @@ func buildScrotCommand(outPath string, opts ScreenshotOptions) (*exec.Cmd, error
 
 func buildImportCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
 	if opts.Window != "" {
-		// #555: a raw title query almost never matches X11 WM_NAME, so resolve
-		// to a concrete window ID first (exact title match preferred); only fall
-		// back to the raw query if resolution is unavailable.
+
 		if wid, err := matchLinuxWindowID(opts.Window); err == nil {
 			return exec.Command("import", "-window", fmt.Sprintf("0x%x", wid), outPath)
 		}
@@ -376,8 +305,6 @@ func buildImportCommand(outPath string, opts ScreenshotOptions) *exec.Cmd {
 	return exec.Command("import", args...)
 }
 
-// matchLinuxWindowID resolves a title/app query to an X11 window ID via
-// wmctrl. Matching semantics (exact-first) live in matchWindowQuery (#555).
 func matchLinuxWindowID(query string) (int, error) {
 	windows, err := ListWindows()
 	if err != nil {
@@ -386,10 +313,6 @@ func matchLinuxWindowID(query string) (int, error) {
 	return matchWindowQuery(windows, query)
 }
 
-// resolveLinuxWindowRegion returns the geometry of the window matching query
-// using hyprctl (Hyperland compositor). grim has no window mode, so the
-// geometry is applied via -g. Other compositors are not guessed at: callers
-// surface an explicit error rather than silently capturing the full screen.
 func resolveLinuxWindowRegion(query string) (ScreenshotRegion, error) {
 	if _, err := exec.LookPath("hyprctl"); err != nil {
 		return ScreenshotRegion{}, fmt.Errorf("hyprctl not found")
@@ -414,8 +337,6 @@ func resolveLinuxWindowRegion(query string) (ScreenshotRegion, error) {
 		return ScreenshotRegion{}, fmt.Errorf("parsing hyprctl clients: %w", err)
 	}
 
-	// Exact match (title, then class) before substring match, mirroring
-	// matchLinuxWindowID's preference ordering.
 	q := strings.ToLower(query)
 	found := -1
 	for _, pass := range []struct{ exact bool }{{true}, {false}} {
@@ -443,8 +364,6 @@ func resolveLinuxWindowRegion(query string) (ScreenshotRegion, error) {
 	return ScreenshotRegion{X: c.Position.X, Y: c.Position.Y, Width: c.Size.Width, Height: c.Size.Height}, nil
 }
 
-// linuxDisplayBounds resolves a 1-based display index to its on-screen
-// geometry using xrandr (X11) or wlr-randr (Wayland) via ListDisplays.
 func linuxDisplayBounds(index int) (ScreenshotRegion, error) {
 	displays, err := ListDisplays()
 	if err != nil {
@@ -460,5 +379,4 @@ func linuxDisplayBounds(index int) (ScreenshotRegion, error) {
 	return ScreenshotRegion{X: d.X, Y: d.Y, Width: d.Width, Height: d.Height}, nil
 }
 
-// Guard against unused import warnings on some build paths.
 var _ = filepath.Join

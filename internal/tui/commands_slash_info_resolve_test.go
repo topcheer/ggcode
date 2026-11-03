@@ -8,10 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// resolveTestStore is a minimal sessionLister for testing resolveSessionID.
-// We avoid JSONLStore because its Save() does not populate the index
-// (index updates happen on AppendMessageToDisk), so List() would return
-// empty. This mock holds sessions directly in memory.
 type resolveTestStore struct {
 	sessions map[string]*session.Session
 }
@@ -104,7 +100,7 @@ func TestResolveSessionIDAmbiguous(t *testing.T) {
 	if !strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("expected ambiguous error, got %v", err)
 	}
-	// Error should list candidate IDs and timestamps so the user can pick one.
+
 	if !strings.Contains(err.Error(), "aaaabbbb") || !strings.Contains(err.Error(), "eeeeffff") {
 		t.Fatalf("error should list candidates, got %v", err)
 	}
@@ -127,7 +123,7 @@ func TestResolveSessionIDNoMatch(t *testing.T) {
 }
 
 func TestResolveSessionIDExactWinsOverAmbiguousPrefix(t *testing.T) {
-	// An exact ID must resolve even if it is also a prefix of another ID.
+
 	store := newResolveTestStore(t,
 		&session.Session{ID: "abcd", Title: "short"},
 		&session.Session{ID: "abcdef", Title: "long"},

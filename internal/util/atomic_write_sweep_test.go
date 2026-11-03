@@ -1,10 +1,5 @@
 package util
 
-// sa-242 runtime audit: AtomicWriteFile cleans its temp on every error
-// return, but a process killed between CreateTemp and Rename (SIGKILL,
-// OOM, power loss) leaves ".ggcode-tmp-*" behind forever. SweepStaleTempFiles
-// is the startup backstop; these tests pin its age gate and tolerance.
-
 import (
 	"os"
 	"path/filepath"
@@ -22,7 +17,7 @@ func TestSweepStaleTempFiles_RemovesOnlyStale(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Age the stale one past the sweep cutoff.
+
 	old := time.Now().Add(-2 * time.Hour)
 	if err := os.Chtimes(stale, old, old); err != nil {
 		t.Fatal(err)

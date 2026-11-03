@@ -52,7 +52,7 @@ func TestBuildAgentSubmissionContentMultipleImages(t *testing.T) {
 	}
 
 	content := buildAgentSubmissionContent("compare these", imgs, true)
-	// Should be: 1 text block + 2 image blocks
+
 	if len(content) != 3 {
 		t.Fatalf("expected 3 blocks (text + 2 images), got %d", len(content))
 	}
@@ -94,34 +94,22 @@ func TestPersistAttachedImageWritesStableFile(t *testing.T) {
 	}
 }
 
-// TestRestorePendingImagesMsgHandler pins #1393-A: the ExpandMentions
-// failure path sends captured attachments home via restorePendingImagesMsg;
-// Update appends them back to pendingImages. RunID-gated: a stale message
-// from an aborted run must NOT interleave into a newer run's state.
 func TestRestorePendingImagesMsgHandler(t *testing.T) {
 	m := newTestModel()
 	m.activeAgentRunID = 7
 	imgs := []imageAttachedMsg{{sourcePath: "shot.png"}}
 
-	// Same-run message restores.
 	m2, _ := m.Update(restorePendingImagesMsg{RunID: 7, Images: imgs})
 	if got := m2.(Model).pendingImages; len(got) != 1 || got[0].sourcePath != "shot.png" {
 		t.Fatalf("images not restored: %#v", got)
 	}
 
-	// Stale-run message is dropped.
 	m3, _ := m.Update(restorePendingImagesMsg{RunID: 6, Images: imgs})
 	if got := m3.(Model).pendingImages; len(got) != 0 {
 		t.Fatalf("stale-run restore interleaved: %#v", got)
 	}
 }
 
-// TestVisionFallbackRestoresModelWhenActivationFails pins the leak fix in
-// runAgentSubmission's vision fallback: when SetActiveSelection succeeds but
-// tryActivateCurrentSelection fails (e.g. missing API key), the user's model
-// must be restored synchronously AND via defer before the text-only
-// fallthrough runs. Pre-fix, the vision model leaked into config.Model
-// permanently on this path.
 func TestVisionFallbackRestoresModelWhenActivationFails(t *testing.T) {
 	m := newTestModel()
 	cfg := &config.Config{
@@ -134,10 +122,7 @@ func TestVisionFallbackRestoresModelWhenActivationFails(t *testing.T) {
 					"testep": {
 						Protocol: "openai",
 						BaseURL:  "https://example.com",
-						// APIKey intentionally empty: ResolveCurrentSelection
-						// fails with "no api key configured" while
-						// SetActiveSelection still succeeds — the exact
-						// half-switched state the fix guards against.
+
 						Models: []string{"text-model", "gpt-4o"},
 					},
 				},
@@ -146,11 +131,8 @@ func TestVisionFallbackRestoresModelWhenActivationFails(t *testing.T) {
 	}
 	m.config = cfg
 
-	// Drive the real function chain (everything except the
-	// runAgentSubmission shell): real selection → real switch → real
-	// activation attempt → synchronous restore → idempotent deferred restore.
 	userModel := cfg.Model
-	vm := m.temporaryVisionModelForTurn() // real selection, not a hardcoded name
+	vm := m.temporaryVisionModelForTurn()
 	if vm != "gpt-4o" {
 		t.Fatalf("temporaryVisionModelForTurn() = %q, want gpt-4o", vm)
 	}
@@ -161,12 +143,12 @@ func TestVisionFallbackRestoresModelWhenActivationFails(t *testing.T) {
 	if err := m.tryActivateCurrentSelection(); err == nil {
 		t.Fatal("expected activation failure with empty API key")
 	}
-	m.restoreUserModelAfterVisionTurn(userModel) // failure-branch synchronous restore
+	m.restoreUserModelAfterVisionTurn(userModel)
 
 	if cfg.Model != userModel {
 		t.Fatalf("vision model leaked: config.Model = %q, want %q", cfg.Model, userModel)
 	}
-	// Second (deferred) restore must be a safe no-op.
+
 	m.restoreUserModelAfterVisionTurn(userModel)
 	if cfg.Model != userModel {
 		t.Fatalf("idempotent restore mutated model: %q", cfg.Model)

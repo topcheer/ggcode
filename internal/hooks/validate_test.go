@@ -107,8 +107,7 @@ func TestValidateHooks_OnCompaction(t *testing.T) {
 }
 
 func TestValidateHooks_OnCompaction_Invalid(t *testing.T) {
-	// Missing command and match — should be caught now that on_compaction
-	// is validated.
+
 	cfg := HookConfig{
 		OnCompaction: []Hook{
 			{Match: "", Command: ""},
@@ -142,7 +141,7 @@ func TestRunCompactionHooks_FireAndForget(t *testing.T) {
 			{Match: "*", Command: "true"},
 		},
 	}
-	// Should not block or panic
+
 	RunCompactionHooks(cfg, HookEnv{
 		TokenBefore: 50000,
 		TokenAfter:  15000,

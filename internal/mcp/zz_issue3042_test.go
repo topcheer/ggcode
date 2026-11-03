@@ -1,10 +1,5 @@
 package mcp
 
-// Regression probe for #3042: the ReadResource MISS path stored the result
-// whose Contents slice the returned &result still aliases - the cache-hit
-// path clones on read (#3041/09c72cf28) but the store side did not. A caller
-// mutating the FIRST (miss) result's Contents polluted every later TTL hit.
-
 import (
 	"context"
 	"testing"
@@ -36,8 +31,6 @@ func TestIssue3042_MissPathStoreDoesNotAliasCallerSlice(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// First read: MISS - the response is stored in the cache and the same
-	// slice is handed to the caller.
 	first, err := client.ReadResource(ctx, "file:///a.txt")
 	if err != nil {
 		t.Fatalf("first (miss) read: %v", err)
@@ -46,12 +39,8 @@ func TestIssue3042_MissPathStoreDoesNotAliasCallerSlice(t *testing.T) {
 		t.Fatalf("unexpected first read: %+v", first.Contents)
 	}
 
-	// Caller-side mutation of the MISS result - exactly the pollution path:
-	// element rewrite (and a sort would do the same) writes through the
-	// shared backing array into the stored cache entry.
 	first.Contents[0].Text = "polluted"
 
-	// Second read within the TTL: cache HIT must serve the pristine entry.
 	second, err := client.ReadResource(ctx, "file:///a.txt")
 	if err != nil {
 		t.Fatalf("second (hit) read: %v", err)

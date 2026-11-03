@@ -15,13 +15,11 @@ const (
 
 var spinnerRunes = []rune(spinnerChars)
 
-// spinnerMsg is sent by tea.Tick to animate the spinner.
 type spinnerMsg struct {
 	time.Time
 	generation uint64
 }
 
-// ToolSpinner manages spinner state for active tool execution.
 type ToolSpinner struct {
 	active     bool
 	generation uint64
@@ -31,14 +29,12 @@ type ToolSpinner struct {
 	startTime  time.Time
 }
 
-// NewToolSpinner creates a new spinner.
 func NewToolSpinner() *ToolSpinner {
 	return &ToolSpinner{
 		style: lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
 	}
 }
 
-// Start begins the spinner for a tool.
 func (s *ToolSpinner) Start(label string) tea.Cmd {
 	s.generation++
 	s.active = true
@@ -48,24 +44,20 @@ func (s *ToolSpinner) Start(label string) tea.Cmd {
 	return s.tick(s.generation)
 }
 
-// Stop ends the spinner.
 func (s *ToolSpinner) Stop() {
 	s.generation++
 	s.active = false
 	s.label = ""
 }
 
-// IsActive returns whether the spinner is running.
 func (s *ToolSpinner) IsActive() bool {
 	return s.active
 }
 
-// CurrentFrame returns the current spinner frame index.
 func (s *ToolSpinner) CurrentFrame() int {
 	return s.frame
 }
 
-// Elapsed returns how long the current tool has been running.
 func (s *ToolSpinner) Elapsed() time.Duration {
 	if s.startTime.IsZero() {
 		return 0
@@ -73,7 +65,6 @@ func (s *ToolSpinner) Elapsed() time.Duration {
 	return time.Since(s.startTime).Round(time.Millisecond)
 }
 
-// String returns the spinner string with tool name.
 func (s *ToolSpinner) String() string {
 	if !s.active {
 		return ""
@@ -86,14 +77,12 @@ func spinnerFrameGlyph(frame int) string {
 	return string(spinnerRunes[frame%len(spinnerRunes)])
 }
 
-// tick returns a tea.Cmd that sends the next spinner frame.
 func (s *ToolSpinner) tick(generation uint64) tea.Cmd {
 	return tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
 		return spinnerMsg{Time: t, generation: generation}
 	})
 }
 
-// Update handles spinner animation frames.
 func (s *ToolSpinner) Update(msg tea.Msg) tea.Cmd {
 	tick, ok := msg.(spinnerMsg)
 	if !ok {
@@ -121,17 +110,16 @@ func (m *Model) ensureLoadingSpinner(label string) tea.Cmd {
 	return m.startLoadingSpinner(label)
 }
 
-// ToolStatusMsg is sent when a tool starts or finishes execution.
 type ToolStatusMsg struct {
 	ToolID      string
 	ToolName    string
 	DisplayName string
 	Detail      string
 	Activity    string
-	Running     bool // true = start, false = done
+	Running     bool
 	Result      string
 	RawArgs     string
-	Args        string // raw tool arguments summary, used as a fallback only
+	Args        string
 	IsError     bool
 	Elapsed     time.Duration
 }

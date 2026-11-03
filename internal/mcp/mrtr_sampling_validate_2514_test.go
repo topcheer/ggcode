@@ -1,12 +1,5 @@
 package mcp
 
-// #2514: the MRTR deferred-sampling resolver must mirror the interactive
-// handleSampling validation exactly - ParseSamplingParams (parse level) AND
-// ValidateSamplingParams (SEP-1577 structural checks). Before this, a
-// deferred sampling input request with structurally malformed params (e.g.
-// tool_use without a matching tool_result turn) reached the LLM handler
-// instead of failing fast.
-
 import (
 	"context"
 	"encoding/json"
@@ -21,9 +14,6 @@ func TestResolveMRTSamplingValidatesStructure(t *testing.T) {
 		return nil, nil
 	})
 
-	// Structurally invalid per SEP-1577: toolChoice declared without any
-	// tool definitions (ValidateSamplingParams rejects this combination;
-	// ParseSamplingParams alone accepts it).
 	raw := json.RawMessage(`{
 		"messages": [{"role": "user", "content": {"type": "text", "text": "hi"}}],
 		"maxTokens": 100,

@@ -1,12 +1,5 @@
 package memory
 
-// sa-146 (REALM, arXiv:2609.33226 retrieval-driven reconsolidation) probes:
-// recall arbitration verdicts must not be use-and-forget. A HIGH-confidence
-// loss (trust gap >= recallConflictLossGap) persists a Conflicts counter on
-// the loser's sidecar record; the counter feeds cap-eviction order (below
-// never-used) and arbitration trust (bounded penalty). Thin margins stay
-// ephemeral annotations.
-
 import (
 	"os"
 	"path/filepath"
@@ -14,15 +7,12 @@ import (
 	"time"
 )
 
-// E2E: a high-confidence conflict during LoadForPrompt persists exactly one
-// loss on the loser and nothing on the winner.
 func TestSA146_LoadForPromptPersistsHighConfidenceLoss(t *testing.T) {
 	dir := t.TempDir()
 	am := &AutoMemory{dir: dir}
 	writeMem(t, dir, "build-old-impl", "build command: go build ./...")
 	writeMem(t, dir, "build-new-impl", "build command: go build -tags goolm ./...")
-	// Winner: persistent + fresh (1.0+0.2+0.1). Loser: persistent + ancient
-	// (1.0+0.2-0.3). Gap 0.4 >= 0.2 -> the loss must persist.
+
 	oldPath := filepath.Join(dir, "build-old-impl.md")
 	past := time.Now().Add(-400 * 24 * time.Hour)
 	if err := os.Chtimes(oldPath, past, past); err != nil {
@@ -42,14 +32,11 @@ func TestSA146_LoadForPromptPersistsHighConfidenceLoss(t *testing.T) {
 	}
 }
 
-// Thin margin (tie trust, newer-wins tie-break only) must NOT persist a loss.
 func TestSA146_ThinMarginLossNotPersisted(t *testing.T) {
 	dir := t.TempDir()
 	am := &AutoMemory{dir: dir}
 	writeMem(t, dir, "cfg-a-impl", "build command: go build ./...")
 	writeMem(t, dir, "cfg-b-impl", "build command: go build -tags goolm ./...")
-	// Same category, same age: trust ties at 1.3, the newer modtime wins the
-	// tie-break with margin 0 < recallConflictLossGap.
 
 	if _, _, err := am.LoadForPrompt(); err != nil {
 		t.Fatal(err)
@@ -61,13 +48,10 @@ func TestSA146_ThinMarginLossNotPersisted(t *testing.T) {
 	}
 }
 
-// RecordConflictLoss: debounced per key in the same window as RecordUse,
-// accumulates after the window expires, and reloads from the sidecar in a
-// fresh instance.
 func TestSA146_RecordConflictLossDebounceAndReload(t *testing.T) {
 	am := newTestAutoMemory(t)
 	am.RecordConflictLoss([]string{"k1"})
-	am.RecordConflictLoss([]string{"k1"}) // same debounce window: counted once
+	am.RecordConflictLoss([]string{"k1"})
 	info, _ := am.UsageOf("k1")
 	if info.Conflicts != 1 {
 		t.Fatalf("debounced count = %d, want 1", info.Conflicts)
@@ -80,14 +64,13 @@ func TestSA146_RecordConflictLossDebounceAndReload(t *testing.T) {
 		t.Fatalf("post-window count = %d, want 2", info.Conflicts)
 	}
 
-	am2 := &AutoMemory{dir: am.dir} // fresh instance, same sidecar
+	am2 := &AutoMemory{dir: am.dir}
 	reloaded, ok := am2.UsageOf("k1")
 	if !ok || reloaded.Conflicts != 2 {
 		t.Fatalf("sidecar reload = ok:%v %+v, want 2 conflicts", ok, reloaded)
 	}
 }
 
-// Trust penalty: strictly monotonic in Conflicts, capped at 3 units.
 func TestSA146_TrustPenaltyMonotonicCapped(t *testing.T) {
 	now := time.Now()
 	mk := func(c int) MemoryMeta {
@@ -108,8 +91,6 @@ func TestSA146_TrustPenaltyMonotonicCapped(t *testing.T) {
 	}
 }
 
-// Cap eviction: a repeated high-confidence loser (Conflicts>=2) is evicted
-// before a never-used clean entry, which is itself evicted before a used one.
 func TestSA146_HighConflictEvictedBeforeNeverUsed(t *testing.T) {
 	now := time.Now()
 	active := []MemoryMeta{

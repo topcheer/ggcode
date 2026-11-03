@@ -69,7 +69,7 @@ func TestXLSXExtraction(t *testing.T) {
 	if result.Format != "xlsx" {
 		t.Errorf("format = %q, want xlsx", result.Format)
 	}
-	// Should contain header row: Name, Age, City
+
 	if !strings.Contains(result.Text, "Name") {
 		t.Errorf("expected 'Name', got: %q", result.Text)
 	}
@@ -272,8 +272,8 @@ func TestIsDocumentFile(t *testing.T) {
 		{"test.go", false},
 		{"test.png", false},
 		{"README", false},
-		{"file.PDF", true},  // case insensitive
-		{"file.DOCX", true}, // case insensitive
+		{"file.PDF", true},
+		{"file.DOCX", true},
 	}
 	for _, tc := range cases {
 		got := IsDocumentFile(tc.path)
@@ -298,7 +298,7 @@ func TestRTFInvalidInput(t *testing.T) {
 }
 
 func TestLargeZipIsBounded(t *testing.T) {
-	// Create a ZIP with 600 files to verify maxArchiveEntries=500 limit
+
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)
 	for i := 0; i < 600; i++ {
@@ -311,21 +311,21 @@ func TestLargeZipIsBounded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("large ZIP: %v", err)
 	}
-	// Should mention 500 files were read (truncated from 600)
+
 	if !strings.Contains(result.Text, "500 files") {
 		t.Errorf("expected '500 files' in output, got first 200 chars: %q", result.Text[:min(200, len(result.Text))])
 	}
 	if !strings.Contains(result.Text, "Showing first") {
 		t.Errorf("expected 'Showing first' truncation notice, got: %q", result.Text[:min(200, len(result.Text))])
 	}
-	// Should NOT contain file_0500+ since we only read 500
+
 	if strings.Contains(result.Text, "file_0500") {
 		t.Error("expected file_0500 to be truncated, but it was found")
 	}
 }
 
 func TestTarGzOutputIsBounded(t *testing.T) {
-	// Create a tar.gz with many files, verify output doesn't exceed limits
+
 	var tarBuf bytes.Buffer
 	tw := tar.NewWriter(&tarBuf)
 	for i := 0; i < 100; i++ {

@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// Session lifecycle hooks (on_session_start / on_session_end): Claude Code
-// hooks parity (https://code.claude.com/docs/en/hooks). Start is blocking
-// with stdout always collected; end is synchronous, non-blocking.
-
 func TestSessionStartHookBlocking(t *testing.T) {
 	cfg := HookConfig{OnSessionStart: []Hook{{Match: "*", Command: "echo locked >&2; exit 2"}}}
 	res := RunSessionStartHooks(cfg, HookEnv{SessionSource: "startup"})

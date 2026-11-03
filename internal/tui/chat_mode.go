@@ -9,13 +9,11 @@ import (
 	"github.com/topcheer/ggcode/internal/lanchat"
 )
 
-// setChatMode toggles LAN Chat quick-send mode.
-// Unlike shell mode, chat mode persists after Enter — the user must press Esc to exit.
 func (m *Model) setChatMode(enabled bool) {
 	m.chatMode = enabled
 	m.syncComposerMode()
 	if enabled {
-		// If there are unread messages, prefill @lastSenderNick
+
 		if m.lanChatUnread > 0 && m.lanChatLastSenderNick != "" {
 			suffix := ""
 			if m.lanChatLastSenderRole == "agent" {
@@ -25,14 +23,12 @@ func (m *Model) setChatMode(enabled bool) {
 			m.input.CursorEnd()
 			m.lanChatUnread = 0
 		} else {
-			// Auto-show user list on first entry
+
 			m.refreshLanChatTargets()
 		}
 	}
 }
 
-// refreshLanChatTargets builds the autocomplete list from online participants.
-// The list includes "All" (broadcast) plus all online participants (human + agent nicks).
 func (m *Model) refreshLanChatTargets() {
 	if m.lanChatHub == nil {
 		m.autoCompleteActive = false
@@ -44,7 +40,7 @@ func (m *Model) refreshLanChatTargets() {
 	all := m.lanChatHub.Participants()
 
 	var targets []string
-	// "All" is always first — selecting it means broadcast (no @mention prefix)
+
 	if m.currentLanguage() == LangZhCN {
 		targets = append(targets, "所有人")
 	} else {
@@ -63,14 +59,8 @@ func (m *Model) refreshLanChatTargets() {
 		}
 	}
 
-	sort.Strings(targets[1:]) // keep "All" first, sort the rest
+	sort.Strings(targets[1:])
 
-	// #1714 case 4: targets ALWAYS contains "All" (appended
-	// unconditionally above), so the old len(targets) > 0 check was
-	// constantly true and the else branch - autocomplete off when nobody
-	// is online - was dead code: with zero online participants the
-	// completion popup still activated with only "All" in it. Gate on
-	// whether there is anyone to address.
 	if len(targets) > 1 {
 		m.autoCompleteActive = true
 		m.autoCompleteKind = "lanchat"
@@ -82,9 +72,6 @@ func (m *Model) refreshLanChatTargets() {
 	}
 }
 
-// submitChatMessage sends a message via LAN Chat.
-// Format: "@nick message" → DM, plain text → broadcast.
-// Stays in chat mode after sending.
 func (m *Model) submitChatMessage(text string) {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -96,7 +83,6 @@ func (m *Model) submitChatMessage(text string) {
 		return
 	}
 
-	// Parse @mention
 	if strings.HasPrefix(text, "@") {
 		spaceIdx := strings.Index(text, " ")
 		if spaceIdx > 0 {
@@ -105,16 +91,14 @@ func (m *Model) submitChatMessage(text string) {
 			if content == "" {
 				return
 			}
-			// Find target participant
+
 			for _, part := range m.lanChatHub.Participants() {
 				if part.HumanNick == mention || part.AgentNick == mention {
 					role := lanchat.RoleHuman
 					if mention == part.AgentNick {
 						role = lanchat.RoleAgent
 					}
-					// #1362: a just-offline peer (stale Online snapshot) or a broken
-					// pipe fails silently if the error is dropped - the echo below
-					// then shows a delivery that never happened.
+
 					if err := m.lanChatHub.SendDirect(context.Background(), part.NodeID, role, content, nil); err != nil {
 						m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[DM → %s] send failed: %v", mention, err))
 						return
@@ -126,13 +110,10 @@ func (m *Model) submitChatMessage(text string) {
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Unknown user: @%s", mention))
 			return
 		}
-		// Just "@nick" with no message — ignore
+
 		return
 	}
 
-	// Team-scoped broadcast (default: your own team)
-	// #1362: surface delivery failure instead of unconditionally echoing
-	// success - the recipients never saw the message.
 	if err := m.lanChatBroadcastTeam(context.Background(), text); err != nil {
 		m.chatWriteSystem(nextSystemID(), "[Broadcast] send failed: "+err.Error())
 		return
@@ -140,9 +121,6 @@ func (m *Model) submitChatMessage(text string) {
 	m.chatWriteUser(nextSystemID(), "[Broadcast] "+text)
 }
 
-// lanChatBroadcastTeam sends a message to all online members of the sender's own team.
-// Falls back to global broadcast if the team has no other online members.
-// Returns the first delivery error so the caller can report it (#1362).
 func (m *Model) lanChatBroadcastTeam(ctx context.Context, content string) error {
 	hub := m.lanChatHub
 	myTeam := hub.Team()
@@ -159,16 +137,13 @@ func (m *Model) lanChatBroadcastTeam(ctx context.Context, content string) error 
 		if p.NodeID == selfNodeID || !p.Online || p.Team != myTeam {
 			continue
 		}
-		// #878: team broadcasts are human-facing — target the participant's
-		// HUMAN panel like the DM path does, not unconditionally the agent
-		// (which triggered agent approval loops and left panels empty).
+
 		if err := hub.SendDirect(ctx, p.NodeID, lanchat.RoleHuman, content, nil); err != nil {
 			firstErr = err
 		}
 		sent++
 	}
 
-	// If no team members found, fall back to global broadcast
 	if sent == 0 {
 		return hub.SendBroadcast(ctx, content, nil)
 	}

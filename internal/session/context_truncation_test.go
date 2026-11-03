@@ -11,11 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// TestContextTruncationKeepsDialogue (#607): a session ending with a long
-// system-note tail must not let MaxContextMessages fill the agent context
-// window with system records only. The truncation start must clamp backward
-// so the most recent user (and following assistant) messages stay inside
-// ContextMessages.
 func TestContextTruncationKeepsDialogue(t *testing.T) {
 	msgLine := func(role, text string, ts time.Time) string {
 		return fmt.Sprintf(`{"type":"message","timestamp":%q,"message":{"role":%q,"content":[{"type":"text","text":%q}]}}`,
@@ -24,7 +19,7 @@ func TestContextTruncationKeepsDialogue(t *testing.T) {
 
 	now := time.Now()
 	var b strings.Builder
-	// 30 real dialogue exchanges, then a 250-message system tail.
+
 	for i := 0; i < 30; i++ {
 		ts := now.Add(-10 * time.Hour)
 		b.WriteString(msgLine("user", fmt.Sprintf("question %d", i), ts) + "\n")
@@ -49,11 +44,10 @@ func TestContextTruncationKeepsDialogue(t *testing.T) {
 	if len(ses.Messages) != 310 {
 		t.Fatalf("messages = %d, want 310", len(ses.Messages))
 	}
-	if len(ses.ContextMessages) <= MaxContextMessages+1 { // +1 for truncation note
+	if len(ses.ContextMessages) <= MaxContextMessages+1 {
 		t.Fatalf("context messages = %d, expected > %d (window must extend past system tail)", len(ses.ContextMessages), MaxContextMessages+1)
 	}
 
-	// The window must contain the last user and assistant messages.
 	var hasUser, hasAssistant bool
 	for _, m := range ses.ContextMessages {
 		if m.Role == "user" && strings.Contains(textOf(m), "question 29") {
@@ -67,7 +61,6 @@ func TestContextTruncationKeepsDialogue(t *testing.T) {
 		t.Fatalf("context window lost dialogue: hasUser=%v hasAssistant=%v (window %d msgs)", hasUser, hasAssistant, len(ses.ContextMessages))
 	}
 
-	// The truncation note must still be present and reflect the adjusted count.
 	if ses.ContextMessages[0].Role != "system" || !strings.Contains(textOf(ses.ContextMessages[0]), "truncated") {
 		t.Fatalf("expected leading truncation note, got role=%q", ses.ContextMessages[0].Role)
 	}

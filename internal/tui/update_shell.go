@@ -8,7 +8,6 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// handleShellCommandStreamMsg handles the corresponding message case.
 func (m Model) handleShellCommandStreamMsg(msg shellCommandStreamMsg, spinnerCmd tea.Cmd) (Model, tea.Cmd) {
 	if msg.RunID != m.activeShellRunID || m.runCanceled || !m.shellRunning {
 		return m, nil
@@ -17,17 +16,11 @@ func (m Model) handleShellCommandStreamMsg(msg shellCommandStreamMsg, spinnerCmd
 	return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(shellStatusActivity(m.currentLanguage())))
 }
 
-// handleShellCommandDoneMsg handles the corresponding message case.
 func (m Model) handleShellCommandDoneMsg(msg shellCommandDoneMsg) (Model, tea.Cmd) {
 	if msg.RunID != m.activeShellRunID {
 		return m, nil
 	}
-	// #1653: an LSP install command just finished (success, failure, or
-	// timeout). Drop the probe cache NOW - any negative entry primed while
-	// the install was still running (panel reopen, post-edit diagnostics)
-	// must not hide the freshly installed server for another 10 minutes.
-	// Same semantics as the desktop side (wailskit lsp.go: success or
-	// failure, one extra probe is cheap).
+
 	if m.lspInstallInFlight {
 		m.lspInstallInFlight = false
 		lsp.InvalidateProbeCache()
@@ -38,16 +31,8 @@ func (m Model) handleShellCommandDoneMsg(msg shellCommandDoneMsg) (Model, tea.Cm
 	m.shellOutputID = ""
 	m.shellRunning = false
 
-	// #1781: capture ownership BEFORE clearing it. The old code cleared
-	// shellOwnedLoading at the top of this handler and then tested it
-	// twenty lines later - the #915 reset below was dead code. A shell-
-	// owned cancel left runCanceled set, and with no reset point on the
-	// direct-prompt path, the next NORMAL agent completion was treated
-	// as canceled (persistFullSessionMessages and the pendingSubmission
-	// continuation skipped).
 	shellOwnedRun := m.shellOwnedLoading
 
-	// Only clear loading if shell "owns" it (agent wasn't running when shell started).
 	if shellOwnedRun {
 		m.shellOwnedLoading = false
 		m.setLoading(false)
@@ -55,19 +40,13 @@ func (m Model) handleShellCommandDoneMsg(msg shellCommandDoneMsg) (Model, tea.Cm
 		m.statusToolName = ""
 		m.statusToolArg = ""
 		m.statusToolCount = 0
-		m.shellCancelFunc = nil // #910
+		m.shellCancelFunc = nil
 		m.spinner.Stop()
 	}
 
 	wasCanceled := m.runCanceled
 	wasFailed := m.runFailed
-	// #915/#1391-A: only the run that OWNS these flags may clear them.
-	// The condition was inverted (!shellOwnedLoading): the shell clearing
-	// ran exactly when the SHELL did NOT own the run - wiping the AGENT's
-	// cancel/fail state, sending a cancelled agent down the normal-
-	// completion path (duplicate session persist, metrics digest, swallowed
-	// pending restore). commit 652104df's message states the intended
-	// semantics: clear ONLY when the shell owns the run.
+
 	if shellOwnedRun {
 		m.runCanceled = false
 		m.runFailed = false
@@ -78,7 +57,7 @@ func (m Model) handleShellCommandDoneMsg(msg shellCommandDoneMsg) (Model, tea.Cm
 			broker.PushTextDone(shellOutputID)
 		}
 	}
-	// Auto-exit shell mode so user returns to the prompt
+
 	m.setShellMode(false)
 	if msg.Status == toolpkg.CommandJobFailed || msg.Status == toolpkg.CommandJobTimedOut {
 		if text := strings.TrimSpace(msg.ErrText); text != "" {
@@ -86,14 +65,7 @@ func (m Model) handleShellCommandDoneMsg(msg shellCommandDoneMsg) (Model, tea.Cm
 		}
 	}
 	if msg.Status == toolpkg.CommandJobCompleted && m.pendingSubmissionCount() > 0 && !wasCanceled && !wasFailed {
-		// Only LOCAL shell-mode input may be chained into the next shell
-		// command. Remote-origin entries (lanchat DM / IM / tunnel - queued
-		// by submitLanChatAgentText and friends while this shell was
-		// running) and hidden cron injections are AGENT turns: feeding them
-		// to submitShellCommand executed a teammate's message as a shell
-		// command the moment a long-running shell finished. Route them
-		// through the agent-path drain instead (arms the #3466 remote
-		// inhibit, renders as a user turn).
+
 		if m.pendingHeadIsAgentOrigin() {
 			return m, m.submitPendingSubmissionCmd()
 		}

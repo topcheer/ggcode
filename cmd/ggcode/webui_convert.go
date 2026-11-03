@@ -8,7 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/webui"
 )
 
-// mcpSnapshotToWebUI converts MCP server snapshots to webui status map.
 func mcpSnapshotToWebUI(snapshot []plugin.MCPServerInfo) map[string]webui.MCPRuntimeStatus {
 	m := make(map[string]webui.MCPRuntimeStatus, len(snapshot))
 	for _, info := range snapshot {
@@ -23,7 +22,6 @@ func mcpSnapshotToWebUI(snapshot []plugin.MCPServerInfo) map[string]webui.MCPRun
 	return m
 }
 
-// a2aInstancesToWebUI converts A2A discovered instances to webui format.
 func a2aInstancesToWebUI(instances []a2a.InstanceInfo) []webui.A2ADiscoveredInstance {
 	result := make([]webui.A2ADiscoveredInstance, 0, len(instances))
 	for _, inst := range instances {
@@ -38,14 +36,13 @@ func a2aInstancesToWebUI(instances []a2a.InstanceInfo) []webui.A2ADiscoveredInst
 	return result
 }
 
-// imSnapshotToWebUI converts IM adapter states to webui status list.
 func imSnapshotToWebUI(snap im.StatusSnapshot, cfg *config.Config) []webui.IMRuntimeStatus {
 	out := make([]webui.IMRuntimeStatus, 0, len(snap.Adapters))
 	disabledSet := map[string]bool{}
 	for _, b := range snap.DisabledBindings {
 		disabledSet[b.Adapter] = true
 	}
-	// Config is the source of truth for disabled state.
+
 	configDisabledSet := map[string]bool{}
 	if cfg != nil {
 		for name, acfg := range cfg.IM.Adapters {

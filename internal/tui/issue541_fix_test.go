@@ -1,12 +1,5 @@
 package tui
 
-// Characteristic tests for the issue #541 fixes:
-//   A) lastUserSubmission producer restored in startNormalTextRun
-//   C) /undo-run guarded by m.loading + removed from busy whitelist
-//   D) change_summary accumulates all checkpoints, filters by RunID, fixes isNew
-//   E) cycleSession handles a current session missing from the store listing
-//   B) MouseWheelMsg routes to the active panel's viewport
-
 import (
 	"strings"
 	"testing"
@@ -16,11 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// --- Bug A: lastUserSubmission producer ---
-
-// The producer was dropped by the e29ea0f3 refactor; restoring it means every
-// normal user submission must land in m.lastUserSubmission so /retry and /edit
-// stop hitting their empty branches.
 func TestStartNormalTextRunStoresLastUserSubmission(t *testing.T) {
 	m := newTestModel()
 	if m.lastUserSubmission != "" {
@@ -44,8 +32,6 @@ func TestEditCommandLoadsStoredSubmission(t *testing.T) {
 	}
 }
 
-// --- Bug C: /undo-run loading guard + busy whitelist ---
-
 func TestUndoRunBlockedWhileAgentRunning(t *testing.T) {
 	m := newTestModel()
 	m.setLoading(true)
@@ -57,9 +43,7 @@ func TestUndoRunBlockedWhileAgentRunning(t *testing.T) {
 
 func TestUndoRunAllowedWhenIdle(t *testing.T) {
 	m := newTestModel()
-	// agent is nil in the test model → handler returns the "checkpoint
-	// disabled" message command. Reaching that branch proves the loading
-	// guard did not short-circuit.
+
 	cmd := m.handleUndoRunCommand()
 	if cmd == nil {
 		t.Fatalf("handleUndoRunCommand must proceed when idle, got nil cmd")
@@ -70,22 +54,18 @@ func TestUndoRunNotWhitelistedWhileBusy(t *testing.T) {
 	if shouldExecuteWhileBusy("/undo-run") {
 		t.Fatalf("/undo-run must not execute while the agent is busy (would race agent writes)")
 	}
-	// Adjacent whitelisted commands must keep working while busy.
+
 	if !shouldExecuteWhileBusy("/pin") {
 		t.Fatalf("/pin should still be allowed while busy")
 	}
 }
-
-// --- Bug D: change_summary accounting ---
 
 func mkCp(runID, file, old, new string) checkpoint.Checkpoint {
 	return checkpoint.Checkpoint{RunID: runID, FilePath: file, OldContent: old, NewContent: new}
 }
 
 func TestAccumulateRunChangesMultipleEditsSameFile(t *testing.T) {
-	// Contents are newline-terminated like real files so the #555
-	// EOF-newline diff semantics do not count a spurious intermediate
-	// "\ No newline" state change between chained checkpoints.
+
 	cps := []checkpoint.Checkpoint{
 		mkCp("r1", "a.go", "l1\nl2\nl3\n", "l1\nX\nl3\n"),
 		mkCp("r1", "a.go", "l1\nX\nl3\n", "l1\nX\nl3\nl4\n"),
@@ -99,7 +79,7 @@ func TestAccumulateRunChangesMultipleEditsSameFile(t *testing.T) {
 	if fc.edits != 2 {
 		t.Fatalf("expected 2 accumulated edits, got %d", fc.edits)
 	}
-	// Net diff must span first OldContent → last NewContent: +2 (X, l4) -1 (l2).
+
 	if fc.added != 2 || fc.deleted != 1 {
 		t.Fatalf("expected +2 -1 net diff across all checkpoints, got +%d -%d", fc.added, fc.deleted)
 	}
@@ -122,7 +102,7 @@ func TestAccumulateRunChangesFiltersByRunID(t *testing.T) {
 }
 
 func TestAccumulateRunChangesIsNewNotFooledByEmptiedExistingFile(t *testing.T) {
-	// File existed with content, was emptied in run r1, edited in run r2.
+
 	cps := []checkpoint.Checkpoint{
 		mkCp("r1", "a.go", "real content\n", ""),
 		mkCp("r2", "a.go", "", "new content\n"),
@@ -132,7 +112,7 @@ func TestAccumulateRunChangesIsNewNotFooledByEmptiedExistingFile(t *testing.T) {
 	if fc := changes["a.go"]; fc == nil || fc.isNew {
 		t.Fatalf("emptied pre-existing file must not be reported as new: %+v", changes["a.go"])
 	}
-	// Contrast: a checkpoint log that never saw non-empty content → new file.
+
 	cps2 := []checkpoint.Checkpoint{mkCp("r1", "b.go", "", "fresh\n")}
 	changes2 := accumulateRunChanges(cps2, "r1", map[string]bool{"b.go": true})
 	if fc := changes2["b.go"]; fc == nil || !fc.isNew {
@@ -140,25 +120,20 @@ func TestAccumulateRunChangesIsNewNotFooledByEmptiedExistingFile(t *testing.T) {
 	}
 }
 
-// --- Bug E: cycleSession with unlisted current session ---
-
 func mkSes(id string) *session.Session {
 	return &session.Session{ID: id, Title: id}
 }
 
 func TestNextSessionInCycleCurrentNotListed(t *testing.T) {
-	// Fresh /clear session is absent from the store listing.
+
 	sessions := []*session.Session{mkSes("s1"), mkSes("s2")}
 	current := mkSes("fresh")
 
-	// Forward cycle must step from the fresh session to the first listed
-	// session (s1), not silently treat index 0 of the listing as current.
 	got := nextSessionInCycle(sessions, current, 1)
 	if got == nil || got.ID != "s1" {
 		t.Fatalf("forward cycle from unlisted current: got %v, want s1", got)
 	}
 
-	// Backward cycle wraps to the last listed session.
 	got = nextSessionInCycle(sessions, current, -1)
 	if got == nil || got.ID != "s2" {
 		t.Fatalf("backward cycle from unlisted current: got %v, want s2", got)
@@ -178,13 +153,11 @@ func TestNextSessionInCycleCurrentListed(t *testing.T) {
 }
 
 func TestNextSessionInCycleOnlyCurrentSession(t *testing.T) {
-	// Listing is empty but the fresh session exists: cycling is a no-op.
+
 	if got := nextSessionInCycle(nil, mkSes("fresh"), 1); got != nil {
 		t.Fatalf("expected no switch when only the current session exists, got %v", got)
 	}
 }
-
-// --- Bug B: mouse wheel routes to the active panel viewport ---
 
 func TestMouseWheelScrollsActivePanelViewport(t *testing.T) {
 	m := newTestModel()
@@ -213,16 +186,13 @@ func TestMouseWheelFallsBackToChatListWithoutPanel(t *testing.T) {
 	if vp := m.activePanelViewport(); vp != nil {
 		t.Fatalf("expected nil viewport when no panel is open")
 	}
-	// Must not panic with no panel and no chatList.
+
 	updated, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
 	if _, ok := updated.(Model); !ok {
 		t.Fatalf("Update did not return a Model")
 	}
 }
 
-// /usage opens a pure-UI panel backed by async vendor probes; it has no
-// dependency on agent state, so it must execute immediately while a run
-// is active instead of queuing behind it (user-reported 2026-09-18).
 func TestUsageAllowedWhileBusy(t *testing.T) {
 	if !shouldExecuteWhileBusy("/usage") {
 		t.Fatalf("/usage must execute while busy (pure UI panel, no agent dependency)")

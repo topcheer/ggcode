@@ -1,11 +1,5 @@
 package memory
 
-// r462: project memory files gain an index tier. Files within
-// MaxInlineProjectMemoryChars inline verbatim; oversized files degrade to a
-// path+preview index line ([project-memory-index] ...) so the model can
-// read_file the full content on demand instead of having it flat-injected
-// into the system prompt budget.
-
 import (
 	"os"
 	"path/filepath"
@@ -26,9 +20,6 @@ func writeProjectMemoryFile(t *testing.T, dir, name, content string) string {
 	return p
 }
 
-// TestReadProjectMemoryFiles_OversizedDegradesToIndex: a file over the rune
-// cap contributes ONLY an index line (marker + path + read_file hint), never
-// its body; it still appears in the returned files list.
 func TestReadProjectMemoryFiles_OversizedDegradesToIndex(t *testing.T) {
 	dir := t.TempDir()
 	body := strings.Repeat("a", MaxInlineProjectMemoryChars+50)
@@ -55,8 +46,6 @@ func TestReadProjectMemoryFiles_OversizedDegradesToIndex(t *testing.T) {
 	}
 }
 
-// TestReadProjectMemoryFiles_WithinCapInlinesVerbatim: at or under the cap
-// the full body inlines (existing behavior unchanged).
 func TestReadProjectMemoryFiles_WithinCapInlinesVerbatim(t *testing.T) {
 	dir := t.TempDir()
 	exact := strings.Repeat("b", MaxInlineProjectMemoryChars)
@@ -74,9 +63,6 @@ func TestReadProjectMemoryFiles_WithinCapInlinesVerbatim(t *testing.T) {
 	}
 }
 
-// TestReadProjectMemoryFiles_CJKBoundary: the cap counts RUNES, not bytes.
-// 2000 CJK chars (6000 bytes) inline; 2001 degrade with valid UTF-8 output
-// (#1155 mojibake lesson: never slice mid-sequence).
 func TestReadProjectMemoryFiles_CJKBoundary(t *testing.T) {
 	dir := t.TempDir()
 
@@ -104,8 +90,6 @@ func TestReadProjectMemoryFiles_CJKBoundary(t *testing.T) {
 	}
 }
 
-// TestProjectMemoryIndexLine_PreviewSkipsBlankLines: the preview is built
-// from leading NON-EMPTY lines, capped at projectMemoryIndexPreviewLines.
 func TestProjectMemoryIndexLine_PreviewSkipsBlankLines(t *testing.T) {
 	data := "\n\n# Title\n\nsecond line\n\nthird\nfourth\nfifth\nsixth-should-not-appear\n"
 	line := projectMemoryIndexLine("/tmp/AGENTS.md", data)

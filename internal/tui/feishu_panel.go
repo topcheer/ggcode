@@ -82,9 +82,7 @@ func (m Model) renderFeishuPanel() string {
 		if entry.Disabled {
 			status = m.t("panel.feishu.entry.disabled")
 		} else if entry.Muted {
-			// #2211: the #887 fix never reached feishu - the list label
-			// showed "Muted" while the details said "Bound"/"Available"
-			// on the same screen.
+
 			status = m.t("panel.feishu.entry.muted")
 		} else if entry.OccupiedBy != "" {
 			status = m.t("panel.feishu.entry.bound")
@@ -118,7 +116,7 @@ func (m Model) renderFeishuPanel() string {
 	} else {
 		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.feishu.actions_hint")))
 	}
-	// Edit config section
+
 	if panel.editState.mode == imEditSelect {
 		body = append(body, "", m.renderIMEditSelect(&panel.editState))
 	} else if panel.editState.mode == imEditInput {
@@ -135,7 +133,7 @@ func (m *Model) handleFeishuPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if panel == nil {
 		return *m, nil
 	}
-	// Edit mode takes priority
+
 	if panel.editState.mode != imEditNone {
 		newState, cmd := m.handleIMEditKey(&panel.editState, msg)
 		panel.editState = *newState
@@ -231,11 +229,7 @@ func (m *Model) handleFeishuPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m *Model) bindFeishuEntry(entry feishuBindingEntry) tea.Cmd {
 	return func() tea.Msg {
-		// #1794 case 2/3: a disabled adapter's auto-enable must run on the
-		// Update loop (#1367 family) - startXXXAdapterIfNeeded wrote the
-		// config map from this Cmd goroutine while the render loop ranged
-		// it. Follow the qq pattern: mutate via configMutationMsg, continue
-		// the bind in next().
+
 		if m.config != nil {
 			if cfg, ok := m.config.GetIMAdapter(entry.Adapter); ok && !cfg.Enabled {
 				return configMutationMsg{
@@ -260,8 +254,6 @@ func (m *Model) bindFeishuEntry(entry feishuBindingEntry) tea.Cmd {
 	}
 }
 
-// bindFeishuRest is the bind chain body after the (optional) enable
-// mutation lands on the Update loop.
 func bindFeishuRest(m *Model, entry feishuBindingEntry) tea.Msg {
 	if err := m.ensureFeishuBotBinding(entry.Adapter); err != nil {
 		return feishuBindResultMsg{err: err}
@@ -270,7 +262,7 @@ func bindFeishuRest(m *Model, entry feishuBindingEntry) tea.Msg {
 		if err := m.waitForFeishuAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
 			return feishuBindResultMsg{err: err}
 		}
-		// Sync session history to the newly bound channel only.
+
 		if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
 			if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
 				return feishuBindResultMsg{err: err}
@@ -313,9 +305,7 @@ func (m *Model) createFeishuAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 3 {
 			return feishuBindResultMsg{err: errors.New(m.t("panel.feishu.error.config_format"))}
 		}
-		// #1370-C: Fields splits on whitespace - a secret WITH spaces was
-		// silently truncated to its first token, then persisted as a
-		// guaranteed-to-fail credential. Reject extras instead.
+
 		if len(fields) > 3 {
 			return feishuBindResultMsg{err: errors.New("extra fields after app_secret (values must not contain spaces): " + spec)}
 		}
@@ -330,10 +320,8 @@ func (m *Model) createFeishuAdapterCmd(spec string) tea.Cmd {
 				"app_secret": appSecret,
 			},
 		}
-		// #1367 family: config write + disk save moved off the Cmd
-		// goroutine onto the Update loop via configMutationMsg - see
-		// dingtalk_panel.go for the template comment.
-		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
+
+		imEnabledBefore := false
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				imEnabledBefore = m.config.IM.Enabled
@@ -341,9 +329,7 @@ func (m *Model) createFeishuAdapterCmd(spec string) tea.Cmd {
 				if err := m.config.AddIMAdapter(name, adapter); err != nil {
 					return err
 				}
-				// #1794 case 2: auto-enable on the Update loop - the next()
-				// closure's startXXXAdapterIfNeeded used to write the map
-				// from the Cmd goroutine (#1367 family).
+
 				if cfg, ok := m.config.GetIMAdapter(name); ok && !cfg.Enabled {
 					return m.config.SetIMAdapterEnabled(name, true)
 				}
@@ -352,19 +338,13 @@ func (m *Model) createFeishuAdapterCmd(spec string) tea.Cmd {
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
 					rollback := func(origErr error) tea.Msg {
-						// #1370-B: the adapter was already persisted with its
-						// plaintext secret - without compensation a wrong secret
-						// stayed on disk forever and blocked the name on retry
-						// ("already exists"), the panel has no delete key.
-						// The rollback REMOVE is itself a map write, so it must
-						// route through configMutationMsg too (#1367) - never
-						// touch config on this Cmd goroutine.
+
 						return configMutationMsg{
 							apply: func(m *Model) error {
 								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 									return rerr
 								}
-								m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
+								m.config.IM.Enabled = imEnabledBefore
 								return m.saveConfig()
 							},
 							next: func(m *Model) tea.Cmd {
@@ -380,11 +360,13 @@ func (m *Model) createFeishuAdapterCmd(spec string) tea.Cmd {
 					}
 					if err := m.startFeishuAdapterIfNeeded(name); err != nil {
 						if errors.Is(err, errFeishuEnableNeeded) {
+
 							// #4486 (a #1719/#1794 case-1 recurrence): enable on the
 							// Update loop, then retry - never write config here.
 							// #4724: pass the success callback so the auto-enable
 							// path ALSO surfaces the added_bot confirmation
 							// (#4580 mirrored to dingtalk/discord, missed here).
+
 							return m.feishuEnableMutation(name, func(m *Model) tea.Msg {
 								return feishuBindResultMsg{message: m.t("panel.feishu.message.added_bot", name)}
 							})
@@ -401,13 +383,8 @@ func (m *Model) createFeishuAdapterCmd(spec string) tea.Cmd {
 	}
 }
 
-// errFeishuEnableNeeded signals the auto-enable must run on the Update
-// loop via configMutationMsg (#4486; as dingtalk_panel's
-// errDingtalkEnableNeeded, #1719).
 var errFeishuEnableNeeded = errors.New("feishu adapter needs enable-on-update-loop")
 
-// feishuEnableMutation performs the auto-enable on the Update loop, then
-// starts the adapter and continues with next.
 func (m *Model) feishuEnableMutation(name string, next func(m *Model) tea.Msg) tea.Msg {
 	return configMutationMsg{
 		apply: func(m *Model) error {
@@ -425,8 +402,7 @@ func (m *Model) feishuEnableMutation(name string, next func(m *Model) tea.Msg) t
 					return feishuBindResultMsg{err: err}
 				}
 				if next == nil {
-					// #4724: nil-next used to return nil here - the auto-enable
-					// success was completely silent (no UI confirmation at all).
+
 					return nil
 				}
 				return next(m)
@@ -457,12 +433,7 @@ func (m *Model) startFeishuAdapterIfNeeded(name string) error {
 		return errors.New(m.t("panel.feishu.error.not_configured", name))
 	}
 	if !adapterCfg.Enabled {
-		// #4486 (a #1719/#1794 case-1 recurrence): this branch used to run
-		// SetIMAdapterEnabled+EnableBinding right HERE on the Cmd goroutine,
-		// racing the Update loop and overriding a user's just-pressed 'd'
-		// disable (TOCTOU: apply enables on the Update loop, next() re-reads
-		// disabled, then writes enabled=true back from this goroutine).
-		// Signal the caller to route the enable through configMutationMsg.
+
 		return errFeishuEnableNeeded
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformFeishu)) {
@@ -618,8 +589,7 @@ func (m Model) feishuAdapterStatus(state *im.AdapterState) string {
 	if status == "" {
 		status = m.t("panel.feishu.status.unknown")
 	}
-	// #894: both branches previously returned the same value — offline
-	// adapters showed their cached "running" status. Mirror wecom.
+
 	if state.Healthy {
 		return status
 	}

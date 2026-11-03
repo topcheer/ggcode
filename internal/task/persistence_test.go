@@ -21,7 +21,6 @@ func TestTaskBoardSnapshotRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("SnapshotJSON: %v", err)
 	}
 
-	// Restore into a FRESH manager (simulating a process restart / resume).
 	m2 := NewManager()
 	if err := m2.RestoreJSON(data); err != nil {
 		t.Fatalf("RestoreJSON: %v", err)
@@ -45,9 +44,6 @@ func TestTaskBoardSnapshotRestoreRoundTrip(t *testing.T) {
 		t.Errorf("reverse edge not restored: %+v", ra)
 	}
 
-	// nextID must continue where the snapshot left off, never restarting or
-	// colliding with restored IDs (exact number is a Create() implementation
-	// detail and must not leak into this test).
 	c := m2.Create("third", "", "", nil)
 	if c.ID == a.ID || c.ID == b.ID {
 		t.Fatalf("restored manager reused an existing ID: %s", c.ID)
@@ -82,7 +78,7 @@ func TestTaskBoardRestoreRejectsNewerVersionAndCorruptData(t *testing.T) {
 	if err := m.RestoreJSON([]byte(`not json`)); err == nil {
 		t.Error("want error for corrupt snapshot")
 	}
-	// Failed restores must leave the live board untouched.
+
 	if got := m.List(); len(got) != 1 || got[0].ID != keep.ID {
 		t.Errorf("failed restore clobbered live board: %+v", got)
 	}
@@ -101,7 +97,6 @@ func TestTaskBoardSnapshotIsDeterministicAndDecoupled(t *testing.T) {
 		t.Error("two snapshots of an unchanged board differ")
 	}
 
-	// Mutating the restored copy must not leak back into the live board.
 	m2 := NewManager()
 	_ = m2.RestoreJSON(d1)
 	tasks := m2.List()
@@ -122,10 +117,9 @@ func TestNumericTaskID(t *testing.T) {
 	}
 }
 
-// ptrStatus is a small test helper mirroring the tool layer's option style.
 func ptrStatus(s TaskStatus) *TaskStatus { return &s }
 
-var _ = time.Now // keep time imported if unused by future edits
+var _ = time.Now
 
 func TestBoardStats(t *testing.T) {
 	m := NewManager()
@@ -138,7 +132,7 @@ func TestBoardStats(t *testing.T) {
 	if _, err := m.Update(b.ID, UpdateOptions{Status: ptrStatus(StatusInProgress)}); err != nil {
 		t.Fatalf("start b: %v", err)
 	}
-	_ = c // stays pending
+	_ = c
 
 	data, err := m.SnapshotJSON()
 	if err != nil {

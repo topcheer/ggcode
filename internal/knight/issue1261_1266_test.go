@@ -1,8 +1,5 @@
 package knight
 
-// Regression tests for GitHub issues #1261-#1266 (knight governance,
-// overlap heuristics, scheduler error propagation, eval cooldown).
-
 import (
 	"strings"
 	"testing"
@@ -11,16 +8,13 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// --- #1264: nameSimilar short-affix false positives ---
-
 func TestNameSimilarShortAffixesRejected(t *testing.T) {
-	// Coincidental short affixes must NOT count as similarity - they used to
-	// hard-floor Jaccard at 0.6 and unconditionally block auto-promotion.
+
 	falsePairs := [][2]string{
 		{"go", "golang"},
-		{"test", "latest"},  // 4-char shared suffix, still below the gate
-		{"api", "rapid"},    // 3-char prefix
-		{"ci", "circle-ci"}, // 2-char prefix
+		{"test", "latest"},
+		{"api", "rapid"},
+		{"ci", "circle-ci"},
 	}
 	for _, p := range falsePairs {
 		if nameSimilar(p[0], p[1]) {
@@ -31,10 +25,10 @@ func TestNameSimilarShortAffixesRejected(t *testing.T) {
 
 func TestNameSimilarSubstantialAffixesKept(t *testing.T) {
 	truePairs := [][2]string{
-		{"golang", "golang-ci"},    // shared prefix 6
-		{"verify", "go-verify"},    // shared suffix 6
-		{"go-verify", "go-verify"}, // exact
-		{"Deploy", "deploy"},       // case-insensitive exact
+		{"golang", "golang-ci"},
+		{"verify", "go-verify"},
+		{"go-verify", "go-verify"},
+		{"Deploy", "deploy"},
 	}
 	for _, p := range truePairs {
 		if !nameSimilar(p[0], p[1]) {
@@ -43,13 +37,11 @@ func TestNameSimilarSubstantialAffixesKept(t *testing.T) {
 	}
 }
 
-// --- #1263: duplicate (scope, name) registration must be reported ---
-
 func TestGovernanceDuplicateRegistrationReported(t *testing.T) {
 	k := &Knight{}
 	active := []*SkillEntry{
 		{Scope: "project", Name: "go-verify", Path: "/ws/foo/SKILL.md"},
-		{Scope: "project", Name: "go-verify", Path: "/ws/bar/SKILL.md"}, // same declared name, different dir
+		{Scope: "project", Name: "go-verify", Path: "/ws/bar/SKILL.md"},
 	}
 	recs := k.findOverlapRecommendations(active)
 	found := false
@@ -78,8 +70,6 @@ func TestGovernanceDistinctNamesNoDupReport(t *testing.T) {
 	}
 }
 
-// --- #1261: proposal tasks get read-only system-prompt rules ---
-
 func TestBuildKnightSystemPromptProposalReadOnly(t *testing.T) {
 	proposal := buildKnightSystemPrompt("project-improvement-proposal")
 	if !strings.Contains(proposal, "READ-ONLY TASK") {
@@ -95,11 +85,9 @@ func TestBuildKnightSystemPromptProposalReadOnly(t *testing.T) {
 	}
 }
 
-// --- #1261: working-tree diff counting ---
-
 func TestCountStatusDiff(t *testing.T) {
 	before := " M a.go\n?? b.txt\n"
-	after := " M a.go\n?? c.txt\n M d.go\n" // b.txt gone, c.txt + d.go new
+	after := " M a.go\n?? c.txt\n M d.go\n"
 	if n := countStatusDiff(before, after); n != 3 {
 		t.Fatalf("countStatusDiff = %d, want 3 (1 removed + 2 added)", n)
 	}
@@ -107,8 +95,6 @@ func TestCountStatusDiff(t *testing.T) {
 		t.Fatalf("identical snapshots must diff to 0, got %d", n)
 	}
 }
-
-// --- #1265: eval cooldown constants wired ---
 
 func TestEvalRetryCooldownConstant(t *testing.T) {
 	if knightEvalRetryCooldown != 24*time.Hour {
@@ -120,23 +106,19 @@ func TestEvalRetryCooldownConstant(t *testing.T) {
 	}
 }
 
-// TestFilterKnightBookkeeping pins the #1261 review fix: status lines inside
-// .ggcode/ (knight's own bookkeeping - budget jsonl appended per LLM call
-// during the run, tick-raced staging/memory writes) must not trip the
-// read-only guardrail; paths outside .ggcode/ keep full protection.
 func TestFilterKnightBookkeeping(t *testing.T) {
 	before := " M main.go\n?? .ggcode/\n"
 	after := " M main.go\n?? .ggcode/\n?? .ggcode/knight/usage-2026-08-29.jsonl\n"
-	// The new bookkeeping line alone must NOT count as a violation.
+
 	if n := countStatusDiff(before, after); n != 0 {
 		t.Fatalf("bookkeeping-only drift must not count as violation, got %d", n)
 	}
-	// A real project-file change outside .ggcode/ still counts.
+
 	violating := after + " M src/app.go\n"
 	if n := countStatusDiff(before, violating); n != 1 {
 		t.Fatalf("project-file drift must count, got %d", n)
 	}
-	// Quoted .ggcode paths (spaces etc.) are filtered too.
+
 	quoted := "?? \".ggcode/my dir/file\"\n"
 	if filterKnightBookkeeping(quoted) != "" {
 		t.Fatalf("quoted .ggcode path must be filtered, got %q", filterKnightBookkeeping(quoted))

@@ -9,12 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// TestIssue2779InstallPropagatesHandlers pins #2779: /mcp install builds the
-// plugin via bare NewMCPPlugin, skipping newPluginFromConfig's handler
-// propagation - so a server installed at runtime permanently missed the
-// manager's sampling/elicitation handlers (every reverse request got
-// -32601 method not supported), while the same server written to yaml and
-// Reload'd worked fine. Install must use newPluginFromConfig.
 func TestIssue2779InstallPropagatesHandlers(t *testing.T) {
 	mgr := NewMCPManager(nil, tool.NewRegistry(), "")
 	var sampled mcp.SamplingHandler = func(ctx context.Context, params mcp.SamplingParams) (*mcp.SamplingResult, error) {
@@ -28,7 +22,7 @@ func TestIssue2779InstallPropagatesHandlers(t *testing.T) {
 
 	err := mgr.Install(context.Background(), config.MCPServerConfig{
 		Name:    "srv-2779",
-		Command: "true", // unreachable/placeholder stdio command is fine: Install fast-fails connect but keeps the plugin
+		Command: "true",
 	})
 	if err != nil {
 		t.Fatalf("Install: %v", err)

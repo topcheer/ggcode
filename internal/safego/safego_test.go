@@ -9,7 +9,7 @@ import (
 )
 
 func TestRunRecoversPanic(t *testing.T) {
-	// Should not propagate the panic to the test goroutine.
+
 	Run("test-panic", func() {
 		panic("boom")
 	})
@@ -54,8 +54,7 @@ func TestPanicHookFires(t *testing.T) {
 	})
 	defer SetPanicHook(old)
 	Run("hook-test", func() { panic("hooked") })
-	// Wait for the hook to fire (should be immediate since Run is sync,
-	// but guards against scheduler edge cases on CI).
+
 	select {
 	case <-done:
 	case <-time.After(time.Second):

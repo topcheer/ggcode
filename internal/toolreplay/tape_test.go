@@ -10,7 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// fakeTool is a minimal tool.Tool implementation for testing.
 type fakeTool struct {
 	name   string
 	calls  int
@@ -73,7 +72,6 @@ func TestRecordAndReplay(t *testing.T) {
 		t.Fatalf("expected tape length 1, got %d", tape.Len())
 	}
 
-	// Now replay — real tool should NOT be called.
 	inner2 := &fakeTool{name: "read_file", result: "WRONG - should not be used"}
 	replayer := NewReplayer(inner2, tape, false)
 
@@ -98,7 +96,6 @@ func TestReplay_SameInputReorderedKeys(t *testing.T) {
 
 	_, _ = recorder.Execute(ctx, json.RawMessage(`{"pattern":"foo","path":"/bar"}`))
 
-	// Replay with reordered keys — should still match.
 	inner2 := &fakeTool{name: "grep", result: "WRONG"}
 	replayer := NewReplayer(inner2, tape, false)
 	result, err := replayer.Execute(ctx, json.RawMessage(`{"path":"/bar","pattern":"foo"}`))
@@ -113,13 +110,11 @@ func TestReplay_SameInputReorderedKeys(t *testing.T) {
 func TestReplay_StrictFIFO(t *testing.T) {
 	tape := NewTape()
 
-	// Record two calls with same input but different results.
 	e1 := Entry{ToolName: "cmd", Input: json.RawMessage(`{"x":1}`), Result: Result{Content: "first"}}
 	e2 := Entry{ToolName: "cmd", Input: json.RawMessage(`{"x":1}`), Result: Result{Content: "second"}}
 	tape.Record(e1)
 	tape.Record(e2)
 
-	// Strict FIFO: first call gets "first", second gets "second".
 	r1, ok := tape.Lookup("cmd", json.RawMessage(`{"x":1}`), true)
 	if !ok || r1.Result.Content != "first" {
 		t.Fatalf("expected 'first', got %q (ok=%v)", r1.Result.Content, ok)
@@ -129,7 +124,6 @@ func TestReplay_StrictFIFO(t *testing.T) {
 		t.Fatalf("expected 'second', got %q (ok=%v)", r2.Result.Content, ok)
 	}
 
-	// Third call — all consumed, should return false.
 	_, ok = tape.Lookup("cmd", json.RawMessage(`{"x":1}`), true)
 	if ok {
 		t.Error("expected no match on third strict FIFO call")
@@ -140,7 +134,6 @@ func TestReplay_NonStrictFIFO(t *testing.T) {
 	tape := NewTape()
 	tape.Record(Entry{ToolName: "t", Input: json.RawMessage(`{}`), Result: Result{Content: "only"}})
 
-	// Non-strict: can look up the same entry multiple times.
 	for i := 0; i < 5; i++ {
 		e, ok := tape.Lookup("t", json.RawMessage(`{}`), false)
 		if !ok || e.Result.Content != "only" {
@@ -166,7 +159,6 @@ func TestReplay_Fallback(t *testing.T) {
 	inner := &fakeTool{name: "t", result: "fallback result"}
 	replayer := NewReplayerWithFallback(inner, tape, false)
 
-	// No tape entry → fallback to real tool.
 	result, err := replayer.Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("fallback failed: %v", err)
@@ -234,7 +226,6 @@ func TestTapeSaveLoad(t *testing.T) {
 		t.Fatalf("expected 2 entries, got %d", loaded.Len())
 	}
 
-	// Verify the grep entry can be looked up.
 	e, ok := loaded.Lookup("grep", json.RawMessage(`{"pattern":"TODO"}`), true)
 	if !ok {
 		t.Fatal("grep entry not found after load")
@@ -305,7 +296,7 @@ func TestWrapRegistry_PassThrough(t *testing.T) {
 	reg.Register(inner)
 
 	tape := NewTape()
-	wrapped := WrapRegistry(reg, tape, "", false) // unknown mode = passthrough
+	wrapped := WrapRegistry(reg, tape, "", false)
 
 	w, _ := wrapped.Get("grep")
 	result, _ := w.Execute(context.Background(), json.RawMessage(`{}`))

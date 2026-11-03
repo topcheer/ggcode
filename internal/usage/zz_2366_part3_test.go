@@ -9,9 +9,6 @@ import (
 	"time"
 )
 
-// #2366 part 3: a 429 on the credits endpoint must surface RateLimitedError
-// instead of falling through to the limit endpoint (double request against a
-// throttled host, and the Retry-After hint would be lost).
 func TestOpenrouterCredits429DoesNotDegrade(t *testing.T) {
 	var creditsCalled, limitCalled int
 	mux := http.NewServeMux()
@@ -50,13 +47,11 @@ func TestOpenrouterCredits429DoesNotDegrade(t *testing.T) {
 	}
 }
 
-// Non-429 credits failures still degrade to the limit endpoint (pre-existing
-// behavior preserved by part 3).
 func TestOpenrouterNon429StillDegrades(t *testing.T) {
 	var limitCalled int
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/credits", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized) // bad key on credits only
+		w.WriteHeader(http.StatusUnauthorized)
 	})
 	mux.HandleFunc("/api/v1/limit", func(w http.ResponseWriter, r *http.Request) {
 		limitCalled++

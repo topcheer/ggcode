@@ -1,7 +1,5 @@
 package tui
 
-// esCatalog returns the Spanish translation for the given key.
-// Keys not yet translated fall through to enCatalog.
 func esCatalog(key string) string {
 	switch key {
 	case "workspace.tagline":

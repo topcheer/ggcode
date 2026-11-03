@@ -8,10 +8,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// TestToolProgressCoalescerLatestWins: staging many updates for the same
-// toolID within one flush window must emit exactly ONE message - the latest
-// output. This is what bounds main-thread renders during high-volume
-// command output (TUI jank fix).
 func TestToolProgressCoalescerLatestWins(t *testing.T) {
 	var mu sync.Mutex
 	var sent [][]tea.Msg
@@ -30,14 +26,11 @@ func TestToolProgressCoalescerLatestWins(t *testing.T) {
 		next: make(map[string]toolProgressMsg),
 	}
 
-	// Stage 50 updates for one tool before any flush can run (single-
-	// goroutine staging, no sleeps racing the ticker).
 	for i := 0; i < 50; i++ {
 		c.stage("tool-1", "run_command", "update")
 	}
 	c.stage("tool-1", "run_command", "FINAL")
 
-	// Force one drain synchronously (same code path the ticker runs).
 	c.mu.Lock()
 	msgs := make([]tea.Msg, 0, len(c.next))
 	for _, m := range c.next {
@@ -62,8 +55,6 @@ func TestToolProgressCoalescerLatestWins(t *testing.T) {
 	}
 }
 
-// TestToolProgressCoalescerMultiTool: distinct toolIDs each get their own
-// message in the same flush batch (parallel tools stay visible).
 func TestToolProgressCoalescerMultiTool(t *testing.T) {
 	var mu sync.Mutex
 	var batch []tea.Msg
@@ -95,15 +86,13 @@ func TestToolProgressCoalescerMultiTool(t *testing.T) {
 	}
 }
 
-// TestToolProgressCoalescerEmptyTick: a drain with nothing staged sends
-// nothing (no idle renders).
 func TestToolProgressCoalescerEmptyTick(t *testing.T) {
 	sent := 0
 	c := &toolProgressCoalescer{
 		send: func(msgs ...tea.Msg) { sent += len(msgs) },
 		next: make(map[string]toolProgressMsg),
 	}
-	// Simulate several empty ticker drains.
+
 	for i := 0; i < 5; i++ {
 		c.mu.Lock()
 		empty := len(c.next) == 0
@@ -115,13 +104,9 @@ func TestToolProgressCoalescerEmptyTick(t *testing.T) {
 	if sent != 0 {
 		t.Fatalf("no staging must mean no sends, got %d", sent)
 	}
-	_ = time.Millisecond // keep time import stable if asserts evolve
+	_ = time.Millisecond
 }
 
-// TestToolProgressCoalescerTunnelAppendMerge: subagent tunnel chunks for
-// the same agent must concatenate in arrival order (append semantics, not
-// latest-wins) - consumers append per message, so dropping chunks would
-// corrupt the tunnel transcript.
 func TestToolProgressCoalescerTunnelAppendMerge(t *testing.T) {
 	var mu sync.Mutex
 	var batch []tea.Msg
@@ -141,7 +126,6 @@ func TestToolProgressCoalescerTunnelAppendMerge(t *testing.T) {
 	c.stageTunnelText("agent-8", "other")
 	c.stageTunnelReasoning("agent-7", "think")
 
-	// Drain (same code the ticker runs).
 	c.mu.Lock()
 	msgs := make([]tea.Msg, 0, len(c.next)+len(c.appendNext)+len(c.appendReas))
 	for _, m := range c.appendReas {
@@ -181,8 +165,6 @@ func TestToolProgressCoalescerTunnelAppendMerge(t *testing.T) {
 	}
 }
 
-// TestToolProgressCoalescerEmptyGuards: staging with empty agentID or text
-// must be a no-op (no phantom messages on flush).
 func TestToolProgressCoalescerEmptyGuards(t *testing.T) {
 	c := &toolProgressCoalescer{
 		send:       func(msgs ...tea.Msg) {},

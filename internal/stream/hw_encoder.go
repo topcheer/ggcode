@@ -7,11 +7,10 @@ import (
 	"sync"
 )
 
-// HardwareEncoder represents a detected hardware encoder.
 type HardwareEncoder struct {
-	Name        string // e.g., "h264_videotoolbox"
-	Description string // e.g., "VideoToolbox H.264"
-	Platform    string // e.g., "darwin", "linux"
+	Name        string
+	Description string
+	Platform    string
 }
 
 var (
@@ -19,7 +18,6 @@ var (
 	hwEncodersOnce sync.Once
 )
 
-// preferredEncoderOrder defines the priority order for hardware encoders.
 var preferredEncoderOrder = []HardwareEncoder{
 	{Name: "h264_videotoolbox", Description: "Apple VideoToolbox", Platform: "darwin"},
 	{Name: "h264_mf", Description: "Windows Media Foundation", Platform: "windows"},
@@ -29,8 +27,6 @@ var preferredEncoderOrder = []HardwareEncoder{
 	{Name: "h264_amf", Description: "AMD AMF", Platform: "windows"},
 }
 
-// DetectHardwareEncoders probes FFmpeg for available hardware H.264 encoders.
-// Results are cached after first call.
 func DetectHardwareEncoders() []HardwareEncoder {
 	hwEncodersOnce.Do(func() {
 		encoders := probeFFmpegEncoders()
@@ -41,41 +37,37 @@ func DetectHardwareEncoders() []HardwareEncoder {
 			for _, enc := range encoders {
 				if enc == pref.Name {
 					hwEncoders = append(hwEncoders, pref)
-					// Hardware encoder detected — no need to log
+
 					break
 				}
 			}
 		}
 		if len(hwEncoders) == 0 {
-			// No hardware encoders found
+
 		}
 	})
 	return hwEncoders
 }
 
-// BestEncoder selects the optimal encoder name.
-// If forceEncoder is non-empty, it's returned directly (user override).
-// Otherwise, picks the first available hardware encoder, or "libx264" as fallback.
 func BestEncoder(forceEncoder string) string {
 	switch forceEncoder {
 	case "software", "libx264":
-		// Using software encoder
+
 		return "libx264"
 	case "", "auto":
 		detected := DetectHardwareEncoders()
 		if len(detected) > 0 {
 			choice := detected[0].Name
-			// Auto-selected hardware encoder
+
 			return choice
 		}
 		return "libx264"
 	default:
-		// Using forced encoder
+
 		return forceEncoder
 	}
 }
 
-// EncoderIsHardware reports whether the given encoder name is a hardware encoder.
 func EncoderIsHardware(name string) bool {
 	softwareEncoders := map[string]bool{
 		"libx264": true, "libx265": true, "libvpx-vp9": true,
@@ -83,7 +75,6 @@ func EncoderIsHardware(name string) bool {
 	return !softwareEncoders[name]
 }
 
-// probeFFmpegEncoders runs `ffmpeg -encoders` and extracts H.264 encoder names.
 func probeFFmpegEncoders() []string {
 	path, err := exec.LookPath("ffmpeg")
 	if err != nil {
@@ -98,12 +89,12 @@ func probeFFmpegEncoders() []string {
 
 	var encoders []string
 	for _, line := range strings.Split(string(out), "\n") {
-		// Lines look like: " V..... h264_videotoolbox  VideoToolbox H.264 encoder"
+
 		line = strings.TrimSpace(line)
 		if len(line) < 10 {
 			continue
 		}
-		// Check it's a video encoder line
+
 		if line[0] != ' ' && line[0] != 'V' {
 			continue
 		}

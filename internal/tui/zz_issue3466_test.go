@@ -1,26 +1,16 @@
 package tui
 
-// #3466 probe: remote-origin text queued while the agent is busy must arm
-// the refusal-ledger inhibit when DRAINED, not silently write the ledger
-// (the #3460 direct-path gap). The queue stamps RemoteOrigin on the entry;
-// consumeDetailed reports it so submitPendingSubmissionCmd can arm.
-
 import "testing"
 
 func TestIssue3466_RemoteOriginRidesQueueToDrain(t *testing.T) {
 	q := &pendingQueue{}
-	q.enqueueWithImages("local one", nil) // local
+	q.enqueueWithImages("local one", nil)
 	n := q.enqueueWithImagesOrigin("remote DM", nil, true)
 	if n != 2 {
 		t.Fatalf("queue count = %d, want 2", n)
 	}
-	q.enqueueWithImages("local two", nil) // local
+	q.enqueueWithImages("local two", nil)
 
-	// #4812: the visible-prefix merge is origin-homogeneous, so this queue
-	// drains as three batches: [local one], [remote DM], [local two]. The
-	// #3466 safety property is unchanged: the remote-origin entry reports
-	// remote=true at ITS drain, arming the refusal-ledger inhibit for the
-	// run it feeds.
 	text1, hidden1, _, _, remote1 := q.consumeDetailed()
 	if hidden1 {
 		t.Fatal("visible entries must drain as visible")

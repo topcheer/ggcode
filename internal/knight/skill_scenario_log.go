@@ -20,9 +20,7 @@ const (
 	maxSkillScenarioEntries = 200
 	maxSkillScenarioTaskLen = 2000
 	maxSkillScenarioErrLen  = 500
-	// #1270: compaction trigger. ~2.5KB/entry x 200 kept entries ~= 500KB
-	// steady state; rotating at 1MB gives ~200 appends of headroom between
-	// compactions.
+
 	skillScenarioRotateBytes = 1 << 20
 )
 
@@ -87,11 +85,7 @@ func (k *Knight) appendSkillScenario(entry SkillScenarioLogEntry) error {
 	if err != nil {
 		return err
 	}
-	// Append a single line instead of read-modify-write rewriting the whole
-	// file: concurrent writers (e.g. TUI + daemon finishing the same project)
-	// previously overwrote each other's entries. The size cap is enforced on
-	// read by readSkillScenarios. O_APPEND is supported on all platforms Go
-	// supports, including Windows.
+
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return err
@@ -103,13 +97,7 @@ func (k *Knight) appendSkillScenario(entry SkillScenarioLogEntry) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	// #1270: the size cap used to live only on the read path, so the jsonl
-	// grew without bound on disk (the in-memory view was trimmed but the
-	// file never shrank, and every read scanned the whole file). Rotate on
-	// the write side: past 1MB, rewrite the file to the most recent
-	// maxSkillScenarioEntries. A concurrent appender racing the rewrite can
-	// lose its line (appends land on the replaced inode) - acceptable for an
-	// advisory eval-context log, bounded to a couple of entries per rotation.
+
 	if info, err := os.Stat(path); err == nil && info.Size() > skillScenarioRotateBytes {
 		if err := k.compactSkillScenarioLog(path); err != nil {
 			debug.Log("knight", "scenario log compaction failed: %v", err)
@@ -118,13 +106,8 @@ func (k *Knight) appendSkillScenario(entry SkillScenarioLogEntry) error {
 	return nil
 }
 
-// compactSkillScenarioLog rewrites the scenario log to its newest
-// maxSkillScenarioEntries lines (#1270). readSkillScenarios applies the same
-// cap on its returned view, so the rewrite trims to the newest window.
 func (k *Knight) compactSkillScenarioLog(path string) error {
-	// readSkillScenarios returns chronological (append) order already
-	// trimmed to the newest maxSkillScenarioEntries window - exactly the
-	// bytes the compacted file should hold.
+
 	entries, err := readSkillScenarios(path)
 	if err != nil {
 		return err
@@ -133,7 +116,7 @@ func (k *Knight) compactSkillScenarioLog(path string) error {
 	for _, e := range entries {
 		line, err := json.Marshal(e)
 		if err != nil {
-			continue // malformed entry: drop instead of failing rotation
+			continue
 		}
 		buf.Write(line)
 		buf.WriteByte('\n')
@@ -202,23 +185,10 @@ func (k *Knight) skillScenarioLogPath() string {
 	return filepath.Join(k.projDir, ".ggcode", "skill-scenarios.jsonl")
 }
 
-// formatRecentSemanticMemoryForEval renders recent semantic memory entries for
-// inclusion in Knight evaluator prompts so past lessons influence new gating
-// decisions. Returns "" when no memory exists.
-//
-// #3030: nightlyMaintenance writes an unconditional self-reflection entry
-// every night (MetaLesson is never empty), and without filtering the eval
-// window filled with near-identical statistics lines - after ~8 nights real
-// promotion/reject lessons were pushed out entirely. Self-reflection entries
-// are rate-limited to the single most recent one; a wider fetch window
-// (limit*4) keeps older REAL lessons reachable past a run of self-reflections.
 func (k *Knight) formatRecentSemanticMemoryForEval(limit int) string {
 	return k.formatSemanticMemoryForEvalIDs(limit).text
 }
 
-// formatSemanticMemoryForEvalIDs is formatRecentSemanticMemoryForEval plus
-// the injected entry IDs, so the caller can feed eval outcomes back into
-// each lesson's utility score (#r25 feedback loop).
 type semanticEvalContext struct {
 	text string
 	ids  []string
@@ -229,8 +199,7 @@ func (k *Knight) formatSemanticMemoryForEvalIDs(limit int) semanticEvalContext {
 	if wide < limit {
 		wide = limit
 	}
-	// #r25: rank by empirical utility (ties by recency) instead of plain
-	// recency, per ICML 2026 top-ranked-principles retrieval.
+
 	entries, err := k.TopSemanticMemoryByUtility(wide)
 	if err != nil || len(entries) == 0 {
 		return semanticEvalContext{}
@@ -288,8 +257,7 @@ func readSkillScenarios(path string) ([]SkillScenarioLogEntry, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	// The append path no longer rewrites the file to enforce the ring cap,
-	// so keep only the most recent entries when reading.
+
 	if len(entries) > maxSkillScenarioEntries {
 		entries = entries[len(entries)-maxSkillScenarioEntries:]
 	}

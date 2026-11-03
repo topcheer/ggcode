@@ -89,9 +89,7 @@ func openBrowserOut(path string) {
 	case "linux":
 		c = exec.Command("xdg-open", url)
 	case "windows":
-		// The empty string is the window title for `start`.
-		// Without it, `start` treats the first quoted argument (the URL)
-		// as the title when the path contains spaces.
+
 		c = exec.Command("cmd", "/c", "start", "", url)
 	default:
 		return

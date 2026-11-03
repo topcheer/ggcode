@@ -20,7 +20,6 @@ func TestTeam_Snapshot(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	// Add a teammate
 	tm := &Teammate{
 		ID:        "tm-1",
 		Name:      "researcher",
@@ -60,19 +59,16 @@ func TestTeammate_StatusTransition(t *testing.T) {
 		Inbox:  make(chan MailMessage, 16),
 	}
 
-	// idle -> working
 	tm.setStatus(TeammateWorking)
 	if tm.getStatus() != TeammateWorking {
 		t.Errorf("expected working, got %s", tm.getStatus())
 	}
 
-	// working -> idle
 	tm.setStatus(TeammateIdle)
 	if tm.getStatus() != TeammateIdle {
 		t.Errorf("expected idle, got %s", tm.getStatus())
 	}
 
-	// idle -> shutting_down
 	tm.setStatus(TeammateShuttingDown)
 	if tm.getStatus() != TeammateShuttingDown {
 		t.Errorf("expected shutting_down, got %s", tm.getStatus())
@@ -107,13 +103,11 @@ func TestTeam_GetTeammate(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	// Not found
 	_, ok := team.getTeammate("tm-999")
 	if ok {
 		t.Error("expected teammate not found")
 	}
 
-	// Add and find
 	tm := &Teammate{ID: "tm-1", Name: "coder", Inbox: make(chan MailMessage, 16)}
 	team.Teammates["tm-1"] = tm
 
@@ -135,13 +129,11 @@ func TestTeam_ListTeammates(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	// Empty
 	list := team.listTeammates()
 	if len(list) != 0 {
 		t.Errorf("expected empty list, got %d", len(list))
 	}
 
-	// Add 3 teammates
 	for i := 0; i < 3; i++ {
 		id := string(rune('a' + i))
 		team.Teammates[id] = &Teammate{ID: id, Inbox: make(chan MailMessage, 16)}
@@ -191,7 +183,7 @@ func TestTeam_Snapshot_NilTasks(t *testing.T) {
 		Name:      "test",
 		LeaderID:  "leader",
 		Teammates: make(map[string]*Teammate),
-		Tasks:     nil, // no task manager yet
+		Tasks:     nil,
 		CreatedAt: time.Now(),
 	}
 
@@ -212,12 +204,11 @@ func TestTeammate_Cancel(t *testing.T) {
 		cancel: cancel,
 	}
 
-	// Cancel should work without panic
 	cancel()
 
 	select {
 	case <-tm.ctx.Done():
-		// expected
+
 	default:
 		t.Error("context should be done after cancel")
 	}
@@ -272,13 +263,11 @@ func TestTeam_teammateStatuses(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	// Empty team
 	statuses := team.teammateStatuses()
 	if len(statuses) != 0 {
 		t.Fatalf("expected 0 statuses, got %d", len(statuses))
 	}
 
-	// Add teammates out of order
 	team.Teammates["tm-3"] = &Teammate{ID: "tm-3", Name: "c", Status: TeammateIdle, Inbox: make(chan MailMessage, 16)}
 	team.Teammates["tm-1"] = &Teammate{ID: "tm-1", Name: "a", Status: TeammateWorking, Inbox: make(chan MailMessage, 16)}
 	team.Teammates["tm-2"] = &Teammate{ID: "tm-2", Name: "b", Status: TeammateShuttingDown, Inbox: make(chan MailMessage, 16)}
@@ -288,7 +277,6 @@ func TestTeam_teammateStatuses(t *testing.T) {
 		t.Fatalf("expected 3 statuses, got %d", len(statuses))
 	}
 
-	// Verify sorted by ID
 	if statuses[0].ID != "tm-1" {
 		t.Errorf("expected first tm-1, got %s", statuses[0].ID)
 	}
@@ -299,7 +287,6 @@ func TestTeam_teammateStatuses(t *testing.T) {
 		t.Errorf("expected third tm-3, got %s", statuses[2].ID)
 	}
 
-	// Verify statuses
 	if statuses[0].Status != TeammateWorking {
 		t.Errorf("tm-1: expected working, got %s", statuses[0].Status)
 	}
@@ -312,10 +299,7 @@ func TestTeam_teammateStatuses(t *testing.T) {
 }
 
 func TestTeammateStatusInfo_ConcurrentWithAppendEvent(t *testing.T) {
-	// This test verifies that statusInfo() does not deadlock when called
-	// concurrently with appendEvent(). Both acquire Teammate.mu — if statusInfo()
-	// held the lock too long (like snapshot() does while copying 200 events),
-	// the appendEvent goroutine would be blocked, causing this test to timeout.
+
 	tm := &Teammate{
 		ID:     "tm-1",
 		Name:   "coder",
@@ -326,7 +310,6 @@ func TestTeammateStatusInfo_ConcurrentWithAppendEvent(t *testing.T) {
 	var wg sync.WaitGroup
 	done := make(chan struct{})
 
-	// Writer: append events rapidly (simulates streaming tokens)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -335,7 +318,6 @@ func TestTeammateStatusInfo_ConcurrentWithAppendEvent(t *testing.T) {
 		}
 	}()
 
-	// Reader: call statusInfo rapidly (simulates TUI strip refresh)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -354,7 +336,7 @@ func TestTeammateStatusInfo_ConcurrentWithAppendEvent(t *testing.T) {
 
 	select {
 	case <-done:
-		// success — no deadlock
+
 	case <-time.After(10 * time.Second):
 		t.Fatal("deadlock detected: statusInfo and appendEvent did not complete within 10s")
 	}
@@ -368,7 +350,6 @@ func TestTeammate_EventsSince(t *testing.T) {
 		Inbox:  make(chan MailMessage, 16),
 	}
 
-	// No events yet
 	events, total := tm.EventsSince(0)
 	if total != 0 {
 		t.Fatalf("expected 0 total, got %d", total)
@@ -377,12 +358,10 @@ func TestTeammate_EventsSince(t *testing.T) {
 		t.Fatalf("expected 0 events, got %d", len(events))
 	}
 
-	// Add some events
 	for i := 0; i < 5; i++ {
 		tm.appendEvent(TeammateEvent{Type: TeammateEventText, Text: fmt.Sprintf("chunk-%d", i)})
 	}
 
-	// Get all events
 	events, total = tm.EventsSince(0)
 	if total != 5 {
 		t.Fatalf("expected 5 total, got %d", total)
@@ -391,7 +370,6 @@ func TestTeammate_EventsSince(t *testing.T) {
 		t.Fatalf("expected 5 events, got %d", len(events))
 	}
 
-	// Get incremental events (from index 3)
 	events, total = tm.EventsSince(3)
 	if total != 5 {
 		t.Fatalf("expected 5 total, got %d", total)
@@ -406,7 +384,6 @@ func TestTeammate_EventsSince(t *testing.T) {
 		t.Errorf("expected chunk-4, got %s", events[1].Text)
 	}
 
-	// fromIdx >= total returns empty
 	events, total = tm.EventsSince(10)
 	if total != 5 {
 		t.Fatalf("expected 5 total, got %d", total)

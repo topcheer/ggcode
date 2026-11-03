@@ -28,17 +28,9 @@ const (
 	binaryName        = "ggcode"
 	updateBaseURLsEnv = "GGCODE_UPDATE_BASE_URLS"
 
-	// defaultDownloadTimeout bounds every release download when the caller
-	// does not inject an HTTPClient. http.DefaultClient has Timeout == 0, so
-	// a half-open TCP connection to a mirror hangs the installer or the
-	// /update path forever (#976).
 	defaultDownloadTimeout = 5 * time.Minute
 )
 
-// maxDownloadBytes caps how much a single release artifact may buffer in
-// memory. Release archives are tens of MiB; anything larger means a
-// misbehaving mirror and must fail instead of exhausting RAM. It is a var
-// so tests can shrink it (#976).
 var maxDownloadBytes int64 = 512 << 20
 
 var defaultReleaseSources = []releaseSource{
@@ -201,9 +193,7 @@ func NormalizeVersion(version string) string {
 	if version == "" || strings.EqualFold(version, "latest") {
 		return "latest"
 	}
-	// #1573-C: the latest check is case-insensitive but the prefix check
-	// was not - `V1.2.3` became `vV1.2.3` and the release URL 404'd with
-	// no case-related hint in the error.
+
 	if len(version) > 0 && (version[0] == 'v' || version[0] == 'V') {
 		return "v" + version[1:]
 	}
@@ -453,17 +443,10 @@ func ResolveInstallDir(explicit string) (string, error) {
 	return filepath.Join(home, "go", "bin"), nil
 }
 
-// DefaultHTTPClient returns the HTTP client used when Options.HTTPClient is
-// nil. Unlike http.DefaultClient it carries a hard Timeout, so an
-// unresponsive or half-open mirror cannot hang the installer or the
-// self-update path (#976). Exported because internal/update shares the same
-// fallback policy.
 func DefaultHTTPClient() *http.Client {
 	return &http.Client{Timeout: defaultDownloadTimeout}
 }
 
-// httpClientOrDefault passes explicitly injected clients through unchanged
-// and substitutes DefaultHTTPClient for nil (#976).
 func httpClientOrDefault(client *http.Client) *http.Client {
 	if client == nil {
 		return DefaultHTTPClient()
@@ -485,8 +468,7 @@ func download(ctx context.Context, client *http.Client, url string) ([]byte, err
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s returned %s", url, resp.Status)
 	}
-	// Read at most maxDownloadBytes+1 so an over-limit body is detected
-	// rather than silently truncated at the cap (#976).
+
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadBytes+1))
 	if err != nil {
 		return nil, err
@@ -533,10 +515,6 @@ func parseChecksums(body string) map[string]string {
 	return out
 }
 
-// normalizeChecksumAssetName maps the filename column of a checksums.txt
-// line onto the bare asset name. sha256sum -b prefixes names with "*" and
-// manual regeneration often emits "./name"; goreleaser itself writes bare
-// names, so this is a fail-safe for regenerated checksum files (#976).
 func normalizeChecksumAssetName(name string) string {
 	name = strings.TrimSpace(name)
 	name = strings.TrimPrefix(name, "*")
@@ -621,13 +599,6 @@ func extractTarGzBinary(name string, archiveData []byte) ([]byte, error) {
 	return nil, fmt.Errorf("binary %s not found in archive", name)
 }
 
-// writeAndSyncFile writes data to path and flushes it toward stable
-// storage before the caller renames it into place. The fsync narrows the
-// power-loss window where os.Rename promotes a tmp file whose contents
-// never left the page cache, which would leave a truncated binary behind
-// after a crash (#976). Sync is best-effort: some filesystems (e.g.
-// network shares) reject FlushFileBuffers and an install must not brick
-// on them.
 func writeAndSyncFile(path string, data []byte) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 	if err != nil {
@@ -650,11 +621,7 @@ func WriteExecutable(path string, data []byte) error {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("chmod binary: %w", err)
 	}
-	// os.Rename atomically replaces the target on Unix (POSIX rename)
-	// and Windows (MoveFileEx with MOVEFILE_REPLACE_EXISTING).
-	// The previous os.Remove was non-atomic: if Rename failed after
-	// Remove succeeded, the binary was permanently deleted with no
-	// replacement.
+
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("move binary into place: %w", err)

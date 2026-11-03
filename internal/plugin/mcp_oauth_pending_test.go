@@ -9,8 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Regression test for issue #315: multiple OAuth MCP servers must be able to
-// be pending simultaneously without overwriting each other.
 func TestPendingOAuthMultiServerCoexistence(t *testing.T) {
 	mgr := NewMCPManager(nil, tool.NewRegistry(), "")
 	a := &MCPOAuthRequiredError{ServerName: "serverA", Handler: &mcp.OAuthHandler{}}
@@ -34,12 +32,10 @@ func TestPendingOAuthMultiServerCoexistence(t *testing.T) {
 		t.Fatalf("PendingOAuthByName(missing) = %v, want nil", got)
 	}
 
-	// Legacy single accessor must not lose the other server.
 	if got := mgr.PendingOAuth(); got == nil || (got.ServerName != "serverA" && got.ServerName != "serverB") {
 		t.Fatalf("PendingOAuth() = %v, want one of the two pending servers", got)
 	}
 
-	// Snapshot flags both servers as OAuthRequired.
 	servers := []config.MCPServerConfig{
 		{Name: "serverA", Type: "http", URL: "http://a.invalid"},
 		{Name: "serverB", Type: "http", URL: "http://b.invalid"},
@@ -56,7 +52,6 @@ func TestPendingOAuthMultiServerCoexistence(t *testing.T) {
 		}
 	}
 
-	// Clearing one entry must leave the other pending (both can complete auth).
 	mgr.ClearPendingOAuth("serverA")
 	if got := mgr.PendingOAuthByName("serverA"); got != nil {
 		t.Fatalf("after ClearPendingOAuth(serverA), entry should be nil, got %v", got)
@@ -71,8 +66,6 @@ func TestPendingOAuthMultiServerCoexistence(t *testing.T) {
 	}
 }
 
-// Regression test for issue #314: Reload removing (or changing) a server must
-// clear its pending OAuth entry so a deleted server cannot complete OAuth.
 func TestReloadClearsPendingOAuthForRemovedServer(t *testing.T) {
 	mgr := NewMCPManager([]config.MCPServerConfig{
 		{Name: "oauthA", Type: "http", URL: "http://a.invalid"},
@@ -84,7 +77,6 @@ func TestReloadClearsPendingOAuthForRemovedServer(t *testing.T) {
 	mgr.pendingOAuth = map[string]*MCPOAuthRequiredError{"oauthA": pending, "oauthB": {ServerName: "oauthB"}}
 	mgr.mu.Unlock()
 
-	// Reload with oauthA removed, oauthB kept.
 	mgr.Reload(context.Background(), []config.MCPServerConfig{
 		{Name: "oauthB", Type: "http", URL: "http://b.invalid"},
 	})
@@ -96,7 +88,6 @@ func TestReloadClearsPendingOAuthForRemovedServer(t *testing.T) {
 		t.Fatal("pending OAuth entry for kept server oauthB must survive reload")
 	}
 
-	// Reload with a changed config for oauthB must also clear its entry.
 	mgr.Reload(context.Background(), []config.MCPServerConfig{
 		{Name: "oauthB", Type: "http", URL: "http://b2.invalid"},
 	})

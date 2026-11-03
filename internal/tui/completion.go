@@ -13,28 +13,21 @@ import (
 
 const (
 	mentionPrefix      = "@"
-	maxMentionFileSize = 100 * 1024 // 100KB
+	maxMentionFileSize = 100 * 1024
 	maxMentions        = 5
 )
 
-// Mention represents a parsed @mention reference.
 type Mention struct {
-	Path  string // resolved file/directory path
+	Path  string
 	IsDir bool
 }
 
-// ParseMentions extracts @path references from user input.
-// Returns the cleaned message (with @path removed) and list of mentions.
 func isSpaceByte(b byte) bool {
 	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
 }
 
 func ParseMentions(input string, workDir string) (string, []Mention, error) {
-	// #1425-A: canonicalize workDir for CONTAINMENT CHECKS only - if the
-	// caller-supplied workdir contains symlink components (macOS
-	// /var vs /private/var), EvalSymlinks'd candidate paths sit OUTSIDE
-	// the lexical workDir and every mention would be misclassified as an
-	// escape. Mention.Path keeps the caller's lexical form.
+
 	realWorkDir := workDir
 	if resolved, err := filepath.EvalSymlinks(workDir); err == nil {
 		realWorkDir = resolved
@@ -42,21 +35,13 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 	var mentions []Mention
 	cleaned := input
 
-	// Find all @path tokens.
-	// #886: searchFrom tracks how far we've consumed — advancing past a
-	// SKIPPED token (lone '@' or over-cap) must not re-find the same '@'
-	// on the next iteration (naive continue loops forever).
 	searchFrom := 0
 	for {
 		idx := strings.Index(cleaned[searchFrom:], mentionPrefix)
 		if idx < 0 {
 			break
 		}
-		// #1718 case 2: DetectMention requires the @ to start the text or
-		// follow whitespace - ParseMentions accepted ANY position, so
-		// foo@bar.com's mid-token @ became a mention (workDir coincidence
-		// made Stat pass, the email got silently rewritten and the file
-		// content injected). Same guard, both sides.
+
 		abs := searchFrom + idx
 		if abs > 0 && !isSpaceByte(cleaned[abs-1]) {
 			searchFrom = abs + 1
@@ -64,7 +49,6 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 		}
 		idx += searchFrom
 
-		// Extract the path token (until whitespace or end)
 		rest := cleaned[idx+1:]
 		end := strings.IndexAny(rest, " \t\n\r")
 		if end < 0 {
@@ -72,30 +56,17 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 		}
 		token := rest[:end]
 		if token == "" {
-			// #886: a lone '@' (followed by whitespace) previously executed
-			// break, terminating the whole parse loop — every later valid
-			// mention in the message was silently dropped. Skip past it.
+
 			searchFrom = idx + 1
 			continue
 		}
 
-		// #886: cap check must run BEFORE the deletion — the 6th+ @file token
-		// was removed from the outgoing message AND not injected, silently
-		// tampering with user input despite the comment promising it is kept.
 		if len(mentions) >= maxMentions {
-			// Keep the remaining @mention text in the message: skip resolution
-			// but leave the token intact.
+
 			searchFrom = idx + 1 + len(token)
 			continue
 		}
 
-		// Resolve path FIRST, remove the token only when the reference
-		// actually resolves. #1365: the old order removed the token before
-		// validating, so in mixed messages ("compare @good.go and @typo.go")
-		// the failing reference silently vanished from the message with no
-		// [Referenced files] entry - the agent never learned the user had
-		// pointed at a second file. Failed references now stay in the text
-		// verbatim, which also tells the model the path did not resolve.
 		fullPath := filepath.Join(workDir, token)
 		absPath, err := filepath.Abs(fullPath)
 		if err != nil {
@@ -103,14 +74,6 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 			continue
 		}
 
-		// Prevent path traversal: resolved path must stay within workDir.
-		// #889: rel=='..' or a '../' component escapes; '..hidden.go' does
-		// NOT — the old HasPrefix(rel, "..") over-matched and silently
-		// dropped such legitimate filenames.
-		// #1425-A: resolve symlinks before the containment check -
-		// @keys/id_rsa (workDir/keys -> ~/.ssh) passed the LEXICAL rel
-		// check, Stat followed the link, and the content of the linked
-		// file was read into the conversation.
 		realPath := absPath
 		if resolved, rerr := filepath.EvalSymlinks(absPath); rerr == nil {
 			realPath = resolved
@@ -120,10 +83,7 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 			continue
 		}
 		rel, err := filepath.Rel(realWorkDir, realPath)
-		// #1425-A: filepath.Rel returns OS-native separators - on Windows an
-		// escape is "..\x", which the forward-slash-only "../" prefix check
-		// missed, letting @mention read outside-workspace files. Match the
-		// separator-aware form used by CompleteMention below.
+
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			debug.Log("completion", "@mention path traversal blocked (symlink escape): %s -> %s", token, realPath)
 			searchFrom = idx + 1 + len(token)
@@ -136,11 +96,9 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 			continue
 		}
 
-		// Resolved: now it is safe to strip the token from the cleaned
-		// message (the content will arrive via [Referenced files]).
 		removeLen := 1 + len(token)
 		if end < len(rest) {
-			removeLen++ // trailing whitespace
+			removeLen++
 		}
 		cleaned = cleaned[:idx] + cleaned[idx+removeLen:]
 		searchFrom = idx
@@ -155,8 +113,6 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 	return cleaned, mentions, nil
 }
 
-// ExpandMentions reads file contents and directory listings for mentions,
-// returning the expanded message text.
 func ExpandMentions(input string, workDir string) (string, error) {
 	cleaned, mentions, err := ParseMentions(input, workDir)
 	if err != nil {
@@ -173,7 +129,7 @@ func ExpandMentions(input string, workDir string) (string, error) {
 
 	for _, m := range mentions {
 		if m.IsDir {
-			// List directory contents
+
 			entries, err := os.ReadDir(m.Path)
 			if err != nil {
 				expanded.WriteString(fmt.Sprintf("\n@%s (error reading directory: %v)\n", m.Path, err))
@@ -185,7 +141,7 @@ func ExpandMentions(input string, workDir string) (string, error) {
 				expanded.WriteString(fmt.Sprintf("  %s\n", e.Name()))
 			}
 		} else {
-			// Read file contents
+
 			info, err := os.Stat(m.Path)
 			if err != nil {
 				expanded.WriteString(fmt.Sprintf("\n@%s (error: %v)\n", m.Path, err))
@@ -208,12 +164,8 @@ func ExpandMentions(input string, workDir string) (string, error) {
 	return expanded.String(), nil
 }
 
-// CompleteMention returns file/directory completions for an @mention prefix.
-// prefix is the text after "@" (e.g., "internal/t" from "@internal/t").
 func CompleteMention(prefix string, workDir string, fuzzyFallback FuzzyFileSearcher) []string {
-	// #1425-A: same canonicalization as ParseMentions - the containment
-	// check below compares EvalSymlinks'd dirs against workDir, so both
-	// must be real paths.
+
 	if resolved, err := filepath.EvalSymlinks(workDir); err == nil {
 		workDir = resolved
 	}
@@ -221,11 +173,11 @@ func CompleteMention(prefix string, workDir string, fuzzyFallback FuzzyFileSearc
 	var partial string
 
 	if prefix == "" {
-		// No prefix: list contents of workDir itself
+
 		dir = workDir
 		partial = ""
 	} else if strings.HasSuffix(prefix, "/") {
-		// Trailing slash: user wants to browse INTO this directory
+
 		dir = filepath.Join(workDir, prefix)
 		partial = ""
 	} else {
@@ -234,21 +186,11 @@ func CompleteMention(prefix string, workDir string, fuzzyFallback FuzzyFileSearc
 		partial = filepath.Base(fullPath)
 	}
 
-	// #1411-B: reject traversal. "@../" used filepath.Join to walk ABOVE
-	// workDir and list parent directories (filename/structure leak), and
-	// the candidates it produced (@../foo) were then REJECTED by
-	// ParseMentions (#889 rejects rel=="..") - "completion offers what
-	// parsing eats back". Guard here so both sides agree.
-	// #1425-A: the old check was purely LEXICAL (filepath.Rel on the
-	// given dir) - a symlink INSIDE the workspace (workDir/keys ->
-	// ~/.ssh) passed it and open(2) followed the link: outside
-	// filenames listed, then @mention-read. Resolve symlinks FIRST and
-	// validate the REAL path.
 	realDir := dir
 	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
 		realDir = resolved
 	} else {
-		return nil // unresolvable (dangling symlink / permission) - refuse
+		return nil
 	}
 	if rel, err := filepath.Rel(workDir, realDir); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return nil
@@ -265,7 +207,7 @@ func CompleteMention(prefix string, workDir string, fuzzyFallback FuzzyFileSearc
 		if partial != "" && !strings.HasPrefix(name, partial) {
 			continue
 		}
-		// Skip hidden files (except . files explicitly referenced)
+
 		if strings.HasPrefix(name, ".") && !strings.HasPrefix(partial, ".") {
 			continue
 		}
@@ -281,16 +223,12 @@ func CompleteMention(prefix string, workDir string, fuzzyFallback FuzzyFileSearc
 		completions = append(completions, displayPath)
 	}
 
-	// If no prefix matches in the current directory and the prefix is a simple
-	// term (no /), fall back to fuzzy search via the code index if available.
-	// This lets users type @comple to find internal/tui/completion.go without
-	// navigating directory by directory (issue #8).
 	if len(completions) == 0 && prefix != "" && !strings.Contains(prefix, "/") {
 		if fuzzyFallback != nil {
 			fuzzyResults := fuzzyFallback(prefix, 30)
 			completions = append(completions, fuzzyResults...)
 		}
-		// Also do a shallow recursive walk as fallback when no index is available
+
 		if len(completions) == 0 {
 			fuzzyResults := recursiveFuzzySearch(workDir, prefix, 4, 30)
 			completions = append(completions, fuzzyResults...)
@@ -300,13 +238,8 @@ func CompleteMention(prefix string, workDir string, fuzzyFallback FuzzyFileSearc
 	return completions
 }
 
-// FuzzyFileSearcher returns file paths matching a fuzzy query.
-// Used by CompleteMention to leverage the code index for @ autocomplete.
 type FuzzyFileSearcher func(query string, maxResults int) []string
 
-// recursiveFuzzySearch walks the workspace up to maxDepth levels deep,
-// returning relative paths whose basename fuzzy-matches the query.
-// Results are capped at maxResults to keep the autocomplete snappy.
 func recursiveFuzzySearch(root, query string, maxDepth, maxResults int) []string {
 	query = strings.ToLower(query)
 	var results []string
@@ -322,7 +255,6 @@ func recursiveFuzzySearch(root, query string, maxDepth, maxResults int) []string
 			return nil
 		}
 
-		// Skip common noise directories
 		base := d.Name()
 		if d.IsDir() {
 			if base == ".git" || base == "node_modules" || base == "vendor" ||
@@ -330,7 +262,7 @@ func recursiveFuzzySearch(root, query string, maxDepth, maxResults int) []string
 				base == "target" || base == ".next" || base == "__pycache__" {
 				return filepath.SkipDir
 			}
-			// Check depth
+
 			depth := strings.Count(rel, string(filepath.Separator))
 			if depth >= maxDepth {
 				return filepath.SkipDir
@@ -338,7 +270,6 @@ func recursiveFuzzySearch(root, query string, maxDepth, maxResults int) []string
 			return nil
 		}
 
-		// Fuzzy match: check if query is a subsequence of the basename
 		if fuzzySubsequenceMatch(strings.ToLower(base), query) {
 			results = append(results, rel)
 			count++
@@ -349,9 +280,6 @@ func recursiveFuzzySearch(root, query string, maxDepth, maxResults int) []string
 	return results
 }
 
-// fuzzySubsequenceMatch returns true if all characters of query appear in s
-// in the same order (not necessarily contiguous). This is the same algorithm
-// used by Sublime Text / VS Code file search (e.g. "cml" matches "completion.go").
 func fuzzySubsequenceMatch(s, query string) bool {
 	if query == "" {
 		return true
@@ -366,7 +294,6 @@ func fuzzySubsequenceMatch(s, query string) bool {
 	return qi == len(query)
 }
 
-// SlashCommands is the list of all available slash commands.
 var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/model", "/provider", "/impersonate",
 	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa",
@@ -382,18 +309,14 @@ var SlashCommands = []string{
 	"/title",
 	"/pin-session", "/unpin-session", "/tag", "/untag", "/tags",
 	"/search",
-	// #889: these have descriptions/placeholders (and real handlers) but
-	// were missing from the list, so Tab completion never offered them.
+
 	"/redo", "/notify", "/export-trace", "/runreport", "/traj", "/export-training", "/why", "/evidence", "/guidance",
-	// #2835: same omission family - /pin /style /goal have live handlers
-	// (commands.go dispatch) but never appeared in Tab completion.
+
 	"/pin", "/style", "/goal",
-	// #4268: third recurrence of the family - /interventions /refusals
-	// had live handlers and descriptions but were absent from this list.
+
 	"/interventions", "/refusals",
 }
 
-// SlashCommandDescriptions provides short descriptions for slash commands.
 var SlashCommandDescriptions = map[string]string{
 	"/help":            "Show help message",
 	"/retry":           "Retry last submission after error",
@@ -504,10 +427,6 @@ var SlashCommandDescriptions = map[string]string{
 	"/rules":           "Manage ratchet rules",
 }
 
-// SlashCommandPlaceholders maps commands that accept optional arguments.
-// When Tab-completing these commands, the input is filled with the command
-// plus a trailing space and the placeholder is shown as a hint.
-// Commands NOT in this map are executed immediately on Tab completion.
 var SlashCommandPlaceholders = map[string]string{
 	"/model":         "<model-name>",
 	"/provider":      "<vendor> [endpoint]",
@@ -596,7 +515,6 @@ var SlashCommandPlaceholders = map[string]string{
 	"/fork":          "",
 }
 
-// CompleteSlashCommand returns matching slash commands for a given prefix.
 func CompleteSlashCommand(prefix string, customCmds map[string]*commands.Command) []string {
 	var matches []string
 	for _, cmd := range SlashCommands {
@@ -618,8 +536,6 @@ func CompleteSlashCommand(prefix string, customCmds map[string]*commands.Command
 	return matches
 }
 
-// DetectSlashCommand returns true if the cursor is at a slash command position.
-// It returns the command fragment after "/" for completion.
 func DetectSlashCommand(value string, cursor int) (active bool, prefix string) {
 	if cursor < 1 || cursor > len(value) {
 		return false, ""
@@ -630,17 +546,13 @@ func DetectSlashCommand(value string, cursor int) (active bool, prefix string) {
 		return false, ""
 	}
 
-	// Find the start of the current word by scanning backwards for whitespace.
-	// Since whitespace chars (space, tab) are single-byte ASCII, we can safely
-	// compare individual bytes — but we must not stop mid-UTF8 sequence.
 	wordStart := cursor
 	for wordStart > 0 {
 		b := value[wordStart-1]
 		if b == ' ' || b == '\t' {
 			break
 		}
-		// Skip over UTF-8 continuation bytes (0x80-0xBF) so we don't
-		// misidentify a continuation byte as a non-whitespace char.
+
 		if b&0xC0 == 0x80 {
 			wordStart--
 			continue
@@ -652,7 +564,6 @@ func DetectSlashCommand(value string, cursor int) (active bool, prefix string) {
 		return false, ""
 	}
 
-	// Ensure "/" is at the start of input or after whitespace.
 	if wordStart > 0 {
 		prev := value[wordStart-1]
 		if prev != ' ' && prev != '\t' {
@@ -660,7 +571,6 @@ func DetectSlashCommand(value string, cursor int) (active bool, prefix string) {
 		}
 	}
 
-	// Extract the prefix after "/".
 	end := cursor
 	if end > len(value) {
 		end = len(value)
@@ -672,17 +582,15 @@ func DetectSlashCommand(value string, cursor int) (active bool, prefix string) {
 	return true, prefix
 }
 
-// DetectMention returns true if the cursor is immediately after a "@" with a path fragment.
-// It returns the path fragment after "@" for completion.
 func DetectMention(value string, cursor int) (active bool, prefix string) {
 	cursor = clampUTF8Cursor(value, cursor)
 	if cursor <= 0 {
 		return false, ""
 	}
-	// Find "@" before cursor
+
 	for i := cursor - 1; i >= 0; i-- {
 		if value[i] == '@' {
-			// Check there's a whitespace or start-of-string before @
+
 			if i == 0 || value[i-1] == ' ' || value[i-1] == '\t' || value[i-1] == '\n' {
 				return true, value[i+1 : cursor]
 			}

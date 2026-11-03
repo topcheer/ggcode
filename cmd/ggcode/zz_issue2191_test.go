@@ -1,10 +1,5 @@
 package main
 
-// #2191 regression: maskedAdapterExtra only checked TOP-LEVEL keys, so
-// the five adapters' nested stt overrides (apiKey/api_key) printed in
-// cleartext on all three CLI read paths (show --json, show text via %v
-// on the map, list --json).
-
 import (
 	"encoding/json"
 	"strings"
@@ -41,7 +36,7 @@ func TestMaskedAdapterExtraRecursesNested(t *testing.T) {
 	if stt["model"] != "whisper" {
 		t.Fatalf("nested benign must pass: %v", stt["model"])
 	}
-	// JSON path carries no secrets.
+
 	blob, _ := json.Marshal(masked)
 	if strings.Contains(string(blob), "nsec1xyz") || strings.Contains(string(blob), "sk-nested****FULL") || strings.Contains(string(blob), "sk-camel****FULL") {
 		t.Fatalf("masked JSON still carries secrets: %s", blob)

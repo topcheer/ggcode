@@ -23,15 +23,13 @@ func createTestPNG(t *testing.T, w, h int) []byte {
 }
 
 func createTestJPEG(t *testing.T) []byte {
-	// Minimal JPEG: FF D8 FF E0 (JFIF header start)
-	// We'll use a real JPEG encoding
+
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, 10, 10))
 	draw.Draw(img, img.Bounds(), &image.Uniform{color.RGBA{0, 128, 255, 255}}, image.Point{}, draw.Src)
 
 	var buf bytes.Buffer
-	// Can't easily encode JPEG without importing image/jpeg encoder
-	// So just test PNG and GIF, and test DetectMIME with manual bytes
+
 	return buf.Bytes()
 }
 
@@ -80,7 +78,7 @@ func TestDecode(t *testing.T) {
 
 func TestDecodeTooLarge(t *testing.T) {
 	bigData := make([]byte, MaxSize+1)
-	bigData[0] = 0x89 // PNG magic start
+	bigData[0] = 0x89
 	bigData[1] = 0x50
 
 	_, err := Decode(bigData)
@@ -150,8 +148,8 @@ func TestIsImageFile(t *testing.T) {
 		{"pic.webp", true},
 		{"doc.txt", false},
 		{"archive.zip", false},
-		{"PNG", false},     // case sensitive extension
-		{"test.PNG", true}, // lowercase check
+		{"PNG", false},
+		{"test.PNG", true},
 	}
 
 	for _, tt := range tests {

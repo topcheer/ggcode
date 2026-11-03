@@ -6,9 +6,6 @@ import (
 	"time"
 )
 
-// RenderText renders one probe result as the short multi-line text used by
-// the IM /usage path (and available to any other text surface). Errors
-// degrade to a single explanatory line - usage is ambient information.
 func RenderText(vendor string, info *UsageInfo, err error) string {
 	if err != nil {
 		return fmt.Sprintf("usage: %s (%s)", vendor, err.Error())

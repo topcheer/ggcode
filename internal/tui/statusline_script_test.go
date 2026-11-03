@@ -91,7 +91,7 @@ func TestHandleStatuslineMsgCacheAndStale(t *testing.T) {
 	if got := updated.statusline.text; got != "hello" {
 		t.Fatalf("cache = %q, want hello", got)
 	}
-	// Stale seq (older than sl.seq) must not overwrite.
+
 	m.statusline.seq = 5
 	updated, _ = m.handleStatuslineMsg(statuslineMsg{seq: 3, text: "stale"})
 	if got := updated.statusline.text; got != "hello" {
@@ -109,8 +109,8 @@ func TestStatuslineBarNilSafe(t *testing.T) {
 
 func TestRefreshStatuslineDisabledNoop(t *testing.T) {
 	m := Model{}
-	m.config = &config.Config{} // no command: disabled
-	m.refreshStatusline()       // must not panic or spawn anything
+	m.config = &config.Config{}
+	m.refreshStatusline()
 	if m.statusline != nil {
 		t.Fatal("disabled config should not allocate statusline state")
 	}

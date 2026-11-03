@@ -14,10 +14,6 @@ import (
 	"github.com/topcheer/ggcode/internal/secretfield"
 )
 
-// --- Config API ---
-
-// sanitizeEndpoints returns a copy of endpoints with API keys replaced by
-// has_api_key booleans, preventing key leakage via the WebUI JSON API.
 func sanitizeEndpoints(endpoints map[string]config.EndpointConfig) map[string]interface{} {
 	out := make(map[string]interface{}, len(endpoints))
 	for name, ep := range endpoints {
@@ -34,7 +30,6 @@ func sanitizeEndpoints(endpoints map[string]config.EndpointConfig) map[string]in
 	return out
 }
 
-// GET /api/config -- full config as JSON (includes scope info)
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -53,7 +48,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
-// GET/PUT /api/config/scope -- read/switch config save scope
 func (s *Server) handleConfigScope(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -90,7 +84,6 @@ func (s *Server) handleConfigScope(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GET/PUT /api/config/active -- read/switch active vendor+endpoint+model
 func (s *Server) handleActiveSelection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -131,7 +124,6 @@ func (s *Server) handleActiveSelection(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GET /api/vendors -- list all vendor names
 func (s *Server) handleVendors(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -185,7 +177,6 @@ func (s *Server) handleVendors(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GET/PUT/DELETE /api/vendors/{vendor}
 func (s *Server) handleVendorDetail(w http.ResponseWriter, r *http.Request) {
 	vendor := strings.TrimPrefix(r.URL.Path, "/api/vendors/")
 
@@ -224,16 +215,13 @@ func (s *Server) handleVendorDetail(w http.ResponseWriter, r *http.Request) {
 		if req.DisplayName != "" {
 			vc.DisplayName = req.DisplayName
 		}
-		// Update API key if provided (empty string = clear, "__unchanged__" = keep)
+
 		if req.APIKey != "__unchanged__" {
 			if err := s.cfg.SetVendorAPIKey(vendor, req.APIKey); err != nil {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			// Re-read after SetVendorAPIKey modified it. #1412-A: the re-read
-			// returned the OLD map copy - dropping the DisplayName change
-			// made above (Go map value semantics) - so changing key+name in
-			// ONE request silently lost the name (200 ok).
+
 			vc = s.cfg.Vendors[vendor]
 			if req.DisplayName != "" {
 				vc.DisplayName = req.DisplayName
@@ -264,7 +252,6 @@ func (s *Server) handleVendorDetail(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GET/POST /api/vendors/{vendor}/endpoints
 func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
 	vendor := r.PathValue("vendor")
 
@@ -307,7 +294,6 @@ func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GET/PUT/DELETE /api/vendors/{vendor}/endpoints/{endpoint}
 func (s *Server) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 	vendor := r.PathValue("vendor")
 	endpoint := r.PathValue("endpoint")
@@ -326,8 +312,7 @@ func (s *Server) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "endpoint not found")
 			return
 		}
-		// #925: GET detail returned the stored api_key in plaintext -
-		// mask like every other read route (has_api_key boolean).
+
 		if raw, err := json.Marshal(ep); err == nil {
 			var m map[string]interface{}
 			if json.Unmarshal(raw, &m) == nil {
@@ -380,7 +365,6 @@ func (s *Server) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// PUT /api/vendors/{vendor}/endpoints/{endpoint}/apikey
 func (s *Server) handleAPIKey(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -411,7 +395,6 @@ func (s *Server) handleAPIKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// GET/POST/DELETE /api/mcp
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -419,7 +402,6 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		defer s.mu.RUnlock()
 		cfg := s.cfg
 
-		// Merge config with runtime status
 		type mcpEntry struct {
 			config.MCPServerConfig
 			Runtime *MCPRuntimeStatus `json:"runtime,omitempty"`
@@ -433,9 +415,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 			}
 			entries[i] = e
 		}
-		// #925: route through the same sanitize semantics as /api/config -
-		// the verbatim struct returned env/headers/oauth_client_secret
-		// (frequently carrying API keys) in cleartext.
+
 		if raw, err := json.Marshal(entries); err == nil {
 			var arr []interface{}
 			if json.Unmarshal(raw, &arr) == nil {
@@ -477,7 +457,6 @@ func (s *Server) getRuntimeMCPStatus() map[string]MCPRuntimeStatus {
 	return s.mcpStatusFn()
 }
 
-// GET /api/mcp/status -- runtime MCP status only
 func (s *Server) handleMCPStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -486,7 +465,6 @@ func (s *Server) handleMCPStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, s.getRuntimeMCPStatus())
 }
 
-// DELETE /api/mcp/{name}
 func (s *Server) handleMCPDetail(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -507,17 +485,12 @@ func (s *Server) handleMCPDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "deleted"})
 }
 
-// maskIMConfig returns a deep copy of cfg with adapter credentials masked
-// (#1021): Env deleted and Extra token/secret keys masked, mirroring
-// sanitizeMap. PUT restores originals via the "__unchanged__" sentinel
-// (same pattern as the vendor endpoint editor), so masking the read side
-// never writes "***" literals back into the config file.
 func maskIMConfig(cfg config.IMConfig) config.IMConfig {
 	out := cfg
 	out.Adapters = make(map[string]config.IMAdapterConfig, len(cfg.Adapters))
 	for name, a := range cfg.Adapters {
 		if len(a.Env) > 0 {
-			a.Env = map[string]string{"__masked__": ""} // presence marker
+			a.Env = map[string]string{"__masked__": ""}
 		}
 		if len(a.Extra) > 0 {
 			masked := make(map[string]interface{}, len(a.Extra))
@@ -535,21 +508,10 @@ func maskIMAdapter(a config.IMAdapterConfig) config.IMAdapterConfig {
 	return maskIMConfig(config.IMConfig{Adapters: map[string]config.IMAdapterConfig{"": a}}).Adapters[""]
 }
 
-// sensitiveExtraKey matches credential-bearing adapter Extra keys (#1021).
-// #2188: delegate to the single source (internal/secretfield, #2180) -
-// the local three-word list predated it and missed the whole key family
-// (nostr private_key, dingtalk app_key rendered in cleartext over the
-// API; the comment's "aligned with the im package" had silently gone
-// false, the same drift #2167 caught in the TUI).
 func sensitiveExtraKey(key string) bool {
 	return secretfield.LooksLikeSecretField(key)
 }
 
-// maskExtraValue masks one Extra value (#2188): sensitive string values
-// become the "__unchanged__" sentinel (restore path reverts them), and
-// NESTED maps recurse - the five adapters' stt.api_key lived in
-// Extra["stt"]["api_key"] and the old top-level-only mask returned the
-// whole map verbatim.
 func maskExtraValue(key string, v interface{}) interface{} {
 	switch val := v.(type) {
 	case string:
@@ -568,9 +530,6 @@ func maskExtraValue(key string, v interface{}) interface{} {
 	}
 }
 
-// restoreMaskedIMCredentials copies masked fields back from prev: any Env
-// presence marker or "__unchanged__" Extra sentinel reverts to the stored
-// value so a full-replace PUT cannot persist masks (#1021).
 func restoreMaskedIMCredentials(prev, next config.IMConfig) config.IMConfig {
 	for name, a := range next.Adapters {
 		old, ok := prev.Adapters[name]
@@ -588,10 +547,6 @@ func restoreMaskedIMCredentials(prev, next config.IMConfig) config.IMConfig {
 	return next
 }
 
-// restoreExtraValue reverts masked sentinels at any depth (#2188):
-// nested maps carry their own "__unchanged__" entries (maskExtraValue
-// recurses), so restoring only top-level strings would PERSIST the
-// mask into storage on a full-replace PUT and destroy e.g. stt config.
 func restoreExtraValue(oldV, newV interface{}) interface{} {
 	if s, ok := newV.(string); ok && s == "__unchanged__" {
 		return oldV
@@ -612,13 +567,12 @@ func restoreExtraValue(oldV, newV interface{}) interface{} {
 	return out
 }
 
-// GET/PUT /api/im -- IM config
 func (s *Server) handleIM(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		s.mu.RLock()
 		defer s.mu.RUnlock()
-		writeJSON(w, maskIMConfig(s.cfg.IM)) // #1021: mask like every other read route
+		writeJSON(w, maskIMConfig(s.cfg.IM))
 	case http.MethodPut:
 		var im config.IMConfig
 		if err := readJSON(r, &im); err != nil {
@@ -627,7 +581,7 @@ func (s *Server) handleIM(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		s.cfg.IM = restoreMaskedIMCredentials(s.cfg.IM, im) // #1021 sentinel restore
+		s.cfg.IM = restoreMaskedIMCredentials(s.cfg.IM, im)
 		if err := s.saveConfig(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -638,7 +592,6 @@ func (s *Server) handleIM(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GET /api/im/status -- runtime IM adapter status with bindings
 func (s *Server) handleIMStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -651,7 +604,6 @@ func (s *Server) handleIMStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, []IMRuntimeStatus{})
 }
 
-// POST /api/im/action -- perform IM action (enable/disable/mute/unmute)
 func (s *Server) handleIMAction(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -659,7 +611,7 @@ func (s *Server) handleIMAction(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Adapter string `json:"adapter"`
-		Action  string `json:"action"` // enable, disable, mute, unmute
+		Action  string `json:"action"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -676,7 +628,6 @@ func (s *Server) handleIMAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// GET /api/im/adapters -- list all IM adapters
 func (s *Server) handleIMAdapters(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -684,10 +635,9 @@ func (s *Server) handleIMAdapters(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	writeJSON(w, maskIMConfig(s.cfg.IM).Adapters) // #1021: mask like every other read route
+	writeJSON(w, maskIMConfig(s.cfg.IM).Adapters)
 }
 
-// GET/POST/PUT/DELETE /api/im/adapters/{name}
 func (s *Server) handleIMAdapterDetail(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/api/im/adapters/")
 	if name == "" {
@@ -704,7 +654,7 @@ func (s *Server) handleIMAdapterDetail(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "adapter not found")
 			return
 		}
-		writeJSON(w, maskIMAdapter(adapter)) // #1021: mask like every other read route
+		writeJSON(w, maskIMAdapter(adapter))
 
 	case http.MethodPost, http.MethodPut:
 		var adapter config.IMAdapterConfig
@@ -715,7 +665,7 @@ func (s *Server) handleIMAdapterDetail(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if prev, ok := s.cfg.IM.Adapters[name]; ok {
-			// #1021: restore sentinel-masked fields from the stored adapter
+
 			single := config.IMConfig{Adapters: map[string]config.IMAdapterConfig{name: prev}}
 			wrapped := config.IMConfig{Adapters: map[string]config.IMAdapterConfig{name: adapter}}
 			adapter = restoreMaskedIMCredentials(single, wrapped).Adapters[name]
@@ -748,7 +698,6 @@ func (s *Server) handleIMAdapterDetail(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GET/PUT /api/impersonate -- read/update impersonation settings
 func (s *Server) handleImpersonate(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -783,7 +732,7 @@ func (s *Server) handleImpersonate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		// Apply to runtime
+
 		var presetPtr *provider.ImpersonationPreset
 		if req.Preset != "" && req.Preset != "none" {
 			presetPtr = provider.FindPresetByID(req.Preset)
@@ -794,7 +743,6 @@ func (s *Server) handleImpersonate(w http.ResponseWriter, r *http.Request) {
 		}
 		provider.SetActiveImpersonation(presetPtr, req.CustomVersion, req.CustomHeaders)
 
-		// Persist
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		impCfg := config.ImpersonationConfig{
@@ -814,7 +762,6 @@ func (s *Server) handleImpersonate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GET/PUT /api/a2a -- A2A protocol configuration
 func (s *Server) handleA2A(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -881,7 +828,7 @@ func (s *Server) handleA2A(w http.ResponseWriter, r *http.Request) {
 				s.cfg.A2A.Auth.APIKey = req.Auth.APIKey
 			}
 			if req.Auth.APIKeys != nil {
-				// Replace entire list (empty slice = clear all)
+
 				s.cfg.A2A.Auth.APIKeys = req.Auth.APIKeys
 			}
 			if req.Auth.OAuth2Clear {
@@ -910,7 +857,6 @@ func (s *Server) handleA2A(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GET /api/a2a/discover -- list discovered A2A instances
 func (s *Server) handleA2ADiscover(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -927,7 +873,6 @@ func (s *Server) handleA2ADiscover(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, instances)
 }
 
-// GET /api/sessions -- list sessions grouped by workspace
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -942,7 +887,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Group by workspace
+
 	type sessionSummary struct {
 		ID        string `json:"id"`
 		Title     string `json:"title"`
@@ -962,7 +907,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	groupMap := map[string]*workspaceGroup{}
 	var groupOrder []string
-	// Ensure current workspace is first
+
 	if s.workspace != "" {
 		groupMap[s.workspace] = &workspaceGroup{
 			Workspace: s.workspace,
@@ -1008,7 +953,6 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /api/sessions/{id} -- get session detail with messages
 func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1028,7 +972,7 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	// Serialize messages, omitting large image data
+
 	type contentBlock struct {
 		Type     string          `json:"type"`
 		Text     string          `json:"text,omitempty"`
@@ -1044,8 +988,7 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	msgs := make([]message, 0, len(ses.Messages))
 	for _, m := range ses.Messages {
-		// Skip system messages -- they contain internal prompts and should
-		// not be shown in the history detail view.
+
 		if m.Role == "system" {
 			continue
 		}
@@ -1076,7 +1019,6 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET/PUT /api/general -- general settings (language, mode, max_iterations, allowed_dirs)
 func (s *Server) handleGeneral(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -1109,12 +1051,7 @@ func (s *Server) handleGeneral(w http.ResponseWriter, r *http.Request) {
 		if req.DefaultMode != "" {
 			s.cfg.DefaultMode = req.DefaultMode
 		}
-		// #1412-B: unconditional assignment meant a partial update from a
-		// third-party client that omits max_iterations wrote the JSON zero
-		// value 0 - which means UNLIMITED iterations in the agent loop
-		// (maxIter <= 0 || i < maxIter), silently dropping the runaway-loop
-		// / cost guard. Pointer + nil check keeps omission a no-op, exactly
-		// like the other partial-update fields in this handler.
+
 		if req.MaxIterations != nil {
 			s.cfg.MaxIterations = *req.MaxIterations
 		}
@@ -1138,14 +1075,13 @@ func (s *Server) handleGeneral(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// POST /api/restart -- trigger application restart
 func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "restarting"})
-	// Trigger async so the response can be sent first
+
 	safego.Go("webui.restart", func() {
 		time.Sleep(500 * time.Millisecond)
 		if s.restartFn != nil {
@@ -1154,7 +1090,6 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleKnight returns Knight agent status and all skill data.
 func (s *Server) handleKnight(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1167,7 +1102,6 @@ func (s *Server) handleKnight(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, s.knightStatusFn())
 }
 
-// handleKnightSkills returns only the active and staging skills (lighter endpoint).
 func (s *Server) handleKnightSkills(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1184,19 +1118,6 @@ func (s *Server) handleKnightSkills(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleKnightAction performs skill lifecycle actions.
-// POST with JSON body: {"action": "...", "name": "skill-name", ...params}
-//
-// Supported actions:
-//   - promote: promote a staging skill to active
-//   - reject: reject (delete) a staging skill
-//   - freeze: freeze an active skill (disable auto-updates)
-//   - unfreeze: unfreeze an active skill
-//   - rollback: rollback a skill to its previous version
-//   - record_effectiveness: record effectiveness score (params: {"score": 1-5})
-//   - analyze: trigger immediate session analysis
-//   - validate: trigger immediate skill validation
-//   - delete_queue: remove a candidate from the queue (params: {"name": "..."})
 func (s *Server) handleKnightAction(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1228,8 +1149,6 @@ func (s *Server) handleKnightAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// handleKnightSkillContent returns the raw markdown content of a skill file.
-// GET with query params: ?name=skill-name&staging=true
 func (s *Server) handleKnightSkillContent(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1253,9 +1172,6 @@ func (s *Server) handleKnightSkillContent(w http.ResponseWriter, r *http.Request
 	writeJSON(w, map[string]string{"content": content})
 }
 
-// a2aAuthPresets returns the built-in OAuth2/OIDC provider presets for the webui.
-// The frontend uses these to auto-fill issuer_url, scopes, and flow when the user
-// selects a provider preset.
 func a2aAuthPresets() map[string]interface{} {
 	out := make(map[string]interface{}, len(auth.ProviderPresets))
 	for name, p := range auth.ProviderPresets {

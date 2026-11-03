@@ -13,7 +13,7 @@ func TestInferDefaultLayoutGoProject(t *testing.T) {
 	writeTestFile(t, filepath.Join(workspace, "Makefile"), "verify-ci:\n\tgo test ./...\n")
 
 	layout := InferDefaultLayout(workspace)
-	// #811: generic layout no longer hardcodes this repo's build tag.
+
 	if !layoutHas(layout, "shell", "") || !layoutHas(layout, "test", "go test ./...") || !layoutHas(layout, "verify", "make verify-ci") {
 		t.Fatalf("Go layout = %+v", layout)
 	}

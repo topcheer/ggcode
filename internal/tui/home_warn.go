@@ -10,11 +10,9 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// homeWarnModel is a full-screen Bubble Tea program that warns the user
-// they are running ggcode from their HOME directory.
 type homeWarnModel struct {
 	lang     Language
-	selected int // 0 = continue, 1 = exit
+	selected int
 	quitting bool
 }
 
@@ -66,7 +64,6 @@ func (m *homeWarnModel) View() tea.View {
 	shortcutC := tr(m.lang, "home.warn.shortcut_c")
 	shortcutE := tr(m.lang, "home.warn.shortcut_e")
 
-	// Styles
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("#FFAA00")).
@@ -94,7 +91,6 @@ func (m *homeWarnModel) View() tea.View {
 		exitLine = selectedStyle.Render("▸ " + exitLine)
 	}
 
-	// Measure terminal width (use 60 as default for styling)
 	boxStyle := lipgloss.NewStyle().
 		Width(60).
 		Padding(2, 4).
@@ -111,30 +107,21 @@ func (m *homeWarnModel) View() tea.View {
 		Render(boxStyle.Render(content)))
 }
 
-// ShouldContinue returns true if the user chose to continue, false if exit.
 func (m *homeWarnModel) ShouldContinue() bool {
 	return m.selected == 0
 }
 
-// ConfirmHomeDir shows a full-screen TUI warning that the user is running
-// from their HOME directory. Returns true if the user wants to continue,
-// false if they want to exit.
 func ConfirmHomeDir(lang Language) bool {
 	m := newHomeWarnModel(lang)
 	p := tea.NewProgram(&m)
 	model, err := p.Run()
 	if err != nil {
-		// If the TUI fails (e.g. no tty), default to continue
+
 		return true
 	}
 	return model.(*homeWarnModel).ShouldContinue()
 }
 
-// ConfirmHomeDirPlain is the line-oriented twin of ConfirmHomeDir for the
-// linear frontend (#4604): same i18n title/message, but printed as plain
-// text with a y/N prompt read from stdin - no Bubble Tea program, no raw
-// mode, safe on dumb terminals where the full-screen dialog is garbled.
-// Defaults to continue on unreadable/EOF input (mirrors the TUI fallback).
 func ConfirmHomeDirPlain(lang Language) bool {
 	fmt.Println(tr(lang, "home.warn.title"))
 	fmt.Println(tr(lang, "home.warn.message"))
@@ -151,8 +138,6 @@ func ConfirmHomeDirPlain(lang Language) bool {
 	}
 }
 
-// NormalizeLanguage converts a language string to a Language value.
-// Exported for use by cmd/ggcode.
 func NormalizeLanguage(s string) Language {
 	return normalizeLanguage(s)
 }

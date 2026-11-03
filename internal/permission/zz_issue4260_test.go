@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// #4260: the escalation gate must match the parser's case-insensitive
-// semantics - every casing of bypass/autopilot escalates (Ask), mixed-case
-// non-escalating targets stay Allow.
 func TestIssue4260_EscalationGateCaseInsensitive(t *testing.T) {
 	for _, raw := range []string{
 		`{"mode":"Bypass"}`, `{"mode":"BYPASS"}`, `{"mode":"ByPass"}`,

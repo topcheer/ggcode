@@ -17,15 +17,11 @@ var (
 	cache = map[int]*glamour.TermRenderer{}
 )
 
-// Warmup pre-initializes the glamour markdown renderer so the first real
-// render is fast. Call this during startup (before the TUI event loop)
-// to avoid blocking the first View() call with parser/renderer init.
 func Warmup() {
 	_ = Renderer(80)
 	_ = Renderer(120)
 }
 
-// Renderer returns a cached glamour.TermRenderer for the given wrap width.
 func Renderer(wrap int) *glamour.TermRenderer {
 	if wrap <= 0 {
 		wrap = 80
@@ -47,16 +43,8 @@ func Renderer(wrap int) *glamour.TermRenderer {
 	return r
 }
 
-// Render renders markdown text to ANSI with the given wrap width.
 func Render(text string, wrap int) string {
-	// Normalize terminal control characters BEFORE glamour sees them:
-	// measurement libraries (runewidth) count '\t' as ~0 columns and '\r'
-	// as zero-width, but the terminal expands tabs to their stop column and
-	// a bare CR (progress bars) rewinds the cursor - lines that measure as
-	// fitting the wrap width get re-wrapped or mangled by the terminal,
-	// desynchronizing item Height() from displayed lines (#995 class).
-	// Glamour's own word-wrap also measures with the same width library, so
-	// tabs inside code blocks silently violate the width invariant here too.
+
 	if strings.ContainsRune(text, '\r') {
 		text = strings.ReplaceAll(text, "\r\n", "\n")
 		text = strings.ReplaceAll(text, "\r", "\n")
@@ -71,17 +59,10 @@ func Render(text string, wrap int) string {
 	if err != nil {
 		return text
 	}
-	// Glamour adds leading/trailing newlines; trim both so the first
-	// line of rendered content lines up with the prefix icon.
+
 	return strings.TrimRight(strings.TrimLeft(out, " \t\n"), " \t\n")
 }
 
-// StyleConfig returns the glamour style config adapted for dark/light terminal.
-// Uses COLORFGBG environment variable instead of termenv.HasDarkBackground()
-// to avoid blocking terminal queries (OSC 11) that deadlock the Bubble Tea
-// event loop on the first render. See: termenv.HasDarkBackground →
-// BackgroundColor → termStatusReport → waitForData blocks forever because
-// Bubble Tea's input reader consumes the response before termenv can read it.
 func StyleConfig() ansi.StyleConfig {
 	if !term.IsTerminal(os.Stdout.Fd()) {
 		return glamourstyles.NoTTYStyleConfig
@@ -90,13 +71,10 @@ func StyleConfig() ansi.StyleConfig {
 	return StyleConfigForDarkMode(dark)
 }
 
-// hasDarkBackground detects dark background via COLORFGBG env var only.
-// This is safe to call from the Bubble Tea event loop because it does not
-// perform blocking terminal I/O (no OSC 11 query).
 func hasDarkBackground() bool {
 	fgbg := os.Getenv("COLORFGBG")
 	if fgbg == "" {
-		// Default to dark — most terminal users use dark themes.
+
 		return true
 	}
 	parts := strings.Split(fgbg, ";")
@@ -104,8 +82,7 @@ func hasDarkBackground() bool {
 		return true
 	}
 	bg := parts[len(parts)-1]
-	// Common dark background values: 0=black, 8=dark gray, etc.
-	// Light backgrounds are typically 15, 231, or 7 (white/light gray).
+
 	switch bg {
 	case "0", "8", "16", "232", "233", "234", "235", "236", "237", "238", "239":
 		return true
@@ -158,7 +135,6 @@ func applyPalette(cfg *ansi.StyleConfig, accent, text, comment, success, stringC
 	cfg.CodeBlock.Chroma.LiteralStringEscape.Color = &accent
 }
 
-// Normalize cleans up markdown for terminal rendering.
 func Normalize(text string) string {
 	if text == "" {
 		return text
@@ -216,11 +192,7 @@ func normalizeHeading(line string) (string, bool) {
 		return line, false
 	}
 	content := strings.TrimSpace(rest[level:])
-	// #1588-C: CommonMark closing sequences require whitespace BEFORE the
-	// '#'s - a bare TrimRight mangled legitimate trailing characters
-	// ('## C#' -> 'C'). Only strip whitespace-delimited closing sequences.
-	// #1644-7: the delimiter is ANY whitespace (space OR tab) - the
-	// literal " #" probe missed tab closers ('## heading\t#' kept its '#').
+
 	if n := len(content); n > 0 {
 		j := n
 		for j > 0 && content[j-1] == '#' {
@@ -228,27 +200,22 @@ func normalizeHeading(line string) (string, bool) {
 		}
 		switch {
 		case j == n:
-			// no trailing '#'s - just trim trailing spaces/tabs
+
 			content = strings.TrimRight(content, " \t")
 		case j == 0:
-			// All-# content (e.g. '###' as heading text) - keep as-is.
+
 		default:
 			if c := content[j-1]; c == ' ' || c == '\t' {
-				// whitespace-delimited closing sequence - strip it
+
 				content = strings.TrimRight(content[:j-1], " \t")
 			}
-			// else '## C#': a word char before the '#'s - keep
+
 		}
 	}
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return line, false
 	}
-	// #2299: rebuild WITH the ATX prefix - the old reconstruction dropped
-	// the #'s ("## hello" -> "hello" + isHeading=true), so Render handed
-	// glamour a prefix-less line and every heading degraded to paragraph
-	// styling on all surfaces. The closing-sequence strip (#1588-C/#1644-7)
-	// already normalized `content`; CommonMark allows 0-3 leading spaces,
-	// normalize to none.
+
 	return strings.Repeat("#", level) + " " + content, true
 }

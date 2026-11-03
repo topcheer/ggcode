@@ -172,42 +172,32 @@ func TestClaimsConflict_Direct(t *testing.T) {
 	}
 }
 
-// Regression for #1592-C: number-set comparison must be order-insensitive
-// and subset-tolerant - the old any-pair-differs loop flagged permuted
-// and superset sets of the SAME facts and told the agent to delete the
-// correct memory.
 func TestNumericConflictSetSemantics(t *testing.T) {
-	// Same facts, permuted order: no conflict.
+
 	if numericConflict("go 1.27 with node 20", "node 20 paired with go 1.27") {
 		t.Fatal("permuted same-fact sets must not conflict")
 	}
-	// Superset (subset/superset pass): no conflict.
+
 	if numericConflict("ports 8080 8443", "port 8080") {
 		t.Fatal("superset sets must not conflict")
 	}
-	// Genuinely disjoint numbers on both sides: conflict.
+
 	if !numericConflict("go 1.27", "go 1.35") {
 		t.Fatal("each side holding a number the other lacks must conflict")
 	}
 }
 
-// TestClaimsConflict_PolarityGate pins #1777 case 2: an affirmative and a
-// negated claim only conflict when they target NEARLY the same thing.
-// "use git" vs "never use git rebase" (jaccard 0.5) is fully compatible
-// and must NOT be a conflict; "use git" vs "don't use git" must be.
 func TestClaimsConflict_PolarityGate(t *testing.T) {
-	// Compatible: subset domains, opposite polarity.
+
 	if claimsConflict("use git for version control", "never use git rebase") {
 		t.Fatal("\"use git\" vs \"never use git rebase\" is compatible (subset domain) - must not conflict")
 	}
-	// True conflict: same target, opposite polarity ("~" form).
+
 	if !claimsConflict("use git for version control", "~use git for version control") {
 		t.Fatal("identical target with opposite polarity must conflict")
 	}
 }
 
-// #1773 case 1: bare integers in non-version context (issue/PR numbers)
-// must not join the version set.
 func TestNumericConflictBareIntegersAreNotVersions(t *testing.T) {
 	if numericConflict("go 1.27 (issue 4532)", "go 1.27 (fixed in 4533)") {
 		t.Fatal("bare issue numbers must not count as version members")

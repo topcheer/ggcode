@@ -12,7 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// TargetState represents the current state of a streaming target.
 type TargetState string
 
 const (
@@ -23,20 +22,18 @@ const (
 	TargetStopped    TargetState = "stopped"
 )
 
-// TargetStatus holds a snapshot of a target's current state.
 type TargetStatus struct {
 	Name      string        `json:"name"`
 	State     TargetState   `json:"state"`
-	URL       string        `json:"url"` // masked URL (key hidden)
+	URL       string        `json:"url"`
 	LastError string        `json:"last_error"`
 	Uptime    time.Duration `json:"uptime"`
 	BytesSent int64         `json:"bytes_sent"`
 }
 
-// Target pushes an FLV stream to a single streaming platform via FFmpeg.
 type Target struct {
 	name string
-	url  string // full RTMP/RTMPS URL with stream key
+	url  string
 
 	mu        sync.Mutex
 	state     TargetState
@@ -48,11 +45,9 @@ type Target struct {
 	stdin  io.WriteCloser
 	stopCh chan struct{}
 
-	// broadcastCh receives FLV data from the broadcaster goroutine.
 	broadcastCh chan []byte
 }
 
-// NewTarget creates a new streaming target.
 func NewTarget(name, fullURL string) *Target {
 	return &Target{
 		name:   name,
@@ -62,17 +57,14 @@ func NewTarget(name, fullURL string) *Target {
 	}
 }
 
-// Name returns the target's display name.
 func (t *Target) Name() string { return t.name }
 
-// State returns the current target state (thread-safe).
 func (t *Target) State() TargetState {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.state
 }
 
-// Status returns a snapshot of the target's current status.
 func (t *Target) Status() TargetStatus {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -82,7 +74,6 @@ func (t *Target) Status() TargetStatus {
 		uptime = time.Since(t.startedAt)
 	}
 
-	// Mask the stream key in URL for display
 	displayURL := t.maskURL()
 
 	return TargetStatus{
@@ -95,8 +86,6 @@ func (t *Target) Status() TargetStatus {
 	}
 }
 
-// Connect starts the FFmpeg subprocess that pushes FLV data to the platform.
-// The caller writes FLV data to the returned io.Writer (the target's stdin).
 func (t *Target) Connect() (io.Writer, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -107,7 +96,6 @@ func (t *Target) Connect() (io.Writer, error) {
 
 	t.setState(TargetConnecting)
 
-	// Check ffmpeg availability
 	check := CheckFFmpeg()
 	if !check.Available {
 		t.lastError = check.Error
@@ -116,12 +104,11 @@ func (t *Target) Connect() (io.Writer, error) {
 	}
 	ffmpegPath := check.Path
 
-	// FFmpeg command: read FLV from stdin, push to RTMP/RTMPS
 	args := []string{
 		"-hide_banner",
 		"-loglevel", "error",
 		"-i", "pipe:0",
-		"-c", "copy", // no re-encoding, just copy streams
+		"-c", "copy",
 		"-f", "flv",
 		t.url,
 	}
@@ -136,17 +123,13 @@ func (t *Target) Connect() (io.Writer, error) {
 	}
 	t.stdin = stdin
 
-	// Capture target FFmpeg stderr via pipe for diagnostics
 	targetStderr, err := t.cmd.StderrPipe()
 	if err != nil {
 		debug.Log("stream", "target %s: stderr pipe: %v", t.name, err)
 	}
 
 	if err := t.cmd.Start(); err != nil {
-		// #1304 R2: StdinPipe succeeded, so the pipe fd is ours to close -
-		// without this a failed Start (binary replaced between check and
-		// exec, EMFILE) leaked the fd and the next Connect overwrote the
-		// old reference. Mirror command_jobs.go's Start-failure handling.
+
 		_ = stdin.Close()
 		t.stdin = nil
 		t.lastError = err.Error()
@@ -154,18 +137,13 @@ func (t *Target) Connect() (io.Writer, error) {
 		return nil, fmt.Errorf("target %s: start: %w", t.name, err)
 	}
 
-	// Monitor target stderr in background
-	// stderrDone (#2578): exec.Cmd contract - Wait closes the piped
-	// stderr fd without waiting for our reader; the monitor below waits
-	// for full drain BEFORE calling Wait so error-path diagnostics
-	// ("Unknown encoder", stream-key rejection, OOM) are never truncated.
 	stderrDone := make(chan struct{})
 	if targetStderr != nil {
 		targetName := t.name
 		safego.Go("stream.targetStderr", func() {
 			defer close(stderrDone)
 			scanner := bufio.NewScanner(targetStderr)
-			scanner.Buffer(make([]byte, 0, 64*1024), 256*1024) // #2578: raise the 64KB default line cap
+			scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
 			for scanner.Scan() {
 				debug.Log("stream", "target %s stderr: %s", targetName, scanner.Text())
 			}
@@ -177,23 +155,13 @@ func (t *Target) Connect() (io.Writer, error) {
 		close(stderrDone)
 	}
 
-	// #1304 R1: reap the target ffmpeg when it exits on its own (network
-	// drop, stream key rejected). Without this monitor every
-	// "disconnect -> reconnect" cycle left a zombie because Connect
-	// overwrites t.cmd and only Stop/Manager.Stop ever called Wait.
-	// This goroutine is now the ONLY waiter; Stop() kills and relies on
-	// it to reap (concurrent cmd.Wait is unsafe).
 	monCmd := t.cmd
 	monName := t.name
 	safego.Go("stream.targetMonitor", func() {
-		<-stderrDone // #2578: drain stderr before reaping (Wait closes the pipe)
+		<-stderrDone
 		werr := monCmd.Wait()
 		t.mu.Lock()
-		// #1339: guard with a cmd identity check, not just state. After
-		// Stop() -> quick Connect() this monitor may return late from
-		// Wait() while a NEW ffmpeg (assigned by Connect) is already
-		// live; without the check we would mark the healthy new session
-		// as TargetError with the dead process's exit status.
+
 		if t.state == TargetLive && t.cmd == monCmd {
 			if werr != nil {
 				t.lastError = fmt.Sprintf("ffmpeg exited: %v", werr)
@@ -214,7 +182,6 @@ func (t *Target) Connect() (io.Writer, error) {
 	return t, nil
 }
 
-// Stop terminates the FFmpeg subprocess.
 func (t *Target) Stop() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -228,15 +195,12 @@ func (t *Target) Stop() {
 	if t.stdin != nil {
 		t.stdin.Close()
 	}
-	// #1304: Kill only - the targetMonitor goroutine owns Wait (concurrent
-	// cmd.Wait would race it and one call would error).
+
 	if t.cmd != nil && t.cmd.Process != nil {
 		_ = t.cmd.Process.Kill()
 	}
 }
 
-// Write forwards FLV data to the target's FFmpeg subprocess.
-// Implements io.Writer for fan-out.
 func (t *Target) Write(p []byte) (int, error) {
 	t.mu.Lock()
 	if t.state != TargetLive {
@@ -265,9 +229,8 @@ func (t *Target) setState(s TargetState) {
 	t.state = s
 }
 
-// maskURL hides the stream key for display.
 func (t *Target) maskURL() string {
-	// Find the last / which separates the key
+
 	idx := len(t.url)
 	for i := len(t.url) - 1; i >= 0; i-- {
 		if t.url[i] == '/' {
@@ -280,5 +243,3 @@ func (t *Target) maskURL() string {
 	}
 	return t.url
 }
-
-// maskURLForLog returns a URL with the stream key partially visible for debug logging.

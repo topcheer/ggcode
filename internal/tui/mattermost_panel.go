@@ -279,8 +279,7 @@ func (m *Model) createMMAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 3 {
 			return mattermostBindResultMsg{err: errors.New(m.t("panel.mattermost.error.config_format"))}
 		}
-		// #1380-C: extra fields (token containing spaces) were silently
-		// dropped - persisting a guaranteed-to-fail credential. Reject.
+
 		if len(fields) > 3 {
 			return mattermostBindResultMsg{err: fmt.Errorf("extra fields (values must not contain spaces): %s", spec)}
 		}
@@ -295,9 +294,8 @@ func (m *Model) createMMAdapterCmd(spec string) tea.Cmd {
 				"token": token,
 			},
 		}
-		// #1367 family batch 2: config write + disk save moved onto
-		// the Update loop via configMutationMsg (see config_mutation.go).
-		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
+
+		imEnabledBefore := false
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				imEnabledBefore = m.config.IM.Enabled
@@ -307,14 +305,13 @@ func (m *Model) createMMAdapterCmd(spec string) tea.Cmd {
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
 					rollback := func(origErr error) tea.Msg {
-						// #1380-B: rollback the persisted adapter (map REMOVE
-						// routes through configMutationMsg - #1370 pattern).
+
 						return configMutationMsg{
 							apply: func(m *Model) error {
 								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 									return rerr
 								}
-								m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
+								m.config.IM.Enabled = imEnabledBefore
 								return m.saveConfig()
 							},
 							next: func(m *Model) tea.Cmd {
@@ -360,9 +357,7 @@ func (m *Model) startMMAdapterIfNeeded(name string) error {
 		return fmt.Errorf(m.t("panel.mattermost.error.not_configured"), name)
 	}
 	if !adapterCfg.Enabled {
-		// #1380-A: disabled adapters must go through bindMMEntry's
-		// configMutationMsg auto-enable path (map write never runs on
-		// this Cmd-goroutine helper).
+
 		return fmt.Errorf("adapter %s is disabled - bind from the panel to enable it", name)
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformMattermost)) {
@@ -384,8 +379,7 @@ func (m *Model) bindMMEntry(entry mattermostBindingEntry) tea.Cmd {
 		if m.imManager == nil {
 			return mattermostBindResultMsg{err: errors.New(m.t("panel.mattermost.error.config_unavailable"))}
 		}
-		// #1380-A: a disabled adapter's auto-enable runs on the Update
-		// loop via configMutationMsg; the bind chain continues in next().
+
 		bindRest := func(m *Model) tea.Msg {
 			if err := m.startMMAdapterIfNeeded(entry.Adapter); err != nil {
 				return mattermostBindResultMsg{err: err}
@@ -441,8 +435,7 @@ func (m *Model) clearMMChannel(adapterName string) tea.Cmd {
 		if m.imManager == nil {
 			return mattermostBindResultMsg{}
 		}
-		// #898/#905: unbind mislabeled as clear (binding lost) + false
-		// "cleared" when nothing matched. Clear channel fields only.
+
 		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
 			return mattermostBindResultMsg{err: err}
 		}

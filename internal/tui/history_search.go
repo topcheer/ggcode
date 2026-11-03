@@ -6,33 +6,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// historySearchState implements Claude Code v2.0-style reverse input history
-// search: the user presses a key to enter search mode, types any substring,
-// and the composer populates with the most recent history entry containing
-// it. Enter accepts the populated query, Esc cancels and restores the
-// pre-search input, and pressing the search key again cycles to older
-// matches (bash reverse-i-search semantics). Matching is plain
-// case-insensitive substring matching, like Ctrl+F text search.
-//
-// Keybinding note: Claude Code binds this to Ctrl+R, but in ggcode Ctrl+R is
-// the long-standing sidebar toggle (persisted per session, covered by
-// tests and i18n hints), so the search lands on Alt+R instead.
-//
-// All helpers below are package-level functions that read the state out of
-// the Model, mutate it, and write it back - a deliberate choice to avoid
-// value-receiver copy traps: state must round-trip through m.historySearch
-// on every keystroke.
 type historySearchState struct {
 	active        bool
 	query         string
-	matchIdx      int    // index into m.history of the current match; -1 = none
-	originalInput string // composer content when search started; restored on Esc
+	matchIdx      int
+	originalInput string
 }
 
-// beginHistorySearch enters reverse history search mode (Alt+R). The current
-// composer content is stashed and shown again if the user cancels with Esc.
-// Like bash/Claude Code reverse search, the most recent entry is offered
-// immediately on an empty query.
 func (m *Model) beginHistorySearch() {
 	m.historySearch = historySearchState{
 		active:        true,
@@ -43,16 +23,12 @@ func (m *Model) beginHistorySearch() {
 	refreshHistorySearch(m)
 }
 
-// refreshHistorySearch recomputes the most recent history entry matching the
-// current query and updates the composer content plus the hint line, then
-// writes the state back to m.historySearch.
 func refreshHistorySearch(m *Model) {
 	s := m.historySearch
 	q := strings.ToLower(s.query)
 	s.matchIdx = -1
 	if q == "" && len(m.history) > 0 {
-		// Empty query matches the most recent entry, like the first press of
-		// Ctrl+R in bash / reverse search in Claude Code.
+
 		s.matchIdx = len(m.history) - 1
 	}
 	if q != "" {
@@ -67,8 +43,7 @@ func refreshHistorySearch(m *Model) {
 		m.input.SetValue(m.history[s.matchIdx])
 		composerCursorEnd(&m.input)
 	} else {
-		// No match yet: keep the raw query visible so the user can keep
-		// refining; Enter then submits it like a normal prompt.
+
 		m.input.SetValue(s.query)
 		m.input.CursorEnd()
 	}
@@ -76,8 +51,6 @@ func refreshHistorySearch(m *Model) {
 	m.historySearch = s
 }
 
-// exitHistorySearch leaves search mode, optionally restoring the input that
-// was present before the search started.
 func exitHistorySearch(m *Model, restore bool) {
 	s := m.historySearch
 	if restore {
@@ -88,23 +61,17 @@ func exitHistorySearch(m *Model, restore bool) {
 	m.inputHint = ""
 }
 
-// handleHistorySearchKey processes a keypress while reverse history search
-// is active. handled=true means the key was consumed by the search mode.
-// handled=false means search mode exits first (keeping the current match in
-// the composer) and the key should then flow through the normal composer
-// path - Enter in particular falls through to the regular submit logic,
-// matching Claude Code's "press Enter to use the populated query".
 func (m Model) handleHistorySearchKey(msg tea.KeyPressMsg) (handled bool, out Model, cmd tea.Cmd) {
 	switch msg.String() {
 	case "enter":
-		// Accept the populated query; fall through to normal submission.
+
 		exitHistorySearch(&m, false)
 		return false, m, nil
 	case "esc":
 		exitHistorySearch(&m, true)
 		return true, m, nil
 	case "alt+r":
-		// Cycle to the next older match, like pressing Ctrl+R again in bash.
+
 		s := m.historySearch
 		q := strings.ToLower(s.query)
 		if q != "" {
@@ -127,26 +94,13 @@ func (m Model) handleHistorySearchKey(msg tea.KeyPressMsg) (handled bool, out Mo
 			refreshHistorySearch(&m)
 			return true, m, nil
 		}
-		// Backspace on an empty query cancels the search.
+
 		exitHistorySearch(&m, true)
 		return true, m, nil
 	}
-	// Printable text (ASCII or CJK; single rune from a terminal, possibly
-	// several from a paste-like key event): extend the query and refine the
-	// match. Modifier combos always render as "mod+key" and never qualify.
-	// #4490: the old string heuristic (!Contains("+") && all runes >= 32)
-	// also matched bubbletea NAMED keys - KeyPressMsg.String() returns the
-	// key NAME for them (up/delete/tab/home/...), every char printable, so
-	// arrows polluted the query instead of exiting search mode (the
-	// exit-on-other-keys contract below was unreachable for them). Gate on
-	// actual text instead: only real typed/pasted text (msg.Text != "", the
-	// v2 idiom - named keys carry empty Text; cf. inspector_panel) and the
-	// space bar are query input.
+
 	if msg.Text != "" || msg.Code == tea.KeySpace {
-		// #4731: Key.String() returns the keystroke NAME for the space bar
-		// ("space"), so multi-word queries became "gitspacestatus". The
-		// decoded text lives in msg.Text; the space bar enters through the
-		// Code gate above with empty Text, so append it explicitly.
+
 		if msg.Code == tea.KeySpace {
 			m.historySearch.query += " "
 		} else {
@@ -155,9 +109,7 @@ func (m Model) handleHistorySearchKey(msg tea.KeyPressMsg) (handled bool, out Mo
 		refreshHistorySearch(&m)
 		return true, m, nil
 	}
-	// Any other key (arrows, readline shortcuts, ...) exits search mode and
-	// is then handled by the composer as usual; the matched text stays in
-	// the input so editing continues seamlessly.
+
 	exitHistorySearch(&m, false)
 	return false, m, nil
 }

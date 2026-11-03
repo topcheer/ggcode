@@ -92,7 +92,7 @@ var (
 
 func TestExportTraceOTLP_Structure(t *testing.T) {
 	spans := otelSpans(t, otelExportDoc(t, "sess-otel", "anthropic", otelTestEvents()))
-	// root session + 2 turns + 3 leaf spans (llm + 2 tools)
+
 	if len(spans) != 6 {
 		t.Fatalf("want 6 spans, got %d", len(spans))
 	}
@@ -108,7 +108,7 @@ func TestExportTraceOTLP_Structure(t *testing.T) {
 			t.Fatalf("startTimeUnixNano missing/non-string on span %v", m["name"])
 		}
 	}
-	// The llm span's parent must be a "turn" span.
+
 	llm := findOTelSpan(t, spans, "chat claude-x")
 	parentID := llm["parentSpanId"].(string)
 	var parentFound bool
@@ -120,7 +120,7 @@ func TestExportTraceOTLP_Structure(t *testing.T) {
 	if !parentFound {
 		t.Fatalf("llm span parentSpanId %q not found among spans", parentID)
 	}
-	// Session root has no parentSpanId.
+
 	root := findOTelSpan(t, spans, "agent.run")
 	if _, has := root["parentSpanId"]; has {
 		t.Fatal("session root span should not have parentSpanId")
@@ -165,7 +165,6 @@ func TestExportTraceOTLP_GenAIAttributes(t *testing.T) {
 		t.Fatalf("status message = %v, want exit status 1", status["message"])
 	}
 
-	// Successful tool span must not carry an error status.
 	okTool := findOTelSpan(t, spans, "execute_tool read_file")
 	if _, has := okTool["status"]; has {
 		t.Fatal("successful tool span should not have a status field")

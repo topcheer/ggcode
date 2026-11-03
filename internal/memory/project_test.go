@@ -8,7 +8,7 @@ import (
 )
 
 func TestLoadProjectMemory(t *testing.T) {
-	// Create temp dirs
+
 	tmpDir := t.TempDir()
 	globalDir := filepath.Join(tmpDir, "home", ".ggcode")
 	projectDir := filepath.Join(tmpDir, "project")
@@ -17,11 +17,9 @@ func TestLoadProjectMemory(t *testing.T) {
 		os.MkdirAll(d, 0755)
 	}
 
-	// Write supported project memory files
 	os.WriteFile(filepath.Join(globalDir, "GGCODE.md"), []byte("global instructions"), 0644)
 	os.WriteFile(filepath.Join(projectDir, "AGENTS.md"), []byte("project instructions"), 0644)
 
-	// Monkey-patch UserHomeDir
 	origHome := os.Getenv("HOME")
 	t.Setenv("HOME", filepath.Join(tmpDir, "home"))
 
@@ -30,7 +28,6 @@ func TestLoadProjectMemory(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should contain global + current dir only (no parent walk)
 	if !contains(content, "global instructions") {
 		t.Error("missing global instructions")
 	}
@@ -91,7 +88,7 @@ func TestLoadProjectMemory_DoesNotWalkParentDirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Should only load from subDir itself, NOT from parent projectDir
+
 	if contains(content, "parent") {
 		t.Fatalf("should NOT load parent dir memory, got %q", content)
 	}
@@ -123,15 +120,14 @@ func TestProjectMemoryFilesForPath_CurrentDirOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProjectMemoryFilesForPath() error = %v", err)
 	}
-	// Should find the current dir's file, plus any global ~/.ggcode/ files.
-	// Must NOT find files from parent directories (no parent walk).
+
 	repoMemory := filepath.Join(repoDir, "GGCODE.md")
 	for _, f := range files {
 		if f == repoMemory {
 			t.Fatalf("should not find parent dir memory file, got %v", files)
 		}
 	}
-	// Verify the feature dir file is present.
+
 	found := false
 	for _, f := range files {
 		if f == filepath.Join(featureDir, "CLAUDE.md") {
@@ -155,7 +151,7 @@ func TestResolveProjectMemoryInitTarget_CurrentDirOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Should target the current working dir, not walk up to git root
+
 	if target != filepath.Join(subDir, "AGENTS.md") {
 		t.Fatalf("expected current-dir target, got %q", target)
 	}
@@ -207,9 +203,7 @@ func TestGenerateProjectMemory_UsesCurrentRepoFacts(t *testing.T) {
 	if !strings.Contains(content, "A terminal-based AI coding agent.") {
 		t.Fatalf("expected README summary in generated content, got %q", content)
 	}
-	// #1593-A: the repo-specific path hints are module-gated - a FOREIGN
-	// module (this fixture is example.com/demo) must NOT receive ggcode's
-	// directory descriptions; correct silence beats wrong facts.
+
 	if strings.Contains(content, "`cmd/ggcode/`") {
 		t.Fatalf("foreign module must not receive ggcode-specific path hints, got %q", content)
 	}
@@ -223,7 +217,7 @@ func TestGenerateProjectMemory_UsesCurrentRepoFacts(t *testing.T) {
 
 func TestLoadProjectMemory_Empty(t *testing.T) {
 	tmpDir := t.TempDir()
-	// Set home to a dir without .ggcode
+
 	t.Setenv("HOME", tmpDir)
 
 	content, files, err := LoadProjectMemory(tmpDir)
@@ -295,7 +289,7 @@ func TestBuildProjectMemoryHint_MultipleFiles(t *testing.T) {
 }
 
 func TestBuildProjectMemoryHint_DeduplicatesByBaseName(t *testing.T) {
-	// Two local files with the same base name in the same dir are deduplicated.
+
 	got := BuildProjectMemoryHint([]string{
 		"/repo/GGCODE.md",
 		"/repo/GGCODE.md",
@@ -307,8 +301,7 @@ func TestBuildProjectMemoryHint_DeduplicatesByBaseName(t *testing.T) {
 }
 
 func TestBuildProjectMemoryHint_GlobalFileShowsFullPath(t *testing.T) {
-	// Files outside the working directory should show their full path
-	// so the agent can locate them via read_file.
+
 	got := BuildProjectMemoryHint([]string{
 		"/Users/test/.ggcode/GGCODE.md",
 	}, "/Users/test/project")
@@ -318,8 +311,7 @@ func TestBuildProjectMemoryHint_GlobalFileShowsFullPath(t *testing.T) {
 }
 
 func TestBuildProjectMemoryHint_NestedFilesNotCollapsed(t *testing.T) {
-	// Nested (monorepo) memory files must keep distinct relative-path labels
-	// instead of collapsing into one "AGENTS.md" entry via base-name dedupe.
+
 	got := BuildProjectMemoryHint([]string{
 		"/repo/AGENTS.md",
 		"/repo/packages/api/AGENTS.md",
@@ -362,8 +354,7 @@ func TestNestedProjectMemoryFilesForPath_ClosestWins(t *testing.T) {
 	if iRoot > iPkg {
 		t.Fatalf("repo-level file must precede the deeper one (closest wins), got %v", files)
 	}
-	// Discovery must stop at the repository root: the AGENTS.md above the
-	// repo (unrelated ancestor workspace) must never be loaded.
+
 	for _, f := range files {
 		if f == filepath.Join(tmpDir, "AGENTS.md") {
 			t.Fatalf("ancestor workspace memory leaked into discovery: %v", files)
@@ -388,8 +379,7 @@ func TestNestedProjectMemoryFilesForPath_NoRepoFallsBackToDirOnly(t *testing.T) 
 	if sliceIndexOf(files, filepath.Join(child, "GGCODE.md")) < 0 {
 		t.Fatalf("expected target-dir memory file, got %v", files)
 	}
-	// Without a repository boundary, ancestor memory must NOT be discovered —
-	// same no-unrelated-ancestor-workspaces rule as LoadProjectMemory.
+
 	for _, f := range files {
 		if f == filepath.Join(parent, "AGENTS.md") {
 			t.Fatalf("ancestor memory loaded without repo boundary: %v", files)
@@ -436,7 +426,6 @@ func TestLoadProjectMemory_CrossToolCompatibility(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	// Create cross-tool rules files
 	if err := os.WriteFile(filepath.Join(projectDir, ".cursorrules"), []byte("cursor rules"), 0644); err != nil {
 		t.Fatalf("write .cursorrules: %v", err)
 	}
@@ -512,7 +501,6 @@ func TestLoadProjectMemory_PrimaryOverridesCompatibility(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Primary files should appear first in the list
 	if len(files) != 2 {
 		t.Fatalf("expected 2 files, got %d: %v", len(files), files)
 	}
@@ -523,12 +511,10 @@ func TestLoadProjectMemory_PrimaryOverridesCompatibility(t *testing.T) {
 		t.Errorf("expected .cursorrules second, got %s", files[1])
 	}
 
-	// Both contents should be present
 	if !contains(content, "ggcode-primary") || !contains(content, "cursor-compat") {
 		t.Errorf("missing expected content: %q", content)
 	}
 
-	// Primary should appear before compatibility in merged content
 	ggcodeIdx := strings.Index(content, "ggcode-primary")
 	cursorIdx := strings.Index(content, "cursor-compat")
 	if ggcodeIdx > cursorIdx {
@@ -540,8 +526,6 @@ func contains(s, sub string) bool {
 	return strings.Contains(s, sub)
 }
 
-// TestIssue1615_HtmlBannerNotSummary pins #1615: README banner HTML
-// paragraphs must not become the project Summary.
 func TestIssue1615_HtmlBannerNotSummary(t *testing.T) {
 	dir := t.TempDir()
 	readme := "# ggcode\n\n<p align=\"center\">\n<img src=\"banner.png\" alt=\"banner\">\n</p>\n\nAn AI coding agent for the terminal.\n"
@@ -557,12 +541,9 @@ func TestIssue1615_HtmlBannerNotSummary(t *testing.T) {
 	}
 }
 
-// TestIssue1636_TechStackGated pins #1636-A: foreign repos never receive
-// ggcode-specific stack claims (npm/python wrappers, plugin phrases) -
-// only the generic Go-codebase line survives the gate.
 func TestIssue1636_TechStackGated(t *testing.T) {
 	dir := t.TempDir()
-	// Foreign Go module with ggcode's telltale dirs/README phrases.
+
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/user/tool\n\ngo 1.27\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

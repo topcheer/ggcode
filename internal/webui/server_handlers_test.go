@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// TestVendorPUTKeepsDisplayNameWithKeyChange pins #1412-A: changing the
-// API key and display name in ONE request used to silently drop the name -
-// SetVendorAPIKey's internal re-read returned the pre-change map copy and
-// overwrote the handler's DisplayName assignment (Go map value semantics).
 func TestVendorPUTKeepsDisplayNameWithKeyChange(t *testing.T) {
 	s, _ := newTestServerWithSave(t)
 	vendor := "testvendor"
@@ -28,9 +24,6 @@ func TestVendorPUTKeepsDisplayNameWithKeyChange(t *testing.T) {
 	}
 }
 
-// TestGeneralPUTOmittedMaxIterationsNoOp pins #1412-B: a partial update
-// omitting max_iterations must not write 0 (which means UNLIMITED
-// iterations in the agent loop) over the configured limit.
 func TestGeneralPUTOmittedMaxIterationsNoOp(t *testing.T) {
 	s, _ := newTestServerWithSave(t)
 	s.cfg.MaxIterations = 40

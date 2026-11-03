@@ -1,21 +1,5 @@
 package session
 
-// sa-146 coverage-net round: gap-filling behavioral tests for internal/session.
-//
-// Theory anchors (2025-2026 durable agent session literature):
-//   - "Crash-Safe Incremental Persistence for Real-Time Agent Sessions" (zylos.ai,
-//     2026-07): event-sourced append-only log, torn-write tolerance, idempotent
-//     replay by sequence numbers.
-//   - "AI Agent Crash Recovery with Journals & Replay" (promptise docs): turn a
-//     fatal event into a resumable one via journal + checkpoint.
-//   - "USL - Universal Session Log" (agent-session-protocol.github.io):
-//     local-first, append-only, crash-recoverable agent session store.
-//
-// The store already implements these patterns (appendRecordLines + flock,
-// terminateTornTail #657, RepairIndex, AppendCheckpointToDisk, index rebuild);
-// these tests pin the guarantees so regressions surface immediately.
-// Test-only round: no production code changes.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -39,10 +23,7 @@ func sa146TempDir(t *testing.T) string {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir store: %v", err)
 	}
-	// Async store goroutines (runMaintenance, backfill*) can still be writing
-	// (saveIndex tmp files, index rebuilds) when cleanup starts, making
-	// RemoveAll fail with "directory not empty". Retry briefly; give up
-	// silently either way - this is cleanup, not an assertion.
+
 	t.Cleanup(func() {
 		deadline := time.Now().Add(2 * time.Second)
 		for {
@@ -65,9 +46,6 @@ func sa146TestStore(t *testing.T) *JSONLStore {
 	return s
 }
 
-// sa146MsgSeq yields unique message IDs. ID-less messages make every
-// loadSession schedule backfillIDsAsync, whose tmp-file writes race
-// t.TempDir cleanup - IDs keep the async path dormant.
 var sa146MsgSeq atomic.Int64
 
 func sa146UserMsg(text string) provider.Message {
@@ -79,8 +57,6 @@ func sa146UserMsg(text string) provider.Message {
 		},
 	}
 }
-
-// --- constructors / accessors ---
 
 func TestSA146NewDefaultStoreAndDir(t *testing.T) {
 	s, err := NewDefaultStore()
@@ -110,8 +86,6 @@ func TestSA146NewJSONLStoreRejectsFileParent(t *testing.T) {
 	}
 }
 
-// --- ListForWorkspace: filter, sort, stale-index repair ---
-
 func TestSA146ListForWorkspaceFilterAndSort(t *testing.T) {
 	s := sa146TestStore(t)
 	now := time.Now()
@@ -124,9 +98,9 @@ func TestSA146ListForWorkspaceFilterAndSort(t *testing.T) {
 		saveFullForTest(t, s, ses)
 		return ses
 	}
-	mk(generateID(), wsA, now.Add(2*time.Hour)) // newest
+	mk(generateID(), wsA, now.Add(2*time.Hour))
 	mk(generateID(), wsB, now.Add(90*time.Minute))
-	mk(generateID(), wsA, now.Add(time.Hour)) // oldest
+	mk(generateID(), wsA, now.Add(time.Hour))
 
 	got, err := s.ListForWorkspace(wsA)
 	if err != nil {
@@ -152,8 +126,6 @@ func TestSA146ListForWorkspaceRepairsEmptyIndex(t *testing.T) {
 	ses.Messages = []provider.Message{sa146UserMsg("need index repair")}
 	saveFullForTest(t, s, ses)
 
-	// Wipe the index to a valid-but-empty array: the disk file exists but the
-	// index no longer knows the workspace. ListForWorkspace must rebuild.
 	if err := os.WriteFile(s.indexPath(), []byte("[]"), 0o600); err != nil {
 		t.Fatalf("write empty index: %v", err)
 	}
@@ -165,8 +137,6 @@ func TestSA146ListForWorkspaceRepairsEmptyIndex(t *testing.T) {
 		t.Fatalf("repair path lost session: got %v", got)
 	}
 }
-
-// --- RepairIndex: phantom entries removed, orphan files adopted ---
 
 func TestSA146RepairIndexRemovesPhantomEntries(t *testing.T) {
 	s := sa146TestStore(t)
@@ -203,7 +173,6 @@ func TestSA146RepairIndexAdoptsOrphanDiskFiles(t *testing.T) {
 	ses.Messages = []provider.Message{sa146UserMsg("orphan adoption")}
 	saveFullForTest(t, s, ses)
 
-	// Drop the index entirely: the JSONL file becomes an orphan on disk.
 	if err := os.Remove(s.indexPath()); err != nil {
 		t.Fatalf("remove index: %v", err)
 	}
@@ -223,8 +192,6 @@ func TestSA146RepairIndexAdoptsOrphanDiskFiles(t *testing.T) {
 	}
 }
 
-// --- Corrupt index: loadIndex must self-heal (durability anchor) ---
-
 func TestSA146LoadIndexCorruptSelfHeals(t *testing.T) {
 	s := sa146TestStore(t)
 	ses := &Session{ID: generateID(), CreatedAt: time.Now(), UpdatedAt: time.Now()}
@@ -234,7 +201,7 @@ func TestSA146LoadIndexCorruptSelfHeals(t *testing.T) {
 	if err := os.WriteFile(s.indexPath(), []byte("{not json"), 0o600); err != nil {
 		t.Fatalf("write corrupt index: %v", err)
 	}
-	idx, err := s.loadIndex() // canRepair=true path
+	idx, err := s.loadIndex()
 	if err != nil {
 		t.Fatalf("loadIndex: %v", err)
 	}
@@ -242,7 +209,6 @@ func TestSA146LoadIndexCorruptSelfHeals(t *testing.T) {
 		t.Fatalf("loadIndex after corruption = %+v, want rebuilt entry", idx)
 	}
 
-	// loadIndexFromDisk (no-recovery sibling) must return nil,nil on garbage.
 	if err := os.WriteFile(s.indexPath(), []byte("{still not json"), 0o600); err != nil {
 		t.Fatalf("rewrite corrupt index: %v", err)
 	}
@@ -251,8 +217,6 @@ func TestSA146LoadIndexCorruptSelfHeals(t *testing.T) {
 		t.Errorf("loadIndexFromDisk on corrupt file = (%v, %v), want (nil, nil)", diskIdx, err)
 	}
 }
-
-// --- AppendCheckpointToDisk: checkpoint record round-trip ---
 
 func TestSA146AppendCheckpointToDiskRoundTrip(t *testing.T) {
 	s := sa146TestStore(t)
@@ -284,17 +248,12 @@ func TestSA146AppendCheckpointToDiskRoundTrip(t *testing.T) {
 	if reloaded.CheckpointTokens != 4321 {
 		t.Errorf("CheckpointTokens = %d, want 4321 (applied from last checkpoint record)", reloaded.CheckpointTokens)
 	}
-	// Index must have been refreshed (checkpoint resets the debounce).
+
 	idx, err := s.loadIndexFromDisk()
 	if err != nil || len(idx) == 0 {
 		t.Fatalf("index after checkpoint empty: %v %v", idx, err)
 	}
 }
-
-// --- AppendTunnelEventToDisk: legacy writer persists, Load skips silently ---
-// Contract (loadSession): tunnel_event lines are no longer replayed into
-// TunnelEvents - the projection store is the sole source of tunnel history.
-// Load must tolerate them silently and keep the session loadable.
 
 func TestSA146AppendTunnelEventToDiskRoundTrip(t *testing.T) {
 	s := sa146TestStore(t)
@@ -311,7 +270,6 @@ func TestSA146AppendTunnelEventToDiskRoundTrip(t *testing.T) {
 		t.Fatalf("AppendTunnelEventToDisk e2: %v", err)
 	}
 
-	// Records are on disk under the legacy tunnel_event type.
 	raw, err := os.ReadFile(s.sessionPath(ses.ID))
 	if err != nil {
 		t.Fatalf("read session file: %v", err)
@@ -320,8 +278,6 @@ func TestSA146AppendTunnelEventToDiskRoundTrip(t *testing.T) {
 		t.Errorf("tunnel_event record count = %d, want 2", n)
 	}
 
-	// Load skips them silently: session stays loadable, messages intact,
-	// TunnelEvents stays empty (projection store owns tunnel history).
 	reloaded, err := s.Load(ses.ID)
 	if err != nil {
 		t.Fatalf("Load with tunnel_event lines: %v", err)
@@ -334,15 +290,12 @@ func TestSA146AppendTunnelEventToDiskRoundTrip(t *testing.T) {
 	}
 }
 
-// --- Torn tail (#657): crash residue must not swallow the next append ---
-
 func TestSA146TornTailRecovery(t *testing.T) {
 	s := sa146TestStore(t)
 	ses := &Session{ID: generateID(), CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	ses.Messages = []provider.Message{sa146UserMsg("before the crash")}
 	saveFullForTest(t, s, ses)
 
-	// Simulate a crash mid-write: partial JSON, no trailing newline.
 	f, err := os.OpenFile(s.sessionPath(ses.ID), os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatalf("open for tear: %v", err)
@@ -369,8 +322,6 @@ func TestSA146TornTailRecovery(t *testing.T) {
 		t.Errorf("last message = %+v, want the post-crash append", last)
 	}
 }
-
-// --- AppendMessagesBatchToDisk: single-write batch + order preservation ---
 
 func TestSA146BatchAppendPreservesOrder(t *testing.T) {
 	s := sa146TestStore(t)
@@ -404,8 +355,6 @@ func TestSA146BatchAppendPreservesOrder(t *testing.T) {
 		}
 	}
 }
-
-// --- backfillTimestamps: legacy sessions get monotonic timestamps ---
 
 func sa146WriteLegacyJSONL(t *testing.T, s *JSONLStore, id string, lines []string) {
 	t.Helper()
@@ -469,10 +418,7 @@ func TestSA146BackfillTimestampsSkipsTimestampedSessions(t *testing.T) {
 	sa146WriteLegacyJSONL(t, s, id, []string{m1, m2})
 
 	s.backfillTimestamps(id)
-	// #4670 semantics update: a mixed file is no longer skipped wholesale -
-	// the ts-less record gets backfilled, anchored AFTER the preceding real
-	// timestamp (monotonic #198 contract). The already-timestamped record
-	// must be untouched.
+
 	data, err := os.ReadFile(s.sessionPath(id))
 	if err != nil {
 		t.Fatalf("read backfilled file: %v", err)
@@ -500,8 +446,6 @@ func TestSA146BackfillTimestampsSkipsTimestampedSessions(t *testing.T) {
 	}
 }
 
-// --- isSummaryNoteMessage matrix ---
-
 func TestSA146IsSummaryNoteMessage(t *testing.T) {
 	cases := []struct {
 		name string
@@ -520,8 +464,6 @@ func TestSA146IsSummaryNoteMessage(t *testing.T) {
 		}
 	}
 }
-
-// --- ExportSessionMarkdownWithDisplay: display names + all block kinds ---
 
 func TestSA146ExportSessionMarkdownWithDisplay(t *testing.T) {
 	ses := &Session{
@@ -553,14 +495,12 @@ func TestSA146ExportSessionMarkdownWithDisplay(t *testing.T) {
 			t.Errorf("markdown missing %q\ngot:\n%s", want, md)
 		}
 	}
-	// Raw keys are used when no display names are supplied.
+
 	raw := ExportSessionMarkdown(ses)
 	if !strings.Contains(raw, "**Vendor:** zai / coding / glm-4.7") {
 		t.Errorf("ExportSessionMarkdown should use raw keys, got:\n%s", raw)
 	}
 }
-
-// --- searchJSONLLine: matching + skip matrix ---
 
 func TestSA146SearchJSONLLine(t *testing.T) {
 	line := `{"type":"message","session_id":"sa146-search","message":{"role":"user","content":[{"type":"text","text":"Fix the Parser Bug TODAY"}]}}`
@@ -588,8 +528,6 @@ func TestSA146SearchJSONLLine(t *testing.T) {
 	}
 }
 
-// --- SessionLock accessors + parsePID ---
-
 func TestSA146SessionLockAccessorsAndParsePID(t *testing.T) {
 	var nilLock *SessionLock
 	if nilLock.HolderPID() != 0 {
@@ -614,7 +552,7 @@ func TestSA146SessionLockAccessorsAndParsePID(t *testing.T) {
 		{in: []byte(""), want: 0},
 		{in: []byte("123"), want: 123},
 		{in: []byte("notapid"), want: 0},
-		{in: []byte("12345678901234567890"), want: 1234567890123456}, // capped at 16 bytes
+		{in: []byte("12345678901234567890"), want: 1234567890123456},
 	}
 	for _, tc := range pids {
 		if got := parsePID(tc.in); got != tc.want {
@@ -622,8 +560,6 @@ func TestSA146SessionLockAccessorsAndParsePID(t *testing.T) {
 		}
 	}
 }
-
-// --- endpoint stats: nil receivers, fallbacks, caps ---
 
 func TestSA146EndpointStatsNilReceivers(t *testing.T) {
 	var s *Session
@@ -636,23 +572,22 @@ func TestSA146EndpointStatsNilReceivers(t *testing.T) {
 }
 
 func TestSA146MetricsForEndpointRebuildAndFallbacks(t *testing.T) {
-	// History present but no per-endpoint buckets -> rebuild path.
+
 	s := &Session{Metrics: []metrics.MetricEvent{{Vendor: "v", Endpoint: "e"}}}
 	got := s.MetricsForEndpoint("v", "e")
 	if len(got) != 1 || got[0].Vendor != "v" {
 		t.Fatalf("rebuild path = %+v, want 1 event", got)
 	}
-	// Empty key with vendor-tagged metadata -> nil (ambiguous legacy bucket).
+
 	if got := s.MetricsForEndpoint("", ""); got != nil {
 		t.Errorf("empty key with metadata = %v, want nil", got)
 	}
-	// Empty key with no buckets and no metadata -> raw copy.
+
 	plain := &Session{Metrics: []metrics.MetricEvent{{}}}
 	if got := plain.MetricsForEndpoint("", ""); len(got) != 1 {
 		t.Errorf("empty key fallback = %+v, want raw copy of 1 event", got)
 	}
-	// Non-empty key, no buckets, no metadata, matching session key -> raw copy
-	// (zero-element copy of a nil slice is itself nil; only length matters).
+
 	matching := &Session{Vendor: "v", Endpoint: "e"}
 	if got := matching.MetricsForEndpoint("v", "e"); len(got) != 0 {
 		t.Errorf("session-key match = %+v, want empty copy", got)
@@ -660,19 +595,19 @@ func TestSA146MetricsForEndpointRebuildAndFallbacks(t *testing.T) {
 }
 
 func TestSA146EndpointUsageFallbacks(t *testing.T) {
-	// No history, matching session key -> fall back to session TokenUsage.
+
 	s := &Session{Vendor: "v", Endpoint: "e", TokenUsage: provider.TokenUsage{InputTokens: 7}}
 	if got := s.UsageForEndpoint("v", "e"); got.InputTokens != 7 {
 		t.Errorf("session-token fallback = %+v, want InputTokens=7", got)
 	}
-	// ensureEndpointStatsLocked lazily creates both maps.
+
 	lazy := &Session{}
 	lazy.AddUsageForEndpoint("v", "e", provider.TokenUsage{InputTokens: 1})
 	lazy.AppendMetricForEndpoint("v", "e", metrics.MetricEvent{Vendor: "v", Endpoint: "e"})
 	if len(lazy.EndpointUsage) != 1 || len(lazy.EndpointMetrics) != 1 {
 		t.Fatalf("lazy init failed: usage=%v metrics=%v", lazy.EndpointUsage, lazy.EndpointMetrics)
 	}
-	// Cap: appending past maxEndpointMetricsPerKey keeps the most recent 200.
+
 	for i := 0; i < maxEndpointMetricsPerKey+5; i++ {
 		lazy.AppendMetricForEndpoint("v", "e", metrics.MetricEvent{Vendor: "v", Endpoint: "e"})
 	}
@@ -680,8 +615,6 @@ func TestSA146EndpointUsageFallbacks(t *testing.T) {
 		t.Errorf("capped metrics = %d, want %d", len(got), maxEndpointMetricsPerKey)
 	}
 }
-
-// --- saveIndex leaves no temp file behind (atomic rename contract) ---
 
 func TestSA146SaveIndexNoTempResidue(t *testing.T) {
 	s := sa146TestStore(t)
@@ -697,8 +630,6 @@ func TestSA146SaveIndexNoTempResidue(t *testing.T) {
 	}
 }
 
-// --- batch 2: pure helpers, cheap branches, durability contracts ---
-
 func TestSA146QuickRecordType(t *testing.T) {
 	cases := []struct {
 		line string
@@ -706,7 +637,7 @@ func TestSA146QuickRecordType(t *testing.T) {
 	}{
 		{`{"type":"message","x":1}`, "message"},
 		{`{"session_id":"a"}`, ""},
-		{`{"type":"meta"`, "meta"}, // unterminated JSON is irrelevant: naive substring scan
+		{`{"type":"meta"`, "meta"},
 	}
 	for _, tc := range cases {
 		if got := quickRecordType([]byte(tc.line)); got != tc.want {
@@ -737,7 +668,7 @@ func TestSA146QuickExtractTimestampTopLevelOnly(t *testing.T) {
 	if ts.IsZero() || ts.Year() != 2026 || ts.Hour() != 3 {
 		t.Errorf("valid top-level timestamp not extracted: %v", ts)
 	}
-	// #558 C: nested pseudo-timestamps must be ignored.
+
 	if got := quickExtractTimestamp([]byte(`{"message":{"timestamp":"2099-01-01T00:00:00Z"}}`)); !got.IsZero() {
 		t.Errorf("nested timestamp leaked: %v", got)
 	}
@@ -808,9 +739,7 @@ func TestSA146CapContextTail(t *testing.T) {
 	if !strings.Contains(got[0].Content[0].Text, "5 earlier messages") {
 		t.Errorf("truncation note = %q, want omitted=5", got[0].Content[0].Text)
 	}
-	// Orphan half-pair at the window START edge must be pulled in, not split:
-	// with 205 messages the window opens at index 5; an orphan tool_result
-	// there shifts the opening back to 4 (omitted 5 -> 4).
+
 	orphaned := make([]provider.Message, len(plain))
 	copy(orphaned, plain)
 	orphaned[5] = provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "tool_result", Output: "orphan pair"}}}
@@ -864,8 +793,7 @@ func TestSA146CleanupOlderThanSkipsPinned(t *testing.T) {
 	for _, ses := range []*Session{pinned, free} {
 		ses.Messages = []provider.Message{sa146UserMsg("cleanup candidate")}
 		saveFullForTest(t, s, ses)
-		// Save() stamps UpdatedAt=now; re-assert the old timestamp via a meta
-		// record (the latest meta wins on load).
+
 		ses.UpdatedAt = old
 		if err := s.AppendMetaToDisk(ses); err != nil {
 			t.Fatalf("AppendMetaToDisk backdate %s: %v", ses.ID, err)
@@ -921,7 +849,7 @@ func TestSA146EndpointStatsKeyTable(t *testing.T) {
 		}
 	}
 	var nilSession *Session
-	nilSession.AddUsageForEndpoint("v", "e", provider.TokenUsage{}) // must not panic
+	nilSession.AddUsageForEndpoint("v", "e", provider.TokenUsage{})
 }
 
 func TestSA146RebuildEndpointStatsCapsAndSkipsEmptyKeys(t *testing.T) {
@@ -930,7 +858,7 @@ func TestSA146RebuildEndpointStatsCapsAndSkipsEmptyKeys(t *testing.T) {
 		s.UsageHistory = append(s.UsageHistory, UsageEntry{Vendor: "v", Endpoint: "e", Usage: provider.TokenUsage{InputTokens: 1}})
 		s.Metrics = append(s.Metrics, metrics.MetricEvent{Vendor: "v", Endpoint: "e"})
 	}
-	// Untagged legacy entries resolve to an empty key and must be skipped.
+
 	s.UsageHistory = append(s.UsageHistory, UsageEntry{Usage: provider.TokenUsage{InputTokens: 100}})
 	s.Metrics = append(s.Metrics, metrics.MetricEvent{})
 
@@ -979,16 +907,12 @@ func TestSA146SetTagsNormalizesAndPersists(t *testing.T) {
 	}
 }
 
-// --- batch 3: error branches and boundary conditions ---
-
 func TestSA146PruneInvalidIndexKeepsEntriesOnLoadError(t *testing.T) {
 	s := sa146TestStore(t)
 	ses := &Session{ID: generateID(), CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	ses.Messages = []provider.Message{sa146UserMsg("unreadable")}
 	saveFullForTest(t, s, ses)
 
-	// #709 hardening: a transient load error must NOT evict the entry —
-	// the session stays listed until a later repair pass succeeds.
 	if err := os.Chmod(s.sessionPath(ses.ID), 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
@@ -1015,8 +939,6 @@ func TestSA146HasUserInteractionOnDiskPermError(t *testing.T) {
 	}
 	defer func() { _ = os.Chmod(s.sessionPath(ses.ID), 0o600) }()
 
-	// Uncertain state must surface as an error, not a silent "no interaction"
-	// (a false negative would let CleanupOlderThan delete a live session).
 	if got, err := s.HasUserInteractionOnDisk(ses.ID); err == nil {
 		t.Errorf("permission-denied read = (%v, nil), want an error", got)
 	}
@@ -1033,7 +955,6 @@ func TestSA146CleanupOlderThanDeleteErrorSurfaces(t *testing.T) {
 		t.Fatalf("AppendMetaToDisk: %v", err)
 	}
 
-	// Read-only store dir: List succeeds, Delete fails, error propagates.
 	if err := os.Chmod(s.Dir(), 0o500); err != nil {
 		t.Fatalf("chmod dir: %v", err)
 	}
@@ -1056,12 +977,10 @@ func TestSA146BackfillTimestampsOpenFailure(t *testing.T) {
 	}
 	defer func() { _ = os.Chmod(s.sessionPath(id), 0o600) }()
 
-	// Unreadable file: firstMessageHasTimestamp -> false, backfill bails
-	// at open, no panic, no rewrite.
 	if firstMessageHasTimestamp(s.sessionPath(id)) {
 		t.Error("unreadable file should report false, not true")
 	}
-	s.backfillTimestamps(id) // must not panic
+	s.backfillTimestamps(id)
 }
 
 func TestSA146LoadIndexPermError(t *testing.T) {
@@ -1086,7 +1005,7 @@ func TestSA146TryAcquireSessionLockBadDir(t *testing.T) {
 }
 
 func TestSA146MakeSnippetBoundaries(t *testing.T) {
-	// Match at the very start: no leading ellipsis.
+
 	res, ok := searchJSONLLine(
 		`{"type":"message","session_id":"x","message":{"role":"user","content":[{"type":"text","text":"needle at start"}]}}`,
 		"/tmp/x.jsonl", "t", "needle")
@@ -1096,7 +1015,7 @@ func TestSA146MakeSnippetBoundaries(t *testing.T) {
 	if strings.HasPrefix(res.Snippet, "...") {
 		t.Errorf("match at index 0 must not have a leading ellipsis: %q", res.Snippet)
 	}
-	// Match at the very end: no trailing ellipsis.
+
 	res2, ok := searchJSONLLine(
 		`{"type":"message","session_id":"x","message":{"role":"user","content":[{"type":"text","text":"tail ends with needle"}]}}`,
 		"/tmp/x.jsonl", "t", "needle")
@@ -1106,7 +1025,7 @@ func TestSA146MakeSnippetBoundaries(t *testing.T) {
 	if strings.HasSuffix(res2.Snippet, "...") {
 		t.Errorf("match at end must not have a trailing ellipsis: %q", res2.Snippet)
 	}
-	// Needle longer than the 200-char snippet budget: half<0 clamps to 0.
+
 	longNeedle := strings.Repeat("x", 210)
 	res3, ok := searchJSONLLine(
 		`{"type":"message","session_id":"x","message":{"role":"user","content":[{"type":"text","text":"`+longNeedle+` tail"}]}}`,
@@ -1127,7 +1046,7 @@ func TestSA146RunMaintenanceCleanStoreEarlyReturn(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		s.runMaintenance() // takes s.mu itself; contends with the background
+		s.runMaintenance()
 		close(done)
 	}()
 	select {
@@ -1164,8 +1083,6 @@ func TestSA146AppendRecordLinesOpenFailure(t *testing.T) {
 	ses.Messages = []provider.Message{sa146UserMsg("locked file probe")}
 	saveFullForTest(t, s, ses)
 
-	// Unwritable data file: the flock sidecar is fine, but the O_RDWR open
-	// fails and appendRecordLines aborts instead of half-writing (#558 D).
 	if err := os.Chmod(s.sessionPath(ses.ID), 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
@@ -1187,21 +1104,18 @@ func TestSA146BackfillIDsUnreadableFile(t *testing.T) {
 	}
 	defer func() { _ = os.Chmod(s.sessionPath(id), 0o600) }()
 
-	// Must abort without corrupting anything; no panic.
 	s.backfillIDs(id, map[string]provider.Message{"sa146-x": sa146UserMsg("update")})
 }
 
 func TestSA146BackfillTimestampsOverlongLine(t *testing.T) {
 	s := sa146TestStore(t)
 	id := generateID()
-	// 10.5MB single line: firstMessageHasTimestamp (2MB cap) and the backfill
-	// scanner (10MB cap) both bail with ErrTooLong - the session is left
-	// untouched rather than partially rewritten.
+
 	blob := strings.Repeat("a", 10*1024*1024+512)
 	line := `{"type":"message","session_id":"` + id + `","message":{"role":"user","content":[{"type":"text","text":"` + blob + `"}]}}`
 	sa146WriteLegacyJSONL(t, s, id, []string{line})
 
-	s.backfillTimestamps(id) // must return early, no panic
+	s.backfillTimestamps(id)
 
 	data, err := os.ReadFile(s.sessionPath(id))
 	if err != nil {
@@ -1215,8 +1129,7 @@ func TestSA146BackfillTimestampsOverlongLine(t *testing.T) {
 func TestSA146UsageForEndpointRebuildMissFallsThrough(t *testing.T) {
 	s := &Session{Vendor: "v", Endpoint: "e"}
 	s.UsageHistory = []UsageEntry{{Vendor: "v", Endpoint: "e", Usage: provider.TokenUsage{InputTokens: 3}}}
-	// Rebuild fills bucket "v/e"; asking for a different endpoint misses and
-	// falls through to the zero value (history is non-empty so no fallback).
+
 	if got := s.UsageForEndpoint("other", "endpoint"); got.InputTokens != 0 {
 		t.Errorf("foreign endpoint usage = %+v, want zero", got)
 	}

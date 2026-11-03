@@ -25,7 +25,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// Session represents a single conversation session.
 type Session struct {
 	ID        string    `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
@@ -35,91 +34,48 @@ type Session struct {
 	Vendor    string    `json:"vendor"`
 	Endpoint  string    `json:"endpoint"`
 	Model     string    `json:"model"`
-	// Preview is a short snippet of the last user message, shown in the
-	// resume picker and session list so users can quickly identify sessions.
-	// Populated automatically on each user message; persisted to index and meta.
+
 	Preview         string                           `json:"preview,omitempty"`
 	TokenUsage      provider.TokenUsage              `json:"token_usage,omitempty"`
 	EndpointUsage   map[string]provider.TokenUsage   `json:"endpoint_usage,omitempty"`
 	UsageHistory    []UsageEntry                     `json:"usage_history,omitempty"`
 	Metrics         []metrics.MetricEvent            `json:"metrics,omitempty"`
 	EndpointMetrics map[string][]metrics.MetricEvent `json:"endpoint_metrics,omitempty"`
-	// Messages holds ALL message records from the JSONL file — the full
-	// conversation history from the very first user message to the latest.
-	// This is what the TUI renders. It is NEVER overwritten by compaction.
-	//
-	// ⚠️ DO NOT assign agent.Messages() (compacted) to this field.
-	// ⚠️ DO NOT call Save() to persist this — Save() rewrites the entire
-	//    file and will destroy pre-compaction message records.
-	// Use AppendMessageToDisk() for incremental writes only.
+
 	Messages []provider.Message `json:"messages,omitempty"`
 
-	// ContextMessages holds the compacted messages for LLM context
-	// restoration: last checkpoint + post-checkpoint messages. This is
-	// what gets fed to the agent on session reload so the LLM sees the
-	// summarized history, not the full log. Computed by loadSession(),
-	// not persisted to JSONL.
-	//
-	// ⚠️ Only RestoreSessionIntoAgent() should read this field.
-	// ⚠️ TUI rendering must use Messages, NOT ContextMessages.
 	ContextMessages        []provider.Message `json:"-"`
 	CheckpointTokens       int                `json:"-"`
 	CheckpointMessageCount int                `json:"-"`
 	TunnelEvents           []TunnelEvent      `json:"tunnel_events,omitempty"`
 	TunnelEventsComplete   bool               `json:"tunnel_events_complete,omitempty"`
-	// TunnelEventsMu serializes TunnelEvents access between tunnel event
-	// recorder goroutines (TunnelHost.recordEvent writer, TUI ledger reset)
-	// and frontend readers (desktop history merge, TUI replay tail).
-	// #2917: recordEvent appends from broker publisher goroutines while the
-	// desktop polls session history mid-stream on the same *Session pointer;
-	// the unsynchronized append could tear the slice header under a reader.
-	// Leaf lock: never hold it while acquiring other locks.
+
 	TunnelEventsMu sync.Mutex `json:"-"`
-	// Cost data stored as opaque JSON to avoid circular dependency with cost package.
+
 	CostJSON []byte `json:"cost,omitempty"`
-	// PermissionMode stores the session-scoped permission mode (e.g. "auto", "bypass").
-	// When non-empty, this overrides the global default_mode on session resume.
-	// It is never written to the config file — only persisted with the session.
+
 	PermissionMode string `json:"permission_mode,omitempty"`
-	// SidebarVisible stores the session-scoped sidebar visibility preference.
-	// When non-nil, this overrides the global sidebar_visible on session resume.
-	// It is never written to the config file — only persisted with the session.
-	// Uses *bool to distinguish "never set" (nil) from "explicitly hidden" (false).
+
 	SidebarVisible *bool `json:"sidebar_visible,omitempty"`
-	// Branch lineage (#346-style session trees): the session this one was
-	// forked from, and how many messages were inherited at the fork point.
-	// Zero values mean "not a branch" — fully backward compatible.
+
 	ParentSessionID string `json:"parent_session_id,omitempty"`
 	ForkPoint       int    `json:"fork_point,omitempty"`
-	// Pinned marks the session as user-bookmarked. Pinned sessions are
-	// skipped by CleanupOlderThan (never aged out) and listed first by
-	// List(). Persisted via meta records; the latest meta record wins.
+
 	Pinned bool `json:"pinned,omitempty"`
-	// Tags are user-assigned labels (e.g. via /tag rust perf) for organizing
-	// long-lived sessions. Deduplicated case-insensitively by SetTags.
+
 	Tags []string `json:"tags,omitempty"`
-	// ContextWindow stores the session-scoped context window size.
-	// When > 0, this overrides the endpoint/per-model config on session resume.
+
 	ContextWindow int `json:"context_window,omitempty"`
-	// MaxTokens stores the session-scoped max output token limit.
-	// When > 0, this overrides the endpoint/per-model config on session resume.
+
 	MaxTokens int `json:"max_tokens,omitempty"`
-	// TasksJSON is the session task board serialized by task.Manager.
-	// Opaque JSON (mirrors CostJSON) to avoid a package dependency cycle:
-	// internal/task must not import internal/session. Restored on session
-	// resume so the task board survives process restarts and /resume.
+
 	TasksJSON []byte `json:"tasks,omitempty"`
-	// TasksEnvJSON is a bounded VCS fingerprint (branch, HEAD, dirty-file
-	// sample) captured when the board was snapshotted. On resume it is
-	// diffed against the live workspace to reconcile persisted task-board
-	// claims with environment drift (see tui/resume_reconciliation.go).
+
 	TasksEnvJSON []byte `json:"tasks_env,omitempty"`
-	// endpointStatsMu is nested inside higher-level session/bridge locks and only
-	// guards the per-endpoint aggregate maps used by live readers/writers.
+
 	endpointStatsMu sync.RWMutex
 }
 
-// TunnelEvent is the canonical persisted tunnel event for a session.
 type TunnelEvent struct {
 	EventID  string          `json:"event_id"`
 	StreamID string          `json:"stream_id,omitempty"`
@@ -127,83 +83,46 @@ type TunnelEvent struct {
 	Data     json.RawMessage `json:"data,omitempty"`
 }
 
-// UsageEntry records a single LLM API call's token consumption within a session.
 type UsageEntry struct {
 	Timestamp time.Time           `json:"timestamp"`
 	TurnIndex int                 `json:"turn_index"`
 	Model     string              `json:"model,omitempty"`
 	Vendor    string              `json:"vendor,omitempty"`
 	Endpoint  string              `json:"endpoint,omitempty"`
-	Source    string              `json:"source,omitempty"` // "agent", "strategist", "verify", "ratchet", "subagent", "compaction"
+	Source    string              `json:"source,omitempty"`
 	Usage     provider.TokenUsage `json:"usage"`
 }
 
-// Store is the interface for session persistence.
 type Store interface {
-	// Save creates the session file if it doesn't exist and updates the
-	// session index. It does NOT write messages — use AppendMessageToDisk
-	// or AppendMessagesBatchToDisk for that.
 	Save(s *Session) error
 
-	// Load retrieves a session by ID.
 	Load(id string) (*Session, error)
 
-	// LoadWithOptions loads a session, optionally bypassing the recent-message
-	// window (fullLoad=true returns every record on disk). Export/archive
-	// paths are data-fidelity surfaces and must always take fullLoad=true
-	// (#4893): the window exists for TUI list performance, not for exports.
 	LoadWithOptions(id string, fullLoad bool) (*Session, error)
 
-	// List returns all sessions, sorted by UpdatedAt descending.
 	List() ([]*Session, error)
 
-	// Delete removes a session by ID.
 	Delete(id string) error
 
-	// ExportMarkdown renders a session as a markdown document.
 	ExportMarkdown(id string) (string, error)
 
-	// CleanupOlderThan removes sessions whose UpdatedAt is before the given time.
 	CleanupOlderThan(before time.Time) (int, error)
 
-	// LatestForWorkspace returns the most recently updated session for the
-	// given workspace, or nil if none exists.
 	LatestForWorkspace(workspace string) (*Session, error)
 
-	// ListForWorkspace returns all sessions for the given workspace,
-	// sorted by UpdatedAt descending (most recent first).
 	ListForWorkspace(workspace string) ([]*Session, error)
 
-	// AppendCheckpoint persists a checkpoint after compaction.
-	// summaryMsgID is the ID of the summary message in JSONL — restore
-	// scans from this message forward to rebuild context.
-	// lastMsgID is the ID of the last message in the snapshot before compaction —
-	// restore uses this to find "extra" messages (post-compaction additions).
 	AppendCheckpoint(s *Session, summaryMsgID, lastMsgID string, tokenCount int) error
 
-	// AppendMetaToDisk appends a single meta record to the session's JSONL file
-	// without rewriting the entire file. Use this for lightweight metadata updates
-	// (e.g., permission_mode, sidebar_visible) instead of Save.
 	AppendMetaToDisk(s *Session) error
 
-	// SetPinned pins or unpins a session and persists the change. Pinned
-	// sessions are skipped by CleanupOlderThan and listed first by List.
 	SetPinned(s *Session, pinned bool) error
 
-	// SetTags replaces the session's user tags and persists the change.
-	// Tags are trimmed, deduplicated case-insensitively, and capped (16 tags,
-	// 32 chars each) by the implementation.
 	SetTags(s *Session, tags []string) error
 
-	// WithSessionLocked runs fn while holding the store lock, so in-memory
-	// session-field mutations are mutually excluded with the meta
-	// serialization the SetTags/SetPinned path performs (#4717: the
-	// streaming usage writer and the slash-command path previously raced
-	// across two different locks).
 	WithSessionLocked(s *Session, fn func())
 }
 
-// indexEntry is a lightweight record for fast session listing.
 type indexEntry struct {
 	ID        string    `json:"id"`
 	Title     string    `json:"title"`
@@ -217,70 +136,34 @@ type indexEntry struct {
 	Model     string    `json:"model,omitempty"`
 	Pinned    bool      `json:"pinned,omitempty"`
 	Tags      []string  `json:"tags,omitempty"`
-	// Branch lineage (parent + fork point) so /branches can navigate the
-	// session tree without opening every session file. omitempty keeps old
-	// index files loading unchanged.
+
 	ParentSessionID string `json:"parent_session_id,omitempty"`
 	ForkPoint       int    `json:"fork_point,omitempty"`
 }
 
-// JSONLStore implements Store using JSONL files.
 type JSONLStore struct {
-	dir string // ~/.ggcode/sessions/
-	// mu serializes all on-disk mutations (Save, Append*, EnsureMeta, Delete,
-	// and the load/modify/save index sequence). Without this, concurrent
-	// O_APPEND writers can interleave inside a single JSONL line (>4KB writes
-	// are not atomic) and the index load/modify/save races silently lose
-	// updates from the loser. See locks.md S3.
+	dir string
+
 	mu sync.Mutex
-	// indexDirtyMu guards indexDirty only. It must NEVER nest with s.mu in
-	// the reverse direction (helpers below touch no other state), so no
-	// deadlock cycle is possible. Needed because runMaintenance touches
-	// indexDirty outside s.mu (startup-latency fix: maintenance no longer
-	// holds s.mu for its full scan).
+
 	indexDirtyMu       sync.Mutex
-	indexDirty         bool // set when updateIndex fails; triggers a later reconciliation pass
+	indexDirty         bool
 	maintenanceRunning bool
 	lastMaintenance    time.Time
-	// createdPending tracks sessions Save()d by THIS process whose first
-	// user-message batch has not landed yet (#4822 creation window).
+
 	createdPending map[string]time.Time
-	// createdPendingMu guards createdPending. It is NOT s.mu: the prune
-	// path reaches inCreationWindow via repairIndexOutsideLock (#4829 CI
-	// fatal: concurrent map read/write between a lock-free repair scan and
-	// a Save() registering the window under s.mu). Lock order is always
-	// s.mu -> createdPendingMu; no path takes s.mu while holding it.
+
 	createdPendingMu sync.Mutex
-	// lastIndexUpdate tracks per-session index flush times for debouncing.
-	// updateIndex does a full read + JSON parse + JSON marshal + fsync of the
-	// entire index file. Without debouncing, every AppendMessageToDisk call
-	// (one per message = 10-20 per agent iteration) triggers an fsync, adding
-	// 10-200ms of blocked I/O per iteration. With debouncing, the index is
-	// updated at most once per 5 seconds per session during active messaging.
+
 	lastIndexUpdate map[string]time.Time
-	// fullLoad disables time-windowed message loading. When false (default),
-	// only messages within RecentMessageWindow are loaded into ses.Messages
-	// for rendering. ContextMessages (agent LLM context) is always fully loaded.
+
 	fullLoad bool
 }
 
-// indexUpdateDebounce is the minimum interval between index updates triggered
-// by AppendMessageToDisk for the same session. Other callers (AppendMetaToDisk,
-// AppendCheckpointToDisk, AppendMessagesBatchToDisk) always update the index.
 const indexUpdateDebounce = 5 * time.Second
 
 const sessionMaintenanceInterval = 30 * time.Second
 
-// MaxTunnelEvents caps the number of tunnel events kept in memory and
-// rewritten by Save(). Tunnel events are ephemeral streaming records for
-// mobile relay replay; the relay server has its own SQLite persistence
-// for full replay history. Keeping only the most recent events bounds
-// memory usage and prevents session files from growing unboundedly
-// (a long session can accumulate 200K+ events = 100MB+).
-// SnapshotTunnelEvents returns a copy of the in-memory tunnel events taken
-// under TunnelEventsMu. Reader goroutines that may run concurrently with
-// event recording (desktop history merge, TUI replay tail) must use this
-// instead of reading TunnelEvents directly (#2917). Nil-safe.
 func (s *Session) SnapshotTunnelEvents() []TunnelEvent {
 	if s == nil {
 		return nil
@@ -295,42 +178,19 @@ func (s *Session) SnapshotTunnelEvents() []TunnelEvent {
 
 const MaxTunnelEvents = 2000
 
-// MaxContextMessages caps the number of messages loaded into the agent's LLM
-// context when a session has no checkpoint (compaction summary). Without this
-// cap, a long session with 10K+ messages and no compaction would load all of
-// them into context on restore, potentially consuming 2M+ tokens and exceeding
-// any model's context window. The full message history is preserved in
-// ses.Messages for TUI rendering; only ContextMessages (what the agent sees)
-// is truncated. When the cap is applied, a synthetic system note is prepended
-// to inform the agent that earlier context was truncated.
 const MaxContextMessages = 200
 
-// RecentMessageWindow is the time window of messages loaded for rendering
-// when a session is very large. Only the most recent messages within this
-// duration from the last message are loaded into ses.Messages; older messages
-// remain on disk but are not deserialized. Override with --full.
 const RecentMessageWindow = 24 * time.Hour
 
-// recentMessageThreshold is the minimum number of message records that
-// triggers time-windowed loading. Below this, all messages load normally.
 const recentMessageThreshold = 500
 
-// quickExtractTimestamp does a fast substring search for the JSON
-// "timestamp":"..." field without fully deserializing the record.
-// Returns zero time if not found.
 func quickExtractTimestamp(line []byte) time.Time {
-	// #558 C: only read the TOP-LEVEL "timestamp" key. The Message (and any
-	// tool_use Input inside it) is serialized BEFORE the record-level Timestamp,
-	// so a naive bytes.Index picks up a pseudo-timestamp embedded in message
-	// content (e.g. {"timestamp":"2099-..."} in a tool_use input) and breaks
-	// findMessageCutoff's monotonicity assumption. topLevelStringField walks
-	// JSON structure (string tokens + depth), so keys nested inside message
-	// content are never confused with the record's own fields.
+
 	start, end := topLevelStringField(line, "timestamp")
 	if start < 0 {
 		return time.Time{}
 	}
-	if end-start < 20 { // RFC3339 needs at least 20 chars: 2006-01-02T15:04:05Z
+	if end-start < 20 {
 		return time.Time{}
 	}
 	ts, err := time.Parse(time.RFC3339, string(line[start:end]))
@@ -340,12 +200,6 @@ func quickExtractTimestamp(line []byte) time.Time {
 	return ts
 }
 
-// topLevelStringField locates the string value of a top-level (depth-1) key
-// in a flat JSON object line, returning the value's content byte range
-// [start, end) excluding quotes. It scans complete string tokens (escape
-// aware) so occurrences of the key name inside nested objects, arrays, or
-// string values never match. Returns (-1, -1) if the field is absent at
-// depth 1. This stays a single-pass byte scan — no unmarshaling.
 func topLevelStringField(line []byte, name string) (int, int) {
 	n := len(line)
 	depth := 0
@@ -367,10 +221,10 @@ func topLevelStringField(line []byte, name string) (int, int) {
 				j++
 			}
 			if j >= n {
-				return -1, -1 // unterminated string
+				return -1, -1
 			}
 			tokenEnd := j + 1
-			// Key candidate: token at depth 1 whose content is the field name.
+
 			if depth == 1 && string(line[i+1:j]) == name {
 				k := tokenEnd
 				for k < n && (line[k] == ' ' || line[k] == '\t') {
@@ -415,7 +269,6 @@ func topLevelStringField(line []byte, name string) (int, int) {
 	return -1, -1
 }
 
-// quickRecordType extracts the "type" field value via fast substring search.
 func quickRecordType(line []byte) string {
 	idx := bytes.Index(line, []byte(`"type":"`))
 	if idx < 0 {
@@ -480,20 +333,6 @@ func quickIsDialogueRole(line []byte) bool {
 	return bytes.Equal(role, []byte("user")) || bytes.Equal(role, []byte("assistant"))
 }
 
-// findMessageCutoff does a fast first-pass scan of the JSONL file to
-// determine the byte offset after which all "message" records fall within
-// the recent time window. Returns (offset, totalMessageCount, lastTimestamp).
-// If the file has fewer than recentMessageThreshold messages or the last
-// message has no timestamp, returns (0, count, zeroTime) meaning "load all".
-//
-// The window is anchored on the last USER or ASSISTANT message, not the last
-// message of any role. Long-running sessions routinely end with a tail of
-// system messages (checkpoint notes, resume markers, compaction summaries)
-// appended hours or days after the last real exchange. Anchoring on that tail
-// put the entire 24h window over system-only records, so the TUI rendered
-// zero visible history even though the file had thousands of messages.
-// Anchoring on the last user/assistant message guarantees at least that
-// message (and its surrounding conversation) falls inside the window.
 func findMessageCutoff(path string) (int64, int, time.Time) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -501,19 +340,14 @@ func findMessageCutoff(path string) (int64, int, time.Time) {
 	}
 	defer f.Close()
 
-	// First: count messages and find last timestamp via fast scan.
-	// We track byte offsets of each message line in a slice.
 	type msgOff struct {
 		offset     int64
 		ts         time.Time
-		isDialogue bool // role is user or assistant
+		isDialogue bool
 	}
 	var offsets []msgOff
 	var pos int64
 
-	// #656: same tolerant bounded reader as loadSession — a >10MB line must
-	// not truncate the offset scan (it previously killed the Scanner, so the
-	// cutoff was computed from a partial file).
 	br := bufio.NewReader(f)
 	const maxLine = 10 * 1024 * 1024
 	for {
@@ -523,15 +357,11 @@ func findMessageCutoff(path string) (int64, int, time.Time) {
 			continue
 		}
 		if rerr != nil && !errors.Is(rerr, io.EOF) {
-			// #662: a real I/O error truncated the offset scan. Log loudly so
-			// the truncated window is visible — findMessageCutoff cannot return
-			// an error (signature), but silently computing the cutoff from a
-			// partial file is what #656 fixed for long lines and must not be
-			// reintroduced for I/O errors.
+
 			debug.Log("session", "findMessageCutoff %s: I/O error at offset %d after %d message records: cutoff computed from PARTIAL file", path, pos, len(offsets))
 		}
 		if line := bytes.TrimRight(raw, "\r\n"); len(line) > 0 {
-			// Fast check: is this a message record?
+
 			if rt := quickRecordType(line); rt == "message" {
 				ts := quickExtractTimestamp(line)
 				offsets = append(offsets, msgOff{offset: pos, ts: ts, isDialogue: quickIsDialogueRole(line)})
@@ -539,7 +369,7 @@ func findMessageCutoff(path string) (int64, int, time.Time) {
 		}
 		pos += consumed
 		if rerr != nil {
-			break // io.EOF (normal) — real I/O errors were logged above (#662)
+			break
 		}
 	}
 
@@ -548,8 +378,6 @@ func findMessageCutoff(path string) (int64, int, time.Time) {
 		return 0, totalMsgs, time.Time{}
 	}
 
-	// Find the anchor: the last message whose role is user or assistant.
-	// If none exists (system-only file), fall back to the last message.
 	last := time.Time{}
 	for i := totalMsgs - 1; i >= 0; i-- {
 		if offsets[i].isDialogue {
@@ -561,20 +389,16 @@ func findMessageCutoff(path string) (int64, int, time.Time) {
 		last = offsets[totalMsgs-1].ts
 	}
 	if last.IsZero() {
-		// No timestamps — can't filter, load all.
+
 		return 0, totalMsgs, time.Time{}
 	}
 
 	cutoff := last.Add(-RecentMessageWindow)
 
-	// Binary search for the first message at or after cutoff.
-	// offsets is sorted by time (file order = chronological).
 	lo, hi := 0, totalMsgs
 	for lo < hi {
 		mid := (lo + hi) / 2
-		// #709: treat zero timestamps conservatively — a malformed/legacy
-		// record mid-file must not be treated as "before cutoff" and push the
-		// cutoff past newer messages. Zero-ts records land inside the window.
+
 		if !offsets[mid].ts.IsZero() && offsets[mid].ts.Before(cutoff) {
 			lo = mid + 1
 		} else {
@@ -583,13 +407,12 @@ func findMessageCutoff(path string) (int64, int, time.Time) {
 	}
 
 	if lo == 0 {
-		return 0, totalMsgs, last // all messages are within window
+		return 0, totalMsgs, last
 	}
 
 	return offsets[lo].offset, totalMsgs, last
 }
 
-// messageHasToolResult reports whether msg contains a tool_result block.
 func messageHasToolResult(msg provider.Message) bool {
 	for _, b := range msg.Content {
 		if b.Type == "tool_result" {
@@ -599,7 +422,6 @@ func messageHasToolResult(msg provider.Message) bool {
 	return false
 }
 
-// messageHasToolUse reports whether msg contains a tool_use block.
 func messageHasToolUse(msg provider.Message) bool {
 	for _, b := range msg.Content {
 		if b.Type == "tool_use" {
@@ -609,10 +431,6 @@ func messageHasToolUse(msg provider.Message) bool {
 	return false
 }
 
-// isOrphanToolMessage reports whether msg would be an invalid first message
-// for the LLM context because it is part of a tool_use/tool_result pair whose
-// other half was truncated away. Extending the context window backward over
-// such messages keeps the paired tool_use and tool_result together.
 func isOrphanToolMessage(msg provider.Message) bool {
 	if msg.Role == "user" && messageHasToolResult(msg) {
 		return true
@@ -623,7 +441,6 @@ func isOrphanToolMessage(msg provider.Message) bool {
 	return false
 }
 
-// NewJSONLStore creates a store rooted at dir (creates dir if needed).
 func NewJSONLStore(dir string) (*JSONLStore, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("creating session directory %s: %w", dir, err)
@@ -631,13 +448,11 @@ func NewJSONLStore(dir string) (*JSONLStore, error) {
 	return &JSONLStore{dir: dir}, nil
 }
 
-// DefaultDir returns the default session directory.
 func DefaultDir() (string, error) {
 	home := config.HomeDir()
 	return filepath.Join(home, ".ggcode", "sessions"), nil
 }
 
-// NewDefaultStore creates a store in the default directory.
 func NewDefaultStore() (*JSONLStore, error) {
 	dir, err := DefaultDir()
 	if err != nil {
@@ -646,8 +461,6 @@ func NewDefaultStore() (*JSONLStore, error) {
 	return NewJSONLStore(dir)
 }
 
-// LoadWithOptions loads a session, optionally forcing all messages to be
-// loaded regardless of the time window. Use fullLoad=true for --full.
 func (s *JSONLStore) LoadWithOptions(id string, fullLoad bool) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -657,14 +470,11 @@ func (s *JSONLStore) LoadWithOptions(id string, fullLoad bool) (*Session, error)
 	return s.loadSession(id)
 }
 
-// SetFullLoad sets the default loading mode for subsequent Load() calls.
 func (s *JSONLStore) SetFullLoad(full bool) {
 	s.mu.Lock()
 	s.fullLoad = full
 	s.mu.Unlock()
 }
-
-// --- index helpers ---
 
 func (s *JSONLStore) indexPath() string {
 	return filepath.Join(s.dir, "index.json")
@@ -674,11 +484,6 @@ func (s *JSONLStore) loadIndex() ([]indexEntry, error) {
 	return s.loadIndexImpl(true)
 }
 
-// loadIndexNoRepair is like loadIndex but skips the automatic repairIndex call
-// on corruption. Use this from contexts that already hold the index flock
-// (updateIndex, removeFromIndex) to avoid a deadlock: repairIndex itself
-// calls lockIndexFile, which would block forever waiting for the lock we
-// already hold.
 func (s *JSONLStore) loadIndexNoRepair() ([]indexEntry, error) {
 	return s.loadIndexImpl(false)
 }
@@ -693,12 +498,11 @@ func (s *JSONLStore) loadIndexImpl(canRepair bool) ([]indexEntry, error) {
 	}
 	var idx []indexEntry
 	if err := json.Unmarshal(data, &idx); err != nil {
-		// Corrupt index — rebuild from disk to avoid losing entries.
+
 		debug.Log("session", "loadIndex: corrupt session index, rebuilding from disk: %v", err)
 		s.setIndexDirty(true)
 		if !canRepair {
-			// Caller holds the flock — cannot repair here (would deadlock).
-			// Return nil; the next unlocked loadIndex call will repair.
+
 			return nil, nil
 		}
 		repaired, repairErr := s.repairIndex(nil)
@@ -714,7 +518,6 @@ func (s *JSONLStore) loadIndexImpl(canRepair bool) ([]indexEntry, error) {
 	return idx, nil
 }
 
-// loadIndexFromDisk reads and parses the index file without corruption recovery.
 func (s *JSONLStore) loadIndexFromDisk() ([]indexEntry, error) {
 	data, err := os.ReadFile(s.indexPath())
 	if err != nil {
@@ -735,7 +538,7 @@ func (s *JSONLStore) saveIndex(idx []indexEntry) error {
 	if err != nil {
 		return err
 	}
-	// atomic write with fsync for crash durability (matches Save() pattern)
+
 	tmp := s.indexPath() + ".tmp"
 	f, err := os.Create(tmp)
 	if err != nil {
@@ -758,16 +561,6 @@ func (s *JSONLStore) saveIndex(idx []indexEntry) error {
 	return os.Rename(tmp, s.indexPath())
 }
 
-// lockWithBackoff retries flock acquisition with exponential backoff (10ms,
-// 20ms, 40ms) to handle transient lock contention from other processes
-// (desktop + TUI). It is the single implementation shared by updateIndex,
-// removeFromIndex, appendRecordLines, and migrateMessageIDs - previously four
-// copy-pasted retry loops that could drift independently.
-// On success it returns the unlock func. On persistent failure it logs
-// "<op>: failed to acquire <kind> lock after 3 retries" and returns the last
-// error; callers decide the fallback (mark index dirty, abort append, skip
-// migration). Failure behavior is per-IAL guidance: every retry path is
-// bounded at 3 attempts, never a spin loop.
 func lockWithBackoff(lockFn func() (func(), error), op string, kind string) (func(), error) {
 	var unlock func()
 	var lockErr error
@@ -777,7 +570,7 @@ func lockWithBackoff(lockFn func() (func(), error), op string, kind string) (fun
 			return unlock, nil
 		}
 		if i < 2 {
-			// Exponential backoff: 10ms, 20ms, 40ms
+
 			time.Sleep(time.Duration(10*(1<<i)) * time.Millisecond)
 		}
 	}
@@ -803,20 +596,14 @@ func (s *JSONLStore) updateIndex(ses *Session) error {
 		return err
 	}
 	if idx == nil && s.getIndexDirty() {
-		// Index is corrupt (not just empty — loadIndexNoRepair set the
-		// dirty flag). Don't write a single-entry index that overwrites
-		// real entries. Keep dirty flag for runMaintenance to rebuild.
+
 		return nil
 	}
 	found := false
 	for i, e := range idx {
 		if e.ID == ses.ID {
 			newEntry := sessionToIndexEntry(ses)
-			// #558 F: under time-windowed loading ses.Messages holds only the
-			// recent window, so len(s.Messages) is a lower bound, not the real
-			// on-disk count. Message records are never removed from a session
-			// file, so taking the max with the previous index entry prevents the
-			// count from regressing on every windowed load.
+
 			if newEntry.MsgCount < e.MsgCount {
 				newEntry.MsgCount = e.MsgCount
 			}
@@ -837,7 +624,7 @@ func (s *JSONLStore) updateIndex(ses *Session) error {
 }
 
 func (s *JSONLStore) removeFromIndex(id string) error {
-	// Matches updateIndex.
+
 	unlock, lockErr := lockWithBackoff(func() (func(), error) { return lockIndexFile(s.indexPath()) }, "removeFromIndex", "index")
 	if lockErr != nil {
 		s.setIndexDirty(true)
@@ -855,9 +642,7 @@ func (s *JSONLStore) removeFromIndex(id string) error {
 		return err
 	}
 	if idx == nil && s.getIndexDirty() {
-		// Index is corrupt (not just empty — loadIndexNoRepair set the
-		// dirty flag). Don't write an empty index that would hide
-		// real entries from List(). Keep dirty flag for runMaintenance to rebuild.
+
 		return nil
 	}
 	filtered := make([]indexEntry, 0, len(idx))
@@ -866,10 +651,12 @@ func (s *JSONLStore) removeFromIndex(id string) error {
 			filtered = append(filtered, e)
 		}
 	}
+
 	// #4769 (defect 3): match updateIndex - a failed save must mark the
 	// index dirty so runMaintenance's early reconciliation rebuilds it;
 	// otherwise the on-disk index keeps the deleted session forever (the
 	// self-healing loop never fires).
+
 	if err := s.saveIndex(filtered); err != nil {
 		s.setIndexDirty(true)
 		return err
@@ -896,11 +683,8 @@ func sessionToIndexEntry(s *Session) indexEntry {
 	}
 }
 
-// --- JSONL helpers ---
-
-// jsonlRecord is written one-per-line in the session file.
 type jsonlRecord struct {
-	Type                 string              `json:"type"` // "meta", "message", "cost", "usage", "metric", or "checkpoint"
+	Type                 string              `json:"type"`
 	SessionID            string              `json:"session_id,omitempty"`
 	Title                string              `json:"title,omitempty"`
 	Preview              string              `json:"preview,omitempty"`
@@ -913,42 +697,35 @@ type jsonlRecord struct {
 	UpdatedAt            time.Time           `json:"updated_at,omitempty"`
 	TunnelEventsComplete bool                `json:"tunnel_events_complete,omitempty"`
 	Message              *provider.Message   `json:"message,omitempty"`
-	Timestamp            time.Time           `json:"timestamp,omitempty"` // per-message timestamp (for message records)
+	Timestamp            time.Time           `json:"timestamp,omitempty"`
 	TunnelEvent          *TunnelEvent        `json:"tunnel_event,omitempty"`
 	CostJSON             json.RawMessage     `json:"cost,omitempty"`
-	// UsageEntry: per-turn usage record (type == "usage").
+
 	UsageEntry *UsageEntry `json:"usage_entry,omitempty"`
-	// MetricEvent: performance metric record (type == "metric").
+
 	MetricEvent *metrics.MetricEvent `json:"metric_event,omitempty"`
-	// Session-scoped preferences.
+
 	PermissionMode string   `json:"permission_mode,omitempty"`
 	SidebarVisible *bool    `json:"sidebar_visible,omitempty"`
 	Pinned         bool     `json:"pinned,omitempty"`
 	Tags           []string `json:"tags,omitempty"`
-	// Branch lineage: set once at fork time. Previously not persisted, so
-	// a fork's parent was lost on reload (write-only field).
+
 	ParentSessionID string `json:"parent_session_id,omitempty"`
 	ForkPoint       int    `json:"fork_point,omitempty"`
 	ContextWindow   int    `json:"context_window,omitempty"`
 	MaxTokens       int    `json:"max_tokens,omitempty"`
-	// Session task board snapshot (opaque task.Manager JSON; see Session.TasksJSON).
+
 	TasksJSON []byte `json:"tasks,omitempty"`
-	// Workspace fingerprint captured alongside TasksJSON (see Session.TasksEnvJSON).
+
 	TasksEnvJSON []byte `json:"tasks_env,omitempty"`
-	// Checkpoint fields: after compaction, only the summary message ID is stored.
-	// The summary message itself is written to JSONL as a type:"message" record.
-	// Restore scans from summary_msg_id forward to rebuild context.
+
 	CheckpointSummaryMsgID string `json:"checkpoint_summary_msg_id,omitempty"`
 	CheckpointLastMsgID    string `json:"checkpoint_last_msg_id,omitempty"`
 	CheckpointTokens       int    `json:"checkpoint_tokens,omitempty"`
-	// Legacy field — kept for migration only. New code uses CheckpointSummaryMsgID.
+
 	CheckpointMessages []provider.Message `json:"checkpoint_messages,omitempty"`
 }
 
-// validSessionID reports whether id is a plain generated identifier.
-// Only [A-Za-z0-9_-] are allowed: an unvalidated id used to flow straight
-// into filepath.Join, so --resume ../../foo escaped the store directory
-// for both reads AND (via empty-session cleanup) deletions (#401).
 func validSessionID(id string) bool {
 	if id == "" || len(id) > 128 {
 		return false
@@ -959,12 +736,9 @@ func validSessionID(id string) bool {
 			return false
 		}
 	}
-	return !strings.HasPrefix(id, "-") // no leading dash: not a flag-like path piece
+	return !strings.HasPrefix(id, "-")
 }
 
-// sessionPath returns the JSONL path for a session ID. Invalid IDs fall back
-// to a safe, non-escaping placeholder so callers that ignore the error still
-// cannot touch files outside s.dir.
 func (s *JSONLStore) sessionPath(id string) string {
 	if !validSessionID(id) {
 		return filepath.Join(s.dir, "_invalid_id_.jsonl")
@@ -972,10 +746,6 @@ func (s *JSONLStore) sessionPath(id string) string {
 	return filepath.Join(s.dir, id+".jsonl")
 }
 
-// HasUserInteraction returns true if the session contains at least one user
-// message with actual text content. Sessions without user interaction (e.g.,
-// created then immediately closed) should not be persisted to avoid accumulating
-// empty session files.
 func (s *Session) HasUserInteraction() bool {
 	for _, m := range s.Messages {
 		if m.Role != "user" {
@@ -990,27 +760,11 @@ func (s *Session) HasUserInteraction() bool {
 	return false
 }
 
-// Save writes the full session as a JSONL file (atomic).
-// If the session has no user interaction, the file is deleted instead.
-//
-// Save creates the JSONL file if it doesn't exist. It does NOT write messages
-// or update the session index — the index is populated on the first
-// AppendMessageToDisk or AppendMetaToDisk call, when the title and message
-// count are meaningful.
-//
-// This method is intentionally a safe no-op for existing sessions to prevent
-// data loss from the full-rewrite pattern. Messages are persisted incrementally
-// via AppendMessageToDisk (called by PersistHandler on every contextManager.Add).
-//
-// To persist messages explicitly (e.g. for /branch), use AppendMessagesBatchToDisk.
-// To update metadata, use AppendMetaToDisk.
 func (s *JSONLStore) Save(ses *Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ses.UpdatedAt = time.Now()
-	// #4822: mark the creation window so the empty-session pruners keep this
-	// session until its first user-message batch lands (or the window expires).
-	// #4824/#4829: lock order s.mu -> createdPendingMu (see field doc).
+
 	s.createdPendingMu.Lock()
 	defer s.createdPendingMu.Unlock()
 	if s.createdPending == nil {
@@ -1020,10 +774,6 @@ func (s *JSONLStore) Save(ses *Session) error {
 
 	path := s.sessionPath(ses.ID)
 
-	// Create the file if it doesn't exist (touch). The session index is NOT
-	// updated here — a new session with title "New session" and 0 messages
-	// would pollute the index. The index is populated on the first
-	// AppendMessageToDisk call, which also carries the auto-generated title.
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return fmt.Errorf("creating session file: %w", err)
@@ -1034,49 +784,23 @@ func (s *JSONLStore) Save(ses *Session) error {
 	return nil
 }
 
-// Load reads a session from its JSONL file.
 func (s *JSONLStore) Load(id string) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.loadSession(id)
 }
 
-// localLightweightEntry pairs a record type tag with its raw JSONL record.
-// Used internally by loadSession to track post-checkpoint entries.
 type localLightweightEntry struct {
 	recType string
 	record  jsonlRecord
 }
 
-// loadSession is the lock-free internal version of Load.
-
-// dedupeUserMsgs collapses plain-text USER messages whose FULL text is
-// byte-identical, keeping the first occurrence (user-reported: a session
-// killed after an endless autopilot/retry loop had the same prompt on
-// disk up to 859 times - the strategist budget notice alone re-fired
-// every cycle, the autopilot cron prompt hundreds of times - all
-// NON-consecutive, separated by assistant runs, so a consecutive-only
-// heuristic missed them entirely). Distinct texts never collide;
-// messages carrying tool_result blocks never participate.
-// #3351: image blocks join the key with a cheap identity signature
-// (MIME + data length + short prefix). Without it an image-only user
-// message (desktop paste / IM photo) keyed as "" and the main loop's
-// `key == ""` branch silently dropped it on resume - every image turn
-// vanished from history and context. Byte-identical retry re-fires
-// still collapse: their signature is identical too.
 func dedupeUserMsgs(msgs []provider.Message) []provider.Message {
 	userKey := func(m provider.Message) (string, bool) {
 		if m.Role != "user" {
 			return "", false
 		}
-		// #4537: turns the interactive surfaces tagged as human-authored are
-		// NEVER collapsible. A byte-identical "yes"/"continue" across turns is
-		// a genuine second answer - collapsing it orphaned the assistant reply
-		// that followed and desynced the dialogue. Machine re-fires (the #2324
-		// cron/strategist storm shape, #3351 image re-fire) carry no Origin and
-		// keep the exact global-collapse behavior the guard tests pin; legacy
-		// records pre-dating the tag are untagged too, so old sessions load
-		// identically.
+
 		if m.Origin == "human" {
 			return "", false
 		}
@@ -1105,7 +829,7 @@ func dedupeUserMsgs(msgs []provider.Message) []provider.Message {
 		key, isUser := userKey(m)
 		if isUser {
 			if key == "" || seen[key] {
-				continue // byte-identical re-fire of an already-kept turn
+				continue
 			}
 			seen[key] = true
 		}
@@ -1114,14 +838,6 @@ func dedupeUserMsgs(msgs []provider.Message) []provider.Message {
 	return out
 }
 
-// capContextTail applies the MaxContextMessages window to a loaded
-// context slice (#2325: the checkpoint paths loaded EVERY post-summary
-// record with no cap - a session whose compaction stopped firing
-// accumulated 7.5k real messages after the last checkpoint and handed
-// the agent a 2.82M-token context on resume; the 200-message cap only
-// guarded the no-checkpoint path). The window never opens with an
-// orphan tool half-pair, shifts (not collapses) to keep the newest
-// user turn inside, and prepends the truncation note.
 func capContextTail(msgs []provider.Message) []provider.Message {
 	if len(msgs) <= MaxContextMessages {
 		return msgs
@@ -1157,14 +873,6 @@ func capContextTail(msgs []provider.Message) []provider.Message {
 	}}, msgs[start:]...)
 }
 
-// appendPostCheckpointExtras appends post-checkpoint "extra" message records
-// from entries into ses.ContextMessages in file order.
-//
-// When summaryMsgID is non-empty (the extraStart-hit path), the current
-// summary message (by ID) and stale summary notes from earlier compactions
-// that can sit between last_msg_id and EOF under async precompact ordering
-// are skipped — their content is already folded into the current summary.
-// The fallback / no-last_msg_id paths pass "" to keep every message.
 func appendPostCheckpointExtras(ses *Session, entries []localLightweightEntry, summaryMsgID string) {
 	for _, entry := range entries {
 		if entry.recType != "message" || entry.record.Message == nil {
@@ -1180,12 +888,7 @@ func appendPostCheckpointExtras(ses *Session, entries []localLightweightEntry, s
 func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	path := s.sessionPath(id)
 
-	// Determine if we should apply time-windowed loading for rendering.
-	// When fullLoad is false and the session has many messages, only load
-	// the most recent messages (within RecentMessageWindow) for ses.Messages.
-	// ContextMessages (agent LLM context) is unaffected — it has its own
-	// checkpoint-based compaction.
-	var msgCutoff int64 // byte offset: skip message records before this offset
+	var msgCutoff int64
 	var totalMsgCount int
 	if !s.fullLoad {
 		msgCutoff, totalMsgCount, _ = findMessageCutoff(path)
@@ -1194,18 +897,11 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		}
 	}
 
-	// Migrate legacy JSONL records: backfill missing message IDs and convert
-	// old checkpoint format to new summary_msg_id format. This is a no-op
-	// if the file is already fully migrated.
 	if migrated, err := s.migrateMessageIDs(id); err != nil {
 		debug.Log("session", "loadSession: migration failed for %s: %v (continuing with original file)", id, err)
 	} else if migrated > 0 {
 		debug.Log("session", "loadSession: migrated %d message IDs in session %s", migrated, id)
-		// #558 A: migration rewrote the entire file (legacy checkpoint snapshot
-		// removed, summary message inserted) — every byte offset computed from
-		// the pre-migration file is stale. Recompute the cutoff against the
-		// rewritten file, otherwise outdated messages leak past the window on
-		// the first resume after migration.
+
 		if !s.fullLoad {
 			msgCutoff, totalMsgCount, _ = findMessageCutoff(path)
 		}
@@ -1221,53 +917,36 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	defer f.Close()
 
 	ses := &Session{ID: id}
-	// #656: use the same fault-tolerant bounded reader as the search path
-	// (#478) instead of bufio.Scanner. A single over-long JSONL line (e.g. a
-	// >10MB base64 image blob) previously tripped Scanner's ErrTooLong and
-	// made loadSession hard-fail — the ENTIRE session became unrecoverable.
-	// Over-long lines are now consumed, skipped, and logged; every other
-	// record keeps loading.
+
 	br := bufio.NewReader(f)
 	const maxLine = 10 * 1024 * 1024
 	skippedLong := 0
 
-	// Single-pass scan: track the last checkpoint and all post-checkpoint records.
-	// We only keep lightweight non-checkpoint records; checkpoint messages are
-	// stored once for the latest checkpoint only.
-	// IMPORTANT: usage and metric records are cumulative history — they must
-	// NOT be cleared when a checkpoint is encountered. Only message/tunnel/cost
-	// entries follow checkpoint semantics (avoid replaying old messages).
 	type lightweightEntry = localLightweightEntry
 	var (
-		metaRecords        []jsonlRecord // always accumulate meta for metadata
+		metaRecords        []jsonlRecord
 		lastCpMessages     []provider.Message
 		lastCpSummaryMsgID string
 		lastCpLastMsgID    string
 		lastCpTokens       int
-		allMessages        []jsonlRecord      // ALL message records (never discarded by checkpoint)
-		postCPEntries      []lightweightEntry // cost entries after last checkpoint
-		allUsage           []jsonlRecord      // ALL usage records (never cleared by checkpoint)
-		allMetrics         []jsonlRecord      // ALL metric records (never cleared by checkpoint)
+		allMessages        []jsonlRecord
+		postCPEntries      []lightweightEntry
+		allUsage           []jsonlRecord
+		allMetrics         []jsonlRecord
 		haveCheckpoint     bool
 	)
 
 	var byteOffset int64
-	var ioErr error // #662: real I/O error (EIO/EDQUOT/...) — distinct from io.EOF
+	var ioErr error
 	for {
 		raw, consumed, rerr := readLineLimitedCounted(br, maxLine)
 		byteOffset += consumed
 		if rerr == errLineTooLong {
 			skippedLong++
-			continue // oversized line consumed; load resumes at the next one
+			continue
 		}
 		if rerr != nil && !errors.Is(rerr, io.EOF) {
-			// #662: a real I/O error (EIO, bad sector, dropped network mount) is
-			// NOT the same as a clean end-of-file. #656's tolerant loop lumped
-			// both together and silently returned a TRUNCATED session; the next
-			// Save then O_APPENDs onto the truncated state and the tail records
-			// are permanently lost. Keep the partial read (still process this
-			// final line), but surface the error to the caller afterwards so the
-			// caller can retry or report instead of treating it as success.
+
 			ioErr = rerr
 			debug.Log("session", "loadSession %s: I/O error at offset %d after %d message records: %v", id, byteOffset, len(allMessages), rerr)
 		}
@@ -1275,118 +954,82 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		line := strings.TrimSpace(string(raw))
 		if line == "" {
 			if rerr != nil {
-				break // io.EOF (clean end) or recorded ioErr — stop the scan
+				break
 			}
 			continue
 		}
 		var rec jsonlRecord
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			// #657: malformed lines (e.g. a crash-torn half line that fused with
-			// a later record) were dropped silently — log so record loss is visible.
+
 			debug.Log("session", "loadSession %s: skipping malformed JSONL line at offset %d: %v", id, byteOffset-lineLen, err)
-			continue // skip malformed lines
+			continue
 		}
 
-		// byteOffset was already advanced past this line at the loop top;
-		// lineStart is where this record began.
 		lineStart := byteOffset - lineLen
 
 		switch rec.Type {
 		case "meta":
 			metaRecords = append(metaRecords, rec)
 		case "checkpoint":
-			// New format: checkpoint_summary_msg_id points to a message in JSONL.
-			// Old format: checkpoint_messages contains full message snapshot.
+
 			if rec.CheckpointSummaryMsgID != "" {
 				lastCpSummaryMsgID = rec.CheckpointSummaryMsgID
 				lastCpLastMsgID = rec.CheckpointLastMsgID
 				lastCpTokens = rec.CheckpointTokens
 				haveCheckpoint = true
-				// #4536: a later new-format checkpoint is authoritative - drop any
-				// earlier legacy snapshot so a lost/corrupt summary message cannot
-				// fall through to the legacy rebuild and silently resurrect the
-				// stale pre-new-format context.
+
 				lastCpMessages = nil
-				// postCPEntries are NOT cleared — we'll filter by ID later.
+
 			} else if len(rec.CheckpointMessages) > 0 {
-				// Legacy checkpoint: migrate — find summary message, write to JSONL.
-				// For now, use the old format directly during migration period.
+
 				lastCpMessages = rec.CheckpointMessages
-				lastCpLastMsgID = "" // legacy checkpoints don't have last_msg_id
+				lastCpLastMsgID = ""
 				lastCpTokens = rec.CheckpointTokens
 				postCPEntries = nil
-				// #4591: symmetric authority - a later legacy checkpoint must also
-				// drop any earlier new-format summary pointer, or the summary
-				// branch below wins on a stale pre-legacy summary (its async flush
-				// can land after this line) and serves outdated context over this
-				// snapshot.
+
 				lastCpSummaryMsgID = ""
 				haveCheckpoint = true
 			}
 		case "usage":
-			// Usage records are cumulative token history — never discard.
+
 			allUsage = append(allUsage, rec)
 		case "metric":
-			// Metric records are cumulative performance history — never discard.
+
 			allMetrics = append(allMetrics, rec)
 		case "message":
-			// Apply time-windowed loading: skip old messages for rendering.
-			// Still track them for checkpoint context restoration.
+
 			if msgCutoff > 0 && lineStart < msgCutoff {
-				// Old message within cutoff — only keep for context restoration,
-				// not for ses.Messages (rendering). postCPEntries needs it for
-				// checkpoint logic, but allMessages (rendering) skips it.
+
 				postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
 				continue
 			}
-			// Recent message (or fullLoad): keep for full rendering.
+
 			allMessages = append(allMessages, rec)
-			// Also track for ContextMessages (checkpoint + post-checkpoint).
+
 			postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
 		case "cost":
 			postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
 		case "message_remove":
-			// #4200: tombstone written by AppendUserMessageRemovalToDisk when
-			// the desktop vision-fallback retry drops the last user message
-			// from live context (Manager.RemoveLastUserMessage). Scan-order
-			// semantics: pop the most recent still-present user message record
-			// from BOTH streams so resume neither renders it nor replays it
-			// into the agent context. Non-user records (assistant/tool turns
-			// recorded after the original) are skipped over, matching the
-			// in-memory Remove which only ever targets user messages. No
-			// matching user record (tombstone before any user message, or a
-			// duplicate tombstone) is a defensive no-op.
+
 			allMessages = popLastUserRecord(allMessages)
 			postCPEntries = popLastUserLightweightEntry(postCPEntries)
 		case "tunnel_event":
-			// Tunnel events are no longer stored in session JSONL.
-			// Old files may still contain these lines — skip them silently.
-			// The projection store is the sole source of tunnel event history.
+
 		}
 		if rerr != nil {
-			// io.EOF is the normal end of the file. A real I/O error was
-			// already recorded in ioErr above — the loop breaks here either
-			// way, but the error is returned to the caller after processing
-			// (#662) instead of being silently swallowed as success.
+
 			break
 		}
 	}
 	if skippedLong > 0 {
 		debug.Log("session", "loadSession %s: skipped %d over-long line(s) >10MB — session remains loadable (#656)", id, skippedLong)
 	}
-	f.Close() // close read handle before potential backfill rewrite
+	f.Close()
 	if ioErr != nil {
-		// #662: never hand back a truncated session as a load success — the
-		// caller would Save (O_APPEND) on top of it and permanently lose the
-		// unread tail. The file itself is healthy; a retry can recover fully.
+
 		return nil, fmt.Errorf("loadSession %s: I/O error reading session file (partial read of %d messages, refusing to return truncated state): %w", id, len(allMessages), ioErr)
 	}
 
-	// Backfill timestamps for historical sessions (created before timestamp feature).
-	// #4670: backfill whenever ANY message lacks a timestamp - the old
-	// first-message gate skipped mixed sessions wholesale (ts-less records
-	// never repaired). backfillTimestamps itself only rewrites zero-ts
-	// records, so fully-timestamped sessions still short-circuit (changed=false).
 	anyMissing := false
 	for _, m := range allMessages {
 		if m.Timestamp.IsZero() {
@@ -1398,14 +1041,10 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		s.backfillTimestamps(id)
 	}
 
-	// Apply metadata from meta records (always the latest meta wins)
 	for _, rec := range metaRecords {
 		ses.Title = rec.Title
 		ses.Preview = rec.Preview
-		// Only overwrite workspace if the meta record has one. Older sessions
-		// (or sessions created before the workspace field existed) may have
-		// empty workspace in their meta records. Overwriting with "" would
-		// make the session unfindable by ListForWorkspace/LatestForWorkspace.
+
 		if rec.Workspace != "" {
 			ses.Workspace = rec.Workspace
 		}
@@ -1419,8 +1058,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		if rec.PermissionMode != "" {
 			ses.PermissionMode = rec.PermissionMode
 		}
-		// Pin state and tags are snapshots like Title: the latest meta
-		// record wins, so unpin/untag records correctly clear the fields.
+
 		ses.Pinned = rec.Pinned
 		ses.Tags = rec.Tags
 		if rec.SidebarVisible != nil {
@@ -1432,78 +1070,34 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		if rec.MaxTokens > 0 {
 			ses.MaxTokens = rec.MaxTokens
 		}
-		// Latest meta record wins: the board is a full snapshot each write.
+
 		ses.TasksJSON = rec.TasksJSON
 		ses.TasksEnvJSON = rec.TasksEnvJSON
-		// Branch lineage is immutable: set once at fork time. Guard with a
-		// non-empty check so pre-lineage meta records (field absent) never
-		// clear it once a later record has established it.
+
 		if rec.ParentSessionID != "" {
 			ses.ParentSessionID = rec.ParentSessionID
 			ses.ForkPoint = rec.ForkPoint
 		}
 	}
 
-	// Fallback: if no meta record contained a workspace (sessions created
-	// before the workspace field was tracked), assign the current workspace.
-	// Without this, the session is invisible to ListForWorkspace and can
-	// never be auto-loaded on restart.
 	if ses.Workspace == "" {
 		ses.Workspace = CurrentWorkspacePath()
 		debug.Log("session", "loadSession %s: workspace was empty, falling back to %s", id, ses.Workspace)
 	}
 
-	// Deduplicate message records in corrupted JSONL files.
-	// A now-fixed bug (StartRunTracking after restore) caused all restored
-	// messages to be re-appended on every agent run, doubling the file on
-	// each restart. This defensive dedup ensures clean in-memory state even
-	// for files that were corrupted before the fix.
 	allMessages = dedupMessageRecords(allMessages)
 	postCPEntries = dedupLightweightEntries(postCPEntries)
 
-	// ── ses.Messages: message records from the file (for rendering) ──
-	// Under time-windowed loading (fullLoad=false, >recentMessageThreshold
-	// messages), only messages within RecentMessageWindow of the last message
-	// are kept here; older records are skipped above. With fullLoad=true this
-	// is the full conversation history. The TUI renders from this slice on
-	// reload.
-	//
-	// ⚠️ Never filter or truncate this by checkpoint — that would silently
-	// destroy conversation history the user expects to see. Note that the
-	// time-window filter above means ses.Messages is NOT reliable for
-	// deletion decisions; use HasUserInteractionOnDisk for those.
 	for _, rec := range allMessages {
 		if rec.Message != nil {
 			ses.Messages = append(ses.Messages, *rec.Message)
 		}
 	}
-	// #2324-report: collapse retry-loop duplicate user turns. This is NOT
-	// the history filtering the warning above forbids - the collapsed
-	// copies are write-side artifacts of a killed endless-retry run, not
-	// distinct turns the user expects to see.
+
 	ses.Messages = dedupeUserMsgs(ses.Messages)
 
-	// ── ses.ContextMessages: compacted context for agent (for LLM) ──
-	// Contains the LAST checkpoint (compaction summary) + messages appended
-	// after that checkpoint. This is what RestoreSessionIntoAgent() feeds to
-	// the agent so the LLM sees the summarized context, not the full log.
-	//
-	// ⚠️ This is SEPARATE from ses.Messages. Do not conflate the two:
-	//   ses.Messages       → TUI rendering (full history)
-	//   ses.ContextMessages → agent LLM context (compacted)
-	// Build ContextMessages:
-	// 1. New checkpoint format: find summary_msg_id in allMessages, load from there
-	// 2. Legacy checkpoint: use lastCpMessages + postCPEntries
-	// 3. No checkpoint: last MaxContextMessages from allMessages
 	if lastCpSummaryMsgID != "" {
-		// New format: ContextMessages = [summary message] + [all messages after last_msg_id]
-		// The summary message may appear anywhere in JSONL (async pre-compact timing).
-		// The extra messages (post-compaction) are identified by lastCpLastMsgID:
-		// everything AFTER that ID in the file is an "extra" message.
-		//
-		// Search postCPEntries (which includes all messages regardless of the
-		// 24h time-window cutoff) so that checkpoint summaries written >24h ago
-		// are still found and used for context restoration.
+
 		var summaryMsg *provider.Message
 		var summaryMsgIdx int = -1
 		for i, entry := range postCPEntries {
@@ -1514,63 +1108,38 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			}
 		}
 		if summaryMsg != nil && summaryMsgIdx >= 0 {
-			// Start with the summary message itself.
+
 			ses.ContextMessages = append(ses.ContextMessages, *summaryMsg)
 			if lastCpLastMsgID != "" {
-				// Find extra messages: everything after lastCpLastMsgID.
-				// #452: search the UNWINDOWED postCPEntries (the same list
-				// the summary lookup above uses), not the 24h-window-filtered
-				// allMessages. On long sessions (>500 msgs, >24h span) the
-				// window filtered out last_msg_id itself, silently dropping
-				// the messages between it and the summary via the fallback.
-				//
-				// The search must span the ENTIRE list, not summaryMsgIdx+1..:
-				// with async precompact the summary message is persisted AFTER
-				// last_msg_id in the file. A summary-anchored search never found
-				// last_msg_id and fell into the post-summary fallback below,
-				// dropping the messages that arrived between last_msg_id and
-				// the summary (the TOCTOU extras kept verbatim after compaction).
+
 				extraStart := -1
 				for i := 0; i < len(postCPEntries); i++ {
 					entry := postCPEntries[i]
 					if entry.recType == "message" && entry.record.Message != nil && entry.record.Message.ID == lastCpLastMsgID {
-						extraStart = i + 1 // start AFTER last_msg_id
+						extraStart = i + 1
 						break
 					}
 				}
 				if extraStart >= 0 {
-					// extraStart indexes postCPEntries — the same unwindowed
-					// list the search above used. It must NOT be used to slice
-					// allMessages: the two index spaces diverge as soon as
-					// postCPEntries contains cost records or windowed-out old
-					// messages (>500 msgs / >24h sessions), which made
-					// allMessages[extraStart:] panic (bounds out of range) or
-					// silently restore the wrong context slice.
+
 					appendPostCheckpointExtras(ses, postCPEntries[extraStart:], lastCpSummaryMsgID)
 				} else {
-					// Fallback: checkpoint last_msg_id not found in allMessages.
-					// This happens when dedup removed a duplicate message, or
-					// the message ID wasn't persisted (older ggcode versions).
-					// Without this fallback, ALL post-checkpoint messages are
-					// lost and the agent sees only the summary on reload.
-					// Load all messages after the summary as extra messages,
-					// same as the no-last_msg_id path below.
+
 					afterSummary := len(postCPEntries) - summaryMsgIdx - 1
 					debug.Log("session", "loadSession %s: checkpoint last_msg_id %q not found in postCPEntries, using post-summary fallback (%d entries after summary)", id, lastCpLastMsgID, afterSummary)
 					appendPostCheckpointExtras(ses, postCPEntries[summaryMsgIdx+1:], "")
 				}
 			} else {
-				// No last_msg_id (migrated checkpoint): load all messages
-				// after the summary as extra messages.
+
 				appendPostCheckpointExtras(ses, postCPEntries[summaryMsgIdx+1:], "")
 			}
 			ses.CheckpointTokens = lastCpTokens
 			ses.CheckpointMessageCount = len(ses.ContextMessages)
 		}
-		// If summary_msg_id not found, fall through to no-checkpoint path
+
 	}
 	if len(ses.ContextMessages) == 0 && haveCheckpoint && len(lastCpMessages) > 0 {
-		// Legacy format: checkpoint messages + post-CP entries
+
 		ses.ContextMessages = make([]provider.Message, len(lastCpMessages))
 		copy(ses.ContextMessages, lastCpMessages)
 		ses.CheckpointTokens = lastCpTokens
@@ -1589,18 +1158,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			ses.CostJSON = []byte(e.record.CostJSON)
 		}
 	}
-	// If no checkpoint, ContextMessages = last MaxContextMessages messages.
-	// Cap at MaxContextMessages to prevent loading tens of thousands of messages
-	// (which can be 2M+ tokens) into the LLM context on restore. The full message
-	// history remains in ses.Messages for TUI rendering; only the agent context
-	// is truncated to the most recent messages.
-	//
-	// ⚠ Build from the UNWINDOWED postCPEntries, never from ses.Messages:
-	// under time-windowed loading (fullLoad=false) ses.Messages holds only the
-	// render window (messages within RecentMessageWindow of the last message).
-	// Slicing that here handed the agent a few-KB stub for every checkpoint-less
-	// session older than the window — the "old session reloads with only a few K
-	// left" bug. The render window is for the TUI, not for the LLM context.
+
 	if len(ses.ContextMessages) == 0 {
 		var unwindowed []provider.Message
 		for _, entry := range postCPEntries {
@@ -1611,26 +1169,10 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		ses.ContextMessages = capContextTail(unwindowed)
 	}
 
-	// #2324-report: same dedup on the LLM context rebuild - the replayed
-	// prompt N times is not just a rendering artifact, the agent literally
-	// saw the same question N times in a row on resume.
-	// DEDUP FIRST, CAP SECOND: the storm tail can be thousands of
-	// identical user copies (4,405 in the observed victim); capping
-	// first would window in only duplicates and the dedup would collapse
-	// the context to a handful of messages, silently discarding recent
-	// assistant turns.
 	ses.ContextMessages = dedupeUserMsgs(ses.ContextMessages)
-	// #2325: the checkpoint paths above load EVERY post-summary record
-	// uncapped - cap them with the same window the no-checkpoint path
-	// uses.
+
 	ses.ContextMessages = capContextTail(ses.ContextMessages)
 
-	// Diagnostic summary: log the final ContextMessages state so that
-	// context-loss issues can be diagnosed via debug_log without needing
-	// to reproduce the problem. This single line captures:
-	//   - session ID and message counts (context vs total)
-	//   - whether a checkpoint was used and its key IDs
-	//   - token baseline from the checkpoint
 	cpInfo := "no-checkpoint"
 	if lastCpSummaryMsgID != "" {
 		cpInfo = fmt.Sprintf("checkpoint summary=%s last_msg=%s tokens=%d", lastCpSummaryMsgID, lastCpLastMsgID, lastCpTokens)
@@ -1638,9 +1180,6 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	debug.Log("session", "loadSession %s: ContextMessages=%d (total=%d) [%s]",
 		id, len(ses.ContextMessages), len(ses.Messages), cpInfo)
 
-	// Backfill missing IDs for ContextMessages and persist to JSONL.
-	// This ensures checkpoint restore can find messages by ID even for
-	// sessions that were created before the msgID feature.
 	if len(ses.ContextMessages) > 0 {
 		needsID := false
 		for i := range ses.ContextMessages {
@@ -1650,8 +1189,8 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			}
 		}
 		if needsID {
-			// Build a set of IDs to update in JSONL.
-			updates := make(map[string]provider.Message) // fingerprint -> msg with ID
+
+			updates := make(map[string]provider.Message)
 			for i := range ses.ContextMessages {
 				if ses.ContextMessages[i].ID == "" {
 					ses.ContextMessages[i].ID = newSessionMessageID()
@@ -1659,7 +1198,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 					updates[fp] = ses.ContextMessages[i]
 				}
 			}
-			// Also update ses.Messages so rendering shows the same IDs.
+
 			for i := range ses.Messages {
 				if ses.Messages[i].ID == "" {
 					fp := messageFingerprint(&ses.Messages[i])
@@ -1668,21 +1207,18 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 					}
 				}
 			}
-			// Rewrite JSONL with backfilled IDs for matching messages.
+
 			s.backfillIDs(ses.ID, updates)
 		}
 
-		// Tunnel events are no longer loaded from session JSONL.
 	}
 
-	// Apply ALL usage records (preserved across checkpoints)
 	for _, rec := range allUsage {
 		if rec.UsageEntry != nil {
 			ses.UsageHistory = append(ses.UsageHistory, *rec.UsageEntry)
 		}
 	}
 
-	// Apply ALL metric records (preserved across checkpoints)
 	for _, rec := range allMetrics {
 		if rec.MetricEvent != nil {
 			ses.Metrics = append(ses.Metrics, *rec.MetricEvent)
@@ -1699,14 +1235,6 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	return ses, nil
 }
 
-// repairIndexOutsideLock runs the potentially long repairIndex disk scan
-// WITHOUT holding s.mu (#4353: a full repair parses every unindexed
-// session file on disk - runMaintenance measured ~48s on a real store and
-// was itself de-locked for exactly this reason). It releases s.mu, scans
-// under the index flock, re-acquires s.mu, and returns the (possibly
-// reloaded) index. Callers must hold s.mu on entry; it is still held on
-// return, so a plain deferred Unlock stays balanced. Concurrent repairs
-// serialize on the index flock and are idempotent.
 func (s *JSONLStore) repairIndexOutsideLock(idx []indexEntry) ([]indexEntry, error) {
 	s.mu.Unlock()
 	changed, err := s.repairIndex(idx)
@@ -1720,7 +1248,6 @@ func (s *JSONLStore) repairIndexOutsideLock(idx []indexEntry) ([]indexEntry, err
 	return idx, nil
 }
 
-// List returns all sessions sorted by UpdatedAt descending (uses index for speed).
 func (s *JSONLStore) List() ([]*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1730,14 +1257,13 @@ func (s *JSONLStore) List() ([]*Session, error) {
 	}
 
 	if len(idx) == 0 {
-		// #4353: full disk scan must not run under s.mu.
+
 		idx, err = s.repairIndexOutsideLock(idx)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	// Pinned sessions first (user bookmarks), then by UpdatedAt descending.
 	sort.Slice(idx, func(i, j int) bool {
 		if idx[i].Pinned != idx[j].Pinned {
 			return idx[i].Pinned
@@ -1767,11 +1293,6 @@ func (s *JSONLStore) List() ([]*Session, error) {
 	return result, nil
 }
 
-// ListChildren returns all sessions forked (via /branch) from parentID,
-// newest first. Works off the index (no per-session file reads) since the
-// lineage fields are persisted in the index entry. Sessions forked before
-// lineage persistence landed have an empty ParentSessionID and are not
-// discoverable; a fresh /branch records lineage going forward.
 func (s *JSONLStore) ListChildren(parentID string) ([]*Session, error) {
 	all, err := s.List()
 	if err != nil {
@@ -1786,10 +1307,6 @@ func (s *JSONLStore) ListChildren(parentID string) ([]*Session, error) {
 	return children, nil
 }
 
-// setIndexDirty / getIndexDirty guard the indexDirty flag with its own
-// dedicated mutex so runMaintenance can touch it without holding s.mu
-// (startup-latency fix). These helpers must never acquire s.mu or any other
-// lock, keeping the lock graph acyclic.
 func (s *JSONLStore) setIndexDirty(v bool) {
 	s.indexDirtyMu.Lock()
 	s.indexDirty = v
@@ -1815,15 +1332,7 @@ func (s *JSONLStore) scheduleMaintenanceLocked() {
 }
 
 func (s *JSONLStore) runMaintenance() {
-	// Startup-latency regression fix: runMaintenance used to hold s.mu for
-	// its entire duration while pruneInvalidIndexEntries fully parsed EVERY
-	// session file (multi-second large sessions; ~48s across a real store).
-	// The repl's Load(resumeID) then queued on s.mu behind it and the TUI
-	// sat on a blank screen for most of a minute. All work here is
-	// file-scoped and self-serialized (index flock in repairIndex/saveIndex,
-	// lock-free clone stores in the prune path), and same-process concurrency
-	// is already capped by maintenanceRunning — so no store-wide lock is
-	// needed. Only the completion bookkeeping takes a short s.mu hold.
+
 	defer func() {
 		s.mu.Lock()
 		s.lastMaintenance = time.Now()
@@ -1851,10 +1360,7 @@ func (s *JSONLStore) runMaintenance() {
 		s.setIndexDirty(false)
 		return
 	}
-	// Acquire cross-process lock before saving — pruneInvalidIndexEntries
-	// may have taken seconds to scan all sessions, and another process could
-	// have appended to the index in the meantime. Without this lock, our
-	// saveIndex would overwrite their entry, losing session data.
+
 	unlock, lockErr := lockIndexFile(s.indexPath())
 	if lockErr != nil {
 		debug.Log("session", "runMaintenance: failed to acquire index lock: %v", lockErr)
@@ -1862,17 +1368,14 @@ func (s *JSONLStore) runMaintenance() {
 		return
 	}
 	defer unlock()
-	// Reload index under lock to pick up any changes from other processes.
+
 	currentIdx, err := s.loadIndexNoRepair()
 	if err != nil {
 		debug.Log("session", "runMaintenance: failed to reload index under lock: %v", err)
 		s.setIndexDirty(true)
 		return
 	}
-	// Merge: keep entries that survived pruning (validIdx) plus entries
-	// added by other processes after our initial load (in currentIdx but
-	// not in our original idx). Drop entries we pruned (in original idx
-	// but not in validIdx).
+
 	merged := s.mergeMaintainedIndex(idx, validIdx, currentIdx)
 	if err := s.saveIndex(merged); err != nil {
 		s.setIndexDirty(true)
@@ -1881,16 +1384,6 @@ func (s *JSONLStore) runMaintenance() {
 	s.setIndexDirty(false)
 }
 
-// mergeMaintainedIndex reconciles the pre-scan index (idx), its pruned
-// survivor list (validIdx), and the locked reload (currentIdx) into the
-// next index generation (#4668, extracted from runMaintenance for direct
-// testability):
-//   - from currentIdx: keep entries that survived pruning OR were added by
-//     another process after our initial load;
-//   - from validIdx: keep entries missing from the locked reload ONLY when
-//     their file verifiably still exists - another process removed them from
-//     the index (most plausibly Delete), and resurrecting them unconditionally
-//     produced ghost rows that List shows but nothing can open.
 func (s *JSONLStore) mergeMaintainedIndex(idx, validIdx, currentIdx []indexEntry) []indexEntry {
 	originalSet := make(map[string]bool, len(idx))
 	for _, e := range idx {
@@ -1904,11 +1397,7 @@ func (s *JSONLStore) mergeMaintainedIndex(idx, validIdx, currentIdx []indexEntry
 	for _, e := range currentIdx {
 		currentSet[e.ID] = true
 	}
-	// #4668 hardening: the two append loops union two snapshots that may
-	// BOTH carry a row for the same ID (e.g. the locked reload already
-	// contains an entry that is also a prune survivor). Emit each ID at most
-	// once - a duplicate row would make List show the same session twice
-	// forever (every later merge preserves both copies).
+
 	seen := make(map[string]bool, len(currentIdx)+len(validIdx))
 	merged := make([]indexEntry, 0, len(currentIdx))
 	emit := func(e indexEntry) {
@@ -1935,37 +1424,14 @@ func (s *JSONLStore) mergeMaintainedIndex(idx, validIdx, currentIdx []indexEntry
 	return merged
 }
 
-// sessionLockProbe is the cross-process "is another process holding this
-// session's flock" probe used by maintenance paths. A package-level var so
-// tests can simulate a held lock: on macOS, flock from the SAME process via
-// a second descriptor CONVERTS the lock instead of conflicting (flock(2)),
-// so an in-process held SessionLock cannot exercise the guard directly.
 var sessionLockProbe = IsSessionLocked
 
-// sessionUnlockedNow reports whether the per-session advisory flock is free
-// right now (#4668). It is a NON-BLOCKING probe used by maintenance paths
-// before unlinking: writers (appendRecordLines) hold this lock while
-// appending, and unlinking a locked session orphans the writer's fd - the
-// append then lands in a detached inode and the data is silently lost.
 func (s *JSONLStore) sessionUnlockedNow(sessionID string) bool {
 	return !sessionLockProbe(s.dir, sessionID)
 }
 
-// sessionCreationWindow bounds how long a freshly Save()d session is
-// protected from the empty-session pruners. #4822: creation legitimately
-// transits Save(touch) -> AppendMetaToDisk -> first user-message batch; in
-// that window the file has no user interaction on disk yet, and the
-// prune/repair paths deleted it (with its meta), so the batch recreated a
-// meta-less file and the title was lost ("expected Session 0, got empty").
-// The registry is in-memory: after a crash+restart it is empty and the
-// historical abandoned-session cleanup (#709/#291 semantics, pinned by
-// TestListCleansUpEmptySessions) applies again to leftovers.
 const sessionCreationWindow = 1 * time.Hour
 
-// inCreationWindow reports whether id was created recently in THIS process
-// and its first user-message batch has not landed yet. Safe with or without
-// s.mu held: the registry has its own lock because the prune path also runs
-// via repairIndexOutsideLock, which must NOT hold s.mu (#4829).
 func (s *JSONLStore) inCreationWindow(id string) bool {
 	s.createdPendingMu.Lock()
 	defer s.createdPendingMu.Unlock()
@@ -1984,16 +1450,7 @@ func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, b
 	cleaned := false
 	validIdx := make([]indexEntry, 0, len(idx))
 	for _, e := range idx {
-		// Startup-latency regression fix: this loop used loadSessionFull (full
-		// JSONL parse of every message just to answer "has a user turn?").
-		// HasUserInteractionOnDisk streams the file and returns at the FIRST
-		// user text block, so live sessions cost one partial scan instead of a
-		// full parse. Semantics preserved vs loadSessionFull (#291/#709):
-		// any inability to read (including ENOENT, which loadSessionFull also
-		// surfaced as a load error) → keep; only a fully-scanned file with no
-		// user interaction is pruned. HasUserInteractionOnDisk alone would map
-		// ENOENT to (false, nil) and evict dangling entries here — that is
-		// repairIndex's job, not the prune's.
+
 		if _, statErr := os.Stat(s.sessionPath(e.ID)); statErr != nil {
 			debug.Log("session", "pruneInvalidIndexEntries: keeping %s despite stat error: %v", e.ID, statErr)
 			validIdx = append(validIdx, e)
@@ -2001,37 +1458,24 @@ func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, b
 		}
 		interacted, hasErr := s.HasUserInteractionOnDisk(e.ID)
 		if hasErr != nil {
-			// Transient I/O errors (network filesystem, permission, lock) must
-			// NOT cause permanent file deletion. Keep the entry in the index so
-			// the session does not flicker out of List() until the next repair
-			// pass — only a confirmed no-user-interaction session is pruned
-			// (#709 hardening).
+
 			debug.Log("session", "pruneInvalidIndexEntries: keeping %s despite on-disk check error: %v", e.ID, hasErr)
 			validIdx = append(validIdx, e)
 			continue
 		}
 		if !interacted && s.inCreationWindow(e.ID) {
-			// #4822: this process just created the session; the first user
-			// message batch may not have landed yet. Keep it.
+
 			validIdx = append(validIdx, e)
 			continue
 		}
 		if !interacted {
-			// #4668: never unlink a session another process is actively writing.
-			// The writers hold the per-session advisory flock (appendRecordLines);
-			// unlink does not need that lock, so a writer in the pre-first-user-text
-			// window (tool_result-only turns, freshly created session) had its fd
-			// silently orphaned and the append lost. Probe the lock non-blockingly
-			// first; a held lock means keep (the next pass re-checks).
+
 			if !s.sessionUnlockedNow(e.ID) {
 				debug.Log("session", "pruneInvalidIndexEntries: %s is flock-held by another process, keeping", e.ID)
 				validIdx = append(validIdx, e)
 				continue
 			}
-			// #1307 E3: a failed Remove (permission, read-only mount, Windows
-			// file-in-use) must NOT evict the index entry - otherwise the
-			// on-disk file becomes an orphan that List() hides forever. Keep
-			// the entry so the next repair pass retries the delete.
+
 			if rmErr := os.Remove(s.sessionPath(e.ID)); rmErr != nil && !os.IsNotExist(rmErr) {
 				debug.Log("session", "pruneInvalidIndexEntries: remove failed for %s, keeping index entry: %v", e.ID, rmErr)
 				validIdx = append(validIdx, e)
@@ -2045,14 +1489,10 @@ func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, b
 	return validIdx, cleaned
 }
 
-// RepairIndex scans the sessions directory and reconciles with the index.
-// It is safe to call from a goroutine (fire-and-forget). The caller must
-// NOT hold the index flock — this function acquires it.
 func (s *JSONLStore) RepairIndex() (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Load current index so repairIndex only loads files NOT already in it.
-	// Passing nil would treat ALL disk files as orphans and reload every one.
+
 	idx, err := s.loadIndexFromDisk()
 	if err != nil {
 		return false, err
@@ -2060,15 +1500,10 @@ func (s *JSONLStore) RepairIndex() (bool, error) {
 	return s.repairIndex(idx)
 }
 
-// repairIndex scans the sessions directory and reconciles with the index.
-// Returns true if the index was modified (written back).
-// The caller must NOT hold the index flock — this function acquires it.
 func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 	unlock, lockErr := lockIndexFile(s.indexPath())
 	if lockErr != nil {
-		// #709 hardening: match updateIndex's discipline — never write the
-		// index unguarded. A fixed .tmp path written without the flock can
-		// interleave with another process's save and corrupt the index.
+
 		return false, fmt.Errorf("repairIndex: failed to acquire index lock: %w", lockErr)
 	}
 	defer func() {
@@ -2081,7 +1516,6 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 		return false, err
 	}
 
-	// Build set of IDs present on disk
 	diskIDs := make(map[string]bool)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
@@ -2096,14 +1530,13 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 
 	for _, e := range idx {
 		if !diskIDs[e.ID] {
-			// Index entry has no file — remove
+
 			changed = true
 			continue
 		}
 		newIdx = append(newIdx, e)
 	}
 
-	// Add entries for files missing from index
 	for id := range diskIDs {
 		found := false
 		for _, e := range newIdx {
@@ -2115,35 +1548,23 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 		if !found {
 			ses, loadErr := s.loadSession(id)
 			if loadErr == nil {
-				// Same full-file check as CleanupIfEmpty: time-windowed loading must
-				// not cause deletion of sessions whose user messages are all older
-				// than RecentMessageWindow (#254). Unknown on-disk state keeps the
-				// session (#291).
+
 				interacted, hasErr := s.HasUserInteractionOnDisk(id)
 				if hasErr != nil {
 					debug.Log("session", "repairIndex: keeping orphan session %s — on-disk check unknown: %v", id, hasErr)
 					newIdx = append(newIdx, sessionToIndexEntry(ses))
 				} else if !interacted {
-					// #4822: inside this process's creation window the first
-					// user-message batch may not have landed yet - keep the
-					// file, un-indexed, and let the next pass decide.
+
 					if s.inCreationWindow(id) {
 						debug.Log("session", "repairIndex: %s is inside the creation window, keeping un-indexed for next pass", id)
 						continue
 					}
-					// #4668: same flock probe as pruneInvalidIndexEntries - a writer
-					// holding the session lock must not have its fd unlinked. Keep the
-					// orphan on disk for the next pass once the writer is gone.
+
 					if !s.sessionUnlockedNow(id) {
 						debug.Log("session", "repairIndex: orphan %s is flock-held by another process, keeping un-indexed for next pass", id)
 						continue
 					}
-					// #1307 discipline (same as pruneInvalidIndexEntries above):
-					// never swallow a failed Remove. If the unlink fails (permission,
-					// read-only mount, Windows file-in-use) the orphan stays on disk
-					// and is retried on the next repair pass; skipping the changed
-					// flag keeps a stuck file from forcing an index rewrite every
-					// round (#4357). A vanished file (IsNotExist race) is success.
+
 					if rmErr := os.Remove(s.sessionPath(id)); rmErr != nil && !os.IsNotExist(rmErr) {
 						debug.Log("session", "repairIndex: remove failed for orphan %s, keeping it un-indexed for the next pass: %v", id, rmErr)
 						continue
@@ -2165,58 +1586,31 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 	return changed, nil
 }
 
-// Delete removes a session file and its index entry.
 func (s *JSONLStore) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path := s.sessionPath(id)
-	// Index first, file second. The old order (file -> index) left a
-	// permanent ghost when removeFromIndex failed after the file was
-	// already gone (flock timeout after 3 retries, index read error):
-	// the index entry survived, List() kept showing the session, and
-	// pruneInvalidIndexEntries cannot self-heal it - loadSessionFull
-	// errors on the missing file, and #709 keeps entries on load errors
-	// (correctly - that guard is for TRANSIENT io errors). The reversed
-	// order's failure mode is far lighter: if the file remove fails after
-	// the index entry is gone, the leftover file is invisible disk garbage
-	// (nothing in List() points at it) instead of a visible, permanently
-	// unloadable row.
+
 	if err := s.removeFromIndex(id); err != nil {
 		return err
 	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		// The index entry is already gone - surface the error so the
-		// caller knows the file survived, but the store stays consistent.
+
 		return fmt.Errorf("removing session file after index update: %w", err)
 	}
-	// #3337: also drop the .flock sidecar. Delete() used to remove only
-	// the .jsonl, leaving orphan <id>.jsonl.flock files behind forever
-	// (~35 observed in a real profile; the graceful Release path deletes
-	// its lock, but a deleted session never went through Release).
-	// IsNotExist is fine: most sessions have no sidecar (lock never taken
-	// or already released). A concurrently-held lock is advisory only -
-	// removing the file is safe; the holder keeps its fd.
+
 	if err := os.Remove(path + ".flock"); err != nil && !os.IsNotExist(err) {
 		debug.Log("session", "removing flock sidecar for %s: %v", id, err)
 	}
 	return nil
 }
 
-// HasUserInteractionOnDisk streams the session's JSONL file and reports
-// whether it contains at least one user message with actual text content.
-// Unlike Session.HasUserInteraction, this is NOT affected by time-windowed
-// loading — it always reflects the full file on disk.
-//
-// This is a three-state check (fix #291): (false, nil) means the file was
-// fully scanned and definitely has no user interaction; (false, err) means
-// the answer is UNKNOWN (file unreadable, or a line exceeded the scanner
-// buffer) — callers MUST treat that as "keep" and avoid destructive actions.
 func (s *JSONLStore) HasUserInteractionOnDisk(id string) (bool, error) {
 	path := s.sessionPath(id)
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// File already gone — nothing to protect.
+
 			return false, nil
 		}
 		return false, fmt.Errorf("opening session file %s: %w", path, err)
@@ -2244,10 +1638,7 @@ func (s *JSONLStore) HasUserInteractionOnDisk(id string) (bool, error) {
 		}
 	}
 	if scanErr := sc.Err(); scanErr != nil {
-		// A line exceeded the 10MB scanner buffer (e.g. the user pasted a huge
-		// blob into a single JSONL message). Scan() stops early even though
-		// user messages may already have been seen — be conservative and keep
-		// the session (fix #291: never delete on uncertain input).
+
 		if errors.Is(scanErr, bufio.ErrTooLong) {
 			debug.Log("session", "HasUserInteractionOnDisk %s: line exceeds scanner buffer, conservatively keeping", id)
 			return true, nil
@@ -2257,15 +1648,6 @@ func (s *JSONLStore) HasUserInteractionOnDisk(id string) (bool, error) {
 	return false, nil
 }
 
-// CleanupIfEmpty deletes the session file if it has no user interaction.
-// Called on exit to avoid leaving empty session files on disk.
-//
-// The check uses HasUserInteractionOnDisk (full-file scan), NOT the
-// in-memory ses.Messages: time-windowed loading drops messages older than
-// RecentMessageWindow from ses.Messages, which previously caused this
-// method to silently delete sessions whose user messages were all >24h old
-// (#254). The full scan is acceptable here because this is a low-frequency
-// exit-path call.
 func (s *JSONLStore) CleanupIfEmpty(ses *Session) error {
 	if !s.WillCleanupIfEmpty(ses) {
 		if !ses.HasUserInteraction() {
@@ -2276,17 +1658,11 @@ func (s *JSONLStore) CleanupIfEmpty(ses *Session) error {
 	return s.Delete(ses.ID)
 }
 
-// WillCleanupIfEmpty reports whether CleanupIfEmpty would delete this session,
-// using the same decision logic (in-memory check first, then full-file scan).
-// Callers that react to the deletion (e.g. clearing IM bindings) should use
-// this instead of !ses.HasUserInteraction(), which can disagree with
-// CleanupIfEmpty under time-windowed loading (#254).
 func (s *JSONLStore) WillCleanupIfEmpty(ses *Session) bool {
 	if ses.HasUserInteraction() {
 		return false
 	}
-	// Windowed load may have dropped user messages — verify against the file.
-	// Unknown (read error / oversized line) keeps the session (#291).
+
 	interacted, err := s.HasUserInteractionOnDisk(ses.ID)
 	if err != nil {
 		debug.Log("session", "WillCleanupIfEmpty: keeping session %s — on-disk check unknown: %v", ses.ID, err)
@@ -2295,16 +1671,6 @@ func (s *JSONLStore) WillCleanupIfEmpty(ses *Session) bool {
 	return !interacted
 }
 
-// persistEligible reports whether meta/usage/metric records may be persisted
-// for ses. It mirrors the two-stage decision of WillCleanupIfEmpty (#254): the
-// cheap in-memory HasUserInteraction check first, then a full-file
-// HasUserInteractionOnDisk fallback when that is false — time-windowed loading
-// (loadSession with fullLoad=false) drops user messages older than
-// RecentMessageWindow from ses.Messages, which made the old single-stage gates
-// silently return nil and lose pin/tag/model changes after a restart (#4356).
-// Read errors count as eligible — the persistence-side fail-safe of #291's
-// rule: an unknown answer must never drop data. Callers hold s.mu;
-// HasUserInteractionOnDisk takes no locks and only reads the file.
 func (s *JSONLStore) persistEligible(ses *Session) bool {
 	if ses.HasUserInteraction() {
 		return true
@@ -2317,9 +1683,6 @@ func (s *JSONLStore) persistEligible(ses *Session) bool {
 	return interacted
 }
 
-// LatestForWorkspace returns the most recently updated session for the
-// given workspace that has at least one message, or nil if none exists.
-// Uses the index directly (not List) to access MsgCount.
 func (s *JSONLStore) LatestForWorkspace(workspace string) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2329,12 +1692,8 @@ func (s *JSONLStore) LatestForWorkspace(workspace string) (*Session, error) {
 		return nil, err
 	}
 
-	// Normalize the workspace for comparison so symlinks and path
-	// inconsistencies don't prevent finding sessions.
 	normalizedWorkspace := NormalizeWorkspacePath(workspace)
 
-	// Check if the index has any entries for this workspace. If not,
-	// the index may be stale — rebuild from disk before giving up.
 	hasWorkspace := false
 	for _, e := range idx {
 		if NormalizeWorkspacePath(e.Workspace) == normalizedWorkspace {
@@ -2343,7 +1702,7 @@ func (s *JSONLStore) LatestForWorkspace(workspace string) (*Session, error) {
 		}
 	}
 	if !hasWorkspace {
-		// #4353: full disk scan must not run under s.mu.
+
 		repaired, repairErr := s.repairIndexOutsideLock(idx)
 		if repairErr != nil {
 			debug.Log("session", "LatestForWorkspace: repairIndex error: %v", repairErr)
@@ -2352,7 +1711,6 @@ func (s *JSONLStore) LatestForWorkspace(workspace string) (*Session, error) {
 		}
 	}
 
-	// Sort by UpdatedAt descending.
 	sort.Slice(idx, func(i, j int) bool {
 		return idx[i].UpdatedAt.After(idx[j].UpdatedAt)
 	})
@@ -2374,9 +1732,6 @@ func (s *JSONLStore) LatestForWorkspace(workspace string) (*Session, error) {
 	return nil, nil
 }
 
-// ListForWorkspace returns all sessions for the given workspace,
-// sorted by UpdatedAt descending (most recent first).
-// Uses the index directly (not List) for fast listing.
 func (s *JSONLStore) ListForWorkspace(workspace string) ([]*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2386,9 +1741,6 @@ func (s *JSONLStore) ListForWorkspace(workspace string) ([]*Session, error) {
 		return nil, err
 	}
 
-	// If the index is empty or doesn't contain the requested workspace,
-	// repair it by scanning disk. This handles stale indexes where session
-	// files exist on disk but aren't in the index (e.g. after index corruption).
 	normalizedWorkspace := NormalizeWorkspacePath(workspace)
 	hasWorkspace := false
 	for _, e := range idx {
@@ -2398,7 +1750,7 @@ func (s *JSONLStore) ListForWorkspace(workspace string) ([]*Session, error) {
 		}
 	}
 	if !hasWorkspace {
-		// #4353: full disk scan must not run under s.mu.
+
 		repaired, repairErr := s.repairIndexOutsideLock(idx)
 		if repairErr != nil {
 			debug.Log("session", "ListForWorkspace: repairIndex error: %v", repairErr)
@@ -2407,7 +1759,6 @@ func (s *JSONLStore) ListForWorkspace(workspace string) ([]*Session, error) {
 		}
 	}
 
-	// Sort by UpdatedAt descending.
 	sort.Slice(idx, func(i, j int) bool {
 		return idx[i].UpdatedAt.After(idx[j].UpdatedAt)
 	})
@@ -2432,11 +1783,8 @@ func (s *JSONLStore) ListForWorkspace(workspace string) ([]*Session, error) {
 	return result, nil
 }
 
-// ExportMarkdown renders a session as a markdown document.
 func (s *JSONLStore) ExportMarkdown(id string) (string, error) {
-	// #4893: exports are data-fidelity surfaces - load the full session,
-	// never the recent-message window (zero production callers today, but
-	// the same defect class as the TUI /export path this issue fixes).
+
 	ses, err := s.LoadWithOptions(id, true)
 	if err != nil {
 		return "", err
@@ -2444,13 +1792,10 @@ func (s *JSONLStore) ExportMarkdown(id string) (string, error) {
 	return ExportSessionMarkdown(ses), nil
 }
 
-// ExportSessionMarkdown renders a Session to markdown.
 func ExportSessionMarkdown(ses *Session) string {
 	return ExportSessionMarkdownWithDisplay(ses, "", "")
 }
 
-// ExportSessionMarkdownWithDisplay renders a Session to markdown with
-// optional display names for vendor and endpoint (instead of raw config keys).
 func ExportSessionMarkdownWithDisplay(ses *Session, vendorDisplay, endpointDisplay string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("# %s\n\n", ses.Title))
@@ -2511,7 +1856,6 @@ func ExportSessionMarkdownWithDisplay(ses *Session, vendorDisplay, endpointDispl
 	return sb.String()
 }
 
-// CleanupOlderThan removes sessions older than the given time. Returns count removed.
 func (s *JSONLStore) CleanupOlderThan(before time.Time) (int, error) {
 	sessions, err := s.List()
 	if err != nil {
@@ -2520,7 +1864,7 @@ func (s *JSONLStore) CleanupOlderThan(before time.Time) (int, error) {
 	removed := 0
 	for _, ses := range sessions {
 		if ses.Pinned {
-			// User pinned this session — never age it out.
+
 			continue
 		}
 		if ses.UpdatedAt.Before(before) {
@@ -2533,11 +1877,6 @@ func (s *JSONLStore) CleanupOlderThan(before time.Time) (int, error) {
 	return removed, nil
 }
 
-// AppendMessage atomically appends a single message to the session's JSONL file.
-// This is more efficient than Save() for incremental updates.
-// AppendMessage persists a message to the session's JSONL file and updates
-// the Session object in place (Messages, UpdatedAt, Title). The caller must
-// ensure no concurrent access to the Session object.
 func (s *JSONLStore) AppendMessage(ses *Session, msg provider.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2551,7 +1890,6 @@ func (s *JSONLStore) AppendMessage(ses *Session, msg provider.Message) error {
 	ses.Messages = append(ses.Messages, msg)
 	ses.UpdatedAt = time.Now()
 
-	// Auto-generate title from first user message
 	if ses.Title == "" {
 		for _, m := range ses.Messages {
 			if m.Role == "user" {
@@ -2569,10 +1907,6 @@ func (s *JSONLStore) AppendMessage(ses *Session, msg provider.Message) error {
 	return s.updateIndex(ses)
 }
 
-// AppendMessageToDisk persists a message to the session's JSONL file and
-// updates the index, but does NOT modify the Session object. Use this when
-// the caller manages Session mutations under its own lock (e.g. sessionMutex
-// in the TUI), and only needs the disk write to happen outside that lock.
 func (s *JSONLStore) AppendMessageToDisk(ses *Session, msg provider.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2583,11 +1917,6 @@ func (s *JSONLStore) AppendMessageToDisk(ses *Session, msg provider.Message) err
 		return err
 	}
 
-	// Debounce index updates: only rewrite the index at most once per
-	// indexUpdateDebounce per session. The index is a display cache — it's
-	// also updated by AppendMetaToDisk (model changes, session switches),
-	// AppendCheckpointToDisk (compaction), and AppendMessagesBatchToDisk
-	// (session save). Those callers bypass the debounce.
 	if s.lastIndexUpdate == nil {
 		s.lastIndexUpdate = make(map[string]time.Time)
 	}
@@ -2598,17 +1927,6 @@ func (s *JSONLStore) AppendMessageToDisk(ses *Session, msg provider.Message) err
 	return s.updateIndex(ses)
 }
 
-// AppendUserMessageRemovalToDisk appends a message_remove tombstone record to
-// the session's JSONL (#4200). loadSession applies tombstones in scan order:
-// each one pops the most recent still-present user message record from both
-// the rendering history (allMessages) and the checkpoint-context stream
-// (postCPEntries). This is the journal-side compensation for in-memory
-// Manager.RemoveLastUserMessage: the vision-fallback retry path drops the
-// original image content from live context, and without this tombstone the
-// JSONL kept the original message — on resume the agent replayed BOTH the
-// original and the text-only projection turns, re-triggering the vision
-// error the fallback was meant to absorb. Append-only: no file rewrite, so a
-// crash between the failed turn and the retry cannot corrupt the journal.
 func (s *JSONLStore) AppendUserMessageRemovalToDisk(ses *Session) error {
 	if ses == nil {
 		return nil
@@ -2620,11 +1938,6 @@ func (s *JSONLStore) AppendUserMessageRemovalToDisk(ses *Session) error {
 	return appendRecordLine(path, rec)
 }
 
-// popLastUserRecord removes the most recent user-role message record from recs
-// (#4200 tombstone application). Scans backward past non-user records so a
-// tombstone arriving after the failed turn's assistant/tool records still
-// reaches the original user message. Returns recs unchanged when no user
-// record is present.
 func popLastUserRecord(recs []jsonlRecord) []jsonlRecord {
 	for i := len(recs) - 1; i >= 0; i-- {
 		if recs[i].Message != nil && recs[i].Message.Role == "user" {
@@ -2634,8 +1947,6 @@ func popLastUserRecord(recs []jsonlRecord) []jsonlRecord {
 	return recs
 }
 
-// popLastUserLightweightEntry is popLastUserRecord for the checkpoint-context
-// stream used to build ContextMessages.
 func popLastUserLightweightEntry(entries []localLightweightEntry) []localLightweightEntry {
 	for i := len(entries) - 1; i >= 0; i-- {
 		if e := entries[i].record; e.Message != nil && e.Message.Role == "user" {
@@ -2645,12 +1956,6 @@ func popLastUserLightweightEntry(entries []localLightweightEntry) []localLightwe
 	return entries
 }
 
-// AppendMessagesBatchToDisk persists multiple messages to the session's JSONL
-// file in a single file write, then updates the index once. This is much more
-// efficient than calling AppendMessageToDisk in a loop, which does N separate
-// file opens and N index read-writes.
-//
-// Like AppendMessageToDisk, this does NOT modify the Session object.
 func (s *JSONLStore) AppendMessagesBatchToDisk(ses *Session, msgs []provider.Message) error {
 	if len(msgs) == 0 {
 		return nil
@@ -2667,26 +1972,17 @@ func (s *JSONLStore) AppendMessagesBatchToDisk(ses *Session, msgs []provider.Mes
 		return err
 	}
 
-	// Batch appends always update the index (they're infrequent — session
-	// save, restore — and the caller expects the index to be current).
 	if s.lastIndexUpdate == nil {
 		s.lastIndexUpdate = make(map[string]time.Time)
 	}
 	s.lastIndexUpdate[ses.ID] = time.Now()
-	// #4822: the first message batch ended the creation window - the file
-	// now carries interaction records and no longer needs prune protection.
-	// #4824/#4829: creation window ends; registry has its own lock (the
-	// batch itself holds s.mu — order s.mu -> createdPendingMu holds).
+
 	s.createdPendingMu.Lock()
 	delete(s.createdPending, ses.ID)
 	s.createdPendingMu.Unlock()
 	return s.updateIndex(ses)
 }
 
-// AppendTunnelEventToDisk persists a canonical tunnel event to the session's
-// JSONL file. Does NOT call updateIndex — tunnel events don't change session
-// metadata (title, model, workspace) that appears in the session index.
-// This avoids 222K+ unnecessary index reads+writes per session.
 func (s *JSONLStore) AppendTunnelEventToDisk(ses *Session, ev TunnelEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2696,21 +1992,17 @@ func (s *JSONLStore) AppendTunnelEventToDisk(ses *Session, ev TunnelEvent) error
 	return appendRecordLine(path, rec)
 }
 
-// AppendMetaToDisk persists the latest session metadata as an additional meta
-// record. Load applies the last meta record, so this updates fields like title,
-// model, and token usage without rewriting the full session file.
 func (s *JSONLStore) AppendMetaToDisk(ses *Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.appendMetaLocked(ses)
 }
 
-// appendMetaLocked is AppendMetaToDisk without locking; callers hold s.mu.
 func (s *JSONLStore) appendMetaLocked(ses *Session) error {
 	if !s.persistEligible(ses) {
 		return nil
 	}
-	// Meta writes always update the index — reset the debounce timer.
+
 	if s.lastIndexUpdate == nil {
 		s.lastIndexUpdate = make(map[string]time.Time)
 	}
@@ -2746,10 +2038,6 @@ func (s *JSONLStore) appendMetaLocked(ses *Session) error {
 	return s.updateIndex(ses)
 }
 
-// SetPinned pins or unpins a session and persists the change via an
-// incremental meta record. Pinned sessions are skipped by CleanupOlderThan
-// and listed first by List. Sessions with no user interaction keep the
-// change in memory only (consistent with AppendMetaToDisk).
 func (s *JSONLStore) SetPinned(ses *Session, pinned bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2757,9 +2045,6 @@ func (s *JSONLStore) SetPinned(ses *Session, pinned bool) error {
 	return s.appendMetaLocked(ses)
 }
 
-// SetTags replaces the session's tags and persists the change. Tags are
-// trimmed, deduplicated case-insensitively, and capped (16 tags, 32 runes
-// each). An empty result clears the tags.
 func (s *JSONLStore) SetTags(ses *Session, tags []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2767,29 +2052,17 @@ func (s *JSONLStore) SetTags(ses *Session, tags []string) error {
 	return s.appendMetaLocked(ses)
 }
 
-// WithSessionLocked runs fn against ses while holding the store lock, so
-// in-memory session-field mutations are mutually excluded with the meta
-// serialization in appendMetaLocked (SetTags/SetPinned path) - both sides
-// hold s.mu. #4717: the streaming usage writer previously mutated
-// TokenUsage/UpdatedAt under the TUI sessionMutex only, while /tag //untag
-// //pin's appendMetaLocked read the same fields under s.mu - two different
-// locks, no exclusion, a -race-reproducible data race that could persist a
-// torn usage record. Callers that already hold the TUI sessionMutex keep
-// doing so; the lock order is sessionMutex -> s.mu (the store never takes
-// TUI locks, so no cycle is possible).
 func (s *JSONLStore) WithSessionLocked(ses *Session, fn func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fn()
 }
 
-// Tag bounds enforced by SetTags/normalizeTags.
 const (
 	maxTagRunes       = 32
 	maxTagsPerSession = 16
 )
 
-// normalizeTags trims, deduplicates (case-insensitively) and bounds tags.
 func normalizeTags(tags []string) []string {
 	seen := make(map[string]bool, len(tags))
 	out := make([]string, 0, len(tags))
@@ -2817,13 +2090,10 @@ func normalizeTags(tags []string) []string {
 	return out
 }
 
-// AppendUsageEntry persists a per-turn usage record to the session's JSONL file.
-// Each record captures the token consumption of a single LLM API call.
 func (s *JSONLStore) AppendUsageEntry(ses *Session, entry UsageEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// #4356: persistEligible subsumes the old bare HasUserInteraction gate
-	// (which silently dropped usage for window-loaded interacted sessions).
+
 	path := s.sessionPath(ses.ID)
 	if !s.persistEligible(ses) {
 		return nil
@@ -2836,12 +2106,10 @@ func (s *JSONLStore) AppendUsageEntry(ses *Session, entry UsageEntry) error {
 	return appendRecordLine(path, rec)
 }
 
-// AppendMetric persists a performance metric record to the session's JSONL file.
-// Does NOT call updateIndex — metrics don't change session index data.
 func (s *JSONLStore) AppendMetric(ses *Session, m metrics.MetricEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// #4356: persistEligible subsumes the old bare HasUserInteraction gate.
+
 	path := s.sessionPath(ses.ID)
 	if !s.persistEligible(ses) {
 		return nil
@@ -2854,20 +2122,11 @@ func (s *JSONLStore) AppendMetric(ses *Session, m metrics.MetricEvent) error {
 	return appendRecordLine(path, rec)
 }
 
-// EnsureMeta writes the meta record if the session file doesn't exist yet.
-// If the session has no user interaction, no file is created.
 func (s *JSONLStore) EnsureMeta(ses *Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path := s.sessionPath(ses.ID)
 
-	// Don't create a meta file for sessions with no user interaction. The
-	// on-disk fallback only applies when the session file already exists —
-	// time-windowed loads may have emptied ses.Messages while the file still
-	// holds user messages (#4356). When the file is absent the fallback can
-	// never prove interaction, and treating an unknown scan error as
-	// eligible must not CREATE a meta-only file for a session that never
-	// interacted.
 	if !ses.HasUserInteraction() {
 		if _, statErr := os.Stat(path); statErr != nil {
 			return nil
@@ -2877,30 +2136,16 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 		}
 	}
 
-	// Hold the cross-process session lock (same .flock sidecar the appenders
-	// use) for the whole create->encode->cleanup window (#4538): without it,
-	// a concurrent appendRecordLines in another process could open this
-	// just-created file and append a record BETWEEN our failed Encode and the
-	// os.Remove below - the Remove then deletes that append too and the
-	// appending process believes its record was persisted. s.mu only
-	// serializes this process, so the sidecar lock is required.
 	unlock, lockErr := lockWithBackoff(func() (func(), error) { return lockSessionFile(path) }, "EnsureMeta", "session")
 	if lockErr != nil {
 		return lockErr
 	}
 	defer unlock()
 
-	// O_EXCL guards against a cross-process TOCTOU (#531): the sessions
-	// directory is shared by multiple ggcode processes (CLI + desktop), and
-	// s.mu only serializes within this process. With Stat-then-Create(O_TRUNC)
-	// another process could create the file and append messages between our
-	// Stat and Create, and the truncate would wipe its session down to a
-	// single meta line. O_EXCL loses that race cleanly instead (backfillIDs
-	// uses the same pattern).
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		if os.IsExist(err) {
-			return nil // already exists (possibly created concurrently)
+			return nil
 		}
 		return err
 	}
@@ -2912,10 +2157,7 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 		Type:      "meta",
 		SessionID: ses.ID,
 		Title:     ses.Title,
-		// #4669: Preview/TasksEnvJSON were missing here while appendMetaLocked
-		// persists both — a fresh session whose only on-disk meta record came
-		// from EnsureMeta reloaded with an empty VCS fingerprint, so the
-		// workspace-change check misfired and rebuilt the task environment.
+
 		Preview:              ses.Preview,
 		Workspace:            ses.Workspace,
 		Vendor:               ses.Vendor,
@@ -2937,8 +2179,7 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 		ForkPoint:            ses.ForkPoint,
 	}
 	if err := enc.Encode(meta); err != nil {
-		// Safe under the sidecar lock held above: no other process can be
-		// appending to this path concurrently (#4538).
+
 		os.Remove(path)
 		return err
 	}
@@ -2946,7 +2187,6 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 	return s.updateIndex(ses)
 }
 
-// NewSession creates a new Session with a generated ID.
 func NewSession(vendor, endpoint, model string) *Session {
 	now := time.Now()
 	return &Session{
@@ -2967,11 +2207,7 @@ func LastTurnIndex(ses *Session) int {
 	if ses == nil {
 		return 0
 	}
-	// Full max scan (#669): #656/#657 tolerate dropping corrupted trailing
-	// records, so the last element is not necessarily the max turn index.
-	// Trusting only the final element under-reported the turn baseline after
-	// a corrupted-line drop, causing turn numbers to be reused (metrics
-	// merges, UsageTurnIndex double counting). O(n), called once per AdoptSession.
+
 	last := 0
 	for _, u := range ses.UsageHistory {
 		if u.TurnIndex > last {
@@ -3008,53 +2244,17 @@ func NormalizeWorkspacePath(path string) string {
 	return filepath.Clean(trimmed)
 }
 
-// newSessionMessageID generates a unique message identifier: "msg_" + UUID v4.
-// This matches the format used by context.Manager.Add() so that IDs are
-// consistent across in-memory and persisted messages.
 func newSessionMessageID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return fmt.Sprintf("msg_fallback_%d", time.Now().UnixNano())
 	}
-	b[6] = (b[6] & 0x0f) | 0x40 // version 4
-	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("msg_%08x-%04x-%04x-%04x-%012x",
 		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-// migrateMessageIDs migrates legacy session JSONL to the new checkpoint format.
-//
-// Old format: checkpoint records embed checkpoint_messages []Message.
-// New format: checkpoint records store checkpoint_summary_msg_id +
-// checkpoint_last_msg_id, pointing to message records in the JSONL.
-//
-// Migration strategy (minimal, targeted):
-//  1. Find the LAST old-format checkpoint (with checkpoint_messages).
-//  2. Extract summary message + last message from it.
-//  3. Append summary message to end of file with a generated ID.
-//  4. Scan backwards from file end to find a message matching the checkpoint's
-//     last message content — that's the last_msg_id. Generate ID for it.
-//  5. Rewrite the checkpoint record to new format.
-//  6. Backfill IDs only for messages AFTER the last_msg_id position (these
-//     are the "extra" messages that restore needs to find by ID).
-//
-// Messages before the checkpoint are never loaded by restore, so they don't
-// need IDs. This keeps migration fast even for very large session files.
-//
-// Must be called while holding the store mutex (same as loadSession).
-// hasNewFormatCheckpoint streams through the JSONL file and returns true as
-// soon as it finds any checkpoint record with checkpoint_summary_msg_id.
-// Since migration is a one-time operation (once migrated, all subsequent
-// checkpoints use the new format), finding one new-format checkpoint proves
-// no migration is needed.
-//
-// Unlike the full migrateMessageIDs scan, this function:
-//   - Does NOT load all lines into memory (uses bufio.Scanner)
-//   - Only JSON-parses lines containing "checkpoint" (fast string filter)
-//   - Returns immediately on first match (early exit)
-//
-// For a 50MB session with a checkpoint in the first 10MB, this exits after
-// reading ~10MB instead of 50MB, and does ~5 JSON parses instead of ~10,000.
 func hasNewFormatCheckpoint(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -3066,9 +2266,7 @@ func hasNewFormatCheckpoint(path string) bool {
 	sc.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 	for sc.Scan() {
 		line := sc.Text()
-		// Fast filter: skip lines that can't be checkpoint records.
-		// Most lines are messages/usage/metrics — this avoids JSON parse
-		// for >99% of lines.
+
 		if !strings.Contains(line, `"checkpoint"`) {
 			continue
 		}
@@ -3077,22 +2275,15 @@ func hasNewFormatCheckpoint(path string) bool {
 			continue
 		}
 		if rec.Type == "checkpoint" && rec.CheckpointSummaryMsgID != "" {
-			return true // Found new-format checkpoint — no migration needed
+			return true
 		}
 	}
-	return false // No new-format checkpoint found
+	return false
 }
 
 func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 	path := s.sessionPath(id)
 
-	// #558 D: hold the cross-process session lock across the entire
-	// read -> tmp -> rename cycle so a concurrent O_APPEND writer in another
-	// process cannot slip an append into the gap that the rename would drop.
-	// #1340: if the lock is unavailable after retries, ABORT the migration
-	// (load from the original file) rather than proceeding unlocked - the
-	// rename would silently drop concurrent appends, and the fast-path
-	// marker would make the loss permanent. Mirrors appendRecordLines.
 	unlock, lockErr := lockWithBackoff(func() (func(), error) { return lockSessionFile(path) }, "migrateMessageIDs", "session")
 	if lockErr != nil {
 		debug.Log("session", "migrateMessageIDs: skipping migration after lock retry exhaustion: %v", lockErr)
@@ -3104,36 +2295,26 @@ func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 		}
 	}()
 
-	// Fast path: check if the file has already been migrated by scanning
-	// only the tail of the file for the last checkpoint record. If it's
-	// new format (has summary_msg_id), skip the expensive full-file scan.
 	if hasNewFormatCheckpoint(path) {
 		return 0, nil
 	}
 
-	// Phase 1: read all lines, find last old-format checkpoint.
 	scan, err := scanMigratableSession(path)
 	if err != nil {
 		return 0, err
 	}
 	lines, lastOldCpIdx := scan.lines, scan.oldCpIdx
 	if scan.newFormatCp {
-		// The last checkpoint is already in new format (summary_msg_id).
-		// Restore will use it, not any older checkpoint. No migration needed.
+
 		return 0, nil
 	}
 
 	if lastOldCpIdx < 0 {
-		// No old-format checkpoint found. ContextMessages for sessions without
-		// a checkpoint is built by taking the last MaxContextMessages from
-		// ses.Messages — this doesn't require message IDs. So no migration
-		// is needed.
+
 		return 0, nil
 	}
 	lastOldCpSummary, lastOldCpLastMsg := scan.summary, scan.lastMsg
 
-	// Phase 2: find last_msg_id — scan backwards from file end to find a
-	// message matching the checkpoint's last message content.
 	lastMsgFingerprint := messageFingerprint(lastOldCpLastMsg)
 	lastMsgLineIdx := -1
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -3149,37 +2330,32 @@ func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 		}
 	}
 
-	// Phase 3: generate IDs and rewrite file.
 	summaryID := newSessionMessageID()
 	if lastOldCpSummary.ID == "" {
 		lastOldCpSummary.ID = summaryID
 	}
 	lastMsgID := ""
 	if lastMsgLineIdx >= 0 {
-		// Generate ID for the matched message if it doesn't have one.
+
 		var rec jsonlRecord
 		if json.Unmarshal([]byte(lines[lastMsgLineIdx]), &rec) == nil && rec.Message != nil {
 			if rec.Message.ID == "" {
 				rec.Message.ID = newSessionMessageID()
 			}
 			lastMsgID = rec.Message.ID
-			// Re-serialize the line with the new ID.
+
 			if data, err := json.Marshal(rec); err == nil {
 				lines[lastMsgLineIdx] = string(data)
 			}
 		}
 	}
 
-	// Phase 4: backfill IDs for messages AFTER lastMsgLineIdx (extra messages).
-	// If lastMsgLineIdx is -1 (no match found), backfill all messages after
-	// the checkpoint record instead.
 	backfillFrom := lastMsgLineIdx + 1
 	if backfillFrom <= 0 {
-		backfillFrom = lastOldCpIdx + 1 // after checkpoint record
+		backfillFrom = lastOldCpIdx + 1
 	}
 	migrated := backfillMessageIDs(lines, backfillFrom)
 
-	// Phase 5: rewrite the checkpoint record to new format.
 	if lastOldCpIdx >= 0 {
 		var cpRec jsonlRecord
 		if json.Unmarshal([]byte(lines[lastOldCpIdx]), &cpRec) == nil {
@@ -3192,8 +2368,6 @@ func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 		}
 	}
 
-	// Phase 6: write file — original lines (modified in-place) with summary
-	// message inserted right after the checkpoint record.
 	added, err := writeMigratedSession(path, lines, lastOldCpIdx, lastOldCpSummary)
 	if err != nil {
 		return 0, err
@@ -3205,19 +2379,14 @@ func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 	return migrated, nil
 }
 
-// migrationScan is the result of scanning a session file for an old-format
-// checkpoint eligible for message-ID migration.
 type migrationScan struct {
-	lines       []string          // all non-empty lines, trimmed
-	oldCpIdx    int               // index in lines of the last old-format checkpoint; -1 if none
-	summary     *provider.Message // summary message of that checkpoint
-	lastMsg     *provider.Message // last message of that checkpoint
-	newFormatCp bool              // true if a checkpoint with summary_msg_id was seen
+	lines       []string
+	oldCpIdx    int
+	summary     *provider.Message
+	lastMsg     *provider.Message
+	newFormatCp bool
 }
 
-// scanMigratableSession reads the whole session file and locates the last
-// old-format checkpoint (one whose messages are inlined rather than referenced
-// by summary_msg_id/last_msg_id). Phase 1 of migrateMessageIDs.
 func scanMigratableSession(path string) (migrationScan, error) {
 	var out migrationScan
 	out.oldCpIdx = -1
@@ -3242,10 +2411,10 @@ func scanMigratableSession(path string) (migrationScan, error) {
 		}
 		if rec.Type == "checkpoint" {
 			if rec.CheckpointSummaryMsgID != "" {
-				// New format checkpoint — restore will use this one.
+
 				out.newFormatCp = true
 			} else if len(rec.CheckpointMessages) > 0 {
-				// Find summary and last message in this checkpoint.
+
 				var summary *provider.Message
 				for i := range rec.CheckpointMessages {
 					msg := &rec.CheckpointMessages[i]
@@ -3273,9 +2442,6 @@ func scanMigratableSession(path string) (migrationScan, error) {
 	return out, nil
 }
 
-// backfillMessageIDs assigns fresh IDs in-place to ID-less message records at
-// or after lines[from], re-serializing each modified line. Phase 4 of
-// migrateMessageIDs; returns the number of records backfilled.
 func backfillMessageIDs(lines []string, from int) int {
 	migrated := 0
 	for i := from; i < len(lines); i++ {
@@ -3294,10 +2460,6 @@ func backfillMessageIDs(lines []string, from int) int {
 	return migrated
 }
 
-// writeMigratedSession writes the migrated lines to a temp file — inserting
-// the summary message right after the checkpoint record — then atomically
-// renames it over the session file. Phase 6 of migrateMessageIDs; returns the
-// number of extra records written (1 if the summary was inserted).
 func writeMigratedSession(path string, lines []string, cpIdx int, summary *provider.Message) (int, error) {
 	tmp := path + ".migrate.tmp"
 	dstF, err := os.Create(tmp)
@@ -3311,7 +2473,7 @@ func writeMigratedSession(path string, lines []string, cpIdx int, summary *provi
 			os.Remove(tmp)
 			return 0, fmt.Errorf("migration write: %w", err)
 		}
-		// Insert summary message right after the checkpoint record.
+
 		if i == cpIdx {
 			summaryRec := jsonlRecord{
 				Type:    "message",
@@ -3352,17 +2514,10 @@ func generateID() string {
 	return fmt.Sprintf("%s-%s", time.Now().Format("20060102-150405"), hex.EncodeToString(b))
 }
 
-// Dir returns the store's directory path.
 func (s *JSONLStore) Dir() string {
 	return s.dir
 }
 
-// AppendCheckpoint appends a checkpoint record to the session JSONL file.
-// The checkpoint captures the compacted messages state after a summarize operation,
-// so that future --resume operations can skip re-compacting old history.
-// AppendCheckpoint persists a checkpoint (compaction snapshot) to the session's
-// JSONL file and updates the Session object in place. The caller must ensure
-// no concurrent access to the Session object.
 func (s *JSONLStore) AppendCheckpoint(ses *Session, summaryMsgID, lastMsgID string, tokenCount int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -3383,10 +2538,6 @@ func (s *JSONLStore) AppendCheckpoint(ses *Session, summaryMsgID, lastMsgID stri
 	return s.updateIndex(ses)
 }
 
-// AppendCheckpointToDisk persists a checkpoint to the session's JSONL file and
-// updates the index, but does NOT modify the Session object. Use this when the
-// caller manages Session mutations under its own lock and only needs the disk
-// write to happen outside that lock.
 func (s *JSONLStore) AppendCheckpointToDisk(ses *Session, summaryMsgID, lastMsgID string, tokenCount int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -3403,7 +2554,6 @@ func (s *JSONLStore) AppendCheckpointToDisk(ses *Session, summaryMsgID, lastMsgI
 		return fmt.Errorf("encoding checkpoint: %w", err)
 	}
 
-	// Checkpoints always update the index — reset the debounce timer.
 	if s.lastIndexUpdate == nil {
 		s.lastIndexUpdate = make(map[string]time.Time)
 	}
@@ -3411,11 +2561,6 @@ func (s *JSONLStore) AppendCheckpointToDisk(ses *Session, summaryMsgID, lastMsgI
 	return s.updateIndex(ses)
 }
 
-// readLineLimitedCounted is the load-path sibling of readLineLimited (#478):
-// it additionally reports how many bytes the line consumed — including a
-// fully discarded over-long line — so loadSession's byteOffset accounting
-// (used for time-windowed message loading) stays anchored even when poison
-// lines are skipped (#656).
 func readLineLimitedCounted(br *bufio.Reader, limit int) (line []byte, consumed int64, err error) {
 	var buf []byte
 	for {
@@ -3423,7 +2568,7 @@ func readLineLimitedCounted(br *bufio.Reader, limit int) (line []byte, consumed 
 		consumed += int64(len(chunk))
 		if rerr == bufio.ErrBufferFull {
 			if len(buf)+len(chunk) > limit {
-				// Discard this entire line, keep the reader moving.
+
 				for rerr == bufio.ErrBufferFull {
 					chunk, rerr = br.ReadSlice('\n')
 					consumed += int64(len(chunk))
@@ -3441,53 +2586,36 @@ func readLineLimitedCounted(br *bufio.Reader, limit int) (line []byte, consumed 
 	}
 }
 
-// terminateTornTail checks whether the file's final byte is a newline. If not
-// (a crash tore the previous write mid-line), it appends one so the next
-// record starts on a fresh line instead of fusing with the residue — at load
-// time a fused line fails json.Unmarshal and BOTH records are lost (#657).
-// The caller must hold the session lock; f must be opened O_APPEND|O_RDWR.
 func terminateTornTail(f *os.File) error {
 	st, err := f.Stat()
 	if err != nil {
 		return err
 	}
 	if st.Size() == 0 {
-		return nil // fresh file, nothing torn
+		return nil
 	}
 	var last [1]byte
 	if _, err := f.ReadAt(last[:], st.Size()-1); err != nil {
 		return err
 	}
 	if last[0] == '\n' {
-		return nil // clean tail
+		return nil
 	}
-	if _, err := f.Write([]byte{'\n'}); err != nil { // O_APPEND: lands at EOF
+	if _, err := f.Write([]byte{'\n'}); err != nil {
 		return err
 	}
 	debug.Log("session", "appendRecordLines: terminated torn trailing line (crash residue) in %s", f.Name())
 	return nil
 }
 
-// appendRecordLine encodes rec to a single buffer then writes it in one
-// os.File.Write call. Combined with the store mutex, this guarantees no JSONL
-// line interleaving even for records larger than PIPE_BUF.
 func appendRecordLine(path string, rec jsonlRecord) error {
 	return appendRecordLines(path, []jsonlRecord{rec})
 }
 
-// lockSessionFile acquires a cross-process exclusive lock on a per-session
-// flock sidecar (path + ".flock"), reusing the lockIndexFile implementation.
-// It serializes full-file rewrites (backfill/migrate: read -> tmp -> rename)
-// against O_APPEND writers in OTHER processes — the store mutex only guards
-// the current process. The sidecar is never renamed or replaced, so the lock
-// stays valid across the atomic rename of the data file (#558 D).
 func lockSessionFile(path string) (func(), error) {
 	return lockIndexFile(path)
 }
 
-// appendRecordLines encodes multiple records and writes them all in a single
-// file open+write. This is significantly faster than calling appendRecordLine
-// in a loop because it avoids repeated open/close syscalls.
 func appendRecordLines(path string, recs []jsonlRecord) error {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -3497,15 +2625,7 @@ func appendRecordLines(path string, recs []jsonlRecord) error {
 			return err
 		}
 	}
-	// O_APPEND guarantees atomic appends at the OS level on POSIX systems.
-	// #558 D: hold the cross-process session lock for the duration of the
-	// write so a concurrent full-file rewrite (backfill/migrate read -> tmp ->
-	// rename) in another process cannot drop this append between its read
-	// and its rename. Within one process the store mutex already serializes.
-	//
-	// If all retries fail, abort the append rather than
-	// continuing with unlocked O_APPEND writes that can be lost to concurrent
-	// renames (60/60 appends lost in probes without this guard).
+
 	unlock, lockErr := lockWithBackoff(func() (func(), error) { return lockSessionFile(path) }, "appendRecordLines", "session")
 	if lockErr != nil {
 		return lockErr
@@ -3515,31 +2635,14 @@ func appendRecordLines(path string, recs []jsonlRecord) error {
 			unlock()
 		}
 	}()
-	// We intentionally skip f.Sync() (fsync) here for performance:
-	//   - Save() only does O_CREATE touch, no fsync on the atomic rename path.
-	//   - This append path trades fsync for speed since it's called frequently.
-	//   - The data reaches disk via the OS buffer cache within seconds.
-	//   - The only risk is power loss losing the last few buffered appends,
-	//     which is acceptable for session event logs.
-	// O_RDWR (not O_WRONLY) so the torn-tail check below can read the last
-	// byte through the same handle.
+
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0600)
 	if err != nil {
 		return err
 	}
-	// #657: a crash/SIGKILL mid-write can leave a torn final line with no
-	// trailing '\n'. Appending directly would fuse the new record onto that
-	// residue, and load would then silently drop BOTH lines (json.Unmarshal
-	// fails -> continue). We hold the session lock here, so terminate the
-	// torn line before appending.
+
 	if err := terminateTornTail(f); err != nil {
-		// #1307 E2: appending onto an unterminated torn tail would FUSE the
-		// new record onto the crash residue - load then drops BOTH lines
-		// (unmarshal-fail -> continue), and because the fused line ends with
-		// \n the torn-tail check can never repair it later. Fail the append
-		// instead: the caller keeps the record and can retry, nothing is
-		// silently lost. The check only fails on genuine I/O errors
-		// (Stat/ReadAt/Write), where the append itself would likely fail too.
+
 		f.Close()
 		return fmt.Errorf("torn-tail check for %s: %w", path, err)
 	}
@@ -3550,9 +2653,6 @@ func appendRecordLines(path string, recs []jsonlRecord) error {
 	return f.Close()
 }
 
-// messageFingerprint builds a content-based fingerprint for deduplication.
-// Two messages with the same role and identical content blocks are considered
-// duplicates regardless of their position in the JSONL file.
 func messageFingerprint(msg *provider.Message) string {
 	var sb strings.Builder
 	sb.WriteString(msg.Role)
@@ -3581,20 +2681,12 @@ func messageFingerprint(msg *provider.Message) string {
 	return sb.String()
 }
 
-// backfillIDs rewrites the JSONL file, adding IDs to message records
-// whose fingerprint matches entries in the updates map.
 func (s *JSONLStore) backfillIDs(sessionID string, updates map[string]provider.Message) {
 	path := s.sessionPath(sessionID)
 
-	// #558 D: lock across read -> tmp -> rename (cross-process lost-update
-	// window vs O_APPEND writers, same as migrateMessageIDs).
 	unlock, lockErr := lockSessionFile(path)
 	if lockErr != nil {
-		// #1291: a failed lock means another process (daemon vs TUI/desktop
-		// sharing the session dir) most likely holds it mid-append. Writing
-		// anyway would rename-over their pending lines — persistent message
-		// loss with no error on either side. Fail SAFE like appendRecordLines
-		// does: skip this backfill (idempotent, retried on next Load).
+
 		debug.Log("session", "backfillIDs: session lock unavailable, skipping: %v", lockErr)
 		return
 	}
@@ -3677,19 +2769,10 @@ func (s *JSONLStore) backfillIDs(sessionID string, updates map[string]provider.M
 	debug.Log("session", "backfillIDsAsync: backfilled IDs in session %s", sessionID)
 }
 
-// backfillTimestamps adds timestamps to message records that don't have one.
-// All backfilled messages get the same timestamp: 6 hours ago.
-// If the first message already has a timestamp, the entire session is skipped.
-// This is called from loadSession for historical sessions created before
-// the timestamp feature was added.
-// firstMessageHasTimestamp reads the file until it finds the first "message"
-// record and returns true if it has a non-zero timestamp. This is used by
-// backfillTimestamps to skip sessions that don't need backfilling without
-// reading the entire file.
 func firstMessageHasTimestamp(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
-		return false // can't determine — let backfillTimestamps handle it
+		return false
 	}
 	defer f.Close()
 
@@ -3714,12 +2797,9 @@ func firstMessageHasTimestamp(path string) bool {
 func (s *JSONLStore) backfillTimestamps(sessionID string) {
 	path := s.sessionPath(sessionID)
 
-	// #558 D: lock across read -> tmp -> rename (cross-process lost-update
-	// window vs O_APPEND writers, same as migrateMessageIDs).
 	unlock, lockErr := lockSessionFile(path)
 	if lockErr != nil {
-		// #1291: same safe-side choice as backfillIDs — a held lock means a
-		// concurrent appender; rewriting the file now would drop its lines.
+
 		debug.Log("session", "backfillTimestamps: session lock unavailable, skipping: %v", lockErr)
 		return
 	}
@@ -3728,12 +2808,6 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 			unlock()
 		}
 	}()
-
-	// #4670: the old fast path skipped the WHOLE session whenever the first
-	// message had a timestamp - mixed sessions (ts-less records after a
-	// timestamped one) never got repaired. The full scan below is required
-	// to find them; fully-timestamped sessions still short-circuit via
-	// changed=false, so the common case pays one extra read, no rewrite.
 
 	f, err := os.Open(path)
 	if err != nil {
@@ -3753,7 +2827,6 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 		return
 	}
 
-	// Find the first real timestamp (if any) to use as backfill base.
 	var firstRealTimestamp time.Time
 	for _, line := range lines {
 		var rec jsonlRecord
@@ -3766,33 +2839,11 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 		}
 	}
 
-	// #4670: no early return when any message has a timestamp - mixed
-	// sessions (ts-less records + real-timestamped records) must still
-	// backfill the missing ones; the assignment loop only touches zero-ts
-	// records.
-
-	// Assign strictly increasing timestamps (+1ms per backfilled line) so
-	// mixed sessions (backfilled prefix + real-timestamped suffix) stay
-	// monotonic: a single shared timestamp broke findMessageCutoff's
-	// binary search, which assumes file order == chronological order (#198).
-	// Base is min(firstRealTimestamp, now-6h):
-	// - If the first real timestamp is older than 6h, use it as base.
-	// - Otherwise use now-6h to avoid polluting recent sessions.
-	// The cursor never falls below a real timestamp seen earlier in the
-	// file, so a ts-less SUFFIX also lands after its predecessor (#4670).
 	backfillBase := time.Now().Add(-6 * time.Hour)
 	if !firstRealTimestamp.IsZero() && firstRealTimestamp.Before(backfillBase) {
 		backfillBase = firstRealTimestamp
 	}
-	// #4715: ts-less records BEFORE the first real timestamp used to start
-	// the cursor AT firstReal (+1ms, +2ms, ...) - landing AFTER the real
-	// record that follows them in file order and breaking the very
-	// monotonicity this backfill exists to preserve (#198 file order ==
-	// chronological order). Count the zero-ts message prefix K and anchor
-	// the cursor K+1 milliseconds BELOW firstReal, so the prefix climbs to
-	// firstReal-1ms - strictly before the first real record. The suffix
-	// path is untouched: the cursor still max-tracks real timestamps
-	// (#4670).
+
 	if !firstRealTimestamp.IsZero() {
 		prefixZero := 0
 		for _, line := range lines {
@@ -3807,7 +2858,7 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 				prefixZero++
 				continue
 			}
-			break // firstReal reached - stop counting the prefix
+			break
 		}
 		if prefixZero > 0 {
 			backfillBase = firstRealTimestamp.Add(-time.Duration(prefixZero+1) * time.Millisecond)
@@ -3823,12 +2874,7 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 		if rec.Type != "message" {
 			continue
 		}
-		// #4670/#558 reconciliation: migration-inserted summary notes are
-		// synthetic-NOW records, not legacy-old ones - findMessageCutoff's
-		// binary search never excludes zero-ts records, so stamping a
-		// summary with a cursor anchored at an old predecessor would drop
-		// it out of the rendering window (the #558 invariant). Summaries
-		// keep zero ts (always in-window).
+
 		if isSummaryNoteMessage(rec.Message) {
 			continue
 		}
@@ -3882,21 +2928,6 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 	debug.Log("session", "backfillTimestamps: backfilled timestamps in session %s", sessionID)
 }
 
-// dedupMessageRecords removes duplicate message records, keeping only the
-// first occurrence of each unique message. Non-message records are passed
-// through unchanged.
-//
-// Dedup key: if the message has an ID, use the ID (exact match). This is
-// the common case — the StartRunTracking bug produced byte-identical
-// copies with the same ID. For messages without an ID (very old sessions
-// pre-dating the ID feature), fall back to a content fingerprint.
-// Using content fingerprint for ALL messages would incorrectly merge
-// distinct messages that happen to have identical content (e.g. a user
-// sending "continue" twice, or two identical build outputs).
-// isSummaryNoteMessage reports whether m is a compaction summary note (a
-// system message whose text starts with the summary marker). Used to keep
-// stale summaries from earlier compactions out of the restored context when
-// async precompact persists them after the latest checkpoint's last_msg_id.
 func isSummaryNoteMessage(m *provider.Message) bool {
 	if m == nil || m.Role != "system" {
 		return false
@@ -3913,15 +2944,9 @@ func dedupMessageRecords(records []jsonlRecord) []jsonlRecord {
 	if len(records) <= 1 {
 		return records
 	}
-	// IDs are stable identities: dedupe by ID globally (a replayed write
-	// of the same message must collapse wherever it lands).
+
 	seenIDs := make(map[string]bool, len(records))
-	// #1628 case A: the ID-less fingerprint used to sit in the SAME global
-	// map - but a fingerprint is only "the same message" for the adjacent
-	// double-append race it exists for. Globally it swallowed LEGITIMATE
-	// repeats (a user sending "continue" twice, identical build outputs) in
-	// legacy ID-less sessions. Adjacent-only: collapse the race, keep the
-	// repeats.
+
 	var prevFP string
 	out := records[:0]
 	for _, rec := range records {
@@ -3941,7 +2966,7 @@ func dedupMessageRecords(records []jsonlRecord) []jsonlRecord {
 		}
 		fp := messageFingerprint(rec.Message)
 		if fp == prevFP {
-			continue // adjacent duplicate of the entry just emitted
+			continue
 		}
 		prevFP = fp
 		out = append(out, rec)
@@ -3949,15 +2974,11 @@ func dedupMessageRecords(records []jsonlRecord) []jsonlRecord {
 	return out
 }
 
-// dedupLightweightEntries removes duplicate message-type entries from a
-// localLightweightEntry slice. Non-message entries (cost, etc.) are kept as-is.
-// Uses the same ID-first strategy as dedupMessageRecords.
 func dedupLightweightEntries(entries []localLightweightEntry) []localLightweightEntry {
 	if len(entries) <= 1 {
 		return entries
 	}
-	// #1628 case A (second path): same split as dedupMessageRecords - IDs
-	// dedupe globally, ID-less fingerprints collapse only ADJACENT repeats.
+
 	seenIDs := make(map[string]bool, len(entries))
 	var prevFP string
 	out := entries[:0]

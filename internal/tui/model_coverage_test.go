@@ -16,10 +16,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// ---------------------------------------------------------------------------
-// stripImagePlaceholder
-// ---------------------------------------------------------------------------
-
 func TestStripImagePlaceholder(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -45,16 +41,12 @@ func TestStripImagePlaceholder(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// looksLikeStartupGarbage
-// ---------------------------------------------------------------------------
-
 func TestLooksLikeStartupGarbage(t *testing.T) {
 	tests := []struct {
 		input string
 		want  bool
 	}{
-		// Normal human input → false
+
 		{"ping", false},
 		{"hello", false},
 		{"Hello World", false},
@@ -62,7 +54,7 @@ func TestLooksLikeStartupGarbage(t *testing.T) {
 		{"search_query", false},
 		{"abc123", false},
 		{"", false},
-		// Terminal garbage → true
+
 		{"11;rgb:0000/0000/0000", true},
 		{"]11;rgb", true},
 		{"1;1R", true},
@@ -79,60 +71,45 @@ func TestLooksLikeStartupGarbage(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// startupInputSuppressionActive
-// ---------------------------------------------------------------------------
-
 func TestStartupInputSuppressionActive(t *testing.T) {
-	// Zero time → not active
+
 	if startupInputSuppressionActive(time.Time{}) {
 		t.Error("expected inactive for zero time")
 	}
-	// Recent time → active
+
 	if !startupInputSuppressionActive(time.Now()) {
 		t.Error("expected active for current time")
 	}
-	// Old time → not active
+
 	old := time.Now().Add(-1 * time.Second)
 	if startupInputSuppressionActive(old) {
 		t.Error("expected inactive for time > 500ms ago")
 	}
 }
 
-// ---------------------------------------------------------------------------
-// combineCmds
-// ---------------------------------------------------------------------------
-
 func TestCombineCmds(t *testing.T) {
-	// nil cmds → nil
+
 	if result := combineCmds(); result != nil {
 		t.Error("expected nil for no cmds")
 	}
-	// all nil → nil
+
 	if result := combineCmds(nil, nil, nil); result != nil {
 		t.Error("expected nil for all-nil cmds")
 	}
-	// single non-nil → that cmd
+
 	cmd := func() tea.Msg { return "hello" }
 	if result := combineCmds(nil, cmd, nil); result == nil {
 		t.Error("expected non-nil for single cmd")
 	}
-	// multiple non-nil → batched (non-nil)
+
 	cmd2 := func() tea.Msg { return "world" }
 	if result := combineCmds(cmd, cmd2); result == nil {
 		t.Error("expected non-nil for multiple cmds")
 	}
 }
 
-// ---------------------------------------------------------------------------
-// truncateString / truncateStr
-// ---------------------------------------------------------------------------
-
 func TestTruncateString_Model(t *testing.T) {
-	// These are wrappers around util.Truncate which appends "..." when truncating.
-	// len=5 → 2 chars + "..." = "he..."
+
 	if got := util.Truncate("hello world", 5); got != "he..." {
 		t.Errorf("truncateString = %q, want %q", got, "he...")
 	}
@@ -147,46 +124,38 @@ func TestTruncateString_Model(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// policyMode
-// ---------------------------------------------------------------------------
-
 func TestPolicyMode(t *testing.T) {
-	// nil policy → supervised
+
 	if got := policyMode(nil); got != permission.SupervisedMode {
 		t.Errorf("policyMode(nil) = %v, want SupervisedMode", got)
 	}
-	// policy with Mode() method
+
 	policy := permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutoMode)
 	if got := policyMode(policy); got != permission.AutoMode {
 		t.Errorf("policyMode(auto) = %v, want AutoMode", got)
 	}
-	// supervised
+
 	policy2 := permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.SupervisedMode)
 	if got := policyMode(policy2); got != permission.SupervisedMode {
 		t.Errorf("policyMode(supervised) = %v, want SupervisedMode", got)
 	}
-	// autopilot
+
 	policy3 := permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode)
 	if got := policyMode(policy3); got != permission.AutopilotMode {
 		t.Errorf("policyMode(autopilot) = %v, want AutopilotMode", got)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// defaultApprovalOptionsFor / diffConfirmOptionsFor
-// ---------------------------------------------------------------------------
-
 func TestDefaultApprovalOptionsFor(t *testing.T) {
 	en := defaultApprovalOptionsFor(LangEnglish)
 	if len(en) != 3 {
 		t.Fatalf("expected 3 English approval options, got %d", len(en))
 	}
-	// Verify structure: first option should be Allow
+
 	if en[0].decision != permission.Allow {
 		t.Errorf("expected first option Allow, got %v", en[0].decision)
 	}
-	// Verify shortcuts exist
+
 	if en[0].shortcut != "y" || en[2].shortcut != "n" {
 		t.Errorf("expected shortcuts y/a/n, got %s/%s/%s", en[0].shortcut, en[1].shortcut, en[2].shortcut)
 	}
@@ -195,7 +164,7 @@ func TestDefaultApprovalOptionsFor(t *testing.T) {
 	if len(zh) != 3 {
 		t.Fatalf("expected 3 Chinese approval options, got %d", len(zh))
 	}
-	// Chinese labels should differ from English
+
 	if zh[0].label == en[0].label {
 		t.Error("expected Chinese labels to differ from English")
 	}
@@ -222,10 +191,6 @@ func TestDiffConfirmOptionsFor(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// vendorNames
-// ---------------------------------------------------------------------------
-
 func TestVendorNames_NilConfig(t *testing.T) {
 	m := NewModel(nil, nil)
 	if got := m.vendorNames(); got != "" {
@@ -246,15 +211,11 @@ func TestVendorNames_WithConfig(t *testing.T) {
 	if len(got) == 0 {
 		t.Fatal("expected non-empty vendor names")
 	}
-	// Should contain both vendor names (order may vary)
+
 	if !strings.Contains(got, "zai") || !strings.Contains(got, "anthropic") {
 		t.Errorf("expected vendor names to contain 'zai' and 'anthropic', got %+v", got)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// setActiveRuntimeSelection
-// ---------------------------------------------------------------------------
 
 func TestSetActiveRuntimeSelection(t *testing.T) {
 	m := NewModel(nil, nil)
@@ -270,28 +231,20 @@ func TestSetActiveRuntimeSelection(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// asciiLogo
-// ---------------------------------------------------------------------------
-
 func TestAsciiLogo(t *testing.T) {
 	logo := asciiLogo()
 	if logo == "" {
 		t.Fatal("expected non-empty ASCII logo")
 	}
-	// ASCII art logo should contain recognizable characters (not blank)
+
 	if !strings.Contains(logo, "____") {
 		t.Errorf("expected ASCII art patterns in logo, got %q", logo)
 	}
-	// Should end with newline
+
 	if !strings.HasSuffix(logo, "\n") {
 		t.Error("expected logo to end with newline")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// pendingSubmission* family (stateful methods tested via Model)
-// ---------------------------------------------------------------------------
 
 func TestEnqueueAndConsumePendingSubmission(t *testing.T) {
 	m := newTestModel()
@@ -309,13 +262,11 @@ func TestEnqueueAndConsumePendingSubmission(t *testing.T) {
 		t.Fatalf("expected count 2, got %d", m.pendingSubmissionCount())
 	}
 
-	// Snapshot should return copy
 	snap := m.pendingSubmissionSnapshot()
 	if len(snap) != 2 || snap[0] != "first message" || snap[1] != "second message" {
 		t.Fatalf("unexpected snapshot: %v", snap)
 	}
 
-	// Consume drains and returns joined
 	joined := m.consumePendingSubmission()
 	if joined != "first message\n\nsecond message" {
 		t.Fatalf("unexpected joined result: %q", joined)
@@ -360,8 +311,7 @@ func TestRestorePendingInput_MergesWithDraft(t *testing.T) {
 	m.input.SetValue("draft")
 	m.restorePendingInput()
 	got := m.input.Value()
-	// Both pending and draft should be present; textinput may flatten newlines
-	// but must contain both pieces
+
 	if !strings.Contains(got, "queued") || !strings.Contains(got, "draft") {
 		t.Fatalf("expected both 'queued' and 'draft' in input, got %+v", got)
 	}
@@ -378,10 +328,6 @@ func TestRestorePendingInput_EmptyNoop(t *testing.T) {
 		t.Fatalf("expected unchanged input, got %q", m.input.Value())
 	}
 }
-
-// ---------------------------------------------------------------------------
-// pendingImages (multi-image support)
-// ---------------------------------------------------------------------------
 
 func TestPendingImages_AppendAndCount(t *testing.T) {
 	m := NewModel(nil, nil)
@@ -417,10 +363,6 @@ func TestPendingImages_Clear(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// cancelActiveRun
-// ---------------------------------------------------------------------------
-
 func TestCancelActiveRun_SetsCanceledFlag(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
@@ -450,7 +392,7 @@ func TestCancelActiveRun_Idempotent(t *testing.T) {
 	m.cancelFunc = func() { cancelCount++ }
 
 	m.cancelActiveRun()
-	m.cancelActiveRun() // second call should be no-op
+	m.cancelActiveRun()
 
 	if cancelCount != 1 {
 		t.Fatalf("expected cancelFunc called once, got %d", cancelCount)
@@ -461,11 +403,9 @@ func TestCancelActiveRun_NilCancelFunc(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
 	m.cancelFunc = nil
-	// Should not panic.
+
 	m.cancelActiveRun()
-	// #1768: an uncancellable loading window (/compact, Background ctx)
-	// must NOT poison runCanceled - the next normal run would be treated
-	// as cancelled (persist/metrics/drain skipped).
+
 	if m.runCanceled {
 		t.Error("runCanceled must stay false when nothing is cancellable (cross-run poisoning)")
 	}
@@ -508,10 +448,6 @@ func TestCancelActiveRun_FinalizesRunningToolAsCancelled(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// resetExitConfirm
-// ---------------------------------------------------------------------------
-
 func TestResetExitConfirm(t *testing.T) {
 	m := newTestModel()
 	m.exitConfirmPending = true
@@ -520,10 +456,6 @@ func TestResetExitConfirm(t *testing.T) {
 		t.Error("expected exitConfirmPending to be false")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// closeActivePanel
-// ---------------------------------------------------------------------------
 
 func TestCloseActivePanel_NoPanel(t *testing.T) {
 	m := newTestModel()
@@ -576,10 +508,6 @@ func TestCloseActivePanel_SkillsPanel(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// drainPendingInterrupt
-// ---------------------------------------------------------------------------
-
 func TestDrainPendingInterrupt_Empty(t *testing.T) {
 	m := newTestModel()
 	got := m.drainPendingInterrupt(42)
@@ -592,7 +520,7 @@ func TestDrainPendingInterrupt_WithPending(t *testing.T) {
 	m := newTestModel()
 	m.pending.enqueue("user interrupt text")
 	got := m.drainPendingInterrupt(1)
-	// #1472-A: drain now returns content BLOCKS.
+
 	if len(got) != 1 || got[0].Type != "text" || got[0].Text != "user interrupt text" {
 		t.Fatalf("expected one text block, got %+v", got)
 	}
@@ -639,22 +567,18 @@ func TestPendingQueueConsumeDetailedKeepsHiddenEntriesSeparate(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// pendingQueue pointer safety
-// ---------------------------------------------------------------------------
-
 func TestPendingQueueIsPointerShared(t *testing.T) {
 	m := newTestModel()
 	q := m.pending
 	if q == nil {
 		t.Fatal("expected pending queue to be initialized")
 	}
-	// Verify the queue is reachable through a Model copy.
-	m2 := m // value copy
+
+	m2 := m
 	if m2.pending != q {
 		t.Fatal("expected Model copy to share the same pendingQueue pointer")
 	}
-	// Enqueue via copy, read via original.
+
 	m2.pending.enqueue("hello")
 	if q.count() != 1 || q.items[0].Text != "hello" {
 		t.Fatal("expected enqueue on copy to be visible on original")
@@ -672,33 +596,22 @@ func TestSessionMutexLazyInit(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Cron prompt dispatch tests
-// ---------------------------------------------------------------------------
-
-// TestCronPromptIdleSubmitsImmediately verifies that when the agent is idle,
-// a cronPromptMsg starts immediately via the hidden submission path instead of just queuing.
 func TestCronPromptIdleSubmitsImmediately(t *testing.T) {
 	m := newTestModel()
-	m.loading = false // agent is idle
+	m.loading = false
 
 	msg := cronPromptMsg{Prompt: "check progress"}
 	next, cmd := m.Update(msg)
 	m2 := next.(Model)
 
-	// When idle, the hidden submission path should start immediately.
 	if cmd == nil {
 		t.Fatal("expected non-nil cmd when cron fires while agent is idle — prompt should be submitted immediately")
 	}
 
-	// The system message "Cron job triggered" should be written.
 	if m2.chatList == nil || m2.chatList.Len() == 0 {
 		t.Fatal("expected cron.firing system message in chatList")
 	}
 
-	// Loading should now be true (agent starting).
 	if !m2.loading {
 		t.Error("expected loading=true after cron prompt submission")
 	}
@@ -707,33 +620,27 @@ func TestCronPromptIdleSubmitsImmediately(t *testing.T) {
 	}
 }
 
-// TestCronPromptBusyQueuesForLater verifies that when the agent is busy,
-// a cronPromptMsg queues the prompt without starting a new run.
 func TestCronPromptBusyQueuesForLater(t *testing.T) {
 	m := newTestModel()
-	m.loading = true // agent is busy
+	m.loading = true
 	m.activeAgentRunID = 1
 
 	msg := cronPromptMsg{Prompt: "check progress", QueueIfBusy: true}
 	next, cmd := m.Update(msg)
 	m2 := next.(Model)
 
-	// When busy, no new cmd should be issued (prompt is queued for later).
 	if cmd != nil {
 		t.Fatal("expected nil cmd when cron fires while agent is busy — prompt should be queued")
 	}
 
-	// The prompt should be in the pending queue.
 	if m2.pendingSubmissionCount() != 1 {
 		t.Fatalf("expected 1 pending submission, got %d", m2.pendingSubmissionCount())
 	}
 
-	// The system message should still be written.
 	if m2.chatList == nil || m2.chatList.Len() == 0 {
 		t.Fatal("expected cron.firing system message in chatList")
 	}
 
-	// Loading should remain true.
 	if !m2.loading {
 		t.Error("expected loading=true to remain unchanged")
 	}
@@ -764,8 +671,6 @@ func TestCronPromptBusyStaysHiddenWhenQueuedRunStarts(t *testing.T) {
 	}
 }
 
-// TestCronPromptEmptyPromptDoesNothing verifies that an empty cron prompt
-// doesn't crash or trigger unexpected behavior.
 func TestCronPromptEmptyPromptDoesNothing(t *testing.T) {
 	m := newTestModel()
 	m.loading = false
@@ -774,7 +679,6 @@ func TestCronPromptEmptyPromptDoesNothing(t *testing.T) {
 	next, _ := m.Update(msg)
 	m2 := next.(Model)
 
-	// System message should still be written.
 	if m2.chatList == nil || m2.chatList.Len() == 0 {
 		t.Fatal("expected cron.firing system message even for empty prompt")
 	}
@@ -782,7 +686,7 @@ func TestCronPromptEmptyPromptDoesNothing(t *testing.T) {
 
 func TestShutdownAll_NilManagers(t *testing.T) {
 	m := newTestModel()
-	// subAgentMgr and swarmMgr are nil — should be no-op
+
 	m.shutdownAll()
 }
 
@@ -801,8 +705,6 @@ func TestShutdownAll_WithSubAgents(t *testing.T) {
 
 	m.shutdownAll()
 
-	// shutdownAll runs CancelAll asynchronously in a goroutine.
-	// Poll until sub-agents are cancelled or timeout.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		sa1, ok1 := m.subAgentMgr.Get("sa-1")
@@ -836,8 +738,6 @@ func TestCancelActiveRun_CancelsSubAgents(t *testing.T) {
 
 	m.cancelActiveRun()
 
-	// CancelAll runs asynchronously in a goroutine. Poll until the sub-agent
-	// is cancelled or timeout.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		snap, ok := m.subAgentMgr.SnapshotByID("sa-1")
@@ -865,7 +765,6 @@ func TestPendingQueuePreservesImagesThroughConsume(t *testing.T) {
 		t.Fatalf("expected 1 pending, got %d", q.count())
 	}
 
-	// Verify images are stored in q.items
 	if len(q.items) != 1 || len(q.items[0].Images) != 1 {
 		t.Fatalf("expected images stored in q.items[0], got items=%d imgs=%d",
 			len(q.items), func() int {
@@ -876,7 +775,6 @@ func TestPendingQueuePreservesImagesThroughConsume(t *testing.T) {
 			}())
 	}
 
-	// Consume should return images
 	text, hidden, override, consumedImgs, _ := q.consumeDetailed()
 	if text != "hello with image" {
 		t.Fatalf("unexpected text: %q", text)

@@ -8,30 +8,22 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// newSes688 creates a fresh session for switchToSession tests.
 func newSes688() *session.Session {
 	return session.NewSession("", "", "")
 }
 
-// Issue #688 HIGH: /clear (switchToSession isNew=true) must sync the
-// ConfigPolicy's internal mode to the global default, not just the displayed
-// m.mode. Otherwise a session A autopilot/bypass mode silently survives into
-// the new session and auto-allows dangerous tools while the status bar shows
-// the global default.
 func TestIssue688_ClearNewSessionSyncsPolicyMode(t *testing.T) {
 	m := newTestModel()
 	cp := permission.NewConfigPolicyWithMode(nil, nil, permission.AutopilotMode)
 	m.policy = cp
-	// Simulate session A being in autopilot (both UI and policy).
+
 	m.mode = permission.AutopilotMode
 	if got := cp.Mode(); got != permission.AutopilotMode {
 		t.Fatalf("setup: policy mode = %v, want autopilot", got)
 	}
 
-	// Simulate a config with a supervised global default.
 	m.config = &config.Config{DefaultMode: "supervised"}
 
-	// Switch to a brand-new session (the /clear path).
 	ses := newSes688()
 	m.switchToSession(ses, true)
 
@@ -44,8 +36,6 @@ func TestIssue688_ClearNewSessionSyncsPolicyMode(t *testing.T) {
 	}
 }
 
-// Issue #688 HIGH (resume branch, regression guard): resuming a session whose
-// saved mode is autopilot must set BOTH the displayed mode and the policy mode.
 func TestIssue688_ResumeSessionSyncsPolicyMode(t *testing.T) {
 	m := newTestModel()
 	cp := permission.NewConfigPolicy(nil, nil)
@@ -56,7 +46,6 @@ func TestIssue688_ResumeSessionSyncsPolicyMode(t *testing.T) {
 	ses.PermissionMode = "autopilot"
 	m.switchToSession(ses, false)
 
-	// two-mode refactor: autopilot normalizes to bypass on restore.
 	if m.mode != permission.BypassMode {
 		t.Errorf("displayed mode = %v, want bypass (autopilot normalizes)", m.mode)
 	}
@@ -65,9 +54,6 @@ func TestIssue688_ResumeSessionSyncsPolicyMode(t *testing.T) {
 	}
 }
 
-// Issue #688 LOW: switching sessions (including /clear) must cancel pending
-// approval/confirm state so the old session's requests cannot leak into the
-// new session.
 func TestIssue688_SwitchSessionClearsPendingApprovals(t *testing.T) {
 	m := newTestModel()
 	if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
@@ -117,8 +103,6 @@ func TestIssue688_SwitchSessionClearsPendingApprovals(t *testing.T) {
 	}
 }
 
-// Issue #688 LOW: changing the permission mode (Shift+Tab cycle and /mode
-// command) must also drop pending approval state from the old mode's context.
 func TestIssue688_ModeSwitchClearsPendingApprovals(t *testing.T) {
 	m := newTestModel()
 	m.pendingApproval = &ApprovalMsg{

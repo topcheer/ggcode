@@ -11,7 +11,7 @@ import (
 )
 
 func TestInsecureMode_Default(t *testing.T) {
-	// Reset cached value for test
+
 	insecureOnce = sync.Once{}
 	insecureValue = false
 
@@ -21,7 +21,7 @@ func TestInsecureMode_Default(t *testing.T) {
 }
 
 func TestInsecureMode_Enabled(t *testing.T) {
-	// Reset cached value for test
+
 	insecureOnce = sync.Once{}
 	insecureValue = false
 
@@ -77,11 +77,10 @@ func TestWrapTransport_InsecureOff(t *testing.T) {
 	base := &http.Transport{}
 	result := WrapTransport(base)
 
-	// Should be a clone, not the same pointer
 	if result == base {
 		t.Error("WrapTransport should return a clone")
 	}
-	// Should NOT have InsecureSkipVerify
+
 	if result.TLSClientConfig != nil && result.TLSClientConfig.InsecureSkipVerify {
 		t.Error("InsecureSkipVerify should be false when GGCODE_INSECURE is not set")
 	}
@@ -149,7 +148,6 @@ func TestInsecureAwareClient_SelfSignedCert(t *testing.T) {
 	os.Setenv("GGCODE_INSECURE", "1")
 	defer os.Unsetenv("GGCODE_INSECURE")
 
-	// Create a self-signed test server
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
@@ -169,7 +167,6 @@ func TestInsecureAwareClient_SelfSignedCert_Rejected(t *testing.T) {
 	insecureValue = false
 	os.Unsetenv("GGCODE_INSECURE")
 
-	// Create a self-signed test server
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
@@ -184,8 +181,7 @@ func TestInsecureAwareClient_SelfSignedCert_Rejected(t *testing.T) {
 }
 
 func TestWrapTransport_PreservesExistingTLSConfig(t *testing.T) {
-	// This package caches insecure mode in globals; these tests must stay
-	// non-parallel unless the implementation becomes injectable.
+
 	insecureOnce = sync.Once{}
 	insecureValue = false
 

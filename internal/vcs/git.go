@@ -8,7 +8,6 @@ import (
 	"strings"
 )
 
-// Git implements VCS for git repositories.
 type Git struct{}
 
 func (Git) Name() string        { return "git" }
@@ -52,9 +51,7 @@ func (Git) CurrentBranch(ctx context.Context, dir string) (string, error) {
 		return "", err
 	}
 	branch := strings.TrimSpace(out)
-	// In detached HEAD state rev-parse --abbrev-ref returns the literal
-	// "HEAD" with exit code 0, which is useless as a display label. Fall
-	// back to the short commit SHA (issue #549 bug E, display layer only).
+
 	if branch == "HEAD" {
 		if sha, err := runVCSCmd(ctx, dir, "git", "rev-parse", "--short", "HEAD"); err == nil {
 			if short := strings.TrimSpace(sha); short != "" {
@@ -73,9 +70,6 @@ func (Git) IsClean(ctx context.Context, dir string) (bool, error) {
 	return strings.TrimSpace(out) == "", nil
 }
 
-// AheadBehind returns the number of commits the local branch is ahead of and
-// behind its upstream tracking branch. ok is false if there is no upstream
-// configured or the command fails.
 func (Git) AheadBehind(ctx context.Context, dir string) (ahead, behind int, ok bool) {
 	out, err := runVCSCmd(ctx, dir, "git", "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
 	if err != nil {
@@ -93,7 +87,6 @@ func (Git) AheadBehind(ctx context.Context, dir string) (ahead, behind int, ok b
 	return a, b, true
 }
 
-// Checkout switches to an existing branch or creates a new one.
 func (Git) Checkout(ctx context.Context, dir, branch string, create bool, startPoint string) (string, error) {
 	args := []string{"checkout"}
 	if create {
@@ -107,7 +100,6 @@ func (Git) Checkout(ctx context.Context, dir, branch string, create bool, startP
 	return runVCSCmd(ctx, dir, "git", args...)
 }
 
-// runVCSCmd executes a VCS command in the given directory.
 func runVCSCmd(ctx context.Context, dir, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir

@@ -5,10 +5,6 @@ import (
 	"time"
 )
 
-// #3295 regression: same-turn sub-agent events (AgentID != "") must not
-// pollute the turn's latency stats - a faster sub-agent first packet used
-// to win the TTFT min, and cross-model decode speeds mixed into one TPS
-// average. Delegated activity is counted separately instead.
 func TestSummarizeDelegatedIsolation(t *testing.T) {
 	main := MetricEvent{
 		Type: "llm", TurnIndex: 3,
@@ -50,7 +46,6 @@ func TestSummarizeDelegatedIsolation(t *testing.T) {
 	}
 }
 
-// Parent events (AgentID == "") keep the exact pre-#3295 aggregation shape.
 func TestSummarizeParentEventsUnchanged(t *testing.T) {
 	evs := []MetricEvent{
 		{Type: "llm", TurnIndex: 1, TTFT: 300 * time.Millisecond, Duration: 2 * time.Second, InputTokens: 10, OutputTokens: 20},

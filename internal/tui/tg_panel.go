@@ -22,6 +22,7 @@ import (
 // (#2215): "<numeric id>:<secret>" - digits, colon, then the
 // alphanumeric-secret alphabet BotFather issues. Form validation, not
 // secrecy validation.
+
 var tgTokenForm = regexp.MustCompile(`^[0-9]+:[A-Za-z0-9_-]{8,}$`)
 
 type tgPanelState struct {
@@ -128,7 +129,7 @@ func (m Model) renderTGPanel() string {
 	} else {
 		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.tg.actions_hint")))
 	}
-	// Edit config section
+
 	if panel.editState.mode == imEditSelect {
 		body = append(body, "", m.renderIMEditSelect(&panel.editState))
 	} else if panel.editState.mode == imEditInput {
@@ -145,7 +146,7 @@ func (m *Model) handleTGPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if panel == nil {
 		return *m, nil
 	}
-	// Edit mode takes priority
+
 	if panel.editState.mode != imEditNone {
 		newState, cmd := m.handleIMEditKey(&panel.editState, msg)
 		panel.editState = *newState
@@ -252,7 +253,7 @@ func (m *Model) bindTGEntry(entry tgBindingEntry) tea.Cmd {
 			if err := m.waitForTGAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
 				return tgBindResultMsg{err: err}
 			}
-			// Sync session history to the newly bound channel only.
+
 			if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
 				if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
 					return tgBindResultMsg{err: err}
@@ -265,8 +266,7 @@ func (m *Model) bindTGEntry(entry tgBindingEntry) tea.Cmd {
 
 func (m *Model) unbindTGEntry(adapterName string) tea.Cmd {
 	return func() tea.Msg {
-		// #1394-A(3): autoEnable=false - unbinding must not silently flip
-		// IM.Enabled=true (and persist it) when the user has IM off.
+
 		if m.imManager == nil {
 			return tgBindResultMsg{err: errors.New(m.t("panel.tg.error.config_unavailable"))}
 		}
@@ -279,7 +279,7 @@ func (m *Model) unbindTGEntry(adapterName string) tea.Cmd {
 
 func (m *Model) clearTGChannel(adapterName string) tea.Cmd {
 	return func() tea.Msg {
-		// #1394-A(3): same - clearing never auto-enables IM.
+
 		if m.imManager == nil {
 			return tgBindResultMsg{err: errors.New(m.t("panel.tg.error.config_unavailable"))}
 		}
@@ -301,12 +301,7 @@ func (m *Model) createTGAdapterCmd(spec string) tea.Cmd {
 		}
 		name := strings.TrimSpace(fields[0])
 		botToken := strings.TrimSpace(fields[1])
-		// #2215: zero format checks persisted arbitrary garbage into the
-		// yaml (Enabled:true), which then retried-and-failed on every
-		// restart - the slack path got prefix validation in #1392-B(1)
-		// and the tg path never followed. Telegram bot tokens are
-		// structurally "digits:alphanumerics" - validate the form, not
-		// the secrecy.
+
 		if !tgTokenForm.MatchString(botToken) {
 			return tgBindResultMsg{err: errors.New(m.t("panel.tg.error.token_format"))}
 		}
@@ -317,9 +312,8 @@ func (m *Model) createTGAdapterCmd(spec string) tea.Cmd {
 				"bot_token": botToken,
 			},
 		}
-		// #1367 family batch 3 final sweep: config write moved onto
-		// the Update loop via configMutationMsg (see config_mutation.go).
-		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
+
+		imEnabledBefore := false
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				imEnabledBefore = m.config.IM.Enabled
@@ -332,9 +326,7 @@ func (m *Model) createTGAdapterCmd(spec string) tea.Cmd {
 						return m.rollbackTGCreate(name, err, imEnabledBefore)
 					}
 					if err := m.startTGAdapterIfNeeded(name); err != nil {
-						// #2215: a failed start left the dirty adapter
-						// persisted forever (slack got rollback in
-						// #1392-B(1); tg never followed).
+
 						return m.rollbackTGCreate(name, err, imEnabledBefore)
 					}
 					return tgBindResultMsg{message: m.t("panel.tg.message.added_bot", name)}
@@ -366,9 +358,7 @@ func (m *Model) startTGAdapterIfNeeded(name string) error {
 		return errors.New(m.t("panel.tg.error.not_configured", name))
 	}
 	if !adapterCfg.Enabled {
-		// #1394-A (family site 15): auto-enable must not write the config
-		// map on this Cmd-goroutine helper - bindTGEntry routes it through
-		// configMutationMsg; disabled adapters are refused here.
+
 		return fmt.Errorf("adapter %s is disabled - bind from the panel to enable it", name)
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformTelegram)) {
@@ -534,7 +524,7 @@ func (m Model) tgAdapterStatus(state *im.AdapterState) string {
 	if status == "" {
 		status = m.t("panel.tg.status.unknown")
 	}
-	// #914: both branches returned the same value (#887 family).
+
 	if state.Healthy {
 		return status
 	}
@@ -579,18 +569,13 @@ func (m Model) waitForTGAdapterHealthy(mgr *im.Manager, adapter string, timeout 
 	return errors.New(m.t("panel.tg.error.not_online", adapter))
 }
 
-// rollbackTGCreate removes a just-persisted tg adapter whose runtime
-// start failed (#2215) - the dirty Enabled:true config used to stay in
-// the yaml forever, retrying and failing on every restart (the slack
-// path got this in #1392-B(1)). Map REMOVE rides configMutationMsg
-// (#1370 pattern).
 func (m *Model) rollbackTGCreate(name string, origErr error, imEnabledBefore bool) tea.Msg {
 	return configMutationMsg{
 		apply: func(m *Model) error {
 			if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 				return rerr
 			}
-			m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
+			m.config.IM.Enabled = imEnabledBefore
 			return m.saveConfig()
 		},
 		next: func(m *Model) tea.Cmd {

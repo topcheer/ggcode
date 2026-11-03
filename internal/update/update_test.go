@@ -107,11 +107,6 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
-// TestRunHelperRollsBackEarlierTargets pins #1402-A: when a later target
-// cannot be replaced, earlier targets already written in the same run are
-// restored to their previous bytes instead of staying on the new version
-// (half-updated install). The second target is made a DIRECTORY - rename
-// onto it fails deterministically without waiting for the 30s deadline.
 func TestRunHelperRollsBackEarlierTargets(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "staged")
@@ -125,7 +120,7 @@ func TestRunHelperRollsBackEarlierTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	t2 := filepath.Join(dir, "t2")
-	// A directory at the target path: WriteExecutable's rename fails fast.
+
 	if err := os.MkdirAll(t2, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +137,7 @@ func TestRunHelperRollsBackEarlierTargets(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected RunHelper to fail with a blocked target")
 	}
-	// t1 must be rolled back to its previous bytes, not left on NEW-BINARY.
+
 	got, readErr := os.ReadFile(t1)
 	if readErr != nil {
 		t.Fatal(readErr)
@@ -152,10 +147,6 @@ func TestRunHelperRollsBackEarlierTargets(t *testing.T) {
 	}
 }
 
-// TestRunHelperUnreadableTargetRollsBack pins #1423-A: an existing but
-// UNREADABLE target (mode 0o200) must abort the run AND roll back the
-// earlier target - it used to be conflated with 'absent', replaced via
-// tmp+rename, then os.Remove'd in rollback with NO backup copy.
 func TestRunHelperUnreadableTargetRollsBack(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads through 0o200 - cannot simulate")
@@ -172,7 +163,7 @@ func TestRunHelperUnreadableTargetRollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	locked := filepath.Join(dir, "locked")
-	if err := os.WriteFile(locked, oldBytes, 0o200); err != nil { // write-only: exists, unreadable
+	if err := os.WriteFile(locked, oldBytes, 0o200); err != nil {
 		t.Fatal(err)
 	}
 	manifest := filepath.Join(dir, "manifest.json")
@@ -185,7 +176,7 @@ func TestRunHelperUnreadableTargetRollsBack(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected failure on unreadable target")
 	}
-	// t1 must be restored, not left on NEW-BINARY.
+
 	got, rerr := os.ReadFile(t1)
 	if rerr != nil {
 		t.Fatal(rerr)
@@ -193,7 +184,7 @@ func TestRunHelperUnreadableTargetRollsBack(t *testing.T) {
 	if string(got) != string(oldBytes) {
 		t.Fatalf("t1 not rolled back: %q", got)
 	}
-	// The unreadable target must be INTACT (not replaced, not removed).
+
 	st, serr := os.Stat(locked)
 	if serr != nil {
 		t.Fatalf("unreadable target deleted: %v", serr)

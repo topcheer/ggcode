@@ -1,10 +1,5 @@
 package usage
 
-// Every coding-plan / anthropic-compatible base shape from
-// ggcode.example.yaml must normalize to the correct probe endpoint path.
-// These are regression pins for the 2026-09-18 "unsupported" panel
-// reports (zhipu coding plan, kimi coding plan, double-/v1 bases).
-
 import (
 	"context"
 	"net/http"
@@ -12,8 +7,6 @@ import (
 	"testing"
 )
 
-// newPathRecorder returns a server that answers every request with body
-// and records the last request path.
 func newPathRecorder(t *testing.T, body string) (*httptest.Server, *string) {
 	t.Helper()
 	path := ""
@@ -25,11 +18,6 @@ func newPathRecorder(t *testing.T, body string) (*httptest.Server, *string) {
 	t.Cleanup(srv.Close)
 	return srv, &path
 }
-
-// hostOf rewrites a fixed host onto the loopback test server so
-// MatchesURL-based resolution is exercised with realistic base URLs.
-// The probes take baseURL directly, so we call Fetch with the transformed
-// base and assert the exact request path.
 
 func TestZaiCodingPlanBase(t *testing.T) {
 	srv, path := newPathRecorder(t, `{"code":200,"msg":"ok","data":{"limits":[{"type":"TIME_LIMIT","unit":5,"number":1,"usage":4000,"currentValue":500,"remaining":3500,"percentage":25,"nextResetTime":1789831644997},{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":60,"nextResetTime":1789738694871}]},"success":true}`)
@@ -51,9 +39,7 @@ func TestZaiCodingPlanBase(t *testing.T) {
 
 func TestZaiMatchesIntlHost(t *testing.T) {
 	zai := ZaiProbe{}
-	// Coding-plan entrances claim; the shared metered base does NOT
-	// (open.bigmodel.cn hosts both /api/paas/v4 and /api/coding/paas/v4,
-	// and only the plan carries window quotas).
+
 	if !zai.MatchesURL("https://api.z.ai/api/coding/paas/v4") {
 		t.Fatalf("api.z.ai coding path must resolve to the zai probe")
 	}
@@ -74,7 +60,7 @@ func TestKimiCodingBaseUsesUsagesWithoutDoubleV1(t *testing.T) {
 	if *path != "/coding/v1/usages" {
 		t.Fatalf("coding base must hit the constant /coding/v1/usages path, got %s", *path)
 	}
-	// Bare host normalizes to the same constant path.
+
 	if _, err := kf.Fetch(context.Background(), srv.URL, "k"); err != nil {
 		t.Fatalf("bare base: %v", err)
 	}

@@ -123,10 +123,8 @@ func TestSessionRecap(t *testing.T) {
 		}
 	})
 
-	// #913: byte-slicing at 120 split CJK runes mid-character (mojibake on
-	// resume); truncation must land on rune boundaries.
 	t.Run("cjk preview truncates on rune boundary", func(t *testing.T) {
-		longPreview := strings.Repeat("好", 130) // 130 runes, 390 bytes
+		longPreview := strings.Repeat("好", 130)
 		ses := &session.Session{
 			Title:     "Test",
 			UpdatedAt: now,
@@ -139,7 +137,7 @@ func TestSessionRecap(t *testing.T) {
 		if recap == "" {
 			t.Fatal("expected non-empty recap")
 		}
-		// Whatever got kept must be valid UTF-8 with no replacement chars.
+
 		if strings.ContainsRune(recap, utf8.RuneError) {
 			t.Errorf("cjk truncation produced invalid utf-8: %q", recap[len(recap)-60:])
 		}

@@ -1,10 +1,5 @@
 package tui
 
-// #3431 probe: the follow-strip separator must appear between every pair
-// of RENDERED chips. i is a global slot index, the last rendered position
-// is start+maxShow-1 (sliding window) - the old absolute `i < maxShow-1`
-// dropped separators once the window slid (start>0), gluing chips together.
-
 import (
 	"strings"
 	"testing"
@@ -16,7 +11,7 @@ func TestIssue3431_SeparatorCountInSlidingWindow(t *testing.T) {
 	for _, n := range names {
 		m.subAgentFollow.slots = append(m.subAgentFollow.slots, followSlot{ID: n, Name: n})
 	}
-	// Active on the LAST slot -> window slides to [2,6], per the issue repro.
+
 	m.subAgentFollow.activeID = "g"
 
 	out := m.renderSubAgentFollowStrip()
@@ -27,7 +22,7 @@ func TestIssue3431_SeparatorCountInSlidingWindow(t *testing.T) {
 }
 
 func TestIssue3431_SeparatorCountNoSlide(t *testing.T) {
-	// Regression pin: start=0 window still renders maxShow-1 separators.
+
 	m := newTestModel()
 	for _, n := range []string{"a", "b", "c", "d", "e"} {
 		m.subAgentFollow.slots = append(m.subAgentFollow.slots, followSlot{ID: n, Name: n})

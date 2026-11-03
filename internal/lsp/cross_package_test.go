@@ -7,7 +7,7 @@ import (
 )
 
 func TestCrossPackageDiagnostics_NoServer(t *testing.T) {
-	// With no LSP server available, should return nil, nil.
+
 	diags, err := CrossPackageDiagnostics(t.Context(), "/nonexistent/workspace", "/nonexistent/workspace/foo.go")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
@@ -28,16 +28,14 @@ func TestCrossPackageDiagnostics_NonGoFile(t *testing.T) {
 }
 
 func TestGoPackageImportPath(t *testing.T) {
-	// Create a temp module structure.
+
 	tmp := t.TempDir()
 	moduleDir := filepath.Join(tmp, "mymod")
 	pkgDir := filepath.Join(moduleDir, "internal", "agent")
 	os.MkdirAll(pkgDir, 0755)
 
-	// Write go.mod.
 	os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte("module github.com/example/mymod\n\ngo 1.23\n"), 0644)
 
-	// Write a Go file in the package.
 	goFile := filepath.Join(pkgDir, "agent.go")
 	os.WriteFile(goFile, []byte("package agent\n"), 0644)
 
@@ -206,7 +204,7 @@ func TestSortCandidatesByErrorCount(t *testing.T) {
 }
 
 func TestCrossPackageDiagnostics_Integration(t *testing.T) {
-	// Create a mini Go module with two packages.
+
 	tmp := t.TempDir()
 	moduleDir := filepath.Join(tmp, "mymod")
 	pkgADir := filepath.Join(moduleDir, "pkg", "a")
@@ -214,18 +212,14 @@ func TestCrossPackageDiagnostics_Integration(t *testing.T) {
 	os.MkdirAll(pkgADir, 0755)
 	os.MkdirAll(pkgBDir, 0755)
 
-	// Write go.mod.
 	os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte("module github.com/example/mymod\n\ngo 1.23\n"), 0644)
 
-	// Write package a (the edited package).
 	fileA := filepath.Join(pkgADir, "a.go")
 	os.WriteFile(fileA, []byte("package a\n\nfunc Foo() {}\n"), 0644)
 
-	// Write package b (depends on a).
 	fileB := filepath.Join(pkgBDir, "b.go")
 	os.WriteFile(fileB, []byte("package b\n\nimport \"github.com/example/mymod/pkg/a\"\n\nfunc Bar() { a.Foo() }\n"), 0644)
 
-	// Verify package import path derivation.
 	pkgPath, ok := goPackageImportPath(moduleDir, fileA)
 	if !ok {
 		t.Fatal("expected ok=true for package path derivation")
@@ -235,12 +229,10 @@ func TestCrossPackageDiagnostics_Integration(t *testing.T) {
 		t.Fatalf("expected %q, got %q", expectedPkg, pkgPath)
 	}
 
-	// Verify import detection.
 	if !fileImportsPackage(fileB, pkgPath) {
 		t.Fatal("expected fileB to import package a")
 	}
 
-	// Verify that fileA itself is NOT detected as importing its own package.
 	if fileImportsPackage(fileA, pkgPath) {
 		t.Fatal("fileA should not import its own package")
 	}

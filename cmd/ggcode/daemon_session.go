@@ -12,8 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// pickSessionInteractive lists up to 10 sessions for the current workspace and reads the user's choice from stdin.
-// Returns the selected session ID, or empty string to start a new session.
 func pickSessionInteractive(store session.Store, lang daemon.Lang) string {
 	sessions, err := store.List()
 	if err != nil || len(sessions) == 0 {
@@ -21,7 +19,6 @@ func pickSessionInteractive(store session.Store, lang daemon.Lang) string {
 		return ""
 	}
 
-	// Filter to current workspace only
 	workingDir, _ := os.Getwd()
 	filtered := agentruntime.FilterWorkspaceSessions(sessions, workingDir)
 	if len(filtered) == 0 {
@@ -29,7 +26,6 @@ func pickSessionInteractive(store session.Store, lang daemon.Lang) string {
 		return ""
 	}
 
-	// Limit to latest 10
 	if len(filtered) > 10 {
 		filtered = filtered[:10]
 	}

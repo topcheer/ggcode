@@ -10,10 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// TestSearchSessions_OverlongLineKeepsHits (#478): a session file containing
-// a single >10MB JSONL line (e.g. a base64 image blob) must not abort the
-// whole scan. Hits from lines BEFORE the oversized line and from lines AFTER
-// it must both be returned; the oversized line itself is skipped.
 func TestSearchSessions_OverlongLineKeepsHits(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewJSONLStore(dir)
@@ -29,15 +25,11 @@ func TestSearchSessions_OverlongLineKeepsHits(t *testing.T) {
 	if err := store.Save(ses); err != nil {
 		t.Fatal(err)
 	}
-	// AppendMessagesBatchToDisk writes the JSONL AND registers the session
-	// in the on-disk index (updateIndex) — loadIndex-driven SearchSessions
-	// only sees sessions present there.
+
 	if err := store.AppendMessagesBatchToDisk(ses, ses.Messages); err != nil {
 		t.Fatal(err)
 	}
 
-	// Hand-craft the JSONL on disk: hit -> >10MB oversized line -> hit.
-	// This mirrors the issue's reproduction (base64 ImageData inline).
 	path := filepath.Join(dir, ses.ID+".jsonl")
 	hit1 := `{"type":"message","message":{"role":"user","content":[{"type":"text","text":"How do I implement OAuth2 token refresh?"}]}}`
 	hit2 := `{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"OAuth2 refresh token grant flow explained"}]}}`
@@ -55,7 +47,7 @@ func TestSearchSessions_OverlongLineKeepsHits(t *testing.T) {
 	if len(results) != 2 {
 		t.Fatalf("expected 2 hits around the oversized line, got %d — hits silently dropped (#478)", len(results))
 	}
-	// Both sides of the blob must be present.
+
 	seenUser, seenAssistant := false, false
 	for _, r := range results {
 		if r.Role == "user" {
@@ -70,9 +62,6 @@ func TestSearchSessions_OverlongLineKeepsHits(t *testing.T) {
 	}
 }
 
-// TestReadLineLimited verifies the bounded reader primitive: normal lines
-// pass through, oversized lines are consumed-and-skipped without killing
-// the stream.
 func TestReadLineLimited(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "f.txt")

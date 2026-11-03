@@ -1,12 +1,5 @@
 package knight
 
-// Tests for issue #977 fixes:
-//  1. In-process mutual exclusion for analyzeRecentSessions (tick vs
-//     PerformSkillAnalysis double-analysis TOCTOU).
-//  2. Symmetric A/B replay fingerprints (baseline includes name/description).
-//  3. Eval log hardening: RawOutput truncation, oversized-line skipping,
-//     size-based rotation.
-
 import (
 	"context"
 	"os"
@@ -22,10 +15,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// barrierStore widens the eligibility-check race window deterministically:
-// the first List() blocks until a second concurrent List() arrives (or a
-// short timeout expires), so a missing in-flight guard reliably leads to a
-// double analysis.
 type barrierStore struct {
 	session.Store
 	lists atomic.Int32
@@ -49,17 +38,8 @@ func (s *barrierStore) Load(id string) (*session.Session, error) {
 	return s.Store.Load(id)
 }
 
-// TestAnalyzeRecentSessionsInFlightMutualExclusion verifies that concurrent
-// entry points (the tick path via analyzeRecentSessions and the daemon
-// command path via PerformSkillAnalysis) never analyze the same session
-// twice: the in-flight guard must make exactly one of them do the work.
 func TestAnalyzeRecentSessionsInFlightMutualExclusion(t *testing.T) {
-	// Not t.TempDir(): the JSONL store schedules a background runMaintenance
-	// goroutine (store.go scheduleMaintenanceLocked) that rewrites index and
-	// session files under the sessions dir. When the test finishes before
-	// maintenance does, t.TempDir's RemoveAll races it and fails with
-	// "unlinkat ... directory not empty" (observed on CI). A retried removal
-	// tolerates the async writer without weakening the test's assertion.
+
 	dir, err := os.MkdirTemp("", "knight-issue977-")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
@@ -110,8 +90,7 @@ func TestAnalyzeRecentSessionsInFlightMutualExclusion(t *testing.T) {
 	cfg := config.DefaultKnightConfig()
 	cfg.Enabled = true
 	k := New(cfg, homeDir, projDir, store)
-	// Set running before spawning goroutines so the unsynchronized read in
-	// CanPerformTask has a happens-before edge (mirrors production Start).
+
 	k.mu.Lock()
 	k.running = true
 	k.mu.Unlock()
@@ -137,9 +116,6 @@ func TestAnalyzeRecentSessionsInFlightMutualExclusion(t *testing.T) {
 	}
 }
 
-// TestBaselineReplayBodyIncludesNameAndDescription verifies the baseline
-// fingerprint carries the entry's name and description alongside the body,
-// keeping the A/B replay comparison symmetric with the candidate side.
 func TestBaselineReplayBodyIncludesNameAndDescription(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "skill.md")
@@ -158,7 +134,7 @@ func TestBaselineReplayBodyIncludesNameAndDescription(t *testing.T) {
 			t.Fatalf("baselineReplayBody(%+v) = %q, missing %q", e, got, want)
 		}
 	}
-	// Unreadable body still fingerprints name+description.
+
 	e2 := &SkillEntry{Name: "n", Meta: SkillMeta{Description: "d"}, Path: filepath.Join(dir, "missing.md")}
 	if got2 := baselineReplayBody(e2); !strings.Contains(got2, "n") || !strings.Contains(got2, "d") {
 		t.Fatalf("baselineReplayBody with unreadable path = %q, want name+description", got2)
@@ -168,9 +144,6 @@ func TestBaselineReplayBodyIncludesNameAndDescription(t *testing.T) {
 	}
 }
 
-// TestABReplayBaselineFingerprintSymmetric verifies through computeABReplayScore
-// that a baseline whose name/description match recent scenarios scores higher
-// than a body-only fingerprint - i.e., baseline trigger words now count.
 func TestABReplayBaselineFingerprintSymmetric(t *testing.T) {
 	scenarios := []SkillScenarioLogEntry{
 		{Task: "deploy via github actions workflow", Success: true},
@@ -189,8 +162,6 @@ func TestABReplayBaselineFingerprintSymmetric(t *testing.T) {
 	}
 }
 
-// TestParseAutoPromoteEvalDecisionTruncatesRawOutput verifies oversized LLM
-// output is truncated at parse time while structured fields still parse.
 func TestParseAutoPromoteEvalDecisionTruncatesRawOutput(t *testing.T) {
 	out := strings.Repeat("a", 200*1024) + "\npromote: yes\nreplay: pass\nrationale: good enough\n"
 	d := parseAutoPromoteEvalDecision(out)
@@ -208,8 +179,6 @@ func TestParseAutoPromoteEvalDecisionTruncatesRawOutput(t *testing.T) {
 	}
 }
 
-// TestAppendAutoPromoteEvalTruncatesRawOutput verifies the append choke point
-// truncates RawOutput even when the decision struct carries a huge value.
 func TestAppendAutoPromoteEvalTruncatesRawOutput(t *testing.T) {
 	dir := t.TempDir()
 	k := New(config.DefaultKnightConfig(), dir, dir, nil)
@@ -228,9 +197,6 @@ func TestAppendAutoPromoteEvalTruncatesRawOutput(t *testing.T) {
 	}
 }
 
-// TestRecentAutoPromoteEvalsSkipsOversizedLines verifies an oversized line in
-// the middle of the log is skipped individually without failing the whole
-// read, so surrounding valid entries are still returned.
 func TestRecentAutoPromoteEvalsSkipsOversizedLines(t *testing.T) {
 	dir := t.TempDir()
 	k := New(config.DefaultKnightConfig(), dir, dir, nil)
@@ -253,8 +219,6 @@ func TestRecentAutoPromoteEvalsSkipsOversizedLines(t *testing.T) {
 	}
 }
 
-// TestAutoPromoteEvalLogRotation verifies the log rotates to ".1" once it
-// exceeds the configured size threshold, keeping one previous generation.
 func TestAutoPromoteEvalLogRotation(t *testing.T) {
 	dir := t.TempDir()
 	k := New(config.DefaultKnightConfig(), dir, dir, nil)

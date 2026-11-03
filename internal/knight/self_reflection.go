@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// SelfReflectionReport summarizes Knight's recent activity for human-visible
-// output and for appending a meta-lesson to semantic memory.
 type SelfReflectionReport struct {
 	Window           time.Duration
 	ActiveSkills     int
@@ -22,10 +20,6 @@ type SelfReflectionReport struct {
 	GeneratedAt      time.Time
 }
 
-// RunSelfReflection inspects Knight's own recent decisions and produces a short
-// summary. It is a low-cost, deterministic pass — no LLM call. The summary is
-// also appended to semantic memory as a meta-lesson so future analyzer + eval
-// prompts see how earlier Knight decisions actually turned out.
 func (k *Knight) RunSelfReflection(_ context.Context, window time.Duration) (SelfReflectionReport, error) {
 	if k == nil {
 		return SelfReflectionReport{}, fmt.Errorf("knight: nil receiver")
@@ -37,11 +31,6 @@ func (k *Knight) RunSelfReflection(_ context.Context, window time.Duration) (Sel
 	}
 	cutoff := time.Now().Add(-window)
 
-	// #3638 / #1262 discipline: an unreadable index must fail the report,
-	// never surface as "active=0 staging=0" - that false conclusion would
-	// be written to semantic memory as a meta-lesson and pollute later
-	// analyzer/eval prompts. governance.go propagates Scan failures the
-	// same way.
 	active, err := k.index.ActiveSkills()
 	if err != nil {
 		return report, fmt.Errorf("self-reflection: active skills unavailable: %w", err)
@@ -108,8 +97,6 @@ func (k *Knight) RunSelfReflection(_ context.Context, window time.Duration) (Sel
 	return report, nil
 }
 
-// MetaLesson renders the report as a single short summary suitable for
-// recording back into semantic memory.
 func (r SelfReflectionReport) MetaLesson() string {
 	parts := []string{
 		fmt.Sprintf("active=%d staging=%d", r.ActiveSkills, r.StagingSkills),
@@ -152,7 +139,6 @@ func (r SelfReflectionReport) MetaLesson() string {
 	return "self-reflection: " + strings.Join(parts, "; ")
 }
 
-// FormatHuman returns a multi-line human-readable rendering of the report.
 func (r SelfReflectionReport) FormatHuman() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Knight self-reflection (window: %s)\n", r.Window)

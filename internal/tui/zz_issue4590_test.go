@@ -12,9 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// newImpersonateTestModel builds the minimal Model needed to drive
-// applyImpersonateSettings: a panel with a chosen version and a config rooted
-// at dir.
 func newImpersonateTestModel(t *testing.T, dir, version string) *Model {
 	t.Helper()
 	cfg, err := config.Load(filepath.Join(dir, "ggcode-test.yaml"))
@@ -32,29 +29,20 @@ func newImpersonateTestModel(t *testing.T, dir, version string) *Model {
 	return m
 }
 
-// #4590: a failed SaveImpersonation must roll the runtime impersonation back
-// to the previous identity - runtime and disk must not fork.
 func TestIssue4590_PersistFailureRollsBackRuntime(t *testing.T) {
-	// Failure injection: seed a plain writable config file first (so Load
-	// succeeds and pins the path), then swap the file for a directory.
-	// patchConfigFile's os.ReadFile then fails with EISDIR (not IsNotExist),
-	// so the persist reliably errors on every platform.
+
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "ggcode-test.yaml")
 	if err := os.WriteFile(fp, []byte("version: 1.3.0\n"), 0o644); err != nil {
 		t.Fatalf("seed config: %v", err)
 	}
 
-	// Establish the "old" identity the disk will keep.
 	oldHdrs := map[string]string{"X-Old": "1"}
 	provider.SetActiveImpersonation(nil, "v100.0", oldHdrs)
 	t.Cleanup(func() { provider.SetActiveImpersonation(nil, "", nil) })
 
-	// Load while the path is still a valid file (pins the config path).
 	m := newImpersonateTestModel(t, dir, "v131.0")
 
-	// Now swap the file for a directory: the next SaveImpersonation
-	// reliably fails with EISDIR.
 	if err := os.Remove(fp); err != nil {
 		t.Fatalf("remove seed: %v", err)
 	}
@@ -82,7 +70,6 @@ func TestIssue4590_PersistFailureRollsBackRuntime(t *testing.T) {
 	}
 }
 
-// Happy path: writable directory keeps the NEW identity (no over-rollback).
 func TestIssue4590_SuccessKeepsNewIdentity(t *testing.T) {
 	dir := t.TempDir()
 	provider.SetActiveImpersonation(nil, "", nil)

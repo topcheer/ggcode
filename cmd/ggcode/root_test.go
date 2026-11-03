@@ -125,9 +125,7 @@ vendors:
 	if !proceed {
 		t.Fatal("expected startup to continue after migration")
 	}
-	// #1444-A: the notice runs BEFORE Load() - migration has NOT happened
-	// yet (and never does under GGCODE_SKIP_AUTOCONFIG). The wording must
-	// say found/will-migrate, never a false 'Migrated' claim.
+
 	if !strings.Contains(out.String(), "will be migrated") {
 		t.Fatalf("expected found/will-migrate notice, got %q", out.String())
 	}
@@ -157,8 +155,7 @@ vendors:
 	if !proceed {
 		t.Fatal("expected migration to continue startup")
 	}
-	// The second call still detects plaintext (migration happens in Load(),
-	// not in this function). But it always returns true to allow startup.
+
 	var second bytes.Buffer
 	proceed, err = confirmPlaintextAPIKeysBeforeTUI(path, strings.NewReader("n\n"), &second, true)
 	if err != nil {
@@ -184,7 +181,7 @@ vendors:
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	var out bytes.Buffer
-	// Auto-migration always succeeds — the function no longer blocks startup.
+
 	proceed, err := confirmPlaintextAPIKeysBeforeTUI(path, strings.NewReader(""), &out, false)
 	if err != nil {
 		t.Fatalf("confirmPlaintextAPIKeysBeforeTUI() unexpected error = %v", err)
@@ -208,9 +205,6 @@ func TestResumeFlagWithValueIsParsedCorrectly(t *testing.T) {
 	}
 }
 
-// TestPlainFlagRegistered (sa-46): --plain must exist on the root command;
-// its runtime effect (setting NO_COLOR) is covered by the daemon package's
-// TestColorEnabledRespectsNoColor - this only pins the CLI surface.
 func TestPlainFlagRegistered(t *testing.T) {
 	cmd := NewRootCmd()
 	if err := cmd.ParseFlags([]string{"--plain"}); err != nil {
@@ -225,10 +219,6 @@ func TestPlainFlagRegistered(t *testing.T) {
 	}
 }
 
-// TestPersistSessionFlagRegistered pins the CLI surface of
-// --persist-session: registered, bool, default off (persistence is opt-in;
-// the default plain behavior stays memory-only). Wiring semantics are
-// covered by TestWirePlainPersistNilAgentGuard and live verification.
 func TestPersistSessionFlagRegistered(t *testing.T) {
 	cmd := NewRootCmd()
 	if err := cmd.ParseFlags([]string{"--persist-session"}); err != nil {
@@ -541,10 +531,6 @@ func TestRootUsageUsesCompactFlagLayout(t *testing.T) {
 	}
 }
 
-// TestParseA2AMaxTasks pins #1422-A: a zero/negative MaxTasks (first-run
-// --bypass install where Validate's early return skips the default fill)
-// falls back to 5 instead of overriding the handler default and rejecting
-// the first task.
 func TestParseA2AMaxTasks(t *testing.T) {
 	for _, in := range []int{0, -1} {
 		if got := parseA2AMaxTasks(in); got != 5 {
@@ -556,10 +542,6 @@ func TestParseA2AMaxTasks(t *testing.T) {
 	}
 }
 
-// TestLocalA2ASkills pins the #3547 broadcast filter: only non-bundled skills
-// with a description are advertised in the A2A Agent Card (bundled ones are
-// represented by a2a.DefaultSkills' generic set; description-less skills
-// carry no discovery value), with DisplayName falling back to Name.
 func TestLocalA2ASkills(t *testing.T) {
 	if got := localA2ASkills(nil); got != nil {
 		t.Fatalf("localA2ASkills(nil) = %v, want nil", got)
@@ -579,8 +561,7 @@ func TestLocalA2ASkills(t *testing.T) {
 		}
 	}
 	writeSkill("deploy-vercel", "description: Ship the project to Vercel\n", "body")
-	// no frontmatter description AND no body: the loader fills Description
-	// from the SKILL.md body, so both must be empty for the filter to bite.
+
 	writeSkill("bare-skill", "", "")
 
 	mgr := commands.NewManager(dir)

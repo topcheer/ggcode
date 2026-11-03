@@ -10,8 +10,6 @@ import (
 	"testing"
 )
 
-// #3260 probes: cross-writer lost-update + fixed-tmp collision are gone.
-
 func readTeammateExpLines(t *testing.T, workingDir string) []teammateExperienceEntry {
 	t.Helper()
 	data, err := os.ReadFile(teammateExpPath(workingDir))
@@ -74,8 +72,8 @@ func TestAppendTeammateExperience_SequentialAccumulates(t *testing.T) {
 
 func TestAppendTeammateExperience_EmptyInputsNoop(t *testing.T) {
 	dir := t.TempDir()
-	appendTeammateExperience("", "t", "a", "", "x")       // no working dir
-	appendTeammateExperience(dir, "t", "a", "", "   \t ") // whitespace-only result
+	appendTeammateExperience("", "t", "a", "", "x")
+	appendTeammateExperience(dir, "t", "a", "", "   \t ")
 	if _, err := os.Stat(teammateExpPath(dir)); !os.IsNotExist(err) {
 		t.Fatal("empty inputs must not create the ledger")
 	}

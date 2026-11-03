@@ -21,7 +21,6 @@ func TestExportTrace_ValidJSON(t *testing.T) {
 		t.Fatal("ExportTrace returned empty data")
 	}
 
-	// Verify it's valid JSON by unmarshalling.
 	var doc TraceDocument
 	if err := json.Unmarshal(data, &doc); err != nil {
 		t.Fatalf("ExportTrace produced invalid JSON: %v", err)
@@ -51,14 +50,14 @@ func TestExportTrace_ValidJSON(t *testing.T) {
 	if doc.ExportedAt.IsZero() {
 		t.Error("expected exported_at to be set")
 	}
-	// Verify span tree is populated.
+
 	if doc.SpanTree.Kind != "session" {
 		t.Errorf("expected span_tree kind 'session', got %q", doc.SpanTree.Kind)
 	}
 	if len(doc.SpanTree.Children) != 2 {
 		t.Errorf("expected 2 turn spans, got %d", len(doc.SpanTree.Children))
 	}
-	// Verify waterfall analysis is populated.
+
 	if len(doc.Waterfall) != 2 {
 		t.Errorf("expected 2 waterfall analyses, got %d", len(doc.Waterfall))
 	}
@@ -81,7 +80,7 @@ func TestExportTrace_EmptyEvents(t *testing.T) {
 	if len(doc.Events) != 0 {
 		t.Errorf("expected 0 events, got %d", len(doc.Events))
 	}
-	// Empty events should still produce a valid (empty) span tree root.
+
 	if doc.SpanTree.Kind != "session" {
 		t.Errorf("expected span_tree kind 'session' for empty, got %q", doc.SpanTree.Kind)
 	}
@@ -114,12 +113,10 @@ func TestExportTrace_IncludesToolSummaries(t *testing.T) {
 		t.Fatalf("invalid JSON: %v", err)
 	}
 
-	// Should have 2 tool summaries (read_file, grep)
 	if len(doc.Summary.SlowTools) != 2 {
 		t.Fatalf("expected 2 tool summaries, got %d", len(doc.Summary.SlowTools))
 	}
 
-	// Find read_file summary
 	var readFileSummary *ToolSummary
 	for i := range doc.Summary.SlowTools {
 		if doc.Summary.SlowTools[i].Name == "read_file" {
@@ -132,7 +129,7 @@ func TestExportTrace_IncludesToolSummaries(t *testing.T) {
 	if readFileSummary.Calls != 3 {
 		t.Errorf("expected 3 calls for read_file, got %d", readFileSummary.Calls)
 	}
-	// Verify error spans are extracted (1 tool failed with error).
+
 	if len(doc.ErrorSpans) != 1 {
 		t.Errorf("expected 1 error span, got %d", len(doc.ErrorSpans))
 	}

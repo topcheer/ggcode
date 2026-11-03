@@ -279,9 +279,7 @@ func (m *Model) createIRCAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 4 {
 			return ircBindResultMsg{err: errors.New(m.t("panel.irc.error.config_format"))}
 		}
-		// #2797 (a #1370-C recurrence): Fields splits on whitespace -
-		// channels WITH spaces was silently truncated to its first token.
-		// Reject extras.
+
 		if len(fields) > 4 {
 			return ircBindResultMsg{err: errors.New("extra fields after channels (values must not contain spaces): " + spec)}
 		}
@@ -298,9 +296,8 @@ func (m *Model) createIRCAdapterCmd(spec string) tea.Cmd {
 				"channels": channels,
 			},
 		}
-		// #1367 family batch 2: config write + disk save moved onto
-		// the Update loop via configMutationMsg (see config_mutation.go).
-		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
+
+		imEnabledBefore := false
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				imEnabledBefore = m.config.IM.Enabled
@@ -310,19 +307,13 @@ func (m *Model) createIRCAdapterCmd(spec string) tea.Cmd {
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
 					rollback := func(origErr error) tea.Msg {
-						// #2797 (a #1370-B recurrence): the adapter was already
-						// persisted with its plaintext nick - without
-						// compensation a wrong credential stays on disk forever
-						// and blocks the name on retry ("already exists"); the
-						// panel has no delete key. The rollback REMOVE is itself
-						// a map write, so it must route through configMutationMsg
-						// too (#1367) - never touch config on this Cmd goroutine.
+
 						return configMutationMsg{
 							apply: func(m *Model) error {
 								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 									return rerr
 								}
-								m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
+								m.config.IM.Enabled = imEnabledBefore
 								return m.saveConfig()
 							},
 							next: func(m *Model) tea.Cmd {
@@ -367,9 +358,7 @@ func (m *Model) startIRCAdapterIfNeeded(name string) error {
 	if !ok {
 		return fmt.Errorf(m.t("panel.irc.error.not_configured"), name)
 	}
-	// #1378-A: disabled adapters must go through bindIRCEntry's
-	// configMutationMsg auto-enable path - the SetIMAdapterEnabled map
-	// write never runs on this Cmd-goroutine function anymore.
+
 	if !adapterCfg.Enabled {
 		return fmt.Errorf("adapter %s is disabled - bind from the panel to enable it", name)
 	}
@@ -392,10 +381,7 @@ func (m *Model) bindIRCEntry(entry ircBindingEntry) tea.Cmd {
 		if m.imManager == nil {
 			return ircBindResultMsg{err: errors.New(m.t("panel.irc.error.config_unavailable"))}
 		}
-		// Start the adapter if not already running. #1378-A: the old
-		// auto-enable inside startIRCAdapterIfNeeded ran a Cmd-goroutine
-		// map write; a disabled adapter now routes the enable through
-		// configMutationMsg and the full bind chain continues in next().
+
 		bindRest := func(m *Model) tea.Msg {
 			if err := m.startIRCAdapterIfNeeded(entry.Adapter); err != nil {
 				return ircBindResultMsg{err: err}
@@ -451,11 +437,7 @@ func (m *Model) clearIRCChannel(adapterName string) tea.Cmd {
 		if m.imManager == nil {
 			return ircBindResultMsg{}
 		}
-		// #898: this was byte-for-byte the u-key UNBIND path — pressing x to
-		// clear the channel silently lost the whole workspace binding.
-		// Clear channel fields only, keep the binding (same semantics as
-		// the generic panel's clearIMPanelChannel). #905: report not-found
-		// instead of a false 'cleared' when no binding matches.
+
 		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
 			return ircBindResultMsg{err: err}
 		}

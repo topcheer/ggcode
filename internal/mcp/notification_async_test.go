@@ -14,13 +14,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// TestNotificationHandlerNotDeadlockedOnReadMu (fix #255): a notification
-// handler that re-enters the client (e.g. refreshTools → ListTools → a new
-// readResponseWithCancel acquiring readMu) must not deadlock against the read
-// loop that dispatched the notification. Previously the handler ran
-// synchronously inside readResponse while readMu was held: the re-entrant
-// read blocked on readMu, the request timed out, and Abort() killed the stdio
-// process — taking down every in-flight request.
 func TestNotificationHandlerNotDeadlockedOnReadMu(t *testing.T) {
 	stream := encodeStdioMessages(
 		t,
@@ -30,26 +23,20 @@ func TestNotificationHandlerNotDeadlockedOnReadMu(t *testing.T) {
 	client := &Client{
 		name:   "notif-deadlock-test",
 		reader: bufio.NewReader(bytes.NewReader(stream)),
-		// Channels must be initialized when bypassing the constructors (fix #292
-		// moved channel creation from lazy init into NewClient/NewClientFromConfig).
+
 		notificationCh:   make(chan *Notification, notificationChanSize),
 		notificationDone: make(chan struct{}),
 	}
 
-	// Handler simulates the mcp_loader refresh path: it issues a follow-up
-	// read that would need readMu. Deliberately blocked until we confirm the
-	// read loop finished the outer read (i.e. handler is NOT on its stack).
 	outerReadDone := make(chan struct{})
 	reentered := make(chan struct{}, 1)
 	var once sync.Once
 	client.SetNotificationHandler(func(method string, params json.RawMessage) {
-		// Wait until the outer readResponse has returned, proving the handler
-		// is running on its own goroutine and the read loop released readMu.
+
 		select {
 		case <-outerReadDone:
 		case <-time.After(5 * time.Second):
-			// The outer read cannot finish while the handler blocks it if the
-			// handler were (bug) invoked synchronously inside the read loop.
+
 		}
 		once.Do(func() { close(reentered) })
 	})
@@ -69,8 +56,6 @@ func TestNotificationHandlerNotDeadlockedOnReadMu(t *testing.T) {
 	}
 }
 
-// TestNotificationOrderPreservedAsyncDispatch (fix #255): notifications are
-// delivered to the handler in arrival order despite asynchronous dispatch.
 func TestNotificationOrderPreservedAsyncDispatch(t *testing.T) {
 	stream := encodeStdioMessages(
 		t,
@@ -82,8 +67,7 @@ func TestNotificationOrderPreservedAsyncDispatch(t *testing.T) {
 	client := &Client{
 		name:   "notif-order-test",
 		reader: bufio.NewReader(bytes.NewReader(stream)),
-		// Channels must be initialized when bypassing the constructors (fix #292
-		// moved channel creation from lazy init into NewClient/NewClientFromConfig).
+
 		notificationCh:   make(chan *Notification, notificationChanSize),
 		notificationDone: make(chan struct{}),
 	}
@@ -114,13 +98,9 @@ func TestNotificationOrderPreservedAsyncDispatch(t *testing.T) {
 	}
 }
 
-// TestAdapterMultibyteTruncationValidUTF8 (fix #262): truncating a >50KB
-// result made of multi-byte runes must still produce valid UTF-8. The old
-// byte-slice cut split Chinese characters into invalid sequences.
 func TestAdapterMultibyteTruncationValidUTF8(t *testing.T) {
-	// 3-byte runes: ensure the 50KB boundary lands mid-rune with high
-	// probability; 60000 bytes of "中" = 20000 runes.
-	big := strings.Repeat("中", 20000) // 60000 bytes > 51200 cap
+
+	big := strings.Repeat("中", 20000)
 	if len(big) <= 50*1024 {
 		t.Fatalf("test content must exceed cap: %d bytes", len(big))
 	}

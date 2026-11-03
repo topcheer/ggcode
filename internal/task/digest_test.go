@@ -63,7 +63,7 @@ func TestDigestCapsListedTasks(t *testing.T) {
 
 func TestDigestRuneSafeCap(t *testing.T) {
 	m := NewManager()
-	// CJK subject: byte cut would split runes and emit U+FFFD.
+
 	m.Create(strings.Repeat("你好世界", 100), "desc", "", nil)
 	got := m.Digest(20, 60)
 	if strings.ContainsRune(got, utf8.RuneError) {

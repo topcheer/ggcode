@@ -1,11 +1,5 @@
 package tui
 
-// #2211 (+ family): the #887 Muted-details fix never propagated - feishu,
-// wecom, and whatsapp details chains had only Disabled/bound branches, so a
-// conflict-muted bot showed "Muted" in the list but "Bound"/"Available" in
-// the details on the same screen. This pins the branch ORDER (Disabled >
-// Muted > bound > available) by source pinning all three panels.
-
 import (
 	"os"
 	"strings"
@@ -31,8 +25,7 @@ func TestIssue2211DetailsMutedBranchPresent(t *testing.T) {
 			t.Errorf("%s: no entry.Muted branch", c.file)
 			continue
 		}
-		// Muted must come BEFORE the bound branch (bound would otherwise
-		// shadow a muted+bound bot - the visible state is Muted).
+
 		bound := strings.Index(src, "entry.OccupiedBy != \"\"")
 		if bound >= 0 && i > bound {
 			t.Errorf("%s: Muted branch must precede the bound branch", c.file)

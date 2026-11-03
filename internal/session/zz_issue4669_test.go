@@ -10,11 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// Regression guard for #4669: EnsureMeta's initial on-disk meta record must
-// persist Preview and TasksEnvJSON exactly like appendMetaLocked does.
-// Pre-fix, a fresh session whose only meta record came from EnsureMeta
-// reloaded with an empty VCS fingerprint, so the workspace-change check
-// misfired and rebuilt the task environment on every load.
 func TestEnsureMeta_PersistsTasksEnvAndPreview(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewJSONLStore(dir)
@@ -26,8 +21,7 @@ func TestEnsureMeta_PersistsTasksEnvAndPreview(t *testing.T) {
 	ses.Title = "t"
 	ses.Preview = "first preview"
 	ses.TasksEnvJSON = []byte(`{"branch":"main","head":"abc123","dirty":2}`)
-	// EnsureMeta skips file creation for sessions with no user interaction
-	// (see #4356 comment at the guard) - mirror a real first-turn session.
+
 	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}}}
 	if err := store.EnsureMeta(ses); err != nil {
 		t.Fatalf("EnsureMeta: %v", err)

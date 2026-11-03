@@ -12,12 +12,10 @@ func TestFindSystemFonts(t *testing.T) {
 	fonts := FindSystemFonts()
 	t.Logf("Found %d system fonts", len(fonts))
 
-	// On any reasonable system there should be at least one font
 	if len(fonts) == 0 {
 		t.Log("WARNING: no system fonts found — rendering will use built-in Latin-only font")
 	}
 
-	// Check that results have valid paths
 	for _, f := range fonts {
 		if f.Path == "" {
 			t.Error("font has empty path")
@@ -33,13 +31,12 @@ func TestFindCJKFont(t *testing.T) {
 	path := FindCJKFont()
 	if path == "" {
 		t.Log("No CJK font found on this system — CJK characters may render as boxes")
-		// Not a test failure — CI may not have CJK fonts
+
 		return
 	}
 
 	t.Logf("CJK font: %s", path)
 
-	// Verify the file exists
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("CJK font path does not exist: %s: %v", path, err)
 	}
@@ -112,19 +109,17 @@ func TestIsMonoFont(t *testing.T) {
 }
 
 func TestReadFontFile(t *testing.T) {
-	// Empty path
+
 	_, err := ReadFontFile("")
 	if err == nil {
 		t.Error("expected error for empty path")
 	}
 
-	// Non-existent file
 	_, err = ReadFontFile("/nonexistent/font.ttf")
 	if err == nil {
 		t.Error("expected error for non-existent file")
 	}
 
-	// Try to read an actual font if available
 	cjkPath := FindCJKFont()
 	if cjkPath != "" {
 		data, err := ReadFontFile(cjkPath)
@@ -150,7 +145,7 @@ func TestScoreFont(t *testing.T) {
 	tests := []struct {
 		name     string
 		filename string
-		minScore int // minimum expected score
+		minScore int
 	}{
 		{"CJK mono", "SarasaMonoCJK-Regular.ttf", 150},
 		{"CJK only", "PingFang-SC-Regular.ttf", 100},
@@ -175,7 +170,6 @@ func TestSortResults(t *testing.T) {
 	}
 	sortResults(results)
 
-	// CJK font should come first
 	if !results[0].IsCJK {
 		t.Errorf("expected CJK font first, got %q", results[0].Name)
 	}

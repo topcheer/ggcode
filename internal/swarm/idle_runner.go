@@ -15,12 +15,6 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// runTeammateLoop is the core idle loop for a teammate.
-// It processes messages from the inbox AND periodically polls the team's
-// task board for pending tasks to claim.
-// When a "task" message arrives or a pending task is claimed, it uses the
-// agent to execute it.
-// On "shutdown" or context cancellation, it exits.
 func runTeammateLoop(
 	ctx context.Context,
 	tm *Teammate,
@@ -30,14 +24,11 @@ func runTeammateLoop(
 	onEvent func(Event),
 	taskTimeout time.Duration,
 ) {
-	// Panic recovery: ensure we always mark the teammate as done.
+
 	defer func() {
 		if r := recover(); r != nil {
 			debug.Log("swarm", "teammate panic recovered teammate=%s error=%v stack=%s", tm.ID, r, string(runtimedebug.Stack()))
-			// #1688 case 1: roll the in-flight task BACK on the board - the
-			// old recovery only marked the teammate done, leaving the task
-			// stuck in_progress forever (claim only scans pending), so every
-			// BlockedBy dependent was blocked by allBlockersComplete forever.
+
 			rollbackClaimedTask(mgr, team, tm)
 			tm.setStatus(TeammateShuttingDown)
 			if onEvent != nil {
@@ -50,7 +41,14 @@ func runTeammateLoop(
 				})
 			}
 		}
-		// Signal that this goroutine has exited.
+
+		// #4367: record CurrentTaskID IMMEDIATELY after the claim succeeds,
+		// before any code that can panic (probe consumption, onEvent external
+		// callback, prompt building). The deferred rollbackClaimedTask reads
+		// this field; with the old late write, a panic in that window rolled
+		// back a no-op (ID still "" from the previous terminal clear) and the
+		// task leaked in_progress forever (#1688 regression).
+
 		tm.mu.Lock()
 		if tm.done != nil {
 			select {
@@ -66,7 +64,6 @@ func runTeammateLoop(
 	tm.StartedAt = time.Now()
 	tm.mu.Unlock()
 
-	// Poll ticker: how often to check the task board for pending tasks.
 	pollInterval := mgr.cfg.PollInterval
 	if pollInterval <= 0 {
 		pollInterval = 5 * time.Second
@@ -81,7 +78,7 @@ func runTeammateLoop(
 
 		case msg, ok := <-tm.Inbox:
 			if !ok {
-				// inbox closed
+
 				return
 			}
 			switch msg.Type {
@@ -91,7 +88,7 @@ func runTeammateLoop(
 				if ctx.Err() != nil {
 					return
 				}
-				// Hint: try claiming immediately instead of waiting for poller.
+
 				if tm.getStatus() == TeammateIdle {
 					tryClaimPendingTask(ctx, tm, team, agent, mgr, onEvent, taskTimeout)
 				}
@@ -106,7 +103,7 @@ func runTeammateLoop(
 			if ctx.Err() != nil {
 				return
 			}
-			// Only poll when idle — skip if already working on something.
+
 			if tm.getStatus() != TeammateIdle {
 				continue
 			}
@@ -115,7 +112,6 @@ func runTeammateLoop(
 	}
 }
 
-// handleMessage processes an inbox message (task or general message).
 func handleMessage(
 	ctx context.Context,
 	tm *Teammate,
@@ -136,7 +132,7 @@ func handleMessage(
 				Timestamp:  time.Now(),
 			})
 		}
-		// Reply to caller so they don't block forever on ReplyTo channel.
+
 		if msg.ReplyTo != nil {
 			select {
 			case msg.ReplyTo <- TaskResult{Error: fmt.Errorf("teammate %q has no agent", tm.ID)}:
@@ -147,7 +143,7 @@ func handleMessage(
 	}
 
 	tm.mu.Lock()
-	tm.CurrentTaskID = "" // direct messages carry no board ID (#1688)
+	tm.CurrentTaskID = ""
 	tm.mu.Unlock()
 	tm.setStatus(TeammateWorking)
 	tm.setCurrentTask(util.Truncate(msg.Content, 100))
@@ -164,13 +160,11 @@ func handleMessage(
 
 	result, taskErr := executeTask(ctx, agent, msg, tm, onEvent, team, taskTimeout)
 
-	// Send result back to caller if they requested it.
 	if msg.ReplyTo != nil {
 		select {
 		case msg.ReplyTo <- TaskResult{Output: result, Error: taskErr}:
 		case <-ctx.Done():
-			// Caller cancelled or teammate is shutting down; don't block forever
-			// on an unbuffered/abandoned ReplyTo channel.
+
 		}
 	}
 
@@ -178,7 +172,6 @@ func handleMessage(
 
 	debug.Log("swarm", "teammate %s setLastResult len=%d", tm.ID, len(result))
 
-	// If context was cancelled (e.g. CancelAll), don't revert to idle.
 	if ctx.Err() != nil {
 		tm.setStatus(TeammateShuttingDown)
 		return
@@ -193,15 +186,12 @@ func handleMessage(
 			TeammateID:   tm.ID,
 			TeammateName: tm.Name,
 			Result:       util.Truncate(result, 500),
-			Error:        taskErr, // #1497: idle derived success from ev.Error; leaving it unset made failed tasks render green on tunnel clients
+			Error:        taskErr,
 			Timestamp:    time.Now(),
 		})
 	}
 }
 
-// tryClaimPendingTask looks for a pending task on the team's task board and
-// atomically claims it (pending → in_progress) via ExpectedStatus.
-// This is the key bridge between swarm_task_create and teammate auto-pickup.
 func tryClaimPendingTask(
 	ctx context.Context,
 	tm *Teammate,
@@ -211,31 +201,20 @@ func tryClaimPendingTask(
 	onEvent func(Event),
 	taskTimeout time.Duration,
 ) {
-	// No agent → nothing to do.
+
 	if agent == nil {
 		return
 	}
 
-	// r455: failure-storm bulkhead - a teammate with an open circuit
-	// does not claim board tasks (its failures keep starving the team;
-	// healthy teammates pick the tasks up instead). Direct inbox task
-	// delivery is the parent's explicit routing decision and stays
-	// unaffected.
 	if !teammateClaimAllowed(tm.ID) {
 		return
 	}
 
-	// Get the team's task manager (nil if no task board created yet).
 	tmMgr := mgr.GetTaskManager(team.ID)
 	if tmMgr == nil {
 		return
 	}
 
-	// Find eligible tasks (pending, unassigned-to-others, unblocked), then
-	// claim in effective-priority order (r456: priority metadata + aging —
-	// previously the walk was creation-order FIFO and priority had no
-	// runtime effect). Ties keep list order, so boards without priority
-	// metadata behave exactly as before.
 	pending := task.StatusPending
 	inProgress := task.StatusInProgress
 	eligible := make([]task.Task, 0, 8)
@@ -243,14 +222,11 @@ func tryClaimPendingTask(
 		if tk.Status != pending {
 			continue
 		}
-		// Skip tasks assigned to a specific teammate that isn't us.
-		// Those are delivered directly to the assignee's inbox by swarm_task_create.
+
 		if assignee, ok := tk.Metadata["assignee"]; ok && assignee != "" && assignee != tm.ID {
 			continue
 		}
-		// Skip tasks with unmet dependencies — all BlockedBy tasks must be
-		// completed before this task can be claimed. This prevents premature
-		// execution of tasks that depend on other tasks' output.
+
 		if !allBlockersComplete(tmMgr, tk) {
 			continue
 		}
@@ -267,7 +243,6 @@ func tryClaimPendingTask(
 
 	for _, tk := range eligible {
 
-		// Atomically claim: only succeeds if status is still pending.
 		owner := tm.ID
 		claimed, err := tmMgr.Update(tk.ID, task.UpdateOptions{
 			ExpectedStatus: &pending,
@@ -275,29 +250,19 @@ func tryClaimPendingTask(
 			Owner:          &owner,
 		})
 		if err != nil {
-			// Another teammate beat us — continue to next task.
+
 			continue
 		}
-		// #4367: record CurrentTaskID IMMEDIATELY after the claim succeeds,
-		// before any code that can panic (probe consumption, onEvent external
-		// callback, prompt building). The deferred rollbackClaimedTask reads
-		// this field; with the old late write, a panic in that window rolled
-		// back a no-op (ID still "" from the previous terminal clear) and the
-		// task leaked in_progress forever (#1688 regression).
+
 		tm.mu.Lock()
-		tm.CurrentTaskID = claimed.ID // #1688: panic rollback needs the board ID
+		tm.CurrentTaskID = claimed.ID
 		tm.mu.Unlock()
-		// #3245: the claim is REAL now - spend the armed probe slot (if
-		// any) exactly here. Gate passes that never reached a claim left
-		// the circuit OPEN+expired so a later tick can still probe; only
-		// an actually-owned task becomes the probe.
+
 		teammateConsumeProbe(tm.ID)
 		if onEvent != nil {
 			onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
 		}
 
-		// Build prompt from the claimed task, plus findings from its
-		// completed dependencies (dep-chain blackboard sharing).
 		prompt := buildTaskPrompt(claimed) + depFindingsPrompt(tmMgr, claimed)
 
 		tm.setStatus(TeammateWorking)
@@ -313,7 +278,6 @@ func tryClaimPendingTask(
 			})
 		}
 
-		// Execute the task via agent.
 		msg := MailMessage{Content: prompt, Type: "task"}
 		result, taskErr := executeTask(ctx, agent, msg, tm, onEvent, team, taskTimeout)
 
@@ -327,24 +291,22 @@ func tryClaimPendingTask(
 			tm.setStatus(TeammateShuttingDown)
 			return
 		}
-		// Mark task status based on whether agent execution succeeded.
+
 		if taskErr != nil {
-			// Check if the error is permanent (quota exhaustion or auth failure).
-			// If so, don't revert to pending — another teammate would hit the
-			// same permanent failure, creating a wasteful retry loop.
+
 			fc := provider.ClassifyLLMError(taskErr)
 			if fc == provider.FailureQuota || fc == provider.FailureAuth {
-				// Mark task as completed with error metadata so it's not re-claimed.
-				// Using "completed" instead of adding a new "failed" status keeps the
-				// task board consistent — the metadata records the permanent failure.
+
 				completed := task.StatusCompleted
 				errMsg := util.Truncate(taskErr.Error(), 200)
 				meta := map[string]string{"permanent_error": fc.String(), "error": errMsg}
-				meta = attachAttribution(meta, buildFailureAttribution(tm, claimed.ID, taskErr)) // sa-90 step-level attribution
+				meta = attachAttribution(meta, buildFailureAttribution(tm, claimed.ID, taskErr))
 				if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{
+
 					// #4672: CAS guard - an external terminal write (team review
 					// approve, manual /task, RestoreJSON) during execution must not
 					// be overwritten; mirrors rollbackClaimedTask (#2579).
+
 					ExpectedStatus: &inProgress,
 					Status:         &completed,
 					Metadata:       meta,
@@ -354,11 +316,7 @@ func tryClaimPendingTask(
 				debug.Log("swarm", "teammate %s task %s permanently failed (%s): %v",
 					tm.ID, claimed.ID, fc, taskErr)
 			} else {
-				// Transient error — revert to pending so another teammate can
-				// retry, BUT capped (#1295): without a limit, a poison task
-				// (one that deterministically hits the same 5xx/EOF/DNS/timeout)
-				// was re-claimed every tick forever, burning a full LLM
-				// retry+fallback chain per attempt and starving later tasks.
+
 				attempts := 0
 				if v, ok := claimed.Metadata["retry_attempts"]; ok {
 					if n, err := strconv.Atoi(v); err == nil {
@@ -374,9 +332,9 @@ func tryClaimPendingTask(
 						"error":           errMsg,
 						"retry_attempts":  strconv.Itoa(attempts),
 					}
-					meta = attachAttribution(meta, buildFailureAttribution(tm, claimed.ID, taskErr)) // sa-90 step-level attribution
+					meta = attachAttribution(meta, buildFailureAttribution(tm, claimed.ID, taskErr))
 					if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{
-						ExpectedStatus: &inProgress, // #4672 CAS guard (see permanent park)
+						ExpectedStatus: &inProgress,
 						Status:         &completed,
 						Metadata:       meta,
 					}); uerr != nil {
@@ -388,7 +346,7 @@ func tryClaimPendingTask(
 					pending := task.StatusPending
 					owner := ""
 					if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{
-						ExpectedStatus: &inProgress, // #4672 CAS guard - never stomp an external terminal write
+						ExpectedStatus: &inProgress,
 						Status:         &pending,
 						Owner:          &owner,
 						Metadata:       map[string]string{"retry_attempts": strconv.Itoa(attempts)},
@@ -400,13 +358,12 @@ func tryClaimPendingTask(
 		} else {
 			completed := task.StatusCompleted
 			if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{
-				ExpectedStatus: &inProgress, // #4672 CAS guard - an external approve/completed write wins over our success write-back
+				ExpectedStatus: &inProgress,
 				Status:         &completed,
 			}); uerr != nil {
 				debug.Log("swarm", "teammate %s completion of %s failed: %v", tm.ID, claimed.ID, uerr)
 			}
-			// Persist the final output on the board so dependent tasks
-			// claimed later inherit the findings (dep-chain blackboard).
+
 			persistTaskResult(tmMgr, claimed.ID, result)
 		}
 		if onEvent != nil {
@@ -414,9 +371,7 @@ func tryClaimPendingTask(
 		}
 		tm.setStatus(TeammateIdle)
 		tm.setCurrentTask("")
-		// #2579: clear CurrentTaskID once the task is terminal (success,
-		// park, or error) — a stale ID lets a later panic rollback flip an
-		// already-completed task back to pending for re-execution.
+
 		tm.mu.Lock()
 		tm.CurrentTaskID = ""
 		tm.mu.Unlock()
@@ -428,21 +383,17 @@ func tryClaimPendingTask(
 				TeammateID:   tm.ID,
 				TeammateName: tm.Name,
 				Result:       util.Truncate(result, 500),
-				Error:        taskErr, // #1497: same as the inbox-task idle event above
+				Error:        taskErr,
 				Timestamp:    time.Now(),
 			})
 		}
 
-		// Claimed and completed one task — break to let the next poll pick up more.
 		return
 	}
 }
 
-// maxTransientTaskRetries caps how many times a transiently-failing task
-// bounces back to pending before it is parked (#1295).
 const maxTransientTaskRetries = 3
 
-// buildTaskPrompt constructs the agent prompt from a task.
 func buildTaskPrompt(tk task.Task) string {
 	var sb strings.Builder
 	sb.WriteString("You have claimed a task from the team's task board.\n\n")
@@ -460,9 +411,6 @@ func buildTaskPrompt(tk task.Task) string {
 	return sb.String()
 }
 
-// rollbackClaimedTask reverts the teammate's in-flight board task to
-// pending (#1688 case 1: panic recovery used to leave it in_progress
-// forever - claim only scans pending, so BlockedBy dependents deadlocked).
 func rollbackClaimedTask(mgr *Manager, team *Team, tm *Teammate) {
 	if mgr == nil || team == nil {
 		return
@@ -477,18 +425,13 @@ func rollbackClaimedTask(mgr *Manager, team *Team, tm *Teammate) {
 	if board == nil {
 		return
 	}
-	// #2118: the panic path used to only flip Status back to pending,
-	// bypassing the #1295 retry cap entirely (the cap is only read on the
-	// taskErr path). A deterministically panicking task was then re-claimed
-	// by each surviving teammate in turn - bounded only by the team size
-	// (16), dismantling the whole team at one teammate per iteration.
-	// Mirror the taskErr path: increment retry_attempts and park the task
-	// as completed(max_retries) once the cap is hit.
+
 	current, ok := board.Get(taskID)
 	if !ok {
 		debug.Log("swarm", "panic rollback: task=%s vanished from board", taskID)
 		return
 	}
+
 	// #2579: guard both updates with ExpectedStatus=in_progress — the
 	// rollback must only ever act on a task THIS teammate is still running.
 	// A completed (or otherwise terminal) task fails the guard and the
@@ -508,7 +451,7 @@ func rollbackClaimedTask(mgr *Manager, team *Team, tm *Teammate) {
 			"error":           "teammate panicked repeatedly",
 			"retry_attempts":  strconv.Itoa(attempts),
 		}
-		meta = attachAttribution(meta, buildFailureAttribution(tm, taskID, fmt.Errorf("teammate panicked repeatedly"))) // sa-90 step-level attribution
+		meta = attachAttribution(meta, buildFailureAttribution(tm, taskID, fmt.Errorf("teammate panicked repeatedly")))
 		if _, uerr := board.Update(taskID, task.UpdateOptions{
 			ExpectedStatus: &inProgress,
 			Status:         &completed,
@@ -526,19 +469,6 @@ func rollbackClaimedTask(mgr *Manager, team *Team, tm *Teammate) {
 	}
 }
 
-// ctxCancelRollbackTask releases a claimed task when the teammate's ctx is
-// cancelled (team shutdown) - the idle loop's counterpart of
-// rollbackClaimedTask's panic path.
-//
-// #4541 (a #2579 gap in the same file): the rollback is guarded with
-// ExpectedStatus=in_progress - it must only ever act on a task THIS teammate
-// is still running. External writers can set the task terminal during the
-// minutes executeTask runs (team_review_decide approve, a manual /task
-// command, a durable-board RestoreJSON snapshot restore); the old unguarded
-// write flipped completed tasks back to pending, and they were re-claimed
-// and re-executed. A failed guard (task no longer in_progress) is the
-// correct no-op: log only. #2118: increment retry_attempts so cap-bypassing
-// revive loops are visible on the board, as rollbackClaimedTask does.
 func ctxCancelRollbackTask(tmMgr *task.Manager, claimed task.Task, tm *Teammate) {
 	inProgress := task.StatusInProgress
 	pending := task.StatusPending
@@ -560,7 +490,6 @@ func ctxCancelRollbackTask(tmMgr *task.Manager, claimed task.Task, tm *Teammate)
 	}
 }
 
-// executeTask runs the agent on a task message and collects the output.
 func executeTask(
 	ctx context.Context,
 	agent AgentRunner,
@@ -570,7 +499,7 @@ func executeTask(
 	team *Team,
 	timeout time.Duration,
 ) (string, error) {
-	// When timeout > 0, create a sub-context with deadline. When timeout == 0, no deadline.
+
 	var subCtx context.Context
 	var cancel context.CancelFunc
 	if timeout > 0 {
@@ -578,8 +507,7 @@ func executeTask(
 	} else {
 		subCtx, cancel = context.WithCancel(ctx)
 	}
-	// r29 actor-aware memory provenance: attribute this teammate's tool
-	// writes (tm-* id) in the memory sidecar, same as sub-agents.
+
 	subCtx = util.WithActor(subCtx, tm.ID)
 	defer cancel()
 
@@ -589,12 +517,9 @@ func executeTask(
 	}
 
 	var output strings.Builder
-	var textBuf strings.Builder // accumulate text chunks into turn-level events
+	var textBuf strings.Builder
 	lastToolName := ""
-	// #4474: some providers/relays surface a non-fatal failure as an
-	// in-stream Error event yet still return nil from RunStream. Track the
-	// first such error so the task is not reported Completed with the error
-	// text persisted as findings for dependents to inherit.
+
 	var streamErr error
 	flushText := func() {
 		if textBuf.Len() == 0 {
@@ -666,11 +591,7 @@ func executeTask(
 				IsError:  event.IsError,
 			})
 			if onEvent != nil {
-				// #1012: the result text belongs in Result - it was written to
-				// ToolArgs (which the Event doc says is for teammate_tool_call
-				// arguments), leaving desktop consumers reading an empty Result.
-				// The two tunnel consumers read ToolArgs "wrongly" in the same
-				// way, cancelling out; they are fixed together here.
+
 				onEvent(Event{
 					Type:         "teammate_tool_result",
 					TeamID:       team.ID,
@@ -698,10 +619,6 @@ func executeTask(
 	})
 	flushText()
 
-	// #4474: promote the tracked in-stream error so the claim path's
-	// transient/permanent classification (and the breaker accounting below)
-	// sees it; otherwise the task is marked Completed and persistTaskResult
-	// stores the error text as this task's findings.
 	if err == nil && streamErr != nil {
 		err = streamErr
 	}
@@ -713,22 +630,17 @@ func executeTask(
 		} else if subCtx.Err() == context.Canceled {
 			output.WriteString("\n[cancelled]")
 		} else if streamErr == nil {
-			// (when streamErr != nil the in-stream handler above already
-			// appended the matching [error: ...] line - do not duplicate it)
+
 			output.WriteString(fmt.Sprintf("\n[error: %v]", err))
 		}
 	}
 
 	debug.Log("swarm", "teammate %s task complete output_len=%d", tm.ID, output.Len())
-	// r455: breaker accounting. Cancellation (shutdown/team teardown)
-	// is not a teammate failure; deadline/other errors are.
+
 	recordTeammateTaskResult(tm.ID, err != nil && !errors.Is(subCtx.Err(), context.Canceled))
 	return output.String(), err
 }
 
-// allBlockersComplete returns true if every task listed in tk.BlockedBy has
-// status "completed" (genuine completion - not parking, see below).
-// Tasks with no BlockedBy entries return true.
 func allBlockersComplete(tmMgr *task.Manager, tk task.Task) bool {
 	if len(tk.BlockedBy) == 0 {
 		return true
@@ -736,20 +648,13 @@ func allBlockersComplete(tmMgr *task.Manager, tk task.Task) bool {
 	for _, blockerID := range tk.BlockedBy {
 		blocker, ok := tmMgr.Get(blockerID)
 		if !ok {
-			// Blocker doesn't exist (deleted?) — treat as unmet dependency.
+
 			return false
 		}
 		if blocker.Status != task.StatusCompleted {
 			return false
 		}
-		// #2786: "completed" carries a second meaning - PARKING. The
-		// permanent-failure paths (quota/auth, and the #1295 max-retries
-		// cap) mark a task completed with a permanent_error metadata key
-		// so it is never re-claimed, but no output was produced. Treating
-		// such a blocker as complete silently unlocked dependents to run
-		// on nonexistent outputs, burning full LLM runs and cascading
-		// hallucinated "completed" results downstream. A parked blocker
-		// keeps its dependents blocked until a human intervenes.
+
 		if _, parked := blocker.Metadata["permanent_error"]; parked {
 			return false
 		}

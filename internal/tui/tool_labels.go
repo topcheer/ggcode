@@ -18,15 +18,8 @@ type toolPresentation struct {
 	Activity    string
 }
 
-// spawnAgentModelResolver resolves the effective model shown in spawn_agent
-// labels when the tool call omits the model param (the sub-agent then
-// inherits the parent's runtime model — see spawn_agent.go's displayModel
-// fallback). Wired by REPL.SetSubAgentManager; nil in tests and non-TUI
-// frontends, preserving the explicit-model-only behavior there.
 var spawnAgentModelResolver func() string
 
-// namedAgentModelResolver resolves a named agent template's model override
-// by name. Returns "" if the template has no model override. Wired by REPL.
 var namedAgentModelResolver func(name string) string
 
 type commandPreview struct {
@@ -48,8 +41,6 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	}
 
-	// Universal priority: if the LLM provided a description field, use it as DisplayName.
-	// This mirrors GUI's toolDescription() and IM's DescribeTool() behavior.
 	if desc := argString(args, "description"); desc != "" {
 		detail := fileTarget
 		if detail == "" {
@@ -70,12 +61,10 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		detail = displayToolTarget(detail)
 		pretty := friendlyToolName(toolName)
 
-		// For spawn_agent, include the model name in brackets: "desc [model] (Spawn Agent)"
 		if toolName == "spawn_agent" {
 			model := argString(args, "model")
 			if model == "" && spawnAgentModelResolver != nil {
-				// No explicit override — the sub-agent inherits the parent's
-				// runtime model, so show that instead of hiding the model.
+
 				model = spawnAgentModelResolver()
 			}
 			if model != "" {
@@ -133,11 +122,11 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		))
 		return toolPresentationFor(lang, "run_in_background", target)
 	case "write_command_input":
-		// The input text being sent to the process is the most important detail
+
 		inputText := argString(args, "input")
 		jobID := argString(args, "job_id")
 		if inputText != "" {
-			// Truncate long input for display
+
 			if runewidth.StringWidth(inputText) > 60 {
 				runes := []rune(inputText)
 				w := 0
@@ -489,7 +478,7 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		if name != "" {
 			label = fmt.Sprintf("%s: %s", label, name)
 		}
-		// Resolve model: try template's configured model first, then parent agent's model.
+
 		if namedAgentModelResolver != nil {
 			if m := namedAgentModelResolver(name); m != "" {
 				label += " [" + m + "]"
@@ -589,7 +578,7 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			Activity:    localizedToolActivity(lang, "a2a_cancel_task", ""),
 		}
 	default:
-		// LSP tools share a common pattern: show file:line
+
 		if strings.HasPrefix(toolName, "lsp_") {
 			return lspToolPresentation(lang, toolName, args, fileTarget)
 		}

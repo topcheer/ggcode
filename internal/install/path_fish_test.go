@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// Regression for #1648-1: fish targets get fish syntax (fish_add_path),
-// not POSIX export fish cannot parse.
 func TestUpsertPathBlockFishSyntax(t *testing.T) {
 	out, err := upsertPathBlockFor("/home/u/.config/fish/config.fish", "set -x EDITOR vim\n", "/usr/local/bin")
 	if err != nil {

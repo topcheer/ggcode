@@ -1,20 +1,11 @@
 package swarm
 
-// #2786 regression: the two parking paths (quota/auth permanent failure,
-// and the #1295 max-retries cap) mark a task StatusCompleted with a
-// permanent_error metadata key so it is never re-claimed. But
-// allBlockersComplete only compared the literal status, so a parked
-// blocker unlocked its BlockedBy dependents to execute on outputs that
-// were never produced.
-
 import (
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/task"
 )
 
-// Guard probe: a quota-parked blocker (completed + permanent_error) must
-// keep its dependents blocked.
 func TestIssue2786_ParkedBlockerKeepsDependentsBlocked(t *testing.T) {
 	tmMgr := task.NewManager()
 
@@ -39,7 +30,6 @@ func TestIssue2786_ParkedBlockerKeepsDependentsBlocked(t *testing.T) {
 	}
 }
 
-// Guard probe: the max-retries parking path uses the same metadata key.
 func TestIssue2786_MaxRetriesParkingKeepsDependentsBlocked(t *testing.T) {
 	tmMgr := task.NewManager()
 
@@ -67,7 +57,6 @@ func TestIssue2786_MaxRetriesParkingKeepsDependentsBlocked(t *testing.T) {
 	}
 }
 
-// Genuine completion (no permanent_error) must still unblock dependents.
 func TestIssue2786_GenuineCompletionStillUnblocks(t *testing.T) {
 	tmMgr := task.NewManager()
 

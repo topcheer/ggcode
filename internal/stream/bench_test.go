@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// BenchmarkImageToRGBAGeneric benchmarks the slow path (generic image.Image).
 func BenchmarkImageToRGBAGeneric(b *testing.B) {
 	img := image.NewRGBA(image.Rect(0, 0, 640, 480))
 	for y := 0; y < 480; y++ {
@@ -14,7 +13,7 @@ func BenchmarkImageToRGBAGeneric(b *testing.B) {
 			img.SetRGBA(x, y, color.RGBA{R: 30, G: 30, B: 30, A: 255})
 		}
 	}
-	// Wrap in a non-RGBA type to force generic path
+
 	var generic image.Image = img
 
 	b.ResetTimer()
@@ -23,7 +22,6 @@ func BenchmarkImageToRGBAGeneric(b *testing.B) {
 	}
 }
 
-// BenchmarkImageToRGBAFast benchmarks the fast path (*image.RGBA direct copy).
 func BenchmarkImageToRGBAFast(b *testing.B) {
 	img := image.NewRGBA(image.Rect(0, 0, 640, 480))
 	for y := 0; y < 480; y++ {
@@ -38,7 +36,6 @@ func BenchmarkImageToRGBAFast(b *testing.B) {
 	}
 }
 
-// BenchmarkResizeImage benchmarks the resize operation.
 func BenchmarkResizeImage(b *testing.B) {
 	src := image.NewRGBA(image.Rect(0, 0, 1300, 740))
 	for y := 0; y < 740; y++ {
@@ -53,12 +50,10 @@ func BenchmarkResizeImage(b *testing.B) {
 	}
 }
 
-// BenchmarkRender benchmarks the direct render pipeline.
 func BenchmarkRender(b *testing.B) {
 	r := NewDirectRenderer(640, 480, 14, "", 0, 0)
 	text := "Hello World 测试中文\r\nLine 2: some content\r\nLine 3: more text"
 
-	// Warm up to load fonts
 	_, err := r.Render(text)
 	if err != nil {
 		b.Fatal(err)
@@ -73,12 +68,10 @@ func BenchmarkRender(b *testing.B) {
 	}
 }
 
-// BenchmarkDirectRender benchmarks the new direct renderer.
 func BenchmarkDirectRender(b *testing.B) {
 	r := NewDirectRenderer(640, 480, 14, "", 0, 0)
 	text := "Hello World 测试中文\r\nLine 2: some content\r\nLine 3: more text"
 
-	// Warm up to load fonts
 	_, err := r.Render(text)
 	if err != nil {
 		b.Fatal(err)
@@ -93,7 +86,6 @@ func BenchmarkDirectRender(b *testing.B) {
 	}
 }
 
-// BenchmarkCaptureAndEncodeFrame benchmarks the imageToRGBA step.
 func BenchmarkCaptureAndEncodeFrame(b *testing.B) {
 	r := NewDirectRenderer(640, 480, 14, "", 0, 0)
 	img, err := r.Render("Hello World benchmark 测试\r\nLine 2\r\nLine 3")

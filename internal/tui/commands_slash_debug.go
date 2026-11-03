@@ -12,8 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// handleDebugCommand handles /debug export [category] — exports the debug
-// ring buffer to a timestamped file in ~/.ggcode/exports/.
 func (m *Model) handleDebugCommand(parts []string) tea.Cmd {
 	if len(parts) < 2 || parts[1] != "export" {
 		m.chatWriteSystem(nextSystemID(),
@@ -43,7 +41,6 @@ func (m *Model) handleDebugCommand(parts []string) tea.Cmd {
 		return nil
 	}
 
-	// Create exports directory
 	exportDir := filepath.Join(config.HomeDir(), ".ggcode", "exports")
 	if err := os.MkdirAll(exportDir, 0755); err != nil {
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to create export directory: %v", err))
@@ -51,14 +48,10 @@ func (m *Model) handleDebugCommand(parts []string) tea.Cmd {
 		return nil
 	}
 
-	// Generate filename with timestamp and optional category
 	ts := time.Now().Format("20060102-150405")
 	suffix := "all"
 	if category != "" {
-		// #888: the user-supplied category is concatenated into a filename
-		// and filepath.Join resolves '..' — '/debug export ../../evil'
-		// wrote outside the exports dir. Strip everything that could form
-		// a path or invalid filename characters.
+
 		sanitized := filepath.Base(category)
 		sanitized = strings.Map(func(r rune) rune {
 			switch r {

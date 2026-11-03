@@ -15,25 +15,19 @@ import (
 	"time"
 )
 
-// Manager manages a persistent tmux split pane that mirrors command
-// execution output in real time via a tail -f log file.
 type Manager struct {
 	mu        sync.Mutex
-	paneID    string // tmux pane ID (e.g. "%5")
+	paneID    string
 	logFile   *os.File
 	logPath   string
-	active    bool       // pane has been created
-	selfPane  string     // ggcode's own pane ID (never kill)
-	workspace string     // workspace dir (for unique log file)
-	writeMu   sync.Mutex // serializes log file writes from concurrent goroutines
+	active    bool
+	selfPane  string
+	workspace string
+	writeMu   sync.Mutex
 
-	// Track the placement that was used to create the current pane,
-	// so we can detect when a resize invalidates it.
 	curPlacement Placement
 }
 
-// lockedWriter wraps a Manager's writeMu around log file writes to serialize
-// concurrent stdout/stderr tee writes from parallel command executions.
 type lockedWriter struct {
 	mgr *Manager
 }
@@ -44,9 +38,7 @@ func (w *lockedWriter) Write(p []byte) (int, error) {
 	if w.mgr.logFile == nil {
 		return 0, nil
 	}
-	// In-session rotation: if the log file exceeds the size limit, truncate
-	// it to keep disk usage bounded during long sessions. The pane's tail -f
-	// detects the truncation and resets automatically.
+
 	if info, err := w.mgr.logFile.Stat(); err == nil && info.Size()+int64(len(p)) > maxCmdPaneLogSize {
 		_ = w.mgr.logFile.Truncate(0)
 		_, _ = w.mgr.logFile.Seek(0, io.SeekStart)
@@ -54,7 +46,6 @@ func (w *lockedWriter) Write(p []byte) (int, error) {
 	return w.mgr.logFile.Write(p)
 }
 
-// NewManager creates a new command pane manager for the given workspace.
 func NewManager(workspace string) *Manager {
 	return &Manager{
 		workspace: workspace,
@@ -67,17 +58,8 @@ func (m *Manager) logFilePath() string {
 	return filepath.Join(os.TempDir(), fmt.Sprintf("ggcode-cmdpane-%s.log", short))
 }
 
-// maxCmdPaneLogSize is the maximum size of the command pane log file before it
-// is truncated on open. If a previous session crashed without calling Close()
-// (which removes the file), the stale file persists and O_APPEND would grow it
-// unbounded across sessions. Truncating on open is safe because the pane's
-// `tail -f` starts fresh each session and only shows content written after
-// the pane was created.
-const maxCmdPaneLogSize = 5 << 20 // 5 MB
+const maxCmdPaneLogSize = 5 << 20
 
-// Writer returns an io.Writer that appends to the command pane log file.
-// The writer is safe for concurrent use — writes are serialized so that
-// parallel command executions (e.g. from sub-agents) don't interleave.
 func (m *Manager) Writer() (io.Writer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -87,8 +69,7 @@ func (m *Manager) Writer() (io.Writer, error) {
 		if err := os.MkdirAll(filepath.Dir(m.logPath), 0o755); err != nil {
 			return nil, fmt.Errorf("cmdpane: failed to create log dir: %w", err)
 		}
-		// Truncate stale log from a previous session to avoid unbounded growth.
-		// The pane's tail -f starts at end-of-file, so old content is never shown.
+
 		if info, err := os.Stat(m.logPath); err == nil && info.Size() > maxCmdPaneLogSize {
 			_ = os.Truncate(m.logPath, 0)
 		}
@@ -101,25 +82,14 @@ func (m *Manager) Writer() (io.Writer, error) {
 	return &lockedWriter{mgr: m}, nil
 }
 
-// EnsurePane creates or recreates the tmux command pane based on the
-// current terminal dimensions. It is called before every command execution.
-//
-// Resize handling:
-//   - Terminal too small now → kill existing pane (if any)
-//   - Pane direction changed (e.g. right→bottom after rotating screen) → recreate
-//   - Pane size drifts >50% from target → recreate (tmux auto-resizes proportionally,
-//     so we only recreate on significant drift, not minor pixel changes)
-//   - Pane killed externally → recreate
 func (m *Manager) EnsurePane(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Check if we're in tmux.
 	if os.Getenv("TMUX") == "" {
-		return nil // not in tmux, no-op
+		return nil
 	}
 
-	// Get current terminal dimensions on every call.
 	cols, rows, pixW, pixH, err := m.getWindowSize(ctx)
 	if err != nil {
 		return fmt.Errorf("cmdpane: failed to get window size: %w", err)
@@ -127,7 +97,6 @@ func (m *Manager) EnsurePane(ctx context.Context) error {
 
 	wantPlacement := DeterminePlacement(cols, rows, pixW, pixH)
 
-	// If pane exists, check if it's still valid for the current size.
 	if m.active && m.paneID != "" {
 		alive, err := m.paneExists(ctx, m.paneID)
 		if err != nil {
@@ -135,33 +104,31 @@ func (m *Manager) EnsurePane(ctx context.Context) error {
 		}
 
 		if !alive {
-			// Pane was killed externally → fall through to recreate.
+
 			m.active = false
 			m.paneID = ""
 		} else if m.shouldRecreatePane(wantPlacement) {
-			// Pane exists but placement is stale → kill and recreate.
+
 			m.killPane(ctx)
 			m.active = false
 			m.paneID = ""
 		} else if !wantPlacement.IsActive() {
-			// Terminal shrank below threshold → kill pane, don't recreate.
+
 			m.killPane(ctx)
 			m.active = false
 			m.paneID = ""
 			m.curPlacement = Placement{}
 			return nil
 		} else {
-			// Pane still valid → nothing to do.
+
 			return nil
 		}
 	}
 
-	// At this point, pane doesn't exist. Check if we should create one.
 	if !wantPlacement.IsActive() {
-		return nil // terminal too small
+		return nil
 	}
 
-	// Ensure log file exists before creating pane.
 	if m.logFile == nil {
 		m.logPath = m.logFilePath()
 		f, err := os.OpenFile(m.logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -171,12 +138,10 @@ func (m *Manager) EnsurePane(ctx context.Context) error {
 		m.logFile = f
 	}
 
-	// Capture self pane ID — required for split targeting.
 	if m.selfPane == "" {
 		out, err := m.runTmux(ctx, "display-message", "-p", "#{pane_id}")
 		if err != nil || strings.TrimSpace(out) == "" {
-			// #1715 case 4: %w on a nil err renders "%!w(<nil>)" when the
-			// command succeeded but printed nothing.
+
 			if err == nil {
 				err = errors.New("empty pane id")
 			}
@@ -185,9 +150,6 @@ func (m *Manager) EnsurePane(ctx context.Context) error {
 		m.selfPane = strings.TrimSpace(out)
 	}
 
-	// Create the split pane, targeting our own pane so the split always
-	// happens in the window/tab where ggcode is running — not the
-	// currently-active tab (which may differ if the user switched tabs).
 	var flag string
 	if wantPlacement.Direction == "right" {
 		flag = "-h"
@@ -200,7 +162,7 @@ func (m *Manager) EnsurePane(ctx context.Context) error {
 	if m.selfPane != "" {
 		splitArgs = append(splitArgs, "-t", m.selfPane)
 	}
-	splitArgs = append(splitArgs, "tail", "-f", "-n", "0", m.logPath) // #1715 case 1: bare -f replays the last 10 lines - the "old content is never shown" comments were wrong across sessions
+	splitArgs = append(splitArgs, "tail", "-f", "-n", "0", m.logPath)
 
 	paneID, err := m.runTmux(ctx, splitArgs...)
 	if err != nil {
@@ -213,19 +175,13 @@ func (m *Manager) EnsurePane(ctx context.Context) error {
 	return nil
 }
 
-// shouldRecreatePane returns true if the current pane's placement is
-// incompatible with the desired placement.
 func (m *Manager) shouldRecreatePane(want Placement) bool {
 	cur := m.curPlacement
 
-	// Direction changed (right ↔ bottom) → must recreate.
 	if cur.Direction != want.Direction {
 		return true
 	}
 
-	// Size drifted more than 50% → recreate to fix the proportion.
-	// tmux auto-resizes panes proportionally on window resize, so we
-	// only care about large drifts, not minor adjustments.
 	if cur.Size > 0 && want.Size > 0 {
 		larger := cur.Size
 		smaller := want.Size
@@ -241,17 +197,12 @@ func (m *Manager) shouldRecreatePane(want Placement) bool {
 	return false
 }
 
-// paneExists checks whether a tmux pane ID is still alive.
-// Searches across ALL windows, not just the active one, because the
-// command pane might be in a different window than the current active tab.
 func (m *Manager) paneExists(ctx context.Context, paneID string) (bool, error) {
 	out, err := m.runTmux(ctx, "list-panes", "-a", "-F", "#{pane_id}")
 	if err != nil {
 		return false, err
 	}
-	// #879: tmux pane IDs are %N — substring match misdetected %5 as alive
-	// whenever %50..%59 exist, silently discarding output routed to the dead
-	// pane. Compare exactly, line by line.
+
 	for _, line := range strings.Split(out, "\n") {
 		if strings.TrimSpace(line) == paneID {
 			return true, nil
@@ -260,14 +211,12 @@ func (m *Manager) paneExists(ctx context.Context, paneID string) (bool, error) {
 	return false, nil
 }
 
-// killPane kills the current command pane (if it's not self).
 func (m *Manager) killPane(ctx context.Context) {
 	if m.paneID != "" && m.paneID != m.selfPane {
 		_, _ = m.runTmux(ctx, "kill-pane", "-t", m.paneID)
 	}
 }
 
-// WriteHeader writes a formatted header before command execution.
 func (m *Manager) WriteHeader(command, description string) {
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
@@ -289,7 +238,6 @@ func (m *Manager) WriteHeader(command, description string) {
 	_, _ = m.logFile.WriteString(header)
 }
 
-// WriteFooter writes a formatted footer after command execution.
 func (m *Manager) WriteFooter(exitCode int, err error) {
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
@@ -308,7 +256,6 @@ func (m *Manager) WriteFooter(exitCode int, err error) {
 	_, _ = m.logFile.WriteString(footer)
 }
 
-// Close kills the tmux pane and closes the log file.
 func (m *Manager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -319,10 +266,7 @@ func (m *Manager) Close() {
 		m.killPane(ctx)
 	}
 	if m.logFile != nil {
-		// #1715 case 2: lockedWriter.Write holds writeMu across its nil
-		// check and the write - Close used to close the file BETWEEN them
-		// (write error silently dropped, or nil-file ErrInvalid under
-		// -race). Lock order m.mu -> writeMu matches the writer.
+
 		m.writeMu.Lock()
 		_ = m.logFile.Close()
 		m.logFile = nil
@@ -336,8 +280,6 @@ func (m *Manager) Close() {
 	m.curPlacement = Placement{}
 }
 
-// --- tmux helpers ---
-
 func (m *Manager) runTmux(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "tmux", args...)
 	var stdout strings.Builder
@@ -348,9 +290,6 @@ func (m *Manager) runTmux(ctx context.Context, args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// getWindowSize returns the terminal dimensions: character-cell counts
-// (cols/rows) from tmux, and pixel dimensions (pixW/pixH) from TIOCGWINSZ.
-// Pixel dimensions are 0 when unavailable (some terminals don't report them).
 func (m *Manager) getWindowSize(ctx context.Context) (cols, rows, pixW, pixH int, err error) {
 	out, err := m.runTmux(ctx, "display-message", "-p", "#{window_width} #{window_height}")
 	if err != nil {
@@ -363,8 +302,6 @@ func (m *Manager) getWindowSize(ctx context.Context) (cols, rows, pixW, pixH int
 	fmt.Sscanf(parts[0], "%d", &cols)
 	fmt.Sscanf(parts[1], "%d", &rows)
 
-	// Try to get pixel dimensions via TIOCGWINSZ on /dev/tty.
-	// This works even inside tmux when the outer terminal reports pixels.
 	pixW, pixH = getPixelSize()
 	return cols, rows, pixW, pixH, nil
 }

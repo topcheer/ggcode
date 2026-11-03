@@ -1,12 +1,5 @@
 package tui
 
-// #1737 case 2 regression: cursor moves (j/k) used to rewrite
-// versionInput to the TARGET preset's default while currentPreset only
-// updated at presets-area Enter - an apply from another section (e.g.
-// add header + Enter) then persisted preset A with preset B's default
-// version. The sync now runs only at the presets-Enter point where
-// currentPreset updates, so preset+version always apply as a pair.
-
 import (
 	"testing"
 
@@ -32,8 +25,6 @@ func TestImpersonateCursorMoveDoesNotTouchVersionInput(t *testing.T) {
 	p.versionInput = vi
 	m.impersonatePanel = p
 
-	// j moves the cursor to firefox: versionInput must NOT flip to
-	// firefox's default (that used to clobber the chrome custom version).
 	m2, _ := m.handleImpersonatePanelKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	p2 := m2.impersonatePanel
 	if p2.cursor != 1 {

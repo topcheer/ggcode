@@ -7,11 +7,6 @@ import (
 	"testing"
 )
 
-// #3656 probes: skill_promoter trim/ownership/nil-guard defects.
-
-// d1: WriteStaging must canonicalize (trim) the name BEFORE building the
-// on-disk filename - the old code validated TrimSpace(name) but formatted
-// paths from the raw value, producing "knight-20261009- deploy-web.md".
 func Test3656WriteStagingTrimsName(t *testing.T) {
 	proj := t.TempDir()
 	p := NewPromoter(proj, proj)
@@ -29,7 +24,6 @@ func Test3656WriteStagingTrimsName(t *testing.T) {
 	}
 }
 
-// d1 companion: an untrimmable name (whitespace inside) must still be rejected.
 func Test3656WriteStagingRejectsInnerSpace(t *testing.T) {
 	proj := t.TempDir()
 	p := NewPromoter(proj, proj)
@@ -38,13 +32,9 @@ func Test3656WriteStagingRejectsInnerSpace(t *testing.T) {
 	}
 }
 
-// d2: Promote must verify entry.Path actually lives under the staging
-// directory of entry.Scope. A crossed index entry (Path in GLOBAL staging,
-// Scope="project") used to copy the content into project-active and then
-// DELETE the global source file - leaving the global index dangling.
 func Test3656PromoteRejectsCrossScopeStagingPath(t *testing.T) {
-	home := t.TempDir() // global root
-	proj := t.TempDir() // project root
+	home := t.TempDir()
+	proj := t.TempDir()
 	p := NewPromoter(home, proj)
 
 	globalStaging := filepath.Join(home, ".ggcode", "skills-staging")
@@ -52,9 +42,9 @@ func Test3656PromoteRejectsCrossScopeStagingPath(t *testing.T) {
 
 	entry := &SkillEntry{
 		Name:    "crossed",
-		Scope:   "project", // claims project...
+		Scope:   "project",
 		Staging: true,
-		Path:    filepath.Join(globalStaging, "knight-x.md"), // ...but lives in global
+		Path:    filepath.Join(globalStaging, "knight-x.md"),
 	}
 	err := p.Promote(entry)
 	if err == nil {
@@ -63,13 +53,12 @@ func Test3656PromoteRejectsCrossScopeStagingPath(t *testing.T) {
 	if data, rerr := os.ReadFile(filepath.Join(globalStaging, "knight-x.md")); rerr != nil || string(data) != "# global content" {
 		t.Errorf("global staging source was deleted or mutated by rejected Promote: read=%v", rerr)
 	}
-	// And nothing should have been created in project active either.
+
 	if _, serr := os.Stat(filepath.Join(proj, ".ggcode", "skills", "crossed", "SKILL.md")); serr == nil {
 		t.Error("rejected promote must not create an active skill")
 	}
 }
 
-// d2 companion: a legitimate same-scope promote still succeeds.
 func Test3656PromoteSameScopeSucceeds(t *testing.T) {
 	proj := t.TempDir()
 	p := NewPromoter(proj, proj)
@@ -85,8 +74,6 @@ func Test3656PromoteSameScopeSucceeds(t *testing.T) {
 	}
 }
 
-// d3: ValidateSkill(nil) must return an invalid result instead of panicking
-// in checkDependencies (which dereferences entry.Meta.Requires).
 func Test3656ValidateSkillNilNoPanic(t *testing.T) {
 	res := ValidateSkill(nil)
 	if res.Valid {

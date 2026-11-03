@@ -9,14 +9,10 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// streamBodySetter matches how chatUpdateToolOutput drives streaming tools.
 type streamBodySetter interface {
 	SetStreamingBody(string)
 }
 
-// streamingToolModel builds a long-session model with a running tool that
-// streams output like run_command/wait_command do (tail-5 snapshot via
-// SetStreamingBody every 300ms, spinner frame flip every 150ms).
 func streamingToolModel(turns int) (Model, streamBodySetter) {
 	m := buildLongSessionModel(turns)
 	m.session = &session.Session{
@@ -48,15 +44,12 @@ func streamingToolModel(turns int) (Model, streamBodySetter) {
 	return m, setter
 }
 
-// BenchmarkView_RunningStreamingTool measures View() with a running tool
-// whose streaming body updates every 300ms (like run_command) while the
-// spinner flips frames every 150ms - the realistic streaming load.
 func BenchmarkView_RunningStreamingTool(b *testing.B) {
 	m, setter := streamingToolModel(200)
 	if setter == nil {
 		b.Fatal("streaming tool item not found")
 	}
-	// Simulate a 5-line tail snapshot with realistic line lengths.
+
 	tail := ""
 	for i := 0; i < 5; i++ {
 		tail += fmt.Sprintf("[...] src/module%03d/component.go:123: compiling dependency graph node %d\n", i, i*37)
@@ -66,10 +59,9 @@ func BenchmarkView_RunningStreamingTool(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		// Simulate the real event mix: spinner frame flips between
-		// toolProgress updates; each flip triggers a full View.
+
 		chat.SetToolAnimFrame(i % 4)
-		if i%2 == 0 { // ~every 300ms worth of frames
+		if i%2 == 0 {
 			setter.SetStreamingBody(tail + fmt.Sprintf("line %d\n", i))
 		}
 		v := m.View()
@@ -77,7 +69,6 @@ func BenchmarkView_RunningStreamingTool(b *testing.B) {
 	}
 }
 
-// BenchmarkToolItemRunningRender isolates one running tool's Render cost.
 func BenchmarkToolItemRunningRender(b *testing.B) {
 	m, setter := streamingToolModel(1)
 	if setter == nil {
@@ -98,10 +89,8 @@ func BenchmarkToolItemRunningRender(b *testing.B) {
 	}
 }
 
-// BenchmarkUpdateByID_LongList measures the toolProgressMsg handler cost
-// (UpdateByID linear scan + follow) on a full 2000-item list.
 func BenchmarkUpdateByID_LongList(b *testing.B) {
-	m, setter := streamingToolModel(600) // ~2400 items, trims to 2000
+	m, setter := streamingToolModel(600)
 	if setter == nil {
 		b.Fatal("streaming tool item not found")
 	}

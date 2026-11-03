@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// withStdinPipe swaps os.Stdin for r and restores it after f returns.
 func withStdinPipe(t *testing.T, r *os.File, f func()) {
 	t.Helper()
 	orig := os.Stdin
@@ -16,15 +15,12 @@ func withStdinPipe(t *testing.T, r *os.File, f func()) {
 	f()
 }
 
-// TestReadStdinEmptyPipeReturnsNil covers #537 Bug E (prefix half): a pipe
-// that is closed with zero bytes must yield nil, not []byte{} — otherwise
-// buildPipePrompt's nil check fails and the prompt gains a "\n\n" prefix.
 func TestReadStdinEmptyPipeReturnsNil(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("pipe: %v", err)
 	}
-	w.Close() // empty, immediately closed
+	w.Close()
 
 	withStdinPipe(t, r, func() {
 		data, err := readStdin()
@@ -38,8 +34,6 @@ func TestReadStdinEmptyPipeReturnsNil(t *testing.T) {
 	r.Close()
 }
 
-// TestBuildPipePromptEmptyStdinNoPrefix covers #537 Bug E at the prompt
-// level: empty piped stdin must NOT prepend "\n\n" to the user prompt.
 func TestBuildPipePromptEmptyStdinNoPrefix(t *testing.T) {
 	prompt, blocks, err := buildPipePrompt("hi", nil)
 	if err != nil {
@@ -53,16 +47,13 @@ func TestBuildPipePromptEmptyStdinNoPrefix(t *testing.T) {
 	}
 }
 
-// TestReadStdinStalledPipeTimesOut covers #537 Bug E (blocking half): a pipe
-// whose writer never closes and never writes must not block forever —
-// readStdin returns (nil, nil) after the idle timeout instead of hanging.
 func TestReadStdinStalledPipeTimesOut(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("pipe: %v", err)
 	}
 	defer r.Close()
-	defer w.Close() // writer stays open but silent — the stall case
+	defer w.Close()
 
 	origTimeout := stdinIdleTimeout
 	stdinIdleTimeout = 100 * time.Millisecond
@@ -91,9 +82,6 @@ func TestReadStdinStalledPipeTimesOut(t *testing.T) {
 	})
 }
 
-// TestReadStdinSlowButFlowingPipeCompletes guards the timeout semantics: the
-// deadline is per-read (idle), so a stream that keeps delivering data within
-// the window finishes normally even if total time exceeds the window.
 func TestReadStdinSlowButFlowingPipeCompletes(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -126,7 +114,7 @@ func TestReadStdinSlowButFlowingPipeCompletes(t *testing.T) {
 			if readErr != nil {
 				t.Fatalf("readStdin: %v", readErr)
 			}
-			if len(data) != 24 { // 4 * len("chunk\n")
+			if len(data) != 24 {
 				t.Fatalf("data = %d bytes, want 24", len(data))
 			}
 		case <-time.After(3 * time.Second):
@@ -136,8 +124,6 @@ func TestReadStdinSlowButFlowingPipeCompletes(t *testing.T) {
 	r.Close()
 }
 
-// TestReadStdinRegularFile reads a regular file redirected to stdin (the
-// `ggcode -p hi < file.txt` case): full contents, no timeout path.
 func TestReadStdinRegularFile(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "stdin-*.txt")
 	if err != nil {
@@ -162,10 +148,6 @@ func TestReadStdinRegularFile(t *testing.T) {
 	})
 }
 
-// TestReadStdinCharDeviceSkipped: when stdin is a terminal (char device),
-// readStdin returns (nil, nil) without reading. /dev/null is not a char
-// device on all platforms, so this is validated indirectly via the closed-fd
-// behavior in the empty-pipe test plus this structural check.
 func TestReadStdinCharDeviceSkipped(t *testing.T) {
 	if info, err := os.Stdin.Stat(); err == nil && (info.Mode()&os.ModeCharDevice) != 0 {
 		data, err := readStdin()

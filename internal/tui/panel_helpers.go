@@ -64,20 +64,7 @@ func normalizePanelLines(lines []string, height int) []string {
 }
 
 func padPanelLine(line string, width int) string {
-	// #1014: defense in depth - expand control characters that slipped past
-	// upstream sanitizers into spaces BEFORE measuring; lipgloss counts them
-	// as width 0 while the terminal expands TABs to tab stops, so a padded
-	// line could still land past the border column.
-	//
-	// R201 fix: the expansion must be ANSI-AWARE. The panel renders its rows
-	// through lipgloss FIRST (e.g. summaries in Foreground(Color("8")) =
-	// SGR 90, the cursor row Bold+Color("12") = SGR 1;94), so styled lines
-	// legitimately contain ESC sequences. The old blanket r<0x20 expansion
-	// replaced the ESC byte of those sequences with a space, leaving the
-	// sequence body visible as literal text - every row showed "[90m ... [m"
-	// in the /sessions panel. Escape sequences are zero-width for
-	// lipgloss.Width and are copied through verbatim; every OTHER control
-	// character (TAB/CR/0x7f, the actual #1014 concern) still expands.
+
 	if strings.ContainsFunc(line, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 		line = expandControlCharsANSIAware(line)
 	}
@@ -88,11 +75,6 @@ func padPanelLine(line string, width int) string {
 	return line + strings.Repeat(" ", width-visible)
 }
 
-// expandControlCharsANSIAware replaces control characters with spaces while
-// copying ANSI escape sequences through untouched. A sequence started by ESC
-// is consumed as: CSI (ESC [ ... final byte @-~), OSC/DCS/APC/PM (ESC ] / P /
-// X / ^ / _ ... terminated by BEL or ESC \), or a two-byte escape (ESC <char>).
-// A lone ESC at end-of-line expands to a space like any other control char.
 func expandControlCharsANSIAware(line string) string {
 	var b strings.Builder
 	b.Grow(len(line))
@@ -109,11 +91,11 @@ func expandControlCharsANSIAware(line string) string {
 			continue
 		}
 		if i+1 >= len(line) {
-			b.WriteByte(' ') // lone trailing ESC
+			b.WriteByte(' ')
 			break
 		}
 		switch line[i+1] {
-		case '[': // CSI: copy through the final byte (@-~)
+		case '[':
 			j := i + 2
 			for j < len(line) {
 				if line[j] >= 0x40 && line[j] <= 0x7e {
@@ -122,11 +104,11 @@ func expandControlCharsANSIAware(line string) string {
 				j++
 			}
 			if j < len(line) {
-				j++ // include the final byte
+				j++
 			}
 			b.WriteString(line[i:j])
 			i = j
-		case ']', 'P', 'X', '^', '_': // string sequences: BEL or ESC \ terminate
+		case ']', 'P', 'X', '^', '_':
 			j := i + 2
 			end := -1
 			for j < len(line) {
@@ -145,7 +127,7 @@ func expandControlCharsANSIAware(line string) string {
 			}
 			b.WriteString(line[i:end])
 			i = end
-		default: // two-byte escape (ESC 7, ESC (, ...)
+		default:
 			b.WriteString(line[i : i+2])
 			i += 2
 		}

@@ -15,7 +15,7 @@ func TestRootHelpShowsAllCommands(t *testing.T) {
 	_ = cmd.Execute()
 
 	help := buf.String()
-	// All subcommands should be visible
+
 	expected := []string{
 		"version",
 		"completion",

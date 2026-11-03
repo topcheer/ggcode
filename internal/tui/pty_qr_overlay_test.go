@@ -14,12 +14,6 @@ import (
 	"github.com/creack/pty/v2"
 )
 
-// ---------------------------------------------------------------------------
-// startGGCodeLive launches ggcode with the user's real config.
-// Config is copied to t.TempDir() (never inside the git repo).
-// MCP servers requiring OAuth are stripped to prevent blocking popups.
-// ---------------------------------------------------------------------------
-
 func startGGCodeLive(t *testing.T) *ptyHarness {
 	t.Helper()
 
@@ -34,7 +28,6 @@ func startGGCodeLive(t *testing.T) *ptyHarness {
 		rows: 40,
 	}
 
-	// Find binary
 	candidates := []string{"./bin/ggcode", "../bin/ggcode", "./ggcode"}
 	for _, c := range candidates {
 		if _, err := os.Stat(c); err == nil {
@@ -51,17 +44,13 @@ func startGGCodeLive(t *testing.T) *ptyHarness {
 		t.Skip("ggcode binary not found")
 	}
 
-	// t.TempDir() is outside the git repo — safe to copy real config here.
 	h.tmpDir = t.TempDir()
 
-	// Copy entire ~/.ggcode/ → {tmpdir}/.ggcode/ so adapters get keys.env,
-	// oauth tokens, etc. Then strip MCP OAuth servers from the config copy.
 	dstGGCodeDir := h.tmpDir + "/.ggcode"
 	if err := copyDir(realGGCodeDir, dstGGCodeDir); err != nil {
 		t.Fatalf("copy ~/.ggcode: %v", err)
 	}
 
-	// Strip MCP servers needing OAuth in the copied config
 	cfgPath := dstGGCodeDir + "/ggcode.yaml"
 	cfgData, err := os.ReadFile(cfgPath)
 	if err != nil {
@@ -72,11 +61,9 @@ func startGGCodeLive(t *testing.T) *ptyHarness {
 		t.Fatalf("write stripped config: %v", err)
 	}
 
-	// Workspace dir
 	workspaceDir := h.tmpDir + "/workspace"
 	os.MkdirAll(workspaceDir, 0755)
 
-	// Set HOME=tmpdir so ggcode reads our copied ~/.ggcode/
 	filteredEnv := make([]string, 0, len(os.Environ()))
 	for _, e := range os.Environ() {
 		if strings.HasPrefix(e, "HOME=") {
@@ -123,7 +110,6 @@ func startGGCodeLive(t *testing.T) *ptyHarness {
 	return h
 }
 
-// copyDir recursively copies a directory tree.
 func copyDir(src, dst string) error {
 	return fs.WalkDir(os.DirFS(src), ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -141,8 +127,6 @@ func copyDir(src, dst string) error {
 	})
 }
 
-// stripMCPOAuthServers removes MCP server entries that need OAuth/device auth.
-// This prevents the "MCP Device Authorization" popup from blocking the TUI.
 func stripMCPOAuthServers(cfg string) string {
 	lines := strings.Split(cfg, "\n")
 	var result []string
@@ -156,7 +140,6 @@ func stripMCPOAuthServers(cfg string) string {
 		trimmed := strings.TrimSpace(line)
 		indent := len(line) - len(strings.TrimLeft(line, " \t"))
 
-		// Detect mcp_servers: section
 		if trimmed == "mcp_servers:" {
 			inMCP = true
 			mcpIndent = indent
@@ -172,11 +155,10 @@ func stripMCPOAuthServers(cfg string) string {
 				continue
 			}
 
-			// Detect start of a new entry: "  - name: xxx"
 			if strings.HasPrefix(trimmed, "- name:") {
 				skipEntry = false
 				entryIndent = indent
-				// Look ahead for oauth or githubcopilot
+
 				for j := i + 1; j < len(lines); j++ {
 					ahead := strings.TrimSpace(lines[j])
 					if ahead == "" || strings.HasPrefix(ahead, "#") {
@@ -205,28 +187,23 @@ func stripMCPOAuthServers(cfg string) string {
 	return strings.Join(result, "\n")
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-// waitForIdle waits until the TUI shows the input prompt without a spinner.
 func waitForIdle(h *ptyHarness, timeout time.Duration) {
 	h.t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		screen := h.snapshot()
-		// Agent busy indicators
+
 		if strings.Contains(screen, "Thinking") {
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
-		// Spinner characters mean agent is running
+
 		if strings.Contains(screen, "⠋") || strings.Contains(screen, "⠙") ||
 			strings.Contains(screen, "⠹") || strings.Contains(screen, "⠸") {
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
-		// Input prompt visible and no busy indicators
+
 		if strings.Contains(screen, "Type a message") {
 			return
 		}
@@ -235,22 +212,21 @@ func waitForIdle(h *ptyHarness, timeout time.Duration) {
 }
 
 func typeCommand(h *ptyHarness, cmd string) {
-	// Wait for agent to be idle
+
 	waitForIdle(h, 20*time.Second)
 	h.drainOutput()
 	time.Sleep(200 * time.Millisecond)
 
-	// Type the command
 	for _, ch := range cmd {
 		h.sendKey(string(ch))
 	}
-	// Wait for autocomplete to appear and settle
+
 	time.Sleep(300 * time.Millisecond)
-	// Enter to select from autocomplete
+
 	h.sendKey("enter")
-	// Wait for autocomplete to close / command to execute
+
 	time.Sleep(300 * time.Millisecond)
-	// Second enter to confirm (slash command picker needs double-enter)
+
 	h.sendKey("enter")
 }
 
@@ -268,7 +244,7 @@ func waitForAdapterReady(h *ptyHarness, timeout time.Duration) bool {
 			return true
 		}
 		if strings.Contains(screen, "Bound") || strings.Contains(screen, "bound") {
-			// Exclude "Bound Directory:" which is just a panel label
+
 			cleaned := strings.ReplaceAll(screen, "Bound Directory:", "")
 			if strings.Contains(cleaned, "Bound") || strings.Contains(cleaned, "bound") {
 				h.t.Logf("waitForAdapterReady: matched 'bound'")
@@ -279,7 +255,7 @@ func waitForAdapterReady(h *ptyHarness, timeout time.Duration) bool {
 			h.t.Logf("waitForAdapterReady: matched 'Online'")
 			return true
 		}
-		// "Active" followed by space, newline, or box-drawing char (NOT "Activeconnecting")
+
 		for _, suffix := range []string{"Active ", "Active│", "Active\n"} {
 			if strings.Contains(screen, suffix) {
 				h.t.Logf("waitForAdapterReady: matched %q", suffix)
@@ -290,11 +266,6 @@ func waitForAdapterReady(h *ptyHarness, timeout time.Duration) bool {
 	}
 	return false
 }
-
-// ---------------------------------------------------------------------------
-// Test 1: Nostr auto-generate → QR overlay
-// Nostr doesn't need a running server; keypair is generated locally.
-// ---------------------------------------------------------------------------
 
 func TestPTY_QROverlay_NostrAutoGen(t *testing.T) {
 	if testing.Short() {
@@ -313,7 +284,6 @@ func TestPTY_QROverlay_NostrAutoGen(t *testing.T) {
 	screen := h.snapshot()
 	t.Logf("Nostr panel:\n%s", lastN(screen, 500))
 
-	// Enter create mode
 	h.sendKey("i")
 	time.Sleep(800 * time.Millisecond)
 
@@ -341,14 +311,9 @@ func TestPTY_QROverlay_NostrAutoGen(t *testing.T) {
 	}
 	t.Logf("Nostr QR overlay OK: %d blocks, npub present", qrBlocks)
 
-	// Esc closes overlay
 	h.sendKey("esc")
 	time.Sleep(500 * time.Millisecond)
 }
-
-// ---------------------------------------------------------------------------
-// Test 2: All platform panels — 'q' key doesn't crash
-// ---------------------------------------------------------------------------
 
 func TestPTY_QROverlay_QKeyNoCrash(t *testing.T) {
 	if testing.Short() {
@@ -395,10 +360,6 @@ func TestPTY_QROverlay_QKeyNoCrash(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Test 3: No inline QR in any panel
-// ---------------------------------------------------------------------------
-
 func TestPTY_QROverlay_NoInlineQR(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping PTY test in short mode")
@@ -427,11 +388,6 @@ func TestPTY_QROverlay_NoInlineQR(t *testing.T) {
 		})
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Test 4: Adapter-connected platforms — 'q' opens QR overlay
-// Waits for adapter to connect, then verifies QR overlay content.
-// ---------------------------------------------------------------------------
 
 func TestPTY_QROverlay_AdapterQR(t *testing.T) {
 	if testing.Short() {
@@ -463,25 +419,22 @@ func TestPTY_QROverlay_AdapterQR(t *testing.T) {
 			typeCommand(h, p.cmd)
 			time.Sleep(1 * time.Second)
 
-			// Wait for adapter to connect (up to 15s)
 			time.Sleep(3 * time.Second)
 			screen := h.snapshot()
 			t.Logf("%s panel:\n%s", p.name, lastN(screen, 600))
 
-			// Press q to open QR overlay
 			h.sendKey("q")
 			time.Sleep(1 * time.Second)
 
 			screen = h.snapshot()
 			t.Logf("After 'q':\n%s", lastN(screen, 800))
 
-			// Verify QR overlay content
 			qrBlocks := countQRBlocks(screen)
 			hasURI := strings.Contains(screen, p.uriPrefix)
 			hasScanHint := strings.Contains(screen, "Scan") || strings.Contains(screen, "扫码")
 
 			if qrBlocks < 5 {
-				// No QR overlay — adapter likely not connected
+
 				t.Skipf("%s: no QR overlay (adapter may not be connected)", p.name)
 			}
 			if !hasURI {
@@ -491,16 +444,11 @@ func TestPTY_QROverlay_AdapterQR(t *testing.T) {
 			t.Logf("%s QR overlay OK: %d blocks, URI=%v, scan=%v",
 				p.name, qrBlocks, hasURI, hasScanHint)
 
-			// Esc closes overlay
 			h.sendKey("esc")
 			time.Sleep(500 * time.Millisecond)
 		})
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Test 5: Esc closes QR overlay and returns to panel
-// ---------------------------------------------------------------------------
 
 func TestPTY_QROverlay_EscReturnsToPanel(t *testing.T) {
 	if testing.Short() {
@@ -513,7 +461,6 @@ func TestPTY_QROverlay_EscReturnsToPanel(t *testing.T) {
 	h.waitForText("Type a message", 10*time.Second)
 	h.drainOutput()
 
-	// Use Nostr — always works without server
 	typeCommand(h, "/nostr")
 	time.Sleep(500 * time.Millisecond)
 	h.sendKey("i")
@@ -530,7 +477,6 @@ func TestPTY_QROverlay_EscReturnsToPanel(t *testing.T) {
 		t.Skip("QR overlay did not open for Nostr")
 	}
 
-	// Press Esc
 	h.sendKey("esc")
 	time.Sleep(500 * time.Millisecond)
 

@@ -24,7 +24,6 @@ func TestCryptoRoundTrip(t *testing.T) {
 	t.Logf("nonce: %s", nonce)
 	t.Logf("ciphertext: %s", ciphertext)
 
-	// Simulate relay message format
 	relayMsg := map[string]string{
 		"type":       "encrypted",
 		"nonce":      nonce,
@@ -33,7 +32,6 @@ func TestCryptoRoundTrip(t *testing.T) {
 	msgBytes, _ := json.Marshal(relayMsg)
 	t.Logf("relay message: %s", string(msgBytes))
 
-	// Parse and decrypt
 	var parsed struct {
 		Type       string `json:"type"`
 		Nonce      string `json:"nonce"`
@@ -51,7 +49,7 @@ func TestCryptoRoundTrip(t *testing.T) {
 }
 
 func TestCryptoShortToken(t *testing.T) {
-	// Token < 16 bytes triggers argon2 derivation
+
 	c, err := NewCrypto("short")
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +69,7 @@ func TestCryptoShortToken(t *testing.T) {
 }
 
 func TestCrypto16ByteKey(t *testing.T) {
-	// Exactly 16 bytes -> AES-128
+
 	c, err := NewCrypto("0123456789abcdef")
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +89,7 @@ func TestCrypto16ByteKey(t *testing.T) {
 }
 
 func TestCrypto24ByteKey(t *testing.T) {
-	// Exactly 24 bytes -> AES-192
+
 	c, err := NewCrypto("0123456789abcdef01234567")
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +109,7 @@ func TestCrypto24ByteKey(t *testing.T) {
 }
 
 func TestCrypto32ByteKey(t *testing.T) {
-	// Exactly 32 bytes -> AES-256
+
 	c, err := NewCrypto("0123456789abcdef0123456789abcdef")
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +129,7 @@ func TestCrypto32ByteKey(t *testing.T) {
 }
 
 func TestCryptoLongTokenTruncated(t *testing.T) {
-	// Token > 32 bytes gets truncated to 32
+
 	token := "0123456789abcdef0123456789abcdef_extrabytes"
 	c, err := NewCrypto(token)
 	if err != nil {
@@ -197,7 +195,7 @@ func TestCryptoDecryptWrongKey(t *testing.T) {
 func TestCryptoDecryptTamperedCiphertext(t *testing.T) {
 	c, _ := NewCrypto("0123456789abcdef0123456789abcdef")
 	nonce, ct, _ := c.Encrypt([]byte("secret"))
-	// Decode, tamper first byte, re-encode
+
 	ctBytes, err := base64.StdEncoding.DecodeString(ct)
 	if err != nil {
 		t.Fatal(err)
@@ -266,7 +264,6 @@ func TestCryptoRoundTripViaJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Simulate relay message
 	relayMsg := map[string]string{
 		"type":       "encrypted",
 		"nonce":      nonce,
@@ -274,7 +271,6 @@ func TestCryptoRoundTripViaJSON(t *testing.T) {
 	}
 	wire, _ := json.Marshal(relayMsg)
 
-	// Parse and decrypt
 	var parsed struct {
 		Type       string `json:"type"`
 		Nonce      string `json:"nonce"`

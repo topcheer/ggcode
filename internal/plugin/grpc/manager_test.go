@@ -13,8 +13,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-// --- Mock gRPC server for testing ---
-
 type mockToolServer struct {
 	pb.UnimplementedToolServiceServer
 	tools []*pb.ToolDefinition
@@ -42,12 +40,9 @@ func (s *mockToolServer) Shutdown(ctx context.Context, _ *pb.ShutdownRequest) (*
 	return &pb.ShutdownResponse{}, nil
 }
 
-// --- Test GRPCAdapter directly with a mock gRPC server ---
-
 func startMockServer(t *testing.T) (pb.ToolServiceClient, func()) {
 	t.Helper()
 
-	// Start a real gRPC server on a Unix domain socket
 	tmpDir := t.TempDir()
 	sockPath := filepath.Join(tmpDir, "test.sock")
 
@@ -69,15 +64,10 @@ func startMockServer(t *testing.T) (pb.ToolServiceClient, func()) {
 	}
 	pb.RegisterToolServiceServer(server, mock)
 
-	// Listen on Unix domain socket
 	go func() {
-		_ = server.Serve(nil) // Will fail, that's OK — we use a different approach below
+		_ = server.Serve(nil)
 	}()
 
-	// Actually, for unit testing, let's just test the adapter directly
-	// by creating a client that we control. We'll use an in-memory approach.
-
-	// Close and cleanup
 	cleanup := func() {
 		server.GracefulStop()
 		_ = os.Remove(sockPath)
@@ -87,7 +77,7 @@ func startMockServer(t *testing.T) (pb.ToolServiceClient, func()) {
 }
 
 func TestGRPCAdapter_BasicInterface(t *testing.T) {
-	// Verify GRPCAdapter implements tool.Tool interface
+
 	var _ tool.Tool = (*GRPCAdapter)(nil)
 }
 
@@ -117,13 +107,12 @@ func TestGRPCAdapter_DefaultParameters(t *testing.T) {
 	def := &pb.ToolDefinition{
 		Name:        "minimal_tool",
 		Description: "No parameters defined",
-		Parameters:  nil, // empty
+		Parameters:  nil,
 	}
 
 	adapter := NewGRPCAdapter(nil, def, "/tmp")
 	params := adapter.Parameters()
 
-	// Should return a default empty schema
 	if string(params) == "" {
 		t.Error("expected default parameters, got empty")
 	}
@@ -138,8 +127,7 @@ func TestGRPCAdapter_DefaultParameters(t *testing.T) {
 }
 
 func TestGRPCAdapter_ExecuteWithMockClient(t *testing.T) {
-	// We need a real gRPC connection for this.
-	// Skip if we can't set up the server easily.
+
 	t.Skip("requires full gRPC server setup — covered by integration test")
 }
 
@@ -155,7 +143,7 @@ func TestManager_New(t *testing.T) {
 
 func TestManager_ShutdownEmpty(t *testing.T) {
 	m := NewManager("/tmp/test")
-	// Should not panic with no plugins
+
 	m.Shutdown()
 }
 
@@ -169,7 +157,6 @@ func TestEnvSlice(t *testing.T) {
 		t.Fatalf("expected 2 entries, got %d", len(result))
 	}
 
-	// Order is non-deterministic, so check presence
 	found := make(map[string]bool)
 	for _, e := range result {
 		found[e] = true
@@ -196,14 +183,13 @@ func TestLoadAll_EmptyCommand(t *testing.T) {
 }
 
 func TestGRPCAdapter_Timeout(t *testing.T) {
-	// Ensure context can be cancelled
+
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 	defer cancel()
 
-	// Just verify the context expires
 	select {
 	case <-ctx.Done():
-		// expected
+
 	case <-time.After(100 * time.Millisecond):
 		t.Error("context should have timed out")
 	}

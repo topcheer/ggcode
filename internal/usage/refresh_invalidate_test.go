@@ -7,17 +7,11 @@ import (
 	"time"
 )
 
-// TestRefreshInvalidateKeepsNegativeEntries verifies #2366-①: the r-key's
-// invalidation must drop SUCCESS entries only. Negative entries - the
-// Retry-After-sized 429 back-offs the Service exists to enforce - survive,
-// so a rate-limited endpoint is not re-probed just because the user
-// pressed refresh.
 func TestRefreshInvalidateKeepsNegativeEntries(t *testing.T) {
 	p := &fakeProbe{vendor: "ri-vendor"}
 	svc := NewService()
 	svc.Register(p)
 
-	// Seed: one success (via fresh cache write) and one negative entry.
 	ok := &UsageInfo{Vendor: "ri-vendor"}
 	svc.mu.Lock()
 	svc.cached["ri-vendor"] = cachedResult{info: ok, at: time.Now()}
@@ -36,15 +30,11 @@ func TestRefreshInvalidateKeepsNegativeEntries(t *testing.T) {
 	}
 }
 
-// TestRefreshUsagePanelKeepsServiceInstance verifies the TUI side of
-// #2366-①: refresh must keep the Service instance (singleflight + pacing
-// state) instead of rebuilding an empty one.
 func TestRefreshKeepsServiceUnderRepeatedPresses(t *testing.T) {
 	svc := NewService()
 	p := &fakeProbe{vendor: "k"}
 	svc.Register(p)
-	// Simulate a Retry-After-sized negative entry: pressing r must NOT
-	// clear it, so the probe is not re-run for that vendor.
+
 	svc.mu.Lock()
 	svc.cached["k"] = cachedResult{err: &RateLimitedError{RetryAfter: 10 * time.Minute}, at: time.Now()}
 	svc.mu.Unlock()
@@ -61,6 +51,4 @@ func TestRefreshKeepsServiceUnderRepeatedPresses(t *testing.T) {
 	_ = context.Background
 }
 
-// timeNowPlus/mMinute keep the test free of a direct time dependency in
-// the assertions (entries are read via age, freshly written = age 0).
 var minuteUnit = time.Minute

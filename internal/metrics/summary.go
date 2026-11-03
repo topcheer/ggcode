@@ -23,8 +23,6 @@ type SessionSummary struct {
 	P95Duration time.Duration
 	AvgThink    time.Duration
 
-	// OutputTPS is the average output tokens/sec during the generation phase
-	// (excluding TTFT and think time). 0 if no output or duration.
 	AvgOutputTPS float64
 	P95OutputTPS float64
 
@@ -48,19 +46,17 @@ type TurnSummary struct {
 	TTFT             time.Duration
 	Duration         time.Duration
 	ThinkTime        time.Duration
-	OutputTPS        float64 // weighted avg output tokens/sec during decode (per-LLM-call, excludes prefill)
+	OutputTPS        float64
 	InputTokens      int
 	OutputTokens     int
 	CacheRead        int
 	CacheWrite       int
-	// Delegated: same-turn sub-agent activity (#3295). Kept separate so the
-	// turn's own TTFT/TPS/decode stats are not polluted by faster sub-agent
-	// first packets or cross-model decode speeds.
+
 	DelegatedLLMCalls     int
 	DelegatedToolCalls    int
 	DelegatedInputTokens  int
 	DelegatedOutputTokens int
-	// Cumulative totals across all turns up to and including this one.
+
 	CumInputTokens      int
 	CumOutputTokens     int
 	CumCacheRead        int
@@ -68,11 +64,8 @@ type TurnSummary struct {
 	SlowestTool         string
 	SlowestToolDuration time.Duration
 
-	// Unexported accumulators for per-LLM-call TPS computation.
-	// Each call independently computes TPS = tokens / (Duration - TTFT),
-	// then the turn-level TPS is the simple average across all calls.
-	sumTPS   float64 // sum of per-call TPS values
-	tpsCount int     // number of LLM calls with valid TPS
+	sumTPS   float64
+	tpsCount int
 }
 
 func (s SessionSummary) HasData() bool {
@@ -110,9 +103,7 @@ func Summarize(events []MetricEvent) SessionSummary {
 
 		switch ev.Type {
 		case "llm":
-			// #3295: sub-agent events share the turn index but must not
-			// pollute the turn's latency stats (TTFT min, cross-model TPS
-			// averaging); count them as delegated load instead.
+
 			if ev.AgentID != "" {
 				turn.DelegatedLLMCalls++
 				turn.DelegatedInputTokens += ev.InputTokens
@@ -129,13 +120,7 @@ func Summarize(events []MetricEvent) SessionSummary {
 			turn.OutputTokens += ev.OutputTokens
 			turn.CacheRead += ev.CacheRead
 			turn.CacheWrite += ev.CacheWrite
-			// Per-call TPS: independently compute each call's decode speed,
-			// then average at the turn level (not weighted sum).
-			// Skip calls with very short decode time (<200ms): at that scale,
-			// Duration/TTFT measurement noise dominates, producing absurd TPS
-			// values (e.g. 50K+ tok/s). These are typically fast tool-use calls
-			// where decode is nearly instantaneous — not representative of
-			// sustained generation throughput.
+
 			if ev.OutputTokens > 0 && ev.Duration > ev.TTFT {
 				decodeDur := ev.Duration - ev.TTFT
 				if decodeDur >= 200*time.Millisecond {
@@ -199,7 +184,7 @@ func Summarize(events []MetricEvent) SessionSummary {
 		if turn.ThinkTime > 0 {
 			thinks = append(thinks, turn.ThinkTime)
 		}
-		// Turn-level TPS = simple average of per-call TPS values.
+
 		if turn.tpsCount > 0 {
 			turn.OutputTPS = turn.sumTPS / float64(turn.tpsCount)
 			tpsValues = append(tpsValues, turn.OutputTPS)
@@ -213,7 +198,7 @@ func Summarize(events []MetricEvent) SessionSummary {
 		}
 		return out.Turns[i].TurnIndex < out.Turns[j].TurnIndex
 	})
-	// Fill cumulative token totals.
+
 	var cumIn, cumOut, cumCR, cumCW int
 	for i := range out.Turns {
 		cumIn += out.Turns[i].InputTokens

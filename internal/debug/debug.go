@@ -17,12 +17,12 @@ import (
 )
 
 func init() {
-	// Wire up safego's logger to break the circular import.
+
 	safego.SetLogger(Log)
 }
 
 var (
-	defaultLogDir string // resolved once in Init() via resolveDebugDir()
+	defaultLogDir string
 )
 
 const (
@@ -33,20 +33,16 @@ const (
 	envKey                    = "GGCODE_DEBUG"
 )
 
-// Category represents a debug log output channel. Each category maps to its
-// own log file and can be independently enabled via GGCODE_DEBUG_<CATEGORY>.
 type Category struct {
-	Name        string            // e.g. "agent"
-	EnvSuffix   string            // e.g. "AGENT" → GGCODE_DEBUG_AGENT=1
-	Description string            // human-readable
-	Tags        []string          // debug.Log tags routed to this category
-	aliases     map[string]string // tag → canonical tag (populated by init)
+	Name        string
+	EnvSuffix   string
+	Description string
+	Tags        []string
+	aliases     map[string]string
 }
 
-// Categories is the ordered list of all debug log categories.
-// Order matters: listed first = checked first when building tag routing.
 var Categories = []Category{
-	// ── Agent ──────────────────────────────────────────────────────────
+
 	{
 		Name: "agent", EnvSuffix: "AGENT",
 		Description: "Agent loop, tool execution, autopilot, compaction, sub-agents",
@@ -58,7 +54,6 @@ var Categories = []Category{
 		Tags:        []string{"ctx"},
 	},
 
-	// ── LLM Providers (by platform) ───────────────────────────────────
 	{
 		Name: "openai", EnvSuffix: "OPENAI",
 		Description: "OpenAI provider — chat, streaming, message conversion",
@@ -85,7 +80,6 @@ var Categories = []Category{
 		Tags:        []string{"probe"},
 	},
 
-	// ── IM Adapters (one category per platform) ───────────────────────
 	{
 		Name: "qq", EnvSuffix: "QQ",
 		Description: "QQ IM adapter",
@@ -172,7 +166,6 @@ var Categories = []Category{
 		Tags:        []string{"im", "emitter", "stt", "dummy", "im-send"},
 	},
 
-	// ── UI ─────────────────────────────────────────────────────────────
 	{
 		Name: "tui", EnvSuffix: "TUI",
 		Description: "TUI model updates, repl, completion, submit",
@@ -189,7 +182,6 @@ var Categories = []Category{
 		Tags:        []string{"daemon", "daemon-bridge", "restart"},
 	},
 
-	// ── Infrastructure ─────────────────────────────────────────────────
 	{
 		Name: "knight", EnvSuffix: "KNIGHT",
 		Description: "Knight scheduler, analyzer, runner",
@@ -248,15 +240,12 @@ var Categories = []Category{
 	{
 		Name: "bubbletea", EnvSuffix: "BUBBLETEA",
 		Description: "Bubble Tea framework internal trace (TEA_TRACE), controlled independently via GGCODE_DEBUG_BUBBLETEA",
-		Tags:        []string{}, // not routed through debug.Log; bubbletea writes directly
+		Tags:        []string{},
 	},
 }
 
-// tagToCategory maps each debug.Log tag to its category name.
-// Populated from Categories by init().
 var tagToCategory map[string]string
 
-// knownCategoryNames is the set of all category.Name values.
 var knownCategoryNames map[string]bool
 
 func init() {
@@ -274,69 +263,40 @@ var (
 	mu        sync.RWMutex
 	enabled   bool
 	once      sync.Once
-	sinks     map[string]*asyncFileSink  // category name → sink
-	mainSink  *asyncFileSink             // writes all logs (compat)
-	liveSink  func(category, msg string) // optional real-time sink (e.g. LogStream)
-	loggers   map[string]*log.Logger     // category name → logger
-	tagFilter map[string]bool            // nil = all; non-nil = only these categories
-	verbose   map[string]bool            // categories with verbose (level 2) logging
+	sinks     map[string]*asyncFileSink
+	mainSink  *asyncFileSink
+	liveSink  func(category, msg string)
+	loggers   map[string]*log.Logger
+	tagFilter map[string]bool
+	verbose   map[string]bool
 )
 
-// Init initializes the debug logging system.
-//
-// ## Global control
-//
-// GGCODE_DEBUG=1|true|all — enable ALL categories.
-// GGCODE_DEBUG=<cat1>,<cat2> — enable only listed categories.
-// GGCODE_DEBUG unset or empty — logging disabled (default).
-//
-// ## Per-category control (overrides global)
-//
-// If any GGCODE_DEBUG_<SUFFIX> variable is set to a truthy value,
-// that category is enabled regardless of the global GGCODE_DEBUG value.
-// When per-category env vars exist, the global GGCODE_DEBUG is ignored
-// entirely for the filter decision.
-//
-// Examples:
-//
-//	GGCODE_DEBUG_AGENT=1         — only agent logs
-//	GGCODE_DEBUG_OPENAI=1 GGCODE_DEBUG_AGENT=1 — openai + agent logs
-//	GGCODE_DEBUG=1               — all logs (every category)
-//	GGCODE_DEBUG=agent,provider  — agent + provider categories
-//
-// ## Category environment variable names
-//
-// Each category has an EnvSuffix; the env var is GGCODE_DEBUG_<SUFFIX>.
-// See the Categories variable for the full list.
 func Init() {
 	once.Do(func() {
-		// Resolve debug log directory first — cleanupStaleLogs needs it.
+
 		if defaultLogDir == "" {
 			defaultLogDir = resolveDebugDir()
 		}
 
-		// Clean up stale log files from crashed/killed previous instances.
 		cleanupStaleLogs()
 
-		// Check per-category env vars first
 		perCategoryEnvs, verbCats := scanPerCategoryEnvs()
 
 		var filter map[string]bool
 		globalVal := os.Getenv(envKey)
 
 		if perCategoryEnvs != nil {
-			// Per-category env vars take precedence; ignore global GGCODE_DEBUG
+
 			filter = perCategoryEnvs
 		} else if globalVal != "" {
 			filter = parseTagFilter(globalVal)
 		} else {
-			// No env vars set — logging disabled
+
 			return
 		}
 
 		pid := os.Getpid()
 
-		// Create main sink (all messages combined)
 		mainPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-debug-%d.log", pid))
 		main, err := newAsyncFileSink(mainPath, "", defaultMaxLogSize, defaultMaxLogFiles, defaultAsyncBufSize)
 		if err != nil {
@@ -346,7 +306,6 @@ func Init() {
 		sinkMap := make(map[string]*asyncFileSink)
 		loggerMap := make(map[string]*log.Logger)
 
-		// Create per-category sinks
 		for _, cat := range Categories {
 			if filter != nil && !filter[cat.Name] {
 				continue
@@ -371,8 +330,6 @@ func Init() {
 	})
 }
 
-// scanPerCategoryEnvs checks for GGCODE_DEBUG_<SUFFIX> env vars.
-// Returns a set of enabled category names, or nil if none found.
 func scanPerCategoryEnvs() (enabled map[string]bool, verb map[string]bool) {
 	enabled = make(map[string]bool)
 	verb = make(map[string]bool)
@@ -395,23 +352,19 @@ func scanPerCategoryEnvs() (enabled map[string]bool, verb map[string]bool) {
 	return enabled, verb
 }
 
-// isVerbose returns true for "2", "verbose", "trace" (case-insensitive).
 func isVerbose(val string) bool {
 	v := strings.TrimSpace(strings.ToLower(val))
 	return v == "2" || v == "verbose" || v == "trace"
 }
 
-// isTruthy returns true for "1", "true", "yes", "on" (case-insensitive).
 func isTruthy(val string) bool {
 	v := strings.TrimSpace(strings.ToLower(val))
 	return v == "1" || v == "true" || v == "yes" || v == "on"
 }
 
-// parseTagFilter parses the GGCODE_DEBUG value into a category filter set.
-// Returns nil if all categories should be logged.
 func parseTagFilter(val string) map[string]bool {
 	if isTruthy(val) || strings.EqualFold(val, "all") {
-		return nil // log everything
+		return nil
 	}
 	filter := make(map[string]bool)
 	for _, part := range strings.Split(val, ",") {
@@ -426,15 +379,12 @@ func parseTagFilter(val string) map[string]bool {
 	return filter
 }
 
-// Active reports whether the debug logger is enabled.
 func Active() bool {
 	mu.RLock()
 	defer mu.RUnlock()
 	return enabled
 }
 
-// MainLogPath returns the path of the main (combined) debug log file, or ""
-// when logging is disabled. Safe to call at any time.
 func MainLogPath() string {
 	mu.RLock()
 	defer mu.RUnlock()
@@ -444,25 +394,8 @@ func MainLogPath() string {
 	return mainSink.basePath
 }
 
-// ensureMu serializes EnsureFileLogging's whole check-reset-init sequence.
-// mu alone cannot: the sequence spans Close()/Init(), which take mu
-// internally, so the unguarded window between the Active() check and
-// Close() let a second caller's cleanup glob delete every log file the
-// first caller had just written (#1539 case B).
 var ensureMu sync.Mutex
 
-// EnsureFileLogging turns on debug file logging at runtime when it was not
-// enabled at startup. It is idempotent: a no-op when logging is already
-// active. Intended for blind-spot error paths — an unrecognized error shape
-// is undiagnosable without logs, so the first occurrence turns logging on
-// and the user is told where the file is.
-//
-// The goroutine-safety story: concurrent callers are serialized by ensureMu
-// across the entire sequence, so the loser of a race observes logging
-// already active and returns without touching anything — the winner's log
-// lines survive intact. (Before #1539 case B the loser's Close() cleanup
-// deleted the full segment the winner had written, not "a few early
-// lines" as the old comment claimed.)
 func EnsureFileLogging() (wasEnabled bool, path string) {
 	ensureMu.Lock()
 	defer ensureMu.Unlock()
@@ -471,8 +404,6 @@ func EnsureFileLogging() (wasEnabled bool, path string) {
 		return true, MainLogPath()
 	}
 
-	// Mirror EnableForTest's reset: Init() is once-guarded, so a fresh Once
-	// is required for a second initialization.
 	Close()
 	mu.Lock()
 	once = sync.Once{}
@@ -483,20 +414,12 @@ func EnsureFileLogging() (wasEnabled bool, path string) {
 	tagFilter = nil
 	mu.Unlock()
 
-	// "1" enables all categories — a blind spot gives no hint which
-	// component misbehaved, so capture everything.
 	os.Setenv(envKey, "1")
 	Init()
 
 	return false, MainLogPath()
 }
 
-// IsVerbose reports whether verbose (level 2) logging is enabled for the
-// given category. Use this to gate high-volume trace logs:
-//
-//	if debug.IsVerbose("openai") { debug.Log("openai", ...) }
-//
-// Enabled via GGCODE_DEBUG_OPENAI=2, GGCODE_DEBUG_OPENAI=verbose, or GGCODE_DEBUG_OPENAI=trace.
 func IsVerbose(pkg string) bool {
 	mu.RLock()
 	defer mu.RUnlock()
@@ -507,11 +430,6 @@ func IsVerbose(pkg string) bool {
 	return verbose[cat]
 }
 
-// truncateMessage caps a log message at maxMessageLen bytes without
-// splitting a multi-byte rune mid-sequence. Byte slicing here used to cut
-// CJK runes in half, corrupting the tail with U+FFFD after JSON marshaling
-// (#537); this uses util.SnapToRuneStart for a rune-safe cut and appends
-// "..." so the truncation is visible.
 func truncateMessage(msg string) string {
 	if len(msg) <= maxMessageLen {
 		return msg
@@ -520,16 +438,11 @@ func truncateMessage(msg string) string {
 	return msg[:cut] + "..."
 }
 
-// Log writes a formatted message with a package tag to the appropriate
-// category-specific log file and the main log file.
-// Format: [HH:MM:SS.mmm] [pkg] message
 func Log(pkg, format string, args ...interface{}) {
 	cat := tagToCategory[pkg]
 	msg := fmt.Sprintf("[%s] "+format, append([]interface{}{pkg}, args...)...)
 	msg = truncateMessage(msg)
 
-	// LiveSink works independently of GGCODE_DEBUG — always fires.
-	// Read liveSink under RLock to avoid race with SetLiveSink.
 	mu.RLock()
 	sink := liveSink
 	mu.RUnlock()
@@ -537,7 +450,6 @@ func Log(pkg, format string, args ...interface{}) {
 		sink(cat, msg)
 	}
 
-	// Ring buffer always captures (for debug_log tool access)
 	ringAppend(cat, msg)
 
 	mu.RLock()
@@ -550,22 +462,18 @@ func Log(pkg, format string, args ...interface{}) {
 	filt := tagFilter
 	mu.RUnlock()
 
-	// Apply category filter
 	if filt != nil {
 		if cat == "" || !filt[cat] {
 			return
 		}
 	}
 
-	// Append newline for file output
 	fileMsg := msg + "\n"
 
-	// Write to category-specific file
 	if l != nil {
 		l.Print(fileMsg)
 	}
 
-	// Write to main file with timestamp
 	if ms != nil {
 		ts := time.Now().Format("15:04:05.000000")
 		_, _ = ms.Write([]byte(ts + " " + fileMsg))
@@ -578,7 +486,6 @@ func SetLiveSink(fn func(category, msg string)) {
 	mu.Unlock()
 }
 
-// Logf writes a raw formatted message (no package tag).
 func Logf(format string, args ...interface{}) {
 	mu.RLock()
 	if !enabled {
@@ -597,7 +504,6 @@ func Logf(format string, args ...interface{}) {
 	}
 }
 
-// Close flushes, closes, and removes all debug log files for the current process.
 func Close() {
 	mu.Lock()
 	enabled = false
@@ -616,24 +522,15 @@ func Close() {
 		ms.Close()
 	}
 
-	// Clean up bubbletea trace log if we created it via TEA_TRACE.
 	cleanupBubbleteaTrace()
 }
 
-// staleLogMaxAge caps how long a log file can survive the stale-PID sweep
-// even when its PID checks alive: a dead ggcode's PID can be REUSED by an
-// unrelated live process (low PIDs are aggressively recycled after reboot),
-// and such collision survivors are kept forever by the liveness check alone.
-// #3339 (sa-244 audit): the sweep ran every startup yet ~/.ggcode/debug held
-// ~15 old-PID file sets - exactly the collision-survivor population.
 const staleLogMaxAge = 14 * 24 * time.Hour
 
-// cleanupStaleLogs removes log files belonging to processes that no longer exist.
-// This handles the case where ggcode was killed with SIGKILL and couldn't clean up.
 func cleanupStaleLogs() {
 	entries, err := os.ReadDir(defaultLogDir)
 	if err != nil {
-		return // directory doesn't exist yet, nothing to clean
+		return
 	}
 	selfPid := os.Getpid()
 	for _, entry := range entries {
@@ -646,39 +543,33 @@ func cleanupStaleLogs() {
 			continue
 		}
 		if pid == selfPid {
-			continue // don't clean up our own files
+			continue
 		}
-		// On Unix, FindProcess always succeeds. Use signal 0 to check liveness.
+
 		proc, _ := os.FindProcess(pid)
 		if !util.IsProcessAliveProc(proc) {
-			// Process doesn't exist — remove its log files
+
 			_ = os.Remove(filepath.Join(defaultLogDir, name))
 			continue
 		}
-		// PID-reuse backstop: the liveness check just passed, but if the PID
-		// belongs to a *different* process that recycled it, the file still
-		// belongs to a dead ggcode. Age is the only signal left - anything
-		// past staleLogMaxAge goes regardless of liveness (selfPid already
-		// skipped above, so a long-running live ggcode's own files are safe).
+
 		if info, statErr := entry.Info(); statErr == nil && time.Since(info.ModTime()) > staleLogMaxAge {
 			_ = os.Remove(filepath.Join(defaultLogDir, name))
 		}
 	}
 }
 
-// extractPidFromLogName parses "ggcode-xxx-12345.log" or "ggcode-xxx-12345.log.1"
-// and returns the pid (12345). Returns 0 if the name doesn't match.
 func extractPidFromLogName(name string) int {
-	// Match pattern: ggcode-*-{pid}.log[.N]
+
 	if !strings.HasPrefix(name, "ggcode-") {
 		return 0
 	}
 	base := name
-	// Strip rotation suffix
+
 	if idx := strings.LastIndex(base, ".log"); idx >= 0 {
 		base = base[:idx]
 	}
-	// Find last hyphen before the pid number
+
 	lastDash := strings.LastIndex(base, "-")
 	if lastDash < 0 {
 		return 0
@@ -698,18 +589,16 @@ func extractPidFromLogName(name string) int {
 func cleanupBubbleteaTrace() {
 	pid := os.Getpid()
 	path := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-bubbletea-%d.log", pid))
-	// Only remove if TEA_TRACE points at our file (not user-set).
+
 	if te := os.Getenv("TEA_TRACE"); te == path {
 		_ = os.Remove(path)
-		// Also remove rotated copies
+
 		matches, _ := filepath.Glob(path + ".*")
 		for _, m := range matches {
 			_ = os.Remove(m)
 		}
 	}
 }
-
-// --- async file sink ---
 
 type asyncFileSink struct {
 	basePath   string
@@ -729,8 +618,6 @@ type asyncFileSink struct {
 	size int64
 }
 
-// resolveDebugDir returns the debug log directory.
-// Prefers ~/.ggcode/debug/ (user-private); falls back to /tmp/ggcode-debug-{uid}.
 func resolveDebugDir() string {
 	home := util.HomeDir()
 	if home != "" {
@@ -739,7 +626,7 @@ func resolveDebugDir() string {
 			return dir
 		}
 	}
-	// Fallback: use UID-scoped dir in /tmp
+
 	uidNum := os.Getuid()
 	if uidNum > 0 {
 		return filepath.Join(os.TempDir(), fmt.Sprintf("ggcode-debug-%d", uidNum))
@@ -929,8 +816,6 @@ func samePath(a, b string) bool {
 	return filepath.Clean(a) == filepath.Clean(b)
 }
 
-// EnableForTest forces the debug system on for the given categories.
-// If categories is empty, all categories are enabled.
 func EnableForTest(t interface{ Cleanup(func()) }, categories ...string) {
 	Close()
 	mu.Lock()

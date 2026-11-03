@@ -26,10 +26,6 @@ var projectPathHints = []projectPathHint{
 	{Path: "python", Description: "Python wrapper that installs the GitHub Release binary"},
 }
 
-// GenerateProjectMemory builds the AGENTS.md starter document from
-// heuristically detected repo facts. /init presents it to the agent as a
-// hint block - the agent explores the repository first and writes the final
-// AGENTS.md from what it actually found (see handleInitCommand).
 func GenerateProjectMemory(root string) (string, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -118,11 +114,7 @@ func detectReadmeSummary(root string) string {
 		if strings.HasPrefix(line, "#") {
 			continue
 		}
-		// #1615: centered HTML banners (<p align=center>, <img>, </p>)
-		// are the first "paragraph" in many READMEs (this repo's own) -
-		// the tag soup became the project Summary injected into every
-		// session's AGENTS.md. Skip HTML-tag lines and empty-out
-		// tag-only paragraphs so the first REAL text paragraph wins.
+
 		if strings.HasPrefix(line, "<") {
 			continue
 		}
@@ -149,12 +141,7 @@ func detectGoModule(root string) string {
 }
 
 func detectTechStack(root string) []string {
-	// #1636-A: same gate as detectImportantPaths (#1593-A) - the specific
-	// stack claims below (npm release wrapper, plugin-system phrases) are
-	// ggcode's OWN facts; a user repo with python/ or an MCP-mentioning
-	// README got them written into AGENTS.md as MUST-follow context.
-	// Correct silence beats wrong facts; foreign repos keep only the
-	// generic Go-codebase line.
+
 	module := detectGoModule(root)
 	if module != "github.com/topcheer/ggcode" {
 		if fileExists(filepath.Join(root, "go.mod")) {
@@ -186,12 +173,7 @@ func detectTechStack(root string) []string {
 
 func detectImportantPaths(root string) []string {
 	var paths []string
-	// #1593-A: the hints describe THIS repository's layout. Almost every
-	// standard Go repo has internal/agent, internal/tool, docs/, python/
-	// namesakes - emitting these descriptions for a user's own repo wrote
-	// factually WRONG entries into AGENTS.md, which is injected into every
-	// subsequent session ("MUST follow"). Gate on the module name; foreign
-	// repos get no path claims at all (correct silence beats wrong facts).
+
 	module := detectGoModule(root)
 	if module != "github.com/topcheer/ggcode" {
 		return nil

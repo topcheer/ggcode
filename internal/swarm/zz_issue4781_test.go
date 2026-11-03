@@ -10,11 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// #4781 (S-10): broadcast-style claiming produced 7 concurrent claims of 2
-// items - each seat's in-memory CAS "won" and the last async snapshot
-// silently stole ownership. ClaimTaskSingleWinner adds cross-process
-// single-winner semantics: advisory file lock + durable-board loser check +
-// synchronous persist.
 func zz4781Manager(t *testing.T) *Manager {
 	t.Helper()
 	m := NewManager(config.SwarmConfig{}, nil,
@@ -41,7 +36,6 @@ func TestIssue4781_ConcurrentClaimsExactlyOneWinner(t *testing.T) {
 	}
 	created := tm.Create("claimable task", "desc", "", nil)
 
-	// N concurrent claims on the same task: exactly one winner.
 	const n = 8
 	var wg sync.WaitGroup
 	winners := make(chan string, n)
@@ -79,7 +73,7 @@ func TestIssue4781_ConcurrentClaimsExactlyOneWinner(t *testing.T) {
 }
 
 func TestIssue4781_CrossSeatWinnerVisibleToSecondManager(t *testing.T) {
-	// Two Managers in one HOME = two seats sharing one durable board.
+
 	t.Setenv("HOME", t.TempDir())
 	seatA := zz4781Manager(t)
 	teamA := seatA.CreateTeam("xseat-team", "leader-a")
@@ -89,13 +83,10 @@ func TestIssue4781_CrossSeatWinnerVisibleToSecondManager(t *testing.T) {
 	}
 	created := tmA.Create("shared task", "desc", "", nil)
 
-	// Seat A wins and persists synchronously.
 	if _, err := seatA.ClaimTaskSingleWinner(teamA.ID, created.ID, "seatA"); err != nil {
 		t.Fatalf("seatA claim: %v", err)
 	}
 
-	// Seat B: fresh manager, same team id -> loads the durable board lazily.
-	// Its claim must lose and be TOLD who won (not silently steal).
 	seatB := zz4781Manager(t)
 	teamB := seatB.CreateTeam("xseat-team", "leader-b")
 	_, err = seatB.ClaimTaskSingleWinner(teamB.ID, created.ID, "seatB")
@@ -106,7 +97,6 @@ func TestIssue4781_CrossSeatWinnerVisibleToSecondManager(t *testing.T) {
 		t.Fatalf("loser error must name seatA, got: %v", err)
 	}
 
-	// Idempotent: seatA re-claiming its own task succeeds without error.
 	if _, err := seatA.ClaimTaskSingleWinner(teamA.ID, created.ID, "seatA"); err != nil {
 		t.Fatalf("same-owner re-claim must be idempotent: %v", err)
 	}

@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// --- Dispatch tests ---
-
 func TestDispatch_PreToolUse_Block(t *testing.T) {
 	cfg := HookConfig{
 		PreToolUse: []Hook{
@@ -82,10 +80,10 @@ func TestDispatch_OnAgentStop_Async(t *testing.T) {
 	if !result.Allowed {
 		t.Error("on_agent_stop should always allow")
 	}
-	// Async — give it a moment
+
 	time.Sleep(100 * time.Millisecond)
 	if atomic.LoadInt32(&called) > 0 {
-		// Best effort check — the hook ran async
+
 	}
 }
 
@@ -115,8 +113,6 @@ func TestDispatch_UnknownEvent_NoOp(t *testing.T) {
 		t.Error("unknown event should be noop (allow)")
 	}
 }
-
-// --- HTTP hook tests ---
 
 func TestHTTPHook_Success(t *testing.T) {
 	var receivedPayload HookPayload
@@ -296,8 +292,6 @@ func TestHTTPHook_EventHeader(t *testing.T) {
 	}
 }
 
-// --- Payload tests ---
-
 func TestBuildPayload_PreToolUse(t *testing.T) {
 	env := HookEnv{
 		Event:      EventPreToolUse,
@@ -373,8 +367,6 @@ func TestBuildPayload_OnUserMessage(t *testing.T) {
 	}
 }
 
-// --- matchAny tests ---
-
 func TestMatchAny_Wildcard(t *testing.T) {
 	if !matchAny("glob", "*", "", "") {
 		t.Error("* should match everything")
@@ -393,8 +385,6 @@ func TestMatchAny_ToolSpecific(t *testing.T) {
 	}
 }
 
-// --- Hook.HasType tests ---
-
 func TestHook_HasType_Command(t *testing.T) {
 	h := Hook{Command: "echo hello"}
 	if h.HasType() != HookTypeCommand {
@@ -411,7 +401,7 @@ func TestHook_HasType_HTTP(t *testing.T) {
 
 func TestHook_HasType_HTTPRequiresExplicitType(t *testing.T) {
 	h := Hook{URL: "https://example.com"}
-	// URL alone does NOT infer http type — user must set type: http explicitly
+
 	if h.HasType() != HookTypeCommand {
 		t.Error("hook with URL but no type should default to command")
 	}

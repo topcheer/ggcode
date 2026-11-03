@@ -43,7 +43,6 @@ type MCPServerInfo struct {
 	OAuthRequired         bool
 }
 
-// MCPOAuthRequiredError signals that OAuth is needed for an MCP server.
 type MCPOAuthRequiredError struct {
 	ServerName string
 	Handler    *mcp.OAuthHandler
@@ -53,7 +52,6 @@ func (e *MCPOAuthRequiredError) Error() string {
 	return fmt.Sprintf("mcp server %q requires OAuth authentication", e.ServerName)
 }
 
-// MCPPlugin connects to an MCP server and registers its tools.
 type MCPPlugin struct {
 	cfg           config.MCPServerConfig
 	client        *mcp.Client
@@ -61,8 +59,7 @@ type MCPPlugin struct {
 	mu            sync.RWMutex
 	connected     bool
 	awaitingOAuth bool
-	// closed is set once Close() has run (#1285): watchers must not start
-	// and reconnect cycles must not resurrect the plugin afterwards.
+
 	closed            bool
 	status            MCPStatus
 	lastError         string
@@ -70,70 +67,34 @@ type MCPPlugin struct {
 	resources         []string
 	resourceTemplates []string
 
-	// Resource subscription state (MCP 2025-06-18). subscribed tracks URIs
-	// with an in-flight or confirmed resources/subscribe request so repeated
-	// reads of the same resource do not re-subscribe; resourceUpdated records
-	// the wall-clock time of the latest notifications/resources/updated per
-	// URI. All access is guarded by mu.
 	subscribed      map[string]bool
 	resourceUpdated map[string]time.Time
 
-	// toolsHash is the content hash of the last-applied tool definitions.
-	// refreshTools compares a fresh ListTools result against it and skips
-	// the unregister/rebuild/re-register cycle when nothing changed - the
-	// LLM-visible tool schemas and adapter object stay untouched.
 	toolsHash string
 
-	// baselines persists per-server approved tool definition hashes
-	// (anti-rug-pull, research sa-119). nil disables drift tracking.
 	baselines *ToolBaselineStore
 
-	// OnToolDrift, if set, is invoked when a server's tool definitions
-	// change after the persisted approval baseline (outside the 24h
-	// onboarding window and unless AllowToolDrift is set). Called on a
-	// separate goroutine; must not take the plugin write lock directly.
 	OnToolDrift func(server string, added, removed []string)
 
-	// notifyState, if set, is invoked (with m.mu NOT held) whenever a
-	// background path mutates connection state or the tool set outside the
-	// manager's connect/disconnect lifecycle (tool refresh, auto-reconnect).
-	// The manager injects its emitUpdate so UI panels converge (#3967);
-	// must be called outside the plugin lock because the listener chain
-	// re-enters Info() which takes the plugin read lock.
 	notifyState func()
 
-	// lastRefreshAt throttles manual tool refreshes so a user cannot hammer
-	// the server (each refresh is a ListTools roundtrip + potential rebuild).
 	lastRefreshAt time.Time
 
-	// forceReauthPending signals Connect() to call ForceReauth on the new
-	// OAuthHandler so it skips the canonical (shared) credential fallback.
 	forceReauthPending bool
 
-	// autoReconnect controls whether the plugin watches for unexpected
-	// process exits and attempts to reconnect automatically.
 	autoReconnect bool
 
-	// reconnectCancel stops the auto-reconnect watcher goroutine.
 	reconnectCancel context.CancelFunc
 
-	// healthCancel stops the WS health-probe goroutine.
 	healthCancel context.CancelFunc
 
-	// registry holds a reference to the tool registry for re-registering
-	// tools after auto-reconnect.
 	registry *tool.Registry
 
-	// samplingHandler, if set, is propagated to each new MCP client so
-	// the server can request LLM completions via sampling/createMessage.
 	samplingHandler mcp.SamplingHandler
 
-	// elicitationHandler, if set, is propagated to each new MCP client so
-	// the server can request structured user input via elicitation/create.
 	elicitationHandler mcp.ElicitationHandler
 }
 
-// NewMCPPlugin creates a plugin from an MCP server configuration.
 func NewMCPPlugin(cfg config.MCPServerConfig) *MCPPlugin {
 	return &MCPPlugin{
 		cfg:       cfg,
@@ -144,35 +105,20 @@ func NewMCPPlugin(cfg config.MCPServerConfig) *MCPPlugin {
 
 func (m *MCPPlugin) Name() string { return m.cfg.Name }
 
-// SetSamplingHandler sets the LLM sampling handler on this plugin.
-// The handler is propagated to each new MCP client when it connects.
-// Must be called before Connect.
 func (m *MCPPlugin) SetSamplingHandler(h mcp.SamplingHandler) {
 	m.samplingHandler = h
 }
 
-// SetElicitationHandler sets the user elicitation handler on this plugin.
-// The handler is propagated to each new MCP client when it connects.
-// Must be called before Connect.
 func (m *MCPPlugin) SetElicitationHandler(h mcp.ElicitationHandler) {
 	m.elicitationHandler = h
 }
 
-// startWSHealthProbe launches a periodic health probe for WebSocket MCP
-// servers. Unlike stdio, WS has no process-exit signal, and unlike HTTP,
-// the connection is stateful — a dropped TCP connection leaves the tools
-// registered but every call failing with a websocket write error until the
-// session restarts. The probe sends a lightweight ListTools request every
-// interval; a connection-level failure triggers the standard reconnect
-// path (attemptReconnect), which unregisters stale tools and re-registers
-// them once the server is back.
 func (m *MCPPlugin) startWSHealthProbe(client *mcp.Client) {
 	if !strings.EqualFold(strings.TrimSpace(m.cfg.Type), "ws") &&
 		!strings.EqualFold(strings.TrimSpace(m.cfg.Type), "websocket") {
-		return // stdio has the process watcher; http is per-request stateless
+		return
 	}
-	// One probe loop per plugin: cancel any previous one (reconnect creates
-	// a new client, and the old probe would otherwise watch a dead client).
+
 	if m.healthCancel != nil {
 		m.healthCancel()
 	}
@@ -188,8 +134,7 @@ func (m *MCPPlugin) startWSHealthProbe(client *mcp.Client) {
 				return
 			case <-ticker.C:
 			}
-			// Skip when disconnected — the reconnect watcher owns recovery
-			// in that state; probing would double-reconnect.
+
 			m.mu.RLock()
 			connected := m.connected && m.client == client
 			m.mu.RUnlock()
@@ -203,27 +148,19 @@ func (m *MCPPlugin) startWSHealthProbe(client *mcp.Client) {
 				continue
 			}
 			if !isWSConnError(err) {
-				continue // server-level error (e.g. capability gate) — not a transport drop
+				continue
 			}
 			debug.Log("mcp-ws-health", "server=%s transport dropped (%v), reconnecting", m.cfg.Name, err)
-			// #1285: pass the PROBE ctx, not context.Background() — a probe
-			// cancelled by Close must not resurrect the plugin from beyond the
-			// grave with an uncancellable Background dial.
+
 			m.attemptReconnect(ctx)
-			// attemptReconnect swapped in a fresh client with its own probe
-			// (startWSHealthProbe runs again from Connect); this loop is done.
+
 			return
 		}
 	})
 }
 
-// wsHealthProbeInterval is how often the WS health probe pings the server.
-// Long enough to stay idle-cheap, short enough that an unnoticed dead
-// connection doesn't waste many agent calls.
 const wsHealthProbeInterval = 60 * time.Second
 
-// isWSConnError reports whether an error indicates the WebSocket transport
-// itself is broken (as opposed to a server-returned application error).
 func isWSConnError(err error) bool {
 	if err == nil {
 		return false
@@ -237,7 +174,6 @@ func isWSConnError(err error) bool {
 		strings.Contains(msg, "eof")
 }
 
-// Connect initializes the MCP server, discovers tools, and returns an adapter.
 func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.mu.RLock()
 	if m.adapter != nil {
@@ -256,11 +192,10 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	}
 	m.mu.Lock()
 	forceReauth := m.forceReauthPending
-	m.forceReauthPending = false // one-shot: clear immediately
+	m.forceReauthPending = false
 	m.mu.Unlock()
 	if forceReauth && client != nil {
-		// New client was just created — tell its OAuthHandler to skip
-		// the canonical credential so a fresh OAuth flow triggers.
+
 		_ = client.ForceReauth()
 	}
 	if err := client.Start(ctx); err != nil {
@@ -291,8 +226,7 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
-		// #1285: Close() completed while this Connect was dialing. Taking
-		// the connection would leak a client + watcher nothing can cancel.
+
 		_ = client.Close()
 		return nil, fmt.Errorf("mcp server %q closed during connect", m.cfg.Name)
 	}
@@ -306,7 +240,7 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	} else {
 		m.adapter = mcp.NewAdapter(m.cfg.Name, client, tools)
 	}
-	// sa-44: surface the server's initialize instructions on its tools.
+
 	m.adapter.SetServerInstructions(client.Instructions())
 	m.connected = true
 	m.awaitingOAuth = false
@@ -320,22 +254,12 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.resources = resources
 	m.resourceTemplates = templates
 	m.setupNotificationHandler(client)
-	// MCP 2026-07-28: self-detecting upgrade to the correlated subscription
-	// stream (subscriptions/listen) is deferred to postConnect — it runs on
-	// the CONNECT CALLER's goroutine, OUTSIDE m.mu. The old inline call held
-	// the plugin write lock across the full ack wait (10s before #2542),
-	// and the TUI's refreshCommands → SnapshotMCP → Info() path takes this
-	// same lock's read side — every UI command refresh stalled behind
-	// silent-server ack deadlines (live freeze capture 2026-09-18).
+
 	m.startReconnectWatcher(client)
 	m.startWSHealthProbe(client)
 	return m.adapter, nil
 }
 
-// postConnect runs the subscriptions/listen upgrade outside m.mu. Call
-// once from the connect path after Connect returns successfully. Safe when
-// the plugin was concurrently closed or reconnected: it re-checks the
-// client under the lock and bails if the connection moved on.
 func (m *MCPPlugin) postConnect() {
 	m.mu.RLock()
 	client := m.client
@@ -347,23 +271,6 @@ func (m *MCPPlugin) postConnect() {
 	m.setupModernSubscriptions(client)
 }
 
-// setupModernSubscriptions attempts the MCP 2026-07-28 subscriptions/listen
-// upgrade for this server connection. It is deliberately self-detecting and
-// best-effort: success opens a correlated notification stream, a legacy
-// server's method-not-found response downgrades silently, and any other
-// failure only costs a debug log. Called from the shared connect path so
-// auto-reconnect re-opens the stream automatically.
-//
-// The ack wait runs on a SHORT deadline (2s, not the old 10s): this call
-// sits on the synchronous connect path, and servers that silently ignore
-// unknown methods (observed live: Pen.app's stdio servers, 2026-09-18)
-// neither answer -32601 nor ack — the old 10s timeout stalled each such
-// server's connect goroutine 10s and the 'connected' state it gates
-// arrived 10s late, which froze the TUI startup (two Pen servers = two
-// serialized 10s stalls, user-visible freeze of ~20s). A server that
-// cannot ack within 2s is treated as unsupported for this client
-// instance; EnableModernSubscriptions also persists the downgrade on
-// deadline so reconnects do not pay again.
 func (m *MCPPlugin) setupModernSubscriptions(client *mcp.Client) {
 	ctx, cancel := context.WithTimeout(context.Background(), mcp.SubscriptionsAckTimeout)
 	defer cancel()
@@ -372,14 +279,6 @@ func (m *MCPPlugin) setupModernSubscriptions(client *mcp.Client) {
 	}
 }
 
-// setupNotificationHandler registers a notification handler on the MCP client
-// to process server-initiated notifications:
-//   - notifications/tools/list_changed: triggers hot tool list refresh
-//   - notifications/resources/list_changed: triggers resource list refresh
-//   - notifications/resources/updated: records a per-URI freshness stamp
-//   - notifications/message (logging): forwards to debug log
-//
-// This enables dynamic MCP servers that add/remove tools at runtime.
 func (m *MCPPlugin) setupNotificationHandler(client *mcp.Client) {
 	client.SetNotificationHandler(func(method string, params json.RawMessage) {
 		switch method {
@@ -394,7 +293,7 @@ func (m *MCPPlugin) setupNotificationHandler(client *mcp.Client) {
 		case "notifications/prompts/list_changed":
 			debug.Log("mcp-notif", "server=%s prompts/list_changed received", m.cfg.Name)
 		case "notifications/message":
-			// Server logging notification — forward to debug log for visibility.
+
 			var msg struct {
 				Level string `json:"level"`
 				Data  any    `json:"data"`
@@ -418,6 +317,7 @@ func (m *MCPPlugin) setupNotificationHandler(client *mcp.Client) {
 // "ListTools errored" from "succeeded with zero tools" (a legal
 // resources/prompts-only server), which the old (false, 0) collapsed into
 // one ambiguous value.
+
 func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -433,10 +333,7 @@ func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int, e
 	if newHash == m.toolsHash && m.adapter != nil {
 		m.lastRefreshAt = time.Now()
 		m.mu.Unlock()
-		// Content identical to what is already registered: skip the
-		// unregister/rebuild/re-register cycle entirely. Re-registering
-		// unchanged tools would churn the registry and the LLM-visible
-		// schemas for no benefit.
+
 		debug.Log("mcp-notif", "server=%s tools unchanged (hash match), skipping rebuild", m.cfg.Name)
 		return false, len(tools), nil
 	}
@@ -450,30 +347,29 @@ func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int, e
 	readOnly := m.cfg.ReadOnly
 	m.mu.Unlock()
 
-	// Unregister old tools
 	if oldAdapter != nil && registry != nil {
+
 		// #4071: only the names this adapter actually owns (#1594-A) -
 		// ToolNames() includes collision-skipped names owned by siblings.
+
 		for _, tn := range oldAdapter.RegisteredNames() {
 			registry.Unregister(tn)
 		}
 	}
 
-	// Create new adapter with updated tools
 	var newAdapter *mcp.Adapter
 	if readOnly {
 		newAdapter = mcp.NewReadOnlyAdapter(m.cfg.Name, client, tools)
 	} else {
 		newAdapter = mcp.NewAdapter(m.cfg.Name, client, tools)
 	}
-	// sa-44: re-apply server instructions on the refreshed tool set.
+
 	newAdapter.SetServerInstructions(client.Instructions())
 
 	m.mu.Lock()
 	m.adapter = newAdapter
 	m.mu.Unlock()
 
-	// Re-register tools if we have a registry
 	if registry != nil {
 		if regErr := newAdapter.RegisterTools(registry); regErr != nil {
 			debug.Log("mcp-notif", "server=%s tool re-registration failed: %v", m.cfg.Name, regErr)
@@ -481,17 +377,11 @@ func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int, e
 	}
 
 	debug.Log("mcp-notif", "server=%s tools refreshed: %d tools", m.cfg.Name, len(tools))
-	// #3967: the tool set (and thus Info()) changed - push a snapshot so
-	// open panels re-render the new list instead of staying stale until
-	// reopened. Lock-free call site: notifyStateChange re-enters Info().
+
 	m.notifyStateChange()
 	return true, len(tools), nil
 }
 
-// computeToolsHash returns a stable content hash over a tool definition
-// list. Ordering does not matter (definitions are sorted by name before
-// hashing); name, description, and input schema bytes all participate, so
-// a server-side description edit is detected just like an added tool.
 func computeToolsHash(tools []mcp.ToolDefinition) string {
 	sorted := append([]mcp.ToolDefinition(nil), tools...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
@@ -507,7 +397,6 @@ func computeToolsHash(tools []mcp.ToolDefinition) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// refreshResources re-fetches the resource list from the MCP server.
 func (m *MCPPlugin) refreshResources(client *mcp.Client) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -523,18 +412,14 @@ func (m *MCPPlugin) refreshResources(client *mcp.Client) {
 	debug.Log("mcp-notif", "server=%s resources refreshed: %d items, %d templates", m.cfg.Name, len(resources), len(templates))
 }
 
-// startReconnectWatcher launches a goroutine that monitors the stdio MCP
-// server process for unexpected exits and attempts automatic reconnection
-// with exponential backoff. Only active for stdio transports when
-// autoReconnect is true (default for stdio servers).
 func (m *MCPPlugin) startReconnectWatcher(client *mcp.Client) {
-	// Cancel any previous watcher
+
 	if m.reconnectCancel != nil {
 		m.reconnectCancel()
 	}
 	exitCh := client.ProcessExit()
 	if exitCh == nil {
-		return // non-stdio transport, no process to watch
+		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.reconnectCancel = cancel
@@ -545,7 +430,7 @@ func (m *MCPPlugin) startReconnectWatcher(client *mcp.Client) {
 		case <-ctx.Done():
 			return
 		case <-exitCh:
-			// Process exited unexpectedly; attempt reconnect.
+
 		}
 		debug.Log("mcp-reconnect", "server=%s detected crash, starting auto-reconnect", m.cfg.Name)
 		backoff := []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second, 20 * time.Second}
@@ -560,15 +445,7 @@ func (m *MCPPlugin) startReconnectWatcher(client *mcp.Client) {
 				return
 			}
 		}
-		// Fast backoff exhausted (~37s). A server that is merely slow to come
-		// back (npx cold download, heavy startup under load, system restart)
-		// must not leave its tools permanently unregistered for the rest of
-		// the session — the old behavior gave up here with MCPStatusFailed and
-		// no recovery path short of restarting ggcode. Enter a slow cooldown
-		// re-probe loop: retry every mcpReconnectCooldown until the server
-		// returns or the watcher is cancelled. Status stays Failed between
-		// probes so the UI still shows the outage; each probe flips it to
-		// Pending so a successful recovery reads correctly.
+
 		debug.Log("mcp-reconnect", "server=%s all fast retries exhausted, entering cooldown re-probe every %s", m.cfg.Name, mcpReconnectCooldown)
 		for {
 			select {
@@ -584,16 +461,8 @@ func (m *MCPPlugin) startReconnectWatcher(client *mcp.Client) {
 	})
 }
 
-// mcpReconnectCooldown is the interval between reconnect probes once the
-// fast exponential backoff (2/5/10/20s) has been exhausted. Slow enough to
-// stay cheap on a genuinely dead server, frequent enough that a server which
-// needed a minute to start is back well within a typical working session.
 const mcpReconnectCooldown = 60 * time.Second
 
-// notifyStateChange propagates a plugin-level state/tool change to the
-// manager's update listeners (the TUI panel rides emitUpdate). MUST be
-// called with m.mu NOT held: the listener chain re-enters Info() which
-// takes the plugin read lock (#3967).
 func (m *MCPPlugin) notifyStateChange() {
 	m.mu.RLock()
 	fn := m.notifyState
@@ -603,16 +472,11 @@ func (m *MCPPlugin) notifyStateChange() {
 	}
 }
 
-// attemptReconnect performs one reconnect cycle: mark disconnected, drop
-// stale tool registrations, reconnect, and re-register tools on success.
-// Returns true when the server is back and its tools are available again.
 func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
-	// Mark as disconnected
+
 	m.mu.Lock()
 	if m.closed {
-		// #1285: Close() won this race — the plugin is unloaded; starting a
-		// reconnect here would spawn an unstoppable watcher against a server
-		// the user explicitly removed.
+
 		m.mu.Unlock()
 		return false
 	}
@@ -622,23 +486,20 @@ func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
 	m.client = nil
 	m.status = MCPStatusPending
 	m.mu.Unlock()
-	// #3967: the visible status flipped (e.g. connected -> pending after a
-	// crash); panels still showing the pre-crash state must converge.
+
 	m.notifyStateChange()
-	// Unregister old tools so stale definitions don't linger
+
 	if oldAdapter != nil && m.registry != nil {
-		// #4071: owned subset only - see the Info() snapshot note.
+
 		for _, tn := range oldAdapter.RegisteredNames() {
 			m.registry.Unregister(tn)
 		}
 	}
-	// Attempt reconnection
+
 	adapter, err := m.Connect(ctx)
 	if err == nil && adapter != nil {
 		m.postConnect()
-		// #1285: Close may have run while Connect was dialing (TOCTOU). If
-		// so, the freshly connected client + its watcher must NOT survive:
-		// unregister and drop it, never re-register tools (ghost tools).
+
 		m.mu.Lock()
 		if m.closed {
 			client := m.client
@@ -648,7 +509,7 @@ func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
 			m.status = MCPStatusPending
 			m.mu.Unlock()
 			if m.registry != nil {
-				// #4071: owned subset only (#1594-A).
+
 				for _, tn := range adapter.RegisteredNames() {
 					m.registry.Unregister(tn)
 				}
@@ -661,14 +522,13 @@ func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
 		}
 		m.mu.Unlock()
 		debug.Log("mcp-reconnect", "server=%s reconnected successfully", m.cfg.Name)
-		// Re-register tools if we have a registry reference
+
 		if m.registry != nil {
 			if regErr := adapter.RegisterTools(m.registry); regErr != nil {
 				debug.Log("mcp-reconnect", "server=%s tool re-registration failed: %v", m.cfg.Name, regErr)
 			}
 		}
-		// #3967: auto-recovery succeeded - without this the panel keeps
-		// showing the outage (or the pre-crash connected mark) forever.
+
 		m.notifyStateChange()
 		return true
 	}
@@ -676,7 +536,7 @@ func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
 	m.status = MCPStatusFailed
 	m.lastError = normalizeMCPError(err)
 	m.mu.Unlock()
-	// #3967: surface the failed attempt so the panel reflects reality.
+
 	m.notifyStateChange()
 	debug.Log("mcp-reconnect", "server=%s reconnect attempt failed: %v", m.cfg.Name, err)
 	return false
@@ -722,7 +582,6 @@ func discoverCapabilities(ctx context.Context, client *mcp.Client) ([]mcp.ToolDe
 	}
 }
 
-// RegisterTools discovers MCP tools and registers them into the registry.
 func (m *MCPPlugin) RegisterTools(ctx context.Context, registry *tool.Registry) error {
 	adapter, err := m.Connect(ctx)
 	if err != nil {
@@ -731,20 +590,17 @@ func (m *MCPPlugin) RegisterTools(ctx context.Context, registry *tool.Registry) 
 	if err := adapter.RegisterTools(registry); err != nil {
 		return err
 	}
-	// subscriptions/listen upgrade runs here (outside m.mu) — Connect no
-	// longer holds the plugin lock across the ack wait (see postConnect).
+
 	m.postConnect()
 	return nil
 }
 
-// Adapter returns the MCP adapter (nil if not connected).
 func (m *MCPPlugin) Adapter() *mcp.Adapter {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.adapter
 }
 
-// IsConnected returns whether the MCP server has been successfully contacted.
 func (m *MCPPlugin) IsConnected() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -783,12 +639,6 @@ func (m *MCPPlugin) Info() MCPServerInfo {
 	return info
 }
 
-// OwnedToolNames returns the registry names this plugin's adapter ACTUALLY
-// owns (#1594-A post-collision subset). Unregister paths must use this, not
-// Info().ToolNames - the Info snapshot keeps full definitions for display,
-// but Unregister is a pure name-key delete, so a duplicate-name server whose
-// registrations were all collision-skipped must not enumerate its sibling's
-// names (#4071).
 func (m *MCPPlugin) OwnedToolNames() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -799,14 +649,7 @@ func (m *MCPPlugin) OwnedToolNames() []string {
 }
 
 func (m *MCPPlugin) Close() error {
-	// #1285: every field below is written by startReconnectWatcher /
-	// startWSHealthProbe under m.mu (Connect holds the lock when starting
-	// them), so Close MUST take the same lock — the old lock-free read-call-
-	// nil raced a concurrent Connect: Close's cancel landed on the OLD value,
-	// the new watcher's cancel overwrote it, and nothing could ever stop
-	// that watcher again (eternal 60s reconnect storms against an unloaded
-	// server). closed also marks the plugin as gone so late attemptReconnect
-	// cycles cannot resurrect it.
+
 	m.mu.Lock()
 	m.closed = true
 	if m.reconnectCancel != nil {
@@ -853,20 +696,12 @@ func (m *MCPPlugin) ReadResource(ctx context.Context, uri string) (*mcp.ReadReso
 	}
 	result, err := client.ReadResource(ctx, uri)
 	if err == nil {
-		// Lazily subscribe after a successful read (MCP 2025-06-18) so
-		// future server-side changes to this resource surface as
-		// notifications/resources/updated. Best-effort and deduplicated.
+
 		m.subscribeResourceAsync(client, uri)
 	}
 	return result, err
 }
 
-// subscribeResourceAsync issues resources/subscribe for uri in the
-// background when the server advertises resources.subscribe. The in-flight
-// marker in m.subscribed deduplicates concurrent reads of the same URI and
-// is rolled back on failure so a later read can retry. Errors are logged
-// and never propagated: losing a subscription only degrades freshness
-// signalling, it must not fail the original successful read.
 func (m *MCPPlugin) subscribeResourceAsync(client *mcp.Client, uri string) {
 	if client == nil || !client.HasResourceSubscribe() {
 		return
@@ -895,8 +730,6 @@ func (m *MCPPlugin) subscribeResourceAsync(client *mcp.Client, uri string) {
 	})
 }
 
-// markResourceUpdatedFromParams parses a notifications/resources/updated
-// payload ({"uri": ...}) and records a freshness stamp for the URI.
 func (m *MCPPlugin) markResourceUpdatedFromParams(params json.RawMessage) {
 	var p struct {
 		URI string `json:"uri"`
@@ -908,7 +741,6 @@ func (m *MCPPlugin) markResourceUpdatedFromParams(params json.RawMessage) {
 	m.markResourceUpdated(p.URI)
 }
 
-// markResourceUpdated records the time of the latest resource update.
 func (m *MCPPlugin) markResourceUpdated(uri string) {
 	m.mu.Lock()
 	if m.resourceUpdated == nil {
@@ -919,8 +751,6 @@ func (m *MCPPlugin) markResourceUpdated(uri string) {
 	debug.Log("mcp-notif", "server=%s resource updated: %s", m.cfg.Name, uri)
 }
 
-// ResourceUpdatedAt reports when the server last pushed a
-// notifications/resources/updated for uri, if it did.
 func (m *MCPPlugin) ResourceUpdatedAt(uri string) (time.Time, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -928,9 +758,6 @@ func (m *MCPPlugin) ResourceUpdatedAt(uri string) (time.Time, bool) {
 	return t, ok
 }
 
-// unsubscribeAll drops every active resource subscription before the
-// transport is closed. Best-effort: failures are logged and skipped so
-// Close never fails because a server is unresponsive.
 func (m *MCPPlugin) unsubscribeAll(client *mcp.Client) {
 	m.mu.Lock()
 	uris := make([]string, 0, len(m.subscribed))
@@ -960,7 +787,6 @@ func (m *MCPPlugin) markPending() {
 	}
 }
 
-// Tools returns the registered tool names (requires prior Connect).
 func (m *MCPPlugin) Tools() []tool.Tool {
 	return nil
 }
@@ -971,12 +797,7 @@ func (m *MCPPlugin) Init(cfg map[string]interface{}) error {
 
 type MCPManager struct {
 	plugins []*MCPPlugin
-	// scope is the workspace path this manager's server set belongs to
-	// (#2390): disabled-state lookups consult the global bucket plus this
-	// workspace's bucket instead of a bare global name match, so disabling
-	// "github" in workspace A no longer disables the same-name server in
-	// workspace B. Empty scope (ACP bridge, legacy callers) consults only
-	// the global bucket - the pre-#2390 semantics.
+
 	scope              string
 	registry           *tool.Registry
 	onUpdate           func([]MCPServerInfo)
@@ -1005,18 +826,13 @@ func NewMCPManager(servers []config.MCPServerConfig, registry *tool.Registry, sc
 		timeout:      8 * time.Second,
 		stdioTimeout: 2 * time.Minute,
 	}
-	// #4062: wire the anti-rug-pull alert sink on every production assembly
-	// path. Previously OnToolDrift was nil everywhere outside tests, so a
-	// tampered MCP server was detected and silently re-baselined with the
-	// user never seeing the alert the docs promised.
+
 	for _, p := range m.plugins {
 		p.OnToolDrift = m.handleToolDrift
 	}
 	return m
 }
 
-// isDisabled reports whether the named server is disabled for this
-// manager's scope (#2390).
 func (m *MCPManager) isDisabled(name string) bool {
 	return MCPDisabledIn(m.scope, name)
 }
@@ -1033,9 +849,6 @@ func (m *MCPManager) SetURLOpener(fn func(string) error) {
 	m.urlOpener = fn
 }
 
-// SetSamplingHandler propagates the LLM sampling handler to all MCP plugins.
-// Each plugin will pass the handler to its MCP client on connect, enabling
-// servers to request LLM completions via sampling/createMessage.
 func (m *MCPManager) SetSamplingHandler(h mcp.SamplingHandler) {
 	m.mu.Lock()
 	m.samplingHandler = h
@@ -1046,9 +859,6 @@ func (m *MCPManager) SetSamplingHandler(h mcp.SamplingHandler) {
 	}
 }
 
-// SetElicitationHandler propagates the user elicitation handler to all MCP
-// plugins. Each plugin will pass the handler to its MCP client on connect,
-// enabling servers to request structured user input via elicitation/create.
 func (m *MCPManager) SetElicitationHandler(h mcp.ElicitationHandler) {
 	m.mu.Lock()
 	m.elicitationHandler = h
@@ -1059,17 +869,12 @@ func (m *MCPManager) SetElicitationHandler(h mcp.ElicitationHandler) {
 	}
 }
 
-// PendingOAuthByName returns the pending OAuth error for a specific server,
-// or nil if that server is not waiting for OAuth login. With multiple OAuth
-// MCP servers pending simultaneously, each server keeps its own entry.
 func (m *MCPManager) PendingOAuthByName(name string) *MCPOAuthRequiredError {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.pendingOAuth[name]
 }
 
-// PendingOAuth returns one pending OAuth error (alphabetically first server
-// name) for legacy single-value consumers, or nil when none are pending.
 func (m *MCPManager) PendingOAuth() *MCPOAuthRequiredError {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -1085,8 +890,6 @@ func (m *MCPManager) PendingOAuth() *MCPOAuthRequiredError {
 	return m.pendingOAuth[first]
 }
 
-// ClearPendingOAuth clears the pending OAuth entry for the named server.
-// An empty name clears nothing.
 func (m *MCPManager) ClearPendingOAuth(name string) {
 	if name == "" {
 		return
@@ -1141,12 +944,6 @@ func (m *MCPManager) emitUpdate() {
 	}
 }
 
-// handleToolDrift is the production sink for the anti-rug-pull alert
-// (#4062). Wired into every plugin built by NewMCPManager and
-// newPluginFromConfig so a detected tool-definition drift can no longer
-// die on an unwired callback: it is recorded on the manager's warnings
-// slice (surfaced by ConnectAll and MCP status consumers) and pushed to
-// UI panels via the update broadcast.
 func (m *MCPManager) handleToolDrift(server string, added, removed []string) {
 	m.mu.Lock()
 	m.warnings = append(m.warnings, fmt.Sprintf(
@@ -1158,12 +955,7 @@ func (m *MCPManager) handleToolDrift(server string, added, removed []string) {
 }
 
 func (m *MCPManager) connectOne(ctx context.Context, p *MCPPlugin) {
-	// #1740 case 1: the panel's enter/r keys reach Retry/Reconnect here
-	// without any disabled check - connectOne explicitly revives (p.closed
-	// = false), so a server disabled via space (persisted disabled_mcp.json)
-	// came back alive in-process and re-died on next start. The "human
-	// intent revives" comment means an explicit UN-disable, not a reconnect
-	// keypress. ConnectAll/attemptReconnect already gate on this.
+
 	if m.isDisabled(p.Name()) {
 		debug.Log("mcp-connect", "refusing connect of disabled server=%s", p.Name())
 		return
@@ -1171,12 +963,7 @@ func (m *MCPManager) connectOne(ctx context.Context, p *MCPPlugin) {
 	connectCtx, cancel := context.WithTimeout(ctx, m.connectTimeoutFor(p))
 	defer cancel()
 	p.markPending()
-	// #1285 follow-up: connectOne is the manager's explicit "this plugin is
-	// wanted" signal (ConnectAll / Retry / Reconnect / fresh install). It
-	// must clear the closed flag set by a previous Close() - otherwise the
-	// UI Disconnect -> Reconnect cycle was permanently rejected by the
-	// #1285 closed guard. Watcher-driven attemptReconnect deliberately does
-	// NOT clear it: only a human/manager intent revives a closed plugin.
+
 	p.mu.Lock()
 	p.registry = m.registry
 	p.closed = false
@@ -1205,8 +992,7 @@ func (m *MCPManager) connectOne(ctx context.Context, p *MCPPlugin) {
 		m.mu.Unlock()
 	} else {
 		debug.Log("mcp-connect", "connected server=%s tools=%d", p.Name(), len(p.Info().ToolNames))
-		// Stale pending-OAuth entry (e.g. server connected after auth completed
-		// by another path) must not linger.
+
 		m.mu.Lock()
 		delete(m.pendingOAuth, p.Name())
 		m.mu.Unlock()
@@ -1275,32 +1061,19 @@ func (m *MCPManager) Retry(name string) bool {
 	return false
 }
 
-// Refresh re-fetches the tool list of a connected server without
-// reconnecting. found=false means no plugin by that name; otherwise the
-// outcome plus the tool count (when a ListTools roundtrip happened) is
-// returned synchronously - the call is cheap (one ListTools) so the UI can
-// show an immediate result.
 func (m *MCPManager) Refresh(name string) (found bool, outcome RefreshOutcome, count int) {
 	p := m.pluginByName(name)
 	if p == nil {
 		return false, RefreshNotConnected, 0
 	}
 	outcome, count = p.refreshToolsNow()
-	// #3967: a manual refresh must converge the UI regardless of outcome:
-	// the panel data is only as fresh as the last mcpServersUpdatedMsg, and
-	// unchanged results previously left the panel stale (e.g. a change that
-	// happened while the panel was closed). The changed path notifies via
-	// the plugin hook; this emitUpdate covers every other outcome.
+
 	m.emitUpdate()
 	return true, outcome, count
 }
 
 func (m *MCPManager) Install(ctx context.Context, server config.MCPServerConfig) error {
-	// #2779: build via newPluginFromConfig so the manager's sampling and
-	// elicitation handlers propagate - a bare NewMCPPlugin left runtime-
-	// installed servers permanently without reverse-request support
-	// (-32601 method not supported) while the same server loaded via
-	// Reload worked.
+
 	plugin := m.newPluginFromConfig(server)
 
 	var previous *MCPPlugin
@@ -1313,21 +1086,17 @@ func (m *MCPManager) Install(ctx context.Context, server config.MCPServerConfig)
 		m.plugins[i] = plugin
 		m.mu.Unlock()
 		if previous != nil {
-			for _, toolName := range previous.OwnedToolNames() { // #4071 owned set
+			for _, toolName := range previous.OwnedToolNames() {
 				m.registry.Unregister(toolName)
 			}
 			_ = previous.Close()
 		}
-		// #785: mirror Reload's cleanup (#314): a stale pendingOAuth handler
-		// for the OLD config survived replacement and kept reporting
-		// OAuthRequired=true -- a dead OAuth prompt that can never complete.
+
 		m.mu.Lock()
 		delete(m.pendingOAuth, server.Name)
 		m.mu.Unlock()
 		m.connectOne(ctx, plugin)
-		// A freshly installed server may also be temporarily unreachable
-		// (network not up yet); give it the same cooldown recovery as startup
-		// connections. Install stays fast-fail for immediate UI feedback.
+
 		m.maybeStartInitialRecovery(ctx, plugin)
 		return nil
 	}
@@ -1348,7 +1117,7 @@ func (m *MCPManager) Uninstall(name string) bool {
 		m.plugins = append(m.plugins[:i], m.plugins[i+1:]...)
 		m.mu.Unlock()
 
-		for _, toolName := range plugin.OwnedToolNames() { // #4071 owned set
+		for _, toolName := range plugin.OwnedToolNames() {
 			m.registry.Unregister(toolName)
 		}
 		_ = plugin.Close()
@@ -1359,9 +1128,6 @@ func (m *MCPManager) Uninstall(name string) bool {
 	return false
 }
 
-// Disconnect closes the MCP server connection and unregisters its tools,
-// but keeps the plugin in the list so it can be reconnected later.
-// Runs asynchronously to avoid blocking the caller.
 func (m *MCPManager) Disconnect(name string) bool {
 	m.mu.RLock()
 	plugins := append([]*MCPPlugin(nil), m.plugins...)
@@ -1372,7 +1138,7 @@ func (m *MCPManager) Disconnect(name string) bool {
 		}
 		p := plugin
 		safego.Go("plugin.mcp.unregister", func() {
-			toolNames := p.OwnedToolNames() // #4071 owned set
+			toolNames := p.OwnedToolNames()
 			for _, toolName := range toolNames {
 				m.registry.Unregister(toolName)
 			}
@@ -1384,7 +1150,6 @@ func (m *MCPManager) Disconnect(name string) bool {
 	return false
 }
 
-// Reconnect reconnects a previously disconnected MCP server.
 func (m *MCPManager) Reconnect(name string) bool {
 	m.mu.RLock()
 	plugins := append([]*MCPPlugin(nil), m.plugins...)
@@ -1400,9 +1165,6 @@ func (m *MCPManager) Reconnect(name string) bool {
 	return false
 }
 
-// ForceReauth disconnects the server and marks it to skip the canonical
-// (shared) credential on next connect. The new client's OAuthHandler will
-// find no valid token and trigger a fresh OAuth flow.
 func (m *MCPManager) ForceReauth(name string) bool {
 	m.mu.RLock()
 	plugins := append([]*MCPPlugin(nil), m.plugins...)
@@ -1412,15 +1174,10 @@ func (m *MCPManager) ForceReauth(name string) bool {
 			continue
 		}
 
-		// 1. Unregister old tools so stale descriptions (e.g. embedded
-		//    accountId) don't survive the reconnect.
-		// Avoid nested RLock: Info() also acquires p.mu.RLock(), which
-		// deadlocks when a writer is waiting (Go RWMutex is non-reentrant).
 		p.mu.RLock()
 		var oldToolNames []string
 		if p.adapter != nil {
-			// #4071: owned subset only (#1594-A) - ToolNames() includes
-			// collision-skipped names owned by duplicate-name siblings.
+
 			oldToolNames = p.adapter.RegisteredNames()
 		}
 		p.mu.RUnlock()
@@ -1428,7 +1185,6 @@ func (m *MCPManager) ForceReauth(name string) bool {
 			m.registry.Unregister(toolName)
 		}
 
-		// 2. Disconnect: close old client, clear adapter so Connect() creates new ones.
 		p.mu.Lock()
 		if p.client != nil {
 			_ = p.client.Close()
@@ -1440,9 +1196,6 @@ func (m *MCPManager) ForceReauth(name string) bool {
 		p.forceReauthPending = true
 		p.mu.Unlock()
 
-		// 3. Reconnect — Connect() will create a new client/handler, call
-		//    ForceReauth() on it (skipCanonical=true), find no credential,
-		//    and return OAuthRequiredError to trigger the auth flow.
 		pCopy := p
 		safego.Go("plugin.mcp.reauth", func() { m.connectOne(context.Background(), pCopy) })
 		return true
@@ -1507,8 +1260,7 @@ func (m *MCPManager) connectWithRetry(ctx context.Context, plugin *MCPPlugin) {
 		if plugin.IsConnected() {
 			return
 		}
-		// Stop retrying if OAuth is needed — the TUI will handle reconnection
-		// after the user completes the browser auth flow.
+
 		plugin.mu.RLock()
 		waiting := plugin.awaitingOAuth
 		plugin.mu.RUnlock()
@@ -1516,19 +1268,10 @@ func (m *MCPManager) connectWithRetry(ctx context.Context, plugin *MCPPlugin) {
 			return
 		}
 	}
-	// Fast initial attempts exhausted (~4s) and the server is still down.
-	// A common case: the user's network is not up yet when ggcode starts
-	// (VPN still connecting, Wi-Fi roaming, system just booted) — everything
-	// recovers minutes later, but the old behavior left the MCP server
-	// Failed for the rest of the session. Hand off to the cooldown recovery
-	// loop, mirroring the crash-reconnect cooldown (mcpReconnectCooldown).
+
 	m.maybeStartInitialRecovery(ctx, plugin)
 }
 
-// maybeStartInitialRecovery launches the cooldown recovery loop when an
-// initial connection failed and no other recovery path exists. It is a
-// no-op when the plugin connected, is waiting for OAuth (the TUI owns that
-// flow), or is closed (user intent — see #1285).
 func (m *MCPManager) maybeStartInitialRecovery(ctx context.Context, plugin *MCPPlugin) {
 	if plugin.IsConnected() {
 		return
@@ -1542,11 +1285,6 @@ func (m *MCPManager) maybeStartInitialRecovery(ctx context.Context, plugin *MCPP
 	m.startInitialRecoveryLoop(ctx, plugin)
 }
 
-// initialRecoveryShouldProbe reports whether the initial-connect recovery
-// loop should keep probing this plugin. false means stop: the plugin came
-// back (connected or via user action), was closed/removed, is awaiting
-// OAuth, was disabled, or was replaced by a newer plugin instance
-// (Install/Reload swap pointers, not fields).
 func (m *MCPManager) initialRecoveryShouldProbe(p *MCPPlugin) bool {
 	if p.IsConnected() {
 		return false
@@ -1560,21 +1298,13 @@ func (m *MCPManager) initialRecoveryShouldProbe(p *MCPPlugin) bool {
 	if closed || waiting {
 		return false
 	}
-	// Reload/Install replace the plugin object for the same server name;
-	// probing the orphaned old instance would resurrect a server config
-	// the user already changed or removed.
+
 	if m.pluginByName(p.Name()) != p {
 		return false
 	}
 	return true
 }
 
-// startInitialRecoveryLoop probes a server whose initial connection failed
-// every mcpReconnectCooldown until it connects or a stop condition is hit.
-// On success the crash-reconnect watcher (started inside Connect) owns any
-// later failures, so this loop exits permanently once connected. Status
-// flips Failed→Pending on each probe so the UI shows the outage is still
-// being worked on.
 func (m *MCPManager) startInitialRecoveryLoop(ctx context.Context, plugin *MCPPlugin) {
 	safego.Go("plugin.mcp.initialRecovery", func() {
 		debug.Log("mcp-recovery", "server=%s initial connect failed; entering cooldown re-probe every %s", plugin.Name(), mcpReconnectCooldown)
@@ -1598,32 +1328,22 @@ func (m *MCPManager) startInitialRecoveryLoop(ctx context.Context, plugin *MCPPl
 	})
 }
 
-// mcpRefreshMinInterval is the minimum spacing between manual tool
-// refreshes for one server. Manual refresh is a ListTools roundtrip plus a
-// possible registry rebuild; anything tighter than this is spam.
 const mcpRefreshMinInterval = 5 * time.Second
 
-// RefreshOutcome describes what a manual refresh did.
 type RefreshOutcome int
 
 const (
-	// RefreshThrottled: last manual refresh was less than
-	// mcpRefreshMinInterval ago; nothing was sent to the server.
 	RefreshThrottled RefreshOutcome = iota
-	// RefreshNotConnected: the server is not connected (reconnect instead).
+
 	RefreshNotConnected
-	// RefreshFailed: ListTools errored; nothing changed locally.
+
 	RefreshFailed
-	// RefreshUnchanged: content hash matched; in-memory tools untouched.
+
 	RefreshUnchanged
-	// RefreshChanged: tool set changed; adapter rebuilt and re-registered.
+
 	RefreshChanged
 )
 
-// refreshToolsNow is the manual entry point: rate-limited, connected-only,
-// hash-gated. The notification path (tools/list_changed) goes through
-// refreshTools directly and is NOT rate-limited - the server only sends it
-// when something actually changed.
 func (m *MCPPlugin) refreshToolsNow() (RefreshOutcome, int) {
 	m.mu.Lock()
 	if !m.connected || m.client == nil || m.closed {
@@ -1637,9 +1357,7 @@ func (m *MCPPlugin) refreshToolsNow() (RefreshOutcome, int) {
 	client := m.client
 	m.mu.Unlock()
 	changed, count, err := m.refreshTools(client)
-	// #4042: failure is the EXPLICIT error - a successful refresh that
-	// returns zero tools (resources/prompts-only server) is NOT a failure;
-	// the old `count == 0 && !changed` misreported it as RefreshFailed.
+
 	if err != nil {
 		return RefreshFailed, 0
 	}
@@ -1661,14 +1379,6 @@ func (m *MCPManager) pluginByName(name string) *MCPPlugin {
 	return nil
 }
 
-// Reload hot-swaps MCP server configurations without restarting the session.
-// It diffs the new server list against the current one:
-//   - Removed servers: disconnect + unregister tools + remove from list
-//   - Changed servers: disconnect + unregister + replace plugin + reconnect
-//   - New servers: add plugin + connect
-//   - Unchanged servers: left alone
-//
-// This enables hot-reloading mcp_servers.yaml at runtime.
 func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfig) {
 	m.mu.Lock()
 
@@ -1677,7 +1387,6 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 		newByName[s.Name] = s
 	}
 
-	// Categorize current plugins into kept/removed/changed.
 	var removed, changed []*MCPPlugin
 	finalPlugins := make([]*MCPPlugin, 0, len(servers))
 	oldNames := make(map[string]bool, len(m.plugins))
@@ -1686,18 +1395,17 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 		newCfg, exists := newByName[p.Name()]
 		if !exists {
 			removed = append(removed, p)
-			delete(m.pendingOAuth, p.Name()) // #314: no OAuth flow for removed servers
+			delete(m.pendingOAuth, p.Name())
 			continue
 		}
 		if !mcpServerConfigEqual(p.cfg, newCfg) {
 			changed = append(changed, p)
-			delete(m.pendingOAuth, p.Name()) // config replaced: stale handler
+			delete(m.pendingOAuth, p.Name())
 			continue
 		}
 		finalPlugins = append(finalPlugins, p)
 	}
 
-	// Create fresh plugins for changed + new servers.
 	changedNames := make(map[string]bool, len(changed))
 	for _, p := range changed {
 		changedNames[p.Name()] = true
@@ -1716,9 +1424,8 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 	m.plugins = finalPlugins
 	m.mu.Unlock()
 
-	// Unregister tools + close removed/changed plugins (outside lock).
 	closeAndUnregister := func(p *MCPPlugin, reason string) {
-		for _, toolName := range p.OwnedToolNames() { // #4071 owned set
+		for _, toolName := range p.OwnedToolNames() {
 			m.registry.Unregister(toolName)
 		}
 		_ = p.Close()
@@ -1733,7 +1440,6 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 
 	m.emitUpdate()
 
-	// Connect new + changed plugins in background.
 	for _, p := range connectPlugins {
 		if m.isDisabled(p.Name()) {
 			continue
@@ -1748,16 +1454,12 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 	debug.Log("mcp-reload", "reload complete: removed=%d changed=%d total=%d", len(removed), len(changed), len(finalPlugins))
 }
 
-// newPluginFromConfig creates an MCPPlugin from a server config, propagating
-// the manager's sampling and elicitation handlers.
 func (m *MCPManager) newPluginFromConfig(s config.MCPServerConfig) *MCPPlugin {
 	p := NewMCPPlugin(s)
 	p.registry = m.registry
-	// #3967: bridge plugin-level background mutations (tool refresh,
-	// auto-reconnect) into the manager's update broadcast so UI panels
-	// converge without a manual reopen.
+
 	p.notifyState = m.emitUpdate
-	// #4062: reload path must carry the drift alert sink too.
+
 	p.OnToolDrift = m.handleToolDrift
 	if m.samplingHandler != nil {
 		p.SetSamplingHandler(m.samplingHandler)
@@ -1768,8 +1470,6 @@ func (m *MCPManager) newPluginFromConfig(s config.MCPServerConfig) *MCPPlugin {
 	return p
 }
 
-// mcpServerConfigEqual compares two MCP server configs to determine if
-// anything that affects the connection has changed.
 func mcpServerConfigEqual(a, b config.MCPServerConfig) bool {
 	if a.Name != b.Name {
 		return false
@@ -1810,9 +1510,7 @@ func mcpServerConfigEqual(a, b config.MCPServerConfig) bool {
 			return false
 		}
 	}
-	// #1868: OAuth credentials feed SetClientCredentials (mcp/client.go)
-	// on connect - a changed client_id/secret must rebuild the connection,
-	// or the old client keeps authenticating with stale credentials.
+
 	if a.OAuthClientID != b.OAuthClientID {
 		return false
 	}
@@ -1943,10 +1641,6 @@ func listResourceNames(resources []mcp.ResourceDefinition, err error) []string {
 	return names
 }
 
-// listResourceTemplateNames extracts sorted display names for resource
-// templates: "name (uriTemplate)" when named, else the raw uriTemplate.
-// Resource templates are an older-server-optional method, so any error
-// (including -32601 method-not-found) degrades to "no templates".
 func listResourceTemplateNames(templates []mcp.ResourceTemplate, err error) []string {
 	if isOptionalCapabilityUnavailable(err) || err != nil {
 		return nil

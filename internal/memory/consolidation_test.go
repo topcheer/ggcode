@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// newTestMemory builds an AutoMemory backed by a temp dir.
 func newTestMemory(t *testing.T) *AutoMemory {
 	t.Helper()
 	return &AutoMemory{dir: t.TempDir()}
@@ -64,7 +63,7 @@ func TestConsolidateConflictFirstSeenPersists(t *testing.T) {
 	}
 	firstSeen := state.Conflicts[0].FirstSeen
 
-	time.Sleep(10 * time.Millisecond) // ensure a later run timestamp differs
+	time.Sleep(10 * time.Millisecond)
 	second := am.Consolidate("")
 	if second.ConflictPairs != 1 {
 		t.Fatalf("second run: ConflictPairs = %d, want 1", second.ConflictPairs)
@@ -94,8 +93,7 @@ func TestConsolidateDetectsSupersededNearDuplicates(t *testing.T) {
 }
 
 func TestConsolidateEvolvingEntriesExcludedFromSupersede(t *testing.T) {
-	// Evolving entries (research-*) already have curation-level keep-newest
-	// semantics; consolidation must not duplicate that as a supersede pair.
+
 	am := newTestMemory(t)
 	writeTestEntry(t, am, "research-cache", "cache: level1")
 	time.Sleep(10 * time.Millisecond)

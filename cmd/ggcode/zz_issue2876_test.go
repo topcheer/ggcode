@@ -7,11 +7,6 @@ import (
 	"testing"
 )
 
-// zz_issue2876_test.go - probe for #2876: the daemon provider-switch hook
-// must call lanchatHub.SetModel after a successful switch so LAN peers see
-// the new model (and any stale quota-degraded status is cleared). TUI
-// (internal/tui/model.go) and Desktop (desktop/wailskit/chat.go) already do
-// this on their switch paths; the daemon hook was the only one missing it.
 func TestIssue2876HookUpdatesLanchatModel(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "daemon.go", nil, 0)
@@ -27,8 +22,7 @@ func TestIssue2876HookUpdatesLanchatModel(t *testing.T) {
 		if !ok {
 			return true
 		}
-		// Heuristic (same as zz_issue2868_test.go): the provider-switch hook
-		// is the 3-param FuncLit that calls agentruntime.ActivateCurrentSelection.
+
 		paramNames := 0
 		if fn.Type.Params != nil {
 			for _, p := range fn.Type.Params.List {
@@ -52,15 +46,12 @@ func TestIssue2876HookUpdatesLanchatModel(t *testing.T) {
 		}
 		foundHook = true
 
-		// The hook must invoke lanchatHub.SetModel(...) on the fresh resolved
-		// model. Accept any argument shape but require the call, and require
-		// it to be guarded against a nil hub (A2A disabled path).
 		ast.Inspect(fn.Body, func(inner ast.Node) bool {
 			ifs, ok := inner.(*ast.IfStmt)
 			if !ok {
 				return true
 			}
-			// nil guard shape: `if lanchatHub != nil { ... }`
+
 			bin, ok := ifs.Cond.(*ast.BinaryExpr)
 			if !ok || bin.Op != token.NEQ {
 				return true

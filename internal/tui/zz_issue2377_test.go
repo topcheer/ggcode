@@ -1,10 +1,5 @@
 package tui
 
-// #2377: the async usage-probe goroutine captured the whole *Model and
-// re-read m.imEmitter cross-goroutine (emitIMText) while Update-side
-// writers swap it - a data race. The goroutine must hold the emitter
-// VALUE snapshotted on the Update side and call EmitText directly.
-
 import (
 	"os"
 	"strings"
@@ -22,7 +17,7 @@ func TestIssue2377ProbeGoroutineHoldsEmitterValue(t *testing.T) {
 	if i < 0 {
 		t.Fatal("the #2377 snapshot block must exist in SessionUsageSummary")
 	}
-	j := strings.Index(src[i:], "\n\t\t\t}\n") // end of the if-block region
+	j := strings.Index(src[i:], "\n\t\t\t}\n")
 	region := src[i : i+j+10]
 	if strings.Contains(region, "emitter := d.m\n") {
 		t.Fatal("must not capture the whole *Model (#2377 race source)")

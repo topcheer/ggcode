@@ -1,9 +1,5 @@
 package tui
 
-// #2169 regression: the edit-input view echoed the WHOLE plaintext of a
-// secret field into the frame (and thus the terminal scrollback) - the
-// #2158 list-view mask was silently bypassed one screen later on Enter.
-
 import (
 	"strings"
 	"testing"
@@ -25,7 +21,7 @@ func TestMaskedEditValueSecrets(t *testing.T) {
 			t.Fatalf("maskedEditValue(%q) must keep a non-empty echo", field)
 		}
 	}
-	// Benign fields echo verbatim.
+
 	if got := maskedEditValue("env.APP_ID", "123456"); got != "123456" {
 		t.Fatalf("benign field must echo verbatim, got %q", got)
 	}

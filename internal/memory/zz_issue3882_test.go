@@ -1,10 +1,5 @@
 package memory
 
-// #3882 probe: RecordOutcome holds the cross-process lock during its
-// read-modify-write of .usage.json (the 3120 contract), so a concurrent
-// RecordUse from a second AutoMemory instance (simulated second process)
-// cannot be lost to last-writer-wins.
-
 import (
 	"os"
 	"strings"
@@ -14,19 +9,16 @@ import (
 func TestIssue3882_RecordOutcomeHoldsCrossProcessLock(t *testing.T) {
 	dir := t.TempDir()
 	a := NewProjectAutoMemory(dir)
-	b := NewProjectAutoMemory(dir) // "second process"
+	b := NewProjectAutoMemory(dir)
 	if a == nil || b == nil {
 		t.Fatal("auto memory nil")
 	}
 
-	// Interleave outcome writes (instance a) with usage writes (instance b).
 	for i := 0; i < 20; i++ {
 		a.RecordOutcome("concurrent-key", "success")
 		b.RecordUse([]string{"other-key"}, "test")
 	}
 
-	// Both records must survive: the RMW under FileLock must not clobber
-	// the sibling writer's entries.
 	idx := a.loadUsage()
 	if idx.Entries["concurrent-key"] == nil {
 		t.Fatal("outcome entry lost")

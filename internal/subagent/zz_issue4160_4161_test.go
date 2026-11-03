@@ -8,9 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// #4161: SetModel must hold sa.mu - snapshot()/statusInfo() read Model inside
-// the lock, so any bare writer is a data race the race detector flags.
-// Run with -race for the assertion to matter.
 func TestSetModelConcurrentWithSnapshotReaders(t *testing.T) {
 	m := NewManager(config.SubAgentConfig{MaxConcurrent: 4})
 	id := m.Spawn("race-test", "task", "", nil, t.Context())
@@ -30,16 +27,13 @@ func TestSetModelConcurrentWithSnapshotReaders(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 200; i++ {
-			// statusInfo is the production lock-held Model reader
-			// (manager.go) backing wait_agent/list_agents polling.
+
 			_ = m.Statuses()
 		}
 	}()
 	wg.Wait()
 }
 
-// #4160: all three synthetic Spawn rejection IDs must be recognized - the
-// sa-budget-* pass-through leaked one worktree + branch per spawn attempt.
 func TestIsSyntheticID(t *testing.T) {
 	for _, id := range []string{
 		"sa-shutdown-1697",
@@ -55,7 +49,7 @@ func TestIsSyntheticID(t *testing.T) {
 			t.Errorf("IsSyntheticID(%q) = true, want false", id)
 		}
 	}
-	if strings.HasPrefix("", "x") { // keep strings import exercised
+	if strings.HasPrefix("", "x") {
 		t.Fail()
 	}
 }

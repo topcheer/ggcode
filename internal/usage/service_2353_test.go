@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-// fakeProbe lets tests script probe results and observe call counts.
 type fakeProbe struct {
 	vendor string
 	delay  time.Duration
@@ -35,9 +34,6 @@ func (f *fakeProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageIn
 	return r.info, r.err
 }
 
-// TestSingleflightWaiterGetsResult verifies #2353-①: a waiter that joins an
-// in-flight call must observe the owner's result, never the zero value
-// (nil, nil) that the close-before-publish order produced.
 func TestSingleflightWaiterGetsResult(t *testing.T) {
 	p := &fakeProbe{vendor: "waiter-vendor", delay: 50 * time.Millisecond}
 	p.result.Store(&cachedResult{info: &UsageInfo{Vendor: "waiter-vendor"}})
@@ -72,11 +68,6 @@ func TestSingleflightWaiterGetsResult(t *testing.T) {
 	}
 }
 
-// TestNegativeCacheUsesShortTTL verifies #2353-②: an error is served from
-// the negative cache for negativeTTL only. With cacheTTL == 3*negativeTTL
-// this test would hang for minutes using the real constants, so it asserts
-// the mechanism: after Invalidate-style expiry the probe is re-called, and
-// while an error is fresh it is NOT re-probed.
 func TestNegativeCacheUsesShortTTL(t *testing.T) {
 	p := &fakeProbe{vendor: "neg-vendor"}
 	p.result.Store(&cachedResult{err: errors.New("down")})
@@ -93,9 +84,6 @@ func TestNegativeCacheUsesShortTTL(t *testing.T) {
 		t.Fatalf("error not negative-cached: %d probe calls", n)
 	}
 
-	// Simulate negativeTTL expiry: age the entry past negativeTTL but
-	// well inside cacheTTL - the OLD code (fresh absorbs errors for 3min)
-	// would still serve the stale error.
 	svc.mu.Lock()
 	c := svc.cached["neg-vendor"]
 	c.at = time.Now().Add(-(negativeTTL + time.Second))
@@ -110,9 +98,6 @@ func TestNegativeCacheUsesShortTTL(t *testing.T) {
 	}
 }
 
-// TestCancellationDoesNotPoisonCache verifies #2353-③: a caller cancelling
-// its context mid-flight must not leave a negative cache entry that other
-// callers then hit.
 func TestCancellationDoesNotPoisonCache(t *testing.T) {
 	p := &fakeProbe{vendor: "cancel-vendor", delay: 50 * time.Millisecond}
 	p.result.Store(&cachedResult{info: &UsageInfo{Vendor: "cancel-vendor"}})
@@ -128,7 +113,6 @@ func TestCancellationDoesNotPoisonCache(t *testing.T) {
 		t.Fatal("expected cancellation error")
 	}
 
-	// A fresh caller must NOT inherit the cancellation as a cached error.
 	info, err := svc.Get(context.Background(), "cancel-vendor", "", "")
 	if err != nil {
 		t.Fatalf("fresh caller got poisoned cache: %v", err)

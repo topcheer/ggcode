@@ -6,24 +6,19 @@ import (
 	"time"
 )
 
-// WaterfallAnalysis provides latency breakdown for a single turn, identifying
-// parallel vs sequential execution, the critical path, and bottleneck tools.
-// This is the core observability primitive for "why was this turn slow?"
-// debugging - equivalent to a flame graph for LLM agent execution.
 type WaterfallAnalysis struct {
 	TurnIndex            int           `json:"turn_index"`
 	WallClock            time.Duration `json:"wall_clock_ms"`
 	TotalToolTime        time.Duration `json:"total_tool_time_ms"`
 	LLMTime              time.Duration `json:"llm_time_ms"`
-	OverlapRatio         float64       `json:"overlap_ratio"`    // 0=fully sequential, 1=fully parallel
-	CriticalPathDuration time.Duration `json:"critical_path_ms"` // longest sequential chain
+	OverlapRatio         float64       `json:"overlap_ratio"`
+	CriticalPathDuration time.Duration `json:"critical_path_ms"`
 	BottleneckTool       string        `json:"bottleneck_tool"`
 	BottleneckDuration   time.Duration `json:"bottleneck_duration_ms"`
 	ParallelToolGroups   [][]ToolSpan  `json:"parallel_groups,omitempty"`
 	SequentialChain      []ToolSpan    `json:"sequential_chain,omitempty"`
 }
 
-// ToolSpan represents a single tool execution with reconstructed start/end times.
 type ToolSpan struct {
 	Name      string        `json:"name"`
 	StartTime time.Time     `json:"start_time"`
@@ -33,23 +28,11 @@ type ToolSpan struct {
 	Error     string        `json:"error,omitempty"`
 }
 
-// AnalyzeWaterfall produces a per-turn latency waterfall analysis from the
-// flat MetricEvent list. For each turn it determines:
-//
-//   - Wall clock duration (earliest start to latest end)
-//   - Total tool time (sum of all tool durations)
-//   - Overlap ratio (how much tools ran in parallel)
-//   - Critical path (longest sequential dependency chain)
-//   - Bottleneck tool (slowest single tool)
-//   - Parallel groups (sets of tools that overlapped in time)
-//
-// This is deterministic and requires no LLM calls - pure interval arithmetic.
 func AnalyzeWaterfall(events []MetricEvent) []WaterfallAnalysis {
 	if len(events) == 0 {
 		return nil
 	}
 
-	// Group by turn.
 	turnEvents := make(map[int][]MetricEvent)
 	for _, ev := range events {
 		turnEvents[ev.TurnIndex] = append(turnEvents[ev.TurnIndex], ev)
@@ -68,7 +51,6 @@ func AnalyzeWaterfall(events []MetricEvent) []WaterfallAnalysis {
 	return results
 }
 
-// turnMetrics holds the intermediate data extracted from a turn's events.
 type turnMetrics struct {
 	toolSpans   []ToolSpan
 	llmDuration time.Duration
@@ -76,8 +58,6 @@ type turnMetrics struct {
 	maxEnd      time.Time
 }
 
-// collectTurnMetrics iterates a turn's events and extracts tool spans,
-// LLM duration, and time bounds.
 func collectTurnMetrics(events []MetricEvent) turnMetrics {
 	var m turnMetrics
 	for _, ev := range events {
@@ -109,7 +89,6 @@ func collectTurnMetrics(events []MetricEvent) turnMetrics {
 	return m
 }
 
-// findBottleneck returns the name and duration of the slowest tool span.
 func findBottleneck(spans []ToolSpan) (string, time.Duration) {
 	var name string
 	var dur time.Duration
@@ -122,7 +101,6 @@ func findBottleneck(spans []ToolSpan) (string, time.Duration) {
 	return name, dur
 }
 
-// sumDurations returns the total duration across all tool spans.
 func sumDurations(spans []ToolSpan) time.Duration {
 	var total time.Duration
 	for _, ts := range spans {
@@ -131,8 +109,6 @@ func sumDurations(spans []ToolSpan) time.Duration {
 	return total
 }
 
-// computeOverlapRatio measures how much tool execution overlapped.
-// Returns 0 for fully sequential, approaching 1 for fully parallel.
 func computeOverlapRatio(spans []ToolSpan, totalToolTime, wallClock time.Duration) float64 {
 	if totalToolTime <= 0 || wallClock <= 0 {
 		return 0
@@ -147,7 +123,6 @@ func computeOverlapRatio(spans []ToolSpan, totalToolTime, wallClock time.Duratio
 func analyzeTurn(turnIdx int, events []MetricEvent) WaterfallAnalysis {
 	m := collectTurnMetrics(events)
 
-	// Sort tool spans by start time.
 	sort.SliceStable(m.toolSpans, func(i, j int) bool {
 		return m.toolSpans[i].StartTime.Before(m.toolSpans[j].StartTime)
 	})
@@ -180,26 +155,22 @@ func analyzeTurn(turnIdx int, events []MetricEvent) WaterfallAnalysis {
 	}
 }
 
-// computeToolWallClock computes the actual wall-clock time covered by all
-// tool spans (merging overlapping intervals), used to detect parallelism.
 func computeToolWallClock(spans []ToolSpan) time.Duration {
 	if len(spans) == 0 {
 		return 0
 	}
 
-	// Sort by start time.
 	sorted := make([]ToolSpan, len(spans))
 	copy(sorted, spans)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		return sorted[i].StartTime.Before(sorted[j].StartTime)
 	})
 
-	// Merge overlapping intervals.
 	var merged []ToolSpan
 	current := sorted[0]
 	for i := 1; i < len(sorted); i++ {
 		if !sorted[i].StartTime.After(current.EndTime) {
-			// Overlaps - extend current.
+
 			if sorted[i].EndTime.After(current.EndTime) {
 				current.EndTime = sorted[i].EndTime
 			}
@@ -217,8 +188,6 @@ func computeToolWallClock(spans []ToolSpan) time.Duration {
 	return total
 }
 
-// findParallelGroups identifies sets of tools that overlap in time.
-// Tools whose [start, end) intervals intersect are grouped together.
 func findParallelGroups(spans []ToolSpan) [][]ToolSpan {
 	if len(spans) <= 1 {
 		return nil
@@ -236,7 +205,7 @@ func findParallelGroups(spans []ToolSpan) [][]ToolSpan {
 
 	for i := 1; i < len(sorted); i++ {
 		if sorted[i].StartTime.Before(currentEnd) {
-			// Strictly overlaps (start < current end) with current group.
+
 			currentGroup = append(currentGroup, sorted[i])
 			if sorted[i].EndTime.After(currentEnd) {
 				currentEnd = sorted[i].EndTime
@@ -255,30 +224,20 @@ func findParallelGroups(spans []ToolSpan) [][]ToolSpan {
 	return groups
 }
 
-// findCriticalPath identifies the longest sequential chain of non-overlapping
-// tool spans. This represents the minimum possible wall-clock time if tools
-// were perfectly parallelized except for sequential dependencies.
-//
-// Algorithm: greedy interval scheduling - pick the earliest-ending non-overlapping
-// span, then the next that starts after it ends, etc.
 func findCriticalPath(spans []ToolSpan) []ToolSpan {
 	if len(spans) == 0 {
 		return nil
 	}
 
-	// Sort by end time (greedy earliest-finish-first).
 	sorted := make([]ToolSpan, len(spans))
 	copy(sorted, spans)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		return sorted[i].EndTime.Before(sorted[j].EndTime)
 	})
 
-	// Find the longest chain using dynamic programming on sorted intervals.
-	// For each span, the longest chain ending at it = 1 + max(chain of all
-	// spans ending before it starts).
 	n := len(sorted)
-	dp := make([]int, n)   // length of longest chain ending at i
-	prev := make([]int, n) // previous index in chain (-1 if none)
+	dp := make([]int, n)
+	prev := make([]int, n)
 	for i := range dp {
 		dp[i] = int(sorted[i].Duration / time.Millisecond)
 		prev[i] = -1
@@ -300,7 +259,6 @@ func findCriticalPath(spans []ToolSpan) []ToolSpan {
 		}
 	}
 
-	// Reconstruct chain.
 	var chain []ToolSpan
 	for idx := bestEnd; idx >= 0; {
 		chain = append(chain, sorted[idx])
@@ -310,15 +268,12 @@ func findCriticalPath(spans []ToolSpan) []ToolSpan {
 		idx = prev[idx]
 	}
 
-	// Reverse to chronological order.
 	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
 		chain[i], chain[j] = chain[j], chain[i]
 	}
 	return chain
 }
 
-// FormatWaterfallSummary produces a human-readable summary string of the
-// waterfall analysis for inline display in TUI or logs.
 func FormatWaterfallSummary(turns []WaterfallAnalysis) string {
 	if len(turns) == 0 {
 		return ""

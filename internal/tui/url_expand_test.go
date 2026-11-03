@@ -87,7 +87,7 @@ func TestExpandURLsFetchError(t *testing.T) {
 
 func TestExpandURLsContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
+	cancel()
 
 	result := ExpandURLs(ctx, "check https://example.com")
 	if !strings.Contains(result, "check https://example.com") {
@@ -132,7 +132,7 @@ func TestExpandURLsPreservesOriginalText(t *testing.T) {
 func TestExpandURLsTimeout(t *testing.T) {
 	done := make(chan struct{})
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Block until test is done so server.Close() doesn't hang
+
 		select {
 		case <-r.Context().Done():
 		case <-done:
@@ -150,40 +150,29 @@ func TestExpandURLsTimeout(t *testing.T) {
 	}
 }
 
-// TestExtractURLsCJKAndParens pins #1397: CJK text glued to a URL must not
-// be swallowed into the match, and Wikipedia-style parenthesized paths must
-// survive intact while prose parens are stripped.
 func TestExtractURLsCJKAndParens(t *testing.T) {
-	// A: CJK suffix stays OUT of the URL.
+
 	got := extractURLs("看 https://example.com/docs这个文档")
 	if len(got) != 1 || got[0] != "https://example.com/docs" {
 		t.Fatalf("CJK swallowed or wrong extraction: %#v", got)
 	}
 
-	// B: balanced parens (Wikipedia) survive whole.
 	got = extractURLs("see https://en.wikipedia.org/wiki/Python_(programming_language) now")
 	if len(got) != 1 || got[0] != "https://en.wikipedia.org/wiki/Python_(programming_language)" {
 		t.Fatalf("paren path truncated: %#v", got)
 	}
 
-	// B2: prose closing paren is stripped (prose case).
 	got = extractURLs("(see https://example.com/page)")
 	if len(got) != 1 || got[0] != "https://example.com/page" {
 		t.Fatalf("prose paren not stripped: %#v", got)
 	}
 
-	// Regression: trailing sentence punctuation still stripped.
 	got = extractURLs("go to https://example.com/a, then rest.")
 	if len(got) != 1 || got[0] != "https://example.com/a" {
 		t.Fatalf("punctuation handling regressed: %#v", got)
 	}
 }
 
-// TestExtractURLsClosingDelimiters pins #1419 (a #1397 regression): the
-// [!-~] body charset admitted closing delimiters the old negated class
-// excluded, so URLs were fetched with a trailing " ' > or ] verbatim -
-// doomed fetches injecting 404/error pages into context. They are now
-// stripped by trimURLTail like trailing punctuation.
 func TestExtractURLsClosingDelimiters(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{`看 "https://example.com/docs" 这段`, "https://example.com/docs"},
@@ -200,19 +189,16 @@ func TestExtractURLsClosingDelimiters(t *testing.T) {
 	}
 }
 
-// TestMaskAPIKey pins #1410: the byte-length gate + rune-count arithmetic
-// computed negative Repeat counts for multi-byte keys (15 bytes / 5 runes)
-// and panicked the TUI. All measures are runes now.
 func TestMaskAPIKey(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"", "****"},
-		{"short", "****"},          // 5 runes
-		{"12345678", "****"},       // exactly 8 runes
-		{"123456789", "1234*6789"}, // 9 runes
+		{"short", "****"},
+		{"12345678", "****"},
+		{"123456789", "1234*6789"},
 		{"0123456789abcdef", "0123********cdef"},
-		{"密密密密密", "****"},              // 15 bytes / 5 runes - used to panic
-		{"ab中文de", "****"},             // 9 bytes / 6 runes - used to panic
-		{"12345678中文字", "1234***8中文字"}, // 11 runes: first 4 + 3 stars + last 4 (incl. '8')
+		{"密密密密密", "****"},
+		{"ab中文de", "****"},
+		{"12345678中文字", "1234***8中文字"},
 	}
 	for _, c := range cases {
 		if got := maskAPIKey(c.in); got != c.want {

@@ -30,7 +30,7 @@ func TestIsHomeDir(t *testing.T) {
 }
 
 func TestDirHasProjectFiles(t *testing.T) {
-	// Directory with only hidden entries -> not a project.
+
 	hiddenOnly := t.TempDir()
 	if err := os.WriteFile(filepath.Join(hiddenOnly, ".DS_Store"), nil, 0o644); err != nil {
 		t.Fatal(err)
@@ -39,7 +39,6 @@ func TestDirHasProjectFiles(t *testing.T) {
 		t.Errorf("dirHasProjectFiles(hidden-only dir) = true, want false")
 	}
 
-	// Directory with a real (non-hidden) file -> project.
 	project := t.TempDir()
 	if err := os.WriteFile(filepath.Join(project, "main.go"), nil, 0o644); err != nil {
 		t.Fatal(err)
@@ -48,7 +47,6 @@ func TestDirHasProjectFiles(t *testing.T) {
 		t.Errorf("dirHasProjectFiles(project dir) = false, want true")
 	}
 
-	// Nonexistent directory -> false.
 	if dirHasProjectFiles(filepath.Join(t.TempDir(), "does-not-exist")) {
 		t.Errorf("dirHasProjectFiles(nonexistent dir) = true, want false")
 	}

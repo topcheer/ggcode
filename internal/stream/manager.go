@@ -11,18 +11,13 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// TerminalSize holds the current terminal dimensions in characters.
 type TerminalSize struct {
 	Cols int
 	Rows int
 }
 
-// ViewFunc returns the current TUI rendering as an ANSI string.
-// The manager calls this at the target FPS to capture frames.
 type ViewFunc func() (content string, size TerminalSize)
 
-// Manager orchestrates live streaming: captures TUI frames, encodes via FFmpeg,
-// and fans out to multiple platform targets.
 type Manager struct {
 	config   StreamConfig
 	renderer *DirectRenderer
@@ -32,13 +27,12 @@ type Manager struct {
 	viewFunc ViewFunc
 
 	mu         sync.Mutex
-	encoderMu  sync.RWMutex // protects encoder field across goroutines
+	encoderMu  sync.RWMutex
 	running    bool
 	stopCh     chan struct{}
-	encW, encH int // locked encoder resolution (set once at stream start)
+	encW, encH int
 }
 
-// NewManager creates a new stream manager with the given configuration.
 func NewManager(config StreamConfig) *Manager {
 	config.ApplyDefaults()
 	return &Manager{
@@ -48,8 +42,6 @@ func NewManager(config StreamConfig) *Manager {
 	}
 }
 
-// Start begins the streaming pipeline.
-// viewFunc is called at the configured FPS to capture TUI frames.
 func (m *Manager) Start(viewFunc ViewFunc) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -58,8 +50,6 @@ func (m *Manager) Start(viewFunc ViewFunc) error {
 		return fmt.Errorf("stream: already running")
 	}
 
-	// Recreate stopCh in case Stop() was previously called (close() is
-	// permanent — a closed channel can never be reused).
 	m.stopCh = make(chan struct{})
 
 	if viewFunc == nil {
@@ -67,8 +57,6 @@ func (m *Manager) Start(viewFunc ViewFunc) error {
 	}
 	m.viewFunc = viewFunc
 
-	// Determine encoder resolution immediately from terminal orientation
-	// so that EncoderSize() is available before the first frame tick.
 	if _, size := viewFunc(); size.Cols > 0 && size.Rows > 0 {
 		if size.Cols >= size.Rows {
 			m.encW, m.encH = 1920, 1080
@@ -77,12 +65,8 @@ func (m *Manager) Start(viewFunc ViewFunc) error {
 		}
 	}
 
-	// Initial renderer — will be resized on first frame based on terminal size.
-	// Use config defaults as a starting point.
 	m.renderer = NewDirectRenderer(m.config.Width, m.config.Height, m.config.FontSize, m.config.FontPath, 0, 0)
 
-	// Prepare targets (but don't connect yet — encoder must exist first).
-	// frameLoop will connect them after the first terminal size reading.
 	for i := range m.config.Targets {
 		tc := &m.config.Targets[i]
 		if !tc.Enabled {
@@ -97,13 +81,11 @@ func (m *Manager) Start(viewFunc ViewFunc) error {
 	debug.Log("stream", "started: %dx%d @ %dfps targets=%d",
 		m.config.Width, m.config.Height, m.config.FPS, len(m.targets))
 
-	// Start frame capture goroutine (creates encoder + connects targets on first frame)
 	safego.Go("stream.frameLoop", func() { m.frameLoop() })
 
 	return nil
 }
 
-// Stop shuts down the entire streaming pipeline.
 func (m *Manager) Stop() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -114,14 +96,6 @@ func (m *Manager) Stop() {
 
 	m.running = false
 
-	// #1293: stop the ENCODER FIRST. The broadcaster is the sole reader of
-	// the encoder's stdout; closing stopCh first makes it exit immediately,
-	// leaving ffmpeg's flush (stdin EOF -> tail frames + FLV trailer)
-	// writing into a full pipe with no reader - it blocks, hits the 5s
-	// grace timeout, and gets Killed, truncating the recording exactly as
-	// #1292 intended to fix. With the encoder reaped first, the broadcaster
-	// drains the flush, then sees EOF and exits on its own; stopCh remains
-	// as a belt-and-braces signal for the no-encoder case.
 	m.encoderMu.RLock()
 	enc := m.encoder
 	m.encoderMu.RUnlock()
@@ -131,15 +105,12 @@ func (m *Manager) Stop() {
 
 	close(m.stopCh)
 
-	// Stop all targets
 	for _, t := range m.targets {
 		t.Stop()
 	}
 
-	// stopped
 }
 
-// StopTarget stops a specific target by name.
 func (m *Manager) StopTarget(name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -151,13 +122,9 @@ func (m *Manager) StopTarget(name string) error {
 	t.Stop()
 	delete(m.targets, name)
 
-	// target stopped
 	return nil
 }
 
-// Status returns the status of all streaming targets.
-// EncoderSize returns the actual encoder output resolution.
-// Returns 0,0 if streaming hasn't started yet.
 func (m *Manager) EncoderSize() (int, int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -179,14 +146,12 @@ func (m *Manager) Status() []TargetStatus {
 	return statuses
 }
 
-// IsRunning returns whether the manager is actively streaming.
 func (m *Manager) IsRunning() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.running
 }
 
-// frameLoop runs in a goroutine, capturing TUI frames at the target FPS.
 func (m *Manager) frameLoop() {
 	interval := time.Second / time.Duration(m.config.FPS)
 	ticker := time.NewTicker(interval)
@@ -194,7 +159,6 @@ func (m *Manager) frameLoop() {
 
 	lastCols, lastRows := 0, 0
 
-	// frameLoopInit tracks whether the first frame has been processed.
 	frameLoopInit := false
 
 	frameCount := 0
@@ -206,23 +170,18 @@ func (m *Manager) frameLoop() {
 		case <-ticker.C:
 			ansiText, termSize := m.viewFunc()
 			frameCount++
-			// Don't log frame ticks — extremely noisy at 30fps
+
 			if ansiText == "" {
 				continue
 			}
 
-			// Detect terminal resize (or first frame) — rebuild renderer and encoder.
-			// Renderer uses natural terminal character size for correct proportions.
-			// FFmpeg scale filter handles output resolution with letterboxing.
 			cols, rows := termSize.Cols, termSize.Rows
 			if cols <= 0 || rows <= 0 {
-				cols, rows = 80, 24 // fallback
+				cols, rows = 80, 24
 			}
 
 			if cols != lastCols || rows != lastRows {
-				// Lock encoder resolution for the entire streaming session.
-				// YouTube Live locks resolution from the first frame and cannot change mid-stream.
-				// Detect orientation at startup and keep it; ignore subsequent resize changes.
+
 				m.mu.Lock()
 				if m.encW == 0 {
 					if cols >= rows {
@@ -234,9 +193,6 @@ func (m *Manager) frameLoop() {
 				encW, encH := m.encW, m.encH
 				m.mu.Unlock()
 
-				// Auto-calc fontSize to fit cols into encoder width.
-				// DejaVu Mono: charW ≈ pt*10/16.
-				// We size by width first, let rows overflow/clip like a real terminal.
 				fontSize := int(float64(encW) / float64(cols) * 16.0 / 10.0)
 				if fontSize < 10 {
 					fontSize = 10
@@ -247,26 +203,19 @@ func (m *Manager) frameLoop() {
 
 				m.renderer = NewDirectRenderer(encW, encH, fontSize, m.config.FontPath, cols, rows)
 
-				// Don't log terminal size on every resize
-
 				if !frameLoopInit {
-					// First frame: create encoder, connect targets, start broadcaster.
+
 					m.encoderMu.Lock()
 					m.encoder = NewEncoder(encW, encH, m.config.Quality, m.config.FPS, m.config.HardwareEncoder)
 					if err := m.encoder.Start(); err != nil {
 						m.encoderMu.Unlock()
 						debug.Log("stream", "encoder start failed: %v", err)
-						// #792: roll back the running state -- frameLoop's early
-						// return left running=true forever, so IsRunning() lied,
-						// a second Start() hit 'already running', and the UI kept
-						// showing a dead stream. Route through Stop() for full
-						// cleanup (targets, broadcaster, stopCh).
+
 						m.Stop()
 						return
 					}
 					m.encoderMu.Unlock()
 
-					// Snapshot targets under lock to avoid concurrent map iteration race
 					m.mu.Lock()
 					snapshot := make([]*Target, 0, len(m.targets))
 					for _, target := range m.targets {
@@ -278,20 +227,10 @@ func (m *Manager) frameLoop() {
 							debug.Log("stream", "target %s connect failed: %v", target.Name(), err)
 						}
 					}
-					// Single broadcaster goroutine reads encoder, broadcasts to all targets
+
 					safego.Go("stream.fanOutBroadcaster", func() { m.fanOutBroadcaster() })
 					frameLoopInit = true
 
-					// #1631 case 1: Stop() and the first-frame init raced.
-					// Stop read m.encoder while it was still nil (skipping
-					// enc.Stop), then init completed AFTER Stop returned -
-					// leaking the encoder ffmpeg process, re-connected
-					// targets and the broadcaster goroutine, while a second
-					// Start() succeeded and overwrote the stale encoder.
-					// With both select cases ready Go picks randomly, so the
-					// tick branch could still run after close(stopCh). Now
-					// the init path re-checks stopCh once it is complete and
-					// reaps everything itself if Stop already fired.
 					select {
 					case <-m.stopCh:
 						debug.Log("stream", "stop raced first-frame init: reaping encoder/targets")
@@ -308,28 +247,20 @@ func (m *Manager) frameLoop() {
 					default:
 					}
 				}
-				// On resize: only the renderer is recreated above. The encoder
-				// resolution is locked at first frame (encW/encH don't change
-				// after encW==0 check). Recreating the encoder would orphan the
-				// old broadcaster which still holds a reference, causing it to
-				// read from the new encoder's stdout concurrently.
+
 				lastCols, lastRows = cols, rows
 			}
 
-			// Encode and send every frame — no dedup.
-			// Live streaming requires steady frame rate for stable bitrate.
 			m.captureAndEncodeFrame(ansiText)
 		}
 	}
 }
 
-// captureAndEncodeFrame renders an ANSI string and sends it to the encoder.
 func (m *Manager) captureAndEncodeFrame(ansiText string) {
 	if m.encoder == nil || !m.encoder.IsRunning() {
 		return
 	}
 
-	// Render ANSI directly to RGBA — no PNG encode/decode
 	img, err := m.renderer.Render(ansiText)
 	if err != nil {
 		debug.Log("stream", "render error: %v", err)
@@ -339,19 +270,17 @@ func (m *Manager) captureAndEncodeFrame(ansiText string) {
 		return
 	}
 
-	// img is already *image.RGBA — get raw pixel data directly
 	var frameData []byte
 	if img.Stride == img.Rect.Dx()*4 && img.Rect.Min.X == 0 && img.Rect.Min.Y == 0 {
-		// Contiguous pixels — use directly
+
 		frameData = img.Pix
 	} else {
 		frameData = imageToRGBA(img)
 	}
 
-	// Size check: must match encoder expectations
 	expected := m.encoder.ExpectedFrameSize()
 	if len(frameData) != expected {
-		// Resize if renderer produced different dimensions than encoder expects
+
 		if img.Rect.Dx() != m.encoder.width || img.Rect.Dy() != m.encoder.height {
 			resized := resizeImage(img, m.encoder.width, m.encoder.height)
 			if rgba, ok := resized.(*image.RGBA); ok {
@@ -366,20 +295,16 @@ func (m *Manager) captureAndEncodeFrame(ansiText string) {
 		}
 	}
 
-	// Send frame to encoder
 	if err := m.encoder.WriteFrame(frameData); err != nil {
 		debug.Log("stream", "encode error: %v", err)
 		return
 	}
 }
 
-// fanOutBroadcaster is the single reader from the encoder pipe.
-// It broadcasts FLV data to all target goroutines via channels.
 func (m *Manager) fanOutBroadcaster() {
 	buf := make([]byte, 32*1024)
 	broadcastCount := 0
 
-	// Collect target channels under lock to prevent concurrent map write (StopTarget)
 	var targets []chan []byte
 	var targetPtrs []*Target
 	m.mu.Lock()
@@ -398,11 +323,6 @@ func (m *Manager) fanOutBroadcaster() {
 		}
 	}()
 
-	// #3094: every internal exit path must Stop its own targets - the
-	// write-failure and encoder-nil exits previously left the ffmpeg
-	// child process and the upstream RTMP connection dangling until the
-	// outer Manager.Stop() ran. Stop() is lock-guarded and idempotent
-	// (Idle/Stopped early-exit), so stopping here never double-kills.
 	stopAllTargets := func() {
 		for _, t := range targetPtrs {
 			t.Stop()
@@ -421,24 +341,22 @@ func (m *Manager) fanOutBroadcaster() {
 		m.encoderMu.RUnlock()
 		if enc == nil {
 			debug.Log("stream", "broadcaster: encoder is nil, exiting")
-			stopAllTargets() // #3094: targets would otherwise dangle until Manager.Stop
+			stopAllTargets()
 			return
 		}
 
 		n, err := enc.Read(buf)
 		if n > 0 {
 			broadcastCount++
-			// Copy data and send to each target
+
 			data := make([]byte, n)
 			copy(data, buf[:n])
-
-			// Don't log byte counts — extremely noisy
 
 			for _, ch := range targets {
 				select {
 				case ch <- data:
 				default:
-					// Channel full — drop frame silently
+
 				}
 			}
 		}
@@ -446,48 +364,39 @@ func (m *Manager) fanOutBroadcaster() {
 			if err != io.EOF {
 				debug.Log("stream", "broadcaster read error: %v", err)
 			}
-			// #3154: the read-error exit is the third internal exit path and
-			// must honor the #3094 contract - without this Stop, every
-			// target's ffmpeg pusher child and upstream RTMP connection
-			// dangles until the outer Manager.Stop() (which may never come
-			// for a long-lived manager), and with no data flowing the
-			// targetWriter write-error self-stop can never fire.
+
 			stopAllTargets()
 			return
 		}
 	}
 }
 
-// targetWriter reads from broadcast channel and writes to a single RTMP target.
 func (m *Manager) targetWriter(target *Target, ch chan []byte) {
 	total := 0
 	for data := range ch {
 		n, err := target.Write(data)
 		if err != nil {
 			debug.Log("stream", "target %s write error: %v", target.Name(), err)
-			// #3094: stop this target's ffmpeg pusher and connection now -
-			// returning without Stop left them dangling until Manager.Stop.
+
 			target.Stop()
 			return
 		}
 		total += n
-		// Don't log byte forwarding stats
+
 	}
 }
 
-// imageToRGBA converts any image.Image to raw RGBA byte slice.
-// Fast path: if the image is already *image.RGBA, copies the underlying pixel data.
 func imageToRGBA(img image.Image) []byte {
 	if rgba, ok := img.(*image.RGBA); ok {
 		bounds := rgba.Bounds()
 		w, h := bounds.Dx(), bounds.Dy()
-		// If the image is contiguous (no sub-image), copy directly
+
 		if bounds.Min.X == 0 && bounds.Min.Y == 0 && rgba.Stride == w*4 {
 			out := make([]byte, len(rgba.Pix))
 			copy(out, rgba.Pix)
 			return out
 		}
-		// Stride doesn't match — copy row by row
+
 		data := make([]byte, w*h*4)
 		for y := 0; y < h; y++ {
 			srcOff := (y+bounds.Min.Y)*rgba.Stride + bounds.Min.X*4
@@ -497,7 +406,6 @@ func imageToRGBA(img image.Image) []byte {
 		return data
 	}
 
-	// Slow path: generic image
 	bounds := img.Bounds()
 	w, h := bounds.Dx(), bounds.Dy()
 	data := make([]byte, w*h*4)
@@ -514,7 +422,6 @@ func imageToRGBA(img image.Image) []byte {
 	return data
 }
 
-// resizeImage resizes an image to the target dimensions using nearest-neighbor.
 func resizeImage(img image.Image, targetW, targetH int) image.Image {
 	srcBounds := img.Bounds()
 	srcW, srcH := srcBounds.Dx(), srcBounds.Dy()

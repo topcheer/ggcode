@@ -9,7 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/stream"
 )
 
-// handleStreamSlash processes /stream sub-commands.
 func (m *Model) handleStreamSlash(args string) (string, bool) {
 	parts := strings.Fields(args)
 	if len(parts) == 0 {
@@ -25,9 +24,7 @@ func (m *Model) handleStreamSlash(args string) (string, bool) {
 		return m.streamStatus(), false
 	case "config":
 		m.openStreamPanel()
-		// #2408: the remote path drops empty responses (update_remote.go
-		// only emits non-empty text), so an empty return left the IM side
-		// with zero feedback while the local TUI popped its panel.
+
 		return "stream config panel opened in the local TUI terminal", false
 	default:
 		return m.streamHelp(), false
@@ -49,7 +46,6 @@ func (m *Model) streamStart(targets []string) (string, bool) {
 		return "stream: already running. Use /stream stop first.", false
 	}
 
-	// Check ffmpeg first
 	check := stream.CheckFFmpeg()
 	if !check.Available {
 		return fmt.Sprintf("stream: %s", check.Error), false
@@ -59,14 +55,10 @@ func (m *Model) streamStart(targets []string) (string, bool) {
 	cfg.ExpandEnv()
 	cfg.ApplyDefaults()
 
-	// #912: the panel path validates before Start but the slash path never
-	// did - a config whose targets are all enabled:false reported 'started'
-	// with an empty name list (success-shaped lie).
 	if err := cfg.Validate(); err != nil {
 		return fmt.Sprintf("stream: %v", err), false
 	}
 
-	// Filter to specific targets if named
 	if len(targets) > 0 {
 		want := make(map[string]bool)
 		for _, t := range targets {
@@ -92,11 +84,6 @@ func (m *Model) streamStart(targets []string) (string, bool) {
 	mgr := stream.NewManager(cfg)
 	m.streamManager = mgr
 
-	// ViewFunc reads the cached view snapshot (thread-safe via shared pointer).
-	// Never calls m.View() directly — that would race with Bubble Tea.
-	// #4209: terminal size comes from the mirrored copy in the shared state —
-	// m.width/m.height are plain fields owned by the Bubble Tea goroutine and
-	// must not be read from the stream frameLoop goroutine (data race).
 	viewFunc := func() (string, stream.TerminalSize) {
 		snap, _ := m.streamViewState.getSnapshot()
 		w, h := m.streamViewState.getSize()
@@ -114,7 +101,7 @@ func (m *Model) streamStart(targets []string) (string, bool) {
 			names = append(names, t.Name)
 		}
 	}
-	// Show actual encoder resolution
+
 	w, h := cfg.Width, cfg.Height
 	if m.streamManager != nil {
 		ew, eh := m.streamManager.EncoderSize()
@@ -123,7 +110,7 @@ func (m *Model) streamStart(targets []string) (string, bool) {
 		}
 	}
 	if w == 0 || h == 0 {
-		// Predict based on current terminal orientation
+
 		if m.width >= m.height {
 			w, h = 1920, 1080
 		} else {
@@ -153,7 +140,6 @@ func (m *Model) streamStop(targets []string) (string, bool) {
 		stopped = append(stopped, name)
 	}
 
-	// If no targets remain, fully stop
 	if len(m.streamManager.Status()) == 0 {
 		m.streamManager.Stop()
 		m.streamManager = nil

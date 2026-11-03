@@ -12,8 +12,6 @@ import (
 	"time"
 )
 
-// getJSON is the shared probe transport: Bearer auth, JSON body, bounded
-// by the service timeout via ctx.
 func getJSON(ctx context.Context, url, apiKey string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -27,9 +25,7 @@ func getJSON(ctx context.Context, url, apiKey string, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
-		// #2150 batch 2b: surface the server's Retry-After so the Service
-		// can size its negative cache to the rate-limit window instead of
-		// hammering the endpoint every negativeTTL tick.
+
 		return &RateLimitedError{RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -38,9 +34,6 @@ func getJSON(ctx context.Context, url, apiKey string, out any) error {
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-// RateLimitedError marks a 429 response. The Service turns RetryAfter into
-// the negative-cache lifetime (clamped), so a rate-limited vendor is probed
-// again only when the server says it is allowed.
 type RateLimitedError struct {
 	RetryAfter time.Duration
 }
@@ -52,9 +45,6 @@ func (e *RateLimitedError) Error() string {
 	return "rate limited"
 }
 
-// parseRetryAfter accepts both RFC 7231 forms: delta-seconds and
-// HTTP-date. Returns 0 when absent/unparseable (caller then uses the
-// default negative TTL).
 func parseRetryAfter(v string) time.Duration {
 	v = strings.TrimSpace(v)
 	if v == "" {
@@ -76,14 +66,10 @@ func parseRetryAfter(v string) time.Duration {
 
 func f64(v float64) *float64 { return &v }
 
-// ZaiProbe queries the bigmodel/z.ai quota endpoint (sub2api-verified
-// shape): a limit/usage pair the sidebar renders as a window.
 type ZaiProbe struct{}
 
 func (ZaiProbe) Vendor() string { return "zai" }
 
-// MatchesURL: zai accounts span two hosts - open.bigmodel.cn (mainland)
-// and api.z.ai (international). Both share the same monitor endpoint.
 func (ZaiProbe) MatchesURL(baseURL string) bool {
 	u, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || u.Host == "" {
@@ -92,24 +78,14 @@ func (ZaiProbe) MatchesURL(baseURL string) bool {
 	if !hostMatch(strings.ToLower(u.Hostname()), "open.bigmodel.cn", "api.z.ai", "z.ai") {
 		return false
 	}
-	// Host is SHARED with metered pay-as-you-go APIs (/api/paas/v4): only
-	// coding-plan entrances carry plan windows. The anthropic-compatible
-	// entrance (/api/anthropic) is coding-plan-only on this platform.
+
 	p := strings.ToLower(u.Path)
 	return strings.Contains(p, "/coding") || strings.Contains(p, "/api/anthropic")
 }
 
 func (ZaiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
-	// Chat bases come in four shapes (see ggcode.example.yaml):
-	//   https://open.bigmodel.cn/api/paas/v4          (standard, mainland)
-	//   https://open.bigmodel.cn/api/coding/paas/v4   (coding plan)
-	//   https://api.z.ai/api/paas/v4                  (intl standard)
-	//   https://api.z.ai/api/coding/paas/v4           (intl coding plan)
-	// plus Anthropic-compatible entries (.../api/anthropic). The monitor
-	// endpoint sits at the SITE ROOT for all of them - normalize every
-	// known suffix away or the request 404s (coding-plan users saw a
-	// misleading "unsupported" panel before the coding suffix was added).
+
 	for _, suffix := range []string{"/api/coding/paas/v4", "/api/paas/v4", "/api/anthropic", "/v4"} {
 		if strings.HasSuffix(base, suffix) {
 			base = strings.TrimSuffix(base, suffix)
@@ -120,10 +96,10 @@ func (ZaiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, 
 		Msg  string `json:"msg"`
 		Data struct {
 			Limits []struct {
-				Type         string `json:"type"` // TIME_LIMIT (rolling) | TOKENS_LIMIT (weekly)
+				Type         string `json:"type"`
 				Unit         int    `json:"unit"`
 				Number       int    `json:"number"`
-				Percentage   int    `json:"percentage"` // 0-100 used
+				Percentage   int    `json:"percentage"`
 				NextResetMs  int64  `json:"nextResetTime"`
 				CurrentValue int64  `json:"currentValue"`
 				Remaining    int64  `json:"remaining"`
@@ -133,18 +109,7 @@ func (ZaiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, 
 	if err := getJSON(ctx, base+"/api/monitor/usage/quota/limit", apiKey, &payload); err != nil {
 		return nil, err
 	}
-	// Classification aligned with sub2api's parseZhipuTokenTiers (itself
-	// aligned with cc-switch, issue #3036):
-	//  1. Only TOKENS_LIMIT entries compete for the 5h/weekly slots.
-	//     TIME_LIMIT is a different meter (tool/search quota) and would
-	//     pollute the display; CREDIT_LIMIT only shows when no
-	//     TOKENS_LIMIT exists at all.
-	//  2. Explicit unit wins: 3=5h, 6=weekly. Reset-time ordering CANNOT
-	//     substitute - near a period boundary the weekly window resets
-	//     EARLIER than the 5h one, so sorting by reset flips the labels.
-	//  3. Unknown units: entries without nextResetTime claim 5h first
-	//     (a 0%-used 5h bucket may carry no reset), the rest fill empty
-	//     slots in ascending reset order.
+
 	type zaiEntry struct {
 		resetMs  int64
 		hasReset bool
@@ -157,7 +122,7 @@ func (ZaiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, 
 	for _, l := range payload.Data.Limits {
 		t := strings.ToUpper(strings.TrimSpace(l.Type))
 		if t != "TOKENS_LIMIT" && t != "CREDIT_LIMIT" {
-			continue // TIME_LIMIT and friends: different meter, skip
+			continue
 		}
 		e := zaiEntry{percent: clampPercent(float64(l.Percentage)), resetMs: l.NextResetMs, hasReset: l.NextResetMs > 0}
 		if t == "CREDIT_LIMIT" {
@@ -214,8 +179,6 @@ func (ZaiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, 
 	return info, nil
 }
 
-// DeepSeekProbe reads the multi-currency balance table; USD first, else
-// the first entry.
 type DeepSeekProbe struct{}
 
 func (DeepSeekProbe) Vendor() string { return "deepseek" }
@@ -226,9 +189,7 @@ func (DeepSeekProbe) MatchesURL(baseURL string) bool {
 
 func (DeepSeekProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
-	// Chat bases carry /v1 (https://api.deepseek.com/v1); the balance
-	// endpoint lives at the SITE ROOT (/user/balance, no v1). Strip it or
-	// the request becomes /v1/user/balance (404) -> "unsupported".
+
 	base = strings.TrimSuffix(base, "/v1")
 	var payload struct {
 		BalanceInfos []struct {
@@ -244,17 +205,13 @@ func (DeepSeekProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageI
 			return &UsageInfo{Vendor: "deepseek", Balance: f64(float64(b.TotalBalance)), Source: "user/balance"}, nil
 		}
 	}
-	// #2807: multi-currency tables without a USD entry used to fall through
-	// with Balance=nil, silently dropping data the API did return (UI showed
-	// "balance: -"). Honor the documented contract above: "USD first, else
-	// the first entry".
+
 	if len(payload.BalanceInfos) > 0 {
 		return &UsageInfo{Vendor: "deepseek", Balance: f64(float64(payload.BalanceInfos[0].TotalBalance)), Source: "user/balance"}, nil
 	}
 	return &UsageInfo{Vendor: "deepseek", Source: "user/balance"}, nil
 }
 
-// MoonshotProbe reads the available_balance field.
 type MoonshotProbe struct{}
 
 func (MoonshotProbe) Vendor() string { return "moonshot" }
@@ -265,9 +222,7 @@ func (MoonshotProbe) MatchesURL(baseURL string) bool {
 
 func (MoonshotProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
-	// Chat bases carry /v1 (https://api.moonshot.cn/v1); the balance
-	// endpoint is /v1/users/me/balance - appended to the ROOT, not to the
-	// /v1 base (that would double it: /v1/v1/users/... 404).
+
 	base = strings.TrimSuffix(base, "/v1")
 	var payload struct {
 		Data struct {
@@ -280,7 +235,6 @@ func (MoonshotProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageI
 	return &UsageInfo{Vendor: "moonshot", Balance: f64(float64(payload.Data.AvailableBalance)), Source: "users/me/balance"}, nil
 }
 
-// DefaultService returns a Service with every P1 probe registered.
 func DefaultService() *Service {
 	s := NewService()
 	s.Register(ZaiProbe{})
@@ -294,8 +248,6 @@ func DefaultService() *Service {
 	return s
 }
 
-// urlHostOf extracts the lowercase hostname of a base URL ("" if
-// unparseable). Shared by host-level MatchesURL implementations.
 func urlHostOf(baseURL string) string {
 	u, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || u.Host == "" {

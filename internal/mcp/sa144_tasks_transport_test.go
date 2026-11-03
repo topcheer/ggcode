@@ -1,12 +1,5 @@
 package mcp
 
-// sa-144: transport-level coverage for the SEP-1686 task client methods
-// (CallToolAsTask / GetTask / TaskResult / CancelTask / ListTasks / HasTasks).
-// These tests drive a real JSON-RPC over HTTP round trip against a fake MCP
-// server (httptest), matching the MCP 2026 protocol-conformance testing
-// direction: the client is exercised through the wire, not via stubbed
-// internals.
-
 import (
 	"context"
 	"encoding/json"
@@ -20,8 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// sa144FakeServer records per-method invocation counts and delegates unknown
-// methods to the test-provided handler.
 type sa144FakeServer struct {
 	mu     sync.Mutex
 	counts map[string]int
@@ -46,9 +37,6 @@ func sa144RPCError(w http.ResponseWriter, id json.RawMessage, code int, msg stri
 	_, _ = w.Write(append(append([]byte("data: "), payload...), '\n', '\n'))
 }
 
-// sa144NewServer starts a fake MCP HTTP server that completes the initialize
-// handshake (advertising the tasks capability when requested) and routes
-// everything else through handle.
 func sa144NewServer(t *testing.T, tasksCap bool, handle func(method string, params json.RawMessage) (any, bool)) (*httptest.Server, *sa144FakeServer) {
 	t.Helper()
 	fake := &sa144FakeServer{counts: map[string]int{}, handle: handle}
@@ -212,8 +200,7 @@ func TestSa144CallToolAsTaskTerminalFailures(t *testing.T) {
 func TestSa144CallToolAsTaskMissingTaskID(t *testing.T) {
 	srv, _ := sa144NewServer(t, true, func(method string, params json.RawMessage) (any, bool) {
 		if method == "tools/call" {
-			// Flat envelope requires taskId; a bare discriminator without one
-			// is a protocol violation.
+
 			return map[string]any{"resultType": "task", "status": TaskStatusWorking}, true
 		}
 		return nil, false
@@ -233,7 +220,7 @@ func TestSa144CallToolAsTaskResultFetchError(t *testing.T) {
 		case "tasks/get":
 			return map[string]any{"taskId": "t-res", "status": TaskStatusCompleted}, true
 		}
-		// tasks/result falls through to method-not-found (JSON-RPC error).
+
 		return nil, false
 	})
 	c := sa144StartClient(t, srv.URL)
@@ -256,7 +243,7 @@ func TestSa144CallToolAsTaskClosedClient(t *testing.T) {
 func TestSa144GetTaskBackfillsTaskID(t *testing.T) {
 	srv, _ := sa144NewServer(t, true, func(method string, params json.RawMessage) (any, bool) {
 		if method == "tasks/get" {
-			// Server omits taskId; the client must echo the requested id.
+
 			return map[string]any{"status": TaskStatusWorking, "statusMessage": "grinding"}, true
 		}
 		return nil, false
@@ -289,7 +276,7 @@ func TestSa144CancelTask(t *testing.T) {
 }
 
 func TestSa144TaskResultError(t *testing.T) {
-	srv, _ := sa144NewServer(t, true, nil) // tasks/result → method not found
+	srv, _ := sa144NewServer(t, true, nil)
 	c := sa144StartClient(t, srv.URL)
 	if _, err := c.TaskResult(context.Background(), "nope"); err == nil || !strings.Contains(err.Error(), "tasks/result") {
 		t.Fatalf("expected tasks/result error, got %v", err)
@@ -327,8 +314,7 @@ func TestSa144ListTasksPagination(t *testing.T) {
 }
 
 func TestSa144ListTasksLifecycleGuards(t *testing.T) {
-	// No tasks capability advertised: HasTasks false, ListTasks returns an
-	// empty (non-nil) list without touching the wire.
+
 	srv, _ := sa144NewServer(t, false, nil)
 	c := sa144StartClient(t, srv.URL)
 	if c.HasTasks() {
@@ -342,14 +328,12 @@ func TestSa144ListTasksLifecycleGuards(t *testing.T) {
 		t.Fatalf("expected empty non-nil list, got %+v", tasks)
 	}
 
-	// With the capability advertised HasTasks flips true.
 	srv2, _ := sa144NewServer(t, true, nil)
 	c2 := sa144StartClient(t, srv2.URL)
 	if !c2.HasTasks() {
 		t.Fatal("HasTasks must be true when capability advertised")
 	}
 
-	// Closed client refuses ListTasks outright.
 	c2.Close()
 	if _, err := c2.ListTasks(context.Background()); err == nil || !strings.Contains(err.Error(), "connection closed") {
 		t.Fatalf("expected closed-connection error, got %v", err)

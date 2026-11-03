@@ -16,8 +16,7 @@ func TestHomeDir_RespectsEnv(t *testing.T) {
 
 func TestHomeDir_EmptyEnv(t *testing.T) {
 	t.Setenv("HOME", "")
-	// On most systems os.UserHomeDir will still return a valid home.
-	// We just verify it doesn't crash and returns something.
+
 	home := HomeDir()
 	_ = home
 }
@@ -34,9 +33,8 @@ func TestConfigDir(t *testing.T) {
 
 func TestConfigDir_EmptyHome(t *testing.T) {
 	origHome := os.Getenv("HOME")
-	// We can't easily force os.UserHomeDir to fail, but we can test
-	// the HOME="" path returns something reasonable.
+
 	t.Setenv("HOME", "")
-	_ = ConfigDir() // should not panic
+	_ = ConfigDir()
 	t.Setenv("HOME", origHome)
 }

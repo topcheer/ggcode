@@ -9,13 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/task"
 )
 
-// #4363 companion tests.
-//
-// (1) Corrupt board quarantine: RestoreJSON failure must rename the
-// undecodable board to board.json.corrupt-<ts> BEFORE returning an empty
-// board. Without the rename, the next board change would atomically
-// overwrite the file (persistTeamBoardNow temp+rename) and the team's
-// entire task history would be unrecoverable.
 func TestZZBoardCorruptQuarantine(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	teamID := "quarantine-team"
@@ -35,13 +28,11 @@ func TestZZBoardCorruptQuarantine(t *testing.T) {
 	if got := len(tm.List()); got != 0 {
 		t.Fatalf("corrupt board must load as empty, got %d tasks", got)
 	}
-	// The original file must be GONE from the live path: the lazy overwrite
-	// chain (EmitBoardUpdated -> persistTeamBoardNow) would otherwise
-	// destroy it on the first board change.
+
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("corrupt board must be renamed away from live path, stat err=%v", err)
 	}
-	// And preserved verbatim in a quarantine file.
+
 	quarantined, err := filepath.Glob(path + ".corrupt-*")
 	if err != nil || len(quarantined) != 1 {
 		t.Fatalf("expected exactly one quarantine file, got %v (err=%v)", quarantined, err)
@@ -52,14 +43,12 @@ func TestZZBoardCorruptQuarantine(t *testing.T) {
 	}
 }
 
-// (2) depFindingsPrompt budget skip must not eat later small entries: an
-// over-budget entry skips ITSELF (continue), not the rest of the list.
 func TestZZDepFindingsSkipKeepsLaterSmallEntries(t *testing.T) {
 	_, board, _ := newClaimHarness(t)
 	completed := task.StatusCompleted
 
 	var depIDs []string
-	// Five near-max entries (~810 bytes each) fill most of the 4800 budget.
+
 	for i := 0; i < 5; i++ {
 		dep := board.Create("big-dep", "d", "", nil)
 		if _, err := board.Update(dep.ID, task.UpdateOptions{
@@ -70,8 +59,7 @@ func TestZZDepFindingsSkipKeepsLaterSmallEntries(t *testing.T) {
 		}
 		depIDs = append(depIDs, dep.ID)
 	}
-	// A sixth near-max entry would exceed the remaining budget: it must be
-	// skipped alone.
+
 	big6 := board.Create("over-budget-dep", "d", "", nil)
 	if _, err := board.Update(big6.ID, task.UpdateOptions{
 		Status:   &completed,
@@ -80,8 +68,7 @@ func TestZZDepFindingsSkipKeepsLaterSmallEntries(t *testing.T) {
 		t.Fatalf("over-budget dep: %v", err)
 	}
 	depIDs = append(depIDs, big6.ID)
-	// A later small entry still fits the remaining budget: with the old
-	// `break` it was silently dropped; with #4363's `continue` it survives.
+
 	tail := board.Create("tail-dep", "d", "", nil)
 	if _, err := board.Update(tail.ID, task.UpdateOptions{
 		Status:   &completed,

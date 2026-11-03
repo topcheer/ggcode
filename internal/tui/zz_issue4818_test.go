@@ -6,10 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/im"
 )
 
-// #4818: remote IM image attachments must be decoded into the pending-image
-// pipeline instead of being collapsed to a '[Attached image from remote IM]'
-// placeholder by BuildInboundText - daemon-attached sessions get the full
-// pixels, and TUI-attached sessions must too.
 func TestIssue4818_RemoteInboundImageInjected(t *testing.T) {
 	m := NewModel(nil, nil)
 	before := len(m.pendingImages)
@@ -43,8 +39,6 @@ func TestIssue4818_RemoteInboundImageInjected(t *testing.T) {
 	}
 }
 
-// #4818: a corrupt base64 payload must not panic or break the text flow -
-// the attachment is skipped and the text still routes.
 func TestIssue4818_RemoteInboundCorruptImageSkipped(t *testing.T) {
 	m := NewModel(nil, nil)
 	before := len(m.pendingImages)

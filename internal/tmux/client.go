@@ -14,7 +14,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// Environment describes the current tmux attachment.
 type Environment struct {
 	Available bool
 	InTmux    bool
@@ -51,7 +50,6 @@ func (e *Environment) Label() string {
 	return strings.Join(parts, " ")
 }
 
-// Pane is a tmux pane known to ggcode.
 type Pane struct {
 	ID         string    `json:"id"`
 	Purpose    string    `json:"purpose"`
@@ -78,7 +76,6 @@ type PopupRequest struct {
 	Height    string
 }
 
-// Client wraps tmux CLI operations. Use exec.Command args directly; do not shell-quote tmux args.
 type Client struct {
 	bin string
 }
@@ -159,12 +156,7 @@ func (c *Client) Split(ctx context.Context, req SplitRequest) (*Pane, error) {
 	if err != nil {
 		return nil, err
 	}
-	// #3107: -P -F prints the pane id to stdout, but output() used to
-	// CombinedOutput the streams -- a benign stderr warning (server
-	// first-start probe, config diagnostics) polluted the id and every
-	// later Capture/Kill/PaneExists targeted a garbage string, leaving the
-	// pane uncontrollable. Validate the %N shape and take the first match
-	// instead of trusting the whole trimmed output.
+
 	paneID, err := extractPaneID(out)
 	if err != nil {
 		return nil, fmt.Errorf("tmux split-window: %w", err)
@@ -233,11 +225,7 @@ func (c *Client) KillPane(ctx context.Context, paneID string) error {
 }
 
 func (c *Client) ListPaneIDs(ctx context.Context) (map[string]struct{}, error) {
-	// #4372: -a enumerates ALL panes on the server. Without it list-panes
-	// only covers the target (current) window, so Refresh marked every
-	// managed pane living in another window as stale - CaptureAll skipped
-	// them and Restore re-created duplicates. Pane ids (%N) are globally
-	// unique, so widening the scope introduces no ambiguity.
+
 	out, err := c.output(ctx, "list-panes", "-a", "-F", "#{pane_id}")
 	if err != nil {
 		return nil, err
@@ -252,13 +240,8 @@ func (c *Client) ListPaneIDs(ctx context.Context) (map[string]struct{}, error) {
 	return ids, nil
 }
 
-// paneIDPattern matches tmux pane ids: a literal '%' followed by digits.
 var paneIDPattern = regexp.MustCompile(`(?m)^%\d+$`)
 
-// extractPaneID scans command output for the first line shaped like a tmux
-// pane id (%N) and returns it. Any stderr noise mixed in (or unexpected
-// multi-line stdout) is rejected rather than silently becoming the id
-// (#3107).
 func extractPaneID(out string) (string, error) {
 	m := paneIDPattern.FindString(out)
 	if m == "" {
@@ -272,11 +255,7 @@ func (c *Client) output(ctx context.Context, args ...string) (string, error) {
 		c = NewClient()
 	}
 	cmd := exec.CommandContext(ctx, c.bin, args...)
-	// #3107: separate the streams. CombinedOutput merged stderr warnings
-	// into callers' parse input -- pane creation returned a polluted id,
-	// Capture could return warning text as pane content, and ListPaneIDs
-	// collected garbage entries. Only stdout is parse input now; stderr is
-	// diagnostic (logged on success, folded into the error on failure).
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -291,23 +270,10 @@ func (c *Client) output(ctx context.Context, args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// shellCommand renders cmd as a tmux trailing shell-command that is
-// evaluated exactly ONCE by the user's login shell. #4680: the old
-// `$SHELL -lc strconv.Quote(cmd)` wrapped cmd in Go-syntax double quotes -
-// strconv.Quote escapes Go string syntax, not shell, so the OUTER tmux
-// default-shell expanded $var/$(...)/backticks inside the double quotes
-// in the wrong environment (tmux server, non-login, server locale), broke
-// single-quote literal semantics, and created a second-order injection
-// surface when outer expansion output contained shell syntax. POSIX single
-// quoting hides cmd from the outer shell entirely; only the inner -lc
-// login shell evaluates it.
 func shellCommand(cmd string) string {
 	return shellPath() + " -lc " + shSingleQuote(cmd)
 }
 
-// shSingleQuote wraps s in POSIX single quotes, escaping embedded single
-// quotes with the '"'"' idiom - the result undergoes NO expansion by the
-// reading shell until the quotes are deliberately consumed.
 func shSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }

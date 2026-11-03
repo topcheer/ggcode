@@ -1,13 +1,5 @@
 package tui
 
-// #3391 probes: a single [a] on a GLOBAL-scope staging skill must not take
-// immediate effect - the panel mirrors the command path's --confirm-global
-// gate (knight_commands.go: "a warning that is followed by immediate effect
-// in the same keypress is not a confirmation gate"). Project scope stays
-// single-key. #3389 probe: the navigation domain and the render fetches
-// share one list limit constant (pre-fix: count fetched 50, renderers 20,
-// the down key walked into items the panel never showed).
-
 import (
 	"os"
 	"path/filepath"
@@ -64,7 +56,6 @@ func asModel(v any) (Model, bool) {
 func TestIssue3391_GlobalApproveNeedsSecondKeypress(t *testing.T) {
 	m, skillPath := new3391Model(t)
 
-	// First [a]: arms the confirm, does NOT promote.
 	out, _ := m.knightPanelAction("staging", 0, "approve")
 	m1, ok := asModel(out)
 	if !ok {
@@ -77,7 +68,6 @@ func TestIssue3391_GlobalApproveNeedsSecondKeypress(t *testing.T) {
 		t.Fatalf("first [a] must arm the confirm: msg=%q pending=%q", m1.knightPanel.message, m1.knightPanel.pendingGlobalApprovePath)
 	}
 
-	// Second [a] at the same index: executes.
 	out, _ = m1.knightPanelAction("staging", 0, "approve")
 	m2, ok := asModel(out)
 	if !ok {
@@ -94,11 +84,9 @@ func TestIssue3391_GlobalApproveNeedsSecondKeypress(t *testing.T) {
 func TestIssue3391_NavigationCancelsArmedConfirm(t *testing.T) {
 	m, skillPath := new3391Model(t)
 	m.knightPanel.focus = 1
-	// knightSections order: status, budget, queue, skills, staging, ...
+
 	m.knightPanel.selectedIndex = 4
 
-	// Arm, then navigate: the pending confirm must reset so a later [a] at
-	// the same visible index re-arms instead of executing.
 	outArm, _ := m.knightPanelAction("staging", 0, "approve")
 	mArm, ok := asModel(outArm)
 	if !ok || mArm.knightPanel.pendingGlobalApprovePath != skillPath {
@@ -111,7 +99,6 @@ func TestIssue3391_NavigationCancelsArmedConfirm(t *testing.T) {
 		t.Fatal("navigation must cancel the armed global confirm")
 	}
 
-	// Re-pressing [a] after navigation must re-arm (not execute).
 	out, _ := m.knightPanelAction("staging", 0, "approve")
 	mOut, ok := asModel(out)
 	if !ok || stagingCount(t, mOut) != 1 {
@@ -119,7 +106,6 @@ func TestIssue3391_NavigationCancelsArmedConfirm(t *testing.T) {
 	}
 }
 
-// #3389: navigation domain and render fetches must share the same limit.
 func TestIssue3389_CountAndRenderShareListLimit(t *testing.T) {
 	src, err := os.ReadFile("knight_panel.go")
 	if err != nil {

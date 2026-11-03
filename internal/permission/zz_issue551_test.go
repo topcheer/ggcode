@@ -7,16 +7,6 @@ import (
 	"testing"
 )
 
-// TestIssue551D_ExitPlanModeRestoresWithoutGate verifies that in Plan
-// mode, exit_plan_mode returns Allow. #551-D made it Ask by aligning the
-// code with an old doc comment; that ignored two things: exiting restores
-// the mode the USER chose before entering plan mode (user sovereignty —
-// a bypass/autopilot user detouring through plan mode needed "permission"
-// to go back), and enter/exit symmetry (enter was Allow, exit was Ask —
-// an agent that entered plan mode mid-run was trapped until a human
-// confirmed its way out). The genuine escalation vector — switch_mode
-// naming bypass/autopilot — remains gated by Ask (#1705 case 1), which
-// this test also pins.
 func TestIssue551D_ExitPlanModeRestoresWithoutGate(t *testing.T) {
 	p := NewConfigPolicyWithMode(nil, []string{t.TempDir()}, PlanMode)
 
@@ -27,14 +17,11 @@ func TestIssue551D_ExitPlanModeRestoresWithoutGate(t *testing.T) {
 	if d != Allow {
 		t.Fatalf("exit_plan_mode in plan mode: got %v, want Allow (restores the user's own previous mode)", d)
 	}
-	// The real escalation gate stays: switch_mode naming bypass/autopilot
-	// still asks, so an injected exit→re-escalate detour is not opened up.
+
 	if d, _ := p.Check("switch_mode", json.RawMessage(`{"mode":"bypass"}`)); d != Ask {
 		t.Fatalf("switch_mode→bypass in plan mode: got %v, want Ask (#1705)", d)
 	}
 
-	// Guard rails: entering plan mode stays allowed, read-only tools stay
-	// allowed, and write tools stay denied in plan mode.
 	if d, _ := p.Check("enter_plan_mode", json.RawMessage(`{}`)); d != Allow {
 		t.Fatalf("enter_plan_mode in plan mode: got %v, want Allow", d)
 	}
@@ -46,11 +33,6 @@ func TestIssue551D_ExitPlanModeRestoresWithoutGate(t *testing.T) {
 	}
 }
 
-// TestIssue551E_GitCheckoutRefForm verifies that `git checkout <ref> -- <paths>`
-// (e.g. `git checkout HEAD -- .` / `git checkout main -- src/`) is flagged
-// dangerous (#551-E). Existing patterns only matched `git checkout -- .` and
-// `git checkout .`, so the ref form discarded working tree changes without
-// any warning.
 func TestIssue551E_GitCheckoutRefForm(t *testing.T) {
 	det := NewDangerousDetector()
 
@@ -72,12 +54,11 @@ func TestIssue551E_GitCheckoutRefForm(t *testing.T) {
 		}
 	}
 
-	// Non-destructive checkout forms must stay unmatched.
 	safe := []string{
-		"git checkout main",      // branch switch only, no pathspec
-		"git checkout -b feat/x", // create branch
-		"git checkout abc1234",   // detached HEAD, no pathspec
-		"git checkout --help",    // help flag
+		"git checkout main",
+		"git checkout -b feat/x",
+		"git checkout abc1234",
+		"git checkout --help",
 	}
 	for _, cmd := range safe {
 		if det.IsDangerous(cmd) {
@@ -86,16 +67,10 @@ func TestIssue551E_GitCheckoutRefForm(t *testing.T) {
 	}
 }
 
-// TestIssue551F_SandboxRelativePathAnchoredToAllowedDir verifies that a
-// relative path is judged against the sandbox's allowed directory (the
-// agent's WorkingDir since #542 tools resolve relative paths there), not
-// the process CWD (#551-F). With WorkingDir != process CWD the old
-// CWD-anchored resolution produced false Deny/Allow verdicts.
 func TestIssue551F_SandboxRelativePathAnchoredToAllowedDir(t *testing.T) {
 	workspace := t.TempDir()
-	otherDir := t.TempDir() // stands in for the process CWD
+	otherDir := t.TempDir()
 
-	// Move the process CWD away from the workspace.
 	origWd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
@@ -107,7 +82,6 @@ func TestIssue551F_SandboxRelativePathAnchoredToAllowedDir(t *testing.T) {
 
 	sb := NewPathSandbox([]string{workspace})
 
-	// Relative path must resolve under the workspace, not otherDir.
 	if !sb.Allowed("notes.txt") {
 		t.Error("Allowed(\"notes.txt\") = false with workspace allowedDir, want true (relative path anchored at allowed dir, not process CWD)")
 	}
@@ -115,7 +89,6 @@ func TestIssue551F_SandboxRelativePathAnchoredToAllowedDir(t *testing.T) {
 		t.Error("nested relative path denied; want allowed under workspace")
 	}
 
-	// Absolute paths keep their existing semantics.
 	if !sb.Allowed(filepath.Join(workspace, "file.go")) {
 		t.Error("absolute path inside workspace denied")
 	}

@@ -61,12 +61,10 @@ func TestBrokerP2PTransport(t *testing.T) {
 	b := NewBroker(nil)
 	defer b.Stop()
 
-	// Initially no P2P transport.
 	if b.HasP2PTransport() {
 		t.Error("broker should not have P2P transport initially")
 	}
 
-	// Set a mock P2P transport.
 	mock := &mockTransport{}
 	b.SetP2PTransport(mock)
 
@@ -74,14 +72,12 @@ func TestBrokerP2PTransport(t *testing.T) {
 		t.Error("broker should have P2P transport after SetP2PTransport")
 	}
 
-	// Revert to relay.
 	b.SetP2PTransport(nil)
 	if b.HasP2PTransport() {
 		t.Error("broker should not have P2P transport after nil")
 	}
 }
 
-// mockTransport implements Transport for testing.
 type mockTransport struct {
 	sent   [][]byte
 	onMsg  func([]byte)

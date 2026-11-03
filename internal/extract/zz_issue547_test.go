@@ -1,9 +1,5 @@
 package extract
 
-// Issue #547 characteristic tests: EPUB ../ href resolution (A), RTF \'XX
-// code-page decoding (D), archive CJK rune-boundary truncation (B), and the
-// .tar.xz registration contract fix (C).
-
 import (
 	"archive/zip"
 	"bytes"
@@ -12,11 +8,8 @@ import (
 	"unicode/utf8"
 )
 
-// --- Bug A: EPUB ../ href resolution ---
-
 func TestIssue547_EpubParentDirHrefExtractsText(t *testing.T) {
-	// Layout common in Sigil/older InDesign exports: OPF lives in OEBPS/,
-	// chapter files in a sibling text/ dir reached via "../text/chap1.xhtml".
+
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 
@@ -62,11 +55,11 @@ func TestIssue547_EpubParentDirHrefExtractsText(t *testing.T) {
 
 func TestIssue547_ResolvePathNormalization(t *testing.T) {
 	cases := []struct{ base, rel, want string }{
-		{"OEBPS/", "../text/chap1.xhtml", "text/chap1.xhtml"}, // the #547 case
-		{"OEBPS/", "chap1.xhtml", "OEBPS/chap1.xhtml"},        // no regression
-		{"", "chap1.xhtml", "chap1.xhtml"},                    // no regression
-		{"OEBPS/", "/abs.xhtml", "abs.xhtml"},                 // no regression
-		{"OEBPS/", "./chap1.xhtml", "OEBPS/chap1.xhtml"},      // ./ also normalized
+		{"OEBPS/", "../text/chap1.xhtml", "text/chap1.xhtml"},
+		{"OEBPS/", "chap1.xhtml", "OEBPS/chap1.xhtml"},
+		{"", "chap1.xhtml", "chap1.xhtml"},
+		{"OEBPS/", "/abs.xhtml", "abs.xhtml"},
+		{"OEBPS/", "./chap1.xhtml", "OEBPS/chap1.xhtml"},
 	}
 	for _, tc := range cases {
 		if got := resolvePath(tc.base, tc.rel); got != tc.want {
@@ -75,10 +68,8 @@ func TestIssue547_ResolvePathNormalization(t *testing.T) {
 	}
 }
 
-// --- Bug D: RTF \'XX code-page decoding ---
-
 func TestIssue547_RtfHexEscapeValidUTF8(t *testing.T) {
-	// \ansicpg1252 caf\'e9 — the exact probe input from the issue.
+
 	src := `{\rtf1\ansi\ansicpg1252 caf\'e9}`
 	result, err := Extract("doc.rtf", []byte(src))
 	if err != nil {
@@ -93,7 +84,7 @@ func TestIssue547_RtfHexEscapeValidUTF8(t *testing.T) {
 }
 
 func TestIssue547_RtfHexEscapeDefaultCodePage(t *testing.T) {
-	// No \ansicpg control word at all: the spec default is Windows-1252.
+
 	src := `{\rtf1\ansi r\'e9sum\'e9}`
 	result, err := Extract("doc.rtf", []byte(src))
 	if err != nil {
@@ -108,8 +99,7 @@ func TestIssue547_RtfHexEscapeDefaultCodePage(t *testing.T) {
 }
 
 func TestIssue547_RtfHexEscapeRespectsAnsicpg1251(t *testing.T) {
-	// cp1251 0xE9 = U+0439 (й). Proves the decoder actually reads \ansicpg
-	// rather than always assuming 1252 (which would give U+00E9 é).
+
 	src := `{\rtf1\ansi\ansicpg1251 \'e9}`
 	result, err := Extract("doc.rtf", []byte(src))
 	if err != nil {
@@ -121,7 +111,7 @@ func TestIssue547_RtfHexEscapeRespectsAnsicpg1251(t *testing.T) {
 }
 
 func TestIssue547_RtfUnicodeEscapeUnchanged(t *testing.T) {
-	// The \uN path was already correct; guard against regressions.
+
 	src := `{\rtf1\ansi caf\u233}`
 	result, err := Extract("doc.rtf", []byte(src))
 	if err != nil {
@@ -132,15 +122,9 @@ func TestIssue547_RtfUnicodeEscapeUnchanged(t *testing.T) {
 	}
 }
 
-// --- Bug B: archive entry truncation at rune boundary ---
-
 func TestIssue547_ArchiveEntryTruncationKeepsRuneBoundary(t *testing.T) {
-	// To make a registered-format entry's extracted text exceed
-	// maxArchiveEntrySize, exploit zip nesting: an .odt whose content.xml
-	// decompresses to ~1.2MB of CJK fits well under the archive entry data
-	// cap, but its extracted text crosses it. The truncation point
-	// (1048576 % 3 == 1) then falls mid-rune — the exact bug B probe.
-	fill := strings.Repeat("汉", 400000) // 1.2MB of valid UTF-8
+
+	fill := strings.Repeat("汉", 400000)
 	contentXML := "<t>" + fill + "</t>"
 
 	var odt bytes.Buffer
@@ -180,7 +164,7 @@ func TestIssue547_ArchiveEntryTruncationKeepsRuneBoundary(t *testing.T) {
 		t.Fatalf("expected truncation to fire (text len %d), tail %q", len(result.Text), tailFor(result.Text, 60))
 	}
 	if !utf8.ValidString(result.Text) {
-		// Locate the offending byte for the failure message.
+
 		bad := -1
 		for i, r := range result.Text {
 			if r == utf8.RuneError {
@@ -199,8 +183,6 @@ func tailFor(s string, n int) string {
 	return s[len(s)-n:]
 }
 
-// --- Bug C: .tar.xz no longer registered ---
-
 func TestIssue547_TarXzNotRegistered(t *testing.T) {
 	if IsDocumentFile("archive.tar.xz") {
 		t.Error("IsDocumentFile(.tar.xz) = true, want false — extractor cannot decode xz, registration contradicted IsDocumentFile")
@@ -208,7 +190,7 @@ func TestIssue547_TarXzNotRegistered(t *testing.T) {
 	if defaultRegistry.Get(".tar.xz") != nil {
 		t.Error("registry still contains .tar.xz extractor")
 	}
-	// Unregistered must surface an honest error instead of guaranteed failure.
+
 	if _, err := Extract("archive.tar.xz", []byte("stub")); err == nil {
 		t.Error("Extract(.tar.xz) should return unsupported-format error")
 	}

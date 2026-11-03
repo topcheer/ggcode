@@ -1,10 +1,5 @@
 package tui
 
-// #2175 regression: ensureCurrentWorkspaceIMManager ran check-and-set
-// with NO guard from Cmd goroutines (ensurePCReady + 8 panels) while
-// the Update loop kept reading m.imManager - duplicate InitRuntime
-// races and an unlocked config.IM.Enabled flip + saveConfig.
-
 import (
 	"sync"
 	"testing"
@@ -26,9 +21,7 @@ func TestEnsureCurrentWorkspaceIMManagerSerialized(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	// IM disabled + autoEnable=false: every call must return the
-	// disabled error - run under -race: the serialized check-and-set
-	// must not race the config.IM.Enabled read either.
+
 	for i, err := range errs {
 		if err == nil || err.Error() != "disabled" {
 			t.Fatalf("call %d: want disabled error, got %v", i, err)

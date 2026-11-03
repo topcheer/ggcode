@@ -11,7 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// TaskResult holds the outcome of a Knight task execution.
 type TaskResult struct {
 	TaskName string
 	Output   string
@@ -20,24 +19,16 @@ type TaskResult struct {
 	Error    error
 }
 
-// AgentRunner is the interface Knight uses to run LLM-powered tasks.
-// It mirrors subagent.AgentRunner for compatibility.
 type AgentRunner interface {
-	// #4537: variadic origin mirrors agent.Agent.RunStream (human-origin tag).
 	RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent), origin ...string) error
 }
 
-// AgentFactory creates a Knight agent with restricted tools.
-// The onUsage callback receives token usage after each LLM call.
 type AgentFactory func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (AgentRunner, error)
 
-// RunTask executes a single Knight task with budget tracking and default maxTurns=10.
-// Token usage is tracked via the onUsage callback wired into the agent.
 func (k *Knight) RunTask(ctx context.Context, taskName, prompt string, factory AgentFactory) TaskResult {
 	return k.RunTaskWithTurns(ctx, taskName, prompt, factory, 10)
 }
 
-// RunTaskWithTurns executes a single Knight task with a custom maxTurns limit.
 func (k *Knight) RunTaskWithTurns(ctx context.Context, taskName, prompt string, factory AgentFactory, maxTurns int) TaskResult {
 	start := time.Now()
 	result := TaskResult{TaskName: taskName}
@@ -54,31 +45,27 @@ func (k *Knight) RunTaskWithTurns(ctx context.Context, taskName, prompt string, 
 
 	debug.Log("knight", "starting task: %s", taskName)
 
-	// Build system prompt for Knight tasks
 	sysPrompt := buildKnightSystemPrompt(taskName)
 
-	// Wire up usage tracking — each LLM call's tokens go to budget
 	var totalUsage provider.TokenUsage
 	onUsage := func(usage provider.TokenUsage) {
 		totalUsage.InputTokens += usage.InputTokens
 		totalUsage.OutputTokens += usage.OutputTokens
 		totalUsage.CacheRead += usage.CacheRead
 		totalUsage.CacheWrite += usage.CacheWrite
-		// Record immediately so budget stays current
+
 		if err := k.budget.Record(taskName, usage.InputTokens, usage.OutputTokens); err != nil {
 			debug.Log("knight", "budget record error: %v", err)
 		}
 		k.bucketBudget.record(bucket, usage.InputTokens+usage.OutputTokens, time.Now())
 	}
 
-	// Create agent via factory
 	runner, err := factory(sysPrompt, maxTurns, onUsage)
 	if err != nil {
 		result.Error = fmt.Errorf("create agent: %w", err)
 		return result
 	}
 
-	// Run, collecting text output
 	var output strings.Builder
 	err = runner.RunStream(ctx, prompt, func(event provider.StreamEvent) {
 		defer safego.Recover("knight.runner.streamCallback")
@@ -101,15 +88,8 @@ func (k *Knight) RunTaskWithTurns(ctx context.Context, taskName, prompt string, 
 	return result
 }
 
-// buildKnightSystemPrompt creates a system prompt for Knight tasks.
 func buildKnightSystemPrompt(taskName string) string {
-	// #1261: the generic "use the appropriate tools to create content" rule
-	// below directly contradicted the proposal prompt's "do NOT modify the
-	// project" instruction - and with the full interactive tool registry
-	// injected, an LLM following the system prompt over the task prompt had a
-	// real unauthorized-write path. Proposal tasks now get an explicit
-	// read-only rule at system-prompt level (plus the post-run git check in
-	// project_proposal.go, which catches violations regardless of adherence).
+
 	readOnlyRules := ""
 	if strings.Contains(taskName, "proposal") {
 		readOnlyRules = `

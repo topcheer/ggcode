@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-// sa-218: sub-agent events carry agent_id, which must surface as
-// gen_ai.agent.name on llm/tool spans in the OTLP export.
 func TestOTLPExportSubAgentAttribution(t *testing.T) {
 	base := time.Now().UTC().Truncate(time.Microsecond)
 	evs := []MetricEvent{
@@ -27,14 +25,12 @@ func TestOTLPExportSubAgentAttribution(t *testing.T) {
 	if !strings.Contains(doc, "ggcode:subagent:agent-abc") {
 		t.Fatalf("agent.name value wrong, got: %s", doc)
 	}
-	// Parent and sub-agent spans share the session-derived traceId.
+
 	if !strings.Contains(doc, "traceId") {
 		t.Fatal("traceId missing")
 	}
 }
 
-// Parent (empty AgentID) events must NOT gain an agent.name attribute -
-// the session span keeps its plain ggcode identity.
 func TestOTLPExportParentUnattributed(t *testing.T) {
 	base := time.Now().UTC().Truncate(time.Microsecond)
 	evs := []MetricEvent{

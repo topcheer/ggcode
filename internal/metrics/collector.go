@@ -7,9 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// Collector receives MetricEvents on a buffered channel and persists them
-// asynchronously via a callback. Events are dropped (never blocked) if
-// the channel is full, so the agent is never slowed down.
 type Collector struct {
 	ch       chan MetricEvent
 	stopCh   chan struct{}
@@ -18,8 +15,6 @@ type Collector struct {
 	stopOnce sync.Once
 }
 
-// NewCollector starts a background goroutine that drains ch and calls persist
-// for each event. cap is the channel buffer size (256 is a good default).
 func NewCollector(ctx context.Context, capacity int, persist func(MetricEvent)) *Collector {
 	if ctx == nil {
 		ctx = context.Background()
@@ -69,16 +64,14 @@ func NewCollector(ctx context.Context, capacity int, persist func(MetricEvent)) 
 	return c
 }
 
-// Emit sends a metric event to the collector. Non-blocking: drops if full.
 func (c *Collector) Emit(m MetricEvent) {
 	select {
 	case c.ch <- m:
 	default:
-		// drop — don't block the agent
+
 	}
 }
 
-// Flush blocks until all currently queued events have been persisted.
 func (c *Collector) Flush() {
 	if c == nil {
 		return
@@ -95,7 +88,6 @@ func (c *Collector) Flush() {
 	}
 }
 
-// Stop signals the collector goroutine to drain and exit.
 func (c *Collector) Stop() {
 	if c == nil {
 		return

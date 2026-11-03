@@ -12,10 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// g69Server: minimal fake MCP HTTP server answering the initialize handshake
-// and then replying -32602 (Invalid params) to every tasks/get and
-// tasks/result - the SEP-2663 stable-extension signal for an expired,
-// TTL-deleted, or unknown task.
 func g69Server(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -43,8 +39,6 @@ func g69Server(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// G1: a -32602 on tasks/result must surface as an explicit expiry, not a
-// bare "Invalid params" that reads like a client bug.
 func TestG69TaskResultExpiredClassification(t *testing.T) {
 	srv := g69Server(t)
 	c := NewClientFromConfig(config.MCPServerConfig{Name: "g69", Type: "http", URL: srv.URL})
@@ -65,8 +59,6 @@ func TestG69TaskResultExpiredClassification(t *testing.T) {
 	}
 }
 
-// G1: the same classification applies when the poll loop (tasks/get) hits
-// an expired task mid-await.
 func TestG69PollExpiredClassification(t *testing.T) {
 	srv := g69Server(t)
 	c := NewClientFromConfig(config.MCPServerConfig{Name: "g69b", Type: "http", URL: srv.URL})
@@ -79,16 +71,13 @@ func TestG69PollExpiredClassification(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.taskPollOverride = time.Millisecond
-	// Bypass tools/call (server answers -32601 there) and drive the poll
-	// loop directly via GetTask, which is what awaitTaskLoop calls.
+
 	_, err := c.GetTask(ctx, "t-gone")
 	if err == nil || !strings.Contains(err.Error(), "expired or deleted") {
 		t.Fatalf("want explicit expiry wording from tasks/get, got: %v", err)
 	}
 }
 
-// G2: stable-extension field names (ttlMs/pollIntervalMs) must decode into
-// the canonical fields; old names keep winning when both are present.
 func TestG69TaskStableFieldNamesDecode(t *testing.T) {
 	var modern Task
 	if err := json.Unmarshal([]byte(`{"taskId":"t-1","status":"working","ttlMs":30000,"pollIntervalMs":250}`), &modern); err != nil {

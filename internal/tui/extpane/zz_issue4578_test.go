@@ -2,11 +2,6 @@
 
 package extpane
 
-// Regression test for GitHub issue #4579: WriteText after HandleDone
-// buffered text that flushAll/flushAgent would never flush (both skip
-// Done panes), silently dropping late teammate_text events at the 30s
-// grace close. Done panes must now write through immediately.
-
 import (
 	"context"
 	"os"
@@ -16,8 +11,7 @@ import (
 )
 
 func TestIssue4579_WriteTextAfterDoneFlushesImmediately(t *testing.T) {
-	// No terminal backend needed: the pane is injected directly, the way
-	// HandleDone leaves it (Done=true, log file open).
+
 	os.Setenv("TMUX", "")
 	os.Setenv("TERM_PROGRAM", "")
 	os.Setenv("KITTY_WINDOW_ID", "")
@@ -25,9 +19,7 @@ func TestIssue4579_WriteTextAfterDoneFlushesImmediately(t *testing.T) {
 
 	m := NewManager()
 	defer m.CloseAll()
-	// WriteText short-circuits on !Available(); satisfy it with a fake
-	// backend so the Done branch under test is reachable without a
-	// real terminal.
+
 	m.backend = fake4579Backend{}
 
 	logPath := filepath.Join(t.TempDir(), "agent-4579.log")
@@ -41,7 +33,6 @@ func TestIssue4579_WriteTextAfterDoneFlushesImmediately(t *testing.T) {
 
 	m.WriteText("a-4579", "LATE-AFTER-DONE")
 
-	// Read BEFORE CloseAll: closePane removes the log file by design.
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("read pane log: %v", err)

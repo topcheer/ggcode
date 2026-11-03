@@ -27,7 +27,7 @@ func TestCheckDuplicateSimilar(t *testing.T) {
 	am.SaveMemory("release-process", "content 2")
 
 	dc := am.CheckDuplicate("build-process-v2", "")
-	// "build-process-v2" shares "build" and "process" with "build-process"
+
 	if dc.SimilarTo != "build-process" {
 		t.Errorf("expected SimilarTo=build-process, got %q", dc.SimilarTo)
 	}
@@ -81,7 +81,7 @@ func TestJaccardSimilarity(t *testing.T) {
 	b := map[string]struct{}{"build": {}, "process": {}, "v2": {}}
 
 	sim := jaccardSimilarity(a, b)
-	// intersection=2, union=3, sim=0.667
+
 	if sim < 0.6 || sim > 0.7 {
 		t.Errorf("expected ~0.667, got %f", sim)
 	}

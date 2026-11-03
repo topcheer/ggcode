@@ -7,10 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// #4873: the where-to-get-credentials guide (Hermes-style numbered steps)
-// must render IN the panel when createMode is active, in both languages,
-// with the VERIFIED console URLs (q.qq.com - not the API-only bots.qq.com;
-// dev.dingtalk.com - the console the adapter itself links to).
 func TestCreateGuideRendersInCreateMode(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -77,8 +73,6 @@ func TestCreateGuideRendersInCreateMode(t *testing.T) {
 	}
 }
 
-// The guide is scoped to createMode: idle panels must NOT push setup
-// instructions at users who are not creating (the #4869 lesson).
 func TestCreateGuideAbsentWhenNotCreating(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.handleResize(160, 50)

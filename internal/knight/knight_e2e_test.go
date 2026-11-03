@@ -14,16 +14,8 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// TestEndToEnd_KnightLifecycle tests the complete Knight workflow:
-// 1. Create Knight with real directories
-// 2. Analyze a session with repeated build-test pattern
-// 3. Discover skill candidate
-// 4. Write to staging
-// 5. Validate
-// 6. Promote to active
-// 7. Verify skill is loadable
 func TestEndToEnd_KnightLifecycle(t *testing.T) {
-	// Setup real directory structure
+
 	dir, err := os.MkdirTemp("", "knight-e2e-*")
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +27,6 @@ func TestEndToEnd_KnightLifecycle(t *testing.T) {
 	os.MkdirAll(filepath.Join(homeDir, ".ggcode"), 0755)
 	os.MkdirAll(filepath.Join(projDir, ".ggcode"), 0755)
 
-	// Create a real session store with a session that has build-test pattern
 	storeDir := filepath.Join(homeDir, ".ggcode", "sessions")
 	os.MkdirAll(storeDir, 0755)
 	store, err := session.NewJSONLStore(storeDir)
@@ -43,12 +34,9 @@ func TestEndToEnd_KnightLifecycle(t *testing.T) {
 		t.Fatalf("NewJSONLStore: %v", err)
 	}
 
-	// Create a session with repeated build-test pattern
 	ses := session.NewSession("zai", "test", "test-model")
 	ses.Title = "Build and test iteration"
 
-	// Simulate a conversation with a user correction and a failure-fix
-	// Round 1: AI makes a mistake, user corrects
 	store.AppendMessage(ses, provider.Message{
 		Role: "user",
 		Content: []provider.ContentBlock{
@@ -68,7 +56,7 @@ func TestEndToEnd_KnightLifecycle(t *testing.T) {
 			{Type: "tool_result", ToolID: "find-log", Output: "no such directory", IsError: true},
 		},
 	})
-	// AI retries with the correct path
+
 	store.AppendMessage(ses, provider.Message{
 		Role: "assistant",
 		Content: []provider.ContentBlock{
@@ -87,7 +75,7 @@ func TestEndToEnd_KnightLifecycle(t *testing.T) {
 			{Type: "text", Text: "Found it at /tmp/ggcode-debug/"},
 		},
 	})
-	// User correction — this is the key learning signal
+
 	store.AppendMessage(ses, provider.Message{
 		Role: "user",
 		Content: []provider.ContentBlock{
@@ -101,19 +89,16 @@ func TestEndToEnd_KnightLifecycle(t *testing.T) {
 		},
 	})
 
-	// Create Knight
 	cfg := config.DefaultKnightConfig()
 	cfg.Enabled = true
 	cfg.TrustLevel = "staged"
 	k := New(cfg, homeDir, projDir, store)
 
-	// Step 1: Start Knight (ensures directories)
 	if err := k.Start(context.Background()); err != nil {
 		t.Fatalf("Knight Start: %v", err)
 	}
 	defer k.Stop()
 
-	// Step 1: Verify the session has the right structure
 	t.Logf("Session ID: %s, Messages: %d", ses.ID, len(ses.Messages))
 	toolUseCount := 0
 	for _, msg := range ses.Messages {
@@ -130,7 +115,6 @@ func TestEndToEnd_KnightLifecycle(t *testing.T) {
 		t.Fatal("session has no tool_use blocks — session store may not persist tool_use in AppendMessage")
 	}
 
-	// Step 2: Analyze sessions
 	analyzer := NewSessionAnalyzer(k)
 	result, err := analyzer.AnalyzeRecent(context.Background())
 	if err != nil {
@@ -143,12 +127,10 @@ func TestEndToEnd_KnightLifecycle(t *testing.T) {
 		t.Fatal("expected at least 1 session analyzed")
 	}
 
-	// Step 3: Check that we found patterns
 	if len(result.SkillCandidates) == 0 {
 		t.Fatal("expected at least 1 skill candidate (correction or failure-fix)")
 	}
 
-	// Step 4: Write the best candidate to staging
 	best := result.SkillCandidates[0]
 	t.Logf("Best candidate: %s (%s) score=%.1f reason=%s", best.Name, best.Scope, best.Score, best.Reason)
 
@@ -175,13 +157,12 @@ created_from: %s
 	}
 	t.Logf("Written to staging: %s", stagingPath)
 
-	// Step 5: Validate the staging skill
 	staging, err := k.index.StagingSkills()
 	if err != nil {
 		t.Fatalf("StagingSkills: %v", err)
 	}
 	if len(staging) == 0 {
-		// Debug: check if file exists and parse frontmatter
+
 		stagingDir := filepath.Join(homeDir, ".ggcode", "skills-staging")
 		entries, _ := os.ReadDir(stagingDir)
 		for _, e := range entries {
@@ -200,24 +181,20 @@ created_from: %s
 		t.Fatalf("skill validation failed: %v", validation.Errors)
 	}
 
-	// Step 6: Promote to active
 	if err := k.PromoteStaging(best.Name); err != nil {
 		t.Fatalf("PromoteStaging: %v", err)
 	}
 	t.Log("Promoted to active")
 
-	// Step 7: Verify active skill is loadable
 	active := k.index.FindActiveByName(best.Name)
 	if active == nil {
 		t.Fatalf("active skill '%s' not found after promotion", best.Name)
 	}
 	t.Logf("Active skill verified: name=%s scope=%s description=%s", active.Name, active.Scope, active.Meta.Description)
 
-	// Step 8: Verify staging is reduced (may have leftover candidates)
 	stagingAfter, _ := k.index.StagingSkills()
 	t.Logf("Remaining staging skills after promotion: %d", len(stagingAfter))
 
-	// Step 9: Verify budget tracking worked
 	if !k.budget.CanSpend() {
 		t.Fatal("expected budget available after e2e test")
 	}

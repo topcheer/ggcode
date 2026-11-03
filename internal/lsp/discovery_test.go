@@ -204,7 +204,7 @@ func TestDetectWorkspaceStatusIncludesPythonInstallOptions(t *testing.T) {
 	if !strings.Contains(python.InstallOptions[0].Command, "--user") {
 		t.Fatalf("expected first pyright option to be user-level, got %#v", python.InstallOptions[0])
 	}
-	// Check that a project-level venv option exists
+
 	foundVenv := false
 	for _, opt := range python.InstallOptions {
 		if strings.Contains(opt.Command, ".venv") && strings.Contains(opt.Command, "python3 -m venv") {
@@ -215,7 +215,7 @@ func TestDetectWorkspaceStatusIncludesPythonInstallOptions(t *testing.T) {
 	if !foundVenv {
 		t.Fatalf("expected a project venv install option, got %#v", python.InstallOptions)
 	}
-	// Check that pylsp option exists
+
 	foundPylsp := false
 	for _, opt := range python.InstallOptions {
 		if strings.Contains(opt.Command, "python-lsp-server") {
@@ -326,11 +326,11 @@ func TestDetectWorkspaceStatusIncludesConfigInstallOptions(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected %s detection in %#v", id, status.Languages)
 		}
-		// Should have at least 2 options (global + project)
+
 		if len(lang.InstallOptions) < 2 {
 			t.Fatalf("expected at least 2 install options for %s, got %#v", id, lang.InstallOptions)
 		}
-		// First option should be recommended (global)
+
 		if !lang.InstallOptions[0].Recommended {
 			t.Fatalf("expected first install option to be recommended for %s, got %#v", id, lang.InstallOptions)
 		}
@@ -338,7 +338,7 @@ func TestDetectWorkspaceStatusIncludesConfigInstallOptions(t *testing.T) {
 	if !strings.Contains(got["yaml"].InstallOptions[0].Command, "yaml-language-server") {
 		t.Fatalf("expected yaml install command, got %#v", got["yaml"].InstallOptions)
 	}
-	// yaml global option should use npm install -g
+
 	if !strings.Contains(got["yaml"].InstallOptions[0].Command, "-g") {
 		t.Fatalf("expected yaml global install to use -g, got %#v", got["yaml"].InstallOptions[0])
 	}
@@ -681,18 +681,18 @@ func TestDetectWorkspaceStatusIncludesCSharpInstallOption(t *testing.T) {
 	if len(csharp.InstallOptions) < 2 {
 		t.Fatalf("expected at least 2 csharp install options, got %#v", csharp.InstallOptions)
 	}
-	// First option should be user-level (recommended)
+
 	if !csharp.InstallOptions[0].Recommended {
 		t.Fatalf("expected first csharp install option to be recommended, got %#v", csharp.InstallOptions)
 	}
 	if !strings.Contains(csharp.InstallOptions[0].Command, "csharp-ls") {
 		t.Fatalf("expected csharp-ls install option, got %#v", csharp.InstallOptions[0])
 	}
-	// First option should be user-level (-g flag)
+
 	if !strings.Contains(csharp.InstallOptions[0].Command, "-g") {
 		t.Fatalf("expected first csharp option to be user-level (-g), got %#v", csharp.InstallOptions[0])
 	}
-	// Second option should be project-level (.ggcode/tools)
+
 	if !strings.Contains(csharp.InstallOptions[1].Command, "--tool-path") || !strings.Contains(csharp.InstallOptions[1].Command, ".ggcode/tools") {
 		t.Fatalf("expected workspace-local csharp install command as second option, got %#v", csharp.InstallOptions[1])
 	}
@@ -1172,24 +1172,18 @@ func TestSequentialRepoFileLSPCallsWithInstalledGopls(t *testing.T) {
 	workspace := filepath.Clean(filepath.Join("..", ".."))
 	path := filepath.Join(workspace, "internal", "lsp", "client.go")
 
-	// DocumentSymbols — always works (no type info needed).
 	symbols, err := DocumentSymbols(context.Background(), workspace, path)
 	if err != nil || len(symbols) == 0 {
 		t.Fatalf("DocumentSymbols() err=%v len=%d", err, len(symbols))
 	}
 	t.Logf("DocumentSymbols returned %d symbols", len(symbols))
 
-	// Diagnostics — works without full type info.
 	diagnostics, err := Diagnostics(context.Background(), workspace, path)
 	if err != nil {
 		t.Fatalf("Diagnostics() err=%v", err)
 	}
 	t.Logf("Diagnostics returned %d items", len(diagnostics))
 
-	// Hover, Definition, References — gopls may return empty results for
-	// repo files during cold start or when type info is incomplete.
-	// These are thoroughly tested with temp workspaces in integration_test.go.
-	// We only verify they don't error here.
 	pos := findSymbolPosition(t, symbols, "Hover")
 	if pos != nil {
 		hover, err := Hover(context.Background(), workspace, path, *pos)
@@ -1220,7 +1214,6 @@ func TestSequentialTimedRepoFileLSPCallsWithInstalledGopls(t *testing.T) {
 	workspace := filepath.Clean(filepath.Join("..", ".."))
 	path := filepath.Join(workspace, "internal", "lsp", "client.go")
 
-	// Test that LSP calls work with context timeouts on repo files.
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 10*time.Second)
 	symbols, err := DocumentSymbols(ctx1, workspace, path)
 	cancel1()
@@ -1236,7 +1229,6 @@ func TestSequentialTimedRepoFileLSPCallsWithInstalledGopls(t *testing.T) {
 	}
 	_ = diagnostics
 
-	// Hover/Definition/References with timeout — best-effort.
 	pos := findSymbolPosition(t, symbols, "Hover")
 	if pos != nil {
 		ctx3, cancel3 := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1251,8 +1243,6 @@ func TestSequentialTimedRepoFileLSPCallsWithInstalledGopls(t *testing.T) {
 	}
 }
 
-// findSymbolPosition searches symbols for one matching the given name
-// and returns its start position. Returns nil if not found.
 func findSymbolPosition(t *testing.T, symbols []Symbol, name string) *Position {
 	t.Helper()
 	for _, s := range symbols {
@@ -1272,7 +1262,6 @@ func symbolNames(symbols []Symbol) []string {
 	return names
 }
 
-// truncateForLog truncates a string for logging purposes.
 func truncateForLog(s string, max int) string {
 	if len(s) <= max {
 		return s
@@ -1287,14 +1276,14 @@ func TestParseDocumentHighlights(t *testing.T) {
 				"start": map[string]any{"line": 2, "character": 5},
 				"end":   map[string]any{"line": 2, "character": 8},
 			},
-			"kind": 2, // read
+			"kind": 2,
 		},
 		{
 			"range": map[string]any{
 				"start": map[string]any{"line": 5, "character": 0},
 				"end":   map[string]any{"line": 5, "character": 3},
 			},
-			"kind": 3, // write
+			"kind": 3,
 		},
 	})
 	if err != nil {

@@ -7,18 +7,6 @@ import (
 	"syscall"
 )
 
-// FileLock acquires a bounded exclusive cross-process lock on the given
-// lock file path, serializing read-modify-write cycles between ggcode
-// processes that share state files (cron stores, probe caches). The
-// returned cleanup function releases the lock and closes the handle.
-// AtomicWriteFile prevents torn files; FileLock prevents LOST UPDATES
-// between concurrent full-file rewrites (#1337).
-//
-// #1834 case 2: acquisition is NON-blocking (LOCK_NB) with a bounded retry
-// loop instead of a bare blocking flock. A blocking flock hung forever
-// when the holder was alive-but-slow (SIGSTOP, giant merge, suspended
-// desktop). On timeout the error is returned; every caller degrades to
-// its unlocked merge-and-write path (fail-open, same as the wasm stub).
 func FileLock(lockPath string) (func(), error) {
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {

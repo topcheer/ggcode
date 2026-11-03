@@ -10,11 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/knight"
 )
 
-// sa-162: dedicated tests for the decomposed /knight dispatcher paths that
-// the original monolith's test suite did not cover: on/off config
-// persistence, the nil-knight gate, unknown-subcommand usage, the #1363
-// global-scope promotion gate, staging rejection, and log clearing.
-
 func knightTestWriteStagingSkill(t *testing.T, baseDir, scope, name string) {
 	t.Helper()
 	stagingDir := filepath.Join(baseDir, ".ggcode", "skills-staging")
@@ -61,7 +56,7 @@ func knightTestStartKnight(t *testing.T) (*knight.Knight, string, string) {
 }
 
 func TestKnightOnOffWithoutConfig(t *testing.T) {
-	m := newTestModel() // config == nil, knight == nil
+	m := newTestModel()
 	for _, subcmd := range []string{"on", "off"} {
 		if cmd := m.handleKnightCommand([]string{"/knight", subcmd}); cmd != nil {
 			t.Fatalf("expected %q to complete synchronously", subcmd)
@@ -126,7 +121,7 @@ func TestKnightOnOffWithoutRuntimeShowsRestartNotice(t *testing.T) {
 }
 
 func TestKnightSubcommandRequiresRunningKnight(t *testing.T) {
-	m := newTestModel() // knight == nil
+	m := newTestModel()
 	if cmd := m.handleKnightCommand([]string{"/knight", "budget"}); cmd != nil {
 		t.Fatal("expected budget gate to complete synchronously")
 	}
@@ -154,7 +149,6 @@ func TestKnightApproveGlobalScopeRequiresConfirm(t *testing.T) {
 	m := newTestModel()
 	m.SetKnight(k)
 
-	// Without --confirm-global the #1363 gate must block promotion.
 	if cmd := m.handleKnightCommand([]string{"/knight", "approve", "gskill"}); cmd != nil {
 		t.Fatal("expected approve gate to complete synchronously")
 	}
@@ -166,7 +160,6 @@ func TestKnightApproveGlobalScopeRequiresConfirm(t *testing.T) {
 		t.Fatalf("expected staging skill to remain, got %d entries", len(staging))
 	}
 
-	// With --confirm-global the promotion proceeds.
 	if cmd := m.handleKnightCommand([]string{"/knight", "approve", "gskill", "--confirm-global"}); cmd != nil {
 		t.Fatal("expected confirmed approve to complete synchronously")
 	}
@@ -214,10 +207,6 @@ func TestKnightScenariosAndRejectsClear(t *testing.T) {
 	}
 }
 
-// sa-133: the dispatcher is a handler map, so a subcommand listed in the usage
-// help but missing from knightSubcommands (or vice versa) would silently fall
-// through to the usage fallback instead of failing to compile like the old
-// switch did. Guard against that drift.
 func TestKnightUsageHelpSubcommandsAllHaveHandlers(t *testing.T) {
 	body := strings.TrimPrefix(knightUsageHelp, "Knight commands: ")
 	for _, segment := range strings.Split(body, ", ") {
@@ -230,7 +219,7 @@ func TestKnightUsageHelpSubcommandsAllHaveHandlers(t *testing.T) {
 			t.Errorf("usage help lists %q but knightSubcommands has no handler for it", name)
 		}
 	}
-	// Implicit and alias entries must survive map refactors too.
+
 	for _, name := range []string{"", "reject-history"} {
 		if _, ok := knightSubcommands[name]; !ok {
 			t.Errorf("knightSubcommands is missing implicit/alias entry %q", name)
@@ -238,8 +227,6 @@ func TestKnightUsageHelpSubcommandsAllHaveHandlers(t *testing.T) {
 	}
 }
 
-// sa-133: bare /knight must keep routing to the status panel (old switch case
-// "status", "") rather than to the usage fallback after the map refactor.
 func TestKnightBareCommandOpensPanel(t *testing.T) {
 	k, _, _ := knightTestStartKnight(t)
 	m := newTestModel()

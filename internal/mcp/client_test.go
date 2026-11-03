@@ -23,9 +23,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// mockServerProcess simulates an MCP server for testing.
-// It writes a response for each request on stdout and reads from stdin.
-// We test client by verifying it can parse responses and build requests.
 func TestClientRequestBuild(t *testing.T) {
 	c := NewClient("test", "echo", nil)
 	id1 := c.nextRequestID()
@@ -33,7 +30,7 @@ func TestClientRequestBuild(t *testing.T) {
 	if id1 == nil || id2 == nil {
 		t.Fatal("expected non-nil IDs")
 	}
-	// IDs should be different
+
 	b1, _ := json.Marshal(id1)
 	b2, _ := json.Marshal(id2)
 	if string(b1) == string(b2) {
@@ -136,8 +133,6 @@ func TestCallToolResultFields(t *testing.T) {
 		t.Error("round-trip failed")
 	}
 
-	// #1644 case 6: structuredContent must survive the JSON round-trip -
-	// spec-legal servers return only this field.
 	r3 := &CallToolResult{StructuredContent: json.RawMessage(`{"rows":3}`)}
 	data3, err := json.Marshal(r3)
 	if err != nil {
@@ -170,7 +165,7 @@ func TestInitializeParams(t *testing.T) {
 
 func TestClientCloseIdempotent(t *testing.T) {
 	c := NewClient("test", "echo", nil)
-	// Close without start should not panic
+
 	if err := c.Close(); err != nil {
 		t.Error("first close:", err)
 	}
@@ -179,27 +174,18 @@ func TestClientCloseIdempotent(t *testing.T) {
 	}
 }
 
-// TestClientCloseOAuthCleanup verifies that Close() actually invokes
-// oauthHandler.Close() on the first close call. This is a regression test
-// for issue #39 where Abort() was called before the c.closed check,
-// making the cleanup block dead code.
 func TestClientCloseOAuthCleanup(t *testing.T) {
 	c := NewClient("test", "echo", nil)
 
-	// Install an OAuthHandler so we can verify it gets closed.
 	h := NewOAuthHandler("test", "https://example.com", nil)
 	c.mu.Lock()
 	c.oauthHandler = h
 	c.mu.Unlock()
 
-	// Close should invoke oauthHandler.Close() and clear the field.
 	if err := c.Close(); err != nil {
 		t.Fatalf("Close() error: %v", err)
 	}
 
-	// After Close, oauthHandler should be nil (cleared in cleanup block).
-	// If Abort() is called before the c.closed check (the bug from #39),
-	// the cleanup block is skipped and oauthHandler remains set.
 	c.mu.Lock()
 	cleared := c.oauthHandler == nil
 	c.mu.Unlock()
@@ -221,15 +207,12 @@ func TestAdapterRegisterTools(t *testing.T) {
 	}
 	a := NewAdapter("srv", nil, tools)
 
-	// We can't easily test without a real registry import in this package,
-	// so we test the tool names generation
 	names := a.ToolNames()
 	if len(names) != 1 || names[0] != "mcp__srv__tool1" {
 		t.Errorf("unexpected names: %v", names)
 	}
 }
 
-// Test MCP tool Execute with invalid JSON input
 func TestMCPToolExecuteInvalidJSON(t *testing.T) {
 	mt := &mcpTool{
 		name:     "mcp__srv__tool",
@@ -238,8 +221,7 @@ func TestMCPToolExecuteInvalidJSON(t *testing.T) {
 	}
 	ctx := context.Background()
 	result, err := mt.Execute(ctx, json.RawMessage(`{invalid`))
-	// Invalid JSON should now return a tool.Result with IsError=true
-	// (not a Go error return), with the server name in the message.
+
 	if err != nil {
 		t.Errorf("expected nil Go error, got: %v", err)
 	}
@@ -255,9 +237,7 @@ func TestHTTPClientLifecycle(t *testing.T) {
 	var sawSessionOnList bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
-		// Standalone notification stream probe (client.go
-		// startHTTPNotificationStream): this mock does not offer it; 405 is
-		// the spec-sanctioned answer and cleanly disables the stream.
+
 		if r.Method == http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
@@ -623,11 +603,9 @@ func (n nopWriteCloser) Write(p []byte) (int, error) {
 
 func (nopWriteCloser) Close() error { return nil }
 
-// TestClientErrorContext_ConnectionClosed verifies that error messages include the
-// server name when RPC fails due to a closed connection.
 func TestClientErrorContext_ConnectionClosed(t *testing.T) {
 	c := NewClient("my-mcp-server", "nonexistent_cmd", nil)
-	// Mark as closed so sendRequest returns the "connection closed" error path
+
 	c.mu.Lock()
 	c.closed.Store(true)
 	c.mu.Unlock()
@@ -643,7 +621,6 @@ func TestClientErrorContext_ConnectionClosed(t *testing.T) {
 	}
 }
 
-// TestClientErrorContext_ListToolsOnClosed verifies ListTools includes server name in error.
 func TestClientErrorContext_ListToolsOnClosed(t *testing.T) {
 	c := NewClient("tool-server", "cmd", nil)
 	c.mu.Lock()
@@ -661,7 +638,6 @@ func TestClientErrorContext_ListToolsOnClosed(t *testing.T) {
 	}
 }
 
-// TestClientErrorContext_CallToolOnClosed verifies CallTool includes server name in error.
 func TestClientErrorContext_CallToolOnClosed(t *testing.T) {
 	c := NewClient("call-server", "cmd", nil)
 	c.mu.Lock()
@@ -679,12 +655,11 @@ func TestClientErrorContext_CallToolOnClosed(t *testing.T) {
 	}
 }
 
-// TestClientErrorContext_HTTPConnectionError verifies server name appears in HTTP transport errors.
 func TestClientErrorContext_HTTPConnectionError(t *testing.T) {
 	client := NewClientFromConfig(config.MCPServerConfig{
 		Name: "broken-http",
 		Type: "http",
-		URL:  "http://127.0.0.1:1", // port 1 should refuse connections
+		URL:  "http://127.0.0.1:1",
 	})
 	if err := client.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -701,11 +676,6 @@ func TestClientErrorContext_HTTPConnectionError(t *testing.T) {
 	}
 }
 
-// TestStartSSETransportNormalizedToHTTP verifies #1659 case 2: MCPCapabilities
-// declares SSE:true and types.go documents "sse" as a legal server Type, so
-// Start must accept transport "sse" (normalized onto the HTTP client, which
-// already handles SSE-framed responses) instead of erroring "unsupported
-// transport".
 func TestStartSSETransportNormalizedToHTTP(t *testing.T) {
 	client := NewClientFromConfig(config.MCPServerConfig{
 		Name: "sse-server",
@@ -717,11 +687,10 @@ func TestStartSSETransportNormalizedToHTTP(t *testing.T) {
 	}
 }
 
-// TestClientErrorContext_UnsupportedTransport verifies server name in unsupported transport error.
 func TestClientErrorContext_UnsupportedTransport(t *testing.T) {
 	client := NewClientFromConfig(config.MCPServerConfig{
 		Name: "bad-transport",
-		Type: "grpc", // unsupported
+		Type: "grpc",
 	})
 	err := client.Start(context.Background())
 	if err == nil {
@@ -736,11 +705,10 @@ func TestClientErrorContext_UnsupportedTransport(t *testing.T) {
 	}
 }
 
-// TestClientErrorContext_SendRequestClosed verifies the "connection closed" error includes server name.
 func TestClientErrorContext_SendRequestClosed(t *testing.T) {
 	c := NewClient("closed-srv", "cmd", nil)
 	ctx := context.Background()
-	// Force the closed state
+
 	c.mu.Lock()
 	c.closed.Store(true)
 	c.mu.Unlock()
@@ -755,22 +723,19 @@ func TestClientErrorContext_SendRequestClosed(t *testing.T) {
 	}
 }
 
-// TestClientErrorContext_ReadMessageError verifies read errors include server name.
 func TestClientErrorContext_ReadMessageError(t *testing.T) {
-	// Use a reader that immediately returns an error
+
 	client := &Client{
 		name:   "read-err-srv",
-		reader: bufio.NewReader(bytes.NewReader(nil)), // empty reader will error on Peek
+		reader: bufio.NewReader(bytes.NewReader(nil)),
 	}
 	_, err := client.readMessage(context.Background())
 	if err == nil {
 		t.Fatal("expected error from readMessage with empty reader")
 	}
-	// Error should come from the withStderr wrapper (may not have server name in text
-	// but the readResponse path wraps it with mcp[server])
+
 }
 
-// TestClientErrorContext_ReadResponseError verifies readResponse wraps errors with server name.
 func TestClientErrorContext_ReadResponseError(t *testing.T) {
 	client := &Client{
 		name:   "read-resp-srv",
@@ -786,7 +751,6 @@ func TestClientErrorContext_ReadResponseError(t *testing.T) {
 	}
 }
 
-// TestClientErrorContext_HTTPStatusError verifies server name in HTTP error status responses.
 func TestClientErrorContext_HTTPStatusError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -844,8 +808,7 @@ func TestNotificationHandlerInvoked(t *testing.T) {
 	client := &Client{
 		name:   "notif-test",
 		reader: bufio.NewReader(bytes.NewReader(stream)),
-		// Channels must be initialized when bypassing the constructors (fix #292
-		// moved channel creation from lazy init into NewClient/NewClientFromConfig).
+
 		notificationCh:   make(chan *Notification, notificationChanSize),
 		notificationDone: make(chan struct{}),
 	}
@@ -862,7 +825,7 @@ func TestNotificationHandlerInvoked(t *testing.T) {
 	if string(resp.Result) != `{"ok":true}` {
 		t.Fatalf("unexpected response: %s", string(resp.Result))
 	}
-	// Handlers are dispatched asynchronously (fix #255); poll briefly.
+
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		mu.Lock()
@@ -896,7 +859,7 @@ func TestNoNotificationHandlerStillWorks(t *testing.T) {
 		name:   "silent-test",
 		reader: bufio.NewReader(bytes.NewReader(stream)),
 	}
-	// No handler set — notifications should be silently skipped
+
 	resp, err := client.readResponse(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -979,29 +942,20 @@ func TestHasResourceSubscribe(t *testing.T) {
 	}
 }
 
-// Test #138: verify wsMu exists and processNotification doesn't deadlock
-// when called from within the read loop. We verify the struct field exists
-// and the client can handle a notification handler that calls back.
 func TestClientWSMuFieldExists(t *testing.T) {
 	c := NewClient("test", "ws", nil)
-	// Verify wsMu is accessible (zero-value Mutex is unlocked)
+
 	c.wsMu.Lock()
 	c.wsMu.Unlock()
 }
 
-// Test #138: notification handler can re-enter sendRequest without deadlock.
-// Since fix #255 the handler is dispatched asynchronously, so this test
-// verifies that processNotification returns promptly (while c.mu and even
-// readMu are held by the caller) and that the handler still runs afterwards.
 func TestClientProcessNotificationNoLock(t *testing.T) {
 	c := NewClient("test", "ws", nil)
 	called := make(chan struct{}, 1)
 	c.SetNotificationHandler(func(method string, params json.RawMessage) {
 		called <- struct{}{}
 	})
-	// Simulate a notification arriving during a sendRequest read loop:
-	// both c.mu and readMu are held by the "outer" caller. Dispatch must
-	// not block on either lock.
+
 	c.mu.Lock()
 	c.readMu.Lock()
 	c.processNotification(&Notification{Method: "test/notify"})
@@ -1014,10 +968,8 @@ func TestClientProcessNotificationNoLock(t *testing.T) {
 	}
 }
 
-// Test #156: concurrent stdio readResponse calls must serialize reads on the
-// shared bufio.Reader and correctly route responses to their requesters by ID.
 func TestStdioConcurrentReadsSerialized(t *testing.T) {
-	// Two interleaved responses: the ID=2 response arrives first.
+
 	stream := encodeStdioMessages(
 		t,
 		Response{JSONRPC: "2.0", ID: json.RawMessage(`2`), Result: json.RawMessage(`{"who":"two"}`)},
@@ -1068,7 +1020,6 @@ func TestStdioConcurrentReadsSerialized(t *testing.T) {
 	}
 }
 
-// Test #156: responseIDMatches compares raw JSON IDs against request IDs.
 func TestResponseIDMatches(t *testing.T) {
 	intID := NewIntID(5)
 	strID := NewStringID("abc")
@@ -1092,9 +1043,6 @@ func TestResponseIDMatches(t *testing.T) {
 	}
 }
 
-// TestParseHTTPResponseNDJSON: HTTP MCP servers (or gateways) may return
-// newline-delimited JSON — a Notification line followed by the Response line,
-// without SSE framing. parseHTTPResponse must recover the Response.
 func TestParseHTTPResponseNDJSON(t *testing.T) {
 	body := []byte("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{\"level\":\"info\",\"data\":\"hello\"}}\n" +
 		"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"serverInfo\":{\"name\":\"srv\",\"version\":\"1\"}}}\n")
@@ -1115,8 +1063,6 @@ func TestParseHTTPResponseNDJSON(t *testing.T) {
 	}
 }
 
-// TestParseHTTPResponseNDJSONOnlyNotifications: if every line is a
-// Notification, parsing must fail with the original error, not panic.
 func TestParseHTTPResponseNDJSONOnlyNotifications(t *testing.T) {
 	body := []byte("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n")
 	_, err := parseHTTPResponse(body, "application/json")
@@ -1125,10 +1071,6 @@ func TestParseHTTPResponseNDJSONOnlyNotifications(t *testing.T) {
 	}
 }
 
-// TestParseHTTPResponseGatewayError: API gateway error bodies (e.g. bigmodel
-// auth failures like {"code":1000,"msg":"身份验证失败。"}) parse as Notifications
-// because they lack id/result. The error must surface the original body, not
-// a misleading "got *mcp.Notification".
 func TestParseHTTPResponseGatewayError(t *testing.T) {
 	body := []byte(`{"code":1000,"msg":"身份验证失败。","success":false}`)
 	_, err := parseHTTPResponse(body, "application/json")
@@ -1143,10 +1085,6 @@ func TestParseHTTPResponseGatewayError(t *testing.T) {
 	}
 }
 
-// TestNotifStreamGenerationGuard pins #1810: a takeover bumps the
-// generation and installs its own cancel; an older exit-defer must NOT
-// clear the newer guard. (The full HTTP path needs a live server - this
-// pins the guard mechanics that the race lived in.)
 func TestNotifStreamGenerationGuard(t *testing.T) {
 	c := &Client{name: "test"}
 	c.mu.Lock()
@@ -1156,13 +1094,11 @@ func TestNotifStreamGenerationGuard(t *testing.T) {
 	c.notifStreamCancel = cancelA
 	c.mu.Unlock()
 
-	// A takeover arrives: bumps gen, installs its own cancel.
 	c.mu.Lock()
 	c.notifStreamGen++
 	c.notifStreamCancel = func() {}
 	c.mu.Unlock()
 
-	// The OLD exit defer (holding myGen==3) must not clear the new guard.
 	c.mu.Lock()
 	if c.notifStreamGen == myGen {
 		c.notifStreamCancel = nil
@@ -1173,10 +1109,6 @@ func TestNotifStreamGenerationGuard(t *testing.T) {
 	}
 }
 
-// TestHTTPClientMRTRRoundTrip drives callWithMRTR through a real HTTP
-// transport: tools/call first answers resultType=input_required with a
-// deferred sampling request; the retry must carry inputResponses and echo
-// requestState before the server returns the complete result.
 func TestHTTPClientMRTRRoundTrip(t *testing.T) {
 	var round int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1206,8 +1138,7 @@ func TestHTTPClientMRTRRoundTrip(t *testing.T) {
 				_, _ = w.Write([]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"resultType":"input_required","inputRequests":{"ask1":{"method":"sampling/createMessage","params":{"messages":[{"role":"user","content":{"type":"text","text":"hi"}}]}}},"requestState":"st-42"}}`, req.ID)))
 				return
 			}
-			// Retry round: params must carry the resolved inputResponses
-			// and echo the opaque requestState verbatim.
+
 			var p struct {
 				InputResponses map[string]json.RawMessage `json:"inputResponses"`
 				RequestState   string                     `json:"requestState"`

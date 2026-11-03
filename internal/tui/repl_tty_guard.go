@@ -16,16 +16,12 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// enableBubbleteaTrace points bubbletea v2 at a per-pid log file by setting
-// TEA_TRACE before tea.NewProgram is constructed. Bubbletea reads this env
-// var inside NewProgram and, if set, attaches a logger that records cancel-
-// reader/readLoop activity. Controlled by GGCODE_DEBUG_BUBBLETEA env var.
 func enableBubbleteaTrace() {
-	// If user already set TEA_TRACE, respect it.
+
 	if existing, ok := os.LookupEnv("TEA_TRACE"); ok && existing != "" {
 		return
 	}
-	// Only enable if GGCODE_DEBUG_BUBBLETEA is explicitly set.
+
 	if v := os.Getenv("GGCODE_DEBUG_BUBBLETEA"); v == "" {
 		return
 	}
@@ -38,15 +34,6 @@ func enableBubbleteaTrace() {
 	debug.Log("repl", "TEA_TRACE enabled path=%s", path)
 }
 
-// drainStdinResidual reads and discards any bytes already sitting in the
-// terminal input buffer before bubbletea starts. This prevents synchronized-
-// output mode probe responses (CSI ?2026$p → ESC[?2026;2$y) and stale paste
-// content from leaking back to the parent shell or being misinterpreted as
-// keypresses by the readLoop.
-//
-// Strategy: temporarily mark stdin O_NONBLOCK, read until EAGAIN/EOF, restore
-// the original flags. We deliberately avoid term.MakeRaw here because
-// bubbletea will do that itself a few ms later and we don't want to fight it.
 func drainStdinResidual() {
 	fd := int(os.Stdin.Fd())
 	if !isTTY(fd) {
@@ -78,26 +65,12 @@ func drainStdinResidual() {
 	}
 }
 
-// startTTYWatchdog periodically inspects the controlling terminal's termios
-// state and logs whenever bubbletea's expected raw-mode invariants appear to
-// be broken (e.g. ICANON re-enabled, ECHO turned back on). It runs until ctx
-// is canceled.
-//
-// In addition to detection, when raw-mode loss is observed we proactively
-// re-apply MakeRaw on stdin. This is a defensive measure for terminals
-// (notably some Warp / multiplexer setups on macOS) where bubbletea v2's
-// initial MakeRaw call returns success but the change does not take effect
-// — leaving the kernel TTY in cooked mode while bubbletea renders to the
-// alt-screen, which causes typed bytes and mouse SGR sequences to be
-// echoed by the line discipline directly on top of the alt-screen frame.
 func startTTYWatchdog(ctx context.Context) (stop func()) {
 	fd := int(os.Stdin.Fd())
 	if !isTTY(fd) {
 		return func() {}
 	}
-	// Capture the shell's pre-bubbletea state once, so we can log a clean
-	// baseline diff and so we have something to restore on shutdown if our
-	// own MakeRaw ends up being the last writer.
+
 	preBubbletea, _ := unix.IoctlGetTermios(fd, ioctlGetTermios)
 	if preBubbletea != nil {
 		debug.Log("repl", "tty-watchdog pre-bubbletea lflag=0x%x ICANON=%v ECHO=%v",
@@ -107,11 +80,7 @@ func startTTYWatchdog(ctx context.Context) (stop func()) {
 	done := make(chan struct{})
 	safego.Go("tui.ttyWatchdog", func() {
 		defer close(done)
-		// Tight initial loop: aggressively re-apply raw mode for the first
-		// ~1.5s after bubbletea startup. This is the window in which bubbletea
-		// (or something it calls into) has been observed to silently revert
-		// the kernel TTY to cooked mode, causing typed bytes to be echoed by
-		// the line discipline on top of the alt-screen frame.
+
 		fastTicker := time.NewTicker(20 * time.Millisecond)
 		defer fastTicker.Stop()
 		fastDeadline := time.After(1500 * time.Millisecond)
@@ -140,7 +109,7 @@ func startTTYWatchdog(ctx context.Context) (stop func()) {
 				forceRawMode(fd, cur)
 			}
 		}
-		// Steady-state slow check.
+
 		t := time.NewTicker(250 * time.Millisecond)
 		defer t.Stop()
 		warned := false
@@ -173,17 +142,13 @@ func startTTYWatchdog(ctx context.Context) (stop func()) {
 	})
 	return func() {
 		cancel()
-		// Wait for the watchdog goroutine to exit so it can't re-apply raw
-		// mode after we restore the terminal below.
+
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
 			debug.Log("repl", "tty-watchdog stop: goroutine did not exit within 2s")
 		}
-		// Restore the terminal to pre-bubbletea state. The watchdog may have
-		// re-applied raw mode in its final loop iteration, so we must overwrite
-		// that here. This runs AFTER bubbletea's own Restore() but is the last
-		// writer, guaranteeing the shell gets back a sane terminal.
+
 		if preBubbletea != nil {
 			if err := unix.IoctlSetTermios(fd, ioctlSetTermios, preBubbletea); err != nil {
 				debug.Log("repl", "tty-watchdog restore failed err=%v", err)
@@ -194,10 +159,6 @@ func startTTYWatchdog(ctx context.Context) (stop func()) {
 	}
 }
 
-// forceRawMode applies a cfmakeraw-equivalent transformation to the given fd.
-// This mirrors x/term's MakeRaw but is safe to call repeatedly and never
-// touches state we don't intend to (we operate on the *current* termios so
-// other tweaks bubbletea may have made survive).
 func forceRawMode(fd int, cur *unix.Termios) {
 	cur.Iflag &^= unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP | unix.INLCR | unix.IGNCR | unix.ICRNL | unix.IXON
 	cur.Oflag &^= unix.OPOST

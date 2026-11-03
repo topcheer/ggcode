@@ -5,12 +5,6 @@ import (
 	"testing"
 )
 
-// sa-222 probes: corrective-form preference capture. Users reteach the
-// same lesson every session because "不对，用 pnpm 跑" / "no, use pnpm
-// instead" carry no durable-intent marker (always/never/以后). A
-// corrective marker alone must NOT capture (bug reports are not
-// preferences) - it needs an action-word co-occurrence.
-
 func TestCorrectivePreferenceCaptured(t *testing.T) {
 	for _, in := range []string{
 		"不对，用 pnpm 跑",
@@ -38,8 +32,6 @@ func TestCorrectionWithoutActionNotCaptured(t *testing.T) {
 	}
 }
 
-// Explicit markers keep working unchanged (regression guard for the
-// isPreferenceSentence extension).
 func TestExplicitMarkersStillCapture(t *testing.T) {
 	if got := DistillUserPreferences("from now on always run tests with -p=1"); len(got) != 1 {
 		t.Fatalf("explicit marker capture regressed: %v", got)
@@ -49,8 +41,6 @@ func TestExplicitMarkersStillCapture(t *testing.T) {
 	}
 }
 
-// Mixed message: one corrective preference + one complaint - only the
-// actionable one is captured, and the per-run cap still applies.
 func TestCorrectiveMixedWithComplaint(t *testing.T) {
 	in := "不对，这个结果错了。不对，用 pnpm 跑测试。"
 	got := DistillUserPreferences(in)

@@ -1,14 +1,5 @@
 package session
 
-// #4353 regression: List / LatestForWorkspace / ListForWorkspace must run
-// the empty/stale-index repair (repairIndex full disk scan) OUTSIDE s.mu.
-// The refactor moved the scan into repairIndexOutsideLock (unlock, scan
-// under the index flock, relock, reload); these probes pin the functional
-// invariant that all three paths still self-heal a wiped index and return
-// the on-disk sessions - the repair just must not pin the store lock while
-// doing it (the ~48s real-store scan cost that got runMaintenance
-// de-locked in the first place).
-
 import (
 	"os"
 	"path/filepath"
@@ -30,9 +21,7 @@ func issue4353Store(t *testing.T) (*JSONLStore, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Two on-disk sessions in different workspaces, written through Save
-	// (canonical schema), then the index is wiped below - simulating a
-	// lost/stale index with real session files on disk.
+
 	for _, id := range []string{"a4353", "b4353"} {
 		ws := "/ws/one"
 		if id == "b4353" {
@@ -42,18 +31,16 @@ func issue4353Store(t *testing.T) (*JSONLStore, string) {
 		if err := store.Save(ses); err != nil {
 			t.Fatal(err)
 		}
-		// Repair only re-indexes sessions with user interaction on disk.
+
 		if err := store.AppendMessage(ses, provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hi " + id}}}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// Wipe the index: len(idx)==0 / missing-workspace repair trigger.
+
 	if err := os.WriteFile(filepath.Join(dir, "index.json"), []byte("[]"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Let the store's async maintenance goroutine quiesce BEFORE t.TempDir
-	// removal (cleanup runs LIFO: this fires first, avoiding the
-	// "directory not empty" unlinkat race observed without it).
+
 	t.Cleanup(func() { time.Sleep(300 * time.Millisecond) })
 	return store, dir
 }
@@ -71,9 +58,7 @@ func TestIssue4353ListRepairsOutsideLock(t *testing.T) {
 
 func TestIssue4353WorkspacePathsRepairOutsideLock(t *testing.T) {
 	store, _ := issue4353Store(t)
-	// Sessions land in the cwd workspace (loadSession's fallback when no
-	// explicit workspace record exists) - the repair trigger (wiped index
-	// missing this workspace) and the re-index path are identical.
+
 	ws, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -96,12 +81,6 @@ func TestIssue4353WorkspacePathsRepairOutsideLock(t *testing.T) {
 	}
 }
 
-// TestIssue4353StoreLockFreeDuringRepair is the liveness probe: while a
-// repair-triggering List runs, a Save on the same store must be able to
-// acquire s.mu promptly. With a two-file store the repair is fast, so the
-// assertion is a smoke (no deadlock/lock-leak) rather than a timing
-// proof; the structural guarantee is the unlock/relock pairing inside
-// repairIndexOutsideLock.
 func TestIssue4353StoreLockFreeDuringRepair(t *testing.T) {
 	store, _ := issue4353Store(t)
 
@@ -137,8 +116,6 @@ func seedSessionsFor4353(t *testing.T, store *JSONLStore, n int) {
 	}
 }
 
-// deleteIndexFor4353 removes the on-disk index so the next List call
-// takes the empty-index repair path.
 func deleteIndexFor4353(t *testing.T, store *JSONLStore) {
 	t.Helper()
 	if err := os.Remove(filepath.Join(store.dir, "index.json")); err != nil && !os.IsNotExist(err) {
@@ -146,9 +123,6 @@ func deleteIndexFor4353(t *testing.T, store *JSONLStore) {
 	}
 }
 
-// Functional: with the index deleted, List must rebuild it and still
-// return every on-disk session (de-locking the repair must not change
-// repair semantics).
 func TestIssue4353ListRepairsEmptyIndex(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_test_*")
 	defer os.RemoveAll(dir)
@@ -166,9 +140,6 @@ func TestIssue4353ListRepairsEmptyIndex(t *testing.T) {
 	}
 }
 
-// Functional: ListForWorkspace/LatestForWorkspace rebuild a workspace
-// miss through the de-locked repair and still return the workspace's
-// sessions.
 func TestIssue4353WorkspaceListingsRepairOnMiss(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_test_*")
 	defer os.RemoveAll(dir)
@@ -193,11 +164,6 @@ func TestIssue4353WorkspaceListingsRepairOnMiss(t *testing.T) {
 	}
 }
 
-// Behavioral pin (the actual #4353 symptom): while List is inside its
-// repair scan, a concurrent Save must make progress instead of queueing
-// on s.mu until the scan finishes. A fresh Save drains the pipe quickly
-// only if the lock is free during repair; under the old code the save
-// stalls for the whole repair window.
 func TestIssue4353SaveProgressesDuringListRepair(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_test_*")
 	defer os.RemoveAll(dir)
@@ -209,8 +175,6 @@ func TestIssue4353SaveProgressesDuringListRepair(t *testing.T) {
 	listDone := make(chan error, 1)
 	go func() { _, err := store.List(); listDone <- err }()
 
-	// Give List a moment to enter the repair path, then run a Save of a
-	// brand-new session; it must complete well inside the repair window.
 	time.Sleep(20 * time.Millisecond)
 	saved := make(chan error, 1)
 	go func() {
@@ -236,9 +200,6 @@ func TestIssue4353SaveProgressesDuringListRepair(t *testing.T) {
 	}
 }
 
-// Race stress: List (repair path) hammered concurrently with Save/Lock
-// users; run under -race this pins that the interim unlock/relock
-// introduced no data race on the shared index or store state.
 func TestIssue4353ConcurrentStress(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_test_*")
 	defer os.RemoveAll(dir)

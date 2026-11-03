@@ -14,15 +14,10 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// osStartProcess is indirected for tests so failure paths (PID file
-// cleanup on fork failure, #552-C) can be exercised without a real fork.
 var osStartProcess = os.StartProcess
 
-// testProcessCmdline is a test hook for mocking processCmdline. It shadows
-// the platform-specific implementation when non-nil. Set via tests only.
 var testProcessCmdline func(int) string
 
-// DaemonInfo holds metadata about a running daemon process.
 type DaemonInfo struct {
 	PID        int       `json:"pid"`
 	SessionID  string    `json:"session_id"`
@@ -30,7 +25,6 @@ type DaemonInfo struct {
 	StartedAt  time.Time `json:"started_at"`
 }
 
-// daemonDir returns ~/.ggcode/daemon/, creating it if needed.
 func daemonDir() (string, error) {
 	dir := filepath.Join(config.ConfigDir(), "daemon")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -39,13 +33,11 @@ func daemonDir() (string, error) {
 	return dir, nil
 }
 
-// workDirHash returns a short hex hash for the working directory path.
 func workDirHash(workingDir string) string {
 	h := md5.Sum([]byte(workingDir))
 	return fmt.Sprintf("%x", h)[:12]
 }
 
-// PIDFilePath returns the PID file path for a given working directory.
 func PIDFilePath(workingDir string) (string, error) {
 	dir, err := daemonDir()
 	if err != nil {
@@ -54,7 +46,6 @@ func PIDFilePath(workingDir string) (string, error) {
 	return filepath.Join(dir, workDirHash(workingDir)+".pid"), nil
 }
 
-// LogFilePath returns the log file path for a given working directory.
 func LogFilePath(workingDir string) (string, error) {
 	dir, err := daemonDir()
 	if err != nil {
@@ -63,19 +54,13 @@ func LogFilePath(workingDir string) (string, error) {
 	return filepath.Join(dir, workDirHash(workingDir)+".log"), nil
 }
 
-// WritePIDFile writes a PID file with daemon metadata, acquiring an
-// exclusive flock to prevent concurrent forks from claiming the same slot
-// (#574 Bug D). The lock is held for the lifetime of the file.
 func WritePIDFile(path string, pid int, sessionID, workingDir string) error {
-	// Open via platform helper: on Windows the handle must be opened with
-	// FILE_SHARE_DELETE so cleanup paths can unlink the PID file while the
-	// lock is held (Unix flock semantics allow this; #552-C/#552-E).
+
 	f, err := openPIDFile(path)
 	if err != nil {
 		return err
 	}
 
-	// Non-blocking exclusive lock: returns an error if another process holds it.
 	if err := flockNonBlocking(f); err != nil {
 		f.Close()
 		return fmt.Errorf("daemon slot already locked (concurrent fork): %w", err)
@@ -93,7 +78,6 @@ func WritePIDFile(path string, pid int, sessionID, workingDir string) error {
 		return err
 	}
 
-	// Write at offset 0 and truncate; the file is already locked.
 	if _, err := f.Seek(0, 0); err != nil {
 		f.Close()
 		return err
@@ -107,14 +91,9 @@ func WritePIDFile(path string, pid int, sessionID, workingDir string) error {
 		return err
 	}
 
-	// Keep the file open and locked for the daemon's lifetime. The OS will
-	// release the lock when the process exits (or when we explicitly Close in
-	// cleanup paths). Caller is responsible for closing the file when the
-	// daemon shuts down.
 	return nil
 }
 
-// ReadPIDFile reads daemon info from a PID file.
 func ReadPIDFile(path string) (*DaemonInfo, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -127,8 +106,6 @@ func ReadPIDFile(path string) (*DaemonInfo, error) {
 	return &info, nil
 }
 
-// CheckExistingDaemon checks if a daemon is already running for the given working directory.
-// Returns the PID if a running daemon is found, or 0 if none.
 func CheckExistingDaemon(workingDir string) (int, error) {
 	pidPath, err := PIDFilePath(workingDir)
 	if err != nil {
@@ -142,34 +119,26 @@ func CheckExistingDaemon(workingDir string) (int, error) {
 		var syntaxErr *json.SyntaxError
 		var typeErr *json.UnmarshalTypeError
 		if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) {
-			// #431: a CORRUPT PID file (partial write, disk fault) would linger
-			// forever; remove it so the next fork starts clean.
+
 			_ = os.Remove(pidPath)
 			return 0, nil
 		}
-		// #520: any other read error (EACCES on a root-owned 0600 file, NFS
-		// EIO, ...) is NOT evidence the daemon is gone. Deleting the PID file
-		// here lets the caller fork a second daemon (log interleaving, relay
-		// contention). Propagate the error and let the caller decide.
+
 		debug.Log("daemon", "PID file %s unreadable (transient/permission); NOT removing: %v", pidPath, err)
 		return 0, fmt.Errorf("reading PID file %s: %w", pidPath, err)
 	}
-	// Check if process is still alive
+
 	proc, err := os.FindProcess(info.PID)
 	if err != nil {
 		return 0, nil
 	}
-	// Send signal 0 to check existence
+
 	if err := checkProcessAlive(proc); err != nil {
-		// Process doesn't exist, clean up stale PID file
+
 		_ = os.Remove(pidPath)
 		return 0, nil
 	}
-	// Signal-0 only proves SOME process owns the PID now. After a daemon
-	// crash (SIGKILL/panic/power loss) the PID file survives and the OS may
-	// later hand the PID to an unrelated process — which would then block
-	// daemon startup forever with a false "already running". Verify the
-	// process identity before trusting the PID file (#412).
+
 	if !daemonIdentityMatches(info.PID, workingDir) {
 		debug.Log("daemon", "PID %d alive but not a ggcode daemon (recycled PID); cleaning stale PID file %s", info.PID, pidPath)
 		_ = os.Remove(pidPath)
@@ -178,19 +147,6 @@ func CheckExistingDaemon(workingDir string) (int, error) {
 	return info.PID, nil
 }
 
-// daemonIdentityMatches reports whether the process at pid looks like a
-// ggcode daemon: its command line carries the hidden --__daemonized flag
-// set by ForkIntoBackground (argv[0] is rewritten to "ggcode[dirname]").
-//
-// When the command line cannot be inspected (unsupported platform,
-// permission denied), we fall back to verifying the process is still alive
-// (signal 0). The caller has already read a structurally valid PID file that
-// we ourselves wrote (WritePIDFile in ForkIntoBackground), which — combined
-// with a live process — is strong evidence the daemon is real. There is
-// deliberately NO mtime-based staleness check here (#1196): the PID file is
-// written exactly once at daemon start, so its mtime equals the start time
-// and a 24h threshold would wrongly evict healthy long-running daemons,
-// delete their PID files, and allow double daemons.
 func daemonIdentityMatches(pid int, workingDir string) bool {
 	var cmdline string
 	if testProcessCmdline != nil {
@@ -199,14 +155,11 @@ func daemonIdentityMatches(pid int, workingDir string) bool {
 		cmdline = processCmdline(pid)
 	}
 	if cmdline != "" {
-		// Normal path: cmdline available, verify daemon markers.
+
 		if strings.Contains(cmdline, "--__daemonized") || strings.Contains(cmdline, "ggcode[") {
 			return true
 		}
-		// #431: on Windows processCmdline returns only the executable IMAGE
-		// NAME (e.g. "ggcode.exe") from a toolhelp32 snapshot — no argv flags.
-		// Accept the daemon binary name so the real daemon is not mistaken for
-		// a recycled PID.
+
 		base := strings.ToLower(strings.TrimSpace(cmdline))
 		if strings.HasSuffix(base, ".exe") {
 			base = strings.TrimSuffix(base, ".exe")
@@ -214,36 +167,23 @@ func daemonIdentityMatches(pid int, workingDir string) bool {
 		return base == "ggcode" || strings.HasPrefix(base, "ggcode-")
 	}
 
-	// Cmdline unavailable: fall back to an aliveness check. The PID file the
-	// caller read (keyed to workingDir) plus a live process is the strongest
-	// evidence available in this fallback path; conservatively accept it.
-	// The old 24h-mtime "safety valve" was removed (#1196): it derived the
-	// PID file path from $PWD instead of the caller's workingDir (wrong file)
-	// and punished healthy daemons that had simply been running for over 24h.
-	_ = workingDir // reserved for future per-workspace identity checks
+	_ = workingDir
 	proc, err := os.FindProcess(pid)
 	if err != nil {
-		// PID not found: process doesn't exist.
+
 		debug.Log("daemon", "daemonIdentityMatches: PID %d not found (os.FindProcess error)", pid)
 		return false
 	}
 	if err := checkProcessAlive(proc); err != nil {
-		// Signal 0 failed: process is gone.
+
 		debug.Log("daemon", "daemonIdentityMatches: PID %d signal-0 check failed (process dead)", pid)
 		return false
 	}
 
-	// Process is alive and the PID file we (or a previous run of this code)
-	// wrote for this working directory names it. Accept it as the daemon.
 	debug.Log("daemon", "daemonIdentityMatches: PID %d alive, PID file present; assuming daemon (cmdline unavailable)", pid)
 	return true
 }
 
-// EnsureDaemonSlot verifies that no live daemon already owns the given
-// working directory before a new fork is attempted. It returns a non-nil
-// error when a daemon is already running (pid reported) or when the PID
-// file cannot be read to rule one out (#552-A: the double-start guard
-// existed but was never wired into the fork entry points).
 func EnsureDaemonSlot(workingDir string) error {
 	pid, err := CheckExistingDaemon(workingDir)
 	if err != nil {
@@ -255,18 +195,10 @@ func EnsureDaemonSlot(workingDir string) error {
 	return nil
 }
 
-// backgroundStdin returns an idle stdin for the daemonized child: /dev/null.
-// Inheriting the parent's tty stdin (#552-B) caused two failures:
-// term.MakeRaw on the user's terminal broke echo, and an SSH disconnect
-// delivered EOF on stdin, making the "background" daemon exit.
 func backgroundStdin() (*os.File, error) {
 	return os.OpenFile(os.DevNull, os.O_RDWR, 0)
 }
 
-// ForkIntoBackground re-execs the current binary as a background daemon.
-// The child process argv[0] is set to "ggcode[dirname]".
-// stdout/stderr are redirected to a log file.
-// Returns the child PID; the caller (parent) should os.Exit(0).
 func ForkIntoBackground(cfgFile, workingDir, sessionID string, extraArgs ...string) (int, error) {
 	executable, err := os.Executable()
 	if err != nil {
@@ -276,21 +208,13 @@ func ForkIntoBackground(cfgFile, workingDir, sessionID string, extraArgs ...stri
 	dirname := filepath.Base(workingDir)
 	displayName := "ggcode[" + dirname + "]"
 
-	// Build args: original args + hidden flag + extra args
 	args := make([]string, len(os.Args), len(os.Args)+1+len(extraArgs))
 	copy(args, os.Args)
 	args = append(args, "--__daemonized")
 	args = append(args, extraArgs...)
-	// Set argv[0] to display name
+
 	args[0] = displayName
 
-	// Open log file.
-	// NOTE: Log rotation is not supported by this simple O_APPEND implementation.
-	// If external log rotation is used, the daemon will continue writing to the old
-	// inode (the old file) because the fd is never re-opened after rotation.
-	// To properly support rotation, the daemon would need to track the current
-	// log file inode and reopen on change, or use a signal-based reopen mechanism.
-	// This limitation is documented in issue #574 (Bug E).
 	logPath, err := LogFilePath(workingDir)
 	if err != nil {
 		return 0, fmt.Errorf("resolving log path: %w", err)
@@ -300,15 +224,11 @@ func ForkIntoBackground(cfgFile, workingDir, sessionID string, extraArgs ...stri
 		return 0, fmt.Errorf("opening log file: %w", err)
 	}
 
-	// Write PID file path
 	pidPath, err := PIDFilePath(workingDir)
 	if err != nil {
 		return 0, fmt.Errorf("resolving PID path: %w", err)
 	}
 
-	// #552-B: stdin must be /dev/null, never the parent's tty. The old
-	// comment claimed "will be /dev/null in background" but the code
-	// inherited os.Stdin.
 	stdin, err := backgroundStdin()
 	if err != nil {
 		logFile.Close()
@@ -319,9 +239,9 @@ func ForkIntoBackground(cfgFile, workingDir, sessionID string, extraArgs ...stri
 		Dir: workingDir,
 		Env: os.Environ(),
 		Files: []*os.File{
-			stdin,   // stdin → /dev/null (#552-B)
-			logFile, // stdout → log
-			logFile, // stderr → log
+			stdin,
+			logFile,
+			logFile,
 		},
 		Sys: newBackgroundSysProcAttr(),
 	}
@@ -330,26 +250,19 @@ func ForkIntoBackground(cfgFile, workingDir, sessionID string, extraArgs ...stri
 	stdin.Close()
 	logFile.Close()
 	if err != nil {
-		// #552-C: a failed fork must not leave a stale PID file behind —
-		// remove any pre-existing file so the next start begins clean.
+
 		_ = os.Remove(pidPath)
 		return 0, fmt.Errorf("starting background process: %w", err)
 	}
 
-	// Write PID file
 	if err := WritePIDFile(pidPath, process.Pid, sessionID, workingDir); err != nil {
-		// Non-fatal: the daemon is running but we couldn't record it
+
 		debug.Log("daemon", "could not write PID file: %v", err)
 	}
 
 	return process.Pid, nil
 }
 
-// CleanupDaemon removes the PID file for the given working directory, but
-// ONLY when it is owned by the current process (#552-E). A foreground
-// instance exiting must not delete the PID file of a background daemon
-// started for the same directory — that would make the background daemon
-// invisible to CheckExistingDaemon and allow a double start.
 func CleanupDaemon(workingDir string) {
 	pidPath, err := PIDFilePath(workingDir)
 	if err != nil {
@@ -363,12 +276,11 @@ func CleanupDaemon(workingDir string) {
 		var syntaxErr *json.SyntaxError
 		var typeErr *json.UnmarshalTypeError
 		if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) {
-			// Corrupt file is garbage; safe to remove.
+
 			_ = os.Remove(pidPath)
 			return
 		}
-		// Unreadable for other reasons (#520 semantics): do not delete —
-		// it may belong to a live daemon.
+
 		debug.Log("daemon", "CleanupDaemon: PID file %s unreadable, NOT removing: %v", pidPath, err)
 		return
 	}

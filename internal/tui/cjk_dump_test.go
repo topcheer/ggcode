@@ -7,8 +7,6 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// mkTA builds a composer textarea with the same configuration as NewModel
-// (internal/tui/model.go) and resize.go, for composer rendering tests.
 func mkTA(width int) textarea.Model {
 	ta := textarea.New()
 	ta.Prompt = "❯ "
@@ -25,7 +23,6 @@ func mkTA(width int) textarea.Model {
 	return ta
 }
 
-// stripANSIForTest removes SGR/erase CSI sequences for width assertions.
 func stripANSIForTest(s string) string {
 	var b strings.Builder
 	inEscape := false

@@ -26,7 +26,6 @@ func newTestStreamModel(t *testing.T) *Model {
 	return &Model{config: cfg}
 }
 
-// sp extracts the Model from updateStreamPanel return value.
 func sp(m tea.Model) *Model { return m.(*Model) }
 
 func TestStreamPanelOpenClose(t *testing.T) {
@@ -89,13 +88,11 @@ func TestStreamPanelNavigateWithTargets(t *testing.T) {
 		t.Errorf("initial selectedIndex = %d, want 0", p.selectedIndex)
 	}
 
-	// Move down
 	updated, _ := m.updateStreamPanel(tea.KeyPressMsg{Text: "j"})
 	if sp(updated).streamPanel.selectedIndex != 1 {
 		t.Errorf("after j: selectedIndex = %d, want 1", sp(updated).streamPanel.selectedIndex)
 	}
 
-	// Move up
 	updated, _ = sp(updated).updateStreamPanel(tea.KeyPressMsg{Text: "k"})
 	if sp(updated).streamPanel.selectedIndex != 0 {
 		t.Errorf("after k: selectedIndex = %d, want 0", sp(updated).streamPanel.selectedIndex)
@@ -110,7 +107,6 @@ func TestStreamPanelDeleteTarget(t *testing.T) {
 		t.Fatalf("expected 2 targets initially, got %d", len(m.streamPanel.targets))
 	}
 
-	// Delete first target
 	updated, _ := m.updateStreamPanel(tea.KeyPressMsg{Text: "d"})
 	um := sp(updated)
 	if len(um.streamPanel.targets) != 1 {
@@ -125,7 +121,6 @@ func TestStreamPanelDeleteLastTarget(t *testing.T) {
 	m := newTestStreamModel(t)
 	m.openStreamPanel()
 
-	// Delete twice
 	updated, _ := m.updateStreamPanel(tea.KeyPressMsg{Text: "d"})
 	updated, _ = sp(updated).updateStreamPanel(tea.KeyPressMsg{Text: "d"})
 	if len(sp(updated).streamPanel.targets) != 0 {
@@ -136,10 +131,10 @@ func TestStreamPanelDeleteLastTarget(t *testing.T) {
 func TestStreamPanelDeleteOutOfBound(t *testing.T) {
 	m := newTestStreamModel(t)
 	m.openStreamPanel()
-	// Select beyond targets (preset area)
+
 	m.streamPanel.selectedIndex = 5
 	updated, _ := m.updateStreamPanel(tea.KeyPressMsg{Text: "d"})
-	// Should not crash, targets unchanged
+
 	if len(sp(updated).streamPanel.targets) != 2 {
 		t.Errorf("targets changed unexpectedly: %d", len(sp(updated).streamPanel.targets))
 	}
@@ -149,7 +144,6 @@ func TestStreamPanelEditKey(t *testing.T) {
 	m := newTestStreamModel(t)
 	m.openStreamPanel()
 
-	// Start editing key
 	updated, _ := m.updateStreamPanel(tea.KeyPressMsg{Text: "e"})
 	if sp(updated).streamPanel.editingField != "key" {
 		t.Errorf("editingField = %q, want key", sp(updated).streamPanel.editingField)
@@ -159,9 +153,9 @@ func TestStreamPanelEditKey(t *testing.T) {
 func TestStreamPanelEditNoTarget(t *testing.T) {
 	m := &Model{}
 	m.openStreamPanel()
-	// No targets, editing should not crash
+
 	updated, _ := m.updateStreamPanel(tea.KeyPressMsg{Text: "e"})
-	// editingField should remain empty since no target is selected
+
 	if sp(updated).streamPanel == nil {
 		t.Fatal("panel should still exist")
 	}
@@ -194,7 +188,6 @@ func TestStreamPanelPersistenceOnClose(t *testing.T) {
 	m := &Model{config: cfg}
 	m.openStreamPanel()
 
-	// Verify panel loaded the targets
 	if len(m.streamPanel.targets) != 1 {
 		t.Fatalf("panel targets = %d, want 1", len(m.streamPanel.targets))
 	}
@@ -202,24 +195,18 @@ func TestStreamPanelPersistenceOnClose(t *testing.T) {
 		t.Errorf("panel target key = %q, want 'my-key'", m.streamPanel.targets[0].Key)
 	}
 
-	// Modify key
 	m.streamPanel.targets[0].Key = "new-key-789"
 
-	// Close panel — should persist
 	m.closeStreamPanel()
 
-	// Verify config was updated in memory
 	if cfg.Stream.Targets[0].Key != "new-key-789" {
 		t.Errorf("config key after close = %q, want 'new-key-789'", cfg.Stream.Targets[0].Key)
 	}
 
-	// Verify file was written — closeStreamPanel may fail silently if Validate fails
-	// on an empty config (no vendor). That's OK for this test; the key behavior
-	// (in-memory persistence + save attempt) is what matters.
 	data, err := os.ReadFile(cfg.FilePath)
 	if err != nil {
 		t.Logf("config file not written (expected for minimal test config): %v", err)
-		// Don't fail — Validate may reject a config without vendor
+
 		return
 	}
 	content := string(data)
@@ -243,10 +230,8 @@ func TestStreamPanelPersistenceOnDelete(t *testing.T) {
 	m := &Model{config: cfg}
 	m.openStreamPanel()
 
-	// Delete first target
 	m.updateStreamPanel(tea.KeyPressMsg{Text: "d"})
 
-	// Verify in-memory config updated
 	if len(cfg.Stream.Targets) != 1 {
 		t.Errorf("config targets after delete = %d, want 1", len(cfg.Stream.Targets))
 	}
@@ -254,7 +239,6 @@ func TestStreamPanelPersistenceOnDelete(t *testing.T) {
 		t.Errorf("remaining config target = %q, want twitch", cfg.Stream.Targets[0].Name)
 	}
 
-	// Verify file written (may not exist if Validate rejects minimal config)
 	data, err := os.ReadFile(cfg.FilePath)
 	if err != nil {
 		t.Logf("config file not written (expected for minimal test config): %v", err)
@@ -277,21 +261,16 @@ func TestStreamPanelPersistenceOnEditSave(t *testing.T) {
 	m := &Model{config: cfg}
 	m.openStreamPanel()
 
-	// Start editing key
 	m.updateStreamPanel(tea.KeyPressMsg{Text: "e"})
 
-	// Type new key
 	m.streamPanel.keyInput.SetValue("brand-new-key")
 
-	// Press Enter to save
 	m.updateStreamPanel(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	// Verify config updated
 	if cfg.Stream.Targets[0].Key != "brand-new-key" {
 		t.Errorf("key after edit = %q, want 'brand-new-key'", cfg.Stream.Targets[0].Key)
 	}
 
-	// Verify file written (may not exist if Validate rejects minimal config)
 	data, err := os.ReadFile(cfg.FilePath)
 	if err != nil {
 		t.Logf("config file not written (expected for minimal test config): %v", err)
@@ -303,7 +282,7 @@ func TestStreamPanelPersistenceOnEditSave(t *testing.T) {
 func TestStreamPanelCloseNoConfig(t *testing.T) {
 	m := &Model{}
 	m.openStreamPanel()
-	// Should not panic with nil config
+
 	m.closeStreamPanel()
 	if m.streamPanel != nil {
 		t.Error("panel should be nil")
@@ -332,7 +311,7 @@ func TestStreamPanelOpenLoadsConfig(t *testing.T) {
 func TestStreamPanelHelpKeys(t *testing.T) {
 	m := newTestStreamModel(t)
 	m.openStreamPanel()
-	// Press ? to toggle help — should not crash
+
 	updated, _ := m.updateStreamPanel(tea.KeyPressMsg{Text: "?"})
 	if sp(updated).streamPanel == nil {
 		t.Fatal("panel should still exist after ?")
@@ -348,17 +327,11 @@ func containsSubstring(s, substr string) bool {
 	return false
 }
 
-// TestStreamPanelVisiblePresetMapping pins #1759 case 1: preset rows map
-// through the VISIBLE preset list - with Presets[0] (youtube) already added
-// and hidden, the first visible preset row must be twitch, not the raw
-// Presets[0].
 func TestStreamPanelVisiblePresetMapping(t *testing.T) {
 	m := newTestStreamModel(t)
 	m.openStreamPanel()
 	p := m.streamPanel
-	// targets carry youtube+twitch already? No: model fixture has both as
-	// targets - presets matching either are hidden. Clear targets to test
-	// the mapping with one hidden preset.
+
 	p.targets = []stream.StreamTarget{{Name: "youtube", URL: "u", Key: "k", Enabled: true}}
 	m.streamPanel = p
 
@@ -366,22 +339,17 @@ func TestStreamPanelVisiblePresetMapping(t *testing.T) {
 	if len(vis) == 0 {
 		t.Fatal("with only youtube added, some presets must stay visible")
 	}
-	// The first visible preset must NOT be youtube (raw index 0).
+
 	if vis[0].ID == "youtube" || vis[0].Name == "youtube" {
 		t.Fatalf("hidden preset leaked into visible list head: %+v", vis[0])
 	}
-	// Row index math: row len(targets)+0 must map to vis[0], never raw Presets[0].
+
 	row := len(m.streamPanel.targets) + 0
 	if row < 0 || vis[0].ID != vis[0].ID {
 		t.Fatal("unreachable")
 	}
 }
 
-// TestStreamPanelSyncSelectionUsesVisiblePresets pins #1885 case 1:
-// syncStreamPanelSelection was the fifth consumer #1759 claimed to have
-// converted (its diff had no hunk there) - with presets[0] hidden and the
-// cursor on the first visible preset row, the prefilled URL must be the
-// VISIBLE preset's URL, not raw Presets[0]'s.
 func TestStreamPanelSyncSelectionUsesVisiblePresets(t *testing.T) {
 	m := newTestStreamModel(t)
 	m.openStreamPanel()
@@ -394,7 +362,7 @@ func TestStreamPanelSyncSelectionUsesVisiblePresets(t *testing.T) {
 	if vis[0].ID == stream.Presets[0].ID {
 		t.Fatal("fixture assumption broken: first visible preset must differ from raw Presets[0]")
 	}
-	// Cursor on the first preset row (after the single target row).
+
 	p.selectedIndex = len(p.targets)
 	p.urlInput.SetValue("")
 	m.streamPanel = p

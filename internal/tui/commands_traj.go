@@ -9,27 +9,10 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 )
 
-// handleTrajCommand (r459) exposes the trajectory-learning store to the
-// user: /traj lists what gets injected into the system prompt (with
-// confidence), /traj clear purges it. Before this, injected learnings
-// were invisible and unkillable - a polluted store kept whispering into
-// every run's prompt.
-// trajClearArg reports whether the /traj clear invocation carries the
-// "global" argument. parts is the FULL command split (parts[0] =
-// "/traj"), so the argument lives at parts[2] - the first version of
-// #3278 checked parts[1] ("clear"), an unreachable branch inside
-// case "clear" (终裁打回：接线死分支)。Extracted so the parsing has
-// its own probe.
 func trajClearArgIsGlobal(parts []string) bool {
 	return len(parts) >= 3 && strings.EqualFold(strings.TrimSpace(parts[2]), "global")
 }
 
-// handleExportTrainingCommand (sa-152) is the manual outlet for the
-// trajectory→training-data exporter: it appends the current session's
-// redacted message history as one JSONL sample under .ggcode/. The
-// automatic post-run path (traj_export.go) only fires with
-// GGCODE_TRAINING_EXPORT=1; this command is the explicit, per-invocation
-// consent path for SFT-style corpus collection.
 func (m *Model) handleExportTrainingCommand() tea.Cmd {
 	wd := m.agent.WorkingDir()
 	if wd == "" {
@@ -62,9 +45,7 @@ func (m *Model) handleTrajCommand(parts []string) tea.Cmd {
 	}
 	switch sub {
 	case "clear", "purge":
-		// #3278: /traj clear global purges the user-level global tier
-		// (bare clear only removes the workspace file - global fillers
-		// kept injecting and were previously unkillable without rm).
+
 		if trajClearArgIsGlobal(parts) {
 			if err := agent.TrajClearGlobalLearnings(); err != nil {
 				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("/traj clear global: %v", err))
@@ -78,9 +59,7 @@ func (m *Model) handleTrajCommand(parts []string) tea.Cmd {
 			return nil
 		}
 		m.chatWriteSystem(nextSystemID(), m.t("traj.cleared"))
-		// #3278: say it when the global tier still holds entries - a
-		// silent partial purge left g-marked items whispering into every
-		// future prompt with no visible remedy.
+
 		if n, gErr := agent.TrajGlobalRemaining(); gErr == nil && n > 0 {
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf(m.t("traj.cleared_global_hint"), n))
 		}
@@ -98,11 +77,11 @@ func (m *Model) handleTrajCommand(parts []string) tea.Cmd {
 			suffix := ""
 			switch {
 			case v.Holdout:
-				// r462 control arm: held out of injection, delta vs holdout.
+
 				marker = "h"
 				suffix = fmt.Sprintf(" (Δ%+.0fpp/%d)", v.DeltaPP, v.HoldRuns)
 			case v.Injects && v.General:
-				marker = "g" // #3266(H): global-tier entry that injects
+				marker = "g"
 				injecting++
 			case v.Injects:
 				marker = ">"

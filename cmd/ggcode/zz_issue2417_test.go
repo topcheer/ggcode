@@ -1,14 +1,5 @@
 package main
 
-// #2417: the CLI im config entry points (add RunE, `config set <name>
-// platform`, and the wizard's raw-input branch) used to persist any
-// platform string without validation - a typo like "telegarm" or a cased
-// "Telegram" saved fine, and the runtime startConfiguredAdapter switch
-// then skipped the adapter in its default branch with only a debug-level
-// log: the bot silently never started. Desktop guarded this at save time
-// since #637/#648; these pins hold the ported guard on all three CLI
-// entry points.
-
 import (
 	"os"
 	"strings"
@@ -35,8 +26,7 @@ func TestIssue2417AddEntryValidatesPlatform(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := string(b)
-	// The add RunE must validate + canonicalize between the non-empty
-	// check and the config write.
+
 	block := sliceFunc(t, src, "--platform is required", "loadIMConfig")
 	if !strings.Contains(block, "imValidatePlatform") {
 		t.Fatal("#2417: `im config add` must validate/canonicalize the platform before persisting")
@@ -68,20 +58,19 @@ func TestIssue2417WizardRawInputValidates(t *testing.T) {
 	if !strings.Contains(block, "imValidatePlatform") {
 		t.Fatal("#2417: wizard raw-input branch must validate the platform instead of passing typos through")
 	}
-	// The old comment-based passthrough must be gone.
+
 	if strings.Contains(block, "allow raw input") {
 		t.Fatal("#2417: wizard must not blindly `plt = platformChoice // allow raw input`")
 	}
 }
 
 func TestIssue2417CanonicalizerSemantics(t *testing.T) {
-	// Behavioral half: the helper canonicalizes cased input and rejects
-	// typos, mirroring the desktop #648 normalize + #637 reject contract.
+
 	cases := map[string]string{
 		"qq":       "qq",
 		"Telegram": "telegram",
-		"TELEGARM": "", // typo: rejected
-		"telegarm": "", // typo: rejected
+		"TELEGARM": "",
+		"telegarm": "",
 		"slack":    "slack",
 		"SlAcK":    "slack",
 		"nope":     "",

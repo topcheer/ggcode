@@ -1,21 +1,5 @@
 package mcp
 
-// sa-68: MCP 2026-07-28 stateless protocol core (SEP-2575) client tests.
-//
-// Coverage matrix:
-//   - selectModernVersion / asUnsupportedProtocolVersion unit paths
-//   - Discover: modern envelope attached, payload decoded (spec example)
-//   - Initialize + stateless opt-in on a modern server: discover probe
-//     replaces the initialize handshake, per-request _meta envelope flows
-//     on every subsequent request, negotiated state + server identity are
-//     populated for the existing capability gates and ServerInfo()
-//   - Initialize + stateless opt-in on a legacy server: any probe failure
-//     that is not a recognized modern error falls back to the unchanged
-//     legacy handshake, and legacy requests stay envelope-free
-//   - -32022 UnsupportedProtocolVersionError: typed surfacing, "supported"
-//     list parsing, and the no-futile-retry gate (same version rejected →
-//     no second attempt)
-
 import (
 	"bufio"
 	"bytes"
@@ -32,22 +16,18 @@ import (
 	"time"
 )
 
-// scriptedRequest records one request observed by the fake server.
 type scriptedRequest struct {
 	ID     int64           `json:"id"`
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params"`
 }
 
-// scriptError shapes a JSON-RPC error response.
 type scriptError struct {
 	code int
 	msg  string
 	data any
 }
 
-// scriptedServer is a stdio fake server whose responses are decided by a
-// handler per method; every request is recorded for assertions.
 type scriptedServer struct {
 	t *testing.T
 
@@ -91,7 +71,6 @@ func (s *scriptedServer) paramsOf(method string, call int) json.RawMessage {
 	return nil
 }
 
-// start wires a Client to the scripted server over os.Pipes.
 func (s *scriptedServer) start() (*Client, func()) {
 	s.t.Helper()
 	reqRead, reqWrite, err := os.Pipe()
@@ -120,7 +99,7 @@ func (s *scriptedServer) start() (*Client, func()) {
 			}
 			var req scriptedRequest
 			if err := json.Unmarshal(line, &req); err != nil || req.ID == 0 {
-				continue // malformed or a notification (no id)
+				continue
 			}
 			s.record(req)
 			if strings.HasPrefix(req.Method, "notifications/") {
@@ -156,8 +135,6 @@ func (s *scriptedServer) start() (*Client, func()) {
 	return client, cleanup
 }
 
-// modernDiscoverResult mirrors the server/discover example from the
-// 2026-07-28 spec (server/discover section).
 func modernDiscoverResult() map[string]any {
 	return map[string]any{
 		"resultType":        "complete",
@@ -223,7 +200,7 @@ func TestInjectMetaPreservesCallerMeta(t *testing.T) {
 	if params.Meta[MetaKeyProtocolVersion] != ProtocolVersion20260728 {
 		t.Errorf("envelope member missing: %v", params.Meta)
 	}
-	// Non-object params pass through untouched.
+
 	if got := injectMeta([]byte(`null`), map[string]any{"k": "v"}); string(got) != "null" {
 		t.Errorf("non-object params mutated: %s", got)
 	}
@@ -263,8 +240,7 @@ func TestDiscoverModernServer(t *testing.T) {
 	if res.TTLms != 30000 {
 		t.Errorf("TTLms = %d", res.TTLms)
 	}
-	// Discover itself carries the modern envelope even outside stateless
-	// operation (it is a modern method; the spec example shows _meta on it).
+
 	var params struct {
 		Meta map[string]any `json:"_meta"`
 	}
@@ -304,7 +280,7 @@ func TestInitializeStatelessModernServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize (stateless): %v", err)
 	}
-	// The handshake was never sent: the discover probe replaced it.
+
 	if n := srv.callsOf("initialize"); n != 0 {
 		t.Errorf("initialize sent %d times on a modern server, want 0", n)
 	}
@@ -321,7 +297,6 @@ func TestInitializeStatelessModernServer(t *testing.T) {
 		t.Errorf("ServerInfo = %+v", si)
 	}
 
-	// Subsequent requests carry the per-request _meta envelope.
 	tools, err := client.ListTools(ctx)
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
@@ -348,7 +323,7 @@ func TestInitializeStatelessLegacyFallback(t *testing.T) {
 	srv := &scriptedServer{t: t, handler: func(method string, _ json.RawMessage) (any, *scriptError) {
 		switch method {
 		case "server/discover":
-			// Legacy server: does not know the modern method.
+
 			return nil, &scriptError{code: ErrorCodeMethodNotFound, msg: "method not found"}
 		case "initialize":
 			return map[string]any{
@@ -386,7 +361,6 @@ func TestInitializeStatelessLegacyFallback(t *testing.T) {
 		t.Errorf("ServerInfo = %+v", si)
 	}
 
-	// Legacy traffic must stay byte-compatible: no _meta envelope.
 	if _, err := client.ListTools(ctx); err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
@@ -406,8 +380,7 @@ func TestUnsupportedVersionSurfacesTypedError(t *testing.T) {
 		wantRetries int
 	}{
 		{
-			// Server rejects the version we sent but lists it as supported:
-			// retrying with the same version is futile (no mutual *change*).
+
 			name:        "same version rejected",
 			supported:   []string{"2026-07-28"},
 			wantRetries: 1,
@@ -472,9 +445,6 @@ func TestUnsupportedVersionSurfacesTypedError(t *testing.T) {
 	}
 }
 
-// TestNewClientFromConfigStatelessWiring closes the last uncovered link:
-// the YAML "stateless: true" field must reach Client.EnableStateless, and
-// the default must stay legacy.
 func TestNewClientFromConfigStatelessWiring(t *testing.T) {
 	modern := NewClientFromConfig(config.MCPServerConfig{Name: "modern", Command: "srv", Stateless: true})
 	if !modern.StatelessEnabled() {
@@ -486,11 +456,6 @@ func TestNewClientFromConfigStatelessWiring(t *testing.T) {
 	}
 }
 
-// TestInitializeStatelessDiscover32022 pins #2557: a -32022 on the
-// server/discover PROBE identifies a modern server - the dual-era contract
-// forbids falling back to the legacy handshake. Without a mutually
-// supported version the typed error surfaces; with one, the probe retries
-// on the new version instead of downgrading.
 func TestInitializeStatelessDiscover32022(t *testing.T) {
 	t.Run("no mutual version surfaces typed error", func(t *testing.T) {
 		srv := &scriptedServer{t: t, handler: func(method string, _ json.RawMessage) (any, *scriptError) {
@@ -514,18 +479,14 @@ func TestInitializeStatelessDiscover32022(t *testing.T) {
 		if uerr.Requested != "2026-07-28" || len(uerr.Supported) != 1 || uerr.Supported[0] != "2099-01-01" {
 			t.Errorf("typed error payload = %+v", uerr)
 		}
-		// The core #2557 assertion: a modern server NEVER falls back to
-		// the legacy handshake.
+
 		if n := srv.callsOf("initialize"); n != 0 {
 			t.Fatalf("legacy initialize sent %d times, want 0 (modern server must not fall back)", n)
 		}
 	})
 
 	t.Run("mutual version retries discover not legacy", func(t *testing.T) {
-		// The retry path needs a server-supported version the client also
-		// knows; today the client speaks only 2026-07-28, so widen the
-		// list for this test (the multi-version future activates this
-		// branch natively).
+
 		orig := modernMCPProtocolVersions
 		modernMCPProtocolVersions = []string{"2026-10-01", ProtocolVersion20260728}
 		defer func() { modernMCPProtocolVersions = orig }()
@@ -536,11 +497,11 @@ func TestInitializeStatelessDiscover32022(t *testing.T) {
 			case "server/discover":
 				probes++
 				if probes == 1 {
-					// First probe: server only supports a newer version.
+
 					return nil, &scriptError{code: ErrorCodeUnsupportedProtocolVersion, msg: "unsupported",
 						data: map[string]any{"requested": "2026-07-28", "supported": []string{"2026-10-01"}}}
 				}
-				// Retry with the mutually supported version succeeds.
+
 				return map[string]any{
 					"supportedVersions": []string{"2026-10-01"},
 					"serverInfo":        map[string]any{"name": "modern", "version": "2.0"},

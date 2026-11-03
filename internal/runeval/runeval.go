@@ -1,22 +1,3 @@
-// Package runeval implements offline, deterministic trajectory evaluation for
-// a completed (or in-progress) agent run.
-//
-// Frontier agent-evaluation practice (Langfuse "AI agent evaluation", 2025-26)
-// scores agents on the trajectory - the path of steps - in addition to the
-// final outcome, because tool-use failures and redundant calls are often
-// invisible in the final answer: the agent recovers, but the retry burned
-// tokens the user pays for. Trajectory-level signals include step count,
-// unnecessary (duplicate) tool calls, loops/retries, and tool error rate.
-// Deterministic code checks cover exactly these signals at zero judge cost.
-//
-// ggcode already had runtime metacognition (trajectory_health detectors that
-// steer the live loop) and post-run qualitative reflection (run-insights
-// memory). What was missing is the quantitative offline scorecard: given the
-// session's full message log, quantify duplicate calls, failed calls, and the
-// context tax they impose, then emit a transparent efficiency score plus
-// actionable findings. runeval is that scorecard - pure analysis, no LLM
-// calls, no runtime steering (it is not a detector; the user invokes it via
-// the /runreport slash command).
 package runeval
 
 import (
@@ -29,140 +10,81 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// UsageSample is a provider-agnostic per-LLM-call usage record. The TUI maps
-// session.UsageEntry entries onto this so runeval does not depend on the
-// session package (and stays trivially unit-testable).
 type UsageSample struct {
-	Source string // "agent", "compaction", "strategist", "verify", "subagent", ...
+	Source string
 	Usage  provider.TokenUsage
 }
 
-// DuplicateGroup describes a tool+input key that was invoked more than once
-// within the evaluated window.
 type DuplicateGroup struct {
-	Tool      string // tool name
-	Input     string // canonical input JSON, display-truncated
-	Count     int    // total identical invocations
-	Repeats   int    // Count-1 redundant invocations
-	Identical bool   // every observed result was byte-identical
-	ReadOnly  bool   // tool classified as read-only
+	Tool      string
+	Input     string
+	Count     int
+	Repeats   int
+	Identical bool
+	ReadOnly  bool
 }
 
-// Report is the trajectory evaluation output.
 type Report struct {
-	// TurnCount counts assistant messages carrying at least one tool call —
-	// the agent-loop steps the trajectory consumed.
 	TurnCount int
 
-	// ToolCalls / ToolErrors count tool_use blocks and IsError results.
 	ToolCalls  int
 	ToolErrors int
 
-	// DistinctTools counts unique tool names invoked.
 	DistinctTools int
 
-	// DuplicateGroups lists keys invoked more than once, worst first.
 	DuplicateGroups []DuplicateGroup
 
-	// WastedRepeatCalls counts redundant invocations whose result added no
-	// new information: failed (IsError) results and byte-identical results
-	// on read-only tools.
 	WastedRepeatCalls int
 
-	// WastedResultBytes sums the output bytes of those no-information
-	// results - text that gets re-ingested into every subsequent request's
-	// context without changing what the model knows.
 	WastedResultBytes int
 
-	// WastedTokenEstimate approximates the context tax at ~4 bytes/token.
 	WastedTokenEstimate int
 
-	// OverheadTokens / TotalTokens split usage by Source. Overhead is any
-	// non-"agent" source (compaction, strategist, verify, ...).
 	OverheadTokens int
 	TotalTokens    int
 
-	// Interaction-quality dimensions (human-centered coding agents,
-	// arXiv:2608.12355): the report surfaces not just what the agent did but
-	// how the human had to engage with it.
-
-	// SteeringEvents counts mid-run user text messages - user input that
-	// arrived after the agent's first reply, i.e. course corrections rather
-	// than the initial task. Tool-result user messages are not steering.
 	SteeringEvents int
 
-	// AskUserCalls counts ask_user invocations - the agent deferring a
-	// decision back to the human instead of guessing.
 	AskUserCalls int
 
-	// CorrectionSignals counts mid-run user messages matching a conservative
-	// correction lexicon ("不对", "错了", "revert", ...): explicit negative
-	// feedback on work already done.
 	CorrectionSignals int
 
-	// Coordination is the cross-agent section (multi-agent coordination
-	// quality, per sa-76's NEW_GAP adjudication of MDPI Future Internet
-	// 18(6):326). Nil for single-agent sessions - the section is hidden.
 	Coordination *CoordinationQualityReport
 
-	// EfficiencyScore is 100 minus transparent penalties (see Evaluate).
-	// 0-100; 100 = clean trajectory.
 	EfficiencyScore int
 
-	// Findings are human-readable, worst-first improvement hints.
 	Findings []string
 }
 
-// callRecord tracks one distinct (tool, canonical-input) key across its
-// invocations and paired results.
 type callRecord struct {
 	tool      string
 	canonical string
 	count     int
-	hashes    map[string]bool // truncated result contents observed
+	hashes    map[string]bool
 	readOnly  bool
 }
 
 func (c *callRecord) identical() bool { return len(c.hashes) == 1 }
 
-// callKey identifies a call record.
 type callKey struct {
 	tool  string
 	input string
 }
 
 const (
-	// bytesPerToken is the classical ~4-chars-per-token approximation used
-	// for the context-tax estimate. Deliberately coarse; the report states
-	// it is an estimate.
 	bytesPerToken = 4
 
-	// displayInputCap truncates the canonical input shown in findings.
 	displayInputCap = 96
 
-	// resultHashCap bounds the per-result identity hash to keep comparison
-	// cost linear and small.
 	resultHashCap = 256
 
-	// minToolsForOverheadPenalty guards the overhead-share penalty against
-	// small-sample noise (a 2-call session has no meaningful overhead).
 	minToolsForOverheadPenalty = 5
 
-	// steeringFindingsThreshold is the mid-run steer count at which the
-	// interaction-quality finding fires (r432): one or two nudges are normal
-	// collaboration, three or more suggests task-alignment drift worth
-	// surfacing (arXiv:2608.12355's steerability dimension).
 	steeringFindingsThreshold = 3
 
-	// correctionFindingsThreshold is the explicit-correction count that fires
-	// the finding even when total steering stays below the threshold above.
 	correctionFindingsThreshold = 2
 )
 
-// readOnlyTools is the conservative whitelist of tools whose repeated
-// identical results carry zero new information. Unknown tools are treated as
-// potentially stateful: their repeats are reported as duplicate groups but
-// never auto-counted as wasted calls.
 var readOnlyTools = map[string]bool{
 	"read_file":       true,
 	"multi_file_read": true,
@@ -195,17 +117,13 @@ var readOnlyTools = map[string]bool{
 	"display_info":    true,
 }
 
-// Evaluate walks the full message log and produces a Report. It is pure:
-// same input, same output, no side effects, no LLM calls.
 func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 	var r Report
 
-	byID := map[string]*callKey{}        // tool_use ID -> its record key
-	records := map[callKey]*callRecord{} // distinct call keys
-	var keyOrder []callKey               // first-appearance order
+	byID := map[string]*callKey{}
+	records := map[callKey]*callRecord{}
+	var keyOrder []callKey
 
-	// resultObs is one ordered tool_result observation; wasted bytes are
-	// decided against record state learned during the same walk.
 	type resultObs struct {
 		key     callKey
 		isError bool
@@ -238,7 +156,7 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 			case "tool_result":
 				key := byID[b.ToolID]
 				if key == nil {
-					continue // unpaired result (e.g. truncated log) - skip
+					continue
 				}
 				rec := records[*key]
 				if rec == nil {
@@ -257,9 +175,6 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 		}
 	}
 
-	// Interaction-quality walk (r432, arXiv:2608.12355): mid-run user text
-	// = steering; ask_user deferrals; explicit correction lexicon hits.
-	// Runs before the loops below mutate nothing; pure counts, no LLM.
 	seenAssistant := false
 	for i := range msgs {
 		switch msgs[i].Role {
@@ -272,7 +187,7 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 			}
 		case "user":
 			if !seenAssistant {
-				continue // initial prompt(s), not steering
+				continue
 			}
 			hasText := false
 			for _, b := range msgs[i].Content {
@@ -290,14 +205,12 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 		}
 	}
 
-	// Distinct tools.
 	seenTools := map[string]bool{}
 	for _, k := range keyOrder {
 		seenTools[records[k].tool] = true
 	}
 	r.DistinctTools = len(seenTools)
 
-	// Turn count: assistant messages that issued at least one tool call.
 	for i := range msgs {
 		if msgs[i].Role != "assistant" {
 			continue
@@ -310,11 +223,6 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 		}
 	}
 
-	// A call key's LAST result is the informative one: the final state the
-	// agent actually learned from. Every earlier result of the same key is a
-	// superseded attempt - wasted when it failed (no usable information) or
-	// when it is an identical read-only repeat (duplicate of what the last
-	// call returns anyway).
 	lastIdx := map[callKey]int{}
 	for i, res := range results {
 		lastIdx[res.key] = i
@@ -353,7 +261,6 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 
 	r.WastedTokenEstimate = r.WastedResultBytes / bytesPerToken
 
-	// Usage split.
 	for _, s := range usage {
 		t := s.Usage.Total()
 		r.TotalTokens += t
@@ -367,15 +274,6 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 	return r
 }
 
-// score is the transparent composite: 100 minus
-//   - 40 × tool error rate,
-//   - 30 × wasted-repeat rate,
-//   - 20 × overhead share (only when the trajectory is big enough for the
-//     ratio to be meaningful),
-//
-// clamped to [0,100]. Weights reflect that a failed call both burns output
-// tokens and forces a retry turn (most damaging), duplicate reads are pure
-// context tax, and overhead machinery is by design.
 func score(r Report) int {
 	s := 100.0
 	if r.ToolCalls > 0 {
@@ -394,7 +292,6 @@ func score(r Report) int {
 	return int(s + 0.5)
 }
 
-// findings renders worst-first, quantified improvement hints.
 func findings(r Report) []string {
 	var f []string
 
@@ -440,9 +337,6 @@ func findings(r Report) []string {
 			comma(r.WastedTokenEstimate), comma(r.WastedResultBytes)))
 	}
 
-	// Interaction-quality findings (r432, arXiv:2608.12355): surface how the
-	// human had to engage, not just what the agent did. Thresholds are
-	// conservative to keep one-off nudges out of the findings list.
 	if r.SteeringEvents >= steeringFindingsThreshold {
 		f = append(f, fmt.Sprintf(
 			"%d mid-run user steer%s after work started (incl. %d explicit correction%s) - frequent takeover may signal task-alignment drift; front-load ambiguity resolution instead",
@@ -456,7 +350,6 @@ func findings(r Report) []string {
 	return f
 }
 
-// plural returns "" for 1 and "s" otherwise, for finding text.
 func plural(n int) string {
 	if n == 1 {
 		return ""
@@ -464,7 +357,6 @@ func plural(n int) string {
 	return "s"
 }
 
-// Render formats the report as a compact scorecard for chat display.
 func Render(r Report) string {
 	var b strings.Builder
 	grade := "good"
@@ -492,8 +384,7 @@ func Render(r Report) string {
 	} else {
 		b.WriteString("  Duplicate groups: none\n")
 	}
-	// Cross-agent coordination section: only rendered for sessions with
-	// swarm/subagent activity (Coordination is nil otherwise).
+
 	if r.Coordination != nil {
 		renderCoordination(&b, r.Coordination)
 	}
@@ -506,18 +397,12 @@ func Render(r Report) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// correctionLexicon is the conservative bilingual marker set for explicit
-// negative feedback on work already done. Deliberately small: false
-// positives (ordinary requests containing "revert" in a neutral sense)
-// are costlier than misses, because the finding text accuses the run.
 var correctionLexicon = []string{
 	"不对", "错了", "不是这", "取消", "撤销", "回滚", "别用", "重来",
 	"wrong", "not what i", "not what I", "instead of that", "cancel that",
 	"undo that", "undo it", "revert that", "don't use", "do not use",
 }
 
-// isCorrectionSignal reports whether a mid-run user text matches the
-// correction lexicon (case-insensitive for the ASCII markers).
 func isCorrectionSignal(text string) bool {
 	lower := strings.ToLower(text)
 	for _, m := range correctionLexicon {
@@ -528,18 +413,6 @@ func isCorrectionSignal(text string) bool {
 	return false
 }
 
-// canonicalJSON normalizes raw input JSON so semantically identical inputs
-// (key order/whitespace differences) hash to the same key. Non-JSON inputs
-// degrade to the raw string.
-//
-// #4341: numbers decode via UseNumber (json.Number lexemes) instead of the
-// default float64 path. float64 loses precision above 2^53, so distinct
-// large integers (9007199254740992 vs ...93) collapsed into the same
-// canonical string, fusing distinct tool calls into one callRecord and
-// fabricating DuplicateGroup / WastedRepeatCalls. Exact lexemes keep distinct
-// inputs distinct; the cost is that differently-written equal numbers (1 vs
-// 1.0) no longer dedupe - a false-split, never a false-merge, which is the
-// fail-safe direction for a dedup key.
 func canonicalJSON(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return "{}"
@@ -550,8 +423,7 @@ func canonicalJSON(raw json.RawMessage) string {
 	if err := dec.Decode(&v); err != nil {
 		return string(raw)
 	}
-	// encoding/json marshals map[string]any with sorted keys, giving a
-	// stable canonical form without extra dependencies.
+
 	out, err := json.Marshal(v)
 	if err != nil {
 		return string(raw)
@@ -559,7 +431,6 @@ func canonicalJSON(raw json.RawMessage) string {
 	return string(out)
 }
 
-// truncateHash bounds result identity comparison to a prefix.
 func truncateHash(s string) string {
 	if len(s) > resultHashCap {
 		return s[:resultHashCap]
@@ -567,7 +438,6 @@ func truncateHash(s string) string {
 	return s
 }
 
-// truncateDisplay bounds canonical input shown in findings.
 func truncateDisplay(s string) string {
 	if s == "" {
 		return "∅"

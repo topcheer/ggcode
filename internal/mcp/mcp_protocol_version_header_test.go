@@ -12,16 +12,9 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// MCP spec 2025-06-18 (PR #548) requires every HTTP request after initialize
-// to carry the negotiated protocol version in the MCP-Protocol-Version header.
-// These tests pin that contract on both HTTP surfaces: the JSON-RPC POST path
-// and the standalone GET SSE notification stream.
-
-// captureHeaders records the MCP-Protocol-Version header seen per JSON-RPC
-// method (and on GET requests) so tests can assert spec compliance.
 type captureHeaders struct {
 	mu     sync.Mutex
-	byName map[string]string // method (or "GET") -> header value
+	byName map[string]string
 }
 
 func (c *captureHeaders) record(name, val string) {
@@ -37,17 +30,12 @@ func (c *captureHeaders) get(name string) (string, bool) {
 	return v, ok
 }
 
-// newVersionHeaderTestServer starts a mock MCP HTTP server that answers
-// initialize (negotiating the given version), notifications/initialized,
-// and tools/list, while capturing the MCP-Protocol-Version header of every
-// request. GET requests open a short-lived SSE stream.
 func newVersionHeaderTestServer(t *testing.T, negotiatedVersion string, cap *captureHeaders) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			// OAuth well-known probes hit the same mux; only the bare root
-			// path is the MCP standalone SSE stream.
+
 			if r.URL.Path != "/" {
 				http.NotFound(w, r)
 				return
@@ -87,9 +75,6 @@ func newVersionHeaderTestServer(t *testing.T, negotiatedVersion string, cap *cap
 	return httptest.NewServer(mux)
 }
 
-// The initialize request itself must NOT carry the header (there is no
-// negotiated version yet); every subsequent POST must carry exactly the
-// negotiated version.
 func TestProtocolVersionHeaderAfterInitialize(t *testing.T) {
 	cap := &captureHeaders{byName: map[string]string{}}
 	server := newVersionHeaderTestServer(t, latestMCPProtocolVersion, cap)
@@ -101,8 +86,6 @@ func TestProtocolVersionHeaderAfterInitialize(t *testing.T) {
 	}
 	defer client.Close()
 
-	// NOTE: no explicit ctx timeout - sandbox HTTP can take seconds/request;
-	// the harness timeout bounds the test.
 	if _, err := client.Initialize(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -125,8 +108,6 @@ func TestProtocolVersionHeaderAfterInitialize(t *testing.T) {
 	}
 }
 
-// When the server negotiates an older supported version, subsequent requests
-// must carry THAT version, not the client's latest.
 func TestProtocolVersionHeaderNegotiatedDown(t *testing.T) {
 	const old = "2025-03-26"
 	cap := &captureHeaders{byName: map[string]string{}}
@@ -156,8 +137,6 @@ func TestProtocolVersionHeaderNegotiatedDown(t *testing.T) {
 	}
 }
 
-// The standalone GET SSE stream is a "subsequent request" too and must carry
-// the negotiated version header.
 func TestProtocolVersionHeaderOnSSEGetStream(t *testing.T) {
 	cap := &captureHeaders{byName: map[string]string{}}
 	server := newVersionHeaderTestServer(t, latestMCPProtocolVersion, cap)

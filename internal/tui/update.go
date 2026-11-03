@@ -83,10 +83,7 @@ func (m Model) shouldShowUpdateSection() bool {
 	if strings.TrimSpace(version.Display()) == "" {
 		return false
 	}
-	// #917: returning only HasUpdate made the 'up to date' else-branch in
-	// renderUpdateSection unreachable dead code - the section's structure
-	// shows update status (both states), so show whenever version info is
-	// available.
+
 	return true
 }
 
@@ -118,24 +115,19 @@ func (m *Model) handlePreparedUpdate(msg updatePrepareResultMsg) (tea.Model, tea
 		m.chatWriteSystem(nextSystemID(), m.t("update.failed", msg.Err))
 		return m, nil
 	}
-	// Use the unified restart helper. The helper will:
-	// 1. Wait for this process to exit
-	// 2. Replace the binary with the staged version
-	// 3. Reset the terminal
-	// 4. Launch the new ggcode
-	// This avoids all orphaned-process-group and terminal-control issues.
+
 	m.chatWriteSystem(nextSystemID(), m.t("update.restarting"))
 	m.updatePrepared = &msg.Prepared
 	m.restartRequested = true
-	// Detect other installations and warn if they might shadow this one.
+
 	if others := update.FindOtherInstalls(m.updateSvc.ExecPath); len(others) > 0 {
 		m.chatWriteSystem(nextSystemID(), m.t("update.other_installs", update.FormatOtherInstalls(others)))
 	}
-	// Windows: warn if both perUser and perMachine installations exist.
+
 	if dual := update.DetectDualScopeWindows(); dual != nil {
 		m.chatWriteSystem(nextSystemID(), m.t("update.dual_scope", dual.UserPath, dual.MachinePath))
 	}
-	// Show package manager hint before quitting.
+
 	if pm := update.PackageManagerHint(m.updateSvc.ExecPath); pm != "" {
 		m.chatWriteSystem(nextSystemID(), m.t("update.pm_hint."+pm))
 	}

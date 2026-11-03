@@ -16,10 +16,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// TestLivePromptEmitsSingleFinalIMText verifies that a live bubbletea program
-// emits a single merged IM text event for the assistant reply after a user
-// submits a prompt. This is an integration test because it runs a real
-// bubbletea event loop with goroutine scheduling and timing dependencies.
 func TestLivePromptEmitsSingleFinalIMText(t *testing.T) {
 	imMgr := im.NewManager()
 	store := im.NewMemoryBindingStore()
@@ -48,7 +44,7 @@ func TestLivePromptEmitsSingleFinalIMText(t *testing.T) {
 	m.startedAt = time.Now().Add(-2 * time.Second)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
-	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
+	imMgr.RegisterSink(sink)
 	m.input.SetValue("ping")
 
 	h := startLiveProgramHarness(t, m)
@@ -89,12 +85,9 @@ func TestLivePromptEmitsSingleFinalIMText(t *testing.T) {
 	}
 }
 
-// TestLiveProgramHarnessProcessesKeyEventsAndPersistsMode verifies that a live
-// bubbletea program correctly processes keyboard input and mode switching.
-// Integration test: depends on real event loop scheduling.
 func TestLiveProgramHarnessProcessesKeyEventsAndPersistsMode(t *testing.T) {
 	m := newTestModel()
-	// Mode is now persisted to session metadata, not config file.
+
 	ses := session.NewSession("", "", "")
 	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "init"}}}}
 	m.session = ses
@@ -119,9 +112,6 @@ func TestLiveProgramHarnessProcessesKeyEventsAndPersistsMode(t *testing.T) {
 	}
 }
 
-// TestLiveProgramHarnessExecutesAsyncClipboardPasteCommand verifies clipboard
-// paste via ctrl+v in a live program. Integration test: depends on async
-// command execution and goroutine scheduling.
 func TestLiveProgramHarnessExecutesAsyncClipboardPasteCommand(t *testing.T) {
 	m := newTestModel()
 	m.clipboardLoader = func() (imageAttachedMsg, error) {

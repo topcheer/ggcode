@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// ── helpers ──────────────────────────────────────────────────────────────
-
 func skipIfNoBinary(t *testing.T, name string) {
 	t.Helper()
 	if _, err := exec.LookPath(name); err != nil {
@@ -31,8 +29,6 @@ func cleanupSessions(t *testing.T, workspace string) {
 	}
 	globalSessions.mu.Unlock()
 }
-
-// ── Go / gopls ───────────────────────────────────────────────────────────
 
 func createGoWorkspace(t *testing.T) (workspace, goFile string) {
 	t.Helper()
@@ -131,7 +127,6 @@ func TestLSP_Go_DocumentHighlights(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Position on "Name" field usage in Greet() — line 9, char ~40
 	highlights, err := DocumentHighlights(ctx, ws, f, Position{Line: 9, Character: 40})
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +134,7 @@ func TestLSP_Go_DocumentHighlights(t *testing.T) {
 	if len(highlights) == 0 {
 		t.Error("expected document highlights for Name field")
 	}
-	// Verify that at least one highlight has a valid kind
+
 	for _, hl := range highlights {
 		if hl.Kind < 1 || hl.Kind > 3 {
 			t.Errorf("unexpected highlight kind: %d", hl.Kind)
@@ -185,7 +180,7 @@ func TestLSP_Go_Diagnostics_Errors(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ws, "go.mod"), []byte("module testlsp\n\ngo 1.22\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	// File with a deliberate type error
+
 	code := `package testlsp
 
 func broken() int {
@@ -198,7 +193,7 @@ func broken() int {
 	}
 	cmd := exec.Command("go", "mod", "tidy")
 	cmd.Dir = ws
-	_ = cmd.Run() // may fail, that's ok
+	_ = cmd.Run()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -301,13 +296,10 @@ func TestLSP_Go_CodeActions(t *testing.T) {
 	t.Logf("CodeActions: %d results", len(actions))
 }
 
-// ── TypeScript / typescript-language-server ──────────────────────────────
-
 func createTSWorkspace(t *testing.T) (workspace, tsFile string) {
 	t.Helper()
 	workspace = t.TempDir()
 
-	// package.json + tsconfig.json + install typescript so tsserver is happy
 	pkgJSON := `{"name":"testlsp","version":"1.0.0","dependencies":{}}`
 	if err := os.WriteFile(filepath.Join(workspace, "package.json"), []byte(pkgJSON), 0644); err != nil {
 		t.Fatal(err)
@@ -316,7 +308,7 @@ func createTSWorkspace(t *testing.T) (workspace, tsFile string) {
 	if err := os.WriteFile(filepath.Join(workspace, "tsconfig.json"), []byte(tsconfig), 0644); err != nil {
 		t.Fatal(err)
 	}
-	// npm install so tsserver sees a real project
+
 	cmd := exec.Command("npm", "install", "--ignore-scripts")
 	cmd.Dir = workspace
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -352,13 +344,12 @@ func TestLSP_TS_Hover(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Hover over 'greet' function name on line 6
 	got, err := Hover(ctx, ws, f, Position{Line: 6, Character: 25})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("TS Hover: %s", truncateForLog(got, 200))
-	// tsserver may return empty on first call; just log, don't fail
+
 }
 
 func TestLSP_TS_Definition(t *testing.T) {
@@ -369,7 +360,6 @@ func TestLSP_TS_Definition(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Definition of "User" on line 6 (greet param type)
 	locs, err := Definition(ctx, ws, f, Position{Line: 6, Character: 24})
 	if err != nil {
 		t.Fatal(err)
@@ -422,7 +412,7 @@ func TestLSP_TS_WorkspaceSymbols(t *testing.T) {
 
 	symbols, err := WorkspaceSymbols(ctx, ws, "greet")
 	if err != nil {
-		// tsserver may error with "No Project" in minimal temp dir
+
 		t.Logf("WorkspaceSymbols error (may be ok for temp workspace): %v", err)
 		return
 	}
@@ -506,8 +496,6 @@ func TestLSP_TS_CallHierarchy(t *testing.T) {
 	}
 	t.Logf("TS OutgoingCalls: %d", len(outCalls))
 }
-
-// ── Lua / lua-language-server ────────────────────────────────────────────
 
 func createLuaWorkspace(t *testing.T) (workspace, luaFile string) {
 	t.Helper()

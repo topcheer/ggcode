@@ -44,15 +44,12 @@ func storeUtility(t *testing.T, s *semanticMemoryStore, id string) float64 {
 	return utilityOf(t, entries, id)
 }
 
-// #r25: recurring lessons merge (semantic dedup) and gain utility instead of
-// flooding the store with near-identical rows.
 func TestSemanticMemoryDedupMergesRecurrence(t *testing.T) {
 	s := newSemanticUtilityTestStore(t)
 
 	first := mustAppend(t, s, "Prefer table-driven tests for parser edge cases")
 	other := mustAppend(t, s, "Run gofmt before committing staged changes")
 
-	// exact recurrence merges into the existing entry
 	if err := s.Append(SemanticMemoryEntry{Kind: "lesson", Summary: "Prefer table-driven tests for parser edge cases"}); err != nil {
 		t.Fatalf("duplicate Append: %v", err)
 	}
@@ -74,7 +71,7 @@ func TestSemanticMemoryDedupMergesRecurrence(t *testing.T) {
 		t.Fatalf("merged entry Hits = %d, want 2", merged.Hits)
 	}
 	if entryUtility(merged) <= entryUtility(other) && merged.Time.Equal(other.Time) {
-		// utility should have risen above the 0.5 baseline after the merge
+
 		t.Fatalf("merged utility %v did not rise above baseline", entryUtility(merged))
 	}
 	if entryUtility(merged) <= 0.5 {
@@ -82,7 +79,6 @@ func TestSemanticMemoryDedupMergesRecurrence(t *testing.T) {
 	}
 }
 
-// #r25: retrieval ranks by empirical utility, not raw recency.
 func TestTopByUtilityRanksByScore(t *testing.T) {
 	s := newSemanticUtilityTestStore(t)
 
@@ -150,8 +146,6 @@ func TestReinforceClampsToUnitRange(t *testing.T) {
 	}
 }
 
-// #r25: eviction prunes lowest utility first, so a strongly reinforced old
-// lesson survives while unreinforced chaff is dropped.
 func TestEvictionKeepsHighUtilityEntry(t *testing.T) {
 	s := newSemanticUtilityTestStore(t)
 
@@ -188,12 +182,9 @@ func TestEvictionKeepsHighUtilityEntry(t *testing.T) {
 	}
 }
 
-// #r25: the eval injection path returns both the rendered text and the
-// injected entry IDs so the scheduler can feed decisions back.
 func TestFormatSemanticMemoryForEvalIDsAndFeedback(t *testing.T) {
 	k := &Knight{projDir: t.TempDir()}
 
-	// empty store → zero context (caller substitutes placeholder)
 	if ctx := k.formatSemanticMemoryForEvalIDs(4); len(ctx.ids) != 0 || ctx.text != "" {
 		t.Fatalf("empty store yielded ids=%d text=%q, want zero/empty", len(ctx.ids), ctx.text)
 	}
@@ -214,9 +205,6 @@ func TestFormatSemanticMemoryForEvalIDsAndFeedback(t *testing.T) {
 		t.Fatal("injection text empty despite populated store")
 	}
 
-	// scheduler feedback contract: after the eval declines, the injected
-	// lesson's utility must decrease via the same Reinforce call the
-	// scheduler makes.
 	before := storeUtility(t, newSemanticMemoryStore(k.semanticMemoryPath()), strong.ID)
 	if err := k.ReinforceSemanticMemory(ctx.ids[0], -0.05); err != nil {
 		t.Fatalf("feedback Reinforce: %v", err)
@@ -225,11 +213,9 @@ func TestFormatSemanticMemoryForEvalIDsAndFeedback(t *testing.T) {
 	if after >= before {
 		t.Fatalf("decline feedback did not lower utility: %v -> %v", before, after)
 	}
-	_ = weak // distinct second lesson so dedup cannot merge the two
+	_ = weak
 }
 
-// legacy JSONL records without utility fields map to the 0.5 default and
-// rank fairly against fresh entries.
 func TestLegacyEntriesDefaultUtility(t *testing.T) {
 	s := newSemanticUtilityTestStore(t)
 	fresh := mustAppend(t, s, "Fresh lesson written by new code")

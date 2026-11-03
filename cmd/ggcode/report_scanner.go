@@ -1,16 +1,10 @@
 package main
 
-// Minimal record types for parsing JSONL session files.
-// We only extract fields needed for the report — everything else is skipped.
-
 import (
 	"encoding/json"
 	"time"
 )
 
-// jsonlRecord matches the top-level JSON structure of each line in a session
-// JSONL file. Meta fields (title, workspace, model, etc.) are directly on the
-// record, NOT nested under a "meta" key.
 type jsonlRecord struct {
 	Type        string          `json:"type"`
 	SessionID   string          `json:"session_id,omitempty"`
@@ -51,7 +45,7 @@ type usageEntry struct {
 
 type metricEvent struct {
 	TurnIndex    int           `json:"turn_index"`
-	Type         string        `json:"type"` // "llm" or "tool"
+	Type         string        `json:"type"`
 	TTFT         time.Duration `json:"ttft,omitempty"`
 	ThinkTime    time.Duration `json:"think_time,omitempty"`
 	Duration     time.Duration `json:"duration,omitempty"`

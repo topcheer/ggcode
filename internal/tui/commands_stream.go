@@ -11,9 +11,7 @@ func (m *Model) appendStreamChunk(chunk string) {
 	if chunk == "" {
 		return
 	}
-	// Skip whitespace-only chunks that arrive before any real text.
-	// Some models emit spaces/newlines between tool_use blocks — these
-	// would create an empty assistant message bubble in the UI.
+
 	if strings.TrimSpace(chunk) == "" && !m.streamPrefixWritten {
 		return
 	}
@@ -23,9 +21,7 @@ func (m *Model) appendStreamChunk(chunk string) {
 		return
 	}
 	m.chatFinishAllRunningTools()
-	// Collapse reasoning block when the first body text arrives.
-	// This implements the design: reasoning starts on first reasoning chunk,
-	// ends on first text or tool event.
+
 	if m.reasoningActive {
 		m.chatFinishReasoning()
 	}
@@ -85,12 +81,12 @@ func (m *Model) appendReasoningChunk(chunk string) {
 		m.chatEnsureAssistant()
 	}
 	m.reasoningActive = true
-	// Append reasoning to the current assistant item
+
 	aid := m.currentAssistantID()
 	if m.chatList != nil {
 		if item := m.chatList.FindByID(aid); item != nil {
 			if a, ok := item.(*chat.AssistantItem); ok {
-				// msg.Text is already the accumulated full text from batchReasoningBuf
+
 				a.SetReasoning(chunk)
 			}
 		}
@@ -98,10 +94,6 @@ func (m *Model) appendReasoningChunk(chunk string) {
 	m.chatListFollowOutput()
 }
 
-// chatFinishReasoning collapses the reasoning block in the current assistant item
-// and marks reasoning as inactive. It is called when the first text chunk or tool
-// event arrives (the natural end of reasoning in an LLM turn), or at turn end via
-// agentTurnDoneMsg (which is a no-op if reasoning was already collapsed).
 func (m *Model) chatFinishReasoning() {
 	if !m.reasoningActive {
 		return

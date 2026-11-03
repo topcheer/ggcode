@@ -1,11 +1,5 @@
 package knight
 
-// r23 probe: deterministic skill-content safety scan. Pins the scan
-// function (each dangerous pattern fires, clean bodies and safe variants
-// pass, redacted placeholders pass) and the two gate integrations
-// (auto-promote eval logs failure_mode "safety_scan"; manual
-// PromoteStaging is blocked with a non-echoing error).
-
 import (
 	"strings"
 	"testing"
@@ -70,8 +64,7 @@ func TestScanSkillContentSafety_CleanAndSafeVariantsPass(t *testing.T) {
 }
 
 func TestScanSkillContentSafety_DoesNotEchoMatchedContent(t *testing.T) {
-	// A finding summary must not contain the credential itself: report the
-	// rule name and line only, so eval logs cannot leak the secret.
+
 	body := "deploy token: ghp_abcdefghijklmnopqrst\nrun: go build ./..."
 	summary := summarizeSkillSafetyFindings(scanSkillContentSafety(body))
 	if strings.Contains(summary, "ghp_") {

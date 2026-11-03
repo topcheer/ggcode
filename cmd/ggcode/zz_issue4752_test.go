@@ -7,8 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tui"
 )
 
-// #4752 defect 2: switchHint must echo the ENDPOINT name (the just-added
-// endpoint is not active), never the default model id.
 func TestIssue4752_SwitchHintUsesEndpointName(t *testing.T) {
 	prev := plainLang
 	plainLang = tui.LangEnglish
@@ -20,9 +18,7 @@ func TestIssue4752_SwitchHintUsesEndpointName(t *testing.T) {
 	if strings.Contains(h, "gpt") {
 		t.Fatalf("hint must not leak model ids, got %q", h)
 	}
-	// A model id passed as the endpoint name would previously produce a hint
-	// targeting a nonexistent endpoint; with the fixed semantics the hint is
-	// built from add.switchhint + name in the active language.
+
 	if h != plainTr(tui.LangEnglish, "add.switchhint")+"myep" {
 		t.Fatalf("hint must be catalog-based, got %q", h)
 	}
@@ -31,9 +27,6 @@ func TestIssue4752_SwitchHintUsesEndpointName(t *testing.T) {
 	}
 }
 
-// #4752 defect 1: the previously dead catalog keys must exist in BOTH
-// catalogs (the wiring added three savefail keys; the rest were verified
-// present and are now actually called).
 func TestIssue4752_CatalogCoversWiredKeys(t *testing.T) {
 	keys := []string{
 		"switch.ok", "flags.bad", "add.req", "add.proto", "add.novendor",
@@ -57,8 +50,6 @@ func TestIssue4752_CatalogCoversWiredKeys(t *testing.T) {
 	}
 }
 
-// The wired format keys must keep their verbs so Printf sites match: add.ok
-// takes two %q plus the hint suffix; addmodel.ok takes %q %q %s.
 func TestIssue4752_FormatVerbsPreserved(t *testing.T) {
 	for _, lang := range []tui.Language{tui.LangEnglish, tui.LangZhCN} {
 		if got := strings.Count(plainTr(lang, "add.ok"), "%q"); got != 2 {

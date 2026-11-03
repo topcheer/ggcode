@@ -8,9 +8,6 @@ import (
 	"testing"
 )
 
-// #4681: a corrupt pane store must be quarantined (renamed aside, data
-// preserved for manual recovery) and rebuilt from empty - not wedge every
-// Load/Save on the machine forever.
 func TestIssue4681_CorruptStoreQuarantinedAndRebuilt(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tmux-panes.json")
@@ -26,7 +23,6 @@ func TestIssue4681_CorruptStoreQuarantinedAndRebuilt(t *testing.T) {
 		t.Fatalf("rebuilt store must be empty, got %+v (#4681)", store.Workspaces)
 	}
 
-	// The corrupt original must survive as a timestamped quarantine copy.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +40,6 @@ func TestIssue4681_CorruptStoreQuarantinedAndRebuilt(t *testing.T) {
 		t.Fatalf("corrupt store must be preserved as .corrupt-* for manual recovery, dir=%v (#4681)", entries)
 	}
 
-	// Round-trip: the rebuilt store is usable JSON.
 	if _, err := readPaneStore(path); err != nil {
 		t.Fatalf("post-quarantine reads must succeed: %v", err)
 	}

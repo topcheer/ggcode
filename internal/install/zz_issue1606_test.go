@@ -7,18 +7,12 @@ import (
 	"testing"
 )
 
-// TestIssue1606_WriteFailureSurfaced pins #1606-A: when a write was needed
-// but EVERY target failed (here: all profile paths are DIRECTORIES, so
-// ReadFile returns EISDIR - not IsNotExist - and the write would fail too),
-// EnsureOnPath must return a non-nil error instead of a false "will be
-// available in new terminals" promise.
 func TestIssue1606_WriteFailureSurfaced(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix profile logic")
 	}
 	home := t.TempDir()
-	// Every candidate profile path is a directory: reads fail with EISDIR
-	// (not IsNotExist), writes would fail likewise.
+
 	for _, rc := range []string{".zshrc", ".zprofile"} {
 		if err := os.MkdirAll(filepath.Join(home, rc), 0o755); err != nil {
 			t.Fatal(err)

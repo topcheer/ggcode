@@ -10,10 +10,6 @@ import (
 	"time"
 )
 
-// #4893: exports are data-fidelity surfaces - they must bypass the
-// recent-message window (24h/500-record). A message record older than the
-// window disappears from Load() but must survive LoadWithOptions(_, true)
-// and reach ExportMarkdown output.
 func TestIssue4893_ExportMarkdownBypassesWindow(t *testing.T) {
 	dir := t.TempDir()
 	st, err := NewJSONLStore(filepath.Join(dir, "sessions"))
@@ -24,13 +20,12 @@ func TestIssue4893_ExportMarkdownBypassesWindow(t *testing.T) {
 	if err := st.Save(ses); err != nil {
 		t.Fatal(err)
 	}
-	// Append one live message through the normal API...
+
 	live := provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "LIVE-MESSAGE-4893"}}}
 	if err := st.AppendMessageToDisk(ses, live); err != nil {
 		t.Fatal(err)
 	}
-	// ...and hand-write one PRE-WINDOW message record with an old timestamp,
-	// exactly the shape a >24h-old session has on disk.
+
 	old := time.Now().Add(-48 * time.Hour)
 	oldMsg := provider.Message{ID: "msg_pre_window_4893", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "PRE-WINDOW-MESSAGE-4893"}}}
 	rec := jsonlRecord{Type: "message", SessionID: ses.ID, Message: &oldMsg, Timestamp: old}

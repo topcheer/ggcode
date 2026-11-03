@@ -1,10 +1,5 @@
 package memory
 
-// #3818 companion: archiveVersion now reports the archive destination so
-// the save path can roll the live file back when the swap-in rename fails.
-// These tests pin the return contract and the rollback primitive; the
-// end-to-end failure injection (cross-device/full-disk) is not portable.
-
 import (
 	"os"
 	"path/filepath"
@@ -52,7 +47,7 @@ func TestIssue3818_RollbackPrimitiveRestoresLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Simulate the failed swap-in + rollback the save path now performs.
+
 	if err := os.Rename(dst, path); err != nil {
 		t.Fatalf("rollback rename: %v", err)
 	}

@@ -6,9 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// #1021: IM read routes must mask adapter credentials, and the full-replace
-// PUT must restore sentinel-masked fields so masks never persist.
-
 func TestMaskIMConfigMasksCredentials(t *testing.T) {
 	cfg := config.IMConfig{Adapters: map[string]config.IMAdapterConfig{
 		"slack": {
@@ -28,7 +25,7 @@ func TestMaskIMConfigMasksCredentials(t *testing.T) {
 	if _, maskedEnv := a.Env["__masked__"]; !maskedEnv {
 		t.Fatalf("env not masked: %v", a.Env)
 	}
-	// original untouched
+
 	if cfg.Adapters["slack"].Extra["bot_token"] != "xoxb-123" {
 		t.Fatal("maskIMConfig must not mutate the source config")
 	}
@@ -51,7 +48,7 @@ func TestRestoreMaskedIMCredentialsRoundTrip(t *testing.T) {
 	prev := config.IMConfig{Adapters: map[string]config.IMAdapterConfig{
 		"slack": {Env: map[string]string{"A": "1"}, Extra: map[string]interface{}{"bot_token": "xoxb-123"}},
 	}}
-	// Simulate the frontend round-trip: read (masked), edit unrelated field, PUT back.
+
 	edited := maskIMConfig(prev)
 	edited.Adapters["slack"].Extra["channel"] = "#ops"
 
@@ -68,8 +65,6 @@ func TestRestoreMaskedIMCredentialsRoundTrip(t *testing.T) {
 	}
 }
 
-// #1020: the /api/config sanitize path must also mask token/secret keys
-// nested in adapter Extra maps.
 func TestSanitizeMapMasksTokenSecret(t *testing.T) {
 	m := map[string]interface{}{
 		"im": map[string]interface{}{

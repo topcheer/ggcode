@@ -8,17 +8,12 @@ import (
 	"time"
 )
 
-// cacheTTL/negativeTTL follow the sub2api pattern: success is cheap to
-// reuse, failure must not hammer a down endpoint.
 const (
 	cacheTTL    = 3 * time.Minute
 	negativeTTL = time.Minute
 	httpTimeout = 10 * time.Second
 )
 
-// Service caches probe results per vendor and merges concurrent queries
-// for the same vendor (singleflight by mutex; probes are rare and
-// side-effect free, so a simple per-vendor in-flight map suffices).
 type Service struct {
 	mu       sync.Mutex
 	probes   map[string]Probe
@@ -45,15 +40,12 @@ func NewService() *Service {
 	}
 }
 
-// Register adds a probe (idempotent per vendor name).
 func (s *Service) Register(p Probe) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.probes[p.Vendor()] = p
 }
 
-// Has reports whether a probe is registered for the vendor (batch 2:
-// the TUI lists only vendors it can actually query).
 func (s *Service) Has(vendor string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -61,11 +53,6 @@ func (s *Service) Has(vendor string) bool {
 	return ok
 }
 
-// Resolve returns the vendor id of the probe that OWNS the given base
-// URL (owner ruling 2026-09-15: adapter selection is BY URL, never by
-// config vendor name). Probes receive the FULL URL - hosts are shared
-// between metered and coding-plan APIs, so path decides plan windows.
-// Empty string when no probe claims it.
 func (s *Service) Resolve(baseURL string) string {
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
@@ -81,9 +68,6 @@ func (s *Service) Resolve(baseURL string) string {
 	return ""
 }
 
-// Get returns the cached usage for a vendor, or queries it. Errors are
-// cached briefly (negative cache) so a failing endpoint does not get
-// hammered by sidebar refreshes.
 func (s *Service) Get(ctx context.Context, vendor, baseURL, apiKey string) (*UsageInfo, error) {
 	for {
 		s.mu.Lock()
@@ -93,10 +77,7 @@ func (s *Service) Get(ctx context.Context, vendor, baseURL, apiKey string) (*Usa
 			return nil, ErrUnsupported
 		}
 		if c, ok := s.cached[vendor]; ok {
-			// #2353-②: only SUCCESS is cached for cacheTTL. The old check
-			// (`fresh := < cacheTTL`) absorbed negative results for 3min,
-			// making the negativeTTL branch dead code and tripling the
-			// error cache window.
+
 			fresh := c.err == nil && time.Since(c.at) < cacheTTL
 			negFresh := c.err != nil && time.Since(c.at) < negativeTTL
 			if fresh || negFresh {
@@ -123,16 +104,9 @@ func (s *Service) Get(ctx context.Context, vendor, baseURL, apiKey string) (*Usa
 		res := cachedResult{info: info, err: err, at: time.Now()}
 
 		s.mu.Lock()
-		// #2353-③: a caller-initiated cancellation must NOT poison the
-		// negative cache for other callers (the TUI refresh path cancels
-		// freely). Canceled propagates from the PARENT ctx; the probe's own
-		// httpTimeout surfaces as DeadlineExceeded and stays cacheable.
+
 		if err == nil || !errors.Is(err, context.Canceled) {
-			// #2150 batch 2b blind-spot linkage: a 429 sizes the negative
-			// cache to the server's Retry-After (clamped 1s..10min) instead
-			// of the default negativeTTL - the old behavior re-probed a
-			// rate-limited endpoint every minute, exactly the hammering the
-			// negative cache exists to prevent.
+
 			var rl *RateLimitedError
 			if errors.As(err, &rl) && rl.RetryAfter > 0 {
 				d := rl.RetryAfter
@@ -142,37 +116,26 @@ func (s *Service) Get(ctx context.Context, vendor, baseURL, apiKey string) (*Usa
 				if d > 10*time.Minute {
 					d = 10 * time.Minute
 				}
-				// Forward-date the entry so negativeTTL expiry (since(at) <
-				// negativeTTL) lands exactly when Retry-After elapses.
+
 				res.at = time.Now().Add(d - negativeTTL)
 			}
 			s.cached[vendor] = res
 		}
 		delete(s.inflight, vendor)
 		s.mu.Unlock()
-		// #2353-①: publish the result BEFORE closing done - waiters wake
-		// from close and read call.res; the old order let a waiter observe
-		// the zero value (nil, nil), a nil-deref for callers and a data
-		// race under -race.
+
 		call.res = res
 		close(call.done)
 		return info, err
 	}
 }
 
-// Invalidate drops the cache for one vendor (used by the error-path
-// hook: a 429 means the cached numbers are stale NOW).
 func (s *Service) Invalidate(vendor string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.cached, vendor)
 }
 
-// RefreshInvalidate drops SUCCESS cache entries only; negative entries -
-// including Retry-After-sized 429 back-offs - survive (#2366-①). The TUI
-// r-key wants fresh data for healthy vendors, NOT to hammer an endpoint
-// the server just rate-limited: replacing the whole Service instance
-// discarded that per-vendor pacing state entirely.
 func (s *Service) RefreshInvalidate() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

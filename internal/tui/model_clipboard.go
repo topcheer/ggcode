@@ -54,9 +54,6 @@ func persistAttachedImage(filename string, img image.Image) (string, error) {
 	return path, nil
 }
 
-// cleanupOldTempImages removes image files older than 24 hours from the
-// ggcode-images temp directory. Called once at startup to prevent
-// unbounded disk usage from accumulated clipboard/tunnel images.
 func cleanupOldTempImages() {
 	cacheDir := filepath.Join(os.TempDir(), "ggcode-images")
 	entries, err := os.ReadDir(cacheDir)
@@ -78,9 +75,6 @@ func cleanupOldTempImages() {
 	}
 }
 
-// buildWebchatImageAttachment converts a webchat image ContentBlock into
-// the same imageAttachedMsg a pasted clipboard image produces (#1860 case 1:
-// pure-image webchat messages used to be dropped by the bridge).
 func buildWebchatImageAttachment(blk provider.ContentBlock) (imageAttachedMsg, error) {
 	data, err := base64.StdEncoding.DecodeString(blk.ImageData)
 	if err != nil {

@@ -10,15 +10,13 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// StaleFinding represents a single staleness signal in a memory entry.
 type StaleFinding struct {
 	Key    string
-	Reason string // "broken-path", "oversized", "ancient"
-	Detail string // specific detail (e.g., which path is broken)
+	Reason string
+	Detail string
 	Age    time.Duration
 }
 
-// StaleReport holds the results of a staleness scan.
 type StaleReport struct {
 	Scanned     int
 	BrokenPaths int
@@ -27,30 +25,16 @@ type StaleReport struct {
 	Findings    []StaleFinding
 }
 
-// HasFindings reports whether any staleness signals were detected.
 func (r StaleReport) HasFindings() bool {
 	return len(r.Findings) > 0
 }
 
-// ancientThreshold is the age at which a persistent memory is considered
-// potentially ancient and worth review. 180 days.
 const ancientThreshold = 180 * 24 * time.Hour
 
-// filePathPattern detects file paths in memory content.
-// Matches patterns like: internal/agent/foo.go, cmd/ggcode/root.go, ./src/main.ts
 var filePathPattern = regexp.MustCompile(`(?:^|[\s'"(+])((?:\.{0,2}/)?(?:[a-zA-Z0-9_-]+/)+[a-zA-Z0-9_-]+\.[a-zA-Z]{1,5})`)
 
-// dirPathPattern detects directory paths in memory content.
-// Matches patterns like: internal/agent/, cmd/ggcode/, pkg/util/
 var dirPathPattern = regexp.MustCompile(`(?:^|[\s'"(+])((?:\.{0,2}/)?(?:[a-zA-Z0-9_-]+/){2,})`)
 
-// ScanStaleness checks memory entries for potential staleness signals:
-//   - Broken file/dir path references (paths that no longer exist)
-//   - Oversized entries (exceeding inline budget)
-//   - Ancient persistent entries (older than 180 days)
-//
-// workingDir is the project root used to resolve relative paths.
-// If workingDir is empty, path checks are skipped.
 func (am *AutoMemory) ScanStaleness(workingDir string) StaleReport {
 	metas, err := am.collectMetas()
 	if err != nil {
@@ -71,8 +55,6 @@ func (am *AutoMemory) ScanStaleness(workingDir string) StaleReport {
 		content := string(data)
 		age := now.Sub(m.CreatedAt)
 
-		// Check for broken path references (only for project-scoped memories
-		// where workingDir is meaningful).
 		if workingDir != "" {
 			broken := findBrokenPaths(content, workingDir)
 			if len(broken) > 0 {
@@ -90,7 +72,6 @@ func (am *AutoMemory) ScanStaleness(workingDir string) StaleReport {
 			}
 		}
 
-		// Check for oversized entries.
 		if len(content) > maxInlineBytes {
 			report.Findings = append(report.Findings, StaleFinding{
 				Key:    m.Key,
@@ -101,7 +82,6 @@ func (am *AutoMemory) ScanStaleness(workingDir string) StaleReport {
 			report.Oversized++
 		}
 
-		// Check for ancient persistent entries.
 		if m.Category == CategoryPersistent && age > ancientThreshold {
 			report.Findings = append(report.Findings, StaleFinding{
 				Key:    m.Key,
@@ -116,20 +96,8 @@ func (am *AutoMemory) ScanStaleness(workingDir string) StaleReport {
 	return report
 }
 
-// maxStaleInlineAnnotations caps how many inline entries may receive a
-// [memory-stale] annotation per prompt rebuild, mirroring maxRecallConflicts
-// flooding protection in recall arbitration.
 const maxStaleInlineAnnotations = 5
 
-// annotateStaleInline appends a [memory-stale] note to every inline entry
-// whose content references paths that no longer exist under the project
-// root (STALE / Implicit Conflict, arXiv:2605.06527). This is the
-// injection-time counterpart of ScanStaleness: the offline repair loop only
-// fixes entries after the fact, while a single stale entry with no live
-// contradicting sibling bypasses ArbitrateInline entirely and would be
-// injected as an unflagged false premise. Annotation-only (entries are never
-// dropped), deterministic, and a no-op for global memory or non-project
-// roots. Entries are mutated in place.
 func (am *AutoMemory) annotateStaleInline(inline []MemoryEntry) {
 	if am.projectRoot == "" || len(inline) == 0 {
 		return
@@ -153,8 +121,6 @@ func (am *AutoMemory) annotateStaleInline(inline []MemoryEntry) {
 	}
 }
 
-// findBrokenPaths extracts file and directory path references from memory
-// content and returns those that don't exist relative to workingDir.
 func findBrokenPaths(content, workingDir string) []string {
 	seen := make(map[string]bool)
 	var broken []string
@@ -166,16 +132,12 @@ func findBrokenPaths(content, workingDir string) []string {
 		}
 		seen[p] = true
 
-		// Skip very generic paths that are too common to be meaningful.
 		if isGenericPath(p) {
 			return
 		}
 
 		full := filepath.Join(workingDir, p)
-		// #3055-C2: any Stat failure means the path cannot be verified as
-		// present - the old IsNotExist-only check treated EACCES/EPERM (an
-		// un-enterable parent dir) as "exists" and silently dropped the
-		// broken-path finding.
+
 		if _, err := os.Stat(full); err != nil {
 			broken = append(broken, p)
 		}
@@ -198,15 +160,12 @@ func findBrokenPaths(content, workingDir string) []string {
 	return broken
 }
 
-// isGenericPath returns true for paths that are too common to verify
-// meaningfully (e.g., "src/main.go", "README.md" without a directory prefix).
 func isGenericPath(p string) bool {
-	// Single-component files without a directory prefix.
+
 	if !strings.Contains(p, "/") {
 		return true
 	}
-	// Skip paths that are likely code examples in comments, not real paths.
-	// Only match placeholder filenames like "example.go" as standalone names.
+
 	base := p
 	if idx := strings.LastIndex(p, "/"); idx >= 0 {
 		base = p[idx+1:]
@@ -214,14 +173,13 @@ func isGenericPath(p string) bool {
 	if strings.HasPrefix(base, "example.") {
 		return true
 	}
-	// Skip npm/node_modules paths that aren't in Go projects.
+
 	if strings.HasPrefix(p, "node_modules/") {
 		return true
 	}
 	return false
 }
 
-// formatByteSize returns a human-readable byte size string.
 func formatByteSize(n int) string {
 	if n < 1024 {
 		return itoa(n) + "B"
@@ -232,7 +190,6 @@ func formatByteSize(n int) string {
 	return itoa(n/(1024*1024)) + "MB"
 }
 
-// formatDuration returns a human-readable duration string.
 func formatDuration(d time.Duration) string {
 	days := int(d.Hours() / 24)
 	if days >= 365 {

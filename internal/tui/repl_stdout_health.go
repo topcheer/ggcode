@@ -13,46 +13,25 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// displaySleepMsg is sent by the stdout health monitor when stdout
-// becomes unwritable (display sleep, terminal closed, SSH disconnect).
 type displaySleepMsg struct{}
 
-// displayWakeMsg is sent when stdout becomes writable again.
 type displayWakeMsg struct{}
 
-// stdoutDead reports whether the stdout health monitor currently considers
-// stdout dead. The renderer-side guard writer (repl_stdout_guard.go) is the
-// reader (#4154) - it drops frames while this is true so bubbletea never
-// blocks on a dead pty.
 func stdoutDead() bool { return stdoutDeadFlag.Load() }
 
-// stdoutDeadFlag is an atomic flag shared between the health monitor and
-// the renderer. When true, the renderer should skip Write() calls.
 var stdoutDeadFlag atomic.Bool
 
-// stdoutHealthInterval is how often we check if stdout is still writable.
 const stdoutHealthInterval = 2 * time.Second
 
-// startStdoutHealthMonitor watches stdout for writability. When stdout
-// becomes unwritable (display sleep, terminal closed, SSH disconnect),
-// it sets stdoutDead=true and sends displaySleepMsg to the program.
-// When stdout recovers, it sends displayWakeMsg.
-//
-// This prevents bubbletea's renderer from blocking on Write() to a dead
-// terminal, which would freeze the entire TUI update loop.
 func startStdoutHealthMonitor(ctx context.Context, sendMsg func(any)) (stop func()) {
-	// Check if stdout is a terminal — if piped, skip monitoring
+
 	if !isTerminalStdout() {
-		// #4154: still reset the flag on stop - a stale true (previous
-		// monitor run or manual Store) would make the guard writer drop
-		// frames of the next tea program in-process forever.
+
 		return func() { stdoutDeadFlag.Store(false) }
 	}
 
 	wctx, cancel := context.WithCancel(ctx)
-	// #4154: seed from the global flag - if a previous monitor in this
-	// process left it true without a clean stop, treat stdout as dead
-	// until a probe proves otherwise (so we also emit the wake message).
+
 	dead := stdoutDeadFlag.Load()
 
 	safego.Go("tui.stdoutHealth", func() {
@@ -86,31 +65,22 @@ func startStdoutHealthMonitor(ctx context.Context, sendMsg func(any)) (stop func
 
 	return func() {
 		cancel()
-		// #4154: a monitor that dies while stdout is dead must not leave
-		// the global flag stuck at true.
+
 		stdoutDeadFlag.Store(false)
 	}
 }
 
-// probeStdout checks if stdout is still writable by attempting a
-// zero-byte write with a deadline. Returns true if stdout is healthy.
 func probeStdout() bool {
-	// #1753 case 2: the probe used to flip O_NONBLOCK and WRITE an SGR
-	// reset on the shared stdout fd - on Linux (where non-blocking now
-	// actually engages, #2018) a renderer frame mid-window hit EAGAIN and
-	// the escape byte interleaved into frames. unix.Poll checks the fd's
-	// error/hangup state with ZERO writes and NO flag flipping: no shared
-	// state touched, no interleaving possible.
+
 	fd := int(os.Stdout.Fd())
 	pollFds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLOUT}}
 	n, err := unix.Poll(pollFds, 0)
 	if err != nil {
-		// EBADF and friends: the fd is gone.
+
 		return false
 	}
 	if n == 0 {
-		// Not writable RIGHT NOW - on a tty this is the sleep/death
-		// symptom (a healthy pty accepts kernel-buffered writes).
+
 		return false
 	}
 	revents := pollFds[0].Revents

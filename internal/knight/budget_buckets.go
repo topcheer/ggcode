@@ -6,9 +6,6 @@ import (
 	"time"
 )
 
-// budgetBucket identifies how a Knight LLM call is being spent. Each bucket
-// has its own daily cap (a fraction of the total budget) so a noisy eval
-// loop cannot starve analysis or proposals.
 type budgetBucket string
 
 const (
@@ -20,8 +17,6 @@ const (
 	BudgetBucketAdhoc       budgetBucket = "adhoc"
 )
 
-// taskNameBucketMap maps the task names used by RunTask/RunTaskWithTurns to
-// budget buckets. Anything unmapped lands in adhoc.
 var taskNameBucketMap = map[string]budgetBucket{
 	"skill-generation":             BudgetBucketAnalysis,
 	"skill-auto-promote-eval":      BudgetBucketEval,
@@ -34,10 +29,6 @@ var taskNameBucketMap = map[string]budgetBucket{
 	"manual-task":                  BudgetBucketAdhoc,
 }
 
-// bucketBudget tracks per-bucket spend within a single rolling day. Daily
-// rollover is keyed by the date string ("2006-01-02") of the first record
-// for that day. The store is intentionally in-memory: persistent budget
-// accounting still goes through Budget; this is a guardrail.
 type bucketBudget struct {
 	mu        sync.Mutex
 	dayKey    string
@@ -46,8 +37,6 @@ type bucketBudget struct {
 	used      map[budgetBucket]int
 }
 
-// newBucketBudget configures bucket fractions of the daily total. Defaults are
-// chosen so eval cannot crowd out analysis even when LLM noise spikes.
 func newBucketBudget(dailyTotal int) *bucketBudget {
 	if dailyTotal < 0 {
 		dailyTotal = 0
@@ -75,7 +64,6 @@ func max1(v int) int {
 	return v
 }
 
-// classify returns the budget bucket for a task name.
 func classifyBucket(taskName string) budgetBucket {
 	if b, ok := taskNameBucketMap[strings.TrimSpace(taskName)]; ok {
 		return b
@@ -83,8 +71,6 @@ func classifyBucket(taskName string) budgetBucket {
 	return BudgetBucketAdhoc
 }
 
-// canSpend reports whether a fresh task in the given bucket may start.
-// Unlimited daily budget always returns true.
 func (b *bucketBudget) canSpend(bucket budgetBucket, now time.Time) bool {
 	if b == nil || b.daily <= 0 {
 		return true
@@ -99,7 +85,6 @@ func (b *bucketBudget) canSpend(bucket budgetBucket, now time.Time) bool {
 	return b.used[bucket] < cap
 }
 
-// record adds tokens to the per-bucket counter and rolls over on a new day.
 func (b *bucketBudget) record(bucket budgetBucket, tokens int, now time.Time) {
 	if b == nil || tokens <= 0 {
 		return
@@ -118,6 +103,3 @@ func (b *bucketBudget) rolloverLocked(now time.Time) {
 	b.dayKey = day
 	b.used = map[budgetBucket]int{}
 }
-
-// snapshot returns a copy of the current per-bucket usage and caps for the
-// rolling day; useful for /knight status diagnostics.

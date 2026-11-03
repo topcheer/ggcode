@@ -8,28 +8,10 @@ import (
 	"github.com/topcheer/ggcode/internal/plugin"
 )
 
-// mcpServersUpdatedMsg refreshes the TUI's MCP server list after a
-// background state change (connect/reconnect/disconnect). Without it the
-// panel keeps showing a stale "reconnecting ..." message forever even when
-// the server actually connected - the manager's emitUpdate had no listener
-// in the TUI before this message existed.
 type mcpServersUpdatedMsg struct {
 	servers []MCPInfo
 }
 
-// applyMCPServersUpdate swaps in the fresh server list and, when the panel
-// is waiting on a reconnect, upgrades the static "reconnecting" message to
-// a terminal result the moment that server settles.
-// convergeMCPSelection clamps the MCP panel cursor into the current list
-// bounds (#2348). The render-side clamp is a LOCAL variable (renderMCPPanel
-// has a value receiver - it cannot write back), and the action keys
-// r/f/space/a/x index m.mcpServers[panel.selected] after only checking
-// len==0, so a stale selected - list shrank between messages, or the
-// uninstall result raced a server update - crashed Update with
-// index-out-of-range; bubbletea does not recover panics. Called at every
-// m.mcpServers swap site (applyMCPServersUpdate, SetMCPServers;
-// update_mcp.go keeps its inline #1396-A clamp, openMCPPanel builds a
-// fresh panel from the new list so it cannot be stale).
 func (m *Model) convergeMCPSelection() {
 	if m.mcpPanel == nil {
 		return
@@ -43,9 +25,7 @@ func (m *Model) convergeMCPSelection() {
 }
 
 func (m *Model) applyMCPServersUpdate(msg mcpServersUpdatedMsg) {
-	// #1812: capture the PRE-swap list - the pending server dropping OUT
-	// of the update (uninstalled mid-reconnect) is only distinguishable
-	// from an unrelated-server update by comparing against what we HAD.
+
 	wasListed := false
 	if m.mcpPanel != nil && m.mcpPanel.pendingReconnect != "" {
 		for _, srv := range m.mcpServers {
@@ -56,7 +36,7 @@ func (m *Model) applyMCPServersUpdate(msg mcpServersUpdatedMsg) {
 		}
 	}
 	m.mcpServers = msg.servers
-	// #2348: converge the cursor at every list swap - see convergeMCPSelection.
+
 	m.convergeMCPSelection()
 	if m.mcpPanel == nil || m.mcpPanel.pendingReconnect == "" {
 		return
@@ -76,17 +56,10 @@ func (m *Model) applyMCPServersUpdate(msg mcpServersUpdatedMsg) {
 			m.mcpPanel.message = m.t("panel.mcp.reconnect_error", name, srv.Error)
 			m.mcpPanel.pendingReconnect = ""
 		}
-		// Still pending (dialing or awaiting OAuth): keep the reconnecting
-		// message until a terminal state arrives.
+
 		return
 	}
-	// #1812: the server WAS in our list and VANISHED from the update
-	// (uninstalled while its reconnect was pending) - the loop never
-	// matched, the latch stayed set, and the panel hung on
-	// "reconnecting..." until reopened. The server is gone; nothing is
-	// coming back - clear with a removal note. A name that was NEVER
-	// listed stays latched (unrelated-server updates must not disturb
-	// it - the pre-existing pin).
+
 	if !found && wasListed {
 		m.mcpPanel.pendingReconnect = ""
 		m.mcpPanel.message = m.t("panel.mcp.removed", name)

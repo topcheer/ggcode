@@ -2,8 +2,6 @@ package knight
 
 import "testing"
 
-// Regression for #1622-A/B: Korean must tokenize (not 0 tokens) and
-// full-width ASCII must differentiate versions.
 func TestTokenizeCJKFullCoverage(t *testing.T) {
 	ko := tokenizeForSimilarity("빌드 검증 자동화 스킬")
 	if len(ko) == 0 {

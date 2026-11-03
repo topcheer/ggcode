@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// writeRejectLines writes a JSONL file mixing encoded entries and raw strings.
 func writeRejectLines(t *testing.T, path string, items ...any) {
 	t.Helper()
 	var buf []byte
@@ -32,9 +31,6 @@ func writeRejectLines(t *testing.T, path string, items ...any) {
 	}
 }
 
-// TestSa161LoadSkipsCorruptLinesAndAlwaysTrims verifies the sa-161 fix: a
-// corrupt line no longer makes load() discard every trailing entry, and the
-// end-of-load trimOld runs even when corruption was seen.
 func TestSa161LoadSkipsCorruptLinesAndAlwaysTrims(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
@@ -50,14 +46,11 @@ func TestSa161LoadSkipsCorruptLinesAndAlwaysTrims(t *testing.T) {
 		t.Fatalf("load = %+v, want corrupt lines skipped and stale trimmed, only [skill-a skill-b]", s.entries)
 	}
 
-	// User-visible surface: recovered entries remain queryable.
 	if last, ok := s.LastFor("project", "Skill-B"); !ok || last.Name != "skill-b" {
 		t.Fatalf("LastFor after corrupt load = (%+v, %v), want skill-b", last, ok)
 	}
 }
 
-// TestSa161LoadTornTailLine covers the crash-mid-append case: a torn final
-// line must not discard the earlier valid entries.
 func TestSa161LoadTornTailLine(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
@@ -79,8 +72,6 @@ func TestSa161LoadTornTailLine(t *testing.T) {
 	}
 }
 
-// TestSa161LoadAllCorruptIdempotent: an all-garbage file loads to zero
-// entries without panicking, and repeated loads stay idempotent.
 func TestSa161LoadAllCorruptIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "garbage.jsonl")
@@ -101,10 +92,6 @@ func TestSa161LoadAllCorruptIdempotent(t *testing.T) {
 	}
 }
 
-// TestSa161RecentExcludesExpiredDespiteCorruption is the regression for the
-// originally reported symptom: with a corrupt line present, the old early
-// return skipped trimOld, so an expired entry stayed in Recent() for the
-// whole process lifetime.
 func TestSa161RecentExcludesExpiredDespiteCorruption(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()

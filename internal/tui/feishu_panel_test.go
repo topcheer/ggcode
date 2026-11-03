@@ -209,9 +209,6 @@ func TestFeishuBindingLabelsMutedActiveAvailable(t *testing.T) {
 	}
 }
 
-// TestFeishuCreateRejectsExtraFields pins #1370-C: a spec with MORE than
-// 3 fields (secret containing spaces) used to be silently truncated to
-// the first token and persisted as a guaranteed-to-fail credential.
 func TestFeishuCreateRejectsExtraFields(t *testing.T) {
 	m := newTestModel()
 	m.config = config.DefaultConfig()

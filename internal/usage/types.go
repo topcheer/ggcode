@@ -1,7 +1,3 @@
-// Package usage implements the first-class usage/balance surface (#2150):
-// per-vendor probes for pay-as-you-go balance and coding-plan rolling
-// windows, with a caching service so callers (TUI sidebar, /usage command,
-// IM, desktop) share one query pipeline.
 package usage
 
 import (
@@ -9,34 +5,23 @@ import (
 	"time"
 )
 
-// UsageWindow is one rolling usage window (e.g. a 5h coding-plan window
-// or a weekly quota).
 type UsageWindow struct {
-	Label       string    // "5h" / "weekly"
-	UsedPercent float64   // 0..100
-	ResetsAt    time.Time // zero when unknown
+	Label       string
+	UsedPercent float64
+	ResetsAt    time.Time
 }
 
-// UsageInfo is the normalized result of one vendor probe.
 type UsageInfo struct {
 	Vendor  string
-	Balance *float64 // PAYG balance, nil when the vendor has no balance concept
+	Balance *float64
 	Windows []UsageWindow
-	Source  string // probe endpoint short name, for diagnostics
+	Source  string
 }
 
-// URLMatcher is the optional second face of a Probe: probes claim the
-// FULL endpoint URL (scheme://host/path) - hosts are SHARED between
-// metered APIs and coding plans (open.bigmodel.cn serves both
-// /api/paas/v4 and /api/coding/paas/v4), so a bare-host match cannot
-// distinguish a plan window from a pay-as-you-go account. Path decides.
 type URLMatcher interface {
 	MatchesURL(baseURL string) bool
 }
 
-// Probe fetches usage for one vendor. Implementations must be safe for
-// concurrent use. apiKey/baseURL come from the resolved active vendor
-// config; the context bounds the HTTP call (service applies a timeout).
 type Probe interface {
 	Vendor() string
 	Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error)

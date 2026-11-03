@@ -1,30 +1,5 @@
 package mcp
 
-// MCP 2026-07-28 stateless protocol core (SEP-2575) client support.
-//
-// The 2026-07-28 revision removed the protocol-level session and the
-// initialize/notifications/initialized handshake. Every request now carries
-// its protocol version, client identity and client capabilities as
-// per-request _meta members (io.modelcontextprotocol/protocolVersion,
-// .../clientInfo, .../clientCapabilities), and servers MUST implement
-// server/discover to advertise their supported versions, capabilities and
-// identity up front.
-//
-// A version mismatch surfaces as UnsupportedProtocolVersionError: JSON-RPC
-// error code -32022 whose data carries the "supported" version list (and the
-// "requested" version). A client SHOULD select a mutually supported version
-// and retry, or surface an actionable error when none exists.
-//
-// Dual-era interoperability (spec basic/versioning): a client that supports
-// both eras detects the server's era with transport-specific mechanics —
-// stdio probes with server/discover and falls back on any error that is not
-// a recognized modern error; a recognized modern error (-32022) identifies a
-// modern server and the client retries with a supported version instead of
-// falling back. ggcode is a dual-era client: legacy (initialize handshake,
-// protocol versions 2024-11-05..2025-11-25) remains the default and
-// unchanged, and this opt-in stateless mode is enabled per server via
-// Client.EnableStateless (config: mcp server "stateless: true").
-
 import (
 	"context"
 	"encoding/json"
@@ -33,12 +8,8 @@ import (
 	"strings"
 )
 
-// ProtocolVersion20260728 is the first stateless (modern-era) MCP protocol
-// revision: per-request _meta versioning, server/discover, and the
-// UnsupportedProtocolVersionError retry contract (SEP-2575).
 const ProtocolVersion20260728 = "2026-07-28"
 
-// _meta key names for the modern per-request envelope (SEP-2575).
 const (
 	MetaKeyProtocolVersion    = "io.modelcontextprotocol/protocolVersion"
 	MetaKeyClientInfo         = "io.modelcontextprotocol/clientInfo"
@@ -46,24 +17,12 @@ const (
 	MetaKeyServerInfo         = "io.modelcontextprotocol/serverInfo"
 )
 
-// ErrorCodeUnsupportedProtocolVersion is the 2026-07-28 server-error code
-// for a request whose _meta protocol version the server does not implement
-// (data.supported lists the versions it does).
 const ErrorCodeUnsupportedProtocolVersion = -32022
 
-// ErrorCodeMethodNotFound is the standard JSON-RPC "method not found" code;
-// on the server/discover probe it identifies a legacy (handshake-era) server
-// per the dual-era fallback rules.
 const ErrorCodeMethodNotFound = -32601
 
-// clientMetaName is the client identity ggcode advertises in the per-request
-// envelope and in legacy initialize (kept consistent with Initialize).
 func clientMetaName() Implementation { return Implementation{Name: "ggcode", Version: "0.1.0"} }
 
-// UnsupportedProtocolVersionError is returned when a server rejects a
-// request with the 2026-07-28 -32022 error. Supported lists the protocol
-// versions the server advertised; Requested echoes the rejected version
-// when the server included it in the error data.
 type UnsupportedProtocolVersionError struct {
 	Requested string
 	Supported []string
@@ -75,12 +34,8 @@ func (e *UnsupportedProtocolVersionError) Error() string {
 		e.Requested, strings.Join(e.Supported, ", "))
 }
 
-// Unwrap exposes the raw JSON-RPC error to errors.Is/As chains.
 func (e *UnsupportedProtocolVersionError) Unwrap() error { return e.Err }
 
-// asUnsupportedProtocolVersion recognizes the -32022 modern error inside any
-// error chain. Per the dual-era rules, this code specifically (not a bare
-// method-not-found) identifies a modern server.
 func asUnsupportedProtocolVersion(err error) (*UnsupportedProtocolVersionError, bool) {
 	var jerr *Error
 	if !errors.As(err, &jerr) || jerr == nil {
@@ -103,15 +58,8 @@ func asUnsupportedProtocolVersion(err error) (*UnsupportedProtocolVersionError, 
 	return u, true
 }
 
-// modernMCPProtocolVersions lists the stateless-era protocol versions this
-// client can speak, most preferred first. With today's client the list holds
-// exactly one entry; the slice (rather than a single constant) keeps the
-// version-selection and retry paths honest for future revisions.
 var modernMCPProtocolVersions = []string{ProtocolVersion20260728}
 
-// selectModernVersion picks the most preferred modern version the server
-// supports, or "" when there is no mutual version (the dual-era fallback
-// signal: no mutually supported modern version → use the legacy handshake).
 func selectModernVersion(supported []string) string {
 	for _, mine := range modernMCPProtocolVersions {
 		for _, s := range supported {
@@ -123,31 +71,20 @@ func selectModernVersion(supported []string) string {
 	return ""
 }
 
-// DiscoverMeta carries the modern result _meta members.
 type DiscoverMeta struct {
 	ServerInfo *Implementation `json:"io.modelcontextprotocol/serverInfo,omitempty"`
 }
 
-// DiscoverResult is the result of server/discover (spec 2026-07-28,
-// server/discover). Servers SHOULD include serverInfo under _meta; it is
-// self-reported, so callers must not make security decisions from it.
 type DiscoverResult struct {
-	// ResultType is "complete" for ordinary results; 2026-07-28 servers may
-	// also return "input_required" interim results (MRTR, SEP-2322), which
-	// never applies to discover. Clients must treat an omitted field as
-	// "complete" (pre-modern servers), so an empty string is tolerated.
 	ResultType        string     `json:"resultType,omitempty"`
 	SupportedVersions []string   `json:"supportedVersions"`
 	Capabilities      ServerCaps `json:"capabilities,omitempty"`
 	Instructions      string     `json:"instructions,omitempty"`
-	// CacheableResult: server/discover supports caching (SEP-2549). An
-	// absent or non-positive TTLms means do-not-cache.
+
 	CacheableResult
 	Meta *DiscoverMeta `json:"_meta,omitempty"`
 }
 
-// ServerInfo extracts the self-reported server identity from the result
-// _meta (zero value when the server omitted it).
 func (r *DiscoverResult) ServerInfo() Implementation {
 	if r == nil || r.Meta == nil || r.Meta.ServerInfo == nil {
 		return Implementation{}
@@ -155,38 +92,24 @@ func (r *DiscoverResult) ServerInfo() Implementation {
 	return *r.Meta.ServerInfo
 }
 
-// EnableStateless opts the client into modern (stateless, per-request _meta)
-// operation. The next Initialize probes server/discover first; a success
-// switches the client to the negotiated modern version and skips the legacy
-// handshake entirely, while any failure that is not a recognized modern
-// error falls back to the legacy initialize path (dual-era client, spec
-// basic/versioning). stdio clients SHOULD probe first so legacy servers fail
-// deterministically instead of hanging an era-ambiguous initialize.
-//
-// Legacy behavior is byte-for-byte unchanged until this is called.
 func (c *Client) EnableStateless() {
 	c.mu.Lock()
 	c.stateless = true
 	c.mu.Unlock()
 }
 
-// StatelessEnabled reports whether the stateless opt-in is set.
 func (c *Client) StatelessEnabled() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.stateless
 }
 
-// ModernVersion returns the modern protocol version the client is currently
-// operating under, or "" when operating in legacy (handshake) mode.
 func (c *Client) ModernVersion() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.modernVersion
 }
 
-// modernServerInfoLocked returns the server identity advertised by
-// server/discover. Caller holds c.mu.
 func (c *Client) modernServerInfoLocked() (Implementation, bool) {
 	if c.modernServerInfo == nil {
 		return Implementation{}, false
@@ -194,9 +117,6 @@ func (c *Client) modernServerInfoLocked() (Implementation, bool) {
 	return *c.modernServerInfo, true
 }
 
-// ServerInfo returns the server identity from server/discover (modern mode)
-// or from the legacy initialize result (ServerInfo field), zero value when
-// neither advertised one.
 func (c *Client) ServerInfo() Implementation {
 	c.mu.Lock()
 	if si, ok := c.modernServerInfoLocked(); ok {
@@ -208,10 +128,6 @@ func (c *Client) ServerInfo() Implementation {
 	return si
 }
 
-// setModernVersionIfChanged switches the client to version and reports
-// whether the version actually changed. The unchanged case also gates the
-// -32022 retry: retrying a request with the same version the server just
-// rejected can only reproduce the failure.
 func (c *Client) setModernVersionIfChanged(version string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -222,9 +138,6 @@ func (c *Client) setModernVersionIfChanged(version string) bool {
 	return true
 }
 
-// clientCapsLocked builds the client capability object for the envelope and
-// the legacy initialize request. Caller holds c.mu (the handler accessors
-// are the mu-synchronized *Locked variants).
 func (c *Client) clientCapsLocked() ClientCaps {
 	caps := ClientCaps{
 		Roots: struct {
@@ -232,34 +145,24 @@ func (c *Client) clientCapsLocked() ClientCaps {
 		}{ListChanged: true},
 	}
 	if c.samplingHandler != nil {
-		// MCP 2025-11-25 (SEP-1577): ggcode's sampling path accepts tools and
-		// toolChoice, forwards them to the LLM provider, and relays tool_use
-		// results with stopReason "toolUse" - advertise that support.
+
 		caps.Sampling = &SamplingCapability{Tools: &struct{}{}}
 	}
 	if c.elicitationHandler != nil {
-		// MCP 2025-11-25: advertise both elicitation modes. ggcode supports
-		// form mode in-band (ask_user surfaces) and URL mode as a
-		// consent-gated out-of-band handoff (it never auto-opens URLs).
+
 		caps.Elicitation = &ElicitationCapability{Form: &struct{}{}, URL: &struct{}{}}
 	}
-	// SEP-1686: the client always implements the task management methods
-	// (tasks/get, tasks/list, tasks/cancel, tasks/result), so declare the
-	// tasks capability unconditionally - it flows through both the legacy
-	// initialize params and the modern per-request _meta envelope.
+
 	caps.Tasks = &struct{}{}
 	return caps
 }
 
-// clientCaps snapshots clientCapsLocked under c.mu.
 func (c *Client) clientCaps() ClientCaps {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.clientCapsLocked()
 }
 
-// modernRequestMeta builds the per-request _meta envelope (spec example
-// shape: protocolVersion + clientInfo + clientCapabilities).
 func (c *Client) modernRequestMeta(version string) map[string]any {
 	return map[string]any{
 		MetaKeyProtocolVersion:    version,
@@ -268,11 +171,6 @@ func (c *Client) modernRequestMeta(version string) map[string]any {
 	}
 }
 
-// injectMeta merges meta into a marshaled params object's _meta field,
-// preserving any caller-provided _meta members (e.g. progressToken) and
-// overlaying the client-level envelope keys. Unmarshalable or non-object
-// params are returned unchanged — envelopes are additive metadata, never a
-// reason to fail a request.
 func injectMeta(paramsJSON []byte, meta map[string]any) []byte {
 	var params map[string]json.RawMessage
 	if len(paramsJSON) == 0 || json.Unmarshal(paramsJSON, &params) != nil || params == nil {
@@ -300,30 +198,18 @@ func injectMeta(paramsJSON []byte, meta map[string]any) []byte {
 	return out
 }
 
-// statelessWanted snapshots the opt-in flag under c.mu.
 func (c *Client) statelessWanted() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.stateless
 }
 
-// Discover sends the server/discover request (MCP 2026-07-28, SEP-2575). It
-// carries no body parameters beyond the standard _meta envelope, which is
-// always attached here regardless of the client's current mode — discover is
-// itself a modern method and the spec example shows the envelope on it.
-//
-// The returned result supports caching via its CacheableResult fields, and
-// callers can surface identity/capabilities from a single call instead of
-// probing tools/list, prompts/list and resources/list separately.
 func (c *Client) Discover(ctx context.Context) (*DiscoverResult, error) {
 	if c.closed.Load() {
 		return nil, fmt.Errorf("mcp[%s]: connection closed", c.name)
 	}
-	// #2557: carry the NEGOTIATED modern version once one exists — the
-	// -32022 retry path (probeModern) sets modernVersion from the error
-	// payload before re-probing, so the retry must not repeat the version
-	// the server just rejected.
-	version := c.ModernVersion() // locked read, matches the setter
+
+	version := c.ModernVersion()
 	if version == "" {
 		version = ProtocolVersion20260728
 	}
@@ -336,51 +222,26 @@ func (c *Client) Discover(ctx context.Context) (*DiscoverResult, error) {
 	return &result, nil
 }
 
-// probeModern runs the server/discover probe and, on success, switches the
-// client into modern stateless operation: the negotiated modern version and
-// server capabilities are cached exactly like the legacy handshake state
-// (so capability gates, the HTTP MCP-Protocol-Version header and listing
-// caches all keep working), and a legacy-shaped InitializeResult is
-// synthesized from the discover payload.
 func (c *Client) probeModern(ctx context.Context) (*InitializeResult, error) {
 	res, err := c.Discover(ctx)
 	if err != nil {
-		// #2557: -32022 identifies a MODERN server (dual-era contract in
-		// the file header, EnableStateless docs and the guide): it must
-		// NEVER fall back to the legacy handshake. Retry once with a
-		// mutually supported version from the error payload; when none
-		// exists, surface the typed error so users get "server does not
-		// support 2026-07-28 (supported: ...)" instead of a misleading
-		// legacy initialize failure / silent legacy downgrade.
+
 		u, unsupported := asUnsupportedProtocolVersion(err)
 		if !unsupported {
-			return nil, err // not a recognized modern error: legacy-era signal, caller falls back
+			return nil, err
 		}
-		// Mutual (client-known) version first; with no intersection, follow
-		// the server's declared preference — the -32022 payload is the
-		// server explicitly telling us what it speaks (server-driven
-		// negotiation, #2557).
+
 		v := selectModernVersion(u.Supported)
 		if v == "" && len(u.Supported) > 0 {
 			v = u.Supported[0]
 		}
-		// setModernVersionIfChanged's unchanged gate also stops a pointless
-		// retry with the version the server just rejected.
+
 		if v == "" || !c.setModernVersionIfChanged(v) {
 			return nil, u
 		}
 		retry, rerr := c.Discover(ctx)
 		if rerr != nil {
-			// #3763: the negotiation itself succeeded (the server spoke
-			// -32022 and we picked a mutual version) - a retry failure is a
-			// transport/lifecycle problem (stdio EOF, network drop), NOT
-			// version incompatibility. Swallowing rerr sent users chasing
-			// version phantoms while the server was simply dead. Join all
-			// three layers: retry context first (the actionable diagnosis),
-			// the real cause, and the typed negotiation error last - keeping
-			// the typed error in the chain stops Initialize's dual-era
-			// fallback from attempting a pointless legacy handshake against
-			// a server that already proved itself modern.
+
 			return nil, errors.Join(
 				fmt.Errorf("mcp[%s]: discover retry after -32022 negotiation with %s failed", c.name, v),
 				rerr, u)
@@ -389,9 +250,7 @@ func (c *Client) probeModern(ctx context.Context) (*InitializeResult, error) {
 	}
 	version := selectModernVersion(res.SupportedVersions)
 	if version == "" {
-		// Server-driven negotiation (#2557): the version set during a -32022
-		// retry may be newer than this client's known list; honor it when the
-		// server's discover response still declares it.
+
 		c.mu.Lock()
 		set := c.modernVersion
 		c.mu.Unlock()
@@ -417,12 +276,8 @@ func (c *Client) probeModern(ctx context.Context) (*InitializeResult, error) {
 	}
 	c.mu.Unlock()
 
-	// setNegotiatedState takes c.mu itself — call it outside the block
-	// above. It also clears the listing cache, mirroring a fresh handshake.
 	c.setNegotiatedState(version, res.Capabilities)
 
-	// Record the modern mode version last so concurrent request paths see a
-	// fully populated negotiated state the moment they observe the envelope.
 	c.mu.Lock()
 	c.modernVersion = version
 	c.mu.Unlock()
@@ -435,17 +290,10 @@ func (c *Client) probeModern(ctx context.Context) (*InitializeResult, error) {
 	}, nil
 }
 
-// DiscoverStateless probes the server and reports its modern-era identity
-// without changing the client's operating mode: useful for doctor-style
-// diagnostics and UI display. The error wraps the typed
-// UnsupportedProtocolVersionError when the server rejects the request's
-// protocol version.
 func (c *Client) DiscoverStateless(ctx context.Context) (*DiscoverResult, error) {
 	return c.Discover(ctx)
 }
 
-// envelopeModernMeta attaches the modern per-request _meta envelope when the
-// client is operating in stateless mode. Legacy traffic is untouched.
 func (c *Client) envelopeModernMeta(method string, paramsJSON []byte) []byte {
 	c.mu.Lock()
 	if !c.stateless || c.modernVersion == "" {

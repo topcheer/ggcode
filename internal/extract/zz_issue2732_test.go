@@ -1,17 +1,10 @@
 package extract
 
-// Issue #2732 probe: the XML decoder token loops in findOPFPath and
-// parseOPFSpine broke on ANY error (including real syntax/malformation
-// errors) and then reported a misleading "missing rootfile" / "empty
-// spine" verdict. Real parse failures must surface with context.
-
 import (
 	"strings"
 	"testing"
 )
 
-// Scenario A: container.xml truncated mid-tag BEFORE rootfile -> the real
-// problem is a syntax error, not a missing file.
 func TestIssue2732TruncatedContainerReportsParseError(t *testing.T) {
 	epub := buildMinimalEPUB(t, map[string]string{
 		"META-INF/container.xml": `<?xml version="1.0"?><container version="1.0"><rootfiles><ro`,
@@ -25,8 +18,6 @@ func TestIssue2732TruncatedContainerReportsParseError(t *testing.T) {
 	}
 }
 
-// Scenario B: OPF manifest contains an illegal raw '<' BEFORE the spine ->
-// the real problem is a syntax error, not an empty spine.
 func TestIssue2732CorruptOPFReportsParseError(t *testing.T) {
 	epub := buildMinimalEPUB(t, map[string]string{
 		"OEBPS/content.opf": `<?xml version="1.0"?>

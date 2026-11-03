@@ -6,7 +6,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// BenchmarkSkillIndexScan benchmarks the skill index scanning.
 func BenchmarkSkillIndexScan(b *testing.B) {
 	dir := b.TempDir()
 	cfg := config.DefaultKnightConfig()
@@ -18,7 +17,6 @@ func BenchmarkSkillIndexScan(b *testing.B) {
 	}
 }
 
-// BenchmarkCollectProjectConventions benchmarks project convention collection.
 func BenchmarkCollectProjectConventions(b *testing.B) {
 	dir := b.TempDir()
 	cfg := config.DefaultKnightConfig()
@@ -31,7 +29,6 @@ func BenchmarkCollectProjectConventions(b *testing.B) {
 	}
 }
 
-// BenchmarkCandidateQueueUpsert benchmarks the candidate queue.
 func BenchmarkCandidateQueueUpsert(b *testing.B) {
 	dir := b.TempDir()
 	q := NewCandidateQueue(dir)
@@ -47,7 +44,6 @@ func BenchmarkCandidateQueueUpsert(b *testing.B) {
 	}
 }
 
-// BenchmarkUsageTrackerRecord benchmarks usage recording.
 func BenchmarkUsageTrackerRecord(b *testing.B) {
 	dir := b.TempDir()
 	ut := NewUsageTracker(dir)
@@ -58,11 +54,10 @@ func BenchmarkUsageTrackerRecord(b *testing.B) {
 	}
 }
 
-// BenchmarkUsageTrackerEffectiveness benchmarks effectiveness recording.
 func BenchmarkUsageTrackerEffectiveness(b *testing.B) {
 	dir := b.TempDir()
 	ut := NewUsageTracker(dir)
-	// Pre-populate
+
 	for i := 0; i < 100; i++ {
 		ut.RecordUse("bench-skill")
 	}
@@ -73,7 +68,6 @@ func BenchmarkUsageTrackerEffectiveness(b *testing.B) {
 	}
 }
 
-// BenchmarkBudgetRecord benchmarks budget tracking.
 func BenchmarkBudgetRecord(b *testing.B) {
 	dir := b.TempDir()
 	budget := NewBudget(dir, config.DefaultKnightConfig())
@@ -85,7 +79,6 @@ func BenchmarkBudgetRecord(b *testing.B) {
 	}
 }
 
-// BenchmarkValidateSkill benchmarks skill validation.
 func BenchmarkValidateSkill(b *testing.B) {
 	entry := &SkillEntry{
 		Name:  "bench-skill",

@@ -1,13 +1,3 @@
-// Coordination-quality evaluation: the multi-agent counterpart of the
-// single-trajectory scorecard above. Research basis (sa-76 adjudication of
-// MDPI Future Internet 18(6):326's six-dimension coordination-quality
-// survey framework): /runreport previously scored only the monolithic
-// trajectory; sessions that fan work out across subagents, swarm teammates,
-// or A2A peers additionally need cross-agent dimensions - duplicated work,
-// delegation round-trip overhead, chain integrity, parallel waste, and the
-// coordination token tax. All metrics are deterministic and offline; the
-// coordination section renders only when the event stream shows actual
-// swarm/subagent activity, so single-agent sessions are unchanged.
 package runeval
 
 import (
@@ -18,82 +8,54 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// CoordEventKind classifies one entry of the coordination event stream.
 type CoordEventKind string
 
 const (
-	// CoordTool is any tool invocation attributed to an agent.
 	CoordTool CoordEventKind = "tool"
-	// CoordDelegation opens a delegated unit of work (delegate, spawn_agent,
-	// swarm task dispatch, A2A task submission, ...).
+
 	CoordDelegation CoordEventKind = "delegation"
-	// CoordDelegationResult closes a delegation with its outcome.
+
 	CoordDelegationResult CoordEventKind = "delegation_result"
-	// CoordMessage is an inter-agent message (teammate DM, lanchat, ...).
+
 	CoordMessage CoordEventKind = "message"
-	// CoordReadBack verifies a delegation's claimed result against ground
-	// truth (internal/tool/delegation_readback.go's compareReadBack pattern).
+
 	CoordReadBack CoordEventKind = "readback"
 )
 
-// CoordEvent is one agent-attributed observation in the coordination
-// stream. runeval stays decoupled from internal/metrics and internal/swarm:
-// the TUI (or a metrics exporter) maps MetricEvent.AgentID, swarm teammate
-// FIFO entries, and delegation tool-call sequences onto this struct, exactly
-// as UsageSample decouples usage accounting from the session package.
 type CoordEvent struct {
-	Seq        int            // stream order; ties broken by array order
-	Kind       CoordEventKind // classification
-	AgentID    string         // "main", subagent name, teammate nick, ...
-	Tool       string         // tool name for CoordTool events
-	InputKey   string         // canonical input identity (tool + input)
-	ResultHash string         // truncated result identity, when observed
-	StartMS    int64          // span start (relative ms); 0 = unknown
-	EndMS      int64          // span end (relative ms); 0 = unknown
-	Tokens     int            // tokens this event contributed to the stream
-	Success    bool           // outcome flag for delegation results
+	Seq        int
+	Kind       CoordEventKind
+	AgentID    string
+	Tool       string
+	InputKey   string
+	ResultHash string
+	StartMS    int64
+	EndMS      int64
+	Tokens     int
+	Success    bool
 }
 
-// CoordinationQualityReport carries the five cross-agent dimensions.
 type CoordinationQualityReport struct {
-	// AgentCount is the number of distinct AgentIDs observed.
 	AgentCount int
 
-	// CrossAgentDuplicateGroups lists tool+input keys invoked by more than
-	// one agent (the single-trajectory DuplicateGroup logic re-keyed across
-	// MetricEvent.AgentID), worst first.
 	CrossAgentDuplicateGroups []DuplicateGroup
 
-	// MessageRoundTrips counts closed delegation→result round trips;
-	// UnansweredDelegations counts delegations that never returned.
 	MessageRoundTrips     int
 	UnansweredDelegations int
 
-	// DelegationRecoveryRate is delegation results / delegations.
-	// ReadBackCoverage is read-back verifications / delegations.
-	// DelegationChainIntegrity is their product (0-1): work must both come
-	// back AND be verified before its claims are trusted.
 	DelegationRecoveryRate   float64
 	ReadBackCoverage         float64
 	DelegationChainIntegrity float64
 
-	// ParallelLayerWasteMS sums wall-clock overlap of same-key work executed
-	// concurrently by different agents (waterfall span-overlap, cross-agent).
 	ParallelLayerWasteMS int64
 
-	// CoordinationTokenShare is coordination traffic (delegations, results,
-	// messages, read-backs, coordination tools) as a fraction of all event
-	// tokens (0-1).
 	CoordinationTokens     int
 	TotalTokens            int
 	CoordinationTokenShare float64
 
-	// Findings are human-readable, worst-first improvement hints.
 	Findings []string
 }
 
-// coordinationTools are tools whose every invocation counts as coordination
-// traffic for the token-share dimension.
 var coordinationTools = map[string]bool{
 	"delegate":          true,
 	"spawn_agent":       true,
@@ -110,7 +72,6 @@ var coordinationTools = map[string]bool{
 	"best_of_n":         true,
 }
 
-// delegationTools open a delegated unit of work when seen in a session log.
 var delegationTools = map[string]bool{
 	"delegate":          true,
 	"spawn_agent":       true,
@@ -122,15 +83,11 @@ var delegationTools = map[string]bool{
 	"best_of_n":         true,
 }
 
-// EvaluateCoordination computes the five cross-agent dimensions from the
-// coordination event stream. It returns nil when the stream shows no
-// swarm/subagent activity (no delegation, no inter-agent messages, and
-// fewer than two distinct agents) so single-agent reports stay unchanged.
 func EvaluateCoordination(events []CoordEvent) *CoordinationQualityReport {
 	if len(events) == 0 {
 		return nil
 	}
-	// Stable stream order: Seq first, array order as tiebreaker.
+
 	ordered := append([]CoordEvent(nil), events...)
 	sort.SliceStable(ordered, func(i, j int) bool {
 		return ordered[i].Seq < ordered[j].Seq
@@ -140,7 +97,6 @@ func EvaluateCoordination(events []CoordEvent) *CoordinationQualityReport {
 	delegations, results, answered, readbacks := 0, 0, 0, 0
 	var coordTokens, totalTokens int
 
-	// Cross-agent duplicate detection: same callKey across >=2 AgentIDs.
 	type agentSet map[string]bool
 	type crossRecord struct {
 		tool     string
@@ -152,7 +108,7 @@ func EvaluateCoordination(events []CoordEvent) *CoordinationQualityReport {
 	}
 	records := map[callKey]*crossRecord{}
 	var order []callKey
-	// Parallel-layer waste: spans keyed by (tool,input) for overlap pairing.
+
 	type span struct {
 		agent      string
 		start, end int64
@@ -209,7 +165,6 @@ func EvaluateCoordination(events []CoordEvent) *CoordinationQualityReport {
 		}
 	}
 
-	// Gate: only render for sessions with actual swarm/subagent activity.
 	if delegations == 0 && coordTokens == 0 && len(agents) < 2 {
 		return nil
 	}
@@ -222,11 +177,10 @@ func EvaluateCoordination(events []CoordEvent) *CoordinationQualityReport {
 		TotalTokens:           totalTokens,
 	}
 
-	// Cross-agent duplicate groups, worst first.
 	for _, key := range order {
 		rec := records[key]
 		if len(rec.agents) < 2 {
-			continue // same-agent duplicates stay in the single-agent section
+			continue
 		}
 		q.CrossAgentDuplicateGroups = append(q.CrossAgentDuplicateGroups, DuplicateGroup{
 			Tool:      rec.tool,
@@ -241,15 +195,12 @@ func EvaluateCoordination(events []CoordEvent) *CoordinationQualityReport {
 		return q.CrossAgentDuplicateGroups[i].Repeats > q.CrossAgentDuplicateGroups[j].Repeats
 	})
 
-	// Delegation chain integrity: recovery x read-back coverage.
 	if delegations > 0 {
 		q.DelegationRecoveryRate = float64(answered) / float64(delegations)
 		q.ReadBackCoverage = float64(readbacks) / float64(delegations)
 	}
 	q.DelegationChainIntegrity = q.DelegationRecoveryRate * q.ReadBackCoverage
 
-	// Parallel-layer waste: same-key spans from different agents that
-	// overlap in wall-clock time (waterfall overlap logic, cross-agent).
 	for _, sp := range spans {
 		for i := 0; i < len(sp); i++ {
 			for j := i + 1; j < len(sp); j++ {
@@ -287,7 +238,6 @@ func min64(a, b int64) int64 {
 	return b
 }
 
-// coordinationFindings renders worst-first improvement hints.
 func coordinationFindings(q *CoordinationQualityReport) []string {
 	var f []string
 	if n := len(q.CrossAgentDuplicateGroups); n > 0 {
@@ -319,13 +269,9 @@ func coordinationFindings(q *CoordinationQualityReport) []string {
 	return f
 }
 
-// CoordEventsFromMessages derives a minimal coordination event stream from a
-// session message log: delegation-tool calls and their results attributed to
-// the main agent. Span/timing detail requires a richer metrics feed; those
-// dimensions simply stay zero for log-derived streams.
 func CoordEventsFromMessages(msgs []provider.Message) []CoordEvent {
 	var events []CoordEvent
-	delegationToolIDs := map[string]string{} // tool_use ID -> tool name
+	delegationToolIDs := map[string]string{}
 	seq := 0
 	for i := range msgs {
 		for _, b := range msgs[i].Content {
@@ -362,16 +308,12 @@ func CoordEventsFromMessages(msgs []provider.Message) []CoordEvent {
 	return events
 }
 
-// EvaluateWithCoordination is Evaluate plus the cross-agent section: the
-// coordination report is attached only when the event stream shows actual
-// swarm/subagent activity.
 func EvaluateWithCoordination(msgs []provider.Message, usage []UsageSample, events []CoordEvent) Report {
 	r := Evaluate(msgs, usage)
 	r.Coordination = EvaluateCoordination(events)
 	return r
 }
 
-// renderCoordination formats the cross-agent section for /runreport.
 func renderCoordination(b *strings.Builder, q *CoordinationQualityReport) {
 	fmt.Fprintf(b, "Coordination: %d agents · %d cross-agent dup group%s", q.AgentCount,
 		len(q.CrossAgentDuplicateGroups), plural(len(q.CrossAgentDuplicateGroups)))

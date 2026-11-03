@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// #2150 batch 3: the IM /usage renderer must keep the balance/windows
-// payload and degrade to one explanatory line on error/nil.
 func TestRenderText(t *testing.T) {
 	bal := 12.5
 	got := RenderText("zai", &UsageInfo{
@@ -29,15 +27,12 @@ func TestRenderText(t *testing.T) {
 	if got := RenderText("x", nil, nil); !strings.Contains(got, "no data") {
 		t.Fatalf("nil case: %q", got)
 	}
-	// No balance concept: no "| balance" segment.
+
 	if got := RenderText("deepseek", &UsageInfo{Vendor: "deepseek", Windows: []UsageWindow{{Label: "weekly", UsedPercent: 7}}}, nil); strings.Contains(got, "balance") {
 		t.Fatalf("nil balance must not render a balance line: %q", got)
 	}
 }
 
-// TestDeepSeekBalanceStringForm pins the 2026-09-19 user report:
-// `deepseek json: cannot unmarshal string into Go struct` - DeepSeek's
-// /user/balance returns total_balance as a QUOTED string ("110.00").
 func TestDeepSeekBalanceStringForm(t *testing.T) {
 	var p struct {
 		BalanceInfos []struct {
@@ -51,7 +46,7 @@ func TestDeepSeekBalanceStringForm(t *testing.T) {
 	if len(p.BalanceInfos) != 1 || float64(p.BalanceInfos[0].TotalBalance) != 110.0 {
 		t.Fatalf("string form = %+v", p.BalanceInfos)
 	}
-	// Bare-number form still works.
+
 	if err := json.Unmarshal([]byte(`{"balance_infos":[{"currency":"CNY","total_balance":3.5}]}`), &p); err != nil {
 		t.Fatalf("number-form total_balance failed: %v", err)
 	}

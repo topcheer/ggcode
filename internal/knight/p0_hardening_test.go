@@ -10,8 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// --- Sanitization ----------------------------------------------------------
-
 func TestSanitizeScenarioTextRedactsSecrets(t *testing.T) {
 	cases := []string{
 		"contact alice@example.com",
@@ -39,8 +37,6 @@ func TestTruncateSanitizedRespectsRuneLimit(t *testing.T) {
 		t.Fatalf("expected ellipsis suffix, got %q", out)
 	}
 }
-
-// --- Emit throttle ---------------------------------------------------------
 
 func TestEmitThrottleSuppressesRepeatsWithinWindow(t *testing.T) {
 	g := newEmitThrottle(time.Hour)
@@ -76,8 +72,6 @@ func TestEmitThrottleEmptyKeyAlwaysAllows(t *testing.T) {
 	}
 }
 
-// --- Jaccard / fingerprint -------------------------------------------------
-
 func TestJaccardIdenticalIsOne(t *testing.T) {
 	a := tokenizeForSimilarity("build verify test")
 	if got := jaccardSimilarity(a, a); got < 0.999 {
@@ -92,8 +86,6 @@ func TestJaccardDisjointIsZero(t *testing.T) {
 		t.Fatalf("disjoint jaccard = %v", got)
 	}
 }
-
-// --- Rule-based overlap ----------------------------------------------------
 
 func TestComputeRuleBasedOverlapDetectsHighSimilarity(t *testing.T) {
 	body := "When to use\nUse before pushing changes to verify build passes.\nSteps\n- run go build\n- run tests\n- never push without verification\n"
@@ -135,8 +127,6 @@ func TestComputeRuleBasedOverlapAllowsUnrelated(t *testing.T) {
 	}
 }
 
-// --- Usage decay -----------------------------------------------------------
-
 func TestUsageDecayFadesOverTime(t *testing.T) {
 	dir := t.TempDir()
 	ut := NewUsageTracker(filepath.Join(dir, "u.json"))
@@ -154,8 +144,6 @@ func TestUsageDecayFadesOverTime(t *testing.T) {
 	}
 }
 
-// --- Reject feedback cooldown ---------------------------------------------
-
 func TestRejectFeedbackCooldownActiveWithinWindow(t *testing.T) {
 	dir := t.TempDir()
 	store := newRejectFeedbackStore(filepath.Join(dir, "rej.jsonl"))
@@ -172,8 +160,6 @@ func TestRejectFeedbackCooldownActiveWithinWindow(t *testing.T) {
 		t.Fatal("expected cooldown to expire after 7+ days")
 	}
 }
-
-// --- Bucket budget --------------------------------------------------------
 
 func TestBucketBudgetCapsSpendAndRollsOver(t *testing.T) {
 	bb := newBucketBudget(1_000_000)
@@ -208,8 +194,6 @@ func TestClassifyBucketKnownAndUnknown(t *testing.T) {
 		t.Fatalf("unknown defaults to adhoc, got %v", got)
 	}
 }
-
-// --- Auto policy runtime derivation ---------------------------------------
 
 func TestAutoPoliciesEffectiveWhenAutoTrustAndCaps(t *testing.T) {
 	k := New(config.KnightConfig{
@@ -246,8 +230,6 @@ func TestAutoPoliciesReadOnlyDisablesEverything(t *testing.T) {
 		}
 	}
 }
-
-// --- Project proposal lifecycle -------------------------------------------
 
 func TestProjectProposalLifecycleApproveReject(t *testing.T) {
 	dir := t.TempDir()
@@ -297,8 +279,6 @@ func TestRejectProposalUnknownIDFails(t *testing.T) {
 		t.Fatal("expected error for unknown id")
 	}
 }
-
-// --- ClearSkillScenarios ---------------------------------------------------
 
 func TestClearSkillScenariosRemovesLog(t *testing.T) {
 	dir := t.TempDir()

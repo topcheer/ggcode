@@ -2,22 +2,19 @@ package hooks
 
 import "testing"
 
-// #413: mixed-syntax match patterns (function-call + pipe alternatives)
-// must fire instead of silently never matching.
 func TestMatchToolMixedSyntax(t *testing.T) {
 	cases := []struct {
 		pattern, tool, input string
 		want                 bool
 	}{
-		// Old code sliced patArgs="*)|bas" from "edit_file(*)|bash" —
-		// Contains was always false → hook never fired (#413).
+
 		{"edit_file(*)|bash", "edit_file", `{"file_path":"/a"}`, true},
 		{"edit_file(*)|bash", "bash", `ls`, true},
 		{"edit_file(*)|bash", "read_file", `x`, false},
 		{"bash|edit_file(*)", "edit_file", `y`, true},
 		{"edit_file(prefix*)|write_file", "edit_file", `{"content":"prefix-here"}`, true},
 		{"edit_file(*prefix)|write_file", "write_file", `z`, true},
-		// Pure forms keep working.
+
 		{"edit_file(*)", "edit_file", `{}`, true},
 		{"read_file|grep", "grep", `pattern`, true},
 		{"read_file", "read_file", ``, true},
@@ -29,8 +26,6 @@ func TestMatchToolMixedSyntax(t *testing.T) {
 	}
 }
 
-// #413: filterEnviron must drop inherited GGCODE_* keys so injected values
-// are never shadowed by stale ones from a chained-hook environment.
 func TestFilterEnviron(t *testing.T) {
 	environ := []string{
 		"PATH=/usr/bin",

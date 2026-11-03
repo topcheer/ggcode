@@ -10,19 +10,6 @@ import (
 	"github.com/topcheer/ggcode/internal/diff"
 )
 
-// appendRunChangeSummary displays a concise summary of files changed during
-// the agent run that just completed. This gives users an at-a-glance view of
-// what the agent modified without needing to scroll through tool calls or
-// run /diff manually.
-//
-// Competitor feature parity:
-//   - Claude Code: shows changed files summary after agent runs
-//   - Cursor: shows a diff panel after Composer runs
-//   - Aider: shows git diff stats after each edit
-//
-// Our implementation is zero-cost (no git subprocess, no LLM call): it
-// cross-references RunStats.FilesEdited with checkpoint data to produce
-// a compact "M path (+N -M)" / "A path (new)" listing.
 func (m *Model) appendRunChangeSummary() {
 	if m.agent == nil {
 		return
@@ -34,14 +21,11 @@ func (m *Model) appendRunChangeSummary() {
 
 	cpMgr := m.agent.CheckpointManager()
 
-	// Build a set of files edited in this run for quick lookup.
 	runFiles := make(map[string]bool, len(stats.FilesEdited))
 	for _, f := range stats.FilesEdited {
 		runFiles[f] = true
 	}
 
-	// Gather checkpoint data per file, filtered to the run that just
-	// finished. See accumulateRunChanges for the accounting rules.
 	var changes map[string]*fileChange
 	if cpMgr != nil {
 		changes = accumulateRunChanges(cpMgr.List(), stats.RunID(), runFiles)
@@ -50,8 +34,6 @@ func (m *Model) appendRunChangeSummary() {
 		changes = make(map[string]*fileChange)
 	}
 
-	// For files with no checkpoint data (e.g., checkpoint evicted), still
-	// show them in the summary without line counts.
 	for _, f := range stats.FilesEdited {
 		if _, ok := changes[f]; !ok {
 			changes[f] = &fileChange{isNew: false, edits: 0}
@@ -62,14 +44,12 @@ func (m *Model) appendRunChangeSummary() {
 		return
 	}
 
-	// Build the summary text.
 	workingDir := m.agent.WorkingDir()
 	totalAdded := 0
 	totalDeleted := 0
 	fileCount := len(changes)
 	var lines []string
 
-	// Sort: new files first, then modified, alphabetical within each group.
 	sortedFiles := make([]string, 0, fileCount)
 	newFiles := make([]string, 0)
 	modFiles := make([]string, 0)
@@ -104,7 +84,6 @@ func (m *Model) appendRunChangeSummary() {
 	m.chatWriteSystem(nextSystemID(), summary)
 }
 
-// fileChange is the net change for one file across a single agent run.
 type fileChange struct {
 	added   int
 	deleted int
@@ -112,29 +91,8 @@ type fileChange struct {
 	edits   int
 }
 
-// accumulateRunChanges computes per-file net changes for one agent run
-// from the checkpoint log (issue #541). It fixes three accounting bugs of
-// the previous implementation:
-//
-//   - Only the first checkpoint per file was counted, so multiple edits to
-//     the same file systematically under-reported the totals. The net diff
-//     now runs from the run's first checkpoint's OldContent to its LAST
-//     checkpoint's NewContent, accumulating every edit.
-//   - Checkpoints were not filtered by RunID, so earlier runs' checkpoints
-//     contaminated the current run's summary. Only checkpoints created by
-//     runID are counted now.
-//   - isNew treated any empty pre-edit content as "new file". A file that
-//     existed with content and was emptied before the run also has empty
-//     OldContent; such files are recognized via older checkpoints that saw
-//     non-empty content and are reported as modified, not new.
 func accumulateRunChanges(cps []checkpoint.Checkpoint, runID string, runFiles map[string]bool) map[string]*fileChange {
-	// Files that any checkpoint (any run) saw with non-empty content before
-	// an edit: proof the file existed before it was possibly emptied.
-	// #883: exclude the CURRENT run's checkpoints — a file created by
-	// write_file then edited by edit_file in the same run has non-empty
-	// OldContent at cp2, which wrongly counted as pre-existing evidence and
-	// reported the file as Modified instead of Added. The main loop applies
-	// the same RunID filter (see below).
+
 	existedWithContent := make(map[string]bool)
 	for _, cp := range cps {
 		if runID != "" && cp.RunID == runID {
@@ -172,24 +130,16 @@ func accumulateRunChanges(cps []checkpoint.Checkpoint, runID string, runFiles ma
 	return changes
 }
 
-// shortenPath converts an absolute path to a project-relative one for display.
 func shortenPath(absPath, workingDir string) string {
 	if workingDir != "" {
-		// #1361: `..` alone must not match `..hidden.go` - a dot-prefixed
-		// file INSIDE the working dir was misjudged as outside and fell
-		// through to absolute-path display.
-		// filepath.Rel uses os.PathSeparator ('..' + '\' on Windows), so a
-		// hardcoded "../" prefix never matched there and outside paths on
-		// the same volume leaked through as relative "..\..." displays.
+
 		if rel, err := filepath.Rel(workingDir, absPath); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 			return rel
 		}
 	}
-	// Fall back to ~ if under home.
+
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		// #1361: home=/Users/alice also prefix-matched /Users/alicebox/x.go
-		// and rendered ~box/x.go - a path that does not exist. Require a
-		// real boundary: the exact home dir or a separator after it.
+
 		if absPath == home || strings.HasPrefix(absPath, home+string(os.PathSeparator)) {
 			return "~" + absPath[len(home):]
 		}
@@ -204,7 +154,6 @@ func pluralFile(n int) string {
 	return "files"
 }
 
-// sortStrings returns a sorted copy of the input slice.
 func sortStrings(s []string) []string {
 	out := make([]string, len(s))
 	copy(out, s)

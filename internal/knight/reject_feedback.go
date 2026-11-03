@@ -16,20 +16,15 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
-// rejectFeedbackEntry records a single user (or scheduler) decision to drop a
-// candidate skill. We persist enough context that the next analysis pass can
-// avoid regenerating the same idea immediately.
 type rejectFeedbackEntry struct {
 	Time     time.Time `json:"time"`
 	Name     string    `json:"name"`
 	Scope    string    `json:"scope,omitempty"`
-	Action   string    `json:"action"` // "reject", "rollback", "auto-reject"
+	Action   string    `json:"action"`
 	Reason   string    `json:"reason,omitempty"`
-	Reporter string    `json:"reporter,omitempty"` // "user", "validator", "scheduler"
+	Reporter string    `json:"reporter,omitempty"`
 }
 
-// rejectFeedbackStore is a tiny append-only JSONL store with an in-memory
-// lookup index keyed by lowercased skill name + scope.
 type rejectFeedbackStore struct {
 	mu      sync.Mutex
 	path    string
@@ -37,22 +32,14 @@ type rejectFeedbackStore struct {
 	loaded  bool
 }
 
-// rejectCoolDownWindow is how long a same-name candidate is suppressed after a
-// recent reject/rollback. Long enough that an analyzer doesn't replay the same
-// idea on the next tick, short enough that a genuinely useful skill can resurface.
 const rejectCoolDownWindow = 7 * 24 * time.Hour
 
-// maxRejectFeedbackEntries caps in-memory entries to prevent unbounded growth
-// from long-running sessions with many reject cycles.
 const maxRejectFeedbackEntries = 500
 
 func newRejectFeedbackStore(path string) *rejectFeedbackStore {
 	return &rejectFeedbackStore{path: path}
 }
 
-// normalizeRejectEntryScope lowercases/trims the scope and defaults empty
-// scopes to "project" (skill_validator.go's default) so a scope-less entry
-// can never act as an every-scope wildcard in LastFor (#3025).
 func normalizeRejectEntryScope(entry *rejectFeedbackEntry) {
 	entry.Scope = strings.ToLower(strings.TrimSpace(entry.Scope))
 	if entry.Scope == "" {
@@ -70,9 +57,7 @@ func (s *rejectFeedbackStore) load() {
 		return
 	}
 	defer f.Close()
-	// Scan line by line so a single corrupt line (e.g. a torn write from a
-	// crash mid-append) neither discards the remaining entries nor, via an
-	// early return, skips the end-of-load trim (sa-161 fix).
+
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 512*1024)
 	for sc.Scan() {
@@ -85,16 +70,15 @@ func (s *rejectFeedbackStore) load() {
 			debug.Log("knight", "reject feedback %s: skipping corrupt line: %v", filepath.Base(s.path), err)
 			continue
 		}
-		normalizeRejectEntryScope(&entry) // #3025: legacy empty-scope entries fence
+		normalizeRejectEntryScope(&entry)
 		s.entries = append(s.entries, entry)
 	}
 	if err := sc.Err(); err != nil {
 		debug.Log("knight", "reject feedback %s: scan error: %v", filepath.Base(s.path), err)
 	}
-	s.trimOld(time.Time{}) // always trim stale entries on load
+	s.trimOld(time.Time{})
 }
 
-// Append persists a new feedback entry and returns the stored copy.
 func (s *rejectFeedbackStore) Append(entry rejectFeedbackEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -102,9 +86,7 @@ func (s *rejectFeedbackStore) Append(entry rejectFeedbackEntry) error {
 	if entry.Time.IsZero() {
 		entry.Time = time.Now()
 	}
-	// #3025: normalize empty scopes to "project" on write (same default as
-	// skill_validator.go) so no entry can wildcard every scope at lookup
-	// time; legacy entries are normalized at load via the same helper.
+
 	normalizeRejectEntryScope(&entry)
 	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
 		return err
@@ -126,12 +108,6 @@ func (s *rejectFeedbackStore) Append(entry rejectFeedbackEntry) error {
 	return nil
 }
 
-// trimOld removes entries that are beyond the cool-down window (no longer
-// useful for lookups) and caps the in-memory slice at maxRejectFeedbackEntries.
-// This prevents unbounded growth from long-running sessions. The on-disk file
-// is not rewritten — only the in-memory index is trimmed. Old entries in the
-// file are harmless (they fall outside the cool-down window and are naturally
-// ignored by LastFor/coolDownActive).
 func (s *rejectFeedbackStore) trimOld(now time.Time) {
 	if len(s.entries) == 0 {
 		return
@@ -147,21 +123,13 @@ func (s *rejectFeedbackStore) trimOld(now time.Time) {
 		}
 	}
 	s.entries = trimmed
-	// Hard cap: keep only the most recent N entries.
+
 	if len(s.entries) > maxRejectFeedbackEntries {
 		sort.SliceStable(s.entries, func(i, j int) bool { return s.entries[i].Time.After(s.entries[j].Time) })
 		s.entries = s.entries[:maxRejectFeedbackEntries]
 	}
 }
 
-// LastFor returns the most recent feedback entry for a (scope, name) pair, if
-// any. Lookup is case-insensitive on name; scope must match exactly when
-// non-empty.
-//
-// #3025: the old gate also skipped the comparison when a stored entry had
-// an EMPTY scope, so a single empty-scope entry (written before write-side
-// normalization) matched lookups in every scope - one rejection cooled the
-// same skill name in both "project" and "global". Exact match both ways.
 func (s *rejectFeedbackStore) LastFor(scope, name string) (rejectFeedbackEntry, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -185,7 +153,6 @@ func (s *rejectFeedbackStore) LastFor(scope, name string) (rejectFeedbackEntry, 
 	return latest, found
 }
 
-// Recent returns the most recent N entries newest-first.
 func (s *rejectFeedbackStore) Recent(limit int) []rejectFeedbackEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -198,7 +165,6 @@ func (s *rejectFeedbackStore) Recent(limit int) []rejectFeedbackEntry {
 	return out
 }
 
-// Clear truncates the underlying log; used by tests and `/knight reject-history clear`.
 func (s *rejectFeedbackStore) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -210,9 +176,6 @@ func (s *rejectFeedbackStore) Clear() error {
 	return nil
 }
 
-// rejectCoolDownActive reports whether a candidate is currently suppressed by
-// a recent reject/rollback. Returns the entry that caused the cool-down for
-// human messaging.
 func (s *rejectFeedbackStore) coolDownActive(scope, name string, now time.Time) (rejectFeedbackEntry, bool) {
 	last, ok := s.LastFor(scope, name)
 	if !ok {
@@ -224,7 +187,6 @@ func (s *rejectFeedbackStore) coolDownActive(scope, name string, now time.Time) 
 	return last, true
 }
 
-// formatRejectFeedback renders a stored entry for status output.
 func formatRejectFeedback(entry rejectFeedbackEntry) string {
 	when := ""
 	if !entry.Time.IsZero() {
@@ -245,10 +207,6 @@ func formatRejectFeedback(entry rejectFeedbackEntry) string {
 	return fmt.Sprintf("%s%s:%s [%s by %s]%s", when, scope, entry.Name, entry.Action, reporter, reason)
 }
 
-// --- Knight surface ---------------------------------------------------------
-
-// RecentRejectFeedback returns at most limit recent reject/rollback entries
-// (newest first) formatted as human-readable strings.
 func (k *Knight) RecentRejectFeedback(limit int) []string {
 	if k == nil || k.rejects == nil {
 		return nil
@@ -261,8 +219,6 @@ func (k *Knight) RecentRejectFeedback(limit int) []string {
 	return out
 }
 
-// ClearRejectFeedback wipes the reject feedback log; rejected candidates may
-// then be re-staged on the next analysis tick.
 func (k *Knight) ClearRejectFeedback() error {
 	if k == nil || k.rejects == nil {
 		return nil

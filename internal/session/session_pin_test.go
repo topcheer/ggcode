@@ -73,7 +73,6 @@ func TestSetTagsNormalizes(t *testing.T) {
 		t.Fatalf("reloaded tags = %v, want %v", loaded.Tags, want)
 	}
 
-	// Clearing with an empty set persists the clear.
 	if err := store.SetTags(ses, nil); err != nil {
 		t.Fatal(err)
 	}

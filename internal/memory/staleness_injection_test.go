@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// STALE / Implicit Conflict (arXiv:2605.06527): a single stale entry with no
-// live contradicting sibling bypasses ArbitrateInline and must still be
-// flagged at injection time instead of serving as an unflagged false premise.
-
 func TestAnnotateStaleInlineBrokenPath(t *testing.T) {
 	workingDir := t.TempDir()
 	am := &AutoMemory{dir: t.TempDir(), projectRoot: workingDir}
@@ -40,10 +36,8 @@ func TestAnnotateStaleInlineValidPath(t *testing.T) {
 }
 
 func TestAnnotateStaleInlineGlobalNoop(t *testing.T) {
-	// Global memory has no projectRoot: the check must degrade to a no-op
-	// instead of resolving repo-style paths against HOME (guaranteed false
-	// positives).
-	am := &AutoMemory{dir: t.TempDir()} // projectRoot == ""
+
+	am := &AutoMemory{dir: t.TempDir()}
 
 	inline := []MemoryEntry{{
 		Key:     "global-stale",
@@ -63,7 +57,7 @@ func TestAnnotateStaleInlineCap(t *testing.T) {
 	inline := make([]MemoryEntry, maxStaleInlineAnnotations+3)
 	for i := range inline {
 		inline[i] = MemoryEntry{
-			Key:     "stale-" + strings.Repeat("a", i), // distinct keys
+			Key:     "stale-" + strings.Repeat("a", i),
 			Content: "references deleted/path/number" + strings.Repeat("0", i+1) + ".go somewhere",
 		}
 	}

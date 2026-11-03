@@ -91,9 +91,7 @@ func TestFormatTurnDigest(t *testing.T) {
 		noFail := turn
 		noFail.ToolFailureCount = 0
 		got := FormatTurnDigest("en", noFail)
-		// Count exclamation marks — should not have the failure marker
-		// The slowest tool duration still contains "3.0s" so just check
-		// the digest doesn't end with "!"
+
 		if strings.HasSuffix(got, "!") {
 			t.Errorf("expected no failure marker, got %q", got)
 		}

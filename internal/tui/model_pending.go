@@ -40,16 +40,12 @@ func (m *Model) queuePendingSubmission(text string) {
 	m.queuePendingSubmissionOrigin(text, false)
 }
 
-// queuePendingSubmissionRemote enqueues remote-origin text (lanchat DM / IM
-// inbound / tunnel / webchat) so the drain path arms the refusal-ledger
-// inhibit for the run it feeds (#3466).
 func (m *Model) queuePendingSubmissionRemote(text string) {
 	m.queuePendingSubmissionOrigin(text, true)
 }
 
 func (m *Model) queuePendingSubmissionOrigin(text string, remote bool) {
-	// Capture images attached with this submission and clear them from the
-	// pending list so they don't leak into the next submission.
+
 	imgs := m.pendingImages
 	m.pendingImages = nil
 	chatID := nextChatID()
@@ -60,9 +56,7 @@ func (m *Model) queuePendingSubmissionOrigin(text string, remote bool) {
 	if count == 0 {
 		return
 	}
-	// Render the user's input in the conversation view so it looks like a
-	// normal submission, rather than showing a "[queued N pending]" hint.
-	// Include image placeholders so the user sees what was attached.
+
 	displayText := text
 	for _, img := range imgs {
 		displayText = strings.TrimSpace(img.placeholder + " " + displayText)
@@ -71,19 +65,15 @@ func (m *Model) queuePendingSubmissionOrigin(text string, remote bool) {
 	m.chatListScrollToBottom()
 }
 
-// dequeueLastVisible removes the last visible (non-hidden) pending submission
-// from the queue, removes its rendered chat bubble, and returns the text and
-// images so the caller can put them back in the input box.
 func (m *Model) dequeueLastVisible() (text string, imgs []imageAttachedMsg, ok bool) {
 	text, imgs, ok = m.pending.popLastVisible()
 	if !ok {
 		return "", nil, false
 	}
-	// Remove the chat bubble for this queued message.
+
 	if m.lastQueuedChatID != "" {
 		m.chatList.RemoveByID(m.lastQueuedChatID)
-		// Keep queuedChatIDs in sync so a later restorePendingInput does not
-		// call RemoveByID on an already-removed bubble (harmless, but noisy).
+
 		for i := len(m.queuedChatIDs) - 1; i >= 0; i-- {
 			if m.queuedChatIDs[i] == m.lastQueuedChatID {
 				m.queuedChatIDs = append(m.queuedChatIDs[:i], m.queuedChatIDs[i+1:]...)
@@ -96,8 +86,6 @@ func (m *Model) dequeueLastVisible() (text string, imgs []imageAttachedMsg, ok b
 	return text, imgs, ok
 }
 
-// queuePendingSubmissionHidden enqueues text for LLM submission without
-// rendering it as a user message in the chat panel (e.g., cron triggers).
 func (m *Model) queuePendingSubmissionHidden(text string) {
 	m.queuePendingSubmissionHiddenWithOverride(text, nil)
 }
@@ -111,10 +99,6 @@ func (m *Model) pendingSubmissionCount() int {
 	return m.pending.count()
 }
 
-// pendingHeadIsAgentOrigin reports whether the oldest queued submission is
-// agent-bound (remote-origin or hidden) and must be drained through the
-// agent path rather than chained into the shell command path. See the
-// shell-done drain in update_shell.go for the routing decision.
 func (m *Model) pendingHeadIsAgentOrigin() bool {
 	return m.pending.headIsAgentOrigin()
 }
@@ -130,13 +114,7 @@ func (m *Model) cancelActiveRun() {
 		return
 	}
 	debug.Log("cancel", "cancelActiveRun: START")
-	// #1768 case 1+2: only poison runCanceled when there is something
-	// to cancel. /compact runs on context.Background (cancelFunc nil,
-	// uncancellable by design) with loading=true - Esc-Esc during it
-	// used to set runCanceled with nothing to cancel, and nothing
-	// reset it before the NEXT normal run, which was then treated as
-	// cancelled: session persist, metrics digest, and the pending-queue
-	// drain all skipped.
+
 	if !m.shellOwnedLoading && m.cancelFunc == nil {
 		debug.Log("cancel", "cancelActiveRun: no active cancellable run (loading is uncancellable e.g. /compact); not poisoning runCanceled")
 		return
@@ -150,9 +128,7 @@ func (m *Model) cancelActiveRun() {
 		m.pushTunnelToolResult(tool.ID, tool.ToolName, "Cancelled", true)
 	}
 	m.pushTunnelCancel()
-	// #910: when a shell command owns the loading state, Esc must cancel the
-	// SHELL's context - not the agent's cancelFunc (which would discard the
-	// agent's output while leaving it uncancellable).
+
 	if m.shellOwnedLoading && m.shellCancelFunc != nil {
 		m.shellCancelFunc()
 		return
@@ -161,11 +137,6 @@ func (m *Model) cancelActiveRun() {
 		m.cancelFunc()
 	}
 
-	// Cancel all running sub-agents and swarm teammates asynchronously.
-	// CancelAll() waits for each sub-agent goroutine to terminate (up to 5s each),
-	// which would freeze the TUI if called synchronously. The cancelFunc() above
-	// already cancelled the parent agent's context, so the agent goroutine will
-	// exit and send agentDoneMsg. Sub-agent cleanup happens in background.
 	if m.subAgentMgr != nil || m.swarmMgr != nil {
 		subMgr := m.subAgentMgr
 		swarmMgr := m.swarmMgr
@@ -216,16 +187,13 @@ func (m *Model) submitPendingSubmissionCmd() tea.Cmd {
 		return nil
 	}
 	if remote {
-		// #3466: this drained submission carries remote-origin text (queued
-		// while the agent was busy). Arm the inhibit NOW - right before the
-		// run starts - so the ledger gate exempts it just like the direct
-		// remote paths, and no unrelated run can consume the flag first.
+
 		m.agent.InhibitNextRefusalLedgerWrite()
 	}
 	if override != nil {
 		m.setNextTunnelUserMessageOverride(*override)
 	}
-	// Restore images so startAgentWithExpand picks them up.
+
 	m.pendingImages = imgs
 	if hidden {
 		return m.submitHiddenText(text)
@@ -233,13 +201,8 @@ func (m *Model) submitPendingSubmissionCmd() tea.Cmd {
 	return m.submitText(text, false)
 }
 
-// shutdownAll cancels all running sub-agents and swarm teammates.
-// Called on exit (double ctrl+c, ctrl+d) to avoid orphaned background work.
 func (m *Model) shutdownAll() {
-	// Cancel sub-agents and swarm teammates asynchronously.
-	// CancelAll() waits up to 5s per sub-agent for its goroutine to terminate,
-	// which would freeze the TUI if called synchronously during shutdown.
-	// The process is exiting anyway (tea.Quit follows), so we fire-and-forget.
+
 	if m.subAgentMgr != nil || m.swarmMgr != nil {
 		subMgr := m.subAgentMgr
 		swarmMgr := m.swarmMgr
@@ -258,17 +221,12 @@ func (m *Model) shutdownAll() {
 	if m.cmdPaneMgr != nil {
 		m.cmdPaneMgr.Close()
 	}
-	// r71: reap managed background command jobs too. start_command children
-	// (especially detach=true dev servers/builds) were the only background
-	// work class surviving exit as orphan processes. Same fire-and-forget
-	// discipline as the sub-agent cancel above: the process is quitting.
+
 	if m.jobManager != nil {
 		jm := m.jobManager
 		safego.Go("tui.shutdownAll.commandJobs", func() { jm.ShutdownAll(2 * time.Second) })
 	}
-	// #1364: knight adhoc tasks (LLM-backed, formerly context.Background)
-	// must die with the session - otherwise they keep billing and running
-	// tool side effects invisibly after exit.
+
 	m.cancelKnightTasks()
 }
 
@@ -276,23 +234,13 @@ type knightTaskHandle struct {
 	cancel context.CancelFunc
 }
 
-// knightCancelSet holds live knight task handles. Lives behind a pointer
-// on Model: Model is passed by value everywhere in the TUI, so the mutex
-// must not be a Model field (go vet copylocks).
 type knightCancelSet struct {
 	mu      sync.Mutex
 	handles []*knightTaskHandle
 }
 
-// registerKnightTask tracks a knight task's cancel for shutdown; returns a
-// handle (pointer identity - funcs are not comparable) the task uses to
-// deregister itself when it finishes.
 func (m *Model) registerKnightTask() (context.Context, *knightTaskHandle) {
-	// #2616: knightTasks is pre-built by NewModel (same pattern as
-	// imEnsureGuard, #1737). The former lazy nil-init here wrote the
-	// Update-local Model copy (Update is a value receiver; the tea.Cmd
-	// closure captured that copy), so registrations landed in a dead
-	// copy and cancelKnightTasks' nil check skipped cancelling anything.
+
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &knightTaskHandle{cancel: cancel}
 	m.knightTasks.mu.Lock()
@@ -301,8 +249,6 @@ func (m *Model) registerKnightTask() (context.Context, *knightTaskHandle) {
 	return ctx, h
 }
 
-// releaseKnightTask drops a finished task from the shutdown set. O(n) on a
-// tiny list (at most a couple of concurrent knight tasks).
 func (m *Model) releaseKnightTask(h *knightTaskHandle) {
 	if m.knightTasks == nil {
 		return
@@ -317,7 +263,6 @@ func (m *Model) releaseKnightTask(h *knightTaskHandle) {
 	m.knightTasks.mu.Unlock()
 }
 
-// cancelKnightTasks cancels every live knight task (shutdown path).
 func (m *Model) cancelKnightTasks() {
 	if m.knightTasks == nil {
 		return
@@ -332,10 +277,7 @@ func (m *Model) cancelKnightTasks() {
 }
 
 func (m *Model) restorePendingInput() {
-	// Remove the rendered chat bubbles for queued messages before restoring
-	// them to the input box. Without this the bubble stayed in the chat list
-	// AND the text reappeared in the composer — a double display — and the
-	// bubble text was silently lost if the user typed over the restored draft.
+
 	for _, id := range m.queuedChatIDs {
 		if id != "" {
 			m.chatList.RemoveByID(id)
@@ -344,10 +286,7 @@ func (m *Model) restorePendingInput() {
 	m.queuedChatIDs = nil
 	m.lastQueuedChatID = ""
 	pending, restoredImgs := m.pending.consumeVisiblePrefix()
-	// Hidden submissions (cron/remote-injected) are intentionally NOT restored
-	// to the input box (they are machine-originated). They stay queued and are
-	// drained by the next submitPendingSubmissionCmd; log so the drop window
-	// is at least observable.
+
 	if hidden := m.pendingSubmissionCount(); hidden > 0 {
 		debug.Log("tui", "restorePendingInput: %d hidden submission(s) remain queued for next run", hidden)
 	}
@@ -363,9 +302,7 @@ func (m *Model) restorePendingInput() {
 	default:
 		m.input.SetValue(pending + "\n\n" + draft)
 	}
-	// #1411: restore the queued screenshots alongside the text - the
-	// placeholder bubbles were removed above, so without this the images
-	// were silently gone.
+
 	if len(restoredImgs) > 0 {
 		m.pendingImages = append(m.pendingImages, restoredImgs...)
 		debug.Log("tui", "restorePendingInput: restored %d image(s) from cancelled queue", len(restoredImgs))
@@ -379,31 +316,23 @@ func (m *Model) drainPendingInterrupt(runID int) []provider.ContentBlock {
 		return nil
 	}
 	debug.Log("tui", "drainPendingInterrupt: runID=%d text=%s", runID, util.Truncate(text, 100))
-	// Do NOT call appendUserMessage here. The agent's injectPendingInterruptions()
-	// adds the (wrapped) interrupt text to its contextManager, and
-	// persistFullSessionMessages() will sync+persist it. Calling appendUserMessage
-	// here would create a SECOND JSONL record for the same user input —
-	// causing duplicate user bubbles on session reload.
-	// #1744 case 2: the old `_, _` discard dropped queued IMAGES and the
-	// tunnel override mid-flight - a run interrupted with a screenshot
-	// queued lost it permanently (#1411 fixed only the cancel-restore
-	// path, not this drain). Restore both, per that precedent.
+
 	if override != nil {
 		m.setNextTunnelUserMessageOverride(*override)
 	}
 	if len(imgs) > 0 {
+
 		// #4598: this runs on the AGENT goroutine (the interruption
 		// handler set up in submit.go), while the Update goroutine may be
 		// appending a freshly pasted image to m.pendingImages right now.
 		// The old `m.pendingImages = imgs` REPLACED the slice and silently
 		// dropped anything pasted mid-run. Merge instead - same shape as
 		// restorePendingInput's #1744 restore above.
+
 		m.pendingImages = append(m.pendingImages, imgs...)
 	}
 	_ = hidden
-	// Don't send agentInterruptMsg — the user already saw their input rendered
-	// in the conversation when it was queued. No extra "[delivered]" hint needed.
-	// #1472-A: return as a text block (image-capable channel).
+
 	return []provider.ContentBlock{{Type: "text", Text: text}}
 }
 
@@ -413,8 +342,6 @@ func (m *Model) sessionMutex() *sync.Mutex {
 	}
 	return m.sessionMu
 }
-
-// --- pendingQueue methods (pointer-reachable, safe across Model copies) ---
 
 func cloneTunnelMessageData(data *tunnel.MessageData) *tunnel.MessageData {
 	if data == nil {
@@ -436,10 +363,6 @@ func (q *pendingQueue) ensureQueueLocked() *agentruntime.PendingQueue[*tunnel.Me
 	return queue
 }
 
-// syncItemsFromQueue rebuilds q.items from the queue snapshot while
-// preserving Images on existing items by text-matching. Without this
-// preservation, every call would silently destroy images on previously
-// enqueued pending submissions.
 func (q *pendingQueue) syncItemsFromQueueLocked(queue *agentruntime.PendingQueue[*tunnel.MessageData]) {
 	snapshot := queue.Snapshot()
 	if len(snapshot) == 0 {
@@ -447,11 +370,7 @@ func (q *pendingQueue) syncItemsFromQueueLocked(queue *agentruntime.PendingQueue
 		q.q = queue
 		return
 	}
-	// Collect per-entry side data to preserve through the rebuild.
-	// Use text as a match key; each match is consumed (first-wins) to handle
-	// duplicate text submissions. Images AND the #3466 remote-origin flag
-	// live only on q.items (the runtime queue knows neither), so both ride
-	// these slots or they are lost on every re-sync.
+
 	type entrySlot struct {
 		text   string
 		images []imageAttachedMsg
@@ -486,23 +405,17 @@ func (q *pendingQueue) syncItemsFromQueueLocked(queue *agentruntime.PendingQueue
 	q.q = queue
 }
 
-// enqueueWithImages stores images alongside the pending text in q.items.
-// The agentruntime.PendingQueue doesn't support images, so we store them
-// directly and recover them during consume.
 func (q *pendingQueue) enqueueWithImages(text string, imgs []imageAttachedMsg) int {
 	return q.enqueueWithImagesOrigin(text, imgs, false)
 }
 
-// enqueueWithImagesOrigin is enqueueWithImages with the #3466 remote-origin
-// flag stamped onto the enqueued entry.
 func (q *pendingQueue) enqueueWithImagesOrigin(text string, imgs []imageAttachedMsg, remote bool) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	queue := q.ensureQueueLocked()
 	count := queue.Enqueue(text, false, nil)
 	q.syncItemsFromQueueLocked(queue)
-	// After sync, the last item in q.items corresponds to our submission.
-	// Store images (and the origin flag) there.
+
 	if len(q.items) > 0 {
 		q.items[len(q.items)-1].Images = imgs
 		q.items[len(q.items)-1].RemoteOrigin = remote
@@ -545,8 +458,6 @@ func (q *pendingQueue) snapshot() []string {
 	return out
 }
 
-// popLastVisible removes and returns the last visible (non-hidden, non-cron)
-// pending submission from the queue.
 func (q *pendingQueue) popLastVisible() (text string, imgs []imageAttachedMsg, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -556,7 +467,7 @@ func (q *pendingQueue) popLastVisible() (text string, imgs []imageAttachedMsg, o
 		q.syncItemsFromQueueLocked(queue)
 		return "", nil, false
 	}
-	// Find images from q.items by matching text (before sync destroys them).
+
 	for i := len(q.items) - 1; i >= 0; i-- {
 		if q.items[i].Text == item.Text && !q.items[i].Hidden {
 			imgs = q.items[i].Images
@@ -572,12 +483,6 @@ func (q *pendingQueue) consume() string {
 	return text
 }
 
-// headIsAgentOrigin reports whether the oldest queued submission is agent-
-// bound (remote-origin lanchat/IM/tunnel text or hidden cron injection)
-// rather than local shell-mode input. The shell-done drain chains queued
-// submissions into submitShellCommand; agent-bound entries must be routed
-// to the agent path there, or a teammate's message that arrived while a
-// long shell command was running gets executed as a shell command.
 func (q *pendingQueue) headIsAgentOrigin() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -587,11 +492,6 @@ func (q *pendingQueue) headIsAgentOrigin() bool {
 	return q.items[0].RemoteOrigin || q.items[0].Hidden
 }
 
-// consumeVisiblePrefix drains all visible (non-hidden, non-meta) queued
-// items and returns their combined text AND images. #1411: the images
-// were silently dropped here - only popLastVisible and consumeDetailed
-// preserved them - so Esc-cancel restore gave back the text while the
-// attached screenshots vanished (placeholder bubble removed too, no hint).
 func (q *pendingQueue) consumeVisiblePrefix() (string, []imageAttachedMsg) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -599,8 +499,7 @@ func (q *pendingQueue) consumeVisiblePrefix() (string, []imageAttachedMsg) {
 	items := queue.ConsumePrefix(func(item agentruntime.PendingMessage[*tunnel.MessageData]) bool {
 		return !item.Hidden && item.Meta == nil
 	})
-	// Collect images from ALL consumed items (q.items holds pre-consume
-	// state; same pattern as consumeDetailed).
+
 	consumedCount := len(items)
 	var allImgs []imageAttachedMsg
 	for i := 0; i < consumedCount && i < len(q.items); i++ {
@@ -635,12 +534,7 @@ func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData, []i
 	if len(q.items) > 0 {
 		headRemote = q.items[0].RemoteOrigin
 	}
-	// #4812: bound the visible-prefix merge to entries sharing the head's
-	// origin. Merging local input with a remote-origin entry (or vice
-	// versa) made one batch carry both, so the shell-done chain could
-	// execute a teammate's queued lanchat message as (part of) a shell
-	// command, and the agent drain could submit typed "$ ..." input fused
-	// with lanchat text. Batches are now origin-homogeneous.
+
 	sameOriginLimit := 0
 	for i := 1; i < len(q.items); i++ {
 		if q.items[i].Hidden || q.items[i].TunnelMessageOverride != nil {
@@ -659,9 +553,7 @@ func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData, []i
 		n++
 		return true
 	})
-	// Collect images from ALL consumed items (not just the first).
-	// q.items still holds the pre-consume state; consumedCount tells us
-	// how many leading entries were consumed.
+
 	consumedCount := 1 + len(items)
 	remote := q.itemsRemoteLocked(consumedCount)
 	var allImgs []imageAttachedMsg
@@ -676,9 +568,6 @@ func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData, []i
 	return strings.TrimSpace(strings.Join(parts, "\n\n")), false, nil, allImgs, remote
 }
 
-// itemsRemoteLocked reports whether any of the first n queued entries is
-// remote-origin (#3466). Call while holding q.mu, before sync destroys the
-// consumed slice.
 func (q *pendingQueue) itemsRemoteLocked(n int) bool {
 	for i := 0; i < n && i < len(q.items); i++ {
 		if q.items[i].RemoteOrigin {
@@ -688,8 +577,6 @@ func (q *pendingQueue) itemsRemoteLocked(n int) bool {
 	return false
 }
 
-// stripImagePlaceholder removes a leading image placeholder from a value.
-// Kept for backward compatibility with test callers.
 func stripImagePlaceholder(value, placeholder string) string {
 	trimmed := strings.TrimSpace(value)
 	placeholder = strings.TrimSpace(placeholder)
@@ -705,17 +592,14 @@ func stripImagePlaceholder(value, placeholder string) string {
 	return trimmed
 }
 
-// pendingImageCount returns the number of attached images.
 func (m *Model) pendingImageCount() int {
 	return len(m.pendingImages)
 }
 
-// clearPendingImages removes all attached images.
 func (m *Model) clearPendingImages() {
 	m.pendingImages = nil
 }
 
-// popPendingImage removes and returns the last attached image, if any.
 func (m *Model) popPendingImage() (*imageAttachedMsg, bool) {
 	n := len(m.pendingImages)
 	if n == 0 {

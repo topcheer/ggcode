@@ -2,17 +2,6 @@ package main
 
 import "testing"
 
-// #536 Bug D: pipe mode and non-TUI subcommands must NOT redirect os.Stderr
-// into the debug ring buffer. Previously main() redirected stderr
-// unconditionally, so every RunPipe error path (provider resolution failure,
-// stdin read failure, agent errors) wrote into a capture pipe whose only
-// consumer was debug.Log — without GGCODE_DEBUG those writes never reached
-// the real stderr, leaving CI/scripts with exit code 1 and zero diagnostics.
-// The restore-before-exit logic was structurally unreachable because RunPipe
-// calls os.Exit from inside cobra's RunE.
-//
-// The gate below is what keeps os.Stderr pristine for those modes, which is
-// exactly what makes pipe-mode errors visible on the caller's stderr.
 func TestShouldRedirectStderr(t *testing.T) {
 	tests := []struct {
 		name string

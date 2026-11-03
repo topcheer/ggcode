@@ -2,14 +2,6 @@
 
 package main
 
-// #4397 regression tests: parseA2ATimeout must warn on stderr when an
-// explicitly-configured a2a.task_timeout fails to parse ("90sec", "5",
-// trailing spaces) instead of silently falling back to 5m - the same
-// "silent fallbacks must be diagnosable" principle #4393 established for
-// adhocInt. Empty string stays a legal silent default (unset).
-// parseA2AMaxTasks stays silent on 0 (#1422-A first-run default fill is
-// skipped by --bypass installs; warning would spam fresh installs).
-
 import (
 	"bytes"
 	"fmt"
@@ -23,17 +15,15 @@ func TestIssue4397_ParseA2ATimeoutWarnsOnInvalidValue(t *testing.T) {
 		wantDur  time.Duration
 		wantWarn bool
 	}{
-		{"", 5 * time.Minute, false},       // unset: silent default
-		{"90s", 90 * time.Second, false},   // valid: no warning
-		{"1h30m", 90 * time.Minute, false}, // valid compound
-		{"90sec", 5 * time.Minute, true},   // typo'd unit
-		{"90s ", 5 * time.Minute, true},    // trailing space
-		{"5", 5 * time.Minute, true},       // missing unit
+		{"", 5 * time.Minute, false},
+		{"90s", 90 * time.Second, false},
+		{"1h30m", 90 * time.Minute, false},
+		{"90sec", 5 * time.Minute, true},
+		{"90s ", 5 * time.Minute, true},
+		{"5", 5 * time.Minute, true},
 	}
 	for _, c := range cases {
-		// Capture via the injectable a2aTimeoutWarnf instead of swapping the
-		// global os.Stderr - the swap raced with concurrent stderr writers
-		// under CI parallelism (intermittent main flake, reviewer report).
+
 		var buf bytes.Buffer
 		orig := a2aTimeoutWarnf
 		a2aTimeoutWarnf = func(format string, args ...any) {

@@ -62,22 +62,18 @@ func TestBudgetRecordAndCheck(t *testing.T) {
 	b := NewBudget(dir, config.DefaultKnightConfig())
 	b.EnsureDir()
 
-	// Initially can spend
 	if !b.CanSpend() {
 		t.Fatal("expected to be able to spend initially")
 	}
 
-	// Record some usage
 	if err := b.Record("test-task", 100, 200); err != nil {
 		t.Fatalf("Record failed: %v", err)
 	}
 
-	// Used should be 300
 	if used := b.Used(); used != 300 {
 		t.Fatalf("expected used=300, got %d", used)
 	}
 
-	// Remaining should be 50M - 300
 	if rem := b.Remaining(); rem != 50_000_000-300 {
 		t.Fatalf("expected remaining=%d, got %d", 50_000_000-300, rem)
 	}
@@ -92,20 +88,16 @@ func TestBudgetExhaustion(t *testing.T) {
 	b := NewBudget(dir, cfg)
 	b.EnsureDir()
 
-	// Use up most of the budget
-	b.Record("task1", 500, 400) // 900 total
+	b.Record("task1", 500, 400)
 
 	if !b.CanSpend() {
 		t.Fatal("should still be able to spend (100 remaining)")
 	}
 
-	// Exhaust
-	b.Record("task2", 100, 100) // 200 more = 1100 total > 1000 budget
+	b.Record("task2", 100, 100)
 
-	// Now should be exhausted — but note: we record even if over budget
-	// The check is done before starting tasks
 	if b.Remaining() >= 0 {
-		// Remaining might be negative, that's ok — CanSpend checks against used < daily
+
 	}
 }
 
@@ -144,7 +136,7 @@ vendors:
 	if !b.CanSpend() {
 		t.Fatal("expected unlimited budget to keep allowing spends")
 	}
-	// #1575-C: -1 is the unlimited sentinel (0 read as exhausted).
+
 	if rem := b.Remaining(); rem != -1 {
 		t.Fatalf("expected unlimited budget remaining sentinel -1, got %d", rem)
 	}
@@ -220,13 +212,10 @@ func TestBudgetPersistence(t *testing.T) {
 	b1 := NewBudget(dir, config.DefaultKnightConfig())
 	b1.EnsureDir()
 
-	// Record usage
 	b1.Record("test", 100, 200)
 
-	// Create new budget instance (simulates restart)
 	b2 := NewBudget(dir, config.DefaultKnightConfig())
 
-	// Should load previous usage
 	if used := b2.Used(); used != 300 {
 		t.Fatalf("expected persisted used=300, got %d", used)
 	}
@@ -258,7 +247,6 @@ func TestSkillIndexScanWithActiveSkills(t *testing.T) {
 	homeDir := filepath.Join(dir, "home")
 	projDir := filepath.Join(dir, "project")
 
-	// Create a global skill
 	globalSkillDir := filepath.Join(homeDir, ".ggcode", "skills", "docker-debug")
 	os.MkdirAll(globalSkillDir, 0755)
 	os.WriteFile(filepath.Join(globalSkillDir, "SKILL.md"), []byte(`---
@@ -269,7 +257,6 @@ created_by: user
 ---
 # Docker Debug`), 0644)
 
-	// Create a project skill
 	projSkillDir := filepath.Join(projDir, ".ggcode", "skills", "build-flow")
 	os.MkdirAll(projSkillDir, 0755)
 	os.WriteFile(filepath.Join(projSkillDir, "SKILL.md"), []byte(`---
@@ -289,7 +276,6 @@ created_by: user
 		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
 
-	// Check scopes
 	scopes := map[string]string{}
 	for _, e := range entries {
 		scopes[e.Name] = e.Scope
@@ -369,7 +355,6 @@ func TestSkillIndexScanWithStaging(t *testing.T) {
 	homeDir := filepath.Join(dir, "home")
 	projDir := filepath.Join(dir, "project")
 
-	// Create a staging skill
 	stagingDir := filepath.Join(projDir, ".ggcode", "skills-staging")
 	os.MkdirAll(stagingDir, 0755)
 	os.WriteFile(filepath.Join(stagingDir, "knight-20260419-test.md"), []byte(`---
@@ -400,7 +385,6 @@ func TestSkillValidatorValidSkill(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "knight-validate-*")
 	defer os.RemoveAll(dir)
 
-	// Create a valid skill file
 	skillPath := filepath.Join(dir, "SKILL.md")
 	os.WriteFile(skillPath, []byte(`---
 name: test-skill
@@ -534,7 +518,6 @@ func TestSkillValidatorDuplicateDetection(t *testing.T) {
 		},
 	}
 
-	// Same name
 	entry := &SkillEntry{
 		Name: "docker-debug",
 		Meta: SkillMeta{Description: "A different description"},
@@ -543,7 +526,6 @@ func TestSkillValidatorDuplicateDetection(t *testing.T) {
 		t.Error("expected duplicate detection for same name")
 	}
 
-	// Different name
 	entry2 := &SkillEntry{
 		Name: "k8s-deploy",
 		Meta: SkillMeta{Description: "Deploy to Kubernetes"},
@@ -568,7 +550,7 @@ func TestAnalyzeRecentAggregatesAcrossSessions(t *testing.T) {
 
 	for i := 0; i < 2; i++ {
 		ses := session.NewSession("zai", "test", "test-model")
-		// Simulate a correction pattern in each session
+
 		store.AppendMessage(ses, provider.Message{
 			Role: "user",
 			Content: []provider.ContentBlock{
@@ -652,7 +634,6 @@ created_by: knight
 		t.Fatal("expected non-empty path")
 	}
 
-	// Verify file exists
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		t.Fatalf("staging file not created at %s", path)
 	}
@@ -808,7 +789,6 @@ func TestPromoterReject(t *testing.T) {
 
 	p := NewPromoter(homeDir, projDir)
 
-	// Write a staging file
 	content := `---
 name: reject-me
 description: Will be rejected
@@ -818,7 +798,6 @@ created_by: knight
 # Reject`
 	path, _ := p.WriteStaging("reject-me", "project", content)
 
-	// Reject it
 	entry := &SkillEntry{
 		Name:    "reject-me",
 		Path:    path,
@@ -829,7 +808,6 @@ created_by: knight
 		t.Fatalf("Reject failed: %v", err)
 	}
 
-	// File should be gone
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("staging file should be deleted after reject")
 	}
@@ -944,12 +922,10 @@ func TestUsageTrackerStale(t *testing.T) {
 	ut := NewUsageTracker(filepath.Join(dir, "usage.json"))
 	ut.EnsureDir()
 
-	// Never used = stale
 	if !ut.IsStale("unknown-skill", time.Hour) {
 		t.Fatal("expected unused skill to be stale")
 	}
 
-	// Recently used = not stale
 	ut.RecordUse("fresh-skill")
 	if ut.IsStale("fresh-skill", time.Hour) {
 		t.Fatal("expected recently used skill to not be stale")
@@ -965,9 +941,8 @@ func TestUsageTrackerPersistence(t *testing.T) {
 	ut1.EnsureDir()
 	ut1.RecordUse("test-skill")
 	ut1.RecordEffectiveness("test-skill", 5)
-	ut1.Flush() // force persist
+	ut1.Flush()
 
-	// New tracker instance should load persisted data
 	ut2 := NewUsageTracker(path)
 	count, _, avg := ut2.GetUsage("test-skill")
 	if count != 1 {
@@ -985,20 +960,17 @@ func TestSkillIndexCache(t *testing.T) {
 	homeDir := filepath.Join(dir, "home")
 	projDir := filepath.Join(dir, "project")
 
-	// Create a skill
 	skillDir := filepath.Join(homeDir, ".ggcode", "skills", "test")
 	os.MkdirAll(skillDir, 0755)
 	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: test\ndescription: test\n---\n# Test"), 0644)
 
 	idx := NewSkillIndex(homeDir, projDir)
 
-	// First scan reads disk
 	entries1, _ := idx.Scan()
 	if len(entries1) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(entries1))
 	}
 
-	// Add another skill — cache should prevent seeing it
 	skillDir2 := filepath.Join(projDir, ".ggcode", "skills", "test2")
 	os.MkdirAll(skillDir2, 0755)
 	os.WriteFile(filepath.Join(skillDir2, "SKILL.md"), []byte("---\nname: test2\ndescription: test2\n---\n# Test2"), 0644)
@@ -1008,7 +980,6 @@ func TestSkillIndexCache(t *testing.T) {
 		t.Fatalf("cache should prevent seeing new skill, got %d", len(entries2))
 	}
 
-	// Invalidate and rescan
 	idx.Invalidate()
 	entries3, _ := idx.Scan()
 	if len(entries3) != 2 {
@@ -2094,8 +2065,6 @@ Use it.
 	}
 }
 
-// --- EventSink Tests ---
-
 func TestFuncSink(t *testing.T) {
 	var startName, completeName, completeReport string
 	var completeDuration time.Duration
@@ -2127,7 +2096,7 @@ func TestFuncSink(t *testing.T) {
 }
 
 func TestFuncSink_NilCallbacks(t *testing.T) {
-	// Should not panic with nil callbacks
+
 	sink := &FuncSink{}
 	sink.OnTaskStart("anything")
 	sink.OnTaskComplete("anything", "report", time.Second)
@@ -2181,7 +2150,6 @@ func TestRunMaintenanceTask_EmitsEvents(t *testing.T) {
 	recorder := &mockRecordingSink{}
 	k.SetEventSink(recorder)
 
-	// Set up a mock factory
 	callCount := 0
 	k.SetFactory(func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (AgentRunner, error) {
 		callCount++
@@ -2268,7 +2236,6 @@ func TestEmitReport_ForwardsToSink(t *testing.T) {
 	recorder := &mockRecordingSink{}
 	k.SetEventSink(recorder)
 
-	// emitReport also sends to sink (with empty task name)
 	k.emitReport("test report content")
 
 	recorder.mu.Lock()
@@ -2312,7 +2279,6 @@ func TestAnalyzeRecentDedupAcrossCalls(t *testing.T) {
 	os.MkdirAll(storeDir, 0755)
 	store, _ := session.NewJSONLStore(storeDir)
 
-	// Create one session with a correction
 	ses := session.NewSession("zai", "test", "test-model")
 	store.AppendMessage(ses, provider.Message{
 		Role:    "user",
@@ -2333,7 +2299,6 @@ func TestAnalyzeRecentDedupAcrossCalls(t *testing.T) {
 
 	k := New(config.DefaultKnightConfig(), homeDir, projDir, store)
 
-	// First call: should find the candidate
 	r1, err := NewSessionAnalyzer(k).AnalyzeRecent(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -2342,7 +2307,6 @@ func TestAnalyzeRecentDedupAcrossCalls(t *testing.T) {
 		t.Fatalf("first call: expected 1 analyzed, got %d", r1.SessionsAnalyzed)
 	}
 
-	// Second call: session unchanged, should be skipped (dedup)
 	r2, err := NewSessionAnalyzer(k).AnalyzeRecent(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -2351,8 +2315,6 @@ func TestAnalyzeRecentDedupAcrossCalls(t *testing.T) {
 		t.Fatalf("second call: expected 0 analyzed (dedup), got %d", r2.SessionsAnalyzed)
 	}
 
-	// Third call: session got a new message (UpdatedAt advanced) → should re-analyze
-	// Wait a tiny bit so UpdatedAt changes
 	time.Sleep(10 * time.Millisecond)
 	store.AppendMessage(ses, provider.Message{
 		Role:    "user",
@@ -2374,7 +2336,7 @@ func TestAnalyzeRecentDedupAcrossCalls(t *testing.T) {
 
 func TestDeleteSkillRemovesDirectory(t *testing.T) {
 	home := t.TempDir()
-	// Create .ggcode/skills/<name>/SKILL.md layout that SkillIndex expects
+
 	skillsDir := filepath.Join(home, ".ggcode", "skills")
 	skillDir := filepath.Join(skillsDir, "test-skill")
 	if err := os.MkdirAll(skillDir, 0755); err != nil {
@@ -2386,24 +2348,20 @@ func TestDeleteSkillRemovesDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create Knight — NewSkillIndex uses home/.ggcode/skills
 	k := &Knight{
 		homeDir: home,
 		projDir: home,
 		index:   NewSkillIndex(home, home),
 	}
 
-	// Delete the skill (global scope since home==project, index sees duplicate)
 	if err := k.DeleteSkill("global:test-skill"); err != nil {
 		t.Fatalf("DeleteSkill failed: %v", err)
 	}
 
-	// File should be gone
 	if _, err := os.Stat(skillPath); !os.IsNotExist(err) {
 		t.Error("skill file should be deleted")
 	}
 
-	// Directory should also be gone (this was the bug)
 	if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
 		t.Errorf("skill directory %s should be deleted", skillDir)
 	}

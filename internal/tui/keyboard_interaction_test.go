@@ -16,11 +16,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// ---------------------------------------------------------------------------
-// Scenario: User exits the application
-// Two ways: ctrl+d (immediate) and ctrl+c twice (confirm)
-// ---------------------------------------------------------------------------
-
 func TestScenario_UserExitsWithCtrlD(t *testing.T) {
 	m := newTestModel()
 
@@ -83,10 +78,6 @@ func TestScenario_ExitConfirmResetsOnAnyOtherKey(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Scenario: User toggles sidebar visibility
-// ---------------------------------------------------------------------------
-
 func TestScenario_UserTogglesSidebar(t *testing.T) {
 	m := newTestModel()
 	m.config = &config.Config{}
@@ -104,10 +95,6 @@ func TestScenario_UserTogglesSidebar(t *testing.T) {
 		t.Error("expected sidebar state to toggle back after second ctrl+r")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Scenario: User enters and exits shell mode
-// ---------------------------------------------------------------------------
 
 func TestScenario_UserEntersShellMode(t *testing.T) {
 	m := newTestModel()
@@ -162,10 +149,6 @@ func TestScenario_EnterShellModeWhileLoading(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Scenario: User navigates command history with up/down arrows
-// ---------------------------------------------------------------------------
-
 func TestScenario_UserNavigatesHistory(t *testing.T) {
 	m := newTestModel()
 	m.history = []string{"first command", "second command", "third command"}
@@ -198,10 +181,6 @@ func TestScenario_UserNavigatesHistory(t *testing.T) {
 		t.Errorf("step4: expected empty input at end of history, got %q", m.input.Value())
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Scenario: User uses autocomplete with up/down/tab/esc/enter
-// ---------------------------------------------------------------------------
 
 func TestScenario_UserNavigatesAutocomplete(t *testing.T) {
 	m := newTestModel()
@@ -285,10 +264,6 @@ func TestScenario_EnterAppliesAutocomplete(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Scenario: User scrolls viewport with pgup/pgdown
-// ---------------------------------------------------------------------------
-
 func TestScenario_UserScrollsWithPageKeys(t *testing.T) {
 	m := newTestModel()
 	for i := 0; i < 200; i++ {
@@ -312,10 +287,6 @@ func TestScenario_UserScrollsWithPageKeys(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Scenario: User switches permission mode with shift+tab
-// ---------------------------------------------------------------------------
-
 func TestScenario_UserSwitchesPermissionMode(t *testing.T) {
 	m := newTestModel()
 	initialMode := m.mode
@@ -327,25 +298,16 @@ func TestScenario_UserSwitchesPermissionMode(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Scenario: User clears the screen with Ctrl+L
-// ---------------------------------------------------------------------------
-
 func TestScenario_UserClearsScreenWithCtrlL(t *testing.T) {
 	m := newTestModel()
 
-	// Ctrl+L should be handled without error
 	updated, _ := m.Update(tea.KeyPressMsg{Text: "ctrl+l"})
 	m = updated.(Model)
-	// After clearing, loading should be false (no agent running)
+
 	if m.loading {
 		t.Error("expected loading=false after ctrl+l clear")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Scenario: User submits text via enter key
-// ---------------------------------------------------------------------------
 
 func TestScenario_UserSubmitsText(t *testing.T) {
 	m := newTestModel()
@@ -405,10 +367,6 @@ func TestScenario_BusySafeCommandExecutesImmediately(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Scenario: User cancels a running task with ctrl+c or esc
-// ---------------------------------------------------------------------------
-
 func TestScenario_UserCancelsRunningTask(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
@@ -448,10 +406,6 @@ func TestScenario_UserCancelsWithEsc(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Scenario: ctrl+c closes active panel before exit confirm
-// ---------------------------------------------------------------------------
-
 func TestScenario_CtrlCClosesActivePanelFirst(t *testing.T) {
 	m := newTestModel()
 	m.modelPanel = &modelPanelState{}
@@ -465,10 +419,6 @@ func TestScenario_CtrlCClosesActivePanelFirst(t *testing.T) {
 		t.Error("should close panel, not prompt exit confirm")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Scenario: User dismisses autocomplete with ctrl+c, then exits with two ctrl+c
-// ---------------------------------------------------------------------------
 
 func TestScenario_AutocompleteDismissThenExit(t *testing.T) {
 	m := newTestModel()
@@ -497,10 +447,6 @@ func TestScenario_AutocompleteDismissThenExit(t *testing.T) {
 		t.Error("expected quitting=true")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Scenario: Approval mode - user allows/denies tool execution
-// ---------------------------------------------------------------------------
 
 func TestScenario_UserApprovesWithY(t *testing.T) {
 	m := newTestModel()
@@ -634,18 +580,17 @@ func TestScenario_UserAlwaysAllowsTool(t *testing.T) {
 	if decision != permission.Allow {
 		t.Errorf("expected Allow, got %v", decision)
 	}
-	// With command-level rules, "npm test" creates pattern "npm test*"
-	// instead of blanket-allowing run_command
+
 	rs := policy.CommandRuleSet()
 	if rs == nil || len(rs.AllowPatterns()) == 0 {
 		t.Error("expected command allow pattern after 'always allow' on run_command")
 	}
-	// Verify the pattern actually matches the original command
+
 	d, matched := rs.Check("npm test")
 	if !matched || d != permission.Allow {
 		t.Errorf("expected 'npm test' to be allowed by command rule, got (%v, %v)", d, matched)
 	}
-	// Unrelated command should NOT be auto-allowed
+
 	d2, matched2 := rs.Check("rm -rf /tmp")
 	if matched2 && d2 == permission.Allow {
 		t.Error("unrelated command should not be auto-allowed")
@@ -675,10 +620,6 @@ func TestScenario_UserSelectsApprovalOptionWithEnter(t *testing.T) {
 		t.Errorf("expected Deny (cursor at 2), got %v", decision)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Scenario: Diff confirmation - user accepts/rejects file changes
-// ---------------------------------------------------------------------------
 
 func TestScenario_UserAcceptsDiff(t *testing.T) {
 	m := newTestModel()
@@ -763,11 +704,6 @@ func TestScenario_UserNavigatesDiffOptions(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Scenario: Language selector keyboard navigation
-// ---------------------------------------------------------------------------
-
 func TestScenario_UserNavigatesLanguageSelector(t *testing.T) {
 	m := newTestModel()
 	m.langOptions = []languageOption{
@@ -849,10 +785,6 @@ func TestScenario_LanguageSelectorCannotDismissWhenRequired(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Scenario: Startup input drain gate suppresses keys
-// ---------------------------------------------------------------------------
-
 func TestScenario_StartupInputDrainSuppressesKeys(t *testing.T) {
 	m := newTestModel()
 	m.inputDrainUntil = time.Now().Add(5 * time.Second)
@@ -871,10 +803,6 @@ func TestScenario_InputDrainExpires(t *testing.T) {
 	updated, _ := m.Update(tea.KeyPressMsg{Text: "a"})
 	_ = updated.(Model)
 }
-
-// ---------------------------------------------------------------------------
-// Scenario: Slash commands through handleCommand dispatch
-// ---------------------------------------------------------------------------
 
 func TestScenario_UserRunsExitCommand(t *testing.T) {
 	m := newTestModel()
@@ -904,13 +832,11 @@ func TestScenario_UserRunsClearCommand(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected nil cmd after /clear")
 	}
-	// /clear now creates a new session and writes a system message.
-	// Verify chatList was cleared and then received the new-session message.
+
 	if m.chatList == nil || m.chatList.Len() == 0 {
 		t.Error("expected session.new system message after /clear")
 	}
 
-	// /clear while loading should be blocked.
 	m2 := newTestModel()
 	m2.chatWriteSystem(nextSystemID(), "content before clear")
 	m2.loading = true
@@ -933,7 +859,7 @@ func TestScenario_UserRunsHelpCommand(t *testing.T) {
 
 func TestScenario_UserRunsModeCommand(t *testing.T) {
 	m := newTestModel()
-	// two-mode refactor: legacy names normalize to canonical modes.
+
 	_ = m.handleCommand("/mode auto")
 	if m.mode != permission.SupervisedMode {
 		t.Errorf("expected mode=supervised (auto normalizes), got %v", m.mode)
@@ -972,10 +898,6 @@ func TestScenario_UnknownCommandShowsError(t *testing.T) {
 		t.Error("expected error message mentioning the unknown command")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Scenario: User opens various panels via slash commands
-// ---------------------------------------------------------------------------
 
 func TestScenario_UserOpensModelPanel(t *testing.T) {
 	m := newTestModel()
@@ -1071,10 +993,6 @@ func TestScenario_UserOpensIMPanels(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Scenario: shouldExecuteWhileBusy function
-// ---------------------------------------------------------------------------
-
 func TestScenario_BusySafeCommandsExecuteImmediately(t *testing.T) {
 	safeCommands := []string{
 		"/help", "/model", "/provider", "/lang en",
@@ -1105,10 +1023,6 @@ func TestScenario_BusyUnsafeCommandsAreQueued(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Scenario: Shell command detection via parseShellCommand
-// ---------------------------------------------------------------------------
-
 func TestScenario_UserTypesShellCommand(t *testing.T) {
 	tests := []struct {
 		input   string
@@ -1137,13 +1051,8 @@ func TestScenario_UserTypesShellCommand(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Scenario: Mode.Next() cycles between the two user modes
-// ---------------------------------------------------------------------------
-
 func TestScenario_PermissionModeCycleCompletes(t *testing.T) {
-	// two-mode refactor: the cycle is supervised <-> bypass; legacy aliases
-	// normalize into it and plan is tool-internal (never cycled).
+
 	cycle := []permission.PermissionMode{
 		permission.BypassMode,
 		permission.SupervisedMode,
@@ -1157,10 +1066,6 @@ func TestScenario_PermissionModeCycleCompletes(t *testing.T) {
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Scenario: Paste is blocked when not ready
-// ---------------------------------------------------------------------------
 
 func TestScenario_PasteBlockedWhenNotReady(t *testing.T) {
 	m := newTestModel()
@@ -1184,12 +1089,6 @@ func TestScenario_PasteAllowedWhenLoading(t *testing.T) {
 		t.Errorf("expected input to contain pasted text, got %q", updated.(Model).input.Value())
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Scenario: Spaces in text input render correctly and cursor position is accurate
-// Regression test for: trailing/middle spaces not rendering in composer input
-// and cursor appearing frozen on space characters.
-// ---------------------------------------------------------------------------
 
 func TestScenario_InputSpacesRenderInComposer(t *testing.T) {
 	m := newTestModel()
@@ -1279,24 +1178,15 @@ func TestScenario_ComposerPanelRendersSpacesWithoutOverflow(t *testing.T) {
 	}
 }
 
-// stripInputANSI removes common ANSI escape sequences from a string.
 var inputANSIRe = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x1b]*\x1b\\`)
 
 func stripInputANSI(s string) string {
 	return inputANSIRe.ReplaceAllString(s, "")
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 func newTestSessionStore(t *testing.T) session.Store {
 	t.Helper()
-	// Use os.MkdirTemp + manual cleanup instead of t.TempDir().
-	// The session store's List() method spawns a background maintenance
-	// goroutine (scheduleMaintenanceLocked) that may still be writing
-	// files when t.TempDir() cleanup runs, causing "directory not empty"
-	// errors on CI.
+
 	dir, err := os.MkdirTemp("", "ggcode_tui_test_*")
 	if err != nil {
 		t.Fatalf("mkdir temp: %v", err)
@@ -1319,12 +1209,9 @@ func TestShiftEnterInsertsNewline(t *testing.T) {
 	m.input.SetValue("hello")
 	m.input.SetHeight(1)
 
-	// Shift+Enter: Code=KeyEnter, Mod=ModShift
 	model, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
 	m = model.(Model)
 
-	// textarea.Update with shift+enter may or may not insert newline depending on keymap.
-	// The important thing is that the input is NOT submitted (value should not be cleared).
 	val := m.input.Value()
 	if val == "" {
 		t.Error("input was cleared — shift+enter should NOT submit")
@@ -1338,38 +1225,34 @@ func TestShiftEnterInsertsNewlineAtCursor(t *testing.T) {
 	m := newTestModel()
 	m.inputReady = true
 	m.input.SetValue("hello world")
-	// Move cursor to after "hello" (col 5, line 0)
+
 	m.input.SetCursorColumn(5)
 
 	model, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
 	m = model.(Model)
 
 	val := m.input.Value()
-	// The newline should be inserted at the cursor position, not at the end.
+
 	if !strings.Contains(val, "hello\n") {
 		t.Errorf("expected newline after 'hello', got %q", val)
 	}
 	if !strings.HasPrefix(val, "hello\n") {
 		t.Errorf("value should start with 'hello\\n', got %q", val)
 	}
-	// Cursor should be on the new line (row 1), not at the end of the text.
+
 	if m.input.Line() != 1 {
 		t.Errorf("cursor should be on line 1 after shift+enter, got line %d", m.input.Line())
 	}
 }
 
 func TestShiftEnterCJK(t *testing.T) {
-	// Regression test: old code used byte-based slicing (inputCursor returns
-	// byte offset from len()), which corrupted multi-byte CJK characters.
-	// InsertRune('\n') avoids this entirely.
+
 	m := newTestModel()
 	m.inputReady = true
 
-	// Simulate: user typed "测试测试，这是一个测试" (11 CJK runes = 33 bytes)
 	text := "测试测试，这是一个测试"
 	m.input.SetValue(text)
 
-	// Move cursor to after "测试测试" (col 4, each CJK rune = 1 col)
 	m.input.SetCursorColumn(4)
 
 	model, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
@@ -1380,15 +1263,15 @@ func TestShiftEnterCJK(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 lines, got %d: %q", len(lines), val)
 	}
-	// First line must be exactly "测试测试" — no missing/corrupted characters
+
 	if lines[0] != "测试测试" {
 		t.Errorf("first line should be '测试测试', got %q", lines[0])
 	}
-	// Second line must be exactly "，这是一个测试"
+
 	if lines[1] != "，这是一个测试" {
 		t.Errorf("second line should be '，这是一个测试', got %q", lines[1])
 	}
-	// Cursor should be at start of line 2
+
 	if m.input.Line() != 1 {
 		t.Errorf("cursor should be on line 1, got line %d", m.input.Line())
 	}
@@ -1398,13 +1281,12 @@ func TestShiftEnterCJK(t *testing.T) {
 }
 
 func TestCtrlJInsertsNewline(t *testing.T) {
-	// Ctrl+J is the fallback newline key inside tmux (which strips shift modifier).
+
 	m := newTestModel()
 	m.inputReady = true
 	m.input.SetValue("hello")
 	m.input.SetHeight(1)
 
-	// Ctrl+J: text representation "ctrl+j"
 	model, _ := m.Update(tea.KeyPressMsg{Text: "ctrl+j"})
 	m = model.(Model)
 
@@ -1418,13 +1300,12 @@ func TestCtrlJInsertsNewline(t *testing.T) {
 }
 
 func TestAltEnterInsertsNewline(t *testing.T) {
-	// Alt+Enter is another fallback newline key for tmux environments.
+
 	m := newTestModel()
 	m.inputReady = true
 	m.input.SetValue("hello")
 	m.input.SetHeight(1)
 
-	// Alt+Enter: Code=KeyEnter, Mod=ModAlt
 	model, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt})
 	m = model.(Model)
 
@@ -1488,14 +1369,12 @@ func TestComposerHeightRespectsSetValue(t *testing.T) {
 	m := newTestModel()
 	m.inputReady = true
 
-	// Multiline content → height should grow
 	m.input.SetValue("a\nb\nc\nd\ne")
 	m.input.SetHeight(composerHeight(m.input.Value()))
 	if m.input.Height() != 5 {
 		t.Errorf("expected height=5, got %d", m.input.Height())
 	}
 
-	// Empty content → height should shrink back to 1
 	m.input.SetValue("")
 	m.input.SetHeight(composerHeight(m.input.Value()))
 	if m.input.Height() != 1 {
@@ -1509,7 +1388,6 @@ func TestPasteSetsCorrectHeight(t *testing.T) {
 	m.input.SetValue("hello")
 	m.input.SetHeight(1)
 
-	// Paste multi-line text
 	model, _ := m.Update(tea.PasteMsg{Content: "line1\nline2\nline3"})
 	m = model.(Model)
 

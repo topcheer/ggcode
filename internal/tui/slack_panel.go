@@ -50,11 +50,6 @@ func (m *Model) closeSlackPanel() {
 	m.slackPanel = nil
 }
 
-// maskSlackCreateEcho masks the create-input echo (#2178): the spec is
-// `name botToken appToken` - the tokens are POSITIONAL (2nd/3rd field),
-// so the field name is unknown at render time. The name (first field)
-// stays readable for review; every later field is token material and
-// is masked. The buffer keeps the real value for the Enter parse.
 func maskSlackCreateEcho(input string) string {
 	return maskPositionalCreateEcho(input, 1)
 }
@@ -126,7 +121,7 @@ func (m Model) renderSlackPanel() string {
 	} else {
 		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.slack.actions_hint")))
 	}
-	// Edit config section
+
 	if panel.editState.mode == imEditSelect {
 		body = append(body, "", m.renderIMEditSelect(&panel.editState))
 	} else if panel.editState.mode == imEditInput {
@@ -143,7 +138,7 @@ func (m *Model) handleSlackPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if panel == nil {
 		return *m, nil
 	}
-	// Edit mode takes priority
+
 	if panel.editState.mode != imEditNone {
 		newState, cmd := m.handleIMEditKey(&panel.editState, msg)
 		panel.editState = *newState
@@ -243,11 +238,7 @@ func (m *Model) handleSlackPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m *Model) bindSlackEntry(entry slackBindingEntry) tea.Cmd {
 	return func() tea.Msg {
-		// #1794 case 2/3: a disabled adapter's auto-enable must run on the
-		// Update loop (#1367 family) - startXXXAdapterIfNeeded wrote the
-		// config map from this Cmd goroutine while the render loop ranged
-		// it. Follow the qq pattern: mutate via configMutationMsg, continue
-		// the bind in next().
+
 		if m.config != nil {
 			if cfg, ok := m.config.GetIMAdapter(entry.Adapter); ok && !cfg.Enabled {
 				return configMutationMsg{
@@ -272,8 +263,6 @@ func (m *Model) bindSlackEntry(entry slackBindingEntry) tea.Cmd {
 	}
 }
 
-// bindSlackRest is the bind chain body after the (optional) enable
-// mutation lands on the Update loop.
 func bindSlackRest(m *Model, entry slackBindingEntry) tea.Msg {
 	if err := m.ensureSlackBotBinding(entry.Adapter); err != nil {
 		return slackBindResultMsg{err: err}
@@ -282,7 +271,7 @@ func bindSlackRest(m *Model, entry slackBindingEntry) tea.Msg {
 		if err := m.waitForSlackAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
 			return slackBindResultMsg{err: err}
 		}
-		// Sync session history to the newly bound channel only.
+
 		if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
 			if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
 				return slackBindResultMsg{err: err}
@@ -328,9 +317,7 @@ func (m *Model) createSlackAdapterCmd(spec string) tea.Cmd {
 		name := strings.TrimSpace(fields[0])
 		botToken := strings.TrimSpace(fields[1])
 		appToken := strings.TrimSpace(fields[2])
-		// #1392-B(1): tokens used to be persisted with ZERO format checks -
-		// any garbage string landed in the yaml and failed on every later
-		// start (the #1384 nostr lesson). Slack tokens are prefixed.
+
 		if !strings.HasPrefix(botToken, "xoxb-") {
 			return slackBindResultMsg{err: errors.New("bot token must start with xoxb-")}
 		}
@@ -345,10 +332,8 @@ func (m *Model) createSlackAdapterCmd(spec string) tea.Cmd {
 				"app_token": appToken,
 			},
 		}
-		// #1367 family: config write + disk save moved off the Cmd
-		// goroutine onto the Update loop via configMutationMsg - see
-		// dingtalk_panel.go for the template comment.
-		imEnabledBefore := false // #4486: what rollback restores if adapter creation fails
+
+		imEnabledBefore := false
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				imEnabledBefore = m.config.IM.Enabled
@@ -356,9 +341,7 @@ func (m *Model) createSlackAdapterCmd(spec string) tea.Cmd {
 				if err := m.config.AddIMAdapter(name, adapter); err != nil {
 					return err
 				}
-				// #1794 case 2: auto-enable on the Update loop - the next()
-				// closure's startXXXAdapterIfNeeded used to write the map
-				// from the Cmd goroutine (#1367 family).
+
 				if cfg, ok := m.config.GetIMAdapter(name); ok && !cfg.Enabled {
 					return m.config.SetIMAdapterEnabled(name, true)
 				}
@@ -367,15 +350,13 @@ func (m *Model) createSlackAdapterCmd(spec string) tea.Cmd {
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
 					rollback := func(origErr error) tea.Msg {
-						// #1392-B(1): rollback the persisted adapter - a failed
-						// start left dirty config in the yaml forever (map
-						// REMOVE rides configMutationMsg, #1370 pattern).
+
 						return configMutationMsg{
 							apply: func(m *Model) error {
 								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
 									return rerr
 								}
-								m.config.IM.Enabled = imEnabledBefore // #4486: restore the global switch a failed create had forced on
+								m.config.IM.Enabled = imEnabledBefore
 								return m.saveConfig()
 							},
 							next: func(m *Model) tea.Cmd {
@@ -391,7 +372,7 @@ func (m *Model) createSlackAdapterCmd(spec string) tea.Cmd {
 					}
 					if err := m.startSlackAdapterIfNeeded(name); err != nil {
 						if errors.Is(err, errSlackEnableNeeded) {
-							// #1758 case 1: enable on the Update loop, then retry.
+
 							return m.slackEnableMutation(name, nil)
 						}
 						return rollback(err)
@@ -406,12 +387,8 @@ func (m *Model) createSlackAdapterCmd(spec string) tea.Cmd {
 	}
 }
 
-// errSlackEnableNeeded signals the auto-enable must run on the Update
-// loop via configMutationMsg (#1758 case 1).
 var errSlackEnableNeeded = errors.New("slack adapter needs enable-on-update-loop")
 
-// slackEnableMutation performs the auto-enable on the Update loop, then
-// restarts the adapter and continues with next.
 func (m *Model) slackEnableMutation(name string, next func(m *Model) tea.Msg) tea.Msg {
 	return configMutationMsg{
 		apply: func(m *Model) error {
@@ -459,10 +436,7 @@ func (m *Model) startSlackAdapterIfNeeded(name string) error {
 		return errors.New(m.t("panel.slack.error.not_configured", name))
 	}
 	if !adapterCfg.Enabled {
-		// #1758 case 1: the auto-enable wrote the config map RIGHT HERE on
-		// the Cmd goroutine (the #1367 family - irc/matrix/mattermost all
-		// migrated; slack only moved AddIMAdapter and missed this). Signal
-		// the caller to route the enable through configMutationMsg.
+
 		return errSlackEnableNeeded
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformSlack)) {
@@ -618,8 +592,7 @@ func (m Model) slackAdapterStatus(state *im.AdapterState) string {
 	if status == "" {
 		status = m.t("panel.slack.status.unknown")
 	}
-	// #913: both branches returned the same value (#887 family) - a
-	// revoked-token adapter showed a stale generic status.
+
 	if state.Healthy {
 		return status
 	}

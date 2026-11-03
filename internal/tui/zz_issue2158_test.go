@@ -1,11 +1,5 @@
 package tui
 
-// #2158 regression: the Env loop in enterIMEditSelect stored secret env
-// values as PLAINTEXT into fieldValues while the Extra loop five lines
-// above masked them - opening the edit panel alone leaked every env
-// secret (already ExpandEnv-resolved to real values at load time) to
-// shoulder-surfing/screen-recording.
-
 import (
 	"strings"
 	"testing"
@@ -35,7 +29,7 @@ func TestIMEditSelectMasksEnvSecrets(t *testing.T) {
 	if v == "" {
 		t.Fatal("masked value must not be empty (edit affordance)")
 	}
-	// Benign env keys stay readable.
+
 	if s.fieldValues["env.APP_ID"] != "123456" {
 		t.Fatalf("benign env value must stay plaintext, got %q", s.fieldValues["env.APP_ID"])
 	}

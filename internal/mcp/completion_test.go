@@ -12,11 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// sa-52: MCP completion/complete (spec 2025-06-18 "Completion"). Servers
-// advertise the plural `completions` capability key; clients request
-// argument autocompletion for prompts (ref/prompt) and resource templates
-// (ref/resource).
-
 func TestCompletionCapabilityGateAndValidation(t *testing.T) {
 	c := NewClient("cap-test", "true", nil)
 
@@ -83,9 +78,7 @@ func testCompletionWireFormat(t *testing.T, req CompleteRequest, wantRefType str
 		case "initialize":
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Mcp-Session-Id", "test-session")
-			// The capability key is the plural form `completions`
-			// (spec 2025-06-18) - the singular form was a known
-			// client-side decode bug this test pins against.
+
 			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"` + latestMCPProtocolVersion + `","capabilities":{"completions":{}},"serverInfo":{"name":"mock","version":"1.0.0"}}}`))
 		case "notifications/initialized":
 			w.WriteHeader(http.StatusNoContent)

@@ -1,16 +1,5 @@
 package debug
 
-// #3339 (sa-244 runtime audit): the stale-PID log sweep had zero test
-// coverage despite a real regression history (v1.3.167: the sweep ran
-// before defaultLogDir was set and silently did nothing). These tests pin
-// the two behaviors users can feel:
-//   - dead-PID files (including rotation suffixes) are removed
-//   - PID-reuse collision survivors are removed by the 14d age backstop
-//     (liveness alone kept them forever - ~15 old-PID file sets observed)
-//
-// Init()'s call order itself is not tested here: Init is sync.Once-guarded
-// and cannot be re-entered within one process.
-
 import (
 	"os"
 	"os/exec"
@@ -28,11 +17,11 @@ func TestExtractPidFromLogName(t *testing.T) {
 		{"ggcode-agent-12345.log.1", 12345},
 		{"ggcode-agent-12345.log.10", 12345},
 		{"ggcode-openai-99999.log.2", 99999},
-		{"ggcode-agent-a1b2.log", 0},  // non-numeric pid
-		{"other-agent-12345.log", 0},  // wrong prefix
-		{"ggcode-agent.log", 0},       // no pid segment
-		{"ggcode-agent-12345", 12345}, // suffix-less also parses (implementation accepts; harmless)
-		{"notes.txt", 0},              // unrelated
+		{"ggcode-agent-a1b2.log", 0},
+		{"other-agent-12345.log", 0},
+		{"ggcode-agent.log", 0},
+		{"ggcode-agent-12345", 12345},
+		{"notes.txt", 0},
 	}
 	for _, c := range cases {
 		if got := extractPidFromLogName(c.name); got != c.want {
@@ -41,7 +30,6 @@ func TestExtractPidFromLogName(t *testing.T) {
 	}
 }
 
-// withSweepDir points defaultLogDir at a temp dir for the duration of a test.
 func withSweepDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -53,8 +41,7 @@ func withSweepDir(t *testing.T) string {
 
 func TestCleanupStaleLogsRemovesDeadPidFiles(t *testing.T) {
 	dir := withSweepDir(t)
-	// 1<<22 exceeds Linux pid_max (4194304) and macOS/Windows ranges, so the
-	// PID is guaranteed dead without spawning a child process.
+
 	dead := 1 << 22
 	main := filepath.Join(dir, "ggcode-agent-"+itoa(dead)+".log")
 	rot := main + ".7"
@@ -89,11 +76,7 @@ func TestCleanupStaleLogsKeepsSelfFiles(t *testing.T) {
 
 func TestCleanupStaleLogsAgeCapsPidCollisionSurvivors(t *testing.T) {
 	dir := withSweepDir(t)
-	// A PID that is alive (our own test process serves as a guaranteed-live
-	// PID distinct from the selfPid skip only if we use a different process;
-	// simplest reliable live non-self PID: reuse os.Getpid()+1 is racy. Use
-	// the test binary's own PID via a *file that pretends its PID is our
-	// parent? Instead: launch a short-lived child and use its PID.
+
 	cmd := exec.Command("sleep", "5")
 	if err := cmd.Start(); err != nil {
 		t.Skip("cannot spawn child process: ", err)
@@ -104,14 +87,11 @@ func TestCleanupStaleLogsAgeCapsPidCollisionSurvivors(t *testing.T) {
 	}()
 	live := cmd.Process.Pid
 
-	// Fresh file with a live PID: must survive (recent, alive).
 	fresh := filepath.Join(dir, "ggcode-agent-"+itoa(live)+".log")
 	if err := os.WriteFile(fresh, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Aged ROTATION sibling of the live PID: same PID parses out, PID is
-	// alive, but the file is ancient - exactly the #3339 collision-survivor
-	// shape (a recycled PID keeping dead-ggcode files alive forever).
+
 	aged := fresh + ".3"
 	if err := os.WriteFile(aged, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)

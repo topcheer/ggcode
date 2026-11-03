@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// #3059 acceptance: a learned delegate approval must never ride a different
-// prompt - MakeKey pins free-text body tools to a hash of the body text.
 func TestIssue3059_MakeKeyBodiesPinnedToPromptHash(t *testing.T) {
 	mk := func(prompt string) string {
 		in, _ := json.Marshal(map[string]string{"agent": "claude", "prompt": prompt})
@@ -27,7 +25,7 @@ func TestIssue3059_MakeKeyBodiesPinnedToPromptHash(t *testing.T) {
 	if mk("review the auth service") != a {
 		t.Fatal("identical prompt must yield identical key (learning still works)")
 	}
-	// spawn_agent task / lanchat message are the same shape.
+
 	taskIn, _ := json.Marshal(map[string]string{"task": "do X"})
 	if k, _ := MakeKey("spawn_agent", taskIn); !strings.HasPrefix(k, "spawn_agent:") {
 		t.Fatalf("task field must be signed, got %q", k)

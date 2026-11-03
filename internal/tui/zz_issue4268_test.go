@@ -2,11 +2,6 @@ package tui
 
 import "testing"
 
-// zz_issue4268_test.go - structural guard for the #889/#2835/#4268 omission
-// family: every command that has a description (i.e. is user-facing) must be
-// present in the SlashCommands list so Tab completion offers it. This test
-// replaces the per-command whack-a-mole that let the family recur 3 times.
-
 func TestSlashCommandDescriptionsSubsetOfList_Issue4268(t *testing.T) {
 	inList := make(map[string]bool, len(SlashCommands))
 	for _, c := range SlashCommands {

@@ -84,7 +84,7 @@ func TestResumePickerMove(t *testing.T) {
 	if m.cursorIndex != 0 {
 		t.Errorf("expected cursor at 0 after move(-1), got %d", m.cursorIndex)
 	}
-	// Wrap around
+
 	m.move(-1)
 	if m.cursorIndex != 2 {
 		t.Errorf("expected cursor at 2 after wrap, got %d", m.cursorIndex)
@@ -93,7 +93,7 @@ func TestResumePickerMove(t *testing.T) {
 
 func TestResumePickerMove_Empty(t *testing.T) {
 	m := resumePickerModel{}
-	m.move(1) // should not panic
+	m.move(1)
 }
 
 func TestResumePickerVisibleItems(t *testing.T) {
@@ -127,7 +127,7 @@ func TestResumePickerSelectedItem_Empty(t *testing.T) {
 }
 
 func TestResumePickerPageInfo(t *testing.T) {
-	sessions := make([]*session.Session, 7) // 2 pages
+	sessions := make([]*session.Session, 7)
 	for i := range sessions {
 		sessions[i] = makeSession("s"+string(rune('0'+i)), "/a", "")
 	}
@@ -250,11 +250,11 @@ func TestResumePickerTurnPage(t *testing.T) {
 		sessions[i] = makeSession("s"+string(rune('0'+i)), "/a", "")
 	}
 	m := newResumePickerModel(sessions, nil, "/a")
-	m.turnPage(1) // go to page 2
+	m.turnPage(1)
 	if m.currentPage != 1 {
 		t.Errorf("expected page 1, got %d", m.currentPage)
 	}
-	m.turnPage(-1) // back to page 1
+	m.turnPage(-1)
 	if m.currentPage != 0 {
 		t.Errorf("expected page 0, got %d", m.currentPage)
 	}
@@ -263,7 +263,7 @@ func TestResumePickerTurnPage(t *testing.T) {
 func TestResumePickerTurnPage_SinglePage(t *testing.T) {
 	sessions := []*session.Session{makeSession("1", "/a", "S1")}
 	m := newResumePickerModel(sessions, nil, "/a")
-	m.turnPage(1) // single page, should not change
+	m.turnPage(1)
 	if m.currentPage != 0 {
 		t.Errorf("expected page 0, got %d", m.currentPage)
 	}

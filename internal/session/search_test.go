@@ -29,7 +29,6 @@ func TestSearchSessions_BasicMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Non-matching session
 	ses2 := NewSession("zai", "default", "glm")
 	ses2.Title = "Unrelated"
 	ses2.Messages = []provider.Message{
@@ -180,13 +179,13 @@ func TestMakeSnippet(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := makeSnippet(tc.text, tc.matchIdx, tc.needle)
-			// For short text, snippet should contain the needle
+
 			if len(tc.text) <= 200 {
 				if got != tc.want && !contains(got, tc.needle) {
 					t.Errorf("expected snippet containing %q, got %q", tc.needle, got)
 				}
 			}
-			// Snippet should never exceed ~210 chars (200 + ellipsis)
+
 			if len(got) > 210 {
 				t.Errorf("snippet too long: %d chars", len(got))
 			}
@@ -233,7 +232,6 @@ func TestSearchSessions_TimestampOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create two sessions with different timestamps
 	ses1 := NewSession("zai", "default", "glm")
 	ses1.Title = "Old"
 	ses1.Messages = []provider.Message{
@@ -241,7 +239,7 @@ func TestSearchSessions_TimestampOrdering(t *testing.T) {
 	}
 	store.Save(ses1)
 	store.AppendMessagesBatchToDisk(ses1, ses1.Messages)
-	// Set old timestamp
+
 	os.Chtimes(filepath.Join(dir, ses1.ID+".jsonl"), time.Now().Add(-2*time.Hour), time.Now().Add(-2*time.Hour))
 
 	ses2 := NewSession("zai", "default", "glm")
@@ -259,9 +257,7 @@ func TestSearchSessions_TimestampOrdering(t *testing.T) {
 	if len(results) < 2 {
 		t.Fatalf("expected at least 2 results, got %d", len(results))
 	}
-	// Results should be sorted by timestamp descending
-	// (session2 was created later, but both messages lack explicit timestamps,
-	// so we just verify we got hits from both sessions)
+
 	sessionIDs := map[string]bool{}
 	for _, r := range results {
 		sessionIDs[r.SessionID] = true

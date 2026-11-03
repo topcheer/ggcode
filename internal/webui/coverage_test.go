@@ -18,7 +18,6 @@ func TestServerSetters(t *testing.T) {
 	cfg := &config.Config{}
 	s := NewServer(cfg)
 
-	// Setters should not panic
 	s.SetIMActionFn(func(action, adapter string) error { return nil })
 	s.SetRestartFn(func() {})
 	s.SetA2ADiscoverFn(func() []A2ADiscoveredInstance { return nil })

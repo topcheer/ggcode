@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// --- GatewayMessage JSON round-trip ---
-
 func TestGatewayMessageJSON(t *testing.T) {
 	msg := GatewayMessage{
 		SessionID: "sess-1",
@@ -52,8 +50,6 @@ func TestGatewayMessageOmitEmpty(t *testing.T) {
 	}
 }
 
-// --- SessionInfoData ---
-
 func TestSessionInfoDataJSON(t *testing.T) {
 	d := SessionInfoData{
 		Workspace: "/home/user/project",
@@ -75,8 +71,6 @@ func TestSessionInfoDataJSON(t *testing.T) {
 	}
 }
 
-// --- TextData ---
-
 func TestTextDataJSON(t *testing.T) {
 	d := TextData{ID: "msg-1", Chunk: "hello world", Done: false}
 	b, _ := json.Marshal(d)
@@ -96,8 +90,6 @@ func TestTextDataDoneTrue(t *testing.T) {
 		t.Error("Done should be true")
 	}
 }
-
-// --- StatusData ---
 
 func TestStatusDataJSON(t *testing.T) {
 	d := StatusData{Status: "thinking", Message: "processing"}
@@ -129,8 +121,6 @@ func TestActivityDataJSON(t *testing.T) {
 	}
 }
 
-// --- ToolCallData ---
-
 func TestToolCallDataJSON(t *testing.T) {
 	d := ToolCallData{
 		ToolID:      "t1",
@@ -147,8 +137,6 @@ func TestToolCallDataJSON(t *testing.T) {
 	}
 }
 
-// --- ToolResultData ---
-
 func TestToolResultDataJSON(t *testing.T) {
 	d := ToolResultData{
 		ToolID:   "t1",
@@ -164,8 +152,6 @@ func TestToolResultDataJSON(t *testing.T) {
 	}
 }
 
-// --- ApprovalRequestData ---
-
 func TestApprovalRequestDataJSON(t *testing.T) {
 	d := ApprovalRequestData{
 		ID:       "appr-1",
@@ -180,8 +166,6 @@ func TestApprovalRequestDataJSON(t *testing.T) {
 	}
 }
 
-// --- ApprovalResponseData ---
-
 func TestApprovalResponseDataJSON(t *testing.T) {
 	d := ApprovalResponseData{ID: "appr-1", Decision: "allow"}
 	b, _ := json.Marshal(d)
@@ -191,8 +175,6 @@ func TestApprovalResponseDataJSON(t *testing.T) {
 		t.Errorf("mismatch: %+v", got)
 	}
 }
-
-// --- MessageData ---
 
 func TestMessageDataJSON(t *testing.T) {
 	d := MessageData{Text: "hello agent"}
@@ -204,8 +186,6 @@ func TestMessageDataJSON(t *testing.T) {
 	}
 }
 
-// --- ModeChangeData ---
-
 func TestModeChangeDataJSON(t *testing.T) {
 	d := ModeChangeData{Mode: "auto"}
 	b, _ := json.Marshal(d)
@@ -215,8 +195,6 @@ func TestModeChangeDataJSON(t *testing.T) {
 		t.Errorf("mismatch: %+v", got)
 	}
 }
-
-// --- ErrorData ---
 
 func TestErrorDataJSON(t *testing.T) {
 	d := ErrorData{Message: "something went wrong", Code: "E001"}
@@ -237,8 +215,6 @@ func TestErrorDataOmitEmptyCode(t *testing.T) {
 		t.Error("code should be omitted when empty")
 	}
 }
-
-// --- AskUser types ---
 
 func TestAskUserRequestDataJSON(t *testing.T) {
 	d := AskUserRequestData{
@@ -292,8 +268,6 @@ func TestAskUserResponseDataJSON(t *testing.T) {
 		t.Errorf("freeform mismatch: %s", got.Answers[0].FreeformText)
 	}
 }
-
-// --- Sub-agent types ---
 
 func TestSubagentSpawnDataJSON(t *testing.T) {
 	d := SubagentSpawnData{
@@ -388,8 +362,6 @@ func TestSubagentToolResultDataJSON(t *testing.T) {
 	}
 }
 
-// --- Constants validation ---
-
 func TestEventConstants(t *testing.T) {
 	events := []string{
 		EventConnected, EventSessionInfo, EventUserMessage, EventSystemMessage, EventText,
@@ -460,8 +432,6 @@ func TestDecisionConstants(t *testing.T) {
 		}
 	}
 }
-
-// --- HistoryEntry (from broker.go) ---
 
 func TestHistoryEntryJSON(t *testing.T) {
 	h := HistoryEntry{
@@ -542,7 +512,7 @@ func TestMessageDataWithImagesJSON(t *testing.T) {
 }
 
 func TestMessageDataImagesOmitEmpty(t *testing.T) {
-	// When no images, the "images" key should be absent from JSON.
+
 	d := MessageData{Text: "hello"}
 	b, _ := json.Marshal(d)
 	var m map[string]interface{}

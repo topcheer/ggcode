@@ -4,8 +4,6 @@ import (
 	"testing"
 )
 
-// --- Format() methods ---
-
 func TestArchiveExtractor_Format(t *testing.T) {
 	e := archiveExtractor{subFormat: "zip"}
 	if e.Format() != "zip" {
@@ -75,8 +73,6 @@ func TestSvgExtractor_Format(t *testing.T) {
 		t.Error("expected 'svg'")
 	}
 }
-
-// --- Pure utility functions ---
 
 func TestIsArchiveExt(t *testing.T) {
 	tests := []struct {

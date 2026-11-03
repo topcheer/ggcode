@@ -17,22 +17,17 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// Emitter is the interface Knight uses to send IM notifications.
 type Emitter interface {
 	EmitKnightReport(report string)
 	HasTargets() bool
 }
 
-// EventSink receives Knight task lifecycle events for display in TUI/daemon.
 type EventSink interface {
-	// OnTaskStart is called when a Knight task begins.
 	OnTaskStart(taskName string)
-	// OnTaskComplete is called when a Knight task finishes with a detailed report.
+
 	OnTaskComplete(taskName string, report string, duration time.Duration)
 }
 
-// Knight is the background auto-evolution agent. It runs scheduled tasks
-// during idle time, analyzes sessions, creates and validates skills.
 type Knight struct {
 	cfg          config.KnightConfig
 	budget       *Budget
@@ -49,15 +44,14 @@ type Knight struct {
 	factory      AgentFactory
 	homeDir      string
 	projDir      string
-	lock         *instanceLock // cross-process lock for exclusive Knight access
+	lock         *instanceLock
 
 	mu       sync.Mutex
 	running  bool
 	cancel   context.CancelFunc
 	lastIdle time.Time
-	wg       sync.WaitGroup // tracks runLoop goroutine for graceful shutdown
+	wg       sync.WaitGroup
 
-	// Throttle timestamps — prevent running the same task every tick
 	lastAnalysis           time.Time
 	lastAnalysisAttempt    time.Time
 	lastValidation         time.Time
@@ -65,14 +59,12 @@ type Knight struct {
 	lastMaintenance        time.Time
 	lastMaintenanceAttempt time.Time
 
-	// Session dedup — persists across ticks, survives analyzer recreation
-	analyzedSessions map[string]time.Time // session ID → time of last analysis
-	// analysisInFlight guards analyzeRecentSessions against concurrent
-	// same-process runs (tick loop vs PerformSkillAnalysis, issue #977).
+	analyzedSessions map[string]time.Time
+
 	analysisInFlight  bool
-	notifiedStaging   map[string]bool      // tracks staging skills already notified to avoid spam
-	stagingFailCount  map[string]int       // per staging skill, keyed scope+name (#1760: name-only leaked counts across legal same-name scopes)
-	evalCooldownUntil map[string]time.Time // #1265: LLM-eval cooldown, keyed scope+name (#1760)
+	notifiedStaging   map[string]bool
+	stagingFailCount  map[string]int
+	evalCooldownUntil map[string]time.Time
 }
 
 const (
@@ -83,26 +75,17 @@ const (
 	knightMaintenanceEvery          = 24 * time.Hour
 	knightRetryBackoffEvery         = 15 * time.Minute
 	knightMaxGeneratedSkills        = 3
-	knightMaxGenFailures            = 3 // abandon candidate after this many consecutive generation failures
-	knightStagingMaxValidationFails = 3 // auto-reject after N consecutive validation failures
-	// #1265: after an LLM auto-promote evaluation concludes no (or errors),
-	// re-running the same 3-turn evaluation every 5-minute tick burns the
-	// eval bucket daily on the same candidate with the same context. A
-	// failed candidate goes on cooldown; PASS clears it (conditions may
-	// change when the skill or baselines are revised).
+	knightMaxGenFailures            = 3
+	knightStagingMaxValidationFails = 3
+
 	knightEvalRetryCooldown       = 24 * time.Hour
-	knightPromptIgnoredThreshold  = 5 // shown this many times with zero explicit use → improve trigger copy
-	knightPromptOutcomeMinSamples = 3 // enough weak run outcomes to consider noisy prompt guidance
+	knightPromptIgnoredThreshold  = 5
+	knightPromptOutcomeMinSamples = 3
 )
 
-// New creates a new Knight instance.
 func New(cfg config.KnightConfig, homeDir, projDir string, store session.Store) *Knight {
 	knightDir := filepath.Join(homeDir, ".ggcode")
-	// Both the total budget and the bucket-level guardrail must derive their
-	// daily total from the same normalization path so bucket caps stay in
-	// sync with the effective total (issue #978). Passing raw
-	// cfg.DailyTokenBudget here left buckets at 0 (unlimited) under the
-	// default config, silently defeating eval/analysis isolation.
+
 	dailyTotal := normalizeDailyTokenBudget(cfg)
 	return &Knight{
 		cfg:               cfg,
@@ -124,23 +107,14 @@ func New(cfg config.KnightConfig, homeDir, projDir string, store session.Store) 
 	}
 }
 
-// ErrLockConflict is returned by Start when another ggcode instance in the same
-// project directory already holds the Knight lock. Callers can check this to
-// show a user-facing hint without treating it as a real error.
 var ErrLockConflict = fmt.Errorf("knight: another instance already running in this workspace")
 
-// Start begins the Knight background loop.
 func (k *Knight) Start(ctx context.Context) error {
 	if !k.cfg.Enabled {
 		debug.Log("knight", "disabled, not starting")
 		return nil
 	}
 
-	// Acquire cross-process lock — only one Knight per project directory.
-	// #3657: keep the acquired lock in a LOCAL variable until the k.mu
-	// section below. Assigning k.lock here (unlocked, like every error
-	// path below releasing it) raced Stop/Status reading k.lock under k.mu
-	// (same family as the #2757 Status race; Start was the missed path).
 	lock := tryAcquireLock(k.projDir)
 	if lock == nil {
 		pid, _ := LockHeldBy(k.projDir)
@@ -161,7 +135,6 @@ func (k *Knight) Start(ctx context.Context) error {
 		return fmt.Errorf("knight: init candidate queue dir: %w", err)
 	}
 
-	// Ensure staging directories exist
 	for _, dir := range []string{
 		filepath.Join(k.homeDir, ".ggcode", "skills-staging"),
 		filepath.Join(k.projDir, ".ggcode", "skills-staging"),
@@ -172,12 +145,14 @@ func (k *Knight) Start(ctx context.Context) error {
 			return fmt.Errorf("knight: create dir %s: %w", dir, err)
 		}
 	}
+
 	// #1644-2: the five raw !EqualFold(TrustLevel, "readonly") checks here
 	// were fail-open - a typo'd trust_level (e.g. "read-only", "HIGH") read
 	// as writable by the scheduler while auto_policy's trustCanWrite
 	// whitelist reported every write policy disabled: the audit panel said
 	// "no writes" while the scheduler kept writing. Route through the same
 	// whitelist (normalized like the auto_policy call site).
+
 	if k.canWrite() {
 		if migrated, err := k.normalizeActiveSkillLayout(); err != nil {
 			debug.Log("knight", "normalize active skill layout failed: %v", err)
@@ -189,8 +164,7 @@ func (k *Knight) Start(ctx context.Context) error {
 	k.mu.Lock()
 	if k.running {
 		k.mu.Unlock()
-		// Freshly acquired flock is redundant when already running
-		// (normally unreachable: double-Start fails at tryAcquireLock).
+
 		lock.release()
 		debug.Log("knight", "already running, start skipped")
 		return nil
@@ -199,7 +173,7 @@ func (k *Knight) Start(ctx context.Context) error {
 	k.cancel = cancel
 	k.running = true
 	k.lastIdle = time.Now()
-	// #3657: the k.lock field is written only here, under k.mu.
+
 	k.lock = lock
 	k.mu.Unlock()
 
@@ -212,7 +186,6 @@ func (k *Knight) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully shuts down Knight.
 func (k *Knight) Stop() {
 	k.mu.Lock()
 	if k.cancel != nil {
@@ -222,12 +195,6 @@ func (k *Knight) Stop() {
 	k.running = false
 	k.mu.Unlock()
 
-	// Wait for runLoop to fully exit BEFORE releasing the cross-process
-	// instance lock (#3657). The old order (release inside k.mu, then
-	// wg.Wait) opened a window where another process could acquire the
-	// instance lock and run a second Knight while this runLoop was still
-	// mid-tick writing skill files. wg.Wait must not run under k.mu:
-	// runLoop takes k.mu during ticks and would deadlock.
 	k.wg.Wait()
 	k.mu.Lock()
 	if k.lock != nil {
@@ -238,15 +205,12 @@ func (k *Knight) Stop() {
 	debug.Log("knight", "stopped")
 }
 
-// Running returns whether Knight is currently active.
 func (k *Knight) Running() bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.running
 }
 
-// Enable starts Knight if not already running. It updates the internal config
-// to Enabled=true before calling Start, so the guard in Start() passes.
 func (k *Knight) Enable(ctx context.Context) error {
 	k.mu.Lock()
 	if k.running {
@@ -258,7 +222,6 @@ func (k *Knight) Enable(ctx context.Context) error {
 	return k.Start(ctx)
 }
 
-// Disable stops Knight if running and marks it as disabled.
 func (k *Knight) Disable() {
 	k.mu.Lock()
 	k.cfg.Enabled = false
@@ -266,28 +229,24 @@ func (k *Knight) Disable() {
 	k.Stop()
 }
 
-// SetEmitter sets the IM emitter for Knight notifications.
 func (k *Knight) SetEmitter(e Emitter) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.emitter = e
 }
 
-// SetFactory sets the agent factory for LLM-powered tasks.
 func (k *Knight) SetFactory(f AgentFactory) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.factory = f
 }
 
-// SetEventSink sets the event sink for task lifecycle notifications.
 func (k *Knight) SetEventSink(s EventSink) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.sink = s
 }
 
-// FuncSink is an EventSink that delegates to callback functions.
 type FuncSink struct {
 	OnStart    func(taskName string)
 	OnComplete func(taskName string, report string, duration time.Duration)
@@ -305,22 +264,18 @@ func (s *FuncSink) OnTaskComplete(taskName string, report string, duration time.
 	}
 }
 
-// getEventSink returns the current event sink under lock protection.
 func (k *Knight) getEventSink() EventSink {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.sink
 }
 
-// getFactory returns the current agent factory under lock protection.
 func (k *Knight) getFactory() AgentFactory {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.factory
 }
 
-// RecordSkillUse increments the usage counter for a skill.
-// Called from the skill tool when a Knight-managed skill is loaded.
 func (k *Knight) RecordSkillUse(ref string) {
 	if k.usage != nil {
 		k.usage.RecordUse(ref)
@@ -328,9 +283,6 @@ func (k *Knight) RecordSkillUse(ref string) {
 	k.syncSkillMetadata(ref)
 }
 
-// RecordSkillPromptExposure records that one or more active skills were visible
-// to the model in the system prompt. This is a weak signal, separate from actual
-// skill invocation, and helps distinguish "never shown" from "shown but ignored".
 func (k *Knight) RecordSkillPromptExposure(refs []string) {
 	if k == nil || k.usage == nil {
 		return
@@ -350,9 +302,6 @@ func (k *Knight) RecordSkillPromptExposure(refs []string) {
 	}
 }
 
-// RecordPromptSkillOutcome records a weak task-level outcome for prompt-visible
-// skills. It should be used only as a soft signal because prompt visibility does
-// not prove the skill caused the outcome.
 func (k *Knight) RecordPromptSkillOutcome(refs []string, success bool) {
 	if k == nil || k.usage == nil {
 		return
@@ -372,7 +321,6 @@ func (k *Knight) RecordPromptSkillOutcome(refs []string, success bool) {
 	}
 }
 
-// RecordSkillEffectiveness records a 1-5 effectiveness score for a skill.
 func (k *Knight) RecordSkillEffectiveness(ref string, score int) {
 	if k.usage != nil {
 		k.usage.RecordEffectiveness(ref, score)
@@ -380,7 +328,6 @@ func (k *Knight) RecordSkillEffectiveness(ref string, score int) {
 	k.syncSkillMetadata(ref)
 }
 
-// SkillUsage returns runtime usage stats for a skill.
 func (k *Knight) SkillUsage(ref string) (count int, lastUsed time.Time, avgScore float64) {
 	if k.usage == nil {
 		return 0, time.Time{}, 0
@@ -388,7 +335,6 @@ func (k *Knight) SkillUsage(ref string) (count int, lastUsed time.Time, avgScore
 	return k.usage.GetUsage(ref)
 }
 
-// SkillPromptExposure returns how often a skill has been visible in the prompt.
 func (k *Knight) SkillPromptExposure(ref string) (count int, lastExposed time.Time) {
 	if k.usage == nil {
 		return 0, time.Time{}
@@ -396,8 +342,6 @@ func (k *Knight) SkillPromptExposure(ref string) (count int, lastExposed time.Ti
 	return k.usage.GetPromptExposure(ref)
 }
 
-// SkillPromptOutcome returns weak success/failure counts from runs where a skill
-// was visible in the prompt.
 func (k *Knight) SkillPromptOutcome(ref string) (successes int, failures int) {
 	if k.usage == nil {
 		return 0, 0
@@ -405,7 +349,6 @@ func (k *Knight) SkillPromptOutcome(ref string) (successes int, failures int) {
 	return k.usage.GetPromptOutcome(ref)
 }
 
-// SkillFeedback returns runtime feedback stats for a skill.
 func (k *Knight) SkillFeedback(ref string) (avgScore float64, samples int) {
 	if k.usage == nil {
 		return 0, 0
@@ -413,12 +356,10 @@ func (k *Knight) SkillFeedback(ref string) (avgScore float64, samples int) {
 	return k.usage.GetFeedback(ref)
 }
 
-// BudgetStatus returns current Knight token usage counters.
 func (k *Knight) BudgetStatus() (used int, remaining int, limit int) {
 	return k.budget.Used(), k.budget.Remaining(), k.budget.DailyLimit()
 }
 
-// SetSkillFrozen updates an active skill's frozen flag.
 func (k *Knight) SetSkillFrozen(name string, frozen bool) error {
 	entry, err := k.FindActiveSkill(name)
 	if err != nil {
@@ -433,27 +374,25 @@ func (k *Knight) SetSkillFrozen(name string, frozen bool) error {
 	return nil
 }
 
-// DeleteSkill removes an active skill by deleting its file and directory.
 func (k *Knight) DeleteSkill(name string) error {
 	entry, err := k.FindActiveSkill(name)
 	if err != nil {
 		return err
 	}
-	// Remove the skill file
+
 	if err := os.Remove(entry.Path); err != nil {
 		return fmt.Errorf("delete skill %q: %w", name, err)
 	}
-	// Remove the parent directory (skills/<name>/) if empty
+
 	skillDir := filepath.Dir(entry.Path)
 	if err := os.Remove(skillDir); err != nil && !errors.Is(err, os.ErrNotExist) {
-		// Non-fatal: directory may not be empty (shouldn't happen, but be safe)
+
 		debug.Log("knight", "remove skill dir %s: %v", skillDir, err)
 	}
 	k.index.Invalidate()
 	return nil
 }
 
-// RollbackSkill restores the latest snapshot for an active skill.
 func (k *Knight) RollbackSkill(name string) error {
 	entry, err := k.FindActiveSkill(name)
 	if err != nil {
@@ -475,7 +414,6 @@ func (k *Knight) RollbackSkill(name string) error {
 	return nil
 }
 
-// FindActiveSkill resolves an active skill reference, optionally scoped as project:name or global:name.
 func (k *Knight) FindActiveSkill(ref string) (*SkillEntry, error) {
 	active, err := k.index.ActiveSkills()
 	if err != nil {
@@ -484,7 +422,6 @@ func (k *Knight) FindActiveSkill(ref string) (*SkillEntry, error) {
 	return findSkillByRef(active, ref, "active")
 }
 
-// FindStagingSkill resolves a staging skill reference, optionally scoped as project:name or global:name.
 func (k *Knight) FindStagingSkill(ref string) (*SkillEntry, error) {
 	staging, err := k.index.StagingSkills()
 	if err != nil {
@@ -493,22 +430,16 @@ func (k *Knight) FindStagingSkill(ref string) (*SkillEntry, error) {
 	return findSkillByRef(staging, ref, "staging")
 }
 
-// Index returns the skill index for external access.
 func (k *Knight) Index() *SkillIndex {
 	return k.index
 }
 
-// Queue returns the candidate queue for external queries.
 func (k *Knight) Queue() *CandidateQueue {
 	return k.queue
 }
 
-// Status returns a human-readable status string.
 func (k *Knight) Status() string {
-	// #2757: cfg.Enabled/running/lock are written under k.mu by
-	// Start/Stop/Enable; snapshot them under the same lock (Running() is the
-	// reference pattern). Unlocked reads were a Go memory model data race
-	// (WebUI Status polling vs daemon control commands).
+
 	k.mu.Lock()
 	enabled, running, lock := k.cfg.Enabled, k.running, k.lock
 	k.mu.Unlock()
@@ -532,16 +463,14 @@ func (k *Knight) Status() string {
 	return fmt.Sprintf("running (tokens: %dK / %dM)", used/1000, limit/1_000_000)
 }
 
-// NotifyActivity is called when the user sends a message, resetting the idle timer.
 func (k *Knight) NotifyActivity() {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.lastIdle = time.Now()
 }
 
-// CanPerformTask checks if Knight has budget and is allowed to run.
 func (k *Knight) CanPerformTask() bool {
-	// #2757: same locked snapshot as Status().
+
 	k.mu.Lock()
 	enabled, running := k.cfg.Enabled, k.running
 	k.mu.Unlock()
@@ -551,7 +480,6 @@ func (k *Knight) CanPerformTask() bool {
 	return k.budget.CanSpend()
 }
 
-// PerformSkillAnalysis triggers an immediate skill analysis task.
 func (k *Knight) PerformSkillAnalysis(ctx context.Context) error {
 	if !k.CanPerformTask() {
 		return fmt.Errorf("knight: no budget or not running")
@@ -559,7 +487,6 @@ func (k *Knight) PerformSkillAnalysis(ctx context.Context) error {
 	return k.analyzeRecentSessions(ctx)
 }
 
-// PerformSkillValidation validates all active skills.
 func (k *Knight) PerformSkillValidation(ctx context.Context) ([]ValidationResult, error) {
 	if !k.CanPerformTask() {
 		return nil, fmt.Errorf("knight: no budget or not running")
@@ -580,7 +507,6 @@ func (k *Knight) PerformSkillValidation(ctx context.Context) ([]ValidationResult
 	return results, nil
 }
 
-// RunAdhocTask executes a user-directed Knight task using the configured agent factory.
 func (k *Knight) RunAdhocTask(ctx context.Context, goal string) (TaskResult, error) {
 	goal = strings.TrimSpace(goal)
 	if goal == "" {
@@ -610,7 +536,6 @@ Requirements:
 	return result, nil
 }
 
-// PromoteStaging promotes a staging skill to active after validation.
 func (k *Knight) PromoteStaging(skillName string) error {
 	s, err := k.FindStagingSkill(skillName)
 	if err != nil {
@@ -619,8 +544,6 @@ func (k *Knight) PromoteStaging(skillName string) error {
 	return k.promoteStagingEntry(s)
 }
 
-// PromoteStagingByPath promotes a staging skill by its file path.
-// Use this when multiple staging skills share the same name/scope.
 func (k *Knight) PromoteStagingByPath(path string) error {
 	staging, err := k.index.StagingSkills()
 	if err != nil {
@@ -639,10 +562,7 @@ func (k *Knight) promoteStagingEntry(s *SkillEntry) error {
 	if !result.Valid {
 		return fmt.Errorf("skill %q failed validation: %s", s.Name, result.Errors)
 	}
-	// r23: the same deterministic safety scan guards manual promotion -
-	// validation is structural only, and staging content is inlined into
-	// future prompts once active. Blocking here degrades to a clear error
-	// the human can review.
+
 	if content, rerr := readSkillContent(s.Path); rerr == nil {
 		if findings := scanSkillContentSafety(string(content)); len(findings) > 0 {
 			return fmt.Errorf("skill %q blocked by safety scan: %s (edit the skill or reject it)",
@@ -652,9 +572,7 @@ func (k *Knight) promoteStagingEntry(s *SkillEntry) error {
 
 	active, err := k.index.ActiveSkills()
 	if err != nil {
-		// #985: propagate index read failures instead of silently skipping
-		// the duplicate guard (active=nil made CheckDuplicate always false
-		// and let a same-name skill overwrite the existing active one).
+
 		return fmt.Errorf("read active skills for duplicate check: %w", err)
 	}
 	if CheckDuplicate(s, active) && !stagingUpdatesActiveSkill(s, active) {
@@ -675,7 +593,6 @@ func (k *Knight) promoteStagingEntry(s *SkillEntry) error {
 	return nil
 }
 
-// RejectStaging removes a staging skill.
 func (k *Knight) RejectStaging(skillName string) error {
 	s, err := k.FindStagingSkill(skillName)
 	if err != nil {
@@ -684,8 +601,6 @@ func (k *Knight) RejectStaging(skillName string) error {
 	return k.rejectStagingEntry(s)
 }
 
-// RejectStagingByPath rejects a staging skill by its file path.
-// Use this when multiple staging skills share the same name/scope.
 func (k *Knight) RejectStagingByPath(path string) error {
 	staging, err := k.index.StagingSkills()
 	if err != nil {
@@ -722,13 +637,11 @@ func (k *Knight) rejectStagingEntry(s *SkillEntry) error {
 	return nil
 }
 
-// runLoop is the main Knight background loop.
 func (k *Knight) runLoop(ctx context.Context) {
-	// Tick every 5 minutes
+
 	ticker := time.NewTicker(knightTickInterval)
 	defer ticker.Stop()
 
-	// Initial delay — wait 1 minute before first task
 	select {
 	case <-time.After(knightInitialDelay):
 	case <-ctx.Done():
@@ -745,25 +658,16 @@ func (k *Knight) runLoop(ctx context.Context) {
 	}
 }
 
-// tick runs one cycle of Knight tasks.
 func (k *Knight) tick(ctx context.Context, now time.Time) {
 	if !k.budget.CanSpend() {
 		debug.Log("knight", "daily budget exhausted, skipping tick")
 		return
 	}
 
-	// Flush usage tracker to disk periodically
 	if k.usage != nil {
 		k.usage.Flush()
 	}
 
-	// #1578-A: the nightly maintenance check must run BEFORE the
-	// quiet-hours return - the most common quiet window (23:00-08:00,
-	// crossing midnight) swallowed every 2 AM tick, so the hour==2
-	// condition never held outside quiet hours and regression/document
-	// audits never ran at all. Maintenance is a local, unattended task;
-	// quiet hours govern NOTIFICATIONS (emitReportKeyed checks them
-	// separately), not background upkeep.
 	if now.Hour() == 2 && shouldRunScheduledTask(now, k.lastMaintenance, k.lastMaintenanceAttempt, knightMaintenanceEvery, knightRetryBackoffEvery) {
 		k.lastMaintenanceAttempt = now
 		sink := k.getEventSink()
@@ -786,13 +690,10 @@ func (k *Knight) tick(ctx context.Context, now time.Time) {
 		return
 	}
 
-	// Only run heavy tasks when user is idle
 	isIdle := k.isIdle(now)
 
-	// Every tick: check for staging skills that need attention
 	k.reviewStagingSkills(ctx)
 
-	// Hourly (throttled): analyze recent sessions for skill candidates
 	if isIdle && k.hasCapability("skill_creation") && shouldRunScheduledTask(now, k.lastAnalysis, k.lastAnalysisAttempt, knightAnalysisEvery, knightRetryBackoffEvery) {
 		k.lastAnalysisAttempt = now
 		sink := k.getEventSink()
@@ -810,7 +711,6 @@ func (k *Knight) tick(ctx context.Context, now time.Time) {
 		}
 	}
 
-	// Every 6 hours: validate all skills
 	if k.hasCapability("skill_validation") && shouldRunScheduledTask(now, k.lastValidation, k.lastValidationAttempt, knightValidationEvery, knightRetryBackoffEvery) {
 		k.lastValidationAttempt = now
 		sink := k.getEventSink()
@@ -830,12 +730,11 @@ func (k *Knight) tick(ctx context.Context, now time.Time) {
 
 }
 
-// isIdle returns true if no user activity has happened for the configured idle delay.
 func (k *Knight) isIdle(now time.Time) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.lastIdle.IsZero() {
-		return true // never set = assume idle
+		return true
 	}
 	return now.Sub(k.lastIdle) >= time.Duration(k.cfg.IdleDelaySec)*time.Second
 }
@@ -849,24 +748,15 @@ func (k *Knight) hasCapability(cap string) bool {
 	return false
 }
 
-// canWrite reports whether the configured trust level grants the scheduler
-// write access (#1644-2): routes through the auto_policy trustCanWrite
-// whitelist with the same normalization as its call site, so the audit
-// panel's display of write policies and the scheduler's actual writes can
-// never disagree again.
 func (k *Knight) canWrite() bool {
 	trust := strings.ToLower(strings.TrimSpace(k.cfg.TrustLevel))
-	// #2213 review: match the auto_policy call site's empty-value default
-	// - an unset trust_level renders write policies ENABLED in the audit
-	// panel ("" -> "staged"), so the scheduler must agree instead of
-	// failing closed and splitting display from behavior in reverse.
+
 	if trust == "" {
 		trust = "staged"
 	}
 	return trustCanWrite(trust)
 }
 
-// reviewStagingSkills checks staging skills and auto-promotes if trust_level=auto.
 func (k *Knight) reviewStagingSkills(ctx context.Context) {
 	if !k.canWrite() {
 		return
@@ -878,9 +768,7 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 
 	active, activeErr := k.index.ActiveSkills()
 	if activeErr != nil {
-		// #1266: with an empty active list the duplicate guard below passes
-		// vacuously (CheckDuplicate(s, nil) is always false) and the revision
-		// check misses real twins - defer staging review to the next tick.
+
 		debug.Log("knight", "reviewStagingSkills: active index unavailable: %v", activeErr)
 		return
 	}
@@ -918,7 +806,7 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 			}
 			continue
 		}
-		// Valid — reset failure count
+
 		delete(k.stagingFailCount, s.Scope+":"+s.Name)
 		isRevision := stagingUpdatesActiveSkill(s, active)
 		if CheckDuplicate(s, active) && !isRevision {
@@ -931,10 +819,6 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 			continue
 		}
 
-		// #1644 family / sa-169: the promotion branch used the RAW value while
-		// canWrite and the audit panel normalize - "AUTO"/" auto " rendered
-		// auto-promotion ENABLED and let the review run, but promotion never
-		// fired. Compare normalized, sharing the canWrite default chain.
 		if k.canWrite() && strings.EqualFold(strings.TrimSpace(k.cfg.TrustLevel), "auto") {
 			if allowed, reason := canAutoPromoteStagingSkill(s, result, isRevision); !allowed {
 				if k.markStagingNotified(s.Scope + ":" + s.Name) {
@@ -944,11 +828,7 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 				continue
 			}
 			if until, ok := k.evalCooldownUntil[s.Scope+":"+s.Name]; ok && time.Now().Before(until) {
-				// #1265: the LLM already evaluated this candidate recently and
-				// concluded no (or the runner errored) - the same context re-runs
-				// to the same verdict. Skip until the cooldown expires; the
-				// user-facing review notice was already emitted once
-				// (markStagingNotified dedups).
+
 				debug.Log("knight", "skill %s: LLM eval cooldown active until %s, skipping re-evaluation", s.Name, until.Format(time.RFC3339))
 				continue
 			}
@@ -974,7 +854,7 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 				fmt.Sprintf("auto-promoted skill %s — %s", s.Name, s.Meta.Description),
 				[]string{s.Scope + ":" + s.Name}, s.Path)
 		} else {
-			// For "staged" trust level, notify user once per skill
+
 			if k.markStagingNotified(s.Scope + ":" + s.Name) {
 				k.emitReportKeyed(fmt.Sprintf("📝 New skill candidate: %s\n%s\n👉 /knight approve %s to promote / /knight reject %s to decline",
 					s.Name, s.Meta.Description, s.Name, s.Name), s.Scope+":"+s.Name, EmitSeverityActionRequired)
@@ -1038,12 +918,7 @@ func (k *Knight) evaluateAutoPromoteCandidate(ctx context.Context, entry *SkillE
 		})
 		return false, fmt.Sprintf("cannot read staging skill for scenario evaluation: %v", err)
 	}
-	// r23: deterministic safety scan before any eval cost is spent. The
-	// LLM gate's "no destructive actions / no credentials" clause is
-	// fail-open; this is its deterministic counterpart (skill files are
-	// persisted then inlined into every future prompt - the same injection
-	// surface r409 closed for save_memory). Findings never echo the matched
-	// content: a hit may itself be a credential.
+
 	if findings := scanSkillContentSafety(string(content)); len(findings) > 0 {
 		reason := fmt.Sprintf("safety scan flagged %d pattern(s): %s - manual review required",
 			len(findings), summarizeSkillSafetyFindings(findings))
@@ -1053,13 +928,10 @@ func (k *Knight) evaluateAutoPromoteCandidate(ctx context.Context, entry *SkillE
 		})
 		return false, reason
 	}
-	// Deterministic rule-based overlap check. Run before invoking the LLM so
-	// that an obviously redundant candidate doesn't burn eval-bucket tokens.
+
 	active, activeErr := k.index.ActiveSkills()
 	if activeErr != nil {
-		// #1266: an empty active list disables the overlap gate vacuously
-		// (same #985 family) - conservatively block promotion this tick
-		// instead of letting an unvetted candidate through.
+
 		reason := fmt.Sprintf("active skill index unavailable, deferring evaluation: %v", activeErr)
 		k.appendAutoPromoteEval(entry, autoPromoteEvalDecision{
 			Rationale:   reason,
@@ -1082,9 +954,7 @@ func (k *Knight) evaluateAutoPromoteCandidate(ctx context.Context, entry *SkillE
 		k.appendAutoPromoteEval(entry, decision)
 		return false, decision.Rationale
 	}
-	// Deterministic A/B replay against recent prompt scenarios. Block only when
-	// we DO have scenarios and the candidate clearly does not cover any of them
-	// — that protects against promoting skills that don't match real usage.
+
 	scenariosForReplay, _ := k.RecentSkillScenarios(40)
 	var baselineBody string
 	if overlap.WorstActiveRef != "" {
@@ -1188,8 +1058,7 @@ Staged skill:
 			RawOutput:   result.Output,
 			FailureMode: "runner_error",
 		})
-		// #1265: the expensive LLM run already burned and produced nothing -
-		// cooldown so the next ticks don't repeat it with the same context.
+
 		k.evalCooldownUntil[entry.Scope+":"+entry.Name] = time.Now().Add(knightEvalRetryCooldown)
 		return false, fmt.Sprintf("scenario evaluation failed: %v", result.Error)
 	}
@@ -1205,10 +1074,7 @@ Staged skill:
 	decision.ReplayVerdict = abReplayVerdict(replay)
 	decision.finalizeFailureMode()
 	k.appendAutoPromoteEval(entry, decision)
-	// #r25 feedback loop: the eval consumed the injected lessons; its
-	// outcome feeds back into each lesson's utility score (approve = the
-	// context helped, decline = it did not). Small deltas compound across
-	// decisions via the utility-ranked retrieval above.
+
 	if len(memoryCtx.ids) > 0 {
 		delta := -0.05
 		if decision.Allowed() {
@@ -1222,13 +1088,11 @@ Staged skill:
 		if decision.Rationale == "" {
 			decision.Rationale = "scenario evaluation did not approve auto-promotion"
 		}
-		// #1265: the LLM evaluated and declined - re-running with identical
-		// context every tick is the structural eval-bucket drain; cooldown.
+
 		k.evalCooldownUntil[entry.Scope+":"+entry.Name] = time.Now().Add(knightEvalRetryCooldown)
 		return false, decision.Rationale
 	}
-	// Approved: clear any cooldown (baselines or the skill may have changed
-	// since the declining verdict).
+
 	delete(k.evalCooldownUntil, entry.Scope+":"+entry.Name)
 	return true, ""
 }
@@ -1336,15 +1200,8 @@ func parseAutoPromoteEvalDecision(output string) autoPromoteEvalDecision {
 	return decision
 }
 
-// analyzeRecentSessions scans recent session history for reusable patterns.
-// High-score candidates are refined via LLM and written to staging.
 func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
-	// In-process mutual exclusion between the tick loop and the exported
-	// PerformSkillAnalysis entry point (issue #977): without it both paths can
-	// pass the analyzedSessions eligibility check before either records its
-	// result — the window spans the whole LLM analysis — double-analyzing the
-	// same sessions and double-spending the skill-generation budget. The
-	// loser skips this round; the next tick retries.
+
 	k.mu.Lock()
 	if k.analysisInFlight {
 		k.mu.Unlock()
@@ -1379,9 +1236,7 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 
 	active, err := k.index.ActiveSkills()
 	if err != nil {
-		// #1266: isKnownCandidate(nil) returns false for everything - known
-		// skills would be regenerated (duplicate LLM generation + staging
-		// churn). Abort the tick instead.
+
 		return fmt.Errorf("knight: active skill index unavailable while staging candidates: %w", err)
 	}
 	staging, err := k.index.StagingSkills()
@@ -1389,7 +1244,6 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 		return fmt.Errorf("knight: staging skill index unavailable while staging candidates: %w", err)
 	}
 
-	// Process candidates: only converged candidates become staging writes.
 	var reported []SkillCandidate
 	generatedCount := 0
 	deferredCount := 0
@@ -1408,7 +1262,7 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 				continue
 			}
 			generatedCount++
-			// High-value candidate: use LLM to generate a proper skill
+
 			content, genErr := analyzer.GenerateSkillFromAnalysis(ctx, c, k.getFactory())
 			if genErr != nil {
 				c.GenFailCount++
@@ -1489,7 +1343,6 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 	return nil
 }
 
-// validateAllSkills checks all active skills for validity and freshness.
 func (k *Knight) validateAllSkills(ctx context.Context) error {
 	active, err := k.index.ActiveSkills()
 	if err != nil {
@@ -1497,7 +1350,7 @@ func (k *Knight) validateAllSkills(ctx context.Context) error {
 	}
 
 	for _, skill := range active {
-		// Basic validation
+
 		result := ValidateSkill(skill)
 		if !result.Valid {
 			debug.Log("knight", "skill %s has issues: %v", skill.Name, result.Errors)
@@ -1507,7 +1360,6 @@ func (k *Knight) validateAllSkills(ctx context.Context) error {
 		}
 		skillRef := formatSkillRef(skill.Scope, skill.Name)
 
-		// Freshness check: is the skill stale?
 		if k.usage.IsStale(skillRef, 30*24*time.Hour) {
 			if k.shouldSuppressStaleNotice(skillRef) {
 				continue
@@ -1527,7 +1379,6 @@ func (k *Knight) validateAllSkills(ctx context.Context) error {
 			}
 		}
 
-		// Effectiveness check: low average score?
 		avgScore, samples, shouldWarn := k.shouldWarnLowEffectiveness(skillRef)
 		if shouldWarn {
 			debug.Log("knight", "skill %s has low effectiveness: %.1f/5", skill.Name, avgScore)
@@ -1539,7 +1390,6 @@ func (k *Knight) validateAllSkills(ctx context.Context) error {
 	return nil
 }
 
-// nightlyMaintenance runs deep maintenance tasks.
 func (k *Knight) nightlyMaintenance(ctx context.Context) error {
 	debug.Log("knight", "running nightly maintenance")
 	factory := k.getFactory()
@@ -1587,17 +1437,10 @@ Do not edit files. Produce a concise report with:
 	return nil
 }
 
-// emitReport sends a Knight report via IM if an emitter is configured.
-// If an EventSink is configured, the report is also forwarded as a
-// task-complete event for display in TUI/daemon terminal.
 func (k *Knight) emitReport(report string) {
 	k.emitReportKeyed(report, "", EmitSeverityInfo)
 }
 
-// emitReportKeyed adds optional throttling. When key is non-empty, the same
-// (key, severity) combination is suppressed for emitThrottle.window after the
-// last successful emit. This prevents staging/stale notifications from
-// flooding when scheduler ticks every 5 minutes.
 func (k *Knight) emitReportKeyed(report, key string, severity EmitSeverity) {
 	if k.inQuietHours(time.Now()) {
 		return
@@ -1606,10 +1449,7 @@ func (k *Knight) emitReportKeyed(report, key string, severity EmitSeverity) {
 	em := k.emitter
 	sink := k.sink
 	k.mu.Unlock()
-	// #1575-B: check for an actual destination BEFORE the throttle gate -
-	// allow() is check-and-set, so a targetless call (daemon up before IM
-	// connects) burned the 6h window as a phantom emit and the first REAL
-	// notification was swallowed.
+
 	if em == nil && sink == nil {
 		return
 	}
@@ -1733,7 +1573,6 @@ func formatSkillRef(scope, name string) string {
 	return scope + ":" + name
 }
 
-// FormatSkillRefForDisplay returns the canonical scope-qualified skill reference.
 func FormatSkillRefForDisplay(scope, name string) string {
 	return formatSkillRef(scope, name)
 }
@@ -1866,10 +1705,7 @@ func (k *Knight) stageSkillRevision(ctx context.Context, skill *SkillEntry, task
 	staging, err := k.index.StagingSkills()
 	if err == nil {
 		for _, candidate := range staging {
-			// #3691: same-name skills in different scopes are a legal layout
-			// (skill_validator.go CheckDuplicate). Dedup must match scope+name,
-			// otherwise a project:foo staging entry silently suppresses every
-			// global:foo revision (infinite silent-drop loop per tick).
+
 			if candidate.Name == skill.Name && candidate.Scope == skill.Scope {
 				debug.Log("knight", "staging entry for %s:%s already pending review, skip", skill.Scope, skill.Name)
 				return
@@ -1914,24 +1750,22 @@ func (k *Knight) stageSkillRevision(ctx context.Context, skill *SkillEntry, task
 }
 
 func (k *Knight) shouldStageCandidate(c SkillCandidate) bool {
-	// If the user (or auto-reject) recently rejected/rolled back a same-name
-	// candidate, suppress regeneration so the next analysis tick doesn't
-	// produce the same churn.
+
 	if k.rejects != nil {
 		if entry, blocked := k.rejects.coolDownActive(c.Scope, c.Name, time.Now()); blocked {
 			debug.Log("knight", "skip candidate %s (cool-down: last %s by %s)", c.Name, entry.Action, entry.Reporter)
 			return false
 		}
 	}
-	// Corrections are the highest-value signal — always worth staging
+
 	if c.Category == "correction" && c.Score >= 1.5 {
 		return true
 	}
-	// Failure-fix patterns need at least 2 occurrences across sessions to be reliable
+
 	if c.Category == "failure-fix" && c.EvidenceCount >= 2 {
 		return true
 	}
-	// Fallback for any future category
+
 	return c.Score >= 3.0
 }
 
@@ -2003,14 +1837,7 @@ func (k *Knight) isKnownCandidate(c SkillCandidate, active, staging []*SkillEntr
 				return true
 			}
 		}
-		// Semantic dedup via name+description token Jaccard. 0.6 is empirically
-		// the threshold above which two candidates describe the same workflow
-		// in this repo's existing skills. CJK-dominant fingerprints use a
-		// stricter 0.75 (#3637): bigram density makes same-prefix Chinese
-		// families score 0.55-0.60 without being duplicates. #3676: the gate
-		// is now pair-wise (both-side dominant = strict; mixed-script pair =
-		// 0.6) instead of candidate-side-only, which made the same pair
-		// direction-dependent and leaked [0.6,0.75) duplicates.
+
 		existFP := skillSimilarityFingerprint(s.Name, s.Meta.Description, "")
 		if jaccardSimilarity(candFP, existFP) >= duplicateThresholdForPair(candFP, existFP) {
 			return true
@@ -2020,10 +1847,7 @@ func (k *Knight) isKnownCandidate(c SkillCandidate, active, staging []*SkillEntr
 		if a == nil {
 			continue
 		}
-		// #3676: pair-wise gate on the active loop too - the candidate-side-only
-		// lookup here had the same direction dependence as the staging loop
-		// (review 6088096655): a wide-script candidate vs an English active
-		// skill leaked [0.6,0.75) duplicates through this path.
+
 		activeFP := skillSimilarityFingerprint(a.Name, a.Meta.Description, "")
 		if jaccardSimilarity(candFP, activeFP) >= duplicateThresholdForPair(candFP, activeFP) {
 			return true

@@ -15,19 +15,10 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// remoteShellAllowed reports whether the #2185 im.remote_dangerous_commands
-// opt-in is set (nil config counts as not allowed - fail closed).
 func (m Model) remoteShellAllowed() bool {
 	return m.config != nil && m.config.IM.RemoteDangerousCommands
 }
 
-// injectRemoteImageAttachments decodes the inbound message's image
-// attachments into pending-image entries (#4818). TUI-attached sessions
-// previously collapsed every image block to a '[Attached image from remote
-// IM]' placeholder via BuildInboundText while the daemon path delivered full
-// ImageBlock content - an image-only IM message gave the model 0% of its
-// pixels. Corrupt payloads are skipped with a debug log, never breaking the
-// text flow.
 func injectRemoteImageAttachments(m *Model, msg im.InboundMessage) {
 	for _, att := range msg.Attachments {
 		if att.DataBase64 == "" {
@@ -55,20 +46,17 @@ func injectRemoteImageAttachments(m *Model, msg im.InboundMessage) {
 	}
 }
 
-// handleRemoteInbound handles the remoteInboundMsg case.
 func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {
-	// Track the originating adapter for per-channel echo suppression.
+
 	m.remoteInboundAdapter = msg.Message.Envelope.Adapter
-	// #4818: honor the #1584-A intent (keep image blocks) like the daemon
-	// path - decode attachments into the pending-image pipeline so they ride
-	// along with the text submission as real multimodal content.
+
 	injectRemoteImageAttachments(&m, msg.Message)
 	prompt := buildRemoteInboundPrompt(msg.Message)
 	route := im.RouteInboundText(prompt, m.pendingApproval != nil, m.pendingQuestionnaire != nil)
 
 	if route.Kind == im.InboundRouteSlash {
 		if response, handled := m.ExecuteRemoteSlashCommand(route.Text); handled {
-			// Handle /restart: send IM confirmation first, then quit after delay.
+
 			if response == "RESTART" || response == "RESTART:DEBUG" {
 				if response == "RESTART:DEBUG" {
 					m.emitIMText("\U0001f504 Restarting ggcode with debug mode enabled...")
@@ -80,7 +68,7 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 				}
 				return m, m.scheduleRemoteRestart()
 			}
-			// Handle /muteself: send warning first, then mute after delay.
+
 			if strings.HasPrefix(response, "MUTES:") {
 				adapter := strings.TrimPrefix(response, "MUTES:")
 				m.emitIMText(im.DefaultMuteSelfWarning(adapter))
@@ -99,11 +87,6 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 		}
 	}
 
-	// Shell passthrough ($ cmd / ! cmd): execute immediately even while a
-	// turn is running, mirroring the daemon bridge and the local TUI escape.
-	// Never queued as an agent submission - the user expects direct output.
-	// #2185: same opt-in gate as /mode escalation - arbitrary shell from a
-	// remote IM peer is the dominant attack surface, hard-denied by default.
 	if route.Kind == im.InboundRouteShell {
 		if !m.remoteShellAllowed() {
 			if msg.Response != nil {
@@ -123,12 +106,7 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 	}
 
 	if route.Kind == im.InboundRouteApproval {
-		// #1833 case 1: mirror the questionnaire branch's stale guard (and
-		// the daemon bridge's #569 A timeout drop). The route decision came
-		// from a snapshot taken before handleRemoteInbound; if the approval
-		// was already answered locally / timed out in between, the late IM
-		// "y" must be dropped - leaking it further would crash on the nil
-		// ToolName read below or, worse, resubmit "y" as a fresh prompt.
+
 		if m.pendingApproval == nil {
 			if msg.Response != nil {
 				msg.Response <- nil
@@ -158,7 +136,7 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 
 	if route.Kind == im.InboundRouteAskUser {
 		if m.pendingQuestionnaire == nil {
-			// Questionnaire was already completed/cancelled; ignore stale IM reply.
+
 			if msg.Response != nil {
 				msg.Response <- nil
 			}
@@ -201,20 +179,15 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 	if msg.Response != nil {
 		msg.Response <- nil
 	}
-	// Echo user message to all channels EXCEPT the originating adapter,
-	// so other IM users can see what was asked.
+
 	m.emitIMLocalUserTextExcept(prompt, m.remoteInboundAdapter)
-	// #1762 case 2: match the local Enter gate (update_keys.go) - a
-	// message arriving while project memory is still LOADING would run
-	// its first turn without the project-memory system injection and
-	// reorder behind locally queued messages.
+
 	if m.loading || m.projectMemoryLoading {
-		// #3466: remote-origin queue entry (drain arms the inhibit).
+
 		m.queuePendingSubmissionRemote(prompt)
 		return m, nil
 	}
-	// #3460: IM inbound is remote-origin - it must not mutate the refusal
-	// ledger (30-day enforceable blocks) any more than a LAN DM can.
+
 	m.agent.InhibitNextRefusalLedgerWrite()
 	return m, m.submitText(prompt, false)
 

@@ -8,9 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
-// #2185: remote /mode escalation gate + explicit mode-name validation on
-// the IM-only SwitchMode path (the local TUI uses handleModeCommand).
-
 func new2185Model(t *testing.T, gate bool) *Model {
 	t.Helper()
 	m := NewModel(nil, nil)
@@ -81,7 +78,7 @@ func TestIssue2185ShellPassthroughGate(t *testing.T) {
 	if !new2185Model(t, true).remoteShellAllowed() {
 		t.Fatal("gate open: shell passthrough must be allowed")
 	}
-	// nil config must fail closed
+
 	var bare Model
 	if bare.remoteShellAllowed() {
 		t.Fatal("nil config must fail closed")
@@ -89,9 +86,7 @@ func TestIssue2185ShellPassthroughGate(t *testing.T) {
 }
 
 func TestIssue2185NilConfigFailsClosed(t *testing.T) {
-	// R82 acceptance: the TUI-side gate must fail closed on nil config,
-	// matching the family invariant (update_remote shell gate and the
-	// daemon-bridge gate both deny when config is unavailable).
+
 	var m Model
 	deps := tuiSlashDeps{m: &m}
 	err := deps.SwitchMode("bypass")

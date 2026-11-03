@@ -12,48 +12,20 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 )
 
-// setupReflection configures the agent's post-run reflection handler.
-// After each RunStreamWithContent call, the handler analyzes what happened
-// (tools used, files edited, commands run, errors encountered) and saves a
-// concise summary to project memory so knowledge compounds across sessions.
-//
-// This implements the "hill climbing loop" from loop engineering: every run's
-// learnings become persistent context for future sessions.
-//
-// Only runs with >=3 tool calls or any file edits get a memory entry.
 func setupReflection(a *agent.Agent) {
 	a.SetReflectionFunc(func(stats agent.RunStats) {
 		if !agent.ShouldReflect(stats) {
 			return
 		}
 
-		// Experience Case Bank capture (Memento-style case-based memory,
-		// arXiv:2508.16153): distill this run into a per-task case
-		// (task/approach/outcome) in the project experience store. Runs
-		// independently of the rolling run-insights blob below so a case is
-		// recorded even when insight generation yields nothing.
-		// repeatedTask is true when this run UPDATED an existing case — the
-		// same task shape succeeded before (strongest repetition signal).
 		repeatedTask := recordExperienceCase(a, stats)
 
-		// Skill suggestion (r319 P1 gap, skillcam/SkillRL lineage): a workflow
-		// that just succeeded for the second+ time is worth persisting as an
-		// invocable skill; record a conservative suggestion (no auto-write).
 		suggestSkillFromRun(a.WorkingDir(), stats, repeatedTask)
 
-		// Missed-skill detection (r398, SAGE lineage): an installed skill
-		// whose topic the user named in the prompt was never invoked - the
-		// routing failure SAGE identifies as skill libraries' universal
-		// weakness. Records a next-session notice; never blocks.
 		detectMissedSkills(a.WorkingDir(), stats)
 
-		// Trajectory→asset distillation (SE-Agent / ACE): persist the
-		// run's verified commands as reusable cmd_snippet entries.
 		distillSnippetsFromRun(a, stats)
 
-		// Preference distillation (Auto Dream Gather seam): durable user
-		// preferences stated in the prompt that were never saved via
-		// save_memory outlive the session instead of dying with it.
 		captureUserPreferences(a, stats)
 
 		insights := agent.GenerateInsights(stats)
@@ -71,12 +43,6 @@ func setupReflection(a *agent.Agent) {
 			return
 		}
 
-		// sa-147 (LIMBO arXiv:2609.14138, inference-time memory allocation):
-		// scan the run's assistant corpus for injected-memory fingerprints.
-		// Consumption signal feeds EffectiveInlineBudget, so stores whose
-		// injections are never quoted stop paying the full inline budget.
-		// Runs before the insights early-return: consumption evidence is
-		// independent of whether this run produced insights.
 		if corpus := stats.AssistantCorpus(); corpus != "" {
 			autoMem.ScanConsumption(corpus)
 			if globalMem := memory.NewAutoMemory(); globalMem != nil {
@@ -85,16 +51,10 @@ func setupReflection(a *agent.Agent) {
 		}
 
 		key := "run-insights"
-		// #1388: LoadAll merges EVERY active memory key ("### {key}" per
-		// entry) - using it here ingested all unrelated memories into
-		// run-insights on every reflection, duplicating them in prompt
-		// injection (original key + run-insights copy). Single-key load.
+
 		existing, err := autoMem.LoadKey(key)
 		if err != nil {
-			// #1388 side-fix: a read error used to be swallowed and the save
-			// below then OVERWROTE the accumulated insights with the fresh
-			// batch (narrow window, but silent loss). Abort this round - the
-			// next reflection retries; old accumulation stays intact.
+
 			debug.Log("tui", "reflection: failed to load existing insights, skipping save: %v", err)
 			return
 		}
@@ -105,8 +65,7 @@ func setupReflection(a *agent.Agent) {
 		if err := autoMem.SaveMemory(key, insights); err != nil {
 			debug.Log("tui", "reflection: failed to save insights: %v", err)
 		} else {
-			// sa-139 (MemGuard): attach the writing run's verification outcome
-			// to the sidecar so recall arbitration and curation can consume it.
+
 			autoMem.RecordOutcome(key, runOutcome(stats))
 			debug.Log("tui", "reflection: saved insights (%d chars, %d tools, %d files, %d commands, outcome=%s)",
 				len(insights), len(stats.ToolCalls), len(stats.FilesEdited), len(stats.CommandsRun), runOutcome(stats))
@@ -114,8 +73,6 @@ func setupReflection(a *agent.Agent) {
 	})
 }
 
-// runOutcome (sa-139, MemGuard) distills the run's verification signal to
-// the three-state label consumed by memory provenance and experience cases.
 func runOutcome(stats agent.RunStats) string {
 	switch {
 	case stats.Success && stats.ErrorCount == 0:
@@ -127,12 +84,6 @@ func runOutcome(stats agent.RunStats) string {
 	}
 }
 
-// recordExperienceCase distills a completed run into the project experience
-// store as a per-task case: task (the user prompt), approach (what the agent
-// actually did - turns, tools, files, commands), and outcome. Returns true
-// when this run UPDATED an existing case (same task shape seen before).
-// Failures are debug-logged only; experience capture must never disturb the
-// session.
 func recordExperienceCase(a *agent.Agent, stats agent.RunStats) (repeatedTask bool) {
 	workingDir := a.WorkingDir()
 	if workingDir == "" {
@@ -169,22 +120,14 @@ func recordExperienceCase(a *agent.Agent, stats agent.RunStats) (repeatedTask bo
 	return updated
 }
 
-// captureUserPreferences distills high-confidence durable preference
-// statements from the run's user input into the "user-preferences"
-// project memory (Auto Dream Gather seam; deterministic, no LLM call).
-// r414: the load->merge->save logic lives in memory.CapturePreferences so
-// pipe/daemon entry points share the exact same path, and reads
-// UserPromptFull so a preference stated after 200 chars (e.g. trailing a
-// pasted log) is not silently truncated away.
 func captureUserPreferences(a *agent.Agent, stats agent.RunStats) {
 	full := stats.UserPromptFull
 	if full == "" {
-		full = stats.UserPrompt // older callers / tests without the field
+		full = stats.UserPrompt
 	}
 	memory.CapturePreferences(a.WorkingDir(), full)
 }
 
-// topToolCalls renders the n most-used tools as "name(count)" pairs.
 func topToolCalls(calls map[string]int, n int) string {
 	type tc struct {
 		name  string
@@ -215,7 +158,6 @@ func topToolCalls(calls map[string]int, n int) string {
 	return strings.Join(parts, ", ")
 }
 
-// handleReflectCommand displays accumulated run insights.
 func (m *Model) handleReflectCommand() tea.Cmd {
 	if m.agent == nil {
 		m.chatWriteSystem(nextSystemID(), m.t("reflect.no_agent"))

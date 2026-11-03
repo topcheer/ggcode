@@ -15,12 +15,9 @@ func writeSession(t *testing.T, dir, name, toolCalls string) {
 	}
 }
 
-// TestAnalyzeToolFlows_MinesRecurringWorkflow: a grep→read_file→edit_file
-// chain repeated across sessions must surface as a trigram with full
-// confidence plus its bigram prefixes.
 func TestAnalyzeToolFlows_MinesRecurringWorkflow(t *testing.T) {
 	dir := t.TempDir()
-	// 5 sessions each containing one full chain: support = 5 (>= threshold).
+
 	for i := 0; i < 5; i++ {
 		writeSession(t, dir, "s"+string(rune('a'+i))+".jsonl", "grep,read_file,edit_file")
 	}
@@ -51,8 +48,6 @@ func TestAnalyzeToolFlows_MinesRecurringWorkflow(t *testing.T) {
 	}
 }
 
-// TestAnalyzeToolFlows_SupportThreshold: one-off sequences are noise, not
-// workflow - below support threshold nothing is reported.
 func TestAnalyzeToolFlows_SupportThreshold(t *testing.T) {
 	dir := t.TempDir()
 	writeSession(t, dir, "lonely.jsonl", "a,b,c,d,e,f")
@@ -65,12 +60,9 @@ func TestAnalyzeToolFlows_SupportThreshold(t *testing.T) {
 	}
 }
 
-// TestAnalyzeToolFlows_NoCrossSessionTransition: a session ending on tool X
-// must not chain into the next session's opener Y.
 func TestAnalyzeToolFlows_NoCrossSessionTransition(t *testing.T) {
 	dir := t.TempDir()
-	// Six sessions: s1 ends with "grep", s2 opens with "read_file"...
-	// arranged so the ONLY possible x→y transitions are cross-file.
+
 	for i := 0; i < 6; i++ {
 		writeSession(t, dir, "s"+string(rune('a'+i))+".jsonl", "grep")
 	}
@@ -88,8 +80,6 @@ func TestAnalyzeToolFlows_NoCrossSessionTransition(t *testing.T) {
 	}
 }
 
-// TestAnalyzeToolFlows_ConfidenceSplits: a prefix with split continuations
-// (50/50) must not report either as dominant.
 func TestAnalyzeToolFlows_ConfidenceSplits(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 3; i++ {

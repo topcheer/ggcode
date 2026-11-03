@@ -47,7 +47,7 @@ func TestScanConventionDriftStaleMakeTarget(t *testing.T) {
 }
 
 func TestScanConventionDriftMissingScript(t *testing.T) {
-	dir := writeDriftFixture(t, "", nil) // no Makefile: make checks disabled
+	dir := writeDriftFixture(t, "", nil)
 	content := "```\nmake anything\nbash scripts/gone.sh\n```\n"
 	d := ScanConventionDrift(content, dir)
 	if len(d) != 1 || !strings.Contains(d[0], "scripts/gone.sh") {
@@ -55,7 +55,6 @@ func TestScanConventionDriftMissingScript(t *testing.T) {
 	}
 }
 
-// Inline prose must never be flagged — only fenced blocks are claims.
 func TestScanConventionDriftIgnoresInlineProse(t *testing.T) {
 	dir := writeDriftFixture(t, "build:\n\techo hi\n", nil)
 	content := "Run `make totally-fake` and `bash nope.sh` sometime.\n"
@@ -64,8 +63,6 @@ func TestScanConventionDriftIgnoresInlineProse(t *testing.T) {
 	}
 }
 
-// LoadProjectMemory must append the drift warning when the project's own
-// memory file carries a stale claim.
 func TestLoadProjectMemoryAppendsDriftWarning(t *testing.T) {
 	dir := writeDriftFixture(t, "build:\n\techo hi\n", map[string]string{
 		"AGENTS.md": "# Guide\n\n```\nmake build\nmake stale-target\n```\n",

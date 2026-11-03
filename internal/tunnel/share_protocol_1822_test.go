@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// #1822 case 3: omitempty expiries must not silently pass validation
-// (zero time = ambiguous IsZero semantics). Pins the parse-level shape:
-// an expiry-less descriptor decodes to zero times with NO parse error,
-// which is exactly the state the new validation guard rejects.
 func Test1822OmittedExpiryParsesToZero(t *testing.T) {
 	payload := `{"protocol_version":4,"room_id":"r","server_auth_ticket":"s","client_auth_ticket":"c"}`
 	var issued relayIssuedShareSessionResponse
@@ -24,7 +20,7 @@ func Test1822OmittedExpiryParsesToZero(t *testing.T) {
 	if !auth.IsZero() || !renew.IsZero() {
 		t.Fatal("omitted expiries must decode to zero times (the state validation now rejects)")
 	}
-	// Well-formed timestamps still parse.
+
 	var good relayIssuedShareSessionResponse
 	payload2 := `{"protocol_version":4,"auth_expires_at":"2026-01-02T15:04:05Z","renew_expires_at":"2026-01-09T15:04:05Z"}`
 	if err := json.NewDecoder(strings.NewReader(payload2)).Decode(&good); err != nil {

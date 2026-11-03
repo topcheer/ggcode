@@ -1,10 +1,5 @@
 package mcp
 
-// sa-144: coverage for migration equivalence helpers and the MRTR deferred
-// input-request resolvers (elicitation / sampling / roots). Pure-function
-// table tests plus handler-injected resolver paths - no transport mocking of
-// internal functions.
-
 import (
 	"context"
 	"encoding/json"
@@ -55,13 +50,13 @@ func TestSa144SameServerConfig(t *testing.T) {
 	if !sameServerConfig(base, base) {
 		t.Fatal("identical configs must be equal")
 	}
-	// Name is trimmed before comparison.
+
 	trimmed := base
 	trimmed.Name = "  srv  "
 	if !sameServerConfig(base, trimmed) {
 		t.Fatal("name comparison must trim whitespace")
 	}
-	// Empty transport equals stdio.
+
 	noType := base
 	noType.Type = ""
 	if !sameServerConfig(base, noType) {
@@ -133,7 +128,6 @@ func TestSa144ResolveMRTElicitation(t *testing.T) {
 	c := NewClient("sa144", "echo", nil)
 	ctx := context.Background()
 
-	// No handler registered.
 	if _, err := c.resolveMRTElicitation(ctx, json.RawMessage(`{"message":"m"}`)); err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("expected not-supported error, got %v", err)
 	}
@@ -142,12 +136,10 @@ func TestSa144ResolveMRTElicitation(t *testing.T) {
 		return &ElicitationResult{Action: ElicitationActionAccept, Content: map[string]any{"name": "val"}}, nil
 	})
 
-	// Malformed params JSON.
 	if _, err := c.resolveMRTElicitation(ctx, json.RawMessage(`{bad json`)); err == nil || !strings.Contains(err.Error(), "invalid elicitation params") {
 		t.Fatalf("expected invalid-params error, got %v", err)
 	}
 
-	// Form mode with valid schema.
 	form := json.RawMessage(`{"message":"name?","requestedSchema":{"type":"object","properties":{"name":{"type":"string"}}}}`)
 	out, err := c.resolveMRTElicitation(ctx, form)
 	if err != nil {
@@ -157,13 +149,11 @@ func TestSa144ResolveMRTElicitation(t *testing.T) {
 		t.Fatalf("expected accept action in %s", out)
 	}
 
-	// Form mode with schema missing properties fails validation.
 	bad := json.RawMessage(`{"message":"name?","requestedSchema":{"type":"object"}}`)
 	if _, err := c.resolveMRTElicitation(ctx, bad); err == nil || !strings.Contains(err.Error(), "invalid elicitation params") {
 		t.Fatalf("expected schema validation error, got %v", err)
 	}
 
-	// URL mode: content is stripped from the response (out-of-band flow).
 	urlMode := json.RawMessage(`{"mode":"url","message":"auth","url":"https://example.com/link","elicitationId":"e1"}`)
 	out, err = c.resolveMRTElicitation(ctx, urlMode)
 	if err != nil {
@@ -176,7 +166,6 @@ func TestSa144ResolveMRTElicitation(t *testing.T) {
 		t.Fatalf("expected accept action in %s", out)
 	}
 
-	// Handler failure surfaces as elicitation failed.
 	c.SetElicitationHandler(func(ctx context.Context, params ElicitationParams) (*ElicitationResult, error) {
 		return nil, context.DeadlineExceeded
 	})
@@ -197,8 +186,6 @@ func TestSa144ResolveMRTSampling(t *testing.T) {
 		return &SamplingResult{Model: "m", StopReason: "end_turn", Role: "assistant", Content: SamplingContent{Type: "text", Text: "ok"}}, nil
 	})
 
-	// #2514 structural validation: toolChoice without tools is rejected
-	// before reaching the LLM handler.
 	invalid := json.RawMessage(`{"messages":[{"role":"user","content":{"type":"text","text":"hi"}}],"toolChoice":{"mode":"auto"}}`)
 	if _, err := c.resolveMRTSampling(ctx, invalid); err == nil || !strings.Contains(err.Error(), "invalid sampling params") {
 		t.Fatalf("expected validation error, got %v", err)

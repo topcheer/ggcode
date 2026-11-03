@@ -18,17 +18,15 @@ import (
 	"unicode"
 )
 
-// SessionAnalyzer analyzes session history to discover reusable patterns.
 type SessionAnalyzer struct {
 	store             session.Store
 	budget            *Budget
 	knight            *Knight
 	projDir           string
-	normalizedProj    string // workspace-normalized project path for session filtering
-	filterByWorkspace bool   // false in test environments with tmp dirs
+	normalizedProj    string
+	filterByWorkspace bool
 }
 
-// NewSessionAnalyzer creates a session analyzer.
 func NewSessionAnalyzer(k *Knight) *SessionAnalyzer {
 	normalized := session.NormalizeWorkspacePath(k.projDir)
 	return &SessionAnalyzer{
@@ -41,59 +39,41 @@ func NewSessionAnalyzer(k *Knight) *SessionAnalyzer {
 	}
 }
 
-// isTempDir returns true if the path looks like a temp directory (test scenario).
 func isTempDir(path string) bool {
 	base := strings.ToLower(filepath.Base(path))
 
-	// #1260: this used to substring-match "/tmp/", "/temp/" and
-	// Contains(base, "tmp") — real project paths with tmp/temp segments
-	// (e.g. /home/user/tmp/work, tmp_project) were misjudged as test
-	// environments, silently DISABLING the workspace filter: every other
-	// project's session became eligible, cross-project conversations were
-	// extracted as skill candidates, and nothing logged why. Only the exact
-	// os.TempDir prefix (respects $TMPDIR / %TEMP%, covers /tmp and
-	// /var/folders) plus the deliberate knight-/test- name markers remain.
 	normalized := filepath.ToSlash(path)
 	if tempDir := os.TempDir(); tempDir != "" {
-		// #1260 review: darwin's os.TempDir() (TMPDIR) ends with "/", which
-		// made the naive normalizedTemp+"/" prefix a double slash and never
-		// matched — the deleted /var/folders/ substring branch had been
-		// silently compensating. Normalize the trailing slash away.
+
 		normalizedTemp := strings.TrimSuffix(filepath.ToSlash(tempDir), "/")
 		if normalizedTemp != "" && (strings.HasPrefix(normalized, normalizedTemp+"/") || normalized == normalizedTemp) {
 			return true
 		}
 	}
 
-	// Name-based heuristics (exact prefixes only — no substring matches)
 	return strings.HasPrefix(base, "knight-") || strings.HasPrefix(base, "test-")
 }
 
-// AnalysisResult holds the outcome of a session analysis.
 type AnalysisResult struct {
 	SessionsAnalyzed int
 	SkillCandidates  []SkillCandidate
 }
 
-// SkillCandidate is a potential skill discovered from session analysis.
 type SkillCandidate struct {
 	Name           string
 	Description    string
-	Scope          string // "global" or "project"
+	Scope          string
 	Score          float64
 	Reason         string
 	EvidenceCount  int
 	SourceSessions []string
-	// Evidence holds the key conversation excerpts that justify this skill.
-	// For corrections: [0]=what AI did wrong, [1]=what user said instead.
-	// For failure-fix: [0]=error message, [1]=how it was fixed.
+
 	Evidence []string
-	// Category classifies the skill source for LLM context.
-	Category string // "correction", "failure-fix", "convention"
-	// GenFailCount tracks consecutive LLM generation failures; abandon after knightMaxGenFailures.
+
+	Category string
+
 	GenFailCount int `json:",omitempty"`
-	// Queue metadata is persisted for deferred candidates so Knight can make
-	// less myopic prioritization decisions across later analysis ticks.
+
 	FirstQueuedAt       time.Time `json:"first_queued_at,omitempty"`
 	LastQueuedAt        time.Time `json:"last_queued_at,omitempty"`
 	QueueTouchCount     int       `json:"queue_touch_count,omitempty"`
@@ -101,13 +81,6 @@ type SkillCandidate struct {
 	QueuePriorityReason string    `json:"queue_priority_reason,omitempty"`
 }
 
-// AnalyzeRecent scans recent sessions for high-value learning signals.
-//
-// Filtering and priority:
-//  1. Only sessions matching the current project workspace are analyzed.
-//  2. Sessions already analyzed in previous ticks are skipped (dedup).
-//  3. Sessions are prioritized: corrections/failure-fixes first, then recency.
-//  4. Up to `limit` sessions are analyzed per tick.
 func (sa *SessionAnalyzer) AnalyzeRecent(ctx context.Context) (*AnalysisResult, error) {
 	if sa.store == nil {
 		return nil, fmt.Errorf("session store not available")
@@ -118,25 +91,22 @@ func (sa *SessionAnalyzer) AnalyzeRecent(ctx context.Context) (*AnalysisResult, 
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
 
-	// Filter: only current project's sessions, not yet analyzed (or updated since last analysis).
 	var eligible []*session.Session
 	for _, s := range sessions {
 		sa.knight.mu.Lock()
 		lastAnalyzed, alreadyAnalyzed := sa.knight.analyzedSessions[s.ID]
 		sa.knight.mu.Unlock()
 		if alreadyAnalyzed {
-			// Already analyzed — skip unless the session has new activity since then
+
 			if !s.UpdatedAt.After(lastAnalyzed) {
 				continue
 			}
 		}
-		// Filter by workspace: skip sessions from different projects.
-		// Only filter when running in a real project (not tests).
-		// Sessions with empty workspace are always included (legacy data).
+
 		if sa.filterByWorkspace && s.Workspace != "" && s.Workspace != sa.normalizedProj {
 			continue
 		}
-		// Load full session to check eligibility
+
 		full, loadErr := sa.store.Load(s.ID)
 		if loadErr != nil {
 			debug.Log("knight", "cannot load session %s: %v", s.ID, loadErr)
@@ -148,11 +118,6 @@ func (sa *SessionAnalyzer) AnalyzeRecent(ctx context.Context) (*AnalysisResult, 
 		eligible = append(eligible, full)
 	}
 
-	// Priority sort: sessions with correction/failure signals first.
-	// Precompute each session's signal score ONCE: the comparator runs
-	// O(n log n) times and each score scan walks every message while
-	// concatenating text, so recomputing inside it is quadratic-ish work
-	// on large session stores.
 	scores := make(map[string]int, len(eligible))
 	for _, ses := range eligible {
 		scores[ses.ID] = sa.sessionSignalScore(ses)
@@ -188,8 +153,6 @@ func (sa *SessionAnalyzer) AnalyzeRecent(ctx context.Context) (*AnalysisResult, 
 	debug.Log("knight", "session analysis: %d eligible (of %d total), %d analyzed, %d candidates",
 		len(eligible), len(sessions), result.SessionsAnalyzed, len(result.SkillCandidates))
 
-	// Trim dedup set to prevent unbounded growth.
-	// Keep only IDs that appear in the current session list.
 	sa.knight.mu.Lock()
 	if len(sa.knight.analyzedSessions) > 1000 {
 		current := make(map[string]time.Time, len(sessions))
@@ -205,8 +168,6 @@ func (sa *SessionAnalyzer) AnalyzeRecent(ctx context.Context) (*AnalysisResult, 
 	return result, nil
 }
 
-// sessionSignalScore estimates how likely a session contains learning signals.
-// Higher score = higher priority for analysis.
 func (sa *SessionAnalyzer) sessionSignalScore(ses *session.Session) int {
 	score := 0
 	textLower := ""
@@ -216,11 +177,11 @@ func (sa *SessionAnalyzer) sessionSignalScore(ses *session.Session) int {
 				textLower += strings.ToLower(block.Text) + " "
 			}
 			if block.Type == "tool_result" && block.IsError {
-				score += 3 // error tool results are strong signals
+				score += 3
 			}
 		}
 	}
-	// Check for correction signals in user messages
+
 	for _, signal := range correctionSignals {
 		if strings.Contains(textLower, strings.ToLower(signal)) {
 			score += 5
@@ -230,28 +191,19 @@ func (sa *SessionAnalyzer) sessionSignalScore(ses *session.Session) int {
 	return score
 }
 
-// analyzeSession runs analysis heuristics on a single session.
 func (sa *SessionAnalyzer) analyzeSession(ses *session.Session) []SkillCandidate {
 	if len(ses.Messages) < 4 {
-		return nil // too short to be interesting
+		return nil
 	}
 
 	var all []SkillCandidate
 
-	// 1. User corrections — the highest-value learning signal
 	all = append(all, sa.detectCorrections(ses)...)
 
-	// 2. Failure → fix pairs (tool error followed by successful correction)
 	all = append(all, sa.detectFailureFixes(ses)...)
 
 	return all
 }
-
-// --- Heuristic 1: User corrections ---
-//
-// When a user says "不对/错了/wrong/不要" they are teaching us something.
-// We capture what the AI did wrong and what the user said instead.
-// These become behavioral guidelines (e.g. "always check code before concluding").
 
 var correctionSignals = []string{
 	"不要", "别用", "不应该", "不对", "错了", "应该是", "改用", "换成",
@@ -287,7 +239,6 @@ func (sa *SessionAnalyzer) detectCorrections(ses *session.Session) []SkillCandid
 			continue
 		}
 
-		// Found a correction — extract context from the preceding assistant message
 		prev := findPrevAssistant(ses.Messages, i)
 		if prev == nil {
 			continue
@@ -295,8 +246,6 @@ func (sa *SessionAnalyzer) detectCorrections(ses *session.Session) []SkillCandid
 
 		prevText := extractText(prev.Content)
 
-		// Only create a candidate if the user message has substantive content
-		// (not just "no" or "wrong" but explains WHY or WHAT to do instead)
 		if len([]rune(text)) < 10 {
 			continue
 		}
@@ -315,7 +264,7 @@ func (sa *SessionAnalyzer) detectCorrections(ses *session.Session) []SkillCandid
 		candidates = append(candidates, SkillCandidate{
 			Name:        name,
 			Description: desc,
-			Scope:       "", // scope decided by LLM during generation
+			Scope:       "",
 			Score:       2.0,
 			Reason:      fmt.Sprintf("user correction in session %s", ses.ID),
 			Evidence:    evidence,
@@ -326,16 +275,9 @@ func (sa *SessionAnalyzer) detectCorrections(ses *session.Session) []SkillCandid
 	return candidates
 }
 
-// --- Heuristic 2: Failure → fix chains ---
-//
-// When a tool call fails (is_error=true) and then the AI or user corrects
-// the approach and succeeds, the failure reason + fix method is a learnable pattern.
-// We look at the ACTUAL error and the fix, not just tool names.
-
 func (sa *SessionAnalyzer) detectFailureFixes(ses *session.Session) []SkillCandidate {
 	var candidates []SkillCandidate
 
-	// Build maps: toolID → toolName, toolID → input, toolID → output
 	type toolInfo struct {
 		name  string
 		input string
@@ -355,9 +297,8 @@ func (sa *SessionAnalyzer) detectFailureFixes(ses *session.Session) []SkillCandi
 		}
 	}
 
-	// Find error tool_results, then look for the fix in subsequent messages
 	var failures []failure
-	matched := make(map[string]bool) // toolName → already matched
+	matched := make(map[string]bool)
 
 	for i, msg := range ses.Messages {
 		for _, block := range msg.Content {
@@ -381,8 +322,6 @@ func (sa *SessionAnalyzer) detectFailureFixes(ses *session.Session) []SkillCandi
 			continue
 		}
 
-		// Look for a successful result of the same tool within 6 messages
-		// with at least one assistant message in between (the fix attempt)
 		for j := f.index + 1; j < len(ses.Messages) && j <= f.index+6; j++ {
 			hasAssistantBetween := false
 			for k := f.index + 1; k < j; k++ {
@@ -402,7 +341,6 @@ func (sa *SessionAnalyzer) detectFailureFixes(ses *session.Session) []SkillCandi
 						continue
 					}
 
-					// Extract what the assistant did to fix it
 					var fixDesc string
 					for k := f.index + 1; k < j; k++ {
 						if ses.Messages[k].Role == "assistant" {
@@ -420,7 +358,7 @@ func (sa *SessionAnalyzer) detectFailureFixes(ses *session.Session) []SkillCandi
 					candidates = append(candidates, SkillCandidate{
 						Name:        name,
 						Description: fmt.Sprintf("Fix for %s error: %s", f.toolName, truncate(f.errMsg, 80)),
-						Scope:       "", // scope decided by LLM during generation
+						Scope:       "",
 						Score:       1.5,
 						Reason:      fmt.Sprintf("failure-fix in session %s", ses.ID),
 						Evidence:    evidence,
@@ -439,9 +377,6 @@ func (sa *SessionAnalyzer) detectFailureFixes(ses *session.Session) []SkillCandi
 	return candidates
 }
 
-// --- Project convention scanning ---
-
-// CollectProjectConventions reads well-known project config files for context.
 func (sa *SessionAnalyzer) CollectProjectConventions() string {
 	var conventions []string
 
@@ -468,11 +403,6 @@ func (sa *SessionAnalyzer) CollectProjectConventions() string {
 	return strings.Join(conventions, "\n\n")
 }
 
-// --- LLM skill generation ---
-
-// GenerateSkillFromAnalysis uses LLM to create a skill from a high-value candidate.
-// The skill is a behavioral guideline that teaches the AI what to do (or not do)
-// based on real user interactions.
 func (sa *SessionAnalyzer) GenerateSkillFromAnalysis(ctx context.Context, candidate SkillCandidate, factory AgentFactory) (string, error) {
 	conventions := sa.CollectProjectConventions()
 	conventionsSection := ""
@@ -579,29 +509,24 @@ RULES:
 	return output, nil
 }
 
-// extractSkillDocument extracts a YAML frontmatter skill document from LLM output.
-// Handles cases where the LLM prepends analysis or appends commentary.
-// Returns empty string if no valid skill document is found.
 func extractSkillDocument(output string) string {
-	// Try the most specific pattern first: "---\nname:" signature
+
 	if idx := strings.LastIndex(output, "---\nname:"); idx >= 0 {
 		return strings.TrimSpace(output[idx:])
 	}
 	if idx := strings.LastIndex(output, "---\r\nname:"); idx >= 0 {
 		return strings.TrimSpace(output[idx:])
 	}
-	// Fallback: any "---" not at position 0
+
 	if idx := strings.Index(output, "---"); idx > 0 {
 		return strings.TrimSpace(output[idx:])
 	}
-	// Already starts with ---
+
 	if strings.HasPrefix(output, "---") {
 		return output
 	}
 	return ""
 }
-
-// --- Helpers ---
 
 func extractText(blocks []provider.ContentBlock) string {
 	var parts []string
@@ -637,26 +562,25 @@ func sanitizeName(s string) string {
 		}
 		return '-'
 	}, s)
-	// Collapse consecutive dashes
+
 	for strings.Contains(s, "--") {
 		s = strings.ReplaceAll(s, "--", "-")
 	}
 	return strings.Trim(s, "-")
 }
 
-// isValidCandidateName rejects garbage names that carry no semantic meaning.
 func isValidCandidateName(name string) bool {
 	if len(name) < 8 {
 		return false
 	}
-	// Pure fallback patterns like "correction-123"
+
 	if strings.HasPrefix(name, "correction-") {
 		rest := strings.TrimPrefix(name, "correction-")
 		if _, err := strconv.Atoi(rest); err == nil {
 			return false
 		}
 	}
-	// Check that at least half the characters are alphanumeric (not dashes)
+
 	alnum := 0
 	for _, r := range name {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
@@ -669,7 +593,6 @@ func isValidCandidateName(name string) bool {
 func buildCorrectionSkillName(text string) string {
 	textLower := strings.ToLower(text)
 
-	// Try to infer a meaningful name from the correction content
 	keywords := []struct {
 		keyword string
 		name    string
@@ -695,27 +618,17 @@ func buildCorrectionSkillName(text string) string {
 		}
 	}
 
-	// Fallback: derive from first meaningful words
 	words := strings.Fields(textLower)
 	var parts []string
 	cjkOnly := true
-	// #1825 case 3: whether ANY word carried CJK content (pure-ASCII
-	// joins that are merely short must keep the plain fallback).
+
 	hasCJK := false
 	for _, w := range words {
 		w = strings.Trim(w, "，。,.!?！？、")
-		// #1604-D: byte-length gate vs the rune-length gate upstream - a
-		// 5-hanzi word is 15 BYTES and already failed, so CJK correction
-		// names never assembled and real corrections dropped silently.
+
 		rw := []rune(w)
 		if len(rw) > 2 && len(rw) < 15 {
-			// #1644-1: sanitizeName maps every non-[a-zA-Z0-9-] rune to
-			// '-', so a PURE-CJK word sanitized to the empty string, the
-			// join produced "--" (<8, rejected) or fell to correction-N
-			// (also rejected) - the commit claimed "CJK correction names
-			// never dropped" but the main scenario never changed. Skip
-			// empty parts (they only waste the 3-part budget) and remember
-			// whether ANY semantic content existed.
+
 			if san := sanitizeName(w); san != "" {
 				parts = append(parts, san)
 			}
@@ -734,19 +647,13 @@ func buildCorrectionSkillName(text string) string {
 		}
 	}
 	if join := strings.Join(parts, "-"); join != "" {
-		// #1825 case 3: a MIXED word like "好v2" carries CJK AND ASCII -
-		// sanitize strips the CJK ("v2" < 8 chars fails the candidate
-		// length) but cjkOnly is false, so the hash fallback never ran
-		// and the correction was silently dropped. When the join cannot
-		// produce a valid candidate but CJK content existed, hash too.
+
 		if len(join) >= 8 || !hasCJK {
 			return join
 		}
 	}
 	if cjkOnly || hasCJK {
-		// Deterministic readable-enough name for pure-CJK corrections:
-		// survives isValidCandidateName (>=8, not the correction-N
-		// fallback pattern) instead of being silently dropped.
+
 		h := fnv.New32a()
 		_, _ = h.Write([]byte(textLower))
 		return fmt.Sprintf("cjk-correction-%08x", h.Sum32())
@@ -754,8 +661,6 @@ func buildCorrectionSkillName(text string) string {
 	return "correction-" + fmt.Sprintf("%d", len(text))
 }
 
-// isASCIIIdentifierWord reports whether w carries any ASCII alphanumeric
-// content that survives sanitizeName (i.e. is not purely CJK/punctuation).
 func isASCIIIdentifierWord(w string) bool {
 	for _, r := range w {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
@@ -772,13 +677,6 @@ type failure struct {
 	index    int
 }
 
-// failureFingerprint derives a stable short fingerprint from the failure's
-// error text (#3016): first non-empty error line, lowercased, with paths and
-// numbers stripped so the same error class hashes identically across
-// sessions while unrelated failures stay distinct. It embeds in the
-// candidate NAME; the coarse failureSignature(errMsg) below is the separate
-// aggregate-KEY classifier - the ec8a285cc merge briefly redeclared both
-// under one name and broke the build.
 func failureFingerprint(f failure) string {
 	first := ""
 	for _, ln := range strings.Split(f.errMsg, "\n") {
@@ -792,8 +690,7 @@ func failureFingerprint(f failure) string {
 		first = f.toolInp
 	}
 	first = strings.ToLower(first)
-	// Strip runs containing a path separator and digit runs: paths, line
-	// numbers, counters and hex addresses vary between sessions/machines.
+
 	fields := strings.Fields(first)
 	for i, w := range fields {
 		if strings.ContainsAny(w, "/\\") || strings.Contains(w, ":") && strings.Count(w, "") > 2 && isMostlyNonAlpha(w) {
@@ -832,15 +729,7 @@ func stripDigits(w string) string {
 }
 
 func buildFailureFixName(f failure) string {
-	// Build a descriptive name from the error context.
-	//
-	// #3016: keyword names alone were far too coarse - "test"/"build"
-	// Contains-match almost any command, so unrelated failures (a go build
-	// timeout and an npm test path error) aggregated under one key and
-	// inflated EvidenceCount into fake cross-session convergence. Keyword
-	// names now carry the failure signature fingerprint so aggregation only
-	// converges genuinely similar failures; identical errors hash
-	// identically across sessions (true convergence survives).
+
 	inputLower := strings.ToLower(f.toolInp)
 	fp := failureFingerprint(f)
 
@@ -869,30 +758,15 @@ func buildFailureFixName(f failure) string {
 	return "fix-" + sanitizeName(f.toolName) + "-" + fp
 }
 
-// --- Aggregation ---
-
 type candidateAggregate struct {
 	candidate SkillCandidate
 	hits      int
 	scoreSum  float64
 	sessions  map[string]struct{}
-	// sig records the failure signature used in the aggregation key
-	// ("" for name-only keys) so finalizeCandidates can disambiguate
-	// Name when one base name forked into multiple signature buckets
-	// (#3016 review follow-up).
+
 	sig string
 }
 
-// failureClass derives a coarse error-class signature from a failure
-// message so aggregation keys don't merge unrelated failures that merely
-// share a keyword (#3016: "go build timeout" and "npm test path error"
-// both matched the "test"/"build" keywords and were aggregated under the
-// same name, inflating EvidenceCount into a fake "converged across N
-// sessions" signal that staged unrelated fixes).
-//
-// Coarse classes first (so distinct details still converge on the same
-// class); the normalized first line of the error is the fallback so two
-// different errors never share a key.
 func failureClass(errMsg string) string {
 	first := errMsg
 	if i := strings.IndexAny(errMsg, "\n\r"); i >= 0 {
@@ -916,7 +790,7 @@ func failureClass(errMsg string) string {
 			return c.class
 		}
 	}
-	// Normalize whitespace so trivially-different phrasings don't fork keys.
+
 	return strings.Join(strings.Fields(first), " ")
 }
 
@@ -925,10 +799,7 @@ func aggregateCandidate(aggregated map[string]*candidateAggregate, candidate Ski
 	if key == "" {
 		return
 	}
-	// #3016: failure-fix candidates aggregate by name AND error signature -
-	// the keyword-based name alone is too broad. Correction/convention
-	// candidates keep name-only keys (their Evidence[0] is not an error
-	// message and name collision is not the failure mode there).
+
 	sig := ""
 	if candidate.Category == "failure-fix" && len(candidate.Evidence) > 0 {
 		sig = failureClass(candidate.Evidence[0])
@@ -949,7 +820,7 @@ func aggregateCandidate(aggregated map[string]*candidateAggregate, candidate Ski
 	}
 	agg.hits++
 	agg.scoreSum += candidate.Score
-	// Keep the longer description and evidence
+
 	if len(candidate.Description) > len(agg.candidate.Description) {
 		agg.candidate.Description = candidate.Description
 	}
@@ -964,14 +835,7 @@ func aggregateCandidate(aggregated map[string]*candidateAggregate, candidate Ski
 
 func finalizeCandidates(aggregated map[string]*candidateAggregate) []SkillCandidate {
 	candidates := make([]SkillCandidate, 0, len(aggregated))
-	// #3016 review follow-up: when one base name forked into multiple
-	// signature buckets, downstream state keyed by Scope+Name (queue
-	// dedup/Remove, stagingFailCount, evalCooldown, isKnownCandidate)
-	// would cross-wire the forks - a known/stale fork could Remove its
-	// sibling from the queue. Disambiguate Name with the signature suffix
-	// whenever a base name has more than one bucket; the single-bucket
-	// case keeps the original name for backward compatibility with
-	// already-staged skills.
+
 	baseNameCount := map[string]int{}
 	for _, agg := range aggregated {
 		baseNameCount[strings.ToLower(strings.TrimSpace(agg.candidate.Name))]++
@@ -1006,7 +870,6 @@ func finalizeCandidates(aggregated map[string]*candidateAggregate) []SkillCandid
 	return candidates
 }
 
-// RecordUsage records token usage for session analysis tasks.
 func (sa *SessionAnalyzer) RecordUsage(usage provider.TokenUsage) {
-	// Intentionally empty — usage is recorded by Knight.RunTask via budget
+
 }

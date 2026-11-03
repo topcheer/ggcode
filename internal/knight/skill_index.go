@@ -11,15 +11,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// SkillMeta is the parsed frontmatter from a SKILL.md or staging skill file.
 type SkillMeta struct {
 	Name                string   `yaml:"name"`
 	Description         string   `yaml:"description"`
-	Scope               string   `yaml:"scope"` // "global" or "project"
+	Scope               string   `yaml:"scope"`
 	Platforms           []string `yaml:"platforms"`
 	Requires            []string `yaml:"requires"`
-	CreatedBy           string   `yaml:"created_by"`   // "user", "knight", "agent"
-	CreatedFrom         string   `yaml:"created_from"` // source session ID
+	CreatedBy           string   `yaml:"created_by"`
+	CreatedFrom         string   `yaml:"created_from"`
 	CreatedAt           string   `yaml:"created_at"`
 	UpdatedAt           string   `yaml:"updated_at"`
 	UsageCount          int      `yaml:"usage_count"`
@@ -32,41 +31,31 @@ type SkillMeta struct {
 	Frozen              bool     `yaml:"frozen"`
 }
 
-// SkillEntry is a discovered skill with its metadata and file location.
 type SkillEntry struct {
 	Name     string
 	Meta     SkillMeta
-	Path     string // full path to the skill file
-	Scope    string // "global" or "project"
-	Staging  bool   // true if in staging directory
+	Path     string
+	Scope    string
+	Staging  bool
 	LoadedAt time.Time
 }
 
-// SkillIndex scans and indexes skills from both global and project directories.
-// Results are cached with a TTL to avoid repeated disk reads.
 type SkillIndex struct {
-	globalDir      string // ~/.ggcode/skills/
-	globalStaging  string // ~/.ggcode/skills-staging/
-	projectDir     string // .ggcode/skills/
-	projectStaging string // .ggcode/skills-staging/
+	globalDir      string
+	globalStaging  string
+	projectDir     string
+	projectStaging string
 
 	mu        sync.RWMutex
 	cache     []*SkillEntry
 	cacheTime time.Time
 	cacheTTL  time.Duration
-	// #1269: bumped by every Invalidate. A Scan goroutine captures the epoch
-	// before its (lock-free) disk walk and only publishes the result into the
-	// cache if the epoch is unchanged - otherwise an Invalidate that fired
-	// mid-scan would be lost: the stale scan result would overwrite the
-	// freshly-invalidated cache and keep serving pre-promote/reject state for
-	// up to the 30s TTL.
+
 	epoch uint64
 }
 
-// Default index cache TTL — avoid re-scanning disk on every call.
 const defaultCacheTTL = 30 * time.Second
 
-// NewSkillIndex creates a skill index for the given home and project dirs.
 func NewSkillIndex(homeDir, projectDir string) *SkillIndex {
 	return &SkillIndex{
 		globalDir:      filepath.Join(homeDir, ".ggcode", "skills"),
@@ -77,7 +66,6 @@ func NewSkillIndex(homeDir, projectDir string) *SkillIndex {
 	}
 }
 
-// Invalidate clears the cache, forcing a fresh scan on next access.
 func (si *SkillIndex) Invalidate() {
 	si.mu.Lock()
 	defer si.mu.Unlock()
@@ -86,7 +74,6 @@ func (si *SkillIndex) Invalidate() {
 	si.epoch++
 }
 
-// Scan returns all discovered skills (active + staging), using cache when fresh.
 func (si *SkillIndex) Scan() ([]*SkillEntry, error) {
 	si.mu.RLock()
 	if si.cache != nil && time.Since(si.cacheTime) < si.cacheTTL {
@@ -94,9 +81,7 @@ func (si *SkillIndex) Scan() ([]*SkillEntry, error) {
 		si.mu.RUnlock()
 		return cached, nil
 	}
-	// #1269: remember which cache generation this scan belongs to. If an
-	// Invalidate fires during the disk walk below, the epoch moves and the
-	// stale write-back is discarded instead of resurrecting old state.
+
 	scanEpoch := si.epoch
 	si.mu.RUnlock()
 
@@ -109,10 +94,7 @@ func (si *SkillIndex) Scan() ([]*SkillEntry, error) {
 		}
 		found, err := si.scanDir(dir, scope, staging)
 		if err != nil {
-			// #770: propagate scan failures instead of caching an empty
-			// result -- a transient ReadDir error used to yield "no active
-			// skills", and CheckDuplicate on an empty list then promoted a
-			// duplicate skill. Caller retries; the 30s cache below is skipped.
+
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -121,25 +103,18 @@ func (si *SkillIndex) Scan() ([]*SkillEntry, error) {
 		entries = append(entries, found...)
 	}
 
-	// Global active skills
 	scan(si.globalDir, "global", false)
 
-	// Global staging skills
 	scan(si.globalStaging, "global", true)
 
-	// Project active skills
 	scan(si.projectDir, "project", false)
 
-	// Project staging skills
 	scan(si.projectStaging, "project", true)
 
 	if firstErr != nil {
 		return entries, firstErr
 	}
 
-	// Cache result, but only if no Invalidate fired mid-scan (#1269). The
-	// caller still gets the freshly-scanned entries either way - only the
-	// cache publish is conditional.
 	si.mu.Lock()
 	if si.epoch == scanEpoch {
 		si.cache = entries
@@ -150,7 +125,6 @@ func (si *SkillIndex) Scan() ([]*SkillEntry, error) {
 	return entries, nil
 }
 
-// ActiveSkills returns only active (non-staging) skills.
 func (si *SkillIndex) ActiveSkills() ([]*SkillEntry, error) {
 	all, err := si.Scan()
 	if err != nil {
@@ -165,7 +139,6 @@ func (si *SkillIndex) ActiveSkills() ([]*SkillEntry, error) {
 	return active, nil
 }
 
-// StagingSkills returns only staging skills.
 func (si *SkillIndex) StagingSkills() ([]*SkillEntry, error) {
 	all, err := si.Scan()
 	if err != nil {
@@ -180,9 +153,6 @@ func (si *SkillIndex) StagingSkills() ([]*SkillEntry, error) {
 	return staging, nil
 }
 
-// LooseActiveSkillFiles returns legacy/non-standard top-level *.md files under
-// active skill directories. These files look like skills but are not loaded by
-// ggcode's standard skill loader, which only accepts <name>/SKILL.md.
 func (si *SkillIndex) LooseActiveSkillFiles() ([]*SkillEntry, error) {
 	var entries []*SkillEntry
 	seen := make(map[string]struct{}, 2)
@@ -205,10 +175,9 @@ func (si *SkillIndex) LooseActiveSkillFiles() ([]*SkillEntry, error) {
 	return entries, nil
 }
 
-// FindActiveByName finds an active skill by name.
 func (si *SkillIndex) FindActiveByName(name string) *SkillEntry {
 	if canonicalSkillDir(si.projectDir) != canonicalSkillDir(si.globalDir) {
-		// Project-level takes priority only when it is a distinct directory.
+
 		if e := si.findInDir(si.projectDir, "project", false, name); e != nil {
 			return e
 		}
@@ -216,7 +185,6 @@ func (si *SkillIndex) FindActiveByName(name string) *SkillEntry {
 	return si.findInDir(si.globalDir, "global", false, name)
 }
 
-// Directories returns all skill directories for display purposes.
 func (si *SkillIndex) Directories() []string {
 	dirs := []string{
 		si.globalDir,
@@ -253,17 +221,15 @@ func canonicalSkillDir(dir string) string {
 	return filepath.Clean(dir)
 }
 
-// scanDir scans a directory for SKILL.md files (active) or .md files (staging).
 func (si *SkillIndex) scanDir(dir, scope string, staging bool) ([]*SkillEntry, error) {
 	var entries []*SkillEntry
 
-	// Ensure directory exists
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return entries, nil
 	}
 
 	if staging {
-		// Staging: flat .md files
+
 		items, err := os.ReadDir(dir)
 		if err != nil {
 			return nil, err
@@ -278,7 +244,7 @@ func (si *SkillIndex) scanDir(dir, scope string, staging bool) ([]*SkillEntry, e
 			if err != nil {
 				continue
 			}
-			// Prefer frontmatter name over filename-derived name
+
 			if meta.Name != "" {
 				name = meta.Name
 			}
@@ -291,7 +257,7 @@ func (si *SkillIndex) scanDir(dir, scope string, staging bool) ([]*SkillEntry, e
 			})
 		}
 	} else {
-		// Active: subdirectories with SKILL.md
+
 		items, err := os.ReadDir(dir)
 		if err != nil {
 			return nil, err
@@ -369,7 +335,6 @@ func (si *SkillIndex) findInDir(dir, scope string, staging bool, name string) *S
 	return nil
 }
 
-// parseSkillFile reads a skill file and extracts its frontmatter.
 func parseSkillFile(path string) (SkillMeta, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -378,23 +343,18 @@ func parseSkillFile(path string) (SkillMeta, error) {
 	return parseSkillFrontmatter(string(data))
 }
 
-// parseSkillFrontmatter extracts YAML frontmatter from a skill markdown file.
 func parseSkillFrontmatter(content string) (SkillMeta, error) {
 	var meta SkillMeta
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 
-	// Content too short to have valid frontmatter
-	if len(content) < 7 { // minimum: ---\nx\n---\n
+	if len(content) < 7 {
 		return meta, fmt.Errorf("content too short for frontmatter")
 	}
 
-	// Must start with ---
 	if !strings.HasPrefix(content, "---") {
 		return meta, fmt.Errorf("no frontmatter found")
 	}
 
-	// Find the closing ---
-	// Skip the opening --- and optional whitespace
 	rest := content[3:]
 	if len(rest) > 0 && rest[0] == '\n' {
 		rest = rest[1:]
@@ -412,11 +372,9 @@ func parseSkillFrontmatter(content string) (SkillMeta, error) {
 	return meta, nil
 }
 
-// skillNameFromFile derives a skill name from a staging filename.
-// e.g. "knight-20260419-build-flow.md" → "build-flow"
 func skillNameFromFile(filename string) string {
 	name := strings.TrimSuffix(filename, ".md")
-	// Strip "knight-YYYYMMDD-" prefix if present
+
 	if strings.HasPrefix(name, "knight-") {
 		parts := strings.SplitN(name, "-", 3)
 		if len(parts) >= 3 && len(parts[1]) == 8 {

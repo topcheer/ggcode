@@ -26,7 +26,7 @@ func TestDirectRendererChinese(t *testing.T) {
 	if img.Rect.Dx() != 640 || img.Rect.Dy() != 480 {
 		t.Errorf("size = %dx%d, want 640x480", img.Rect.Dx(), img.Rect.Dy())
 	}
-	// Verify non-zero pixels (content was rendered)
+
 	if !hasNonZeroPixels(img) {
 		t.Error("rendered image is all black/zero")
 	}
@@ -63,7 +63,7 @@ func TestDirectRendererFontInfo(t *testing.T) {
 
 func TestDirectRendererGridSize(t *testing.T) {
 	r := NewDirectRenderer(640, 480, 14, "", 0, 0)
-	// Force font load
+
 	_, _ = r.Render("x")
 
 	cols, rows := r.Cols(), r.Rows()
@@ -79,7 +79,7 @@ func TestDirectRendererPixelData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render error: %v", err)
 	}
-	// Verify it returns *image.RGBA with correct stride
+
 	if img.Stride != 100*4 {
 		t.Errorf("stride = %d, want %d", img.Stride, 100*4)
 	}
@@ -89,11 +89,11 @@ func TestDirectRendererPixelData(t *testing.T) {
 }
 
 func TestDirectRendererNoFontPath(t *testing.T) {
-	// This should still work (FindCJKFont will search system fonts)
+
 	r := NewDirectRenderer(100, 50, 14, "", 0, 0)
 	img, err := r.Render("test")
 	if err != nil {
-		// May fail on systems without fonts — acceptable
+
 		t.Logf("Render without font path: %v (may be expected)", err)
 		return
 	}
@@ -102,11 +102,10 @@ func TestDirectRendererNoFontPath(t *testing.T) {
 	}
 }
 
-// Benchmark: DirectRenderer vs old Renderer
 func BenchmarkDirectRendererRender(b *testing.B) {
 	r := NewDirectRenderer(640, 480, 14, "", 0, 0)
 	text := "Hello World 测试中文 Line 2 content"
-	// Warm up
+
 	_, _ = r.Render(text)
 
 	b.ResetTimer()
@@ -118,7 +117,7 @@ func BenchmarkDirectRendererRender(b *testing.B) {
 
 func BenchmarkDirectRendererLargeText(b *testing.B) {
 	r := NewDirectRenderer(1280, 720, 14, "", 0, 0)
-	// Simulate a full terminal screen
+
 	lines := make([]string, 40)
 	for i := range lines {
 		lines[i] = "This is a line of terminal content with some 中文字符 mixed in"
@@ -148,5 +147,4 @@ func hasNonZeroPixels(img *image.RGBA) bool {
 	return false
 }
 
-// Ensure color import is used
 var _ color.NRGBA

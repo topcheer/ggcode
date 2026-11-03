@@ -157,9 +157,6 @@ func TestParseInstallArgsRejectsHeadersForStdio(t *testing.T) {
 	}
 }
 
-// #1633 case 1: the -t/--transport option path had no runner guard - the
-// #1611-B fix's own repro ('mcp install -t stdio npx -y @scope/server')
-// still produced Command="-y" (the flag stored as the executable).
 func TestParseInstallArgsOptionTransportRunnerGuard(t *testing.T) {
 	server, err := ParseInstallArgs([]string{"-t", "stdio", "npx", "-y", "@scope/server"})
 	if err != nil {
@@ -176,8 +173,6 @@ func TestParseInstallArgsOptionTransportRunnerGuard(t *testing.T) {
 	}
 }
 
-// #1633 case 1 (legacy form): with an explicit name that IS a known
-// runner, 'mcp install stdio npx -y pkg' used to store Command="-y".
 func TestParseInstallArgsLegacyRunnerGuard(t *testing.T) {
 	server, err := ParseInstallArgs([]string{"stdio", "npx", "-y", "@scope/legacy-server"})
 	if err != nil {

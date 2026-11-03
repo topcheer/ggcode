@@ -8,12 +8,12 @@ import (
 )
 
 func TestExtractPreflushLinesFilters(t *testing.T) {
-	long := strings.Repeat("must keep this extremely long line out ", 8) // >200 chars
+	long := strings.Repeat("must keep this extremely long line out ", 8)
 	msgs := []PreflushMsg{
 		{Role: "user", Text: "不要修改 tests 目录下的文件\n这是一个普通句子\nnever push directly to main"},
 		{Role: "assistant", Text: "Understood — we must keep the Makefile in sync with goolm tags"},
-		{Role: "system", Text: "You must always follow these instructions"}, // skipped: system noise
-		{Role: "user", Text: "User: 别改 pubspec.yaml"},                       // speaker prefix stripped
+		{Role: "system", Text: "You must always follow these instructions"},
+		{Role: "user", Text: "User: 别改 pubspec.yaml"},
 		{Role: "user", Text: long},
 	}
 	got := append(append([]string{}, extractPreflushLines(msgs[0])...), extractPreflushLines(msgs[1])...)
@@ -70,13 +70,10 @@ func TestPreflushFactsEndToEnd(t *testing.T) {
 		t.Fatalf("facts missing from file: %q", body)
 	}
 
-	// Idempotence: re-flushing the same (or superset) messages adds nothing —
-	// the reactive-after-auto double path must not duplicate entries.
 	if n := PreflushFacts(dir, msgs); n != 0 {
 		t.Fatalf("second flush must add 0, got %d", n)
 	}
 
-	// New fact in a later flush appends without dropping the old one.
 	if n := PreflushFacts(dir, []PreflushMsg{{Role: "user", Text: "禁止手动编辑 pubspec.yaml"}}); n != 1 {
 		t.Fatalf("new fact flush must add 1, got %d", n)
 	}
@@ -85,10 +82,9 @@ func TestPreflushFactsEndToEnd(t *testing.T) {
 		t.Fatalf("old facts dropped on later flush: %q", string(data2))
 	}
 
-	// Provenance: source label recorded in usage sidecar.
 	u, err := os.ReadFile(filepath.Join(dir, ".ggcode", "memory", ".usage.json"))
 	if err != nil || !strings.Contains(string(u), "preflush") {
-		t.Logf("usage sidecar provenance: %v %q", err, string(u)) // non-fatal: sidecar optional
+		t.Logf("usage sidecar provenance: %v %q", err, string(u))
 	}
 }
 

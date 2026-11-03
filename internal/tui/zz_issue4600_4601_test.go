@@ -6,11 +6,8 @@ import (
 	"testing"
 )
 
-// #4601: unbind and clear must surface an error when the IM manager is nil,
-// matching the bind path - an empty result left panel.message blank, so the
-// keypress was silently swallowed.
 func TestIssue4601_NilManagerUnbindReturnsError(t *testing.T) {
-	m := Model{} // imManager nil
+	m := Model{}
 	msg := m.unbindNostrEntry("test-adapter")()
 	res, ok := msg.(nostrBindResultMsg)
 	if !ok {
@@ -36,9 +33,6 @@ func TestIssue4601_NilManagerClearReturnsError(t *testing.T) {
 	}
 }
 
-// #4600: the collection guard must require both name AND url. This pins the
-// guard shape inside RunOnboard (the collect step is inline in the interactive
-// flow); a regression to name-only re-opens the half-filled-Custom leak.
 func TestIssue4600_CustomCollectionGuardRequiresNameAndURL(t *testing.T) {
 	srcB, err := os.ReadFile("onboard.go")
 
@@ -50,8 +44,7 @@ func TestIssue4600_CustomCollectionGuardRequiresNameAndURL(t *testing.T) {
 	if !strings.Contains(src, want) {
 		t.Fatal("#4600 guard regressed: collection no longer requires both name (field 0) and url (field 1)")
 	}
-	// buildCustomResolved must still treat url=="" as no-endpoint so the two
-	// validation paths stay aligned.
+
 	if !strings.Contains(src, `if url == "" {
 		return nil
 	}`) {

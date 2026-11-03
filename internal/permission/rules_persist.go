@@ -9,22 +9,16 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// PermissionRulesFile is the JSON representation of persisted permission rules.
-// Stored at ~/.ggcode/permission_rules.json as a separate config file so it
-// doesn't bloat or conflict with the main ggcode.yaml.
 type PermissionRulesFile struct {
-	ToolOverrides        map[string]string `json:"tool_overrides"`         // tool name → "allow"|"deny"
-	CommandAllowPatterns []string          `json:"command_allow_patterns"` // e.g. "git diff*", "npm test*"
+	ToolOverrides        map[string]string `json:"tool_overrides"`
+	CommandAllowPatterns []string          `json:"command_allow_patterns"`
 	CommandDenyPatterns  []string          `json:"command_deny_patterns"`
 }
 
-// RulesFilePath returns the default path for persisted permission rules.
 func RulesFilePath(configDir string) string {
 	return filepath.Join(configDir, "permission_rules.json")
 }
 
-// LoadRules reads persisted permission rules from a JSON file.
-// Returns an empty struct if the file doesn't exist.
 func LoadRules(path string) *PermissionRulesFile {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -55,7 +49,6 @@ func LoadRules(path string) *PermissionRulesFile {
 	return &data
 }
 
-// SaveRules persists permission rules to a JSON file atomically.
 func SaveRules(path string, data *PermissionRulesFile) error {
 	if data == nil {
 		return nil
@@ -63,7 +56,7 @@ func SaveRules(path string, data *PermissionRulesFile) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	// Sort patterns for deterministic output
+
 	sort.Strings(data.CommandAllowPatterns)
 	sort.Strings(data.CommandDenyPatterns)
 
@@ -78,8 +71,6 @@ func SaveRules(path string, data *PermissionRulesFile) error {
 	return os.Rename(tmp, path)
 }
 
-// SnapshotRules builds a PermissionRulesFile from the current policy state.
-// This captures tool overrides and command patterns for persistence.
 func SnapshotRules(p *ConfigPolicy, configDir string) *PermissionRulesFile {
 	if p == nil {
 		return nil
@@ -99,11 +90,7 @@ func SnapshotRules(p *ConfigPolicy, configDir string) *PermissionRulesFile {
 			data.ToolOverrides[tool] = "deny"
 		}
 	}
-	// #1777 case 1: cmdRules used to be read in a SECOND RLock after this
-	// one released - a SetOverride/SetCommandRuleSet slotted between the
-	// two produced a mixed-generation snapshot (old rules + new cmdRules)
-	// that persisted and drifted state on next load. The #1596-D comment
-	// said "read both under the same RLock" all along; now the code does.
+
 	var allowPats, denyPats []string
 	if p.cmdRules != nil {
 		allowPats = userFriendlyPatterns(p.cmdRules.AllowPatterns())
@@ -116,18 +103,16 @@ func SnapshotRules(p *ConfigPolicy, configDir string) *PermissionRulesFile {
 	return data
 }
 
-// userFriendlyPatterns converts regex patterns like "^git diff.*" back to
-// user-friendly glob patterns like "git diff*".
 func userFriendlyPatterns(regexPatterns []string) []string {
 	out := make([]string, 0, len(regexPatterns))
 	for _, re := range regexPatterns {
 		s := re
-		// Strip leading (?i)^
+
 		s = trimPrefix(s, "(?i)^")
 		s = trimPrefix(s, "^")
-		// Convert .* back to *
+
 		s = replaceAll(s, ".*", "*")
-		// Unescape regex metacharacters
+
 		s = unescapeRegex(s)
 		out = append(out, s)
 	}
@@ -159,7 +144,7 @@ func unescapeRegex(s string) string {
 	result := ""
 	for i := 0; i < len(s); i++ {
 		if s[i] == '\\' && i+1 < len(s) {
-			// Keep the next char literally (skip the backslash)
+
 			result += string(s[i+1])
 			i++
 		} else {
@@ -169,7 +154,6 @@ func unescapeRegex(s string) string {
 	return result
 }
 
-// ApplyToPolicy loads rules from file and applies them to a ConfigPolicy.
 func (data *PermissionRulesFile) ApplyToPolicy(p *ConfigPolicy) {
 	if data == nil || p == nil {
 		return

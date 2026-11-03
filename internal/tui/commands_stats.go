@@ -15,37 +15,18 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 )
 
-// handleGuidanceStatsCommand (r14) surfaces the guidance-stats.jsonl
-// aggregate - the only observability layer covering ALL landed detectors
-// (200+ from prior research rounds). Command is /guidance (not /stats:
-// that name is taken by the usage stats panel). Before this, which
-// detectors actually fire or get suppressed in real sessions was
-// invisible: the only access was hand-grepping the jsonl
-// (docs/guide/stale-heuristic-detection.md:37). Integration-audit
-// finding sa-164: dimension-1 exposure gap + the root cause of
-// dimension-2 (guidance-budget contention) being unobservable.
-//
-// Usage:
-//
-//	/guidance        - aggregate view (last 200 jsonl lines)
-//	/guidance <n>    - aggregate over the last n lines (1..1000)
-//	/guidance <tag>  - drill down: the last hint text injected for that
-//	                  tag from guidance-hints.jsonl (r15 introspection
-//	                  span-payload layer: aggregate counts → exact prose)
 func (m *Model) handleGuidanceStatsCommand(parts []string) tea.Cmd {
 	wd := m.agent.WorkingDir()
 	if wd == "" {
 		m.chatWriteSystem(nextSystemID(), m.t("guidance.unavailable"))
 		return nil
 	}
-	// r16: manual override subcommands must be intercepted BEFORE the
-	// drill-down branch - "suppress"/"reset" are non-numeric and would
-	// otherwise be treated as a tag query by the drill-down.
+
 	if len(parts) >= 3 && (parts[1] == "suppress" || parts[1] == "reset") {
 		m.chatWriteSystem(nextSystemID(), m.handleGuidanceOverride(wd, parts[1], strings.Join(parts[2:], " ")))
 		return nil
 	}
-	// Non-numeric first arg (possibly multi-word) selects a tag drill-down.
+
 	if len(parts) > 1 && !isAllDigits(parts[1]) {
 		m.chatWriteSystem(nextSystemID(), m.drilldownGuidanceHint(wd, strings.Join(parts[1:], " ")))
 		return nil
@@ -64,7 +45,6 @@ func (m *Model) handleGuidanceStatsCommand(parts []string) tea.Cmd {
 	return nil
 }
 
-// isAllDigits reports whether s is a non-empty pure digit string.
 func isAllDigits(s string) bool {
 	if s == "" {
 		return false
@@ -77,13 +57,6 @@ func isAllDigits(s string) bool {
 	return true
 }
 
-// handleGuidanceOverride (r16) is the control half of the
-// observability→controllability loop: after drilling into a misfiring
-// detector the user can suppress it (/guidance suppress <tag>) or undo
-// (/guidance reset <tag>). Writes go through the same atomic store the
-// sa-109 auto channel uses, pinned Model:"manual" so they never count
-// against the auto budget. State changes take effect immediately (the
-// agent refreshes its process cache under the same lock).
 func (m *Model) handleGuidanceOverride(wd, verb, query string) string {
 	q := strings.TrimSpace(query)
 	if q == "" {
@@ -94,7 +67,7 @@ func (m *Model) handleGuidanceOverride(wd, verb, query string) string {
 		return fmt.Sprintf(m.t("guidance.tagmiss"), q, m.knownGuidanceTags(wd))
 	}
 	if tag == "" {
-		return "" // ambiguous: resolveUnique already reported via candidates
+		return ""
 	}
 	switch verb {
 	case "suppress":
@@ -115,12 +88,6 @@ func (m *Model) handleGuidanceOverride(wd, verb, query string) string {
 	return m.t("guidance.usage")
 }
 
-// resolveUniqueGuidanceTag resolves a user query to exactly one recorded
-// tag: exact (case-insensitive) match first, then substring. Returns
-// ("", false) on no match and ("", true) on ambiguity - the latter prints
-// the candidate list so a state-changing verb never fires on a guess
-// (drill-down display tolerates picking the last hit; suppression must
-// not - r16 review note from sa-166).
 func (m *Model) resolveUniqueGuidanceTag(wd, query string) (string, bool) {
 	q := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), "##"))
 	tags := m.knownGuidanceTagsList(wd)
@@ -148,13 +115,11 @@ func (m *Model) resolveUniqueGuidanceTag(wd, query string) (string, bool) {
 	if len(cands) > 1 {
 		sort.Strings(cands)
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf(m.t("guidance.ambiguous"), q, strings.Join(cands, "\n  ")))
-		return "", true // ambiguous: candidates already reported
+		return "", true
 	}
 	return "", false
 }
 
-// knownGuidanceTagsList returns the deduped, insertion-ordered tag list
-// recorded in guidance-hints.jsonl.
 func (m *Model) knownGuidanceTagsList(wd string) []string {
 	lines, err := readTailLines(filepath.Join(wd, ".ggcode", "memory", "guidance-hints.jsonl"), 1000)
 	if err != nil {
@@ -174,7 +139,6 @@ func (m *Model) knownGuidanceTagsList(wd string) []string {
 	return tags
 }
 
-// knownGuidanceTags renders the recorded tag list for miss messages.
 func (m *Model) knownGuidanceTags(wd string) string {
 	tags := m.knownGuidanceTagsList(wd)
 	if len(tags) == 0 {
@@ -184,10 +148,6 @@ func (m *Model) knownGuidanceTags(wd string) string {
 	return strings.Join(tags, "\n  ")
 }
 
-// drilldownGuidanceHint (r15) resolves a tag query against
-// guidance-hints.jsonl: exact match first, then unique case-insensitive
-// prefix/substring match. Falls back to listing the available tags so the
-// user can retry without opening the file.
 func (m *Model) drilldownGuidanceHint(wd, query string) string {
 	q := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), "##"))
 	path := filepath.Join(wd, ".ggcode", "memory", "guidance-hints.jsonl")
@@ -210,7 +170,7 @@ func (m *Model) drilldownGuidanceHint(wd, query string) string {
 	if len(recs) == 0 {
 		return m.t("guidance.nohints")
 	}
-	// Exact match wins (last record = most recent).
+
 	var last *hintRec
 	for i := range recs {
 		if strings.EqualFold(recs[i].Tag, q) {
@@ -218,7 +178,7 @@ func (m *Model) drilldownGuidanceHint(wd, query string) string {
 		}
 	}
 	if last == nil {
-		// Otherwise a unique case-insensitive substring match.
+
 		var cand []int
 		for i := range recs {
 			if strings.Contains(strings.ToLower(recs[i].Tag), strings.ToLower(q)) {
@@ -244,9 +204,6 @@ func (m *Model) drilldownGuidanceHint(wd, query string) string {
 	return fmt.Sprintf("%s  (%s)\n\n%s", last.Tag, trimTS(last.TS), last.Text)
 }
 
-// readTailLines returns up to the last n lines of path. Files are small
-// (one line per detector tag per run), so a full read is fine; the cap
-// exists to bound very long-lived workspaces.
 func readTailLines(path string, n int) ([]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -270,13 +227,6 @@ func readTailLines(path string, n int) ([]string, error) {
 	return all, nil
 }
 
-// summarizeGuidanceStats aggregates jsonl records
-// {ts, model?, tag, delivered, suppressed} by tag, sorted by total
-// injections (delivered+suppressed) descending, plus a header with the
-// observed time window and per-model split. claimsOn labels the gated
-// claimsSupervision family (default off, sa-164 discoverability finding).
-// type=stale_heuristic report lines in the same file surface as a trailing
-// "stale" list (r22 harness-assumption expiry, previously grep-only).
 func summarizeGuidanceStats(lines []string, claimsOn bool) string {
 	type stat struct {
 		delivered, suppressed int
@@ -367,7 +317,6 @@ func summarizeGuidanceStats(lines []string, claimsOn bool) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// onOff renders a bool as on/off for the gated-detector header label.
 func onOff(b bool) string {
 	if b {
 		return "on"
@@ -375,7 +324,6 @@ func onOff(b bool) string {
 	return "off"
 }
 
-// trimTS shortens an RFC3339 timestamp to minute precision for the header.
 func trimTS(ts string) string {
 	if t, err := time.Parse(time.RFC3339, ts); err == nil {
 		return t.Local().Format("01-02 15:04")

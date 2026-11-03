@@ -7,7 +7,6 @@ import (
 	"unicode/utf8"
 )
 
-// ANSI color/style codes.
 const (
 	cReset   = "\x1b[0m"
 	cBold    = "\x1b[1m"
@@ -21,7 +20,6 @@ const (
 	cBrightGreen = "\x1b[92m"
 )
 
-// formatHeader creates a visually distinct header for the start of an agent's output.
 func formatHeader(name, kind string) string {
 	icon := "◆"
 	label := "Sub-Agent"
@@ -37,11 +35,6 @@ func formatHeader(name, kind string) string {
 		cGray, rule, cReset)
 }
 
-// formatToolCall renders a tool call as a clean two-line block.
-// No fixed-width boxes — adapts to any terminal width.
-//
-//	▸ read_file
-//	  internal/tui/extpane/manager.go
 func formatToolCall(toolName, detail string) string {
 	detail = compactPreview(detail)
 	header := fmt.Sprintf("%s▸ %s%s\n", cCyan+cBold, toolName, cReset)
@@ -51,9 +44,6 @@ func formatToolCall(toolName, detail string) string {
 	return header + "\n"
 }
 
-// formatToolResult renders a tool result with status icon.
-//
-//	✓ read_file  245 lines · 12.3 KB
 func formatToolResult(toolName, result string, isError bool) string {
 	result = compactPreview(result)
 	if isError {
@@ -66,7 +56,6 @@ func formatToolResult(toolName, result string, isError bool) string {
 		cDim, result, cReset)
 }
 
-// formatDone renders a completion banner.
 func formatDone(isError bool) string {
 	ts := time.Now().Format("15:04:05")
 	if isError {
@@ -76,21 +65,17 @@ func formatDone(isError bool) string {
 		cGray, ts, cReset)
 }
 
-// stripAnsi removes ANSI escape sequences (CSI and two-byte ESC variants).
-// Local copy: extpane cannot import the tui package's stripAnsiForChat
-// (import cycle). Used BEFORE truncation so a boundary cut can never leave
-// a partial CSI that swallows following text (#1368).
 func stripAnsi(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	const (
 		statePlain = iota
-		stateEsc   // saw ESC, deciding CSI vs two-byte
-		stateCsi   // inside CSI [... final @-~
-		stateDcs   // #1721: DCS/APC/PM passthrough consumer
+		stateEsc
+		stateCsi
+		stateDcs
 		stateDcsEsc
-		stateOsc    // #1414-B: inside OSC ] ... BEL/ST
-		stateOscEsc // OSC saw ESC: ST (\) ends, else stay
+		stateOsc
+		stateOscEsc
 	)
 	st := statePlain
 	for _, c := range s {
@@ -105,21 +90,13 @@ func stripAnsi(s string) string {
 			if c == '[' {
 				st = stateCsi
 			} else if c == ']' {
-				// OSC: ESC ] ... terminated by BEL or ST (ESC \).
-				// #1414-B: the old code fell through to the two-byte
-				// branch here - ']' was emitted and the OSC BODY (titles,
-				// hyperlink URLs) plus BEL leaked verbatim into the
-				// preview pane as invisible control bytes.
+
 				st = stateOsc
 			} else if c == 'P' || c == '_' || c == '^' {
-				// #1721 case 3: DCS (P), APC (_), PM (^) - the same leak
-				// family #1414-B fixed for OSC, but the note only patched
-				// ']'. A tmux wrap-passthrough ESC P tmux;... leaked its
-				// second byte, the DCS body AND the trailing ST backslash
-				// into the preview. Consume until ST (ESC \).
+
 				st = stateDcs
 			} else {
-				st = statePlain // two-byte ESC sequence (e.g. \x1bM)
+				st = statePlain
 				b.WriteRune(c)
 			}
 		case stateCsi:
@@ -127,41 +104,33 @@ func stripAnsi(s string) string {
 				st = statePlain
 			}
 		case stateDcs:
-			// #1721 case 3: consume the string body; ST (ESC \) ends it.
+
 			if c == 0x1b {
 				st = stateDcsEsc
 			}
 		case stateDcsEsc:
 			if c == '\\' {
-				st = statePlain // ST complete - sequence fully consumed
+				st = statePlain
 			} else {
-				st = stateDcs // stray ESC inside the body keeps consuming
+				st = stateDcs
 			}
 		case stateOsc:
-			if c == '\x07' { // BEL terminator
+			if c == '\x07' {
 				st = statePlain
 			} else if c == '\x1b' {
 				st = stateOscEsc
 			}
 		case stateOscEsc:
-			if c == '\\' { // ST terminator
+			if c == '\\' {
 				st = statePlain
 			} else {
-				st = stateOsc // not ST; keep consuming OSC body
+				st = stateOsc
 			}
 		}
 	}
 	return b.String()
 }
 
-// compactPreview trims and truncates a string for inline display.
-// UTF-8 aware: never cuts in the middle of a rune.
-//
-// #1368: order matters - ANSI strip and newline replacement run BEFORE the
-// 100-byte truncation. The old order truncated first, so (a) each "\n"
-// expanded to " ↵ " (+4 bytes) AFTER the size check, blowing the cap ~5x on
-// blank-line-heavy output, and (b) a CSI sequence cut at the boundary left
-// a partial escape whose following bytes the terminal ate as parameters.
 func compactPreview(s string) string {
 	s = stripAnsi(s)
 	s = strings.ReplaceAll(s, "\r", "")

@@ -4,10 +4,6 @@ import (
 	"testing"
 )
 
-// #666: ProjectionStore.Append must not stamp a late event from a superseded
-// authority epoch with the store's current (post-cut) epoch — the event would
-// be "laundered" into the new epoch and pollute replay and last-writer
-// snapshot slots.
 func TestIssue666AppendDropsStaleEpochEvents(t *testing.T) {
 	store, err := NewProjectionStore(t.TempDir())
 	if err != nil {
@@ -15,14 +11,12 @@ func TestIssue666AppendDropsStaleEpochEvents(t *testing.T) {
 	}
 	const sid = "sess-666"
 
-	// Epoch-1 status from the original authority.
 	if err := store.Append(GatewayMessage{
 		SessionID: sid, EventID: "e1", Type: EventStatus, AuthorityEpoch: 1,
 	}); err != nil {
 		t.Fatalf("append e1: %v", err)
 	}
 
-	// Authority cut: epoch becomes 2, events/snapshots cleared.
 	epoch, err := store.CutAuthority(sid)
 	if err != nil {
 		t.Fatalf("CutAuthority: %v", err)
@@ -31,8 +25,6 @@ func TestIssue666AppendDropsStaleEpochEvents(t *testing.T) {
 		t.Fatalf("CutAuthority epoch = %d, want 2", epoch)
 	}
 
-	// A late event from the OLD authority (epoch 1) must be dropped silently —
-	// not stored, not replayed, not stamped as epoch 2.
 	if err := store.Append(GatewayMessage{
 		SessionID: sid, EventID: "late-old", Type: EventStatus, AuthorityEpoch: 1,
 	}); err != nil {
@@ -52,7 +44,6 @@ func TestIssue666AppendDropsStaleEpochEvents(t *testing.T) {
 		}
 	}
 
-	// Events from the CURRENT epoch still work.
 	if err := store.Append(GatewayMessage{
 		SessionID: sid, EventID: "new-ok", Type: EventStatus, AuthorityEpoch: 2,
 	}); err != nil {
@@ -73,8 +64,6 @@ func TestIssue666AppendDropsStaleEpochEvents(t *testing.T) {
 	}
 }
 
-// #666: legacy messages without an epoch still adopt the store's current
-// epoch (pre-fix behavior preserved).
 func TestIssue666LegacyZeroEpochAdoptsCurrent(t *testing.T) {
 	store, err := NewProjectionStore(t.TempDir())
 	if err != nil {
@@ -102,8 +91,6 @@ func TestIssue666LegacyZeroEpochAdoptsCurrent(t *testing.T) {
 	}
 }
 
-// #666: snapshot slot epoch guard — replaceProjectionSlot only lets a
-// same-or-newer epoch claim the slot.
 func TestIssue666ReplaceProjectionSlotEpochGuard(t *testing.T) {
 	newer := &GatewayMessage{EventID: "n", AuthorityEpoch: 3}
 	older := &GatewayMessage{EventID: "o", AuthorityEpoch: 2}

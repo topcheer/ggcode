@@ -7,7 +7,6 @@ import (
 //go:embed assets/chart.umd.min.js
 var chartJS string
 
-// htmlTemplate returns the complete HTML document with embedded CSS, Chart.js, and data.
 func htmlTemplate(jsonData string) string {
 	return `<!DOCTYPE html>
 <html lang="en">

@@ -1,9 +1,5 @@
 package runeval
 
-// Aggregation probes: cross-session rollup correctness (mean/min/max,
-// worst-sessions ordering, cross-session repeated-tool aggregation, empty
-// and zero-tool-call handling).
-
 import (
 	"strings"
 	"testing"
@@ -33,7 +29,7 @@ func TestAggregateZeroToolCallSessionsAreSkippedFromMeans(t *testing.T) {
 	if a.MinScore != 90 || a.MaxScore != 90 {
 		t.Fatalf("min/max wrong: %d/%d", a.MinScore, a.MaxScore)
 	}
-	// The empty session must not appear in the worst leaderboard.
+
 	if len(a.WorstSessions) != 1 || a.WorstSessions[0].ID != "b" {
 		t.Fatalf("worst leaderboard should exclude empty: %+v", a.WorstSessions)
 	}
@@ -51,11 +47,11 @@ func TestAggregateMeanMinMaxAndWorstOrdering(t *testing.T) {
 	if a.MinScore != 40 || a.MaxScore != 95 {
 		t.Fatalf("min/max wrong: %d/%d", a.MinScore, a.MaxScore)
 	}
-	// Ascending score order in the leaderboard.
+
 	if a.WorstSessions[0].ID != "s2" || a.WorstSessions[2].ID != "s3" {
 		t.Fatalf("worst ordering wrong: %+v", a.WorstSessions)
 	}
-	// Worst session scored < 60 must produce a named finding.
+
 	found := false
 	for _, f := range a.Findings {
 		if strings.Contains(f, `session "two" scored 40/100`) {
@@ -84,7 +80,7 @@ func TestAggregateCrossSessionRepeatedTools(t *testing.T) {
 	if top.Tool != "read_file" || top.Repeats != 5 || top.Sessions != 2 {
 		t.Fatalf("read_file aggregation wrong: %+v", top)
 	}
-	// High cross-session repeat pressure must fire a finding.
+
 	found := false
 	for _, f := range a.Findings {
 		if strings.Contains(f, `"read_file" re-fetched 5 redundant`) {
@@ -107,7 +103,7 @@ func TestAggregateTotalsSumAcrossSessions(t *testing.T) {
 		a.WastedTokenEstimate != 150 || a.OverheadTokens != 800 || a.TotalTokens != 3000 {
 		t.Fatalf("totals wrong: %+v", a)
 	}
-	// 10% error rate is below the 20% finding threshold - no error finding.
+
 	for _, f := range a.Findings {
 		if strings.Contains(f, "errored across sessions") {
 			t.Fatalf("unexpected error-rate finding at 10%%: %+v", a.Findings)

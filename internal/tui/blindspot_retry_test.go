@@ -21,16 +21,6 @@ func blindSpotSetup(t *testing.T) *Model {
 	return &m
 }
 
-// Blind-spot errors must NOT auto-resubmit. The earlier auto-retry design
-// had three compounding failure modes: the counter was written into a
-// value-receiver model copy so the parent never saw it (every retry showed
-// 1/5 and the loop was unbounded); submitText re-persisted the user turn
-// (duplicate session entries on agent-side failures); and image
-// attachments were dropped (retry replayed text only). The replacement is
-// diagnosis-only: enable file logging and point the user at /retry.
-
-// TestBlindSpotRetryNeverSchedulesAutoResubmit pins the removal: no tick
-// command is ever scheduled, regardless of counter state.
 func TestBlindSpotRetryNeverSchedulesAutoResubmit(t *testing.T) {
 	m := blindSpotSetup(t)
 	m.blindSpotRetries = 0
@@ -43,7 +33,6 @@ func TestBlindSpotRetryNeverSchedulesAutoResubmit(t *testing.T) {
 		t.Fatalf("counter must not advance, got %d", m.blindSpotRetries)
 	}
 
-	// Even with a burnt budget, behavior is identical (no special branch).
 	m.blindSpotRetries = 99
 	cmd = m.maybeBlindSpotRetry(errors.New("gateway said 200 but body was html"))
 	if cmd != nil {
@@ -54,8 +43,6 @@ func TestBlindSpotRetryNeverSchedulesAutoResubmit(t *testing.T) {
 	}
 }
 
-// TestBlindSpotNoticePointsAtManualRetry pins the user-facing path: the
-// notice enables debug logging and offers /retry instead of auto-resending.
 func TestBlindSpotNoticePointsAtManualRetry(t *testing.T) {
 	m := blindSpotSetup(t)
 
@@ -73,9 +60,6 @@ func TestBlindSpotNoticePointsAtManualRetry(t *testing.T) {
 	}
 }
 
-// TestBlindSpotNoRetryHintWithoutSubmission pins the edge case: with no
-// previous submission there is nothing /retry could resend, so the hint
-// is omitted.
 func TestBlindSpotNoRetryHintWithoutSubmission(t *testing.T) {
 	m := blindSpotSetup(t)
 	m.lastUserSubmission = ""
@@ -91,8 +75,6 @@ func TestBlindSpotNoRetryHintWithoutSubmission(t *testing.T) {
 	}
 }
 
-// TestBlindSpotResetOnSuccess stays intact: clearing the (now inert)
-// counter on success keeps the field consistent for future features.
 func TestBlindSpotResetOnSuccess(t *testing.T) {
 	m := blindSpotSetup(t)
 	m.blindSpotRetries = 3

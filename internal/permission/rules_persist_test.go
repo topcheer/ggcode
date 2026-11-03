@@ -81,7 +81,7 @@ func TestRulesPersist_SnapshotRoundTrip(t *testing.T) {
 	if data.ToolOverrides["write_file"] != "allow" {
 		t.Errorf("expected write_file=allow, got %s", data.ToolOverrides["write_file"])
 	}
-	// go build* should be in allow patterns
+
 	found := false
 	for _, pat := range data.CommandAllowPatterns {
 		if pat == "go build*" {
@@ -93,7 +93,6 @@ func TestRulesPersist_SnapshotRoundTrip(t *testing.T) {
 		t.Errorf("expected 'go build*' in allow patterns, got %v", data.CommandAllowPatterns)
 	}
 
-	// Round-trip: apply snapshot to a new policy
 	p2 := NewConfigPolicy(nil, []string{"/tmp"})
 	data.ApplyToPolicy(p2)
 	if d, _ := p2.Check("write_file", json.RawMessage(`{"file_path":"/tmp/x","content":"y"}`)); d != Allow {
@@ -125,33 +124,26 @@ func TestUserFriendlyPatterns(t *testing.T) {
 func TestSupervisedReadOnlyAutoAllow(t *testing.T) {
 	p := NewConfigPolicyWithMode(nil, []string{"/tmp/work"}, SupervisedMode)
 
-	// read_file inside sandbox: auto-allowed
 	d, _ := p.Check("read_file", json.RawMessage(`{"file_path":"/tmp/work/test.go"}`))
 	if d != Allow {
 		t.Errorf("expected read_file inside sandbox to be auto-allowed, got %s", d)
 	}
 
-	// read_file on non-sensitive path outside sandbox: auto-allowed
 	d, _ = p.Check("read_file", json.RawMessage(`{"file_path":"/tmp/other/test.go"}`))
 	if d != Allow {
 		t.Errorf("expected read_file outside sandbox non-sensitive to be auto-allowed, got %s", d)
 	}
 
-	// two-mode refactor: the sensitive-path read gate is gone; reads
-	// outside the sandbox flow Allow (exfil floor is command-side).
 	d, _ = p.Check("read_file", json.RawMessage(`{"file_path":"/root/.ssh/id_rsa"}`))
 	if d != Allow {
 		t.Errorf("expected read_file sensitive path to be Allow (two-mode refactor), got %s", d)
 	}
 
-	// grep: read-only, always allowed
 	d, _ = p.Check("grep", json.RawMessage(`{"pattern":"TODO"}`))
 	if d != Allow {
 		t.Errorf("expected grep to be auto-allowed, got %s", d)
 	}
 
-	// Non-read-only tools: default Allow (two-mode refactor removed the
-	// Ask-for-anything-unspecified fallback).
 	d, _ = p.Check("edit_file", json.RawMessage(`{"file_path":"/tmp/work/test.go"}`))
 	if d != Allow {
 		t.Errorf("expected edit_file to be Allow (default Allow), got %s", d)

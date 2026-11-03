@@ -15,7 +15,7 @@ func TestRestoreHistoryFromMessages(t *testing.T) {
 		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "好的，我来看看"}}},
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "修复一下这个文件"}}},
 		{Role: "user", Content: []provider.ContentBlock{
-			{Type: "text", Text: "  "}, // whitespace-only, should be skipped
+			{Type: "text", Text: "  "},
 			{Type: "text", Text: "这段有内容"},
 		}},
 	}
@@ -87,21 +87,18 @@ func TestHistoryNavigationAfterRestore(t *testing.T) {
 	}
 	m.restoreHistoryFromMessages(messages)
 
-	// historyIdx should be at end (2), so Up should go to most recent
 	model, _ := m.handleHistoryUp()
 	m2 := model.(Model)
 	if m2.input.Value() != "second prompt" {
 		t.Errorf("after Up: input = %q, want %q", m2.input.Value(), "second prompt")
 	}
 
-	// Another Up should go to first
 	model, _ = m2.handleHistoryUp()
 	m3 := model.(Model)
 	if m3.input.Value() != "first prompt" {
 		t.Errorf("after 2nd Up: input = %q, want %q", m3.input.Value(), "first prompt")
 	}
 
-	// Down should go back to second
 	model, _ = m3.handleHistoryDown()
 	m4 := model.(Model)
 	if m4.input.Value() != "second prompt" {

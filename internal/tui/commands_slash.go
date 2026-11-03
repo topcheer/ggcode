@@ -25,19 +25,13 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
-// handleClearChat creates a new session, clears the conversation view,
-// and notifies any connected mobile client.
 func (m *Model) handleClearChat() {
-	// Block /clear while agent or sub-agents are running — same guard as
-	// applyResumedSession. Without this, running sub-agent results would
-	// be routed to the new session after completion.
+
 	if m.loading {
 		m.chatWriteSystem(nextSystemID(), m.t("session.switch_blocked_running"))
 		return
 	}
 
-	// Cancel any running sub-agents and swarm teammates before switching.
-	// Their results belong to the old session and must not pollute the new one.
 	if m.subAgentMgr != nil {
 		safego.Go("tui.clearChat.cancelSubAgents", func() {
 			m.subAgentMgr.CancelAll()
@@ -49,12 +43,6 @@ func (m *Model) handleClearChat() {
 		})
 	}
 
-	// Flush final metadata for the old session. Messages were already
-	// persisted incrementally via AppendMessageToDisk (PersistHandler),
-	// so we must NOT call Save() here — Save() rewrites the entire JSONL
-	// from ses.Messages, which only contains user submissions (not the
-	// agent replies that were written directly to disk). Calling Save()
-	// would overwrite and PERMANENTLY DELETE all agent/tool messages.
 	if m.session != nil && m.sessionStore != nil {
 		oldSes := m.session
 		oldStore := m.sessionStore
@@ -67,7 +55,6 @@ func (m *Model) handleClearChat() {
 		})
 	}
 
-	// Create new session.
 	vendor, endpoint, model := "", "", ""
 	if m.config != nil {
 		vendor = m.config.Vendor
@@ -75,93 +62,50 @@ func (m *Model) handleClearChat() {
 		model = m.config.Model
 	}
 	ses := session.NewSession(vendor, endpoint, model)
-	// Persist the session file immediately so it exists on disk before the
-	// first message. JSONLStore.Save only touches (creates) the empty JSONL
-	// file — it does not rewrite messages and does not update the store
-	// index (that happens on the first AppendMessageToDisk), so this is safe
-	// for a brand-new empty session. cycleSession separately defends against
-	// the window before the index lists this session (issue #541).
+
 	if m.sessionStore != nil {
 		if err := m.sessionStore.Save(ses); err != nil {
 			debug.Log("tui", "clearChat persist new session: %v", err)
 		}
 	}
 
-	// Switch agent, view, lock, cron, and tunnel to the new session.
 	m.switchToSession(ses, true)
 
 	m.chatWriteSystem(nextSystemID(), m.t("session.new", ses.ID))
 }
 
-// switchToSession is the shared helper for all session-switching paths
-// (/clear, /sessions resume, /branch). It handles:
-//   - Resetting view state (streaming buffers, autocomplete, spinner)
-//   - Clearing and restoring agent context (via RestoreSessionIntoAgent)
-//   - Updating session store and persisted message count
-//   - Releasing old session lock and acquiring new one
-//   - Rebinding cron scheduler to the new session
-//   - Restoring session-scoped permission mode
-//   - Restoring session-scoped sidebar visibility
-//   - Notifying connected mobile clients
-//
-// For new sessions (isNew=true), permission mode is set to the global default
-// instead of restored from session metadata.
 func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 	if ses == nil {
 		return
 	}
 
-	// Reset view state so stale streaming/autocomplete state doesn't leak.
 	m.resetConversationView()
 
-	// Capture old workspace BEFORE SetSession overwrites m.session.
 	oldWorkspace := ""
 	if m.session != nil {
 		oldWorkspace = m.session.Workspace
 	}
 
-	// Clear and restore agent context.
 	if m.agent != nil {
 		m.agent.Clear()
-		// Clear checkpoints from the old session to prevent cross-session
-		// undo leaks (/undo in new session would revert old session's edits).
+
 		if cpMgr := m.agent.CheckpointManager(); cpMgr != nil {
 			cpMgr.Clear()
 		}
 		agentruntime.RestoreSessionIntoAgent(m.agent, ses)
 	}
 
-	// Check if the previous run in this session was interrupted by a crash.
-	// If so, show the recovery message to the user AND inject it into the
-	// agent context (G8-1, sa-158): FormatCrashRecoveryMessage's contract
-	// always said "the agent can inject as context", but only the chat list
-	// ever consumed it - so after a crash the model resumed blind to the
-	// half-finished workspace state while a Ctrl+C user (r445 CheckContinuation
-	// below) got the structured injection. Mutual exclusion with the
-	// interrupted path is structural: a crashed journal (State=running + dead
-	// PID) was consumed and deleted by CheckCrashedRun, so CheckContinuation
-	// below sees no snapshot; an interrupted run stamped State=completed, so
-	// CheckCrashedRun returned nil. Only one of the two can ever fire.
 	if recoveryMsg, resumeTask := agentruntime.CheckCrashRecovery(ses.ID); recoveryMsg != "" {
 		m.chatWrite(chat.NewSystemItem("crash-recovery", recoveryMsg, m.chatStyles))
 		if m.agent != nil {
 			m.agent.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: recoveryMsg}}})
 		}
-		// Crash-restore idempotency window: pre-crash successful mutating
-		// calls are re-seeded into the dedup ledger so the recovery-prompted
-		// replay (double push / double IM send) is suppressed with an
-		// advisory instead of re-executing the side effect.
+
 		agentruntime.SeedCrashDedupWindow(m.agent, ses.ID)
-		// sa-117: capture the interrupted task so /continue-task can offer
-		// explicit user-confirmed resumption. Empty for corrupt journals
-		// (placeholder carries no real task) - the command then reports
-		// nothing to resume.
+
 		m.crashResumeTask = resumeTask
 	}
-	// r445: user-interrupted (Ctrl+C) runs get a structured continuation
-	// point - shown to the user AND injected into the agent's context so
-	// the model knows where it was instead of guessing from cancelled-call
-	// placeholders. One-shot: the snapshot is consumed by the check.
+
 	if contMsg := agentruntime.CheckContinuation(ses.ID); contMsg != "" {
 		m.chatWrite(chat.NewSystemItem("continuation", contMsg, m.chatStyles))
 		if m.agent != nil {
@@ -171,9 +115,6 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 
 	m.SetSession(ses, m.sessionStore)
 
-	// Switch CWD if the session belongs to a different workspace.
-	// Note: must compare against oldWorkspace (captured before SetSession),
-	// because SetSession sets m.session = ses, making ses.Workspace == m.session.Workspace.
 	if ses.Workspace != "" && oldWorkspace != "" && ses.Workspace != oldWorkspace {
 		if m.agent != nil {
 			m.agent.SetWorkingDir(ses.Workspace)
@@ -181,36 +122,27 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 		debug.Log("tui", "switchToSession: switched agent workingDir from %q to %q", oldWorkspace, ses.Workspace)
 	}
 
-	// Release old session lock and acquire new one.
 	if m.sessionLockSwitch != nil {
 		m.sessionLockSwitch(ses.ID)
 	}
-	// Rebind cron scheduler to the new session's store path.
-	// Use the session's workspace for migration, not the current r.workingDir.
+
 	if m.sessionCronSwitch != nil {
 		m.sessionCronSwitch(ses.ID)
 	}
 
-	// Restore session-scoped state.
-	// Cancel any pending approval/questionnaire state from the old session so a
-	// stale approval dialog or tunnel answer cannot leak across the switch
-	// (issue #688 LOW).
 	m.clearPendingApprovals()
 	if isNew {
-		// New session inherits global default permission mode.
+
 		if m.config != nil {
 			globalMode := permission.ParsePermissionMode(m.config.DefaultMode)
-			// Keep the policy layer in sync with the displayed mode: without
-			// this, a session A autopilot/bypass mode silently survives into the
-			// new session and auto-allows dangerous tools while the status bar
-			// shows the global default (issue #688 HIGH).
+
 			if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
 				cp.SetMode(globalMode)
 			}
 			m.mode = globalMode
 		}
 	} else {
-		// Resumed session restores its saved permission mode.
+
 		if ses.PermissionMode != "" {
 			sessionMode := permission.ParsePermissionMode(ses.PermissionMode)
 			if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
@@ -218,50 +150,35 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 			}
 			m.mode = sessionMode
 		}
-		// Restore session-scoped sidebar visibility (if set).
+
 		if ses.SidebarVisible != nil {
 			m.sidebarVisible = *ses.SidebarVisible
 		}
 	}
 
-	// Sync the task board with the target session: restored from a resumed
-	// session's persisted snapshot, reset for a brand-new session (the field
-	// is empty there). Keeps the board session-scoped instead of leaking
-	// across sessions in a long-running process.
 	m.restoreTasksFromSession(ses)
-	m.setResumeNote("") // never leak the previous session's reconciliation note
+	m.setResumeNote("")
 
 	m.rebuildConversationFromMessages(ses.Messages)
 
-	// Refresh cached git branch — sessions from other workspaces may have
-	// different active branches.
 	m.refreshCachedGitBranch()
 
 	if !isNew {
-		// Only restore input history for resumed sessions (new sessions
-		// start with empty history so applyAutoComplete can add commands).
+
 		m.restoreHistoryFromMessages(ses.Messages)
 
-		// Show a concise recap of the resumed session so users get immediate
-		// context without scrolling through the full conversation history.
 		if recap := sessionRecap(ses, time.Now()); recap != "" {
 			m.chatWriteSystem(nextSystemID(), recap)
 		}
 
-		// Resume reconciliation: the restored board is a static handoff signal,
-		// but the workspace kept living while the session was paused. Diff the
-		// snapshot-time fingerprint against the live workspace and surface any
-		// drift (user-visible note + model-facing prompt layer).
 		if rec := m.prepareResumeReconciliation(ses); rec != "" {
 			m.chatWriteSystem(nextSystemID(), rec)
 		}
 	}
 
-	// Notify mobile client of session switch.
 	m.publishTunnelSnapshotForCurrentSession(true)
 }
 
-// handleUnshare stops the active tunnel/sharing session.
 func (m *Model) handleUnshare() {
 	if m.tunnelSession == nil && !m.tunnelStarting {
 		m.chatWriteSystem(nextSystemID(), m.t("tunnel.not_active"))
@@ -285,13 +202,7 @@ func (m *Model) resetConversationView() {
 	m.autoCompleteIndex = 0
 	m.exitConfirmPending = false
 	m.clearPendingSubmissions()
-	// #1409: todos are SESSION-scoped state (toolpkg.TodoFilePath(sessionID))
-	// - /clear and /sessions resume MUST NOT carry session A's snapshot into
-	// session B. The stale snapshot made B's first todo_write emit spurious
-	// "removed" change lines for every A todo ID, suppressed the task-mode
-	// sidebar auto-open (len(previous)==0 check), and kept A's todos
-	// displayed until B wrote its own. Same clearing the /todo clear path
-	// does explicitly.
+
 	m.todoSnapshot = nil
 	m.todoOrder = nil
 	m.activeTodo = nil
@@ -301,17 +212,6 @@ func (m *Model) resetConversationView() {
 	m.chatListScrollToBottom()
 }
 
-// clearPendingApprovals cancels any pending approval/confirm/questionnaire
-// state. It is called on session switches and permission-mode changes so an
-// old session's (or old mode's) approval request cannot leak into a new one
-// (issue #688 LOW). Blocked waiters are released with a non-blocking Deny/false
-// send; if the receiver is already gone the send is dropped.
-//
-// The sends are deliberately SYNCHRONOUS non-blocking selects: they can never
-// block (select with default), so there is no need to hand them to safego.Go.
-// Going through a goroutine made the release timing-dependent — a caller that
-// checks the channel right after a session switch could see it still empty
-// (flaky "waiter not released" races under -race).
 func (m *Model) clearPendingApprovals() {
 	if pa := m.pendingApproval; pa != nil {
 		m.pendingApproval = nil
@@ -331,11 +231,7 @@ func (m *Model) clearPendingApprovals() {
 			}
 		}
 	}
-	// #694: the questionnaire's response channel must be released too — the
-	// agent-side waiter (repl.go) blocks on a run-level ctx with no timeout;
-	// dropping the state without answering would hang the agent goroutine and
-	// leave m.loading stuck. Same non-blocking cancelled send as above, dropped
-	// if the receiver is already gone.
+
 	if qs := m.pendingQuestionnaire; qs != nil {
 		m.pendingQuestionnaire = nil
 		m.tunnelPendingAskUserID = ""
@@ -359,12 +255,12 @@ func (m *Model) handleApproval(d permission.Decision) tea.Cmd {
 		return nil
 	}
 	m.pushTunnelApprovalResult(requestID, tunnelDecisionString(d))
-	m.oscWorking("") // OSC 7501: approval decided, run resumes
+	m.oscWorking("")
 	safego.Go("tui.commands.approvalRespond", func() {
 		select {
 		case pa.Response <- d:
 		default:
-			// Receiver already gone; drop to avoid goroutine leak.
+
 		}
 	})
 	return nil
@@ -376,9 +272,7 @@ func (m *Model) handleApprovalAllowAlways() tea.Cmd {
 	m.pendingApproval = nil
 	m.tunnelPendingApprovalID = ""
 	if pa != nil && m.policy != nil {
-		// For command tools, use fine-grained command-level permission
-		// instead of blanket-allowing the entire tool. This prevents
-		// "always allow run_command" from auto-approving every future command.
+
 		if cmd := extractCommandFromInput(pa.Input); cmd != "" {
 			pattern := permission.CommandPrefixToPattern(cmd)
 			if pattern != "" {
@@ -405,7 +299,6 @@ func (m *Model) handleApprovalAllowAlways() tea.Cmd {
 		}
 	}
 
-	// Persist updated permission rules so they survive across sessions.
 	m.persistPermissionRules()
 
 	if pa != nil && pa.Response != nil {
@@ -426,7 +319,7 @@ func (m *Model) handleDiffConfirm(approved bool) tea.Cmd {
 	if pd == nil || pd.Response == nil {
 		return nil
 	}
-	m.oscWorking("") // OSC 7501: diff decided, run resumes
+	m.oscWorking("")
 	safego.Go("tui.commands.diffConfirm", func() {
 		select {
 		case pd.Response <- approved:
@@ -440,14 +333,12 @@ func (m *Model) handleDiffConfirm(approved bool) tea.Cmd {
 }
 
 func (m Model) handleHistoryUp() (tea.Model, tea.Cmd) {
-	// De-queue feature: when agent is busy, input is empty, and there are
-	// visible pending submissions, press Up to pull the last queued message
-	// back into the input box for editing.
+
 	if m.loading && m.input.Value() == "" && m.pendingSubmissionCount() > 0 {
 		text, imgs, ok := m.dequeueLastVisible()
 		if ok {
 			m.input.SetValue(text)
-			// Restore images so they're available if the user re-sends.
+
 			if len(imgs) > 0 {
 				m.pendingImages = imgs
 			}
@@ -458,8 +349,7 @@ func (m Model) handleHistoryUp() (tea.Model, tea.Cmd) {
 	if m.historyIdx > 0 {
 		m.historyIdx--
 		m.input.SetValue(m.history[m.historyIdx])
-		// Long recalled entries (CJK soft-wraps fast) would otherwise render
-		// with the tail clipped below the MaxHeight viewport.
+
 		composerCursorEnd(&m.input)
 	}
 	return m, nil
@@ -595,31 +485,21 @@ func (m *Model) handleClipboardPaste() tea.Cmd {
 		}
 		msg, err := loader()
 		if err != nil {
-			// Silently ignore if clipboard doesn't contain an image.
-			// This is common (user pressed Ctrl+V with text in clipboard).
+
 			if errors.Is(err, image.ErrClipboardImageUnavailable) {
-				// On Windows, show a hint since the terminal likely intercepted
-				// the keypress and the clipboard may not have been checked at all.
+
 				if runtime.GOOS == "windows" {
 					return systemNotifyMsg{Text: m.t("image.clipboard_no_image_windows")}
 				}
-				return nil // no-op on macOS/Linux
+				return nil
 			}
-			// Use systemNotifyMsg instead of errMsg so the actual clipboard
-			// error (e.g. "Install wl-clipboard or xclip") is shown as-is.
-			// errMsg routes through provider.UserFacingError() which strips
-			// clipboard errors to a generic "请求失败，请稍后重试" and kills
-			// any active agent run via handleErrMsg.
+
 			return systemNotifyMsg{Text: fmt.Sprintf(m.t("image.clipboard_failed"), err)}
 		}
 		return msg
 	}
 }
 
-// handleClipboardPasteFallback is used for tea.PasteMsg on Windows where the
-// Ctrl+V keypress is intercepted by the terminal. It attempts to load a
-// clipboard image; if the clipboard contains text instead, it falls back to a
-// plain text paste message.
 func (m *Model) handleClipboardPasteFallback(original tea.PasteMsg) tea.Cmd {
 	return func() tea.Msg {
 		loader := m.clipboardLoader
@@ -638,7 +518,7 @@ func (m *Model) handleClipboardPasteFallback(original tea.PasteMsg) tea.Cmd {
 }
 
 func (m *Model) handleRestartCommand(text string) tea.Cmd {
-	// Check for "debug" argument
+
 	parts := strings.Fields(text)
 	debugMode := false
 	for _, p := range parts[1:] {
@@ -649,11 +529,6 @@ func (m *Model) handleRestartCommand(text string) tea.Cmd {
 	return m.beginRestart(debugMode)
 }
 
-// beginRestart is the single shared core for ALL restart entry points
-// (/restart slash command and the LLM restart tool via
-// firePendingRestart): identical system messages, identical flags,
-// identical quit sequence. Keep the two entry points thin wrappers —
-// never duplicate this logic again.
 func (m *Model) beginRestart(debugMode bool) tea.Cmd {
 	if debugMode {
 		m.restartDebug = true
@@ -668,22 +543,17 @@ func (m *Model) beginRestart(debugMode bool) tea.Cmd {
 	return tea.Quit
 }
 
-// buildRestartArgs reconstructs the CLI arguments needed to relaunch ggcode
-// with the same configuration and resume the current session.
 func (m *Model) buildRestartArgs() []string {
 	var args []string
 
-	// Preserve config file from the update service.
 	if m.updateSvc != nil && m.updateSvc.ConfigPath != "" {
 		args = append(args, "--config", m.updateSvc.ConfigPath)
 	}
 
-	// Resume current session.
 	if m.session != nil && m.session.ID != "" {
 		args = append(args, "--resume", m.session.ID)
 	}
 
-	// Preserve bypass mode.
 	if m.mode == permission.BypassMode {
 		args = append(args, "--bypass")
 	}
@@ -691,11 +561,6 @@ func (m *Model) buildRestartArgs() []string {
 	return args
 }
 
-// handleBranchCommand forks the current conversation into a new session.
-// With no argument it copies everything (tail fork). With "/branch N" it
-// drops the last N complete user turns first, forking from an earlier
-// point in the conversation to explore an alternative direction. The new
-// session records its lineage (ParentSessionID + ForkPoint).
 func (m *Model) handleBranchCommand(parts []string) tea.Cmd {
 	if m.loading {
 		m.chatWriteSystem(nextSystemID(), m.t("branch.busy"))
@@ -713,7 +578,6 @@ func (m *Model) handleBranchCommand(parts []string) tea.Cmd {
 		return nil
 	}
 
-	// Optional "/branch N": fork after dropping the last N user turns.
 	dropRounds := 0
 	if len(parts) > 1 {
 		n, err := strconv.Atoi(strings.TrimSpace(parts[1]))
@@ -731,9 +595,6 @@ func (m *Model) handleBranchCommand(parts []string) tea.Cmd {
 		return nil
 	}
 
-	// Flush final metadata for the current session before branching.
-	// Messages are already on disk via AppendMessageToDisk — Save() would
-	// overwrite them because ses.Messages lacks agent replies.
 	oldSes := m.session
 	oldStore := m.sessionStore
 	safego.Go("tui.branch.metaFlush", func() {
@@ -744,33 +605,26 @@ func (m *Model) handleBranchCommand(parts []string) tea.Cmd {
 		}
 	})
 
-	// Create the branched session with copied data (cannot copy Session by
-	// value because it contains a sync.RWMutex).
 	branched := session.NewSession(oldSes.Vendor, oldSes.Endpoint, oldSes.Model)
 	branched.Workspace = oldSes.Workspace
 	branched.TokenUsage = oldSes.TokenUsage
 	branched.CostJSON = append([]byte(nil), oldSes.CostJSON...)
 	branched.PermissionMode = oldSes.PermissionMode
-	// Snapshot the current board into the source session (for its own meta
-	// flush) and copy it: a branch inherits the conversation, so it inherits
-	// the task board too.
+
 	m.snapshotTasksInto(oldSes)
 	branched.TasksJSON = append([]byte(nil), oldSes.TasksJSON...)
-	// #3792: same fingerprint gap as /rewind - the branch inherits the
-	// workspace fingerprint so resume reconciliation survives.
+
 	branched.TasksEnvJSON = append([]byte(nil), oldSes.TasksEnvJSON...)
 	if oldSes.SidebarVisible != nil {
 		val := *oldSes.SidebarVisible
 		branched.SidebarVisible = &val
 	}
 
-	// Deep-copy messages up to the computed fork point.
 	branched.Messages = make([]provider.Message, cutoff)
 	copy(branched.Messages, oldSes.Messages[:cutoff])
 	branched.ParentSessionID = oldSes.ID
 	branched.ForkPoint = cutoff
 
-	// Deep-copy usage history.
 	if len(oldSes.UsageHistory) > 0 {
 		branched.UsageHistory = make([]session.UsageEntry, len(oldSes.UsageHistory))
 		copy(branched.UsageHistory, oldSes.UsageHistory)
@@ -790,7 +644,6 @@ func (m *Model) handleBranchCommand(parts []string) tea.Cmd {
 		branched.EndpointMetrics[k] = cp
 	}
 
-	// Title: indicate this is a branch.
 	origTitle := oldSes.Title
 	if origTitle == "" {
 		origTitle = oldSes.ID
@@ -800,8 +653,6 @@ func (m *Model) handleBranchCommand(parts []string) tea.Cmd {
 		branched.Title = fmt.Sprintf("Branch (-%d turns): %s", dropRounds, origTitle)
 	}
 
-	// Persist the new session: touch file + update index, then write messages
-	// and metadata explicitly (Save no longer writes messages).
 	if jsonlStore, ok := m.sessionStore.(*session.JSONLStore); ok {
 		if err := jsonlStore.Save(branched); err != nil {
 			m.chatWriteSystem(nextSystemID(), m.t("branch.save_failed", err))
@@ -826,7 +677,6 @@ func (m *Model) handleBranchCommand(parts []string) tea.Cmd {
 		}
 	}
 
-	// Switch to the branched session.
 	m.applyResumedSession(branched)
 
 	m.chatWriteSystem(nextSystemID(), m.t("branch.success", branched.ID, origTitle))
@@ -834,11 +684,6 @@ func (m *Model) handleBranchCommand(parts []string) tea.Cmd {
 	return nil
 }
 
-// handleBranchesCommand lists the branch tree around the current session:
-// when the current session was forked via /branch, its parent and siblings;
-// plus every session forked from the current one. Before this, lineage
-// (ParentSessionID/ForkPoint) was write-only — users could not see which
-// branches existed or jump between them.
 func (m *Model) handleBranchesCommand(parts []string) tea.Cmd {
 	if m.session == nil || m.sessionStore == nil {
 		m.chatWriteSystem(nextSystemID(), m.t("branch.no_session"))
@@ -894,9 +739,6 @@ func (m *Model) handleBranchesCommand(parts []string) tea.Cmd {
 	return nil
 }
 
-// handleBranchSwitchCommand switches to another session in the current
-// branch tree. The target must be related to the current session (parent,
-// child, or sibling); arbitrary sessions stay on /resume.
 func (m *Model) handleBranchSwitchCommand(parts []string) tea.Cmd {
 	if m.loading {
 		m.chatWriteSystem(nextSystemID(), m.t("branch.busy"))
@@ -955,7 +797,6 @@ func (m *Model) handleBranchSwitchCommand(parts []string) tea.Cmd {
 		return nil
 	}
 
-	// Flush current session meta before switching (mirrors /branch).
 	oldSes := m.session
 	oldStore := m.sessionStore
 	safego.Go("tui.branchSwitch.metaFlush", func() {
@@ -976,15 +817,10 @@ func (m *Model) handleBranchSwitchCommand(parts []string) tea.Cmd {
 	return nil
 }
 
-// extractCommandFromInput parses a tool input JSON and extracts the command string.
-// extractCommandFromInput delegates to permission.ExtractCommandFromInput.
-// Kept as a local wrapper for compatibility with existing call sites.
 func extractCommandFromInput(input string) string {
 	return permission.ExtractCommandFromInput(input)
 }
 
-// persistPermissionRules saves the current tool overrides and command patterns
-// to ~/.ggcode/permission_rules.json so they persist across sessions.
 func (m *Model) persistPermissionRules() {
 	if m.policy == nil {
 		return
@@ -1000,15 +836,6 @@ func (m *Model) persistPermissionRules() {
 	}
 }
 
-// handleNotifyCommand handles /notify: view or set notification preferences.
-//
-// Usage:
-//
-//	/notify                         — show current settings
-//	/notify mode <all|long|errors|off>
-//	/notify bell <on|off>
-//	/notify desktop <on|off>
-//	/notify min_duration <seconds>
 func (m *Model) handleNotifyCommand(args []string) tea.Cmd {
 	if m.config == nil {
 		m.chatWriteSystem(nextSystemID(), "Configuration not available.")
@@ -1016,7 +843,6 @@ func (m *Model) handleNotifyCommand(args []string) tea.Cmd {
 		return nil
 	}
 
-	// No args: show current settings.
 	if len(args) == 0 {
 		n := m.config.Notifications
 		mode := n.EffectiveMode()
@@ -1114,7 +940,6 @@ func (m *Model) handleNotifyCommand(args []string) tea.Cmd {
 	return nil
 }
 
-// parseOnOff parses on/off strings to booleans.
 func parseOnOff(s string) bool {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "on", "true", "1", "yes":

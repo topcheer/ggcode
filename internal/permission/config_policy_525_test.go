@@ -6,20 +6,9 @@ import (
 	"testing"
 )
 
-// TestConfigPolicyDangerousAllowDowngradeParity (#525 Bug C): the same
-// extremely dangerous command under user-explicit allow must get the same
-// decision regardless of which rule source matched — runtime cmdRules (TUI
-// "always allow"), static config rules (ggcode.yaml /
-// permission_rules.json), or no rule at all (default). Previously the
-// static-rule branch hard-Denied, making "configured allow" stricter than
-// "configured nothing" (non-monotonic paradox). An explicit Deny rule
-// stays Deny.
-// two-mode refactor: the parity floor is the IsExtremelyDangerous gate
-// (the only supervised gate left), so the probe command is extreme.
 func TestConfigPolicyDangerousAllowDowngradeParity(t *testing.T) {
 	in := json.RawMessage(`{"command":"sudo rm -rf /"}`)
 
-	// Form 1: runtime cmdRules allow (TUI "always allow") + dangerous → Ask.
 	p1 := NewConfigPolicyWithMode(nil, []string{t.TempDir()}, SupervisedMode)
 	rs := NewCommandRuleSet()
 	rs.AddAllowPattern("sudo *")
@@ -29,14 +18,12 @@ func TestConfigPolicyDangerousAllowDowngradeParity(t *testing.T) {
 		t.Fatalf("cmdRules form Check error: %v", err)
 	}
 
-	// Form 2: static config rule allow + dangerous → Ask (was Deny).
 	p2 := NewConfigPolicyWithMode(map[string]Decision{"run_command": Allow}, []string{t.TempDir()}, SupervisedMode)
 	d2, err := p2.Check("run_command", in)
 	if err != nil {
 		t.Fatalf("static-rule form Check error: %v", err)
 	}
 
-	// Form 3: no rules (default fallthrough) → Ask.
 	p3 := NewConfigPolicyWithMode(nil, []string{t.TempDir()}, SupervisedMode)
 	d3, err := p3.Check("run_command", in)
 	if err != nil {
@@ -47,8 +34,6 @@ func TestConfigPolicyDangerousAllowDowngradeParity(t *testing.T) {
 		t.Errorf("dangerous-command downgrade split: cmdRules-allow=%v, static-allow=%v, no-rule=%v; all three must be Ask (allow must not be stricter than default)", d1, d2, d3)
 	}
 
-	// Form 4: explicit static Deny + dangerous → stays Deny (a user deny is
-	// never weakened by the dangerous detector branch).
 	p4 := NewConfigPolicyWithMode(map[string]Decision{"run_command": Deny}, []string{t.TempDir()}, SupervisedMode)
 	d4, err := p4.Check("run_command", in)
 	if err != nil {
@@ -59,12 +44,6 @@ func TestConfigPolicyDangerousAllowDowngradeParity(t *testing.T) {
 	}
 }
 
-// TestConfigPolicyStaticRuleSandboxDowngrade (#525 Bug D): an out-of-sandbox
-// file access under a static rule downgrades to Ask (human review), aligned
-// with the bypass branch's keep-human-in-the-loop semantics. Previously any
-// static rule hit turned out-of-sandbox access into a hard Deny — an explicit
-// user Ask became stricter than the no-rule default. Only an explicit Deny
-// rule keeps Deny outside the sandbox.
 func TestConfigPolicyStaticRuleSandboxDowngrade(t *testing.T) {
 	sandbox := t.TempDir()
 	outside := json.RawMessage(`{"file_path":"/etc/hosts","old_text":"a","new_text":"b"}`)
@@ -77,7 +56,7 @@ func TestConfigPolicyStaticRuleSandboxDowngrade(t *testing.T) {
 
 	cases := []struct {
 		name    string
-		rule    Decision // rule value; nil-rule handled by hasRule=false
+		rule    Decision
 		hasRule bool
 		input   json.RawMessage
 		want    Decision

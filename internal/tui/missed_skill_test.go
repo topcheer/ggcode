@@ -1,9 +1,5 @@
 package tui
 
-// r398 probes: missed-skill detection (SAGE lineage, arXiv:2512.17102).
-// A skill whose topic the user named in the prompt while the run never
-// touched the skill tool is the routing failure SAGE identifies.
-
 import (
 	"os"
 	"path/filepath"
@@ -27,8 +23,6 @@ func probeMissedSkillEnv(t *testing.T, skillName string) string {
 	return wd
 }
 
-// r477 probes: routing-health sentinel (skill-selection scaling-limits
-// watch). Pure-function coverage of the size x accumulated-notices gate.
 func TestSkillRoutingHealthNoticeGate(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -66,9 +60,6 @@ func TestSkillRoutingHealthNoticeGate(t *testing.T) {
 	}
 }
 
-// The sentinel must survive merge round-trips only via live recomputation:
-// a "#"-prefixed line is dropped by mergeMissedSkills, so a stale sentinel
-// never lingers when conditions clear.
 func TestSkillRoutingHealthSentinelNotAccumulatedByMerge(t *testing.T) {
 	existing := "# routing-health: 40 user skills, 6 missed-skill notices - old\nskill foo matched a recent task's prompt but was not invoked - consider the skill tool or /skills list"
 	merged := mergeMissedSkills(existing, []string{"bar"})

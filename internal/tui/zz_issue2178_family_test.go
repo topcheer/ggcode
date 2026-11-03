@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// #2178 family: positional create-echo masking across all IM panels.
-// Each panel's spec format (confirmed from the create*AdapterCmd parsers)
-// and the field index where secret material starts.
-
 func TestMaskPositionalCreateEcho(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -31,7 +27,7 @@ func TestMaskPositionalCreateEcho(t *testing.T) {
 }
 
 func TestMaskCreateEchoIndices(t *testing.T) {
-	// twitch: `name token nick channels` - only the 2nd field (oauth token)
+
 	in := "bot oauth:abc123xyz nick9 #chan"
 	got := maskCreateEchoIndices(in, 1)
 	if strings.Contains(got, "oauth:abc123xyz") {
@@ -40,7 +36,7 @@ func TestMaskCreateEchoIndices(t *testing.T) {
 	if !strings.Contains(got, "bot") || !strings.Contains(got, "nick9") || !strings.Contains(got, "#chan") {
 		t.Errorf("non-sensitive twitch fields must stay readable: %q", got)
 	}
-	// nostr: `name [private_key] [relays]` - only the 2nd field (private key)
+
 	in = "bot 63 hexrelay wss://relay.damus.io"
 	got = maskCreateEchoIndices(in, 1)
 	if strings.Contains(got, "63") {
@@ -49,15 +45,12 @@ func TestMaskCreateEchoIndices(t *testing.T) {
 	if !strings.Contains(got, "wss://relay.damus.io") {
 		t.Errorf("nostr relays must stay readable: %q", got)
 	}
-	// out-of-range index is a no-op
+
 	if got := maskCreateEchoIndices("only", 3); got != "only" {
 		t.Errorf("out-of-range index changed input: %q", got)
 	}
 }
 
-// TestIssue2178FamilyPanels pins every panel's secret start index against
-// its parser-confirmed spec format. The secret literal must not appear in
-// the masked echo; the adapter name must stay readable.
 func TestIssue2178FamilyPanels(t *testing.T) {
 	tests := []struct {
 		panel     string
@@ -87,14 +80,12 @@ func TestIssue2178FamilyPanels(t *testing.T) {
 	}
 }
 
-// secretFromFor mirrors the per-panel constants wired into the render
-// calls (keep in sync with the bot_input lines in each *_panel.go).
 func secretFromFor(panel string) int {
 	switch panel {
 	case "tg", "discord", "dingtalk":
-		return 1 // name <secret...> from field 2 (dingtalk app_key hits the key family)
+		return 1
 	case "feishu", "wecom", "mattermost", "matrix", "qq":
-		return 2 // name <public-id/url> <secret...> (qq: name appid appsecret)
+		return 2
 	default:
 		return 1
 	}

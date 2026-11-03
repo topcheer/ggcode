@@ -119,8 +119,7 @@ Do not use this for unrelated tasks.
 	}
 
 	output := stripAnsi(renderedOutput(&m))
-	// The rendered output may have line breaks between "feedback:" and the score
-	// due to lipgloss word-wrapping, so check for each part separately.
+
 	if !strings.Contains(output, "feedback:") || !strings.Contains(output, "4.0/5 (1)") {
 		t.Fatalf("expected runtime feedback in skills output, got %q", output)
 	}

@@ -1,11 +1,5 @@
 package mcp
 
-// #3790 companion tests: sse servers must be signed by URL like http/ws.
-// Pre-fix, sse fell to the stdio default branch whose Command/Args are
-// empty for sse entries, so EVERY sse server signed as `sig-v2:stdio:[""]`
-// and the migration dedup silently dropped all but the first of multiple
-// different-URL sse servers (deterministic data loss).
-
 import (
 	"os"
 	"path/filepath"
@@ -30,8 +24,6 @@ func TestIssue3790_SSESignatureURLBased(t *testing.T) {
 	}
 }
 
-// Case-variant sse types (migrated lowercase vs explicit "SSE") must dedup
-// against each other, same as http/ws (#1276 review follow-up parity).
 func TestIssue3790_SSESignatureCaseInsensitive(t *testing.T) {
 	pairs := [][2]config.MCPServerConfig{
 		{
@@ -39,7 +31,7 @@ func TestIssue3790_SSESignatureCaseInsensitive(t *testing.T) {
 			{Type: "sse", URL: "https://x/sse"},
 		},
 		{
-			{Type: " sse ", URL: "https://x/sse"}, // transport normalizer trims
+			{Type: " sse ", URL: "https://x/sse"},
 			{Type: "sse", URL: "https://x/sse"},
 		},
 	}
@@ -51,8 +43,6 @@ func TestIssue3790_SSESignatureCaseInsensitive(t *testing.T) {
 	}
 }
 
-// End-to-end: two different-URL sse servers in ~/.claude.json must BOTH
-// survive migration dedup (pre-fix the second was dropped as duplicate).
 func TestIssue3790_TwoSSEServersBothMigrate(t *testing.T) {
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, "home")

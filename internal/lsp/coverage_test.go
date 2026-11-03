@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// --- discovery.go pure functions ---
-
 func TestEscapePowerShellSingleQuoted(t *testing.T) {
 	got := escapePowerShellSingleQuoted("it's a test")
 	if got != "it''s a test" {
@@ -140,8 +138,6 @@ func TestPythonVenvInstallCommand(t *testing.T) {
 	}
 }
 
-// --- client.go pure functions ---
-
 func TestStringifyHoverContents(t *testing.T) {
 	tests := []struct {
 		input    interface{}
@@ -165,9 +161,6 @@ func TestServerLaunchEnv(t *testing.T) {
 	}
 }
 
-// TestParseWorkspaceEditUnsupportedKindNote pins #1769: a rename-kind
-// documentChange (no edits, top-level oldUri/newUri) drops into the
-// unsupported note WITH the file it involves, and the note is retrievable.
 func TestParseWorkspaceEditUnsupportedKindNote(t *testing.T) {
 	raw := []byte(`{"documentChanges":[{"kind":"rename","oldUri":"file:///a/old.go","newUri":"file:///a/new.go"}]}`)
 	edits, note := parseWorkspaceEdit(raw)
@@ -180,8 +173,7 @@ func TestParseWorkspaceEditUnsupportedKindNote(t *testing.T) {
 	if !strings.Contains(note, "rename") || !strings.Contains(note, "new.go") {
 		t.Fatalf("note must name kind+uri, got %q", note)
 	}
-	// #3037: the note is a plain return value; a fresh parse with no
-	// unsupported kinds yields an empty note (nothing global left behind).
+
 	if _, again := parseWorkspaceEdit([]byte(`{"documentChanges":[{"textDocument":{"uri":"file:///a/a.go"},"edits":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"newText":"x"}]}]}`)); again != "" {
 		t.Fatalf("a clean parse must yield no note, got %q", again)
 	}

@@ -1,11 +1,5 @@
 package knight
 
-// Regression probe for #3024: the proposal id's nanosecond disambiguation
-// suffix must never be truncated away. The old whole-id [:80] cut ate the
-// suffix first for slugs longer than 53 chars, deterministically reviving
-// the same-second same-title collision fixed by #1576-B (file overwrite +
-// log collapse losing the first proposal).
-
 import (
 	"strings"
 	"testing"
@@ -13,14 +7,11 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// TestIssue3024_LongSlugKeepsDisambiguationSuffix: two long-title proposals
-// written within the same second must get DIFFERENT ids (suffix preserved),
-// and both .md files must survive.
 func TestIssue3024_LongSlugKeepsDisambiguationSuffix(t *testing.T) {
 	dir := t.TempDir()
 	k := New(config.KnightConfig{Enabled: true}, t.TempDir(), dir, nil)
 
-	longTitle := strings.Repeat("refactor the module boundary ", 8) // slug >> 53 chars
+	longTitle := strings.Repeat("refactor the module boundary ", 8)
 	p1, err := k.writeProjectImprovementProposal("goal", "# "+longTitle+"\n## Summary\nfirst\n")
 	if err != nil {
 		t.Fatal(err)
@@ -37,9 +28,6 @@ func TestIssue3024_LongSlugKeepsDisambiguationSuffix(t *testing.T) {
 	}
 }
 
-// TestIssue3024_LongSlugIDsSharePrefixButDifferInSuffix pins the shape: the
-// timestamp+slug prefix may be shared, the tail differs (the suffix did the
-// disambiguation, not a truncated slug byte).
 func TestIssue3024_LongSlugIDsSharePrefixButDifferInSuffix(t *testing.T) {
 	dir := t.TempDir()
 	k := New(config.KnightConfig{Enabled: true}, t.TempDir(), dir, nil)
@@ -62,8 +50,6 @@ func TestIssue3024_LongSlugIDsSharePrefixButDifferInSuffix(t *testing.T) {
 	}
 }
 
-// TestIssue3024_ShortSlugUnchanged: short titles keep the historical id
-// layout (timestamp + full slug + suffix).
 func TestIssue3024_ShortSlugUnchanged(t *testing.T) {
 	dir := t.TempDir()
 	k := New(config.KnightConfig{Enabled: true}, t.TempDir(), dir, nil)

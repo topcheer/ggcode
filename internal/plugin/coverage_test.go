@@ -8,11 +8,10 @@ import (
 )
 
 func TestSetMCPDisabled(t *testing.T) {
-	// #1782 case 2: same isolation as the race test - never touch the
-	// developer's real ~/.ggcode.
+
 	t.Setenv("HOME", t.TempDir())
 	resetDisabledCache()
-	// Should not panic; #1740 case 2 also returns nil error on success.
+
 	if err := SetMCPDisabledIn("", "test-server", true); err != nil {
 		t.Fatalf("disable should succeed: %v", err)
 	}
@@ -27,10 +26,6 @@ func TestSetMCPDisabled(t *testing.T) {
 	}
 }
 
-// TestConnectOneRefusesDisabled pins #1740 case 1: connectOne (the
-// Retry/Reconnect/fresh-install path) must not revive a server disabled
-// via the persisted set - the markPending state transition is skipped
-// entirely.
 func TestConnectOneRefusesDisabled(t *testing.T) {
 	if err := SetMCPDisabledIn("", "test-disabled-server", true); err != nil {
 		t.Fatal(err)
@@ -61,9 +56,9 @@ func TestMCPPluginIsConnected(t *testing.T) {
 
 func TestMCPPluginStatus(t *testing.T) {
 	p := &MCPPlugin{cfg: config.MCPServerConfig{Name: "test-disabled-server"}}
-	// Default status is empty
+
 	s := p.Status()
-	_ = s // may be empty, just verify no panic
+	_ = s
 }
 
 func TestMCPPluginLastError(t *testing.T) {

@@ -1,12 +1,5 @@
 //go:build integration_local
 
-// This file contains tests that spawn heavyweight external language server
-// processes (JVM, .NET, Node.js, etc.). They are excluded from CI and
-// `make verify-ci` via the integration_local build tag. Run them locally with:
-//
-//	go test -tags "goolm,integration_local" ./internal/lsp/ -run TestDocumentSymbolsWithInstalled -v
-//	go test -tags "goolm,integration_local" ./internal/lsp/ -run TestExternal -v
-
 package lsp
 
 import (

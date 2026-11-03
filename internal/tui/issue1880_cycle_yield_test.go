@@ -2,20 +2,12 @@ package tui
 
 import "testing"
 
-// Regression for #1880 case 1 (residual of #1772): the cycle-session keys
-// (alt+up/alt+down) must yield to EVERY panel the dispatch chain handles,
-// not just the nine states the old hand-enumerated anyPanelOpen listed.
-// For each diff-set panel the old guard read false, cycleSession ran
-// before the dispatch chain, and the open panel leaked onto the newly
-// selected session - the exact bug #1772 fixed for its nine states.
-// The guard now delegates to hasActivePanel (audited against
-// closeActivePanel in #904) plus the four states it does not model.
 func TestSessionCycleKeysYieldToDiffSetPanels(t *testing.T) {
 	openers := map[string]func(m *Model){
 		"modelPanel":      func(m *Model) { m.modelPanel = &modelPanelState{} },
 		"knightPanel":     func(m *Model) { m.knightPanel = &knightPanelState{} },
 		"statsPanel":      func(m *Model) { m.statsPanel = &statsPanelState{} },
-		"usagePanel":      func(m *Model) { m.usagePanel = &usagePanelState{} }, // #2150 batch 2
+		"usagePanel":      func(m *Model) { m.usagePanel = &usagePanelState{} },
 		"skillsPanel":     func(m *Model) { m.skillsPanel = &skillsPanelState{} },
 		"hooksPanel":      func(m *Model) { m.hooksPanel = &hooksPanelState{} },
 		"inspectorPanel":  func(m *Model) { m.inspectorPanel = &inspectorPanelState{} },
@@ -47,8 +39,6 @@ func TestSessionCycleKeysYieldToDiffSetPanels(t *testing.T) {
 	}
 }
 
-// Sanity: the guard reads false when nothing is open, so the cycle keys
-// keep working in the plain state.
 func TestSessionCycleKeysFreeWhenNoPanel(t *testing.T) {
 	m := newTestModel()
 	if anyPanelOpen(m) {

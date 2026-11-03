@@ -2,20 +2,6 @@
 
 package mcp
 
-// MCP cancellation protocol conformance (spec 2025-03-26,
-// https://modelcontextprotocol.io/specification/2025-03-26/basic/utilities/cancellation):
-//
-//  1. When the client abandons an in-flight request (caller deadline,
-//     user interrupt, per-request timeout), it MUST emit a
-//     notifications/cancelled notification referencing the outstanding
-//     request id, so the server can stop processing and free resources.
-//  2. The initialize request MUST NOT be cancelled by clients.
-//
-// Late responses racing the notification are spec-permitted: receivers
-// ignore unknown or already-completed request IDs, so the test also
-// exercises the client tolerating a tools/call response that arrives after
-// it gave up.
-
 import (
 	"bytes"
 	"context"
@@ -30,9 +16,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// sseResult writes a JSON-RPC response as a streamable-HTTP SSE event —
-// the wire shape the #716 tests established for this client's HTTP
-// transport.
 func sseResult(w http.ResponseWriter, id json.RawMessage, result interface{}) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.WriteHeader(http.StatusOK)
@@ -45,7 +28,6 @@ func sseResult(w http.ResponseWriter, id json.RawMessage, result interface{}) {
 	}
 }
 
-// mcpTestServerRequest is the decoded wire request used by the handlers.
 type mcpTestServerRequest struct {
 	Method string          `json:"method"`
 	ID     json.RawMessage `json:"id"`
@@ -83,9 +65,7 @@ func TestMCPCancellation_NotifiesServerOnGiveUp(t *testing.T) {
 			mu.Lock()
 			callID = req.ID
 			mu.Unlock()
-			// Long-running tool; the client gives up long before this
-			// responds. The late response races the cancellation
-			// notification and must not disturb the client.
+
 			time.Sleep(2 * time.Second)
 			sseResult(w, req.ID, map[string]interface{}{
 				"content": []interface{}{map[string]string{"type": "text", "text": "done"}},
@@ -161,7 +141,7 @@ func TestMCPCancellation_InitializeNeverCancelled(t *testing.T) {
 		}
 		switch req.Method {
 		case "initialize":
-			// Slow handshake; the client deadline expires mid-flight.
+
 			time.Sleep(1500 * time.Millisecond)
 			sseResult(w, req.ID, map[string]interface{}{
 				"protocolVersion": latestMCPProtocolVersion,
@@ -203,8 +183,6 @@ func TestMCPCancellation_InitializeNeverCancelled(t *testing.T) {
 		t.Fatal("expected initialize to fail after the 300ms deadline")
 	}
 
-	// The spec forbids clients from cancelling initialize: no
-	// notifications/cancelled may be emitted for it.
 	select {
 	case id := <-gotCancelled:
 		t.Fatalf("initialize was cancelled in violation of the spec (requestId %s)", id)

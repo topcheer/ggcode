@@ -14,16 +14,16 @@ import (
 )
 
 type streamPanelState struct {
-	focus         int // 0=platform list, 1=config area
+	focus         int
 	selectedIndex int
 	scrollOffset  int
 	keyInput      textinput.Model
 	urlInput      textinput.Model
 	nameInput     textinput.Model
 	message       string
-	editingField  string                // "", "key", "url", "name"
-	customMode    bool                  // adding a custom target
-	targets       []stream.StreamTarget // current working config
+	editingField  string
+	customMode    bool
+	targets       []stream.StreamTarget
 	statusRefresh bool
 }
 
@@ -47,20 +47,16 @@ func newStreamPanel(cfg stream.StreamConfig) *streamPanelState {
 }
 
 func (p *streamPanelState) totalItems() int {
-	// #912: count only RENDERED preset rows - added presets are skipped in
-	// render, so counting them left an invisible cursor slot (Enter said
-	// 'already added' on an empty-looking row).
+
 	visible := 0
 	for _, preset := range stream.Presets {
 		if !p.presetAdded(preset) {
 			visible++
 		}
 	}
-	return len(p.targets) + visible + 1 // +1 for "Custom"
+	return len(p.targets) + visible + 1
 }
 
-// presetAdded reports whether the preset already has a target row (ID or
-// Name - the single predicate every site must share).
 func (p *streamPanelState) presetAdded(preset stream.PlatformPreset) bool {
 	for _, t := range p.targets {
 		if t.Name == preset.ID || t.Name == preset.Name {
@@ -70,11 +66,6 @@ func (p *streamPanelState) presetAdded(preset stream.PlatformPreset) bool {
 	return false
 }
 
-// visiblePresets returns the presets that still have a row, in order - the
-// ONLY source of preset<->row index mapping (#1759 case 1: the old
-// `selectedIndex - len(targets)` mapped onto RAW preset indexes, so with
-// presets[0] hidden, Enter added the wrong platform and the cursor
-// vanished; render used the same broken raw-i mapping).
 func (p *streamPanelState) visiblePresets() []stream.PlatformPreset {
 	out := make([]stream.PlatformPreset, 0, len(stream.Presets))
 	for _, preset := range stream.Presets {
@@ -84,8 +75,6 @@ func (p *streamPanelState) visiblePresets() []stream.PlatformPreset {
 	}
 	return out
 }
-
-// --- View ---
 
 func (m *Model) updateStreamPanel(msg tea.Msg) (tea.Model, tea.Cmd) {
 	p := m.streamPanel
@@ -99,11 +88,13 @@ func (m *Model) updateStreamPanel(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			if p.editingField != "" {
 				p.editingField = ""
+
 				// #2800: aborting an edit must also leave custom-add mode.
 				// Otherwise customMode lingers with residual name/url input,
 				// and a later `e` key-edit hijacks handleStreamPanelEnter into
 				// the custom "key" branch: appending a bogus target instead of
 				// editing the selected one (or failing "All fields required").
+
 				p.customMode = false
 				p.nameInput.SetValue("")
 				p.urlInput.SetValue("")
@@ -132,14 +123,14 @@ func (m *Model) updateStreamPanel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleStreamPanelEnter()
 		case "e": // edit
 			if p.editingField == "" && p.selectedIndex < len(p.targets) {
-				// #2800 belt-and-braces: key edits are never custom adds.
+
 				p.customMode = false
 				p.editingField = "key"
 				p.keyInput.SetValue(p.targets[p.selectedIndex].Key)
 				p.keyInput.Focus()
 				return m, nil
 			}
-		case "d": // delete
+		case "d":
 			if p.editingField == "" && p.selectedIndex < len(p.targets) {
 				p.targets = append(p.targets[:p.selectedIndex], p.targets[p.selectedIndex+1:]...)
 				if p.selectedIndex >= len(p.targets) && p.selectedIndex > 0 {
@@ -149,7 +140,7 @@ func (m *Model) updateStreamPanel(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.persistStreamConfig()
 				return m, nil
 			}
-		case "s": // start
+		case "s":
 			if m.streamManager != nil && m.streamManager.IsRunning() {
 				p.message = "Already streaming"
 				return m, nil
@@ -164,8 +155,7 @@ func (m *Model) updateStreamPanel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			mgr := stream.NewManager(cfg)
 			m.streamManager = mgr
-			// #4209: read terminal size from the shared mirrored state —
-			// the plain m.width/m.height fields race with handleResize.
+
 			viewFunc := func() (string, stream.TerminalSize) {
 				snap, _ := m.streamViewState.getSnapshot()
 				w, h := m.streamViewState.getSize()
@@ -184,7 +174,7 @@ func (m *Model) updateStreamPanel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			p.message = fmt.Sprintf("Started → %s", strings.Join(names, ", "))
 			return m, nil
-		case "x": // stop
+		case "x":
 			if m.streamManager != nil && m.streamManager.IsRunning() {
 				m.streamManager.Stop()
 				m.streamManager = nil
@@ -193,12 +183,11 @@ func (m *Model) updateStreamPanel(msg tea.Msg) (tea.Model, tea.Cmd) {
 				p.message = "Not streaming"
 			}
 			return m, nil
-		case "?": // help
+		case "?":
 			p.message = "↑/k↓/j:nav  e:edit  d:delete  s:start  x:stop  enter:add"
 			return m, nil
 		}
 
-		// Handle text input for editing fields
 		if p.editingField != "" {
 			switch p.editingField {
 			case "key":
@@ -226,17 +215,15 @@ func (m *Model) handleStreamPanelEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// If editing, save and exit edit mode
 	if p.editingField != "" {
 		switch p.editingField {
 		case "key":
 			if p.selectedIndex < len(p.targets) {
 				p.targets[p.selectedIndex].Key = p.keyInput.Value()
 			}
-		// (url field has no non-custom save path; its enter handling lives in
-		// the customMode progression below.)
+
 		case "name":
-			// For custom: name → url → key flow
+
 			if p.customMode && p.editingField == "name" {
 				p.editingField = "url"
 				p.urlInput.Focus()
@@ -244,7 +231,6 @@ func (m *Model) handleStreamPanelEnter() (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Continue to next field or finish
 		if p.customMode {
 			switch p.editingField {
 			case "url":
@@ -252,7 +238,7 @@ func (m *Model) handleStreamPanelEnter() (tea.Model, tea.Cmd) {
 				p.keyInput.Focus()
 				return m, nil
 			case "key":
-				// Save custom target
+
 				name := strings.TrimSpace(p.nameInput.Value())
 				url := strings.TrimSpace(p.urlInput.Value())
 				key := p.keyInput.Value()
@@ -261,9 +247,7 @@ func (m *Model) handleStreamPanelEnter() (tea.Model, tea.Cmd) {
 					p.editingField = ""
 					return m, nil
 				}
-				// #1759 case 4: custom adds had no duplicate check (presets do at
-				// L266) - a second target with the same name silently replaced the
-				// first in the manager's map while config kept both.
+
 				for _, t := range p.targets {
 					if t.Name == name {
 						p.message = fmt.Sprintf("%s already exists", name)
@@ -292,11 +276,9 @@ func (m *Model) handleStreamPanelEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Not editing: add from preset or start custom flow
 	totalItems := p.totalItems()
 	if p.selectedIndex >= len(p.targets) && p.selectedIndex < totalItems-1 {
-		// Preset selected - via the VISIBLE preset list (#1759 case 1):
-		// raw preset indexes drift once earlier presets are hidden.
+
 		vis := p.visiblePresets()
 		presetIdx := p.selectedIndex - len(p.targets)
 		if presetIdx >= len(vis) {
@@ -304,7 +286,6 @@ func (m *Model) handleStreamPanelEnter() (tea.Model, tea.Cmd) {
 		}
 		preset := vis[presetIdx]
 
-		// Check if already added
 		for _, t := range p.targets {
 			if t.Name == preset.ID || t.Name == preset.Name {
 				p.message = fmt.Sprintf("%s already added", preset.Name)
@@ -327,7 +308,6 @@ func (m *Model) handleStreamPanelEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Custom target
 	if p.selectedIndex == totalItems-1 {
 		p.customMode = true
 		p.editingField = "name"
@@ -345,15 +325,13 @@ func (m *Model) syncStreamPanelSelection() {
 	if p == nil {
 		return
 	}
-	// Update URL/key display for selected item
+
 	if p.selectedIndex < len(p.targets) {
 		p.keyInput.SetValue(p.targets[p.selectedIndex].Key)
 		p.urlInput.SetValue(p.targets[p.selectedIndex].URL)
 	} else if p.selectedIndex < p.totalItems()-1 {
 		presetIdx := p.selectedIndex - len(p.targets)
-		// #1885 case 1: the fifth consumer #1759 claimed to have
-		// converted - index the VISIBLE preset list, not the raw array,
-		// or a hidden presets[0] shifts the URL by one.
+
 		vis := p.visiblePresets()
 		if presetIdx < len(vis) {
 			p.urlInput.SetValue(vis[presetIdx].URL)
@@ -361,8 +339,6 @@ func (m *Model) syncStreamPanelSelection() {
 		}
 	}
 }
-
-// --- View ---
 
 func (m *Model) renderStreamPanel() string {
 	p := m.streamPanel
@@ -375,9 +351,8 @@ func (m *Model) renderStreamPanel() string {
 		return "Terminal too small for stream panel (need >= 60 columns)"
 	}
 
-	// Left: platform list
 	left := m.renderStreamPanelLeft()
-	// Right: config/status — fills remaining space
+
 	right := m.renderStreamPanelRight(contentWidth)
 
 	joined := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
@@ -396,7 +371,6 @@ func (m *Model) renderStreamPanelLeft() string {
 	lines = append(lines, bold.Render("Platforms"))
 	lines = append(lines, "")
 
-	// Configured targets
 	for i, t := range p.targets {
 		preset := stream.PresetByID(t.Name)
 		displayName := t.Name
@@ -417,11 +391,10 @@ func (m *Model) renderStreamPanelLeft() string {
 		lines = append(lines, prefix+check+displayName)
 	}
 
-	// Presets
 	lines = append(lines, "")
 	lines = append(lines, dimColor.Render("── Add ──"))
 
-	for i, preset := range p.visiblePresets() { // #1759: visible list keeps row/index in lockstep
+	for i, preset := range p.visiblePresets() {
 		idx := len(p.targets) + i
 		prefix := "  "
 		if idx == p.selectedIndex {
@@ -431,7 +404,6 @@ func (m *Model) renderStreamPanelLeft() string {
 		lines = append(lines, prefix+"  "+preset.Name)
 	}
 
-	// Custom
 	customIdx := p.totalItems() - 1
 	prefix := "  "
 	if customIdx == p.selectedIndex {
@@ -448,10 +420,6 @@ func (m *Model) renderStreamPanelLeft() string {
 		Render(content)
 }
 
-// cachedFFmpegCheck / cachedCJKFont (#1759 case 3): the right panel renders
-// on every key press and blink tick - spawning an ffmpeg -version
-// subprocess and rescanning the system font directory per frame is
-// pointless; the answers don't change within a session.
 var (
 	ffmpegCheckOnce sync.Once
 	ffmpegCheckVal  stream.FFmpegCheck
@@ -479,13 +447,10 @@ func (m *Model) renderStreamPanelRight(w int) string {
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	yellow := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 
-	// FFmpeg status (#1759 case 3: cached - CheckFFmpeg spawns an
-	// `ffmpeg -version` subprocess and this render runs on EVERY key/tick;
-	// FindCJKFont scans the whole system font directory likewise)
 	check := cachedFFmpegCheck()
 	if !check.Available {
 		lines = append(lines, red.Render("⚠ FFmpeg not available"))
-		// Show first 2 lines of error (install hints)
+
 		errLines := strings.SplitN(check.Error, "\n", 4)
 		for _, el := range errLines[:min(len(errLines), 3)] {
 			lines = append(lines, dim.Render(el))
@@ -494,7 +459,6 @@ func (m *Model) renderStreamPanelRight(w int) string {
 		lines = append(lines, green.Render("● FFmpeg "+check.Version)+" "+dim.Render(check.Path))
 	}
 
-	// Show font status
 	fontPath := cachedCJKFont()
 	if fontPath != "" {
 		lines = append(lines, green.Render("● CJK Font")+" "+dim.Render(filepath.Base(fontPath)))
@@ -505,7 +469,6 @@ func (m *Model) renderStreamPanelRight(w int) string {
 	lines = append(lines, "")
 	lines = append(lines, bold.Render("Configuration"))
 
-	// Show selected item details
 	if p.selectedIndex < len(p.targets) {
 		t := p.targets[p.selectedIndex]
 		preset := stream.PresetByID(t.Name)
@@ -545,7 +508,7 @@ func (m *Model) renderStreamPanelRight(w int) string {
 		}
 
 	} else if p.selectedIndex < p.totalItems()-1 {
-		// Preset selected - visible-list mapping, same as Enter (#1759 case 1)
+
 		vis := p.visiblePresets()
 		presetIdx := p.selectedIndex - len(p.targets)
 		if presetIdx < len(vis) {
@@ -560,7 +523,7 @@ func (m *Model) renderStreamPanelRight(w int) string {
 			lines = append(lines, "  Press Enter to add this platform")
 		}
 	} else {
-		// Custom selected
+
 		if p.customMode {
 			lines = append(lines, "")
 			lines = append(lines, "Add Custom Target:")
@@ -583,7 +546,6 @@ func (m *Model) renderStreamPanelRight(w int) string {
 		}
 	}
 
-	// Streaming status
 	if m.streamManager != nil && m.streamManager.IsRunning() {
 		lines = append(lines, "")
 		lines = append(lines, green.Bold(true).Render("● Streaming"))
@@ -593,13 +555,11 @@ func (m *Model) renderStreamPanelRight(w int) string {
 		}
 	}
 
-	// Message
 	if p.message != "" {
 		lines = append(lines, "")
 		lines = append(lines, yellow.Render(p.message))
 	}
 
-	// Controls
 	lines = append(lines, "")
 	lines = append(lines, dim.Render("[s]tart  [x]stop  [e]dit  [d]elete  [?]help  [Esc]close"))
 
@@ -612,8 +572,6 @@ func (m *Model) renderStreamPanelRight(w int) string {
 		Render(content)
 }
 
-// --- Open/Close ---
-
 func (m *Model) openStreamPanel() {
 	cfg := stream.StreamConfig{}
 	if m.config != nil {
@@ -623,7 +581,7 @@ func (m *Model) openStreamPanel() {
 }
 
 func (m *Model) closeStreamPanel() {
-	// Save targets back to config
+
 	if m.streamPanel != nil && m.config != nil {
 		m.config.Stream.Targets = m.streamPanel.targets
 		if err := m.saveConfig(); err != nil {
@@ -634,7 +592,6 @@ func (m *Model) closeStreamPanel() {
 	m.streamPanel = nil
 }
 
-// persistStreamConfig saves the current panel targets to the config file.
 func (m *Model) persistStreamConfig() {
 	if m.streamPanel == nil || m.config == nil {
 		return

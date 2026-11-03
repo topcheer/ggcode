@@ -8,27 +8,17 @@ import (
 	"time"
 )
 
-// SpanNode represents a single span in a hierarchical execution trace tree.
-// Modeled after OpenTelemetry/LangSmith span semantics: each span has a unique
-// ID, an optional parent ID, a name, start/end timestamps, and arbitrary
-// attributes (tokens, cost, success, error, etc.).
-//
-// The tree structure is: Session root → Turn spans → LLM/tool child spans.
-// This hierarchy enables visualization in tools that expect span trees
-// (LangSmith, Langfuse, Jaeger, Phoenix/Arize) and supports critical-path
-// analysis for latency debugging.
 type SpanNode struct {
 	SpanID     string                 `json:"span_id"`
 	ParentID   string                 `json:"parent_id,omitempty"`
 	Name       string                 `json:"name"`
-	Kind       string                 `json:"kind"` // "session", "turn", "llm", "tool"
+	Kind       string                 `json:"kind"`
 	StartTime  time.Time              `json:"start_time"`
 	EndTime    time.Time              `json:"end_time"`
 	Attributes map[string]interface{} `json:"attributes,omitempty"`
 	Children   []SpanNode             `json:"children,omitempty"`
 }
 
-// Duration returns the wall-clock duration of this span.
 func (s SpanNode) Duration() time.Duration {
 	if s.EndTime.IsZero() || s.StartTime.IsZero() {
 		return 0
@@ -36,9 +26,6 @@ func (s SpanNode) Duration() time.Duration {
 	return s.EndTime.Sub(s.StartTime)
 }
 
-// spanID generates a deterministic, stable ID from a set of key parts.
-// This ensures the same events always produce the same span IDs, making
-// traces reproducible and diff-able across runs.
 func spanID(parts ...string) string {
 	h := sha1.New()
 	for _, p := range parts {
@@ -48,17 +35,6 @@ func spanID(parts ...string) string {
 	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 
-// BuildSpanTree converts a flat list of MetricEvents into a hierarchical
-// SpanNode tree. The root is a "session" span; each turn becomes a child
-// "turn" span; LLM calls and tool executions become grandchildren.
-//
-// Because MetricEvents are emitted at completion time (they carry Duration
-// but not explicit start/end timestamps), we reconstruct start times by
-// subtracting duration from the event timestamp. This is deterministic and
-// does not require additional instrumentation.
-//
-// The resulting tree can be serialized to JSON and consumed by external
-// observability tools that expect span-tree formats.
 func BuildSpanTree(sessionID string, events []MetricEvent) SpanNode {
 	if len(events) == 0 {
 		return SpanNode{
@@ -68,7 +44,6 @@ func BuildSpanTree(sessionID string, events []MetricEvent) SpanNode {
 		}
 	}
 
-	// Group events by turn index, preserving chronological order within each turn.
 	turnEvents := make(map[int][]MetricEvent)
 	turnOrder := make([]int, 0)
 	for _, ev := range events {
@@ -79,7 +54,6 @@ func BuildSpanTree(sessionID string, events []MetricEvent) SpanNode {
 	}
 	sort.Ints(turnOrder)
 
-	// Determine session span boundaries from all event timestamps.
 	var minStart, maxEnd time.Time
 	for _, ev := range events {
 		start := eventStart(ev)
@@ -115,12 +89,9 @@ func BuildSpanTree(sessionID string, events []MetricEvent) SpanNode {
 	return root
 }
 
-// buildTurnSpan creates a "turn" span containing all LLM and tool events
-// for a given turn index.
 func buildTurnSpan(parentID string, turnIdx int, events []MetricEvent) SpanNode {
 	turnID := spanID(parentID, fmt.Sprintf("turn-%d", turnIdx))
 
-	// Compute turn-level time bounds.
 	var minStart, maxEnd time.Time
 	for _, ev := range events {
 		start := eventStart(ev)
@@ -137,7 +108,6 @@ func buildTurnSpan(parentID string, turnIdx int, events []MetricEvent) SpanNode 
 		}
 	}
 
-	// Sort events by start time for deterministic child ordering.
 	sort.SliceStable(events, func(i, j int) bool {
 		return eventStart(events[i]).Before(eventStart(events[j]))
 	})
@@ -160,7 +130,6 @@ func buildTurnSpan(parentID string, turnIdx int, events []MetricEvent) SpanNode 
 	return turn
 }
 
-// buildLeafSpan creates an "llm" or "tool" span from a single MetricEvent.
 func buildLeafSpan(parentID string, turnIdx, seqIdx int, ev MetricEvent) SpanNode {
 	start := eventStart(ev)
 	end := ev.Timestamp
@@ -171,7 +140,7 @@ func buildLeafSpan(parentID string, turnIdx, seqIdx int, ev MetricEvent) SpanNod
 	var name, kind string
 	attrs := make(map[string]interface{})
 	if ev.AgentID != "" {
-		attrs["agent_id"] = ev.AgentID // sa-218: sub-agent attribution
+		attrs["agent_id"] = ev.AgentID
 	}
 
 	switch ev.Type {
@@ -221,8 +190,6 @@ func buildLeafSpan(parentID string, turnIdx, seqIdx int, ev MetricEvent) SpanNod
 	}
 }
 
-// eventStart reconstructs the start time of an event by subtracting its
-// duration from its completion timestamp.
 func eventStart(ev MetricEvent) time.Time {
 	if ev.Timestamp.IsZero() {
 		return time.Time{}
@@ -240,7 +207,6 @@ func eventStart(ev MetricEvent) time.Time {
 	return ev.Timestamp
 }
 
-// CountSpans returns the total number of spans in a tree (root + all descendants).
 func CountSpans(node SpanNode) int {
 	count := 1
 	for _, child := range node.Children {
@@ -249,8 +215,6 @@ func CountSpans(node SpanNode) int {
 	return count
 }
 
-// FlattenSpans returns a flat list of all spans in the tree, useful for
-// tools that prefer a flat array with parent_id references (OTLP-style).
 func FlattenSpans(node SpanNode) []SpanNode {
 	result := []SpanNode{node}
 	for _, child := range node.Children {
@@ -259,8 +223,6 @@ func FlattenSpans(node SpanNode) []SpanNode {
 	return result
 }
 
-// FindErrorSpans returns all tool spans that recorded a failure (success=false
-// or non-empty error). Useful for root-cause analysis of execution failures.
 func FindErrorSpans(node SpanNode) []SpanNode {
 	var errors []SpanNode
 	if node.Kind == "tool" {

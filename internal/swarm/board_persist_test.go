@@ -12,10 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/task"
 )
 
-// board_persist_test.go - durable swarm task boards: every board mutation
-// funnels through EmitBoardUpdated which snapshots to disk; EnsureTaskManager
-// restores on next access, rolling in_progress claims back to pending.
-
 func newBoardTestManager(t *testing.T) *Manager {
 	t.Helper()
 	m := NewManager(config.SwarmConfig{}, nil,
@@ -62,14 +58,12 @@ func TestBoardPersistenceRoundTrip(t *testing.T) {
 		t.Fatalf("claim t1: %v", err)
 	}
 
-	// Mutation funnel: EmitBoardUpdated triggers the async snapshot.
 	m.EmitBoardUpdated(team.ID)
 	boardFile := boardPersistPath(team.ID)
 	if !waitForFile(t, boardFile, 3*time.Second) {
 		t.Fatalf("board snapshot never landed at %s", boardFile)
 	}
 
-	// Restart simulation: fresh manager for the same team ID restores.
 	m2 := newBoardTestManager(t)
 	team2 := m2.CreateTeam("persist-team", "leader-2")
 	_ = team2
@@ -82,7 +76,7 @@ func TestBoardPersistenceRoundTrip(t *testing.T) {
 	if !ok1 || !ok2 {
 		t.Fatalf("restored board lost tasks: t1=%v t2=%v", ok1, ok2)
 	}
-	// Crash recovery: the in_progress owner died with the old process.
+
 	if got1.Status != task.StatusPending {
 		t.Errorf("in_progress task not rolled back to pending: got %s", got1.Status)
 	}

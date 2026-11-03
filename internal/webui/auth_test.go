@@ -18,7 +18,6 @@ func TestRequireAuth_BearerToken(t *testing.T) {
 		w.Write([]byte("ok"))
 	})
 
-	// Valid Bearer token
 	req := httptest.NewRequest("GET", "/api/test", nil)
 	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
@@ -37,8 +36,6 @@ func TestRequireAuth_QueryParam(t *testing.T) {
 		w.Write([]byte("ok"))
 	})
 
-	// #1856 case 3: the query fallback is WebSocket-only now.
-	// Valid token via query on the WS route -> 200.
 	req := httptest.NewRequest("GET", "/api/chat/ws?token="+s.Token(), nil)
 	w := httptest.NewRecorder()
 	handler(w, req)
@@ -46,8 +43,6 @@ func TestRequireAuth_QueryParam(t *testing.T) {
 		t.Fatalf("expected 200 with valid query token on ws route, got %d", w.Code)
 	}
 
-	// Same valid token via query on a REST route -> 401 (REST must use
-	// Bearer; the token must not live in URLs for loggable routes).
 	req2 := httptest.NewRequest("GET", "/api/test?token="+s.Token(), nil)
 	w2 := httptest.NewRecorder()
 	handler(w2, req2)
@@ -64,7 +59,6 @@ func TestRequireAuth_NoToken(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// No token at all
 	req := httptest.NewRequest("GET", "/api/test", nil)
 	w := httptest.NewRecorder()
 	handler(w, req)
@@ -81,7 +75,6 @@ func TestRequireAuth_WrongToken(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// Wrong Bearer token
 	req := httptest.NewRequest("GET", "/api/test", nil)
 	req.Header.Set("Authorization", "Bearer wrong-token")
 	w := httptest.NewRecorder()
@@ -90,7 +83,6 @@ func TestRequireAuth_WrongToken(t *testing.T) {
 		t.Fatalf("expected 401 with wrong token, got %d", w.Code)
 	}
 
-	// Wrong query token
 	req2 := httptest.NewRequest("GET", "/api/test?token=wrong", nil)
 	w2 := httptest.NewRecorder()
 	handler(w2, req2)
@@ -125,7 +117,6 @@ func TestRequireAuth_PartialBearer(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// Just "Bearer " without actual token
 	req := httptest.NewRequest("GET", "/api/test", nil)
 	req.Header.Set("Authorization", "Bearer ")
 	w := httptest.NewRecorder()
@@ -160,7 +151,7 @@ func TestToken_Method(t *testing.T) {
 	if len(token) != 64 {
 		t.Fatalf("expected 64-char token, got %d", len(token))
 	}
-	// Must be hex
+
 	for _, c := range token {
 		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
 			t.Fatalf("token contains non-hex char: %c", c)
@@ -187,7 +178,6 @@ func TestRequireAuth_WebSocketQueryParam(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// WebSocket upgrade requests use query params
 	req := httptest.NewRequest("GET", "/api/chat/ws?token="+s.Token(), nil)
 	req.Header.Set("Upgrade", "websocket")
 	req.Header.Set("Connection", "Upgrade")
@@ -226,19 +216,16 @@ func TestSanitizeConfigForAPI(t *testing.T) {
 
 	result := sanitizeConfigForAPI(cfg)
 
-	// Vendor should still be present
 	if result["vendor"] != "test-vendor" {
 		t.Fatalf("expected vendor=test-vendor, got %v", result["vendor"])
 	}
 
-	// Check vendor API key is masked
 	vendors := result["vendors"].(map[string]interface{})
 	mv := vendors["myvendor"].(map[string]interface{})
 	if mv["api_key"] != "***" {
 		t.Errorf("expected vendor api_key masked, got %v", mv["api_key"])
 	}
 
-	// Check MCP env/headers are removed (MCPServers is a slice)
 	servers := result["mcp_servers"].([]interface{})
 	ms := servers[0].(map[string]interface{})
 	if _, ok := ms["env"]; ok {
@@ -257,7 +244,7 @@ func TestSanitizeConfigForAPI_NoKeys(t *testing.T) {
 	result := sanitizeConfigForAPI(cfg)
 
 	vendors := result["vendors"].(map[string]interface{})
-	// DefaultConfig has preset vendors — verify keys are masked
+
 	for name, v := range vendors {
 		vmap := v.(map[string]interface{})
 		if ak, ok := vmap["api_key"]; ok {

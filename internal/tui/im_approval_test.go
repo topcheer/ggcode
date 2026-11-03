@@ -11,8 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// --- im.ParseApprovalReply / im.IsApprovalAlwaysReply ---
-
 func TestParseApprovalReply(t *testing.T) {
 	tests := []struct {
 		input      string
@@ -20,7 +18,7 @@ func TestParseApprovalReply(t *testing.T) {
 		wantOK     bool
 		wantAlways bool
 	}{
-		// Allow
+
 		{"y", permission.Allow, true, false},
 		{"Y", permission.Allow, true, false},
 		{"yes", permission.Allow, true, false},
@@ -31,14 +29,12 @@ func TestParseApprovalReply(t *testing.T) {
 		{"同意", permission.Allow, true, false},
 		{"确认", permission.Allow, true, false},
 
-		// Always allow
 		{"a", permission.Allow, true, true},
 		{"always", permission.Allow, true, true},
 		{"总是允许", permission.Allow, true, true},
 		{"总是", permission.Allow, true, true},
 		{"始终允许", permission.Allow, true, true},
 
-		// Deny
 		{"n", permission.Deny, true, false},
 		{"no", permission.Deny, true, false},
 		{"nope", permission.Deny, true, false},
@@ -46,11 +42,9 @@ func TestParseApprovalReply(t *testing.T) {
 		{"取消", permission.Deny, true, false},
 		{"deny", permission.Deny, true, false},
 
-		// Prefix match
 		{"ye", permission.Allow, true, false},
 		{"noo", permission.Deny, true, false},
 
-		// Invalid
 		{"hello", permission.Deny, false, false},
 		{"", permission.Deny, false, false},
 		{"maybe", permission.Deny, false, false},
@@ -81,8 +75,6 @@ func TestParseApprovalReply_TrimSpace(t *testing.T) {
 	}
 }
 
-// --- emitIMApproval / emitIMApprovalResult ---
-
 func newTestModelWithIM(t *testing.T) (Model, *tuiTestSink) {
 	t.Helper()
 	m := NewModel(nil, nil)
@@ -101,7 +93,6 @@ func newTestModelWithIM(t *testing.T) (Model, *tuiTestSink) {
 	ses := session.NewSession("test", "test-endpoint", "test-model")
 	m.SetSession(ses, store)
 
-	// Bind a channel so emitter has a target
 	if _, err := imMgr.BindChannel(im.ChannelBinding{
 		Platform:  im.PlatformQQ,
 		Adapter:   "test-sink",
@@ -113,7 +104,6 @@ func newTestModelWithIM(t *testing.T) (Model, *tuiTestSink) {
 	return m, sink
 }
 
-// waitForEvents polls sink until at least n events arrive or timeout.
 func waitForEvents(sink *tuiTestSink, n int) {
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
@@ -127,7 +117,7 @@ func waitForEvents(sink *tuiTestSink, n int) {
 func TestEmitIMApproval_NoPanicWithoutEmitter(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.SetConfig(config.DefaultConfig())
-	// Should not panic
+
 	m.emitIMApproval("run_command", "ls")
 	m.emitIMApprovalResult("run_command", "allow")
 }
@@ -197,7 +187,6 @@ func TestEmitIMApprovalResult(t *testing.T) {
 		})
 	}
 
-	// Chinese
 	t.Run("zh_allow", func(t *testing.T) {
 		sink.events = nil
 		m.language = LangZhCN
@@ -238,8 +227,6 @@ func TestApprovalNotifiedIMField(t *testing.T) {
 	}
 }
 
-// #1741: every ApprovalMsg/DiffConfirmMsg arrival must re-derive option
-// labels from the model's CURRENT language, not LangEnglish wrappers.
 func TestApprovalOptionsFollowLanguage1741(t *testing.T) {
 	var m Model
 	m.language = LangZhCN
@@ -247,8 +234,7 @@ func TestApprovalOptionsFollowLanguage1741(t *testing.T) {
 	if len(m.approvalOptions) == 0 {
 		t.Fatal("expected approval options to be set")
 	}
-	// The Chinese catalog must not be the English one: the first label
-	// differs between defaultApprovalOptionsFor(LangEnglish) and (LangZhCN).
+
 	en := defaultApprovalOptionsFor(LangEnglish)
 	zh := defaultApprovalOptionsFor(LangZhCN)
 	if len(en) == len(zh) && en[0].label == zh[0].label {
@@ -264,7 +250,7 @@ func TestApprovalOptionsFollowLanguage1741(t *testing.T) {
 	if !sawZh {
 		t.Fatalf("approval options must carry Chinese labels, got: %v", m.approvalOptions)
 	}
-	// Diff-confirm path.
+
 	m.language = LangZhCN
 	m, _ = m.handleDiffConfirmMsg(DiffConfirmMsg{FilePath: "x.go", DiffText: "+ 1"})
 	if len(m.diffOptions) == 0 {

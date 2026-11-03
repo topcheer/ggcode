@@ -13,10 +13,9 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// scanResult holds the parsed data from one session JSONL file.
 type scanResult struct {
 	meta     sessionMeta
-	turns    map[int]*turnAgg // turn_index → aggregated data
+	turns    map[int]*turnAgg
 	tools    map[string]*toolAgg
 	msgCount int
 	hasMeta  bool
@@ -28,7 +27,7 @@ type turnAgg struct {
 	Input     int
 	Output    int
 	Cache     int
-	LLMCalls  int // #1448-B: actual streaming calls (N per agentic turn)
+	LLMCalls  int
 	TTFTMs    int64
 	DurMs     int64
 	ThinkMs   int64
@@ -58,7 +57,6 @@ func (s *scanResult) getTurn(idx int) *turnAgg {
 	return t
 }
 
-// scanSessionFile reads a single JSONL file and extracts report data.
 func scanSessionFile(path string) (*scanResult, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -68,7 +66,7 @@ func scanSessionFile(path string) (*scanResult, error) {
 
 	sr := newScanResult()
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 256*1024), 4*1024*1024) // up to 4MB per line
+	scanner.Buffer(make([]byte, 0, 256*1024), 4*1024*1024)
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -76,11 +74,6 @@ func scanSessionFile(path string) (*scanResult, error) {
 			continue
 		}
 
-		// Fast-path: extract the "type" field without full JSON unmarshal.
-		// Most lines in a session file are "reasoning", "tool_result",
-		// "tool_use", "text", "tunnel_event" etc. which we don't need.
-		// Only "meta", "usage", "metric", "message" are processed.
-		// This avoids parsing gigabytes of irrelevant message content.
 		recType := fastType(line)
 		if recType != "meta" && recType != "usage" && recType != "metric" && recType != "message" {
 			continue
@@ -88,11 +81,9 @@ func scanSessionFile(path string) (*scanResult, error) {
 
 		var rec jsonlRecord
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			continue // skip malformed lines
+			continue
 		}
 
-		// For "message" type, we only need the count — skip full unmarshal
-		// of the message body.
 		if recType == "message" {
 			sr.msgCount++
 			continue
@@ -100,8 +91,7 @@ func scanSessionFile(path string) (*scanResult, error) {
 
 		switch rec.Type {
 		case "meta":
-			// Meta fields are directly on the record, not nested.
-			// Use SessionID as fallback if meta has no explicit ID.
+
 			sr.meta.Title = rec.Title
 			if rec.Workspace != "" {
 				sr.meta.Workspace = rec.Workspace
@@ -142,20 +132,14 @@ func scanSessionFile(path string) (*scanResult, error) {
 					switch me.Type {
 					case "llm":
 						t := sr.getTurn(me.TurnIndex)
-						// #1448-B: an agentic turn makes N streaming calls under
-						// ONE TurnIndex (usageTurnIndex only advances on user
-						// messages), each emitting its own metric - pure '='
-						// overwrote N-1 of them (the usage branch two blocks up
-						// uses '+=' for exactly this reason). TTFT keeps the
-						// FIRST (earliest) call's; duration and think time
-						// accumulate; LLMCalls counts what actually happened.
+
 						if t.LLMCalls == 0 {
 							t.TTFTMs = me.TTFT.Milliseconds()
 						}
 						t.LLMCalls++
 						t.DurMs += me.Duration.Milliseconds()
 						t.ThinkMs += me.ThinkTime.Milliseconds()
-						// Fallback: fill token data from metric if usage record missing
+
 						if t.Input == 0 && me.InputTokens > 0 {
 							t.Input = me.InputTokens
 						}
@@ -186,8 +170,6 @@ func scanSessionFile(path string) (*scanResult, error) {
 	return sr, scanner.Err()
 }
 
-// scanAllSessions scans the sessions directory and returns aggregated results.
-// Files are scanned in parallel — each file's I/O and JSON parsing is independent.
 func scanAllSessions(sessionsDir string) ([]*scanResult, error) {
 	entries, err := os.ReadDir(sessionsDir)
 	if err != nil {
@@ -215,10 +197,7 @@ func scanAllSessions(sessionsDir string) ([]*scanResult, error) {
 
 	for i, path := range paths {
 		go safego.Run("cmd.reportScan.file", func() {
-			// #1537-C: send EXACTLY once via defer - a recovered panic between
-			// scan and the send used to skip the send entirely, and the
-			// len(paths)-iteration collect loop below wedged the whole report.
-			// defer fires whether we return normally or safego recovers a panic.
+
 			var sr *scanResult
 			defer func() {
 				if sr != nil && (sr.hasMeta || len(sr.turns) > 0) {
@@ -229,12 +208,7 @@ func scanAllSessions(sessionsDir string) ([]*scanResult, error) {
 			}()
 			var err error
 			sr, err = scanSessionFile(path)
-			// #1537: scanSessionFile deliberately returns partial results
-			// alongside errors (the 4MB single-line cap trips on
-			// screenshot-laden turns AFTER earlier turns were already
-			// parsed). Dropping the non-nil sr removed the session from the
-			// report silently - and pasted-image sessions are the most
-			// active ones. Keep partial results; warn.
+
 			if err != nil && sr != nil {
 				fmt.Fprintf(os.Stderr, "report: partial session scan %s: %v\n", path, err)
 			}
@@ -249,7 +223,7 @@ func scanAllSessions(sessionsDir string) ([]*scanResult, error) {
 					sr.meta.CreatedAt = info.ModTime()
 				}
 			}
-			// send happens in the defer above - exactly once (#1537-C)
+
 		})
 	}
 
@@ -267,7 +241,6 @@ func scanAllSessions(sessionsDir string) ([]*scanResult, error) {
 		}
 	}
 
-	// Sort by created_at descending (newest first)
 	sort.Slice(valid, func(i, j int) bool {
 		return valid[i].meta.CreatedAt.After(valid[j].meta.CreatedAt)
 	})
@@ -275,7 +248,6 @@ func scanAllSessions(sessionsDir string) ([]*scanResult, error) {
 	return valid, nil
 }
 
-// findSessionsDir locates the sessions directory.
 func findSessionsDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -288,7 +260,6 @@ func findSessionsDir() (string, error) {
 	return dir, nil
 }
 
-// oldestTime returns the earliest timestamp for the "Generated at" display.
 func oldestTime(results []*scanResult) time.Time {
 	var oldest time.Time
 	for _, sr := range results {
@@ -300,10 +271,6 @@ func oldestTime(results []*scanResult) time.Time {
 	return oldest
 }
 
-// fastType extracts the JSON "type" field value from a line without a full
-// json.Unmarshal. It searches for `"type":"..."` in the first 100 characters
-// of the line (the field is always near the start of session JSONL records).
-// Returns "" if not found. This avoids parsing multi-MB message content lines.
 func fastType(line string) string {
 	maxScan := len(line)
 	if maxScan > 100 {

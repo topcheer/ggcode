@@ -11,11 +11,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// #4538: EnsureMeta must hold the .flock sidecar across create->encode->cleanup
-// so its failure-path os.Remove can never delete a concurrent appender's
-// record. Behavioral guard: EnsureMeta followed by concurrent appenders on the
-// same fresh path must lose nothing and must not deadlock (the lock is shared
-// with the appenders - any ordering inversion would hang here).
 func TestIssue4538_EnsureMetaSerializedWithAppenders(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewJSONLStore(dir)
@@ -24,7 +19,7 @@ func TestIssue4538_EnsureMetaSerializedWithAppenders(t *testing.T) {
 	}
 	ses := NewSession("zai", "ep", "model")
 	ses.Title = "4538"
-	// EnsureMeta only creates the file for sessions with user interaction.
+
 	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hi"}}}}
 	path := filepath.Join(dir, ses.ID+".jsonl")
 

@@ -15,7 +15,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Promoter handles moving skills from staging to active directories.
 type Promoter struct {
 	homeDir    string
 	projectDir string
@@ -23,13 +22,10 @@ type Promoter struct {
 
 var safeSkillNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
-// NewPromoter creates a skill promoter.
 func NewPromoter(homeDir, projectDir string) *Promoter {
 	return &Promoter{homeDir: homeDir, projectDir: projectDir}
 }
 
-// Promote moves a skill from staging to the active skills directory.
-// It creates a snapshot of any existing skill with the same name for rollback.
 func (p *Promoter) Promote(entry *SkillEntry) error {
 	if entry == nil {
 		return fmt.Errorf("skill entry is nil")
@@ -37,19 +33,12 @@ func (p *Promoter) Promote(entry *SkillEntry) error {
 	if !entry.Staging {
 		return fmt.Errorf("skill %q is not in staging", entry.Name)
 	}
-	// #3656 d1: use the TRIMMED name everywhere downstream - the old code
-	// validated TrimSpace(name) but built paths from the raw value, so a
-	// name with surrounding whitespace passed validation and landed on
-	// disk as "knight-20261009- deploy-web.md".
+
 	name, err := validateSkillName(entry.Name)
 	if err != nil {
 		return err
 	}
 
-	// #3656 d2: the staging path comes from an index entry; entries can be
-	// inconsistent (Path in global staging while Scope="project") or
-	// poisoned. Verify ownership before reading - and especially before
-	// removeStagingSkill deletes the source file below.
 	stagingRoot := p.stagingDir(entry.Scope)
 	if stagingRoot == "" {
 		return fmt.Errorf("unknown scope %q for staging skill %q", entry.Scope, name)
@@ -58,13 +47,11 @@ func (p *Promoter) Promote(entry *SkillEntry) error {
 		return fmt.Errorf("promote %q aborted: staging path %s is outside the %q staging directory (crossed index entry?)", name, entry.Path, entry.Scope)
 	}
 
-	// Determine target directory
 	targetDir := p.activeDir(entry)
 	if targetDir == "" {
 		return fmt.Errorf("cannot determine target directory for scope %q", entry.Scope)
 	}
 
-	// Ensure target directory exists
 	skillDir := filepath.Join(targetDir, name)
 	if err := os.MkdirAll(skillDir, 0755); err != nil {
 		return fmt.Errorf("create skill dir: %w", err)
@@ -72,56 +59,39 @@ func (p *Promoter) Promote(entry *SkillEntry) error {
 
 	targetPath := filepath.Join(skillDir, "SKILL.md")
 
-	// Snapshot existing skill if present
 	if _, err := os.Stat(targetPath); err == nil {
 		if snapErr := p.createSnapshot(name, targetPath); snapErr != nil {
-			// #1267: this used to be a debug.Log-and-continue - the
-			// AtomicWriteFile below then overwrote the old active version with
-			// NO copy left anywhere (staging holds the NEW content, the snapshot
-			// write failed), making the old version permanently unrecoverable
-			// and Rollback impossible (no snapshots listed). Refuse to promote
-			// without a rollback point; the caller surfaces the error and can
-			// retry once the snapshot dir is writable.
+
 			return fmt.Errorf("promote %q aborted: snapshot of existing active version failed (refusing to overwrite without a rollback point): %w", entry.Name, snapErr)
 		}
 	}
 
-	// Read staging content
 	content, err := os.ReadFile(entry.Path)
 	if err != nil {
 		return fmt.Errorf("read staging skill: %w", err)
 	}
 
-	// Update frontmatter timestamps
 	updated := updateTimestamps(string(content), time.Now())
 
-	// Write to active location
 	if err := util.AtomicWriteFile(targetPath, []byte(updated), 0644); err != nil {
 		return fmt.Errorf("write active skill: %w", err)
 	}
 
-	// Remove staging file
 	if err := removeStagingSkill(entry.Path); err != nil {
 		return err
 	}
 
-	// Write changelog entry
 	p.appendChangelog("promote", name, entry.Scope, entry.Path)
 
 	return nil
 }
 
-// isSubPath reports whether path is located strictly under root (not
-// equal to root, not escaping via ..).
 func isSubPath(root, path string) bool {
 	cleanRoot := filepath.Clean(root)
 	cleanPath := filepath.Clean(path)
 	return strings.HasPrefix(cleanPath, cleanRoot+string(filepath.Separator)) && cleanPath != cleanRoot
 }
 
-// removeStagingSkill deletes the staging copy after a successful promote.
-// A missing file is treated as success (idempotent); any other failure is
-// returned so callers do not end up with both staging and active copies.
 func removeStagingSkill(path string) error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove staging skill: %w", err)
@@ -129,12 +99,8 @@ func removeStagingSkill(path string) error {
 	return nil
 }
 
-// Reject removes a skill from staging.
 func (p *Promoter) Reject(entry *SkillEntry) error {
-	// #1580-D: siblings guard nil; a nil entry panicked here. And repeated
-	// Rejects (scheduler retry + human race) hit a non-idempotent
-	// os.Remove - the second call ALWAYS errored and upper layers kept
-	// retrying forever. Mirror removeStagingSkill's idempotence.
+
 	if entry == nil {
 		return fmt.Errorf("reject: nil skill entry")
 	}
@@ -150,8 +116,6 @@ func (p *Promoter) Reject(entry *SkillEntry) error {
 	return nil
 }
 
-// MigrateLooseActive moves a legacy active top-level *.md skill into the
-// standard <name>/SKILL.md layout used by the ggcode skill loader.
 func (p *Promoter) MigrateLooseActive(entry *SkillEntry) error {
 	if entry == nil {
 		return fmt.Errorf("skill entry is nil")
@@ -195,7 +159,6 @@ func (p *Promoter) MigrateLooseActive(entry *SkillEntry) error {
 	return nil
 }
 
-// Rollback restores the most recent snapshot for an active skill.
 func (p *Promoter) Rollback(entry *SkillEntry) error {
 	if entry == nil {
 		return fmt.Errorf("skill entry is nil")
@@ -219,11 +182,7 @@ func (p *Promoter) Rollback(entry *SkillEntry) error {
 
 	if _, err := os.Stat(entry.Path); err == nil {
 		if snapErr := p.createSnapshot(entry.Name, entry.Path); snapErr != nil {
-			// #1267 (rollback variant): same data-loss class as Promote - the
-			// AtomicWriteFile below would replace the current content with the
-			// snapshot's older version while the pre-rollback snapshot (the ONLY
-			// copy of the current version) failed to write. Abort instead of
-			// silently losing the current version.
+
 			return fmt.Errorf("rollback %q aborted: pre-rollback snapshot of current version failed (refusing to overwrite without a backup): %w", entry.Name, snapErr)
 		}
 	}
@@ -240,10 +199,8 @@ func (p *Promoter) Rollback(entry *SkillEntry) error {
 	return nil
 }
 
-// WriteStaging writes a new skill to the appropriate staging directory.
 func (p *Promoter) WriteStaging(name, scope, content string) (string, error) {
-	// #3656 d1: canonicalize first so the on-disk filename never contains
-	// whitespace that passed validation on the trimmed value.
+
 	name, err := validateSkillName(name)
 	if err != nil {
 		return "", err
@@ -257,7 +214,6 @@ func (p *Promoter) WriteStaging(name, scope, content string) (string, error) {
 		return "", fmt.Errorf("create staging dir: %w", err)
 	}
 
-	// Generate filename with date prefix
 	filename := fmt.Sprintf("knight-%s-%s.md", time.Now().Format("20060102"), name)
 	path := filepath.Join(stagingDir, filename)
 	for i := 2; ; i++ {
@@ -278,7 +234,6 @@ func (p *Promoter) WriteStaging(name, scope, content string) (string, error) {
 	return path, nil
 }
 
-// activeDir returns the active skills directory for a given scope.
 func (p *Promoter) activeDir(entry *SkillEntry) string {
 	if entry.Scope == "global" {
 		return filepath.Join(p.homeDir, ".ggcode", "skills")
@@ -286,7 +241,6 @@ func (p *Promoter) activeDir(entry *SkillEntry) string {
 	return filepath.Join(p.projectDir, ".ggcode", "skills")
 }
 
-// stagingDir returns the staging directory for a given scope.
 func (p *Promoter) stagingDir(scope string) string {
 	if scope == "global" {
 		return filepath.Join(p.homeDir, ".ggcode", "skills-staging")
@@ -294,7 +248,6 @@ func (p *Promoter) stagingDir(scope string) string {
 	return filepath.Join(p.projectDir, ".ggcode", "skills-staging")
 }
 
-// createSnapshot copies the current active skill to the snapshots directory.
 func (p *Promoter) createSnapshot(name, activePath string) error {
 	name, err := validateSkillName(name)
 	if err != nil {
@@ -310,13 +263,6 @@ func (p *Promoter) createSnapshot(name, activePath string) error {
 		return err
 	}
 
-	// #1268: the timestamp used to be second-precision - two snapshots of
-	// the same skill in one second (eval-script promote→rollback chains,
-	// retry loops) produced identical paths and AtomicWriteFile overwrote the
-	// earlier one, losing a version. Microsecond extension keeps each path
-	// unique; listSnapshots matches \d{6,12} and fixed-width digits sort
-	// chronologically (legacy 6-digit snapshots sort before any 12-digit one
-	// of the same second, which is also correct).
 	t := time.Now()
 	base := name + "." + t.Format("20060102-150405")
 	micros := t.Nanosecond() / 1000
@@ -332,16 +278,14 @@ func (p *Promoter) createSnapshot(name, activePath string) error {
 	}
 }
 
-// changelogEntry is one record in the skills changelog.
 type changelogEntry struct {
 	Time   time.Time `json:"time"`
-	Action string    `json:"action"` // "create", "promote", "reject"
+	Action string    `json:"action"`
 	Name   string    `json:"name"`
 	Scope  string    `json:"scope"`
 	Path   string    `json:"path"`
 }
 
-// appendChangelog adds an entry to the skills changelog.
 func (p *Promoter) appendChangelog(action, name, scope, path string) {
 	clPath := filepath.Join(p.projectDir, ".ggcode", "skills-changelog.jsonl")
 
@@ -374,9 +318,7 @@ func (p *Promoter) listSnapshots(name string) ([]string, error) {
 		return nil, err
 	}
 	snapDir := filepath.Join(p.projectDir, ".ggcode", "skills-snapshots")
-	// Skill names may contain dots (e.g. "a" and "a.b"), and a glob like
-	// name+".*.md" would match snapshots of every dotted-prefixed sibling.
-	// Match strictly against the "<name>.YYYYMMDD-HHMMSS.md" layout instead.
+
 	snapPattern := regexp.MustCompile(`^` + regexp.QuoteMeta(name) + `\.\d{8}-\d{6,12}\.md$`)
 	des, err := os.ReadDir(snapDir)
 	if err != nil {
@@ -396,10 +338,6 @@ func (p *Promoter) listSnapshots(name string) ([]string, error) {
 	return matches, nil
 }
 
-// validateSkillName trims the skill name and validates it. The returned
-// string is the canonical (trimmed) name callers MUST use for every path
-// they build - validating the trimmed value while using the raw one
-// produced on-disk names with embedded whitespace (#3656 d1).
 func validateSkillName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -411,8 +349,6 @@ func validateSkillName(name string) (string, error) {
 	return name, nil
 }
 
-// updateTimestamps updates the skill's YAML frontmatter with proper timestamps.
-// Uses yaml.Unmarshal/Marshal for safe handling of multi-line and special characters.
 func updateTimestamps(content string, now time.Time) string {
 	dateStr := now.Format("2006-01-02")
 	updated, err := mutateSkillFrontmatter(content, func(fmMap map[string]interface{}) {
@@ -427,14 +363,12 @@ func updateTimestamps(content string, now time.Time) string {
 	return updated
 }
 
-// splitFrontmatter returns the byte offset where the body starts (after closing ---).
-// Returns -1 if no valid frontmatter found.
 func splitFrontmatter(content string) int {
 	if !strings.HasPrefix(content, "---") {
 		return -1
 	}
 	rest := content[3:]
-	// Skip optional newline after opening ---
+
 	if len(rest) > 0 && rest[0] == '\n' {
 		rest = rest[1:]
 	}
@@ -442,23 +376,22 @@ func splitFrontmatter(content string) int {
 	if idx < 0 {
 		return -1
 	}
-	// Body starts after the closing --- and its trailing newline
-	bodyStart := 3 + len(content[3:]) - len(rest) + idx + 4 // 4 = len("\n---")
+
+	bodyStart := 3 + len(content[3:]) - len(rest) + idx + 4
 	if bodyStart < len(content) && content[bodyStart] == '\n' {
 		bodyStart++
 	}
 	return bodyStart
 }
 
-// extractFrontmatterText extracts the YAML text between --- markers.
 func extractFrontmatterText(content string, bodyStart int) string {
-	// Find opening --- end
+
 	openEnd := 3
 	if openEnd < len(content) && content[openEnd] == '\n' {
 		openEnd++
 	}
-	// Find closing --- start
-	closeStart := bodyStart - 4 // 4 = len("\n---")
+
+	closeStart := bodyStart - 4
 	if closeStart > openEnd {
 		return strings.TrimSpace(content[openEnd:closeStart])
 	}
@@ -503,9 +436,6 @@ func mutateSkillFrontmatter(content string, mutate func(map[string]interface{}))
 	if err != nil {
 		return "", err
 	}
-	// #2762: splitFrontmatter skips the newline right after the closing
-	// "---", so reassembly must put it back. Joining with "\n---" + body
-	// glued the body's first line onto the closing marker (invalid
-	// frontmatter for external tools like Claude Code / markdownlint).
+
 	return "---\n" + strings.TrimRight(string(newFM), "\n") + "\n---\n" + bodyText, nil
 }

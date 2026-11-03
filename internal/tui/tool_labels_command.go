@@ -12,20 +12,16 @@ func commandToolPresentation(lang Language, rawCommand string) (toolPresentation
 		return toolPresentation{}, false
 	}
 	title := displayToolTarget(preview.Title)
-	// Build detail from command lines (showing script preview alongside the title)
+
 	var detailParts []string
 	for _, line := range preview.CommandLines {
 		part := compactSingleLine(strings.TrimRight(line, " \t"))
 		detailParts = append(detailParts, part)
 	}
-	// Show at most 2 command lines in detail to avoid header bloat
+
 	maxDetailLines := 2
 	if len(detailParts) > maxDetailLines {
-		// #1394-B: hidden used len(detailParts)-maxDetailLines PLUS
-		// CommandHiddenLineCount - double-counting: the preview lines are
-		// never truncated (all N present) and CommandHiddenLineCount
-		// describes the LIST view's cutoff (N-5), a different basis.
-		// Hidden-from-detail is simply all lines beyond the 2 shown.
+
 		hidden := len(detailParts) - maxDetailLines
 		detailParts = detailParts[:maxDetailLines]
 		detailParts = append(detailParts, fmt.Sprintf("+%d more", hidden))

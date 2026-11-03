@@ -9,15 +9,8 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// snapshotVersion is the schema version of the persisted task board.
-// Bump when the snapshot format changes; RestoreJSON rejects newer
-// versions instead of silently misinterpreting their fields.
 const snapshotVersion = 1
 
-// persistedTask is the JSON representation of a Task for persistence.
-// A dedicated DTO with explicit tags keeps the on-disk schema stable even
-// if Task's own marshaled form changes (Task is also serialized into tool
-// results shown to the model, so its shape must not be repurposed).
 type persistedTask struct {
 	ID          string            `json:"id"`
 	Subject     string            `json:"subject"`
@@ -32,17 +25,12 @@ type persistedTask struct {
 	UpdatedAt   time.Time         `json:"updated_at"`
 }
 
-// snapshotFormat is the versioned envelope for a persisted task board.
 type snapshotFormat struct {
 	Version int             `json:"version"`
 	NextID  int             `json:"next_id"`
 	Tasks   []persistedTask `json:"tasks"`
 }
 
-// SnapshotJSON serializes the full board - tasks, statuses, dependency
-// edges, metadata and the ID counter - so it can be persisted outside the
-// process (e.g. alongside the session on disk) and restored on resume.
-// Output is deterministic: tasks are ordered by ID.
 func (m *Manager) SnapshotJSON() ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -68,11 +56,6 @@ func (m *Manager) SnapshotJSON() ([]byte, error) {
 	return json.Marshal(snapshotFormat{Version: snapshotVersion, NextID: m.nextID, Tasks: tasks})
 }
 
-// RestoreJSON replaces the board with a snapshot produced by SnapshotJSON.
-// Nil/empty input resets the board to empty - correct for brand-new
-// sessions and for resumes of sessions that never used tasks. On a decode
-// or version error the live board is left untouched, so a corrupt or
-// future-versioned snapshot can never wipe in-memory tasks.
 func (m *Manager) RestoreJSON(data []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -95,10 +78,7 @@ func (m *Manager) RestoreJSON(data []byte) error {
 		if pt.ID == "" {
 			continue
 		}
-		// #4370: a hand-merged/edited snapshot can carry duplicate IDs - the
-		// map write below would silently drop every earlier duplicate and
-		// return nil. Keep the first occurrence (deterministic) and log the
-		// skip, mirroring the hand-edited-nextID defense further down.
+
 		if _, dup := rebuilt[pt.ID]; dup {
 			debug.Log("task", "restore: duplicate task id %s skipped", pt.ID)
 			continue
@@ -125,14 +105,7 @@ func (m *Manager) RestoreJSON(data []byte) error {
 				t.Metadata[k] = v
 			}
 		}
-		// #4370: normalize statuses from older writers/external tools instead
-		// of persisting them through: an invalid status (empty string, old
-		// spelling) silently counts as pending in digestStats and as nothing
-		// in BoardStats, gets re-injected into the digest every round, and is
-		// re-persisted by SnapshotJSON - a round trip that never heals. The
-		// write path (manager.go Create/Update) already validates; restore
-		// now holds the same line, best-effort: keep the task, reset the
-		// status to pending.
+
 		if !IsValidStatus(string(pt.Status)) {
 			debug.Log("task", "restore: task %s has invalid status %q, normalized to pending", pt.ID, pt.Status)
 			t.Status = StatusPending
@@ -141,8 +114,7 @@ func (m *Manager) RestoreJSON(data []byte) error {
 	}
 	m.tasks = rebuilt
 	m.nextID = snap.NextID
-	// Never reuse an ID that was already handed out, even if the snapshot
-	// came from an older writer that forgot next_id (or hand-edited data).
+
 	for id := range rebuilt {
 		if n := numericTaskID(id); n >= m.nextID {
 			m.nextID = n + 1
@@ -151,9 +123,6 @@ func (m *Manager) RestoreJSON(data []byte) error {
 	return nil
 }
 
-// numericTaskID extracts the numeric suffix of a "task-<n>" ID.
-// Returns 0 for malformed or non-numeric IDs (which are then never reused
-// as generated IDs either - they simply don't advance the counter).
 func numericTaskID(id string) int {
 	var n int
 	if _, err := fmt.Sscanf(id, "task-%d", &n); err != nil {
@@ -162,9 +131,6 @@ func numericTaskID(id string) int {
 	return n
 }
 
-// BoardStats summarizes a persisted task-board snapshot without building a
-// live Manager. Used by resume reconciliation to report board scale alongside
-// environment-drift findings. ok is false for empty or undecodable snapshots.
 func BoardStats(data []byte) (completed, inProgress, pending int, ok bool) {
 	if len(data) == 0 {
 		return 0, 0, 0, false

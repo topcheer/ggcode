@@ -1,20 +1,5 @@
 package mcp
 
-// Tests for the MCP 2026-07-28 error-code allocation policy (sa-70).
-//
-// Spec: https://modelcontextprotocol.io/specification/2026-07-28/changelog
-//   - -32020..-32099 is reserved for the MCP specification
-//     (-32000..-32019 stays implementation-defined / grandfathered).
-//   - HeaderMismatch -32001 -> -32020, MissingRequiredClientCapability
-//     -32003 -> -32021, UnsupportedProtocolVersion -32004 -> -32022.
-//   - Resource not found changes from -32002 to -32602 (Invalid Params).
-//
-// Pinned behavior: reserved-range errors carry spec context in their
-// message, the original *Error stays reachable via errors.As for
-// programmatic classification, initialize recognizes the spec's
-// UnsupportedProtocolVersionError in both numberings, and resources/read
-// failures normalize the legacy/new not-found reporting.
-
 import (
 	"context"
 	"encoding/json"
@@ -35,15 +20,15 @@ func TestIsMCPReservedErrorCode(t *testing.T) {
 		code int
 		want bool
 	}{
-		{-32602, false}, // JSON-RPC standard
-		{-32000, false}, // grandfathered implementation-defined zone
-		{-32019, false}, // zone boundary
-		{-32001, false}, // legacy draft numbering: implementation-defined zone
-		{-32020, true},  // reserved range start
-		{-32022, true},  // UnsupportedProtocolVersion
-		{-32042, true},  // URL elicitation required
-		{-32099, true},  // reserved range end
-		{-32100, false}, // below range
+		{-32602, false},
+		{-32000, false},
+		{-32019, false},
+		{-32001, false},
+		{-32020, true},
+		{-32022, true},
+		{-32042, true},
+		{-32099, true},
+		{-32100, false},
 	}
 	for _, tc := range cases {
 		if got := isMCPReservedErrorCode(tc.code); got != tc.want {
@@ -68,7 +53,7 @@ func TestErrorClassificationHelpers(t *testing.T) {
 }
 
 func TestDecorateSpecError(t *testing.T) {
-	// Reserved-range code gets spec context and stays errors.As-able.
+
 	orig := &Error{Code: -32020, Message: "missing Mcp-Method header"}
 	err := decorateSpecError(fmt.Errorf("mcp[srv]: initialize: %w", orig))
 	msg := err.Error()
@@ -82,7 +67,7 @@ func TestDecorateSpecError(t *testing.T) {
 	if decorateSpecError(err) != err {
 		t.Error("decorateSpecError must be idempotent")
 	}
-	// Implementation-defined zone passes through untouched.
+
 	plain := fmt.Errorf("boom: %w", &Error{Code: -32002, Message: "not found"})
 	if got := decorateSpecError(plain); got != plain {
 		t.Errorf("implementation-defined zone must pass through, got: %v", got)
@@ -130,8 +115,6 @@ func TestAnnotateResourceReadError(t *testing.T) {
 	}
 }
 
-// errServer starts an httptest MCP server answering every request with the
-// given JSON-RPC error object (notifications get 202).
 func errServer(t *testing.T, code int, message string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -160,9 +143,6 @@ func errServer(t *testing.T, code int, message string) *httptest.Server {
 	}))
 }
 
-// TestHeaderMismatchDecoratedEndToEnd pins the sendRequest wiring: a server
-// answering -32020 (HeaderMismatch) yields an error that carries the spec
-// annotation AND stays programmatically classifiable via errors.As.
 func TestHeaderMismatchDecoratedEndToEnd(t *testing.T) {
 	srv := errServer(t, ErrCodeHeaderMismatch, "missing Mcp-Method header")
 	defer srv.Close()
@@ -189,10 +169,6 @@ func TestHeaderMismatchDecoratedEndToEnd(t *testing.T) {
 	}
 }
 
-// TestConnectUnsupportedProtocolVersionDiagnostic pins the initialize
-// wiring: a server rejecting the handshake with the spec's renumbered
-// -32022 gets the actionable version diagnostic, and the legacy -32004
-// numbering is recognized too.
 func TestConnectUnsupportedProtocolVersionDiagnostic(t *testing.T) {
 	for _, code := range []int{ErrCodeUnsupportedProtocolVersion, legacyErrCodeUnsupportedProtocolVersion} {
 		srv := errServer(t, code, "unsupported protocol version")
@@ -215,9 +191,6 @@ func TestConnectUnsupportedProtocolVersionDiagnostic(t *testing.T) {
 	}
 }
 
-// TestReadResourceNotFoundEndToEnd pins the ReadResource wiring: the
-// legacy -32002 surfaces as a "resource not found" message and the new
-// -32602 (Invalid Params) carries the 2026-07-28 ambiguity note.
 func TestReadResourceNotFoundEndToEnd(t *testing.T) {
 	srv := errServer(t, legacyErrCodeResourceNotFound, "Resource not found: file:///gone")
 	defer srv.Close()

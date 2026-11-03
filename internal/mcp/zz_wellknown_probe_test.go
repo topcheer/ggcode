@@ -13,11 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// TestWellKnownProbeHitReturnsOAuthImmediately (#1806): the probe-hit path
-// had zero forward coverage - every existing test tolerates the well-known
-// GET with a 404. When the server declares OAuth protection via
-// well-known metadata, an anonymous client must get OAuthRequiredError
-// immediately, with NO request POST (no 401 roundtrip).
 func TestWellKnownProbeHitReturnsOAuthImmediately(t *testing.T) {
 	var posts int32
 	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -39,7 +34,7 @@ func TestWellKnownProbeHitReturnsOAuthImmediately(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"issuer":"` + "http://example-rs" + `","authorization_endpoint":"` + authServer.URL + `/authorize"}`))
 		default:
-			// The JSON-RPC POST must never happen on the probe-hit path.
+
 			atomic.AddInt32(&posts, 1)
 			w.WriteHeader(http.StatusUnauthorized)
 		}

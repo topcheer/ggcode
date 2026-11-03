@@ -1,18 +1,5 @@
 package mcp
 
-// Characterization tests for MCP 2026-07-28 CacheableResult (SEP-2549)
-// client-side freshness caching in internal/mcp/client.go + cacheable.go:
-//
-//	C1: a ttlMs-bearing tools/list result is served from cache on the next
-//	    call, and notifications/tools/list_changed invalidates it.
-//	C2: a legacy server (no ttlMs) is never cached — behavior unchanged.
-//	C3: resources/read entries are cached per-URI; a
-//	    notifications/resources/updated refresh drops only that URI.
-//	C4: an expired ttlMs hint triggers a refetch.
-//	C5: listingCacheTTL unit semantics (min across pages, private
-//	    degradation, missing ttl disables).
-//	C6: re-initialize (setNegotiatedState) clears the cache.
-
 import (
 	"context"
 	"encoding/json"
@@ -26,8 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// newCacheableTestServer starts an httptest MCP server that delegates result
-// construction to respond(method). Notifications (no id) get 202.
 func newCacheableTestServer(respond func(method string) (any, bool)) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -40,7 +25,7 @@ func newCacheableTestServer(respond func(method string) (any, bool)) *httptest.S
 			return
 		}
 		if req.ID == nil {
-			// notifications/initialized and friends: no response body.
+
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
@@ -58,8 +43,6 @@ func newCacheableTestServer(respond func(method string) (any, bool)) *httptest.S
 	}))
 }
 
-// newCacheableTestClient starts an HTTP client against srv with all listing
-// capabilities advertised (mirrors the zz_issue562 pagination harness).
 func newCacheableTestClient(t *testing.T, srv *httptest.Server) *Client {
 	t.Helper()
 	client := NewClientFromConfig(config.MCPServerConfig{Name: "cacheable", Type: "http", URL: srv.URL})
@@ -75,7 +58,6 @@ func newCacheableTestClient(t *testing.T, srv *httptest.Server) *Client {
 	return client
 }
 
-// TestCacheableToolsList_TTLHitAndListChangedInvalidation covers C1.
 func TestCacheableToolsList_TTLHitAndListChangedInvalidation(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
@@ -109,8 +91,7 @@ func TestCacheableToolsList_TTLHitAndListChangedInvalidation(t *testing.T) {
 	if err != nil || len(tools) != 1 || tools[0].Name != "tool-v1" {
 		t.Fatalf("first ListTools: tools=%v err=%v", tools, err)
 	}
-	// Second call must be served from the freshness cache — the tool name is
-	// still v1 even though the server would now return v2.
+
 	tools, err = client.ListTools(ctx)
 	if err != nil || len(tools) != 1 || tools[0].Name != "tool-v1" {
 		t.Fatalf("cached ListTools: tools=%v err=%v", tools, err)
@@ -122,8 +103,6 @@ func TestCacheableToolsList_TTLHitAndListChangedInvalidation(t *testing.T) {
 	}
 	mu.Unlock()
 
-	// The list_changed notification must invalidate the entry; the next call
-	// refetches and observes tool-v2.
 	client.processNotification(&Notification{
 		JSONRPC: "2.0",
 		Method:  "notifications/tools/list_changed",
@@ -139,8 +118,6 @@ func TestCacheableToolsList_TTLHitAndListChangedInvalidation(t *testing.T) {
 	}
 }
 
-// TestCacheableLegacyServer_NeverCached covers C2: pre-2026-07-28 servers
-// send no ttlMs, so every call must reach the server.
 func TestCacheableLegacyServer_NeverCached(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
@@ -178,7 +155,6 @@ func TestCacheableLegacyServer_NeverCached(t *testing.T) {
 	}
 }
 
-// TestCacheableResourceRead_PerURICacheAndUpdatedInvalidation covers C3.
 func TestCacheableResourceRead_PerURICacheAndUpdatedInvalidation(t *testing.T) {
 	var mu sync.Mutex
 	perURI := map[string]int{}
@@ -196,15 +172,13 @@ func TestCacheableResourceRead_PerURICacheAndUpdatedInvalidation(t *testing.T) {
 					URI string `json:"uri"`
 				} `json:"params"`
 			}
-			// The handler closure cannot see the body; re-reads are handled by
-			// counting per URI inside ListResources-style wrappers below.
+
 			_ = req
 			return nil, false
 		}
 		return nil, false
 	})
-	// Per-URI counting needs the request body; build a dedicated server that
-	// decodes params instead of using the shared helper.
+
 	srv.Close()
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -272,7 +246,6 @@ func TestCacheableResourceRead_PerURICacheAndUpdatedInvalidation(t *testing.T) {
 	}
 	mu.Unlock()
 
-	// resources/updated for /a drops only /a's entry.
 	client.processNotification(&Notification{
 		JSONRPC: "2.0",
 		Method:  "notifications/resources/updated",
@@ -294,7 +267,6 @@ func TestCacheableResourceRead_PerURICacheAndUpdatedInvalidation(t *testing.T) {
 	}
 }
 
-// TestCacheableExpiry_RefetchAfterTTL covers C4.
 func TestCacheableExpiry_RefetchAfterTTL(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
@@ -323,7 +295,7 @@ func TestCacheableExpiry_RefetchAfterTTL(t *testing.T) {
 	if _, err := client.ListTools(ctx); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(80 * time.Millisecond) // > ttlMs=25
+	time.Sleep(80 * time.Millisecond)
 	if _, err := client.ListTools(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -334,9 +306,8 @@ func TestCacheableExpiry_RefetchAfterTTL(t *testing.T) {
 	}
 }
 
-// TestListingCacheTTL_Unit covers C5.
 func TestListingCacheTTL_Unit(t *testing.T) {
-	// Minimum across pages wins.
+
 	ttl, scope, ok := listingCacheTTL([]CacheableResult{
 		{TTLms: 60000, CacheScope: "public"},
 		{TTLms: 30000, CacheScope: "public"},
@@ -344,7 +315,7 @@ func TestListingCacheTTL_Unit(t *testing.T) {
 	if !ok || ttl != 30*time.Second || scope != "public" {
 		t.Fatalf("min ttl: ttl=%v scope=%q ok=%v", ttl, scope, ok)
 	}
-	// Any private page degrades the scope.
+
 	_, scope, ok = listingCacheTTL([]CacheableResult{
 		{TTLms: 60000, CacheScope: "public"},
 		{TTLms: 60000, CacheScope: "private"},
@@ -352,17 +323,16 @@ func TestListingCacheTTL_Unit(t *testing.T) {
 	if !ok || scope != "private" {
 		t.Fatalf("private degradation: scope=%q ok=%v", scope, ok)
 	}
-	// A missing ttl (legacy page) disables caching entirely.
+
 	if _, _, ok := listingCacheTTL([]CacheableResult{{TTLms: 60000}, {}}); ok {
 		t.Fatal("page without ttlMs must disable caching")
 	}
-	// No pages at all — nothing cacheable.
+
 	if _, _, ok := listingCacheTTL(nil); ok {
 		t.Fatal("empty pages must not be cacheable")
 	}
 }
 
-// TestCacheableReinitialize_Invalidates covers C6.
 func TestCacheableReinitialize_Invalidates(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
@@ -391,8 +361,7 @@ func TestCacheableReinitialize_Invalidates(t *testing.T) {
 	if _, err := client.ListTools(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// Simulate a reconnect/re-initialize: capabilities are re-negotiated and
-	// every cached freshness hint from the old session must be dropped.
+
 	client.setNegotiatedState(latestMCPProtocolVersion, ServerCaps{Tools: &ToolsCapability{}})
 	if _, err := client.ListTools(ctx); err != nil {
 		t.Fatal(err)

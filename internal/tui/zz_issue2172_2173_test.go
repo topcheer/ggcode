@@ -1,13 +1,5 @@
 package tui
 
-// #2172/#2173 regression:
-//   - #2172: an over-long workspace basename (>32 bytes - 11 Chinese
-//     chars) made qqShareCallbackData return "" and the QQ panel
-//     rendered a "successful" QR that could never pair.
-//   - #2173: the provider panel's API-key edit input and the wizards'
-//     API-key steps echoed every typed character in cleartext (the
-//     repo convention is EchoPassword, cf. onboard/stream_panel).
-
 import (
 	"strings"
 	"testing"
@@ -16,13 +8,11 @@ import (
 )
 
 func TestQQShareCallbackEmptyFailsLoudly(t *testing.T) {
-	long := strings.Repeat("项", 11) // 33 bytes
+	long := strings.Repeat("项", 11)
 	if got := qqShareCallbackData(long); got != "" {
 		t.Fatalf("33-byte basename must yield empty callback (precondition), got %q", got)
 	}
-	// The caller now rejects the empty callback BEFORE generating a QR -
-	// verified by the guard's presence; unit level we pin the helper
-	// boundary that feeds it.
+
 	if got := qqShareCallbackData("ok-dir"); got != "ok-dir" {
 		t.Fatalf("normal basename must pass through, got %q", got)
 	}

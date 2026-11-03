@@ -1,7 +1,5 @@
 package tui
 
-// zhTWOnboardTexts returns Traditional Chinese onboarding texts.
-// Currently reuses zh-CN translations via the tr() fallback.
 func zhTWOnboardTexts() map[string]string {
 	return map[string]string{
 		"title":            "🚀 ggcode 初始設定",

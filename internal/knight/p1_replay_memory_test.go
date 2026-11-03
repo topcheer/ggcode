@@ -9,8 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-// --- A/B replay -----------------------------------------------------------
-
 func TestComputeABReplayScoreReturnsZeroWithoutScenarios(t *testing.T) {
 	c := &SkillEntry{Name: "x", Meta: SkillMeta{Description: "y"}}
 	got := computeABReplayScore(c, "body", "", nil)
@@ -74,8 +72,6 @@ func TestABReplayVerdictMapping(t *testing.T) {
 	}
 }
 
-// --- Semantic memory ------------------------------------------------------
-
 func TestSemanticMemoryAppendAndRecent(t *testing.T) {
 	dir := t.TempDir()
 	store := newSemanticMemoryStore(filepath.Join(dir, "mem.jsonl"))
@@ -129,8 +125,6 @@ func TestSemanticMemoryCappedAtMaxEntries(t *testing.T) {
 		t.Fatalf("expected ≤%d, got %d", maxSemanticMemoryEntries, len(out))
 	}
 }
-
-// --- Knight integration ---------------------------------------------------
 
 func TestKnightApproveProposalRecordsSemanticMemory(t *testing.T) {
 	dir := t.TempDir()

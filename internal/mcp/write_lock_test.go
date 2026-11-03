@@ -11,10 +11,6 @@ import (
 	"time"
 )
 
-// TestWriteMessageConcurrentNoInterleave (#480): server-request responses
-// (writeMessage, formerly lock-free) and request sends (under c.mu) write
-// the same stdin. Concurrent writers must never interleave — every line
-// on the pipe must parse as exactly one JSON-RPC frame.
 func TestWriteMessageConcurrentNoInterleave(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -24,12 +20,6 @@ func TestWriteMessageConcurrentNoInterleave(t *testing.T) {
 
 	c := &Client{name: "test", stdin: w, transport: "stdio"}
 
-	// The reader MUST run concurrently with the writers: Windows anonymous
-	// pipes buffer only ~4KB (Linux: 64KB), so the previous read-after-
-	// wg.Wait design deadlocked there once 200 frames (~15KB) exceeded the
-	// buffer — writers blocked on the full pipe, wg.Wait never returned, and
-	// the whole package hit its test timeout. Draining as the writers write
-	// keeps this correct on every platform; both assertions are unchanged.
 	type readResult struct {
 		lines int
 		err   error
@@ -46,7 +36,7 @@ func TestWriteMessageConcurrentNoInterleave(t *testing.T) {
 			}
 			var obj map[string]interface{}
 			if err := json.Unmarshal([]byte(line), &obj); err != nil {
-				r.Close() // unblock any writer still waiting on the full pipe
+				r.Close()
 				resCh <- readResult{err: fmt.Errorf("interleaved/corrupt frame (#480 regression) at line %d: %v — %q", lines+1, err, line)}
 				return
 			}
@@ -65,7 +55,7 @@ func TestWriteMessageConcurrentNoInterleave(t *testing.T) {
 			defer wg.Done()
 			<-start
 			for j := 0; j < perWriter; j++ {
-				// Alternate the two entry paths that must share c.mu.
+
 				if (id+j)%2 == 0 {
 					_ = c.writeMessage(map[string]interface{}{
 						"jsonrpc": "2.0", "id": id, "result": map[string]string{"w": "resp"},
@@ -78,10 +68,8 @@ func TestWriteMessageConcurrentNoInterleave(t *testing.T) {
 	}
 	close(start)
 	wg.Wait()
-	w.Close() // EOF: lets the scanner finish after draining the pipe
+	w.Close()
 
-	// Every line must have been a complete, parseable JSON object — an
-	// interleaved frame would fail json.Unmarshal or produce glued content.
 	select {
 	case res := <-resCh:
 		if res.err != nil {
@@ -95,10 +83,6 @@ func TestWriteMessageConcurrentNoInterleave(t *testing.T) {
 	}
 }
 
-// TestWriteMessageUnlockedRequiresLock (structural): the Unlocked variant is
-// for callers already holding c.mu — verify sendNotification (which takes
-// c.mu then calls the Unlocked variant) works end-to-end, proving the split
-// did not double-lock.
 func TestSendNotificationNoDeadlock(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {

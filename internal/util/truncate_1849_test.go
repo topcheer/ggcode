@@ -2,9 +2,6 @@ package util
 
 import "testing"
 
-// #1849 case 2: width-arithmetic callers leak negative budgets on narrow
-// terminals - the old contract returned the string untruncated and broke
-// fixed-width panel rendering. Negative budget = no room = empty string.
 func Test1849TruncateNegativeClamp(t *testing.T) {
 	if got := Truncate("hello world", -3); got != "" {
 		t.Fatalf("negative budget must yield empty string, got %q", got)
@@ -14,7 +11,6 @@ func Test1849TruncateNegativeClamp(t *testing.T) {
 	}
 }
 
-// Regression guards for the untouched contract points.
 func Test1849TruncateContract(t *testing.T) {
 	if got := Truncate("hello", 5); got != "hello" {
 		t.Fatalf("exact fit must return as-is, got %q", got)

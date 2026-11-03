@@ -1,10 +1,5 @@
 package tui
 
-// Owner ruling 2026-09-15: the usage panel shows the CURRENT vendor only -
-// the fleet view (every keyed vendor probed) read as garbage rows. And
-// /usage must appear in slash completion (the #2356 cut shipped the
-// command without registering it).
-
 import (
 	"strings"
 	"testing"
@@ -13,8 +8,7 @@ import (
 )
 
 func TestUsagePanelProbesByURLCurrentEndpointOnly(t *testing.T) {
-	// Custom vendor NAME pointed at the zai host: URL matching must hand
-	// it the zai probe (owner ruling: URL, never config name).
+
 	var m Model
 	m.activeVendor = "mycustom"
 	m.activeEndpoint = "e1"
@@ -26,13 +20,12 @@ func TestUsagePanelProbesByURLCurrentEndpointOnly(t *testing.T) {
 			"e": {BaseURL: "https://openrouter.ai/api/v1", APIKey: "k2"},
 		}},
 	}}
-	m.ensureUsageService() // registers DefaultService probes
+	m.ensureUsageService()
 	got := m.probeableVendors()
 	if len(got) != 1 || got[0] != "zai" {
 		t.Fatalf("URL-matched probe = %v, want [zai]", got)
 	}
 
-	// A zhipu-NAMED vendor pointed at an unknown host: nothing probes.
 	m2 := m
 	m2.config.Vendors["mycustom"].Endpoints["e1"] = config.EndpointConfig{
 		BaseURL: "https://internal-gw.corp/api", APIKey: "k1",
@@ -41,8 +34,6 @@ func TestUsagePanelProbesByURLCurrentEndpointOnly(t *testing.T) {
 		t.Fatalf("unknown-host vendor must not probe, got %v", got2)
 	}
 
-	// Sibling endpoint of the SAME vendor is never consulted: kill e1's
-	// key, keep a keyed sibling - still nothing probes.
 	m3 := m
 	m3.config.Vendors["mycustom"].Endpoints["e1"] = config.EndpointConfig{
 		BaseURL: "https://open.bigmodel.cn/api/paas/v4", APIKey: "",

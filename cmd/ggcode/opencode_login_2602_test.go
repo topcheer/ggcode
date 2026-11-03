@@ -12,10 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/auth"
 )
 
-// #2602 defect 2: slow_down MUST increase the polling interval by 5 seconds
-// (RFC 8628 section 3.5). The mock server answers slow_down twice then grants
-// the token; the deltas between successive token-endpoint hits must show the
-// interval growing (base 100ms-ish tick +5s each slow_down), not staying flat.
 func TestIssue2602_SlowDownBacksOff(t *testing.T) {
 	if testing.Short() {
 		t.Skip("timing-based poll test")
@@ -39,7 +35,7 @@ func TestIssue2602_SlowDownBacksOff(t *testing.T) {
 		DeviceCode:              "dc",
 		VerificationURIComplete: "/device",
 		ExpiresIn:               300,
-		Interval:                1, // 1s base interval
+		Interval:                1,
 	}
 	tok, err := pollOpenCodeToken(context.Background(), srv.URL, dev)
 	if err != nil {
@@ -51,9 +47,7 @@ func TestIssue2602_SlowDownBacksOff(t *testing.T) {
 	if len(hits) != 3 {
 		t.Fatalf("want 3 endpoint hits, got %d", len(hits))
 	}
-	// The loop sleeps BEFORE each hit, so gaps carry the backoff applied
-	// after the previous slow_down: gap1 = base(1s)+5s = ~6s,
-	// gap2 = 6s+5s = ~11s. A flat ~1s gap would mean no backoff (the bug).
+
 	gap1 := hits[1].Sub(hits[0])
 	gap2 := hits[2].Sub(hits[1])
 	if gap1 < 5500*time.Millisecond {

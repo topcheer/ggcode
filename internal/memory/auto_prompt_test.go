@@ -11,13 +11,10 @@ func TestLoadForPrompt_InlinesPersistentMemories(t *testing.T) {
 	dir := t.TempDir()
 	am := &AutoMemory{dir: dir}
 
-	// Persistent memory (small) - should be inlined.
 	writeMem(t, dir, "build-process-impl", "Run: make build\nUse Go 1.26.")
 
-	// Transient memory - should NOT be inlined (too old).
 	writeMemOld(t, dir, "impl-task-old", "old task", 40*24*time.Hour)
 
-	// Evolving memory - should be index-only.
 	writeMem(t, dir, "research-2026-07-14-r3", "latest research findings")
 
 	inline, indexOnly, err := am.LoadForPrompt()
@@ -35,7 +32,6 @@ func TestLoadForPrompt_InlinesPersistentMemories(t *testing.T) {
 		t.Error("inline entry should have non-empty content")
 	}
 
-	// Transient (expired) should be in neither. Evolving should be index-only.
 	if len(indexOnly) != 1 {
 		t.Fatalf("expected 1 index-only entry, got %d: %v", len(indexOnly), indexOnly)
 	}
@@ -48,7 +44,6 @@ func TestLoadForPrompt_OversizedPersistentIsIndexOnly(t *testing.T) {
 	dir := t.TempDir()
 	am := &AutoMemory{dir: dir}
 
-	// Persistent but too large - should be index-only.
 	big := make([]byte, maxInlineBytes+1)
 	for i := range big {
 		big[i] = 'x'
@@ -85,9 +80,8 @@ func TestLoadForPrompt_BudgetEnforced(t *testing.T) {
 	dir := t.TempDir()
 	am := &AutoMemory{dir: dir}
 
-	// Create many small persistent entries that together exceed budget.
 	for i := 0; i < 10; i++ {
-		content := "x" // tiny content
+		content := "x"
 		writeMemNamed(t, dir, persistentKeyName(i), content)
 	}
 
@@ -96,7 +90,6 @@ func TestLoadForPrompt_BudgetEnforced(t *testing.T) {
 		t.Fatalf("error: %v", err)
 	}
 
-	// With tiny entries and a 6000 byte budget, all 10 should fit.
 	if len(inline) != 10 {
 		t.Errorf("expected 10 inlined entries (budget not exceeded), got %d", len(inline))
 	}
@@ -128,7 +121,7 @@ func writeMemOld(t *testing.T, dir, key, content string, age time.Duration) {
 }
 
 func persistentKeyName(i int) string {
-	// Names ending in "-impl" are classified as persistent.
+
 	return persistentPrefix(i) + "-impl"
 }
 

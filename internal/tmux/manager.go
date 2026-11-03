@@ -15,8 +15,6 @@ var (
 	sharedManagers   = make(map[string]*Manager)
 )
 
-// SharedManager returns the process-wide tmux pane manager for a workspace.
-// TUI commands and LLM tools use this so they see the same managed panes.
 func SharedManager(workspace string) *Manager {
 	workspace = normalizeWorkspace(workspace)
 	sharedManagersMu.Lock()
@@ -35,7 +33,6 @@ func resetSharedManagersForTest() {
 	sharedManagers = make(map[string]*Manager)
 }
 
-// Manager tracks tmux panes created by ggcode for a workspace.
 type Manager struct {
 	client    *Client
 	workspace string

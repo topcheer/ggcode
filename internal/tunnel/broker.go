@@ -17,14 +17,6 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// Broker bridges agent events and the WebSocket tunnel protocol.
-//
-// Delivery guarantees:
-//   - Text chunks are batched: PushText appends to a per-msgID buffer;
-//     a 300ms ticker flushes all accumulated text as a single message.
-//   - Every outbound message carries a stable session_id + event_id.
-//   - The broker only produces ordered events for the current active session.
-//   - Relay owns per-client replay; broker only emits the canonical event stream.
 type Broker struct {
 	session        *Session
 	callbackMu     sync.RWMutex
@@ -33,29 +25,15 @@ type Broker struct {
 	replayProvider func() []GatewayMessage
 	eventRecorder  func(msg GatewayMessage)
 
-	// Session-scoped event identity.
 	sessionMu         sync.RWMutex
 	sessionID         string
 	sessionGeneration uint64
 	nextEvent         atomic.Int64
 	cachedSessionInfo SessionInfoData
 
-	// Send queue: all outbound messages go here.
-	// The sender goroutine drains it continuously (no ACK blocking).
-	// TCP/WebSocket guarantees ordered delivery.
-	//
-	// This queue is intentionally unbounded. senderLoop drains the entire
-	// queue on each iteration (batch := b.outbound; b.outbound = nil), so
-	// under normal operation messages do not accumulate — the slice is
-	// replaced with nil every cycle. Messages only pile up when the relay
-	// connection drops (b.session == nil), during which time the agent
-	// keeps producing events. Those buffered events are essential for
-	// replay to the mobile client on reconnect; dropping them would cause
-	// permanent data loss on the mobile side. The replay mechanism
-	// (relayRecoveryPlan, replayCanonicalEvents) relies on this.
 	outMu    sync.Mutex
 	outCond  *sync.Cond
-	outbound []GatewayMessage // see comment above: drained continuously, intentionally unbounded
+	outbound []GatewayMessage
 	outDone  chan struct{}
 	stopOnce sync.Once
 
@@ -78,34 +56,27 @@ type Broker struct {
 	subagentToolMeta map[string]subagentToolMeta
 
 	reasoningMu        sync.Mutex
-	activeReasoning    map[string]string // msgID -> agentID (empty for main agent)
-	activeReasoningBuf map[string]string // msgID -> accumulated reasoning text
+	activeReasoning    map[string]string
+	activeReasoningBuf map[string]string
 
-	// Text + reasoning batching
 	textMu     sync.Mutex
-	textBuf    map[string]*textEntry // msgID → unflushed text entry
-	activeText map[string]*textEntry // msgID → full in-flight text entry
+	textBuf    map[string]*textEntry
+	activeText map[string]*textEntry
 	textTick   *time.Ticker
-	textDone   chan struct{} // stop text flusher
+	textDone   chan struct{}
 
-	reasoningBuf map[string]*reasoningEntry // msgID → unflushed reasoning entry
+	reasoningBuf map[string]*reasoningEntry
 
 	projectionMu      sync.Mutex
 	projectionCond    *sync.Cond
 	projectionSyncing bool
 
-	// P2P transport upgrade. When set, messages are sent over the WebRTC
-	// DataChannel instead of the relay WebSocket. Cleared on P2P disconnect.
 	p2pTransportMu   sync.RWMutex
 	p2pTransport     Transport
-	p2pNegotiating   atomic.Bool // true while P2P negotiation is in progress
+	p2pNegotiating   atomic.Bool
 	relayLastEventMu sync.RWMutex
-	relayLastEventID string // relay last event ID at last OnRelayConnected
+	relayLastEventID string
 
-	// Cached projection hash of canonical events. Updated lazily in
-	// relayRecoveryPlan / trustRelayHistory (which already call the replay
-	// provider). activeSessionBarrier reads this cache instead of calling
-	// the replay provider directly, avoiding potential blocking.
 	projectionHashCacheMu sync.RWMutex
 	projectionHashCache   string
 
@@ -162,13 +133,10 @@ func NewBroker(sess *Session) *Broker {
 	b.outCond = sync.NewCond(&b.outMu)
 	b.projectionCond = sync.NewCond(&b.projectionMu)
 
-	// Start sender goroutine.
 	safego.Go("tunnel.broker.senderLoop", func() { b.senderLoop() })
 
-	// Start text flush ticker
 	safego.Go("tunnel.broker.textFlushLoop", func() { b.textFlushLoop() })
 
-	// Handle incoming messages from mobile
 	if sess != nil {
 		sess.OnMessage(func(msg GatewayMessage) {
 			b.callbackMu.RLock()
@@ -194,10 +162,6 @@ func newTunnelSessionID() string {
 	return fmt.Sprintf("sess-%d", time.Now().UnixNano())
 }
 
-// ─── Goroutines ───
-
-// textEntry tracks accumulated text for a message stream.
-// agentID == "" means main agent text; otherwise it's a subagent/teammate.
 type textEntry struct {
 	agentID string
 	text    string
@@ -209,7 +173,6 @@ type reasoningEntry struct {
 	text    string
 }
 
-// senderLoop drains the outbound queue. Never blocks the producer.
 func (b *Broker) senderLoop() {
 	for {
 		b.outMu.Lock()
@@ -227,7 +190,7 @@ func (b *Broker) senderLoop() {
 		b.outMu.Unlock()
 
 		for _, msg := range batch {
-			// Prefer P2P transport if active, fall back to relay session.
+
 			if b.sendViaTransport(msg) {
 				b.signalSent(msg.EventID)
 				continue
@@ -235,13 +198,7 @@ func (b *Broker) senderLoop() {
 			if b.session != nil {
 				if err := b.session.Send(msg); err != nil {
 					debug.Log("tunnel", "broker: send %s event=%s failed: %v", msg.Type, msg.EventID, err)
-					// Do NOT signalSent on failure. Waiters (e.g.
-					// StopSharingGracefully, which waits on this channel to
-					// confirm sharing_stopped was delivered) must not treat a
-					// failed attempt as successful delivery — otherwise the
-					// caller tears the broker down believing the relay got the
-					// event, making replay impossible. Mirrors the P2P path,
-					// which only confirms on success.
+
 					continue
 				}
 			}
@@ -250,9 +207,6 @@ func (b *Broker) senderLoop() {
 	}
 }
 
-// sendViaTransport attempts to send a message over the P2P transport.
-// Returns true if the message was handled (sent or definitively failed).
-// Returns false if no P2P transport is active (caller should use relay).
 func (b *Broker) sendViaTransport(msg GatewayMessage) bool {
 	b.p2pTransportMu.RLock()
 	t := b.p2pTransport
@@ -263,18 +217,16 @@ func (b *Broker) sendViaTransport(msg GatewayMessage) bool {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		debug.Log("tunnel", "broker: marshal for p2p, falling back to relay: %v", err)
-		return false // fall back to relay — never drop messages
+		return false
 	}
 	if err := t.Send(data); err != nil {
 		debug.Log("tunnel", "broker: p2p send %s event=%s failed, falling back to relay: %v", msg.Type, msg.EventID, err)
-		return false // fall back to relay — never drop messages
+		return false
 	}
 	debug.Log("tunnel", "broker: p2p send %s event=%s ok", msg.Type, msg.EventID)
 	return true
 }
 
-// SetP2PTransport upgrades the broker to send over a P2P DataChannel.
-// Pass nil to revert to the relay session.
 func (b *Broker) SetP2PTransport(t Transport) {
 	b.p2pTransportMu.Lock()
 	old := b.p2pTransport
@@ -290,16 +242,10 @@ func (b *Broker) SetP2PTransport(t Transport) {
 	}
 }
 
-// HasP2PTransport returns whether a P2P transport is currently active.
-// p2pUpgradePending returns true if a P2P negotiation is in progress
-// or active. Used to defer relay recovery replay until P2P resolves.
 func (b *Broker) p2pUpgradePending() bool {
 	return b.p2pNegotiating.Load() || b.HasP2PTransport()
 }
 
-// SetP2PNegotiating marks that a P2P negotiation is about to start.
-// Called before Restart() so that subsequent handleRelayConnected calls
-// in the same connect event see P2P as pending and skip recovery replay.
 func (b *Broker) SetP2PNegotiating(v bool) {
 	b.p2pNegotiating.Store(v)
 }
@@ -310,16 +256,13 @@ func (b *Broker) HasP2PTransport() bool {
 	return b.p2pTransport != nil
 }
 
-// TriggerReplayNow sends all projection events to relay when P2P fails.
-// The projection store is capped at ProjectionReplayLimit (1000), so
-// replay ALL projection events — mobile deduplicates by EventID.
 func (b *Broker) TriggerReplayNow() {
 	events := b.canonicalReplayEvents()
 	if len(events) == 0 {
 		debug.Log("tunnel", "broker: triggerReplayNow: no projection events")
 		return
 	}
-	// Clear P2P negotiating flag so future relay events run normal recovery.
+
 	b.SetP2PNegotiating(false)
 	debug.Log("tunnel", "broker: triggerReplayNow: replaying %d projection events to relay (mobile dedupes by EventID)", len(events))
 	if replayed := b.replayCanonicalEvents(false, events); replayed {
@@ -338,11 +281,6 @@ func (b *Broker) canonicalReplayEvents() []GatewayMessage {
 	return provider()
 }
 
-// SyncP2PReplay sends projection events that mobile may have missed during
-// P2P negotiation. Called after P2P DataChannel opens. Uses relayLastEventID
-// (stored at connect time) to find the suffix in the projection store.
-// If the last event ID isn't found (e.g., projection store capped), sends
-// all events — mobile deduplicates by EventID.
 func (b *Broker) SyncP2PReplay() {
 	events := b.canonicalReplayEvents()
 	if len(events) == 0 {
@@ -354,7 +292,7 @@ func (b *Broker) SyncP2PReplay() {
 	if t == nil {
 		return
 	}
-	// Find suffix starting after the relay's last known event ID.
+
 	b.relayLastEventMu.RLock()
 	relayLastID := b.relayLastEventID
 	b.relayLastEventMu.RUnlock()
@@ -384,10 +322,6 @@ func (b *Broker) SyncP2PReplay() {
 	}
 }
 
-// HandleP2PMessage processes a raw message received over the P2P DataChannel.
-// The DataChannel carries unencrypted GatewayMessage JSON (DTLS provides
-// transport encryption). This parses and routes it through the same
-// onCommand handler as relay messages.
 func (b *Broker) HandleP2PMessage(data []byte) {
 	var msg GatewayMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
@@ -402,9 +336,6 @@ func (b *Broker) HandleP2PMessage(data []byte) {
 	}
 }
 
-// SendSignal encodes a WebRTC SignalMessage and enqueues it for
-// transmission over the relay WebSocket to the peer (mobile client).
-// Used by the upgrade manager to send SDP offers and ICE candidates.
 func (b *Broker) SendSignal(signal SignalMessage) error {
 	gm, err := EncodeSignalMessage(signal)
 	if err != nil {
@@ -415,7 +346,6 @@ func (b *Broker) SendSignal(signal SignalMessage) error {
 	return nil
 }
 
-// textFlushLoop periodically flushes accumulated text buffers to the sendQueue.
 func (b *Broker) textFlushLoop() {
 	for {
 		select {
@@ -429,7 +359,6 @@ func (b *Broker) textFlushLoop() {
 	}
 }
 
-// flushAllText sends all accumulated text chunks as a single message per msgID.
 func (b *Broker) flushAllText() {
 	b.textMu.Lock()
 	if len(b.textBuf) == 0 {
@@ -448,10 +377,7 @@ func (b *Broker) flushAllText() {
 	b.textMu.Unlock()
 
 	for msgID, entry := range bufs {
-		// Mirror flushText's guard: an entry created by an empty chunk
-		// (PushText("") et al) must not enqueue an EventText with an empty
-		// Chunk - mobile replays such frames as blank bubbles after a
-		// session switch, and an empty frame carries nothing of value.
+
 		if entry.text == "" {
 			continue
 		}
@@ -480,7 +406,6 @@ func (b *Broker) appendTextLocked(msgID, agentID, chunk, kind string) {
 	}
 }
 
-// flushText flushes the buffer for a specific msgID immediately.
 func (b *Broker) flushText(msgID string) {
 	b.textMu.Lock()
 	entry := b.textBuf[msgID]
@@ -498,10 +423,6 @@ func (b *Broker) flushText(msgID string) {
 	}
 }
 
-// ─── Reasoning batching (mirrors text batching) ───
-
-// appendReasoningLocked adds a reasoning chunk to the pending flush buffer
-// and the active snapshot. Does NOT enqueue — the ticker flushes it.
 func (b *Broker) appendReasoningLocked(msgID, agentID, chunk string) {
 	b.reasoningMu.Lock()
 	defer b.reasoningMu.Unlock()
@@ -522,8 +443,6 @@ func (b *Broker) appendReasoningLocked(msgID, agentID, chunk string) {
 	b.reasoningBuf[msgID].text += chunk
 }
 
-// flushAllReasoning sends all accumulated reasoning chunks as a single
-// message per msgID.
 func (b *Broker) flushAllReasoning() {
 	b.reasoningMu.Lock()
 	if len(b.reasoningBuf) == 0 {
@@ -552,7 +471,6 @@ func (b *Broker) flushAllReasoning() {
 	}
 }
 
-// flushReasoning flushes the buffer for a specific msgID immediately.
 func (b *Broker) flushReasoning(msgID string) {
 	b.reasoningMu.Lock()
 	entry := b.reasoningBuf[msgID]
@@ -652,8 +570,6 @@ func (b *Broker) replayActiveReasoning(active map[string]reasoningEntry) {
 	}
 }
 
-// ─── Lifecycle ───
-
 func (b *Broker) OnCommand(fn func(cmd GatewayMessage)) {
 	b.callbackMu.Lock()
 	defer b.callbackMu.Unlock()
@@ -731,20 +647,16 @@ func (b *Broker) resetSession() string {
 	}
 	b.nextEvent.Store(0)
 	b.clientProjectionSeeded.Store(false)
-	// #919: stale projection hash leaked into the NEW session's
-	// active_session - reconnecting clients always missed and full-reset
-	// replayed on every reconnect after a session switch.
+
 	b.projectionHashCacheMu.Lock()
 	b.projectionHashCache = ""
 	b.projectionHashCacheMu.Unlock()
 	return b.sessionID
 }
 
-// ─── Session lifecycle ───
-
 func (b *Broker) SendSessionInfo(data SessionInfoData) {
 	b.sessionMu.Lock()
-	// Don't let an empty Title overwrite a non-empty cached Title.
+
 	if data.Title == "" && b.cachedSessionInfo.Title != "" {
 		data.Title = b.cachedSessionInfo.Title
 	}
@@ -793,9 +705,6 @@ func (b *Broker) SendSnapshot(snapshot BrokerSnapshot) {
 	}
 }
 
-// SendSnapshotFromProvider calls the snapshot provider (if set) and sends the
-// resulting snapshot. Used by PrepareOnlineShare when there are no replay
-// events to send.
 func (b *Broker) SendSnapshotFromProvider() {
 	b.snapshotMu.RLock()
 	provider := b.snapshotProvider
@@ -825,7 +734,7 @@ func (b *Broker) BindSession(sessionID string) bool {
 		}
 		b.nextEvent.Store(0)
 		b.clientProjectionSeeded.Store(false)
-		// #919: see resetSession - clear the stale projection hash.
+
 		b.projectionHashCacheMu.Lock()
 		b.projectionHashCache = ""
 		b.projectionHashCacheMu.Unlock()
@@ -849,9 +758,7 @@ func (b *Broker) SwitchSession(sessionID string) {
 	if !b.BindSession(sessionID) && strings.TrimSpace(sessionID) == "" {
 		return
 	}
-	// Clear all broker-internal state from previous session so that
-	// the new session starts from a clean slate.  The relay session
-	// (encryption token, WebSocket connection) is preserved.
+
 	b.toolMu.Lock()
 	b.toolArgs = make(map[string]string)
 	b.subagentToolMeta = make(map[string]subagentToolMeta)
@@ -891,10 +798,7 @@ func (b *Broker) activeSessionBarrier() (string, int64, string) {
 	if ordinal > 0 {
 		eventID = fmt.Sprintf("ev-%09d", ordinal)
 	}
-	// Return cached projection hash. The cache is updated by
-	// relayRecoveryPlan / trustRelayHistory during client/server
-	// reconnection handling. This avoids calling the replay provider
-	// (which may block) from this code path.
+
 	b.projectionHashCacheMu.RLock()
 	hash := b.projectionHashCache
 	b.projectionHashCacheMu.RUnlock()
@@ -906,10 +810,7 @@ func (b *Broker) sendActiveSession(sessionID string) {
 		return
 	}
 	barrierEventID, barrierOrdinal, projectionHash := b.activeSessionBarrier()
-	// #1793 case 2: this read raced the writer's whole-struct replace
-	// (SendSnapshot reads the same field under RLock - the asymmetry was
-	// an omission, not design). Multi-string torn reads sent corrupted
-	// workspace/provider to the relay; -race flagged it.
+
 	b.sessionMu.RLock()
 	info := b.cachedSessionInfo
 	b.sessionMu.RUnlock()
@@ -921,7 +822,7 @@ func (b *Broker) sendActiveSessionWithMode(sessionID, mode string) {
 		return
 	}
 	barrierEventID, barrierOrdinal, projectionHash := b.activeSessionBarrier()
-	// #1793 case 2: same torn-read fix as SendActiveSessionWithParams.
+
 	b.sessionMu.RLock()
 	info := b.cachedSessionInfo
 	b.sessionMu.RUnlock()
@@ -941,7 +842,7 @@ func (b *Broker) resetSessionAndEnqueue(clearActive bool) {
 }
 
 func (b *Broker) resetProjectionAndEnqueue(clearActive bool) {
-	// Clear text buffers too.
+
 	b.textMu.Lock()
 	b.textBuf = make(map[string]*textEntry)
 	if clearActive {
@@ -955,12 +856,6 @@ func (b *Broker) resetProjectionAndEnqueue(clearActive bool) {
 	b.enqueueControl(EventSnapshotReset, nil)
 }
 
-// PushSharingStopped is superseded by StopSharingGracefully, which emits the
-// "sharing_stopped" event via enqueueWithBytes and waits for delivery before
-// stopping the broker (#4303: migration, not deletion - all four production
-// emission sites route through the graceful path, so the flutter handlers
-// stay reachable). Kept only as exported-API compat; dead code pending
-// cleanup-pool removal.
 func (b *Broker) PushSharingStopped() {
 	b.enqueue("sharing_stopped", nil)
 }
@@ -1007,20 +902,15 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			debug.Log("tunnel", "broker: rejecting unsupported relay client protocol=%d session=%q", info.ProtocolVersion, currentSessionID)
 			return
 		}
-		// Fast path: if we already seeded and relay history matches, skip.
+
 		if b.clientProjectionSeeded.Load() && b.trustRelayHistory(info, currentSessionID) {
 			b.bumpNextEvent(info.LastEventID)
 			b.flushAllText()
 			return
 		}
-		// P2P-first: if P2P upgrade is pending or active, skip relay recovery
-		// replay. The P2P offer/answer must complete (or fail) before we
-		// flood the relay channel with replay traffic. If P2P succeeds, all
-		// messages flow over DataChannel. If P2P fails, the resulting
-		// UpgradeFailed state will allow recovery replay on the next
-		// OnRelayConnected callback.
+
 		if b.p2pUpgradePending() {
-			// Record relay's last known event for SyncP2PReplay gap detection.
+
 			b.relayLastEventMu.Lock()
 			b.relayLastEventID = info.LastEventID
 			b.relayLastEventMu.Unlock()
@@ -1044,15 +934,11 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
 			}
-			// Compute recovery plan inside goroutine to avoid blocking
-			// the caller (handleRelayConnected runs on the readPump).
+
 			plan, events := b.relayRecoveryPlan(info, currentSessionID)
 			debug.Log("tunnel", "broker: client connected recovery plan trusted=%t reset=%t suffix_from=%d relay session=%q count=%d local session=%q", plan.trusted, plan.reset, plan.replayFrom, info.SessionID, info.HistoryCount, currentSessionID)
 			if plan.trusted {
-				// Relay already has everything — bump + flush, but we must
-				// re-send session_info with the current encryption key.
-				// Relay replay ciphertext uses the old key which the new
-				// client cannot decrypt.
+
 				b.bumpNextEvent(info.LastEventID)
 				b.flushAllText()
 				if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
@@ -1080,12 +966,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
 			}
-			// When reset is needed, use replace_history mode so the relay
-			// clears its accumulated (potentially duplicated) event history
-			// BEFORE replaying the canonical events. Without this, the relay
-			// appends the replayed events to stale history, causing the relay
-			// event count to snowball (relayCount grows beyond localCount on
-			// every client reconnect, perpetually re-triggering reset=true).
+
 			if plan.reset {
 				b.sendActiveSessionWithMode(currentSessionID, ActiveSessionModeReplaceHistory)
 			} else {
@@ -1094,7 +975,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
 			}
-			// Only replay the suffix that relay history doesn't have.
+
 			suffix := events
 			if plan.replayFrom < len(events) {
 				suffix = events[plan.replayFrom:]
@@ -1108,8 +989,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 					return
 				}
 			}
-			// No suffix to replay (or replay was empty) — send authoritative
-			// snapshot with in-flight data so the client gets the full picture.
+
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
 			}
@@ -1140,13 +1020,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 	if info.Role != "server" {
 		return
 	}
-	// Server branch: compute the recovery plan and snapshot inside a
-	// goroutine, mirroring the client branch above. handleRelayConnected
-	// runs on the readPump; relayRecoveryPlan invokes the replay provider
-	// (may block on SQLite persistence reads) and the snapshot provider
-	// copies the full history under a lock. Blocking here stalls the
-	// readPump (no reads, no pongs) until the relay's 75s read timeout
-	// kicks the connection, causing a reconnect storm.
+
 	b.beginProjectionSync()
 	safego.Go("tunnel.broker.relayReplay", func() {
 		defer b.endProjectionSync()
@@ -1159,10 +1033,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 				b.bumpNextEvent(info.LastEventID)
 			}
 			b.markRelayReady()
-			// Always send active_session on server reconnect so the relay
-			// has up-to-date workspace metadata. Even when the relay's
-			// history is trusted, the room may have been restored from
-			// SQLite without workspace fields (e.g. after relay restart).
+
 			b.sendActiveSession(currentSessionID)
 			return
 		}
@@ -1306,8 +1177,7 @@ func (b *Broker) trustRelayHistory(info RelayConnectedState, currentSessionID st
 
 func (b *Broker) relayRecoveryPlan(info RelayConnectedState, currentSessionID string) (relayRecoveryPlan, []GatewayMessage) {
 	events, available := b.canonicalReplayState()
-	// Cache the projection hash for activeSessionBarrier to use without
-	// calling the replay provider (which may block).
+
 	if available && len(events) > 0 {
 		h := ProjectionHash(events)
 		b.projectionHashCacheMu.Lock()
@@ -1321,10 +1191,7 @@ func (b *Broker) relayRecoveryPlan(info RelayConnectedState, currentSessionID st
 	debug.Log("tunnel", "broker: recovery plan inputs: relayEpoch=%d localEpoch=%d relaySession=%q localSession=%q relayCount=%d localCount=%d relayLastEvent=%q relayHash=%q",
 		info.AuthorityEpoch, currentAuthority, info.SessionID, currentSessionID, info.HistoryCount, len(events), info.LastEventID, info.ProjectionHash)
 	if info.AuthorityEpoch == 0 || info.AuthorityEpoch != currentAuthority {
-		// Authority epoch mismatch: the relay may have lost epoch metadata
-		// (e.g. after relay restart) but still has the events. If the session
-		// ID and projection hash match, we can trust the relay's history
-		// without a full reset replay.
+
 		if info.SessionID == currentSessionID &&
 			info.HistoryCount > 0 && info.HistoryCount <= len(events) &&
 			strings.TrimSpace(info.ProjectionHash) != "" &&
@@ -1398,8 +1265,6 @@ func (b *Broker) currentSnapshot(provider func() BrokerSnapshot) (BrokerSnapshot
 	return snapshot, true
 }
 
-// ─── User message ───
-
 func (b *Broker) PushUserMessage(text string) {
 	b.PushUserMessageData(MessageData{Text: text})
 }
@@ -1418,8 +1283,6 @@ func (b *Broker) PushSystemMessageData(data MessageData) {
 	b.enqueue(EventSystemMessage, data)
 }
 
-// ─── Streaming text (batched) ───
-
 func (b *Broker) PushText(id, chunk string) {
 	b.waitProjectionSync()
 	b.textMu.Lock()
@@ -1436,7 +1299,7 @@ func (b *Broker) PushTextData(data TextData) {
 
 func (b *Broker) PushTextDone(id string) {
 	b.waitProjectionSync()
-	// Flush remaining text immediately, then send text_done
+
 	b.flushText(id)
 	b.enqueueWithStream(EventTextDone, id, TextData{ID: id, Done: true})
 	b.textMu.Lock()
@@ -1458,7 +1321,7 @@ func (b *Broker) PushReasoningDone(id string) {
 	if id == "" {
 		return
 	}
-	// Flush remaining reasoning immediately, then send done event.
+
 	b.flushReasoning(id)
 	b.reasoningMu.Lock()
 	agentID, ok := b.activeReasoning[id]
@@ -1476,8 +1339,6 @@ func (b *Broker) PushReasoningDone(id string) {
 	}
 	b.enqueueWithStream(EventReasoningDone, id, TextData{ID: id, Done: true})
 }
-
-// ─── Status ───
 
 func (b *Broker) PushStatus(status, message string) {
 	b.waitProjectionSync()
@@ -1516,8 +1377,6 @@ func (b *Broker) CurrentActivity() (ActivityData, bool) {
 	defer b.activityMu.RUnlock()
 	return b.currentActivity, b.hasCurrentActivity
 }
-
-// ─── Tool calls ───
 
 func (b *Broker) PushToolCall(toolID, toolName, displayName, args, detail string) {
 	b.waitProjectionSync()
@@ -1558,10 +1417,6 @@ func (b *Broker) PushToolResult(toolID, toolName, result string, isError bool) {
 	b.enqueueWithStream(EventToolResult, toolID, payload)
 }
 
-// applyTextPayloadFallback fills Summary/Payload/PayloadMode for tools without
-// a dedicated presentation rule (read_file, grep, run_command, MCP tools, ...).
-// Without it the tunnel event carries only Result with empty payload fields,
-// leaving clients that render payload with no expandable full text (#4286).
 func applyTextPayloadFallback(summary, payload *string, payloadMode *string, result string) {
 	*summary = tunnelCompactSingleLine(result)
 	*payload = result
@@ -1577,8 +1432,6 @@ func tunnelCompactSingleLine(s string) string {
 	return s
 }
 
-// ─── Approval ───
-
 func (b *Broker) PushApprovalRequest(id, toolName, input string) {
 	b.waitProjectionSync()
 	b.enqueueWithStream(EventApprovalRequest, id, ApprovalRequestData{ID: id, ToolName: toolName, Input: input})
@@ -1589,14 +1442,10 @@ func (b *Broker) PushApprovalResult(id, decision string) {
 	b.enqueueWithStream(EventApprovalResult, id, map[string]string{"id": id, "decision": decision})
 }
 
-// ─── Error ───
-
 func (b *Broker) PushError(message string) {
 	b.waitProjectionSync()
 	b.enqueue(EventError, ErrorData{Message: message})
 }
-
-// ─── Ask User ───
 
 func (b *Broker) PushServerAck(messageID string) {
 	if messageID == "" {
@@ -1607,7 +1456,7 @@ func (b *Broker) PushServerAck(messageID string) {
 		debug.Log("tunnel", "broker: marshal error for %s: %v", EventServerAck, err)
 		return
 	}
-	// server_ack is NOT recorded in event history — it's a transient signal.
+
 	b.enqueueWithBytes(EventServerAck, "", dataBytes, false, false)
 }
 
@@ -1620,8 +1469,6 @@ func (b *Broker) PushAskUserResponse(id, status string, answers []AskUserAnswer)
 	b.waitProjectionSync()
 	b.enqueueWithStream(EventAskUserResponse, id, AskUserResponseData{ID: id, Status: status, Answers: answers})
 }
-
-// ─── Sub-agent / Teammate ───
 
 func (b *Broker) PushSubagentSpawn(agentID, name, task, color, parentID string) {
 	b.waitProjectionSync()
@@ -1743,8 +1590,6 @@ func (b *Broker) PushSubagentToolResult(agentID, toolID, toolName, displayName, 
 	})
 }
 
-// ─── Utility ───
-
 func (b *Broker) NextMessageID() string {
 	return fmt.Sprintf("msg-%d", msgCount.Add(1))
 }
@@ -1756,7 +1601,7 @@ type HistoryEntry struct {
 	Content     string `json:"content"`
 	DisplayText string `json:"display_text,omitempty"`
 	Kind        string `json:"kind,omitempty"`
-	// Tool fields (role == "tool_call" or "tool_result")
+
 	ToolID          string `json:"tool_id,omitempty"`
 	ToolName        string `json:"tool_name,omitempty"`
 	ToolDisplayName string `json:"tool_display_name,omitempty"`
@@ -1965,13 +1810,7 @@ func (b *Broker) endProjectionSync() {
 	b.projectionMu.Unlock()
 }
 
-// projectionSyncWaitTimeout bounds a stuck producer's wait (see
-// waitProjectionSync). Atomic because the leaked-goroutine hazard is real:
-// textFlushLoop calls waitProjectionSync from its own goroutine while tests
-// retune this knob mid-suite - a plain Duration var was a DATA RACE that
-// the race detector flagged on unrelated tests running later in the suite
-// (the broker's textFlushLoop outlives tests that never call Stop()).
-var projectionSyncWaitTimeout atomic.Int64 // time.Duration (nanoseconds)
+var projectionSyncWaitTimeout atomic.Int64
 
 func init() {
 	projectionSyncWaitTimeout.Store(int64(10 * time.Second))
@@ -1983,10 +1822,7 @@ func (b *Broker) waitProjectionSync() {
 		b.projectionMu.Unlock()
 		return
 	}
-	// #1182: bound the wait. A sync wedged behind another lock (reconnect
-	// AB-BA against the frontend bridge mutex) previously blocked every
-	// producer forever; wake up after the timeout and proceed degraded
-	// (possible interleave during replay) instead of a permanent stall.
+
 	timedOut := false
 	timer := time.AfterFunc(time.Duration(projectionSyncWaitTimeout.Load()), func() {
 		b.projectionMu.Lock()
@@ -2001,10 +1837,6 @@ func (b *Broker) waitProjectionSync() {
 	b.projectionMu.Unlock()
 }
 
-// ─── Internal ───
-
-// enqueueOut appends a message to the unbounded outbound queue and wakes the sender.
-// This NEVER blocks, so OnUpdate callbacks can call tunnel methods safely.
 func (b *Broker) enqueueOut(msg GatewayMessage) {
 	b.outMu.Lock()
 	b.outbound = append(b.outbound, msg)
@@ -2013,9 +1845,7 @@ func (b *Broker) enqueueOut(msg GatewayMessage) {
 }
 
 func (b *Broker) enqueueRecorded(msg GatewayMessage) {
-	// When replaying old session_info events that lack Title (recorded
-	// before Title was added to the protocol), fill in the cached Title
-	// so mobile always receives the correct session title.
+
 	if msg.Type == EventSessionInfo {
 		b.sessionMu.RLock()
 		cachedTitle := b.cachedSessionInfo.Title
@@ -2040,11 +1870,7 @@ func (b *Broker) enqueueControl(eventType string, data interface{}) {
 		debug.Log("tunnel", "broker: marshal control error for %s: %v", eventType, err)
 		return
 	}
-	// Read session-scoped fields outside the lock, mirroring
-	// enqueueWithBytes. AuthorityEpoch must be stamped on every outbound
-	// message: the relay coerces epoch=0 to 1 in bindRoomSession, which an
-	// established room treats as an authority change and destroys its entire
-	// accumulated history.
+
 	sid := b.SessionID()
 	epoch := b.AuthorityEpoch()
 	b.enqueueOut(GatewayMessage{
@@ -2060,8 +1886,7 @@ func (b *Broker) enqueueSnapshotEvent(ev SnapshotEvent) {
 		return
 	}
 	data := append(json.RawMessage(nil), ev.Data...)
-	// Read session-scoped fields before acquiring outMu to avoid nested
-	// locking (outMu → sessionMu.RLock), mirroring enqueueWithBytes.
+
 	sid := b.SessionID()
 	epoch := b.AuthorityEpoch()
 	b.outMu.Lock()
@@ -2090,7 +1915,6 @@ func (b *Broker) signalSent(eventID string) {
 	}
 }
 
-// enqueue assigns stable session/event metadata and puts on outbound.
 func (b *Broker) enqueue(eventType string, data interface{}) {
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
@@ -2101,7 +1925,7 @@ func (b *Broker) enqueue(eventType string, data interface{}) {
 }
 
 func (b *Broker) enqueueWithStream(eventType, streamID string, data interface{}) {
-	// Marshal outside the lock — this is the expensive part.
+
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
 		debug.Log("tunnel", "broker: marshal error for %s: %v", eventType, err)
@@ -2110,14 +1934,11 @@ func (b *Broker) enqueueWithStream(eventType, streamID string, data interface{})
 	b.enqueueWithBytes(eventType, streamID, dataBytes, true, false)
 }
 
-// enqueueWithBytes assigns an event ID and appends to the outbound queue under
-// the same lock so queue order always matches event ID order.
 func (b *Broker) enqueueWithBytes(eventType, streamID string, dataBytes []byte, record, waitForSend bool) (GatewayMessage, <-chan struct{}) {
 	if eventType == "" {
 		return GatewayMessage{}, nil
 	}
-	// Read session-scoped fields before acquiring outMu to avoid
-	// nested locking (outMu → sessionMu.RLock).
+
 	sid := b.SessionID()
 	epoch := b.AuthorityEpoch()
 	b.outMu.Lock()

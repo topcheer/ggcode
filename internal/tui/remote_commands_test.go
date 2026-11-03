@@ -49,10 +49,6 @@ func TestExecuteRemoteSlashCommand_Unknown(t *testing.T) {
 	}
 }
 
-// TestExecuteRemoteSlashCommand_NickWithoutHub pins the IM-inbound /nick
-// path when no LAN hub is attached: the registry entry routes to
-// tuiSlashDeps.SetLanIdentity, which must answer with a precise
-// "not available" error rather than falling to Unknown command.
 func TestExecuteRemoteSlashCommand_NickWithoutHub(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.SetConfig(config.DefaultConfig())

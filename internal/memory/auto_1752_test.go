@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// #1752 case 2: SaveMemory must be atomic (temp+rename) and safe under
-// concurrent writers - no torn files, no lost final state.
 func Test1752SaveMemoryAtomicConcurrent(t *testing.T) {
 	dir := t.TempDir()
 	am := &AutoMemory{dir: dir}
@@ -28,7 +26,6 @@ func Test1752SaveMemoryAtomicConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Final read: a complete payload, never a torn/partial file.
 	data, err := os.ReadFile(filepath.Join(dir, "race-key.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -37,11 +34,6 @@ func Test1752SaveMemoryAtomicConcurrent(t *testing.T) {
 		t.Fatalf("torn write: got %d bytes", len(data))
 	}
 
-	// No temp residue: the directory holds only the final file plus
-	// legitimate persistent state - the sa-85 provenance sidecar
-	// (.usage.json) and the r488 non-destructive archive dir (.history,
-	// populated when concurrent overwrites archive outgoing versions;
-	// Mem++ arXiv:2610.02002).
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		if e.Name() != "race-key.md" && e.Name() != usageFileName && e.Name() != ".history" {

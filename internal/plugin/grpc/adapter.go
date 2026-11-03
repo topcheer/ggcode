@@ -11,18 +11,14 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// GRPCAdapter wraps a gRPC tool connection as a tool.Tool.
-// One adapter = one tool. A plugin that exports N tools gets N adapters
-// all sharing the same underlying gRPC client.
 type GRPCAdapter struct {
 	client  pb.ToolServiceClient
 	name    string
 	desc    string
 	params  json.RawMessage
-	workDir string // injected at registration time
+	workDir string
 }
 
-// NewGRPCAdapter creates an adapter for a single tool exposed by the plugin.
 func NewGRPCAdapter(client pb.ToolServiceClient, def *pb.ToolDefinition, workDir string) *GRPCAdapter {
 	return &GRPCAdapter{
 		client:  client,
@@ -51,10 +47,7 @@ func (a *GRPCAdapter) Execute(ctx context.Context, input json.RawMessage) (tool.
 		},
 	})
 	if err != nil {
-		// #1597-C: a cancelled/timeout gRPC call is NOT a business
-		// failure - flattening it into an IsError result made the agent
-		// loop treat a user cancellation as ordinary tool output and keep
-		// iterating against a dead context. Let cancellation propagate.
+
 		if st, ok := status.FromError(err); ok {
 			if st.Code() == codes.Canceled || st.Code() == codes.DeadlineExceeded {
 				return tool.Result{}, err

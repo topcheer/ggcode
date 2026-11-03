@@ -103,33 +103,26 @@ type stdioClient struct {
 	nextID  int64
 	pending map[string]chan rpcEnvelope
 	mu      sync.Mutex
-	writeMu sync.Mutex // serializes JSON-RPC header+body writes to stdin
-	failed  bool       // set when readLoop exits unexpectedly
+	writeMu sync.Mutex
+	failed  bool
 	failMu  sync.Mutex
 
 	stderr              lockedBuffer
 	notificationHandler func(method string, params json.RawMessage)
 }
 
-// lockedBuffer wraps bytes.Buffer with a mutex so it is safe for concurrent
-// reads and writes (exec.Cmd writes stderr from a goroutine while
-// failPending reads it from another).
 type lockedBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
 }
 
-// stderrMaxBytes caps the buffer: chatty servers (rust-analyzer
-// indexing, csharp-ls info level) otherwise accumulate unbounded stderr
-// for the whole idle-TTL lifetime, multiplied per parallel language
-// session. The TAIL is kept - that is what failPending reports (#1586-B).
 const stderrMaxBytes = 64 << 10
 
 func (lb *lockedBuffer) Write(p []byte) (int, error) {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 	if lb.buf.Len()+len(p) > stderrMaxBytes {
-		// Keep the newest tail: drop from the front what no longer fits.
+
 		overflow := lb.buf.Len() + len(p) - stderrMaxBytes
 		if overflow > 0 && overflow <= lb.buf.Len() {
 			lb.buf.Next(overflow)
@@ -147,17 +140,11 @@ func (lb *lockedBuffer) String() string {
 	return lb.buf.String()
 }
 
-// DocumentHighlight represents a single highlight occurrence of a symbol
-// within the current document. Kind follows the LSP DocumentHighlightKind
-// values: 1=Text, 2=Read, 3=Write.
 type DocumentHighlight struct {
 	Range Range
 	Kind  int
 }
 
-// DocumentHighlights returns all occurrences of the symbol at pos within the
-// current document, classified by access kind (read/write/text). This is
-// faster and more precise than grep for understanding local symbol usage.
 func DocumentHighlights(ctx context.Context, workspace, path string, pos Position) ([]DocumentHighlight, error) {
 	return withOpenDocument(ctx, workspace, path, func(ctx context.Context, session *sessionClient, docURI string) ([]DocumentHighlight, error) {
 		call := func() ([]DocumentHighlight, error) {
@@ -227,7 +214,6 @@ func References(ctx context.Context, workspace, path string, pos Position) ([]Lo
 	})
 }
 
-// Implementation finds implementations of the symbol at pos using textDocument/implementation.
 func Implementation(ctx context.Context, workspace, path string, pos Position) ([]Location, error) {
 	return withOpenDocument(ctx, workspace, path, func(ctx context.Context, session *sessionClient, docURI string) ([]Location, error) {
 		call := func() ([]Location, error) {
@@ -244,14 +230,13 @@ func Implementation(ctx context.Context, workspace, path string, pos Position) (
 	})
 }
 
-// CallHierarchyItem represents a call hierarchy item returned by the LSP server.
 type CallHierarchyItem struct {
 	Name   string
 	Kind   int
 	Detail string
 	Path   string
 	Range  Range
-	// raw fields preserved for follow-up incoming/outgoing calls
+
 	rawURI   string
 	rawRange rawRange
 }
@@ -265,14 +250,12 @@ type rawCallHierarchyItem struct {
 	SelectionRange rawRange `json:"selectionRange"`
 }
 
-// CallHierarchyCall represents a caller or callee in the call hierarchy.
 type CallHierarchyCall struct {
 	From       CallHierarchyItem
-	To         CallHierarchyItem // only populated for outgoing calls
+	To         CallHierarchyItem
 	FromRanges []Range
 }
 
-// PrepareCallHierarchy prepares call hierarchy items for the symbol at pos.
 func PrepareCallHierarchy(ctx context.Context, workspace, path string, pos Position) ([]CallHierarchyItem, error) {
 	return withOpenDocument(ctx, workspace, path, func(ctx context.Context, session *sessionClient, docURI string) ([]CallHierarchyItem, error) {
 		call := func() ([]CallHierarchyItem, error) {
@@ -289,8 +272,6 @@ func PrepareCallHierarchy(ctx context.Context, workspace, path string, pos Posit
 	})
 }
 
-// IncomingCalls returns callers of the given call hierarchy item.
-// Uses item.Path to re-acquire the LSP session for the file's language.
 func IncomingCalls(ctx context.Context, workspace string, item CallHierarchyItem) ([]CallHierarchyCall, error) {
 	return withOpenDocument(ctx, workspace, item.Path, func(ctx context.Context, session *sessionClient, _ string) ([]CallHierarchyCall, error) {
 		var raw json.RawMessage
@@ -309,7 +290,6 @@ func IncomingCalls(ctx context.Context, workspace string, item CallHierarchyItem
 	})
 }
 
-// OutgoingCalls returns callees of the given call hierarchy item.
 func OutgoingCalls(ctx context.Context, workspace string, item CallHierarchyItem) ([]CallHierarchyCall, error) {
 	return withOpenDocument(ctx, workspace, item.Path, func(ctx context.Context, session *sessionClient, _ string) ([]CallHierarchyCall, error) {
 		var raw json.RawMessage
@@ -343,29 +323,13 @@ func DocumentSymbols(ctx context.Context, workspace, path string) ([]Symbol, err
 	})
 }
 
-// SiblingDiagnostic holds a diagnostic found in a file other than the edited
-// file, along with the source file's path so the caller can report where the
-// error originates.
 type SiblingDiagnostic struct {
 	File       string
 	Diagnostic Diagnostic
 }
 
-// SiblingDiagnostics returns diagnostics for Go source files in the same
-// directory as editedPath (excluding editedPath itself). Language servers like
-// gopls push diagnostics for all files in a package via
-// textDocument/publishDiagnostics; those diagnostics are cached in the session.
-// This function reads from that cache — it does NOT open sibling documents or
-// issue additional LSP requests — so it is fast and non-blocking.
-//
-// This catches cross-file compilation errors that the per-file Diagnostics
-// call misses. For example, renaming a function in file A breaks callers in
-// sibling file B; gopls pushes diagnostics for both files, but only file A is
-// queried by the standard post-edit diagnostics check.
-//
-// Only files with severity 1 (Error) or 2 (Warning) are returned.
 func SiblingDiagnostics(ctx context.Context, workspace, editedPath string) ([]SiblingDiagnostic, error) {
-	// Only check sibling diagnostics for Go files (gopls pushes package-wide).
+
 	if filepath.Ext(editedPath) != ".go" {
 		return nil, nil
 	}
@@ -381,10 +345,9 @@ func SiblingDiagnostics(ctx context.Context, workspace, editedPath string) ([]Si
 		return nil, nil
 	}
 
-	// Acquire the existing session to read cached diagnostics.
 	session, err := globalSessions.acquire(ctx, workspace, resolved)
 	if err != nil {
-		return nil, nil // session not available — silently skip
+		return nil, nil
 	}
 
 	editedAbs, _ := filepath.Abs(editedPath)
@@ -394,8 +357,7 @@ func SiblingDiagnostics(ctx context.Context, workspace, editedPath string) ([]Si
 			continue
 		}
 		name := entry.Name()
-		// Only check Go files, excluding the edited file and test files
-		// that pair with the edited file (their diagnostics overlap).
+
 		if filepath.Ext(name) != ".go" {
 			continue
 		}
@@ -410,9 +372,8 @@ func SiblingDiagnostics(ctx context.Context, workspace, editedPath string) ([]Si
 			continue
 		}
 		for _, d := range diags {
-			// #1881 case 2: severity is optional in LSP - a missing field
-			// decodes to 0 (unspecified), which must NOT count as Error/Warning.
-			if d.Severity >= 1 && d.Severity <= 2 { // Error or Warning only
+
+			if d.Severity >= 1 && d.Severity <= 2 {
 				result = append(result, SiblingDiagnostic{
 					File:       siblingPath,
 					Diagnostic: d,
@@ -423,28 +384,8 @@ func SiblingDiagnostics(ctx context.Context, workspace, editedPath string) ([]Si
 	return result, nil
 }
 
-// CrossPackageDiagnostics checks cached LSP diagnostics for Go files OUTSIDE the
-// edited file's directory that may be affected by the edit. Language servers like
-// gopls push diagnostics for all files in the workspace via
-// textDocument/publishDiagnostics; those diagnostics are cached in the session.
-//
-// Unlike SiblingDiagnostics (which checks files in the same directory/package),
-// this function catches cross-package breakage: when editing a file in package A
-// breaks callers in package B that import A. For example, changing a function
-// signature in internal/agent/agent.go will cause compilation errors in
-// internal/tui/ files that call that function.
-//
-// To minimize false positives (pre-existing errors in unrelated files), this
-// function only reports errors in files whose import block references the edited
-// file's package. The package import path is derived from the go.mod module path
-// plus the edited file's directory relative to the module root.
-//
-// This function reads from the cached diagnostics — it does NOT open documents or
-// issue additional LSP requests — so it is fast and non-blocking. However, it
-// does read candidate files to check their imports; this is capped to a small
-// number of files (maxCrossPackageFiles) to stay fast.
 func CrossPackageDiagnostics(ctx context.Context, workspace, editedPath string) ([]SiblingDiagnostic, error) {
-	// Only check for Go files.
+
 	if filepath.Ext(editedPath) != ".go" {
 		return nil, nil
 	}
@@ -454,19 +395,16 @@ func CrossPackageDiagnostics(ctx context.Context, workspace, editedPath string) 
 		return nil, nil
 	}
 
-	// Determine the Go package import path for the edited file.
 	pkgPath, ok := goPackageImportPath(workspace, editedPath)
 	if !ok || pkgPath == "" {
 		return nil, nil
 	}
 
-	// Acquire the existing session to read cached diagnostics.
 	session, err := globalSessions.acquire(ctx, workspace, resolved)
 	if err != nil {
-		return nil, nil // session not available — silently skip
+		return nil, nil
 	}
 
-	// Collect all URIs with cached error/warning diagnostics.
 	editedAbs, _ := filepath.Abs(editedPath)
 
 	var candidates []crossPackageCandidate
@@ -476,30 +414,27 @@ func CrossPackageDiagnostics(ctx context.Context, workspace, editedPath string) 
 		if !state.seen || len(state.diagnostics) == 0 {
 			continue
 		}
-		// Convert URI to filesystem path.
+
 		fp := uriToPath(uri)
 		if fp == "" {
 			continue
 		}
 		fpAbs, _ := filepath.Abs(fp)
-		// Skip the edited file itself and files in the same directory
-		// (those are handled by SiblingDiagnostics). #1881 case 1: both
-		// comparisons use Abs-normalized paths so correctness does not depend
-		// on callers always passing absolute paths.
+
 		if fpAbs == editedAbs {
 			continue
 		}
 		if filepath.Dir(fpAbs) == filepath.Dir(editedAbs) {
 			continue
 		}
-		// Only consider Go source files.
+
 		if filepath.Ext(fp) != ".go" {
 			continue
 		}
-		// Collect error/warning diagnostics.
+
 		var diags []Diagnostic
 		for _, d := range state.diagnostics {
-			// #1881 case 2: 0 = unspecified severity, not Error/Warning.
+
 			if d.Severity >= 1 && d.Severity <= 2 {
 				diags = append(diags, d)
 			}
@@ -514,10 +449,6 @@ func CrossPackageDiagnostics(ctx context.Context, workspace, editedPath string) 
 		return nil, nil
 	}
 
-	// Filter candidates: only include files that import the edited file's package.
-	// This reduces false positives from pre-existing errors in unrelated files.
-	// Sort candidates by number of errors (most errors first) so we check the
-	// most likely affected files first within our cap.
 	sortCandidatesByErrorCount(candidates)
 
 	checked := 0
@@ -528,7 +459,6 @@ func CrossPackageDiagnostics(ctx context.Context, workspace, editedPath string) 
 		}
 		checked++
 
-		// Quick check: does this file import the edited file's package?
 		if !fileImportsPackage(c.path, pkgPath) {
 			continue
 		}
@@ -544,16 +474,10 @@ func CrossPackageDiagnostics(ctx context.Context, workspace, editedPath string) 
 	return result, nil
 }
 
-// maxCrossPackageFiles limits how many candidate files we read to check imports,
-// keeping the post-edit diagnostics fast even in large workspaces.
 const maxCrossPackageFiles = 20
 
-// goPackageImportPath derives the Go import path for a source file from the
-// workspace's go.mod module path and the file's directory relative to the module root.
-// Returns the import path and true on success, or empty string and false if the
-// module path cannot be determined.
 func goPackageImportPath(workspace, filePath string) (string, bool) {
-	// Walk up from the file's directory to find go.mod.
+
 	dir := filepath.Dir(filePath)
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
@@ -562,7 +486,7 @@ func goPackageImportPath(workspace, filePath string) (string, bool) {
 
 	var modDir, modulePath string
 	searchDir := absDir
-	for i := 0; i < 30; i++ { // cap at 30 levels to prevent infinite loops
+	for i := 0; i < 30; i++ {
 		modFile := filepath.Join(searchDir, "go.mod")
 		if data, err := os.ReadFile(modFile); err == nil {
 			modDir = searchDir
@@ -580,17 +504,14 @@ func goPackageImportPath(workspace, filePath string) (string, bool) {
 		return "", false
 	}
 
-	// Compute the relative path from the module root to the file's directory.
 	relDir, err := filepath.Rel(modDir, absDir)
 	if err != nil || relDir == "." {
 		return modulePath, true
 	}
 
-	// Join module path with the relative directory, using forward slashes.
 	return modulePath + "/" + filepath.ToSlash(relDir), true
 }
 
-// parseGoModModule extracts the module path from a go.mod file content.
 func parseGoModModule(content string) string {
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)
@@ -601,9 +522,6 @@ func parseGoModModule(content string) string {
 	return ""
 }
 
-// fileImportsPackage checks whether a Go source file imports the given package path.
-// This is a fast heuristic: it searches the file content for the import path string
-// within an import block. It does not fully parse the Go AST.
 func fileImportsPackage(filePath, pkgPath string) bool {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -611,13 +529,10 @@ func fileImportsPackage(filePath, pkgPath string) bool {
 	}
 	content := string(data)
 
-	// Fast path: if the package path doesn't appear anywhere in the file, skip.
 	if !strings.Contains(content, pkgPath) {
 		return false
 	}
 
-	// More precise check: look for the path in quoted strings within import context.
-	// Check both single and block import forms.
 	quoted := `"` + pkgPath + `"`
 	if strings.Contains(content, quoted) {
 		return true
@@ -626,14 +541,11 @@ func fileImportsPackage(filePath, pkgPath string) bool {
 	return false
 }
 
-// crossPackageCandidate holds a file path and its cached error/warning diagnostics
-// for cross-package impact analysis.
 type crossPackageCandidate struct {
 	path string
 	diag []Diagnostic
 }
 
-// sortCandidatesByErrorCount sorts candidates in descending order by number of errors.
 func sortCandidatesByErrorCount(candidates []crossPackageCandidate) {
 	for i := 1; i < len(candidates); i++ {
 		for j := i; j > 0 && len(candidates[j].diag) > len(candidates[j-1].diag); j-- {
@@ -642,9 +554,6 @@ func sortCandidatesByErrorCount(candidates []crossPackageCandidate) {
 	}
 }
 
-// ErrDiagnosticsNotReady reports that the published-diagnostics wait timed
-// out without the server ever pushing for the document (#1654-4): the data
-// is late, not absent. Callers must not treat this as a clean/empty result.
 var ErrDiagnosticsNotReady = errors.New("lsp diagnostics not yet published (wait timed out; server analysis may still be running)")
 
 func Diagnostics(ctx context.Context, workspace, path string) ([]Diagnostic, error) {
@@ -655,14 +564,7 @@ func Diagnostics(ctx context.Context, workspace, path string) ([]Diagnostic, err
 				"textDocument": map[string]any{"uri": docURI},
 			}, &raw); err == nil {
 				session.setPullDiagnosticsSupport(true)
-				// #1274: an empty pull result IS a valid answer (clean file).
-				// The old len(parsed) > 0 gate let clean-file queries fall
-				// through to the published-diagnostics poll and eat the full
-				// publishedDiagnosticsWait (up to 500ms) on servers that
-				// support pull but never publish - a per-edit synchronous
-				// latency tax. Return the pull answer (empty included);
-				// publish-backed servers keep the wait below as fallback for
-				// unsupported/failed pulls only.
+
 				parsed := parseDocumentDiagnostics(raw)
 				if len(parsed) > 0 {
 					session.setPublishedDiagnostics(docURI, parsed)
@@ -681,15 +583,7 @@ func Diagnostics(ctx context.Context, workspace, path string) ([]Diagnostic, err
 			}
 			time.Sleep(40 * time.Millisecond)
 		}
-		// #1654-4: the wait timed out with no publish seen. Returning
-		// (nil, nil) here conflated "server reports zero diagnostics"
-		// with "data has not arrived" - post-edit consumers diffed the
-		// empty set against the baseline and asserted "resolved N
-		// pre-existing diagnostic(s)" when the analysis was merely late.
-		// A push-only server on a large project (tsserver-class reanalysis
-		// > 500ms) reported phantom fixes on every such edit. Surface a
-		// distinct sentinel so callers can distinguish not-ready from
-		// clean.
+
 		return nil, ErrDiagnosticsNotReady
 	})
 }
@@ -701,9 +595,7 @@ func retryEmptyStringResult(ctx context.Context, session *sessionClient, call fu
 	}
 	for i := 0; i < csharpWarmupRetryAttempts; i++ {
 		if err := sleepWithContext(ctx, csharpWarmupRetryDelay); err != nil {
-			// #1586-D: returning (result, nil) made a CANCELLED warmup
-			// indistinguishable from a legitimately-empty hover - callers
-			// could neither retry nor degrade. Surface the context error.
+
 			return result, err
 		}
 		next, err := call()
@@ -724,9 +616,7 @@ func retryEmptySliceResult[T any](ctx context.Context, session *sessionClient, c
 	}
 	for i := 0; i < csharpWarmupRetryAttempts; i++ {
 		if err := sleepWithContext(ctx, csharpWarmupRetryDelay); err != nil {
-			// #1586-D (sibling completion, #1766 case 1): return the context
-			// error - (result, nil) made a cancelled call indistinguishable
-			// from a legitimately-empty result for all six slice callers.
+
 			return result, err
 		}
 		next, err := call()
@@ -747,7 +637,7 @@ func retryCallHierarchyItems(ctx context.Context, session *sessionClient, call f
 	}
 	for i := 0; i < csharpWarmupRetryAttempts; i++ {
 		if err := sleepWithContext(ctx, csharpWarmupRetryDelay); err != nil {
-			// #1586-D sibling completion (#1766 case 1): surface cancellation.
+
 			return result, err
 		}
 		next, err := call()
@@ -876,12 +766,7 @@ func startClient(ctx context.Context, workspace string, resolved ResolvedServer,
 	if err != nil {
 		return nil, err
 	}
-	// The notification handler must be installed before readLoop starts.
-	// csharp-ls (and other fast servers) can emit notifications (e.g. the
-	// "Finished loading solution" logMessage that gates awaitProjectReady)
-	// during the initialize handshake — before startClient returns. Without
-	// an early handler, readLoop silently drops those ID-less messages and
-	// the ready signal is lost for the lifetime of the session.
+
 	client := &stdioClient{
 		cmd:                 cmd,
 		stdin:               stdin,
@@ -1034,12 +919,7 @@ func (c *stdioClient) close() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = c.call(ctx, "shutdown", map[string]any{}, nil)
-	// #2144: the exit notification must not share the shutdown call's
-	// deadline - a slow/hung server that consumed the whole 2s budget left
-	// notify's ctx already Done, silently dropping exit and falling
-	// through to Kill (skipping the graceful cleanup the LSP spec's
-	// shutdown->exit sequence provides). Notifications await no response,
-	// so a fresh short deadline costs nothing.
+
 	exitCtx, exitCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer exitCancel()
 	_ = c.notify(exitCtx, "exit", map[string]any{})
@@ -1053,10 +933,6 @@ func (c *stdioClient) close() {
 	}
 }
 
-// isFailed reports whether readLoop has exited unexpectedly, i.e. the
-// underlying server process is dead or the protocol stream is broken and
-// every subsequent call/notify on this client is guaranteed to fail.
-// Reads failed under failMu, matching the write side in readLoop.
 func (c *stdioClient) isFailed() bool {
 	if c == nil {
 		return true
@@ -1070,7 +946,7 @@ func (c *stdioClient) readLoop() {
 	for {
 		msg, err := readRPCMessage(c.reader)
 		if err != nil {
-			// Mark client as failed so callers know the session is dead.
+
 			c.failMu.Lock()
 			c.failed = true
 			c.failMu.Unlock()
@@ -1230,7 +1106,7 @@ func (c *stdioClient) failPending(err error) {
 }
 
 func (c *stdioClient) call(ctx context.Context, method string, params any, out any) error {
-	// Fail fast if readLoop has exited — the session is dead.
+
 	c.failMu.Lock()
 	failed := c.failed
 	c.failMu.Unlock()
@@ -1246,10 +1122,7 @@ func (c *stdioClient) call(ctx context.Context, method string, params any, out a
 	ch := make(chan rpcEnvelope, 1)
 	c.mu.Lock()
 	c.pending[rpcIDKey(idRaw)] = ch
-	// Re-check failed while still holding mu to close the TOCTOU window:
-	// readLoop may have set failed (under failMu) and drained pending via
-	// failPending between the fail-fast check above and this registration.
-	// No code path takes failMu while holding mu, so mu→failMu nesting is safe.
+
 	c.failMu.Lock()
 	failedNow := c.failed
 	c.failMu.Unlock()
@@ -1297,12 +1170,6 @@ func (c *stdioClient) notify(ctx context.Context, method string, params any) err
 	}
 }
 
-// writeTimeout bounds a single JSON-RPC write to the server's stdin
-// (#3746). os.Pipe supports no SetDeadline, and a half-dead server (process
-// alive, stopped reading) fills the ~64KB pipe buffer, after which Write
-// blocks FOREVER while holding writeMu - ctx timeouts only guard the
-// response select in call(), and close()'s Process.Kill() fallback runs
-// behind the same blocked write path, so nothing ever unblocks.
 const writeTimeout = 10 * time.Second
 
 func (c *stdioClient) write(msg rpcEnvelope) error {
@@ -1314,9 +1181,7 @@ func (c *stdioClient) write(msg rpcEnvelope) error {
 	defer c.writeMu.Unlock()
 	type writeResult struct{ err error }
 	done := make(chan writeResult, 1)
-	// safego.Go per the goroutine-protection gate: this goroutine may
-	// legitimately outlive the timeout path (it unblocks only when the
-	// pipe is closed and Write fails with EPIPE) - see #3746 comment below.
+
 	safego.Go("lsp.writeTimeout", func() {
 		if _, err := fmt.Fprintf(c.stdin, "Content-Length: %d\r\n\r\n", len(body)); err != nil {
 			done <- writeResult{err}
@@ -1329,10 +1194,7 @@ func (c *stdioClient) write(msg rpcEnvelope) error {
 	case r := <-done:
 		return r.err
 	case <-time.After(writeTimeout):
-		// The server stopped draining stdin. Mark the session failed and
-		// close the pipe: the blocked goroutine unblocks with EPIPE (its
-		// result is discarded - the session is dead anyway) and writeMu is
-		// released, so callers fail fast instead of hanging behind the lock.
+
 		c.failMu.Lock()
 		if !c.failed {
 			c.failed = true
@@ -1343,14 +1205,7 @@ func (c *stdioClient) write(msg rpcEnvelope) error {
 	}
 }
 
-// maxRPCContentLength caps a single LSP RPC body accepted from the server.
-// LSP servers are independent third-party binaries whose stdout is external
-// input: a crashing/hung server can emit garbage that parses as
-// `Content-Length: 4000000000`, and the old unbounded make() either
-// allocated gigabytes or panicked (`makeslice: len out of range`) inside the
-// readLoop goroutine (#3731). Real LSP messages are orders of magnitude
-// smaller; anything beyond this cap is treated as a protocol error.
-const maxRPCContentLength = 64 << 20 // 64 MiB
+const maxRPCContentLength = 64 << 20
 
 func readRPCMessage(r *bufio.Reader) (rpcEnvelope, error) {
 	var msg rpcEnvelope
@@ -1388,12 +1243,6 @@ func readRPCMessage(r *bufio.Reader) (rpcEnvelope, error) {
 	return msg, nil
 }
 
-// fileURI converts a filesystem path to a file:// URI.
-// Windows drive paths ("C:/foo/bar.go") must be rooted with a leading slash so
-// the drive letter is not mistaken for the URI host component: the correct
-// encoding is file:///C:/foo/bar.go (three slashes, empty host). Without the
-// root, url.URL.String() emits file://C:/foo/bar.go, which every consumer then
-// parses with "C:" as the host and loses the drive letter entirely.
 func fileURI(path string) string {
 	slashed := filepath.ToSlash(path)
 	if isWindowsDrivePath(slashed) {
@@ -1403,14 +1252,10 @@ func fileURI(path string) string {
 	return u.String()
 }
 
-// isWindowsDrivePath reports whether s begins with a drive-letter prefix such
-// as "C:" or "d:". It is purely lexical so it works on every GOOS, which lets
-// POSIX hosts construct and round-trip Windows paths as plain strings.
 func isWindowsDrivePath(s string) bool {
 	return len(s) >= 2 && isDriveLetter(s[0]) && s[1] == ':'
 }
 
-// isDriveLetter reports whether c is an ASCII drive letter.
 func isDriveLetter(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
@@ -1572,29 +1417,17 @@ func parseDocumentDiagnostics(raw json.RawMessage) []Diagnostic {
 	return out
 }
 
-// uriToPath converts a file:// URI back to a filesystem path.
-// Two Windows encodings are handled so the drive letter survives the round
-// trip regardless of who produced the URI:
-//
-//	file:///C:/foo/bar.go  (canonical, three slashes, empty host)
-//	file://C:/foo/bar.go   (legacy two-slash form where the drive letter was
-//	                       parsed as the host; produced by older fileURI)
-//
-// Both yield "C:/foo/bar.go". POSIX URIs are returned cleaned, unchanged.
 func uriToPath(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "file" {
 		return raw
 	}
 	path := u.Path
-	// Legacy two-slash form: reconstruct the drive letter from the host.
-	// url.Parse lowercases the host ("C:" → "c:"), so restore upper case.
+
 	if u.Host != "" && isWindowsDrivePath(u.Host) {
 		path = "/" + strings.ToUpper(u.Host[:1]) + u.Host[1:] + path
 	}
-	// Rooted Windows drive path: "/C:/foo" → "C:/foo". Forward slashes are
-	// kept (Windows APIs accept them), which also keeps this deterministic
-	// on non-Windows GOOS values.
+
 	if len(path) >= 3 && path[0] == '/' && isDriveLetter(path[1]) && path[2] == ':' {
 		return strings.ToUpper(path[1:2]) + ":" + path[3:]
 	}

@@ -7,13 +7,11 @@ import (
 )
 
 func TestMCPDisabledConcurrentReadWrite(t *testing.T) {
-	// #1782 case 2: without this the 500 concurrent toggles below wrote
-	// the developer's REAL ~/.ggcode/disabled_mcp.json (a random subset as
-	// the final state) and leaked the package-global cache to other tests.
+
 	t.Setenv("HOME", t.TempDir())
 	resetDisabledCache()
 	var wg sync.WaitGroup
-	// Concurrent readers
+
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
@@ -23,7 +21,7 @@ func TestMCPDisabledConcurrentReadWrite(t *testing.T) {
 			}
 		}()
 	}
-	// Concurrent writers
+
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
 		go func(n int) {

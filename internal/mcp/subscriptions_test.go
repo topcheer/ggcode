@@ -12,22 +12,11 @@ import (
 	"time"
 )
 
-// Tests for the MCP 2026-07-28 subscriptions/listen client implementation
-// (subscriptions.go). The fake server is the pipe-based NDJSON harness from
-// issue994_test.go, extended with per-scenario behavior for the listen
-// request: ack-then-graceful-close, legacy -32601 downgrade, and silent
-// (cancel path) servers. The client-side read pump mirrors the real stdio
-// read loop: readMessage + deliverResponse for responses, processNotification
-// for notifications (which is where routeSubscriptionNotification runs).
-
-// subFakeServer is a scripted NDJSON stdio server for subscription tests.
 type subFakeServer struct {
 	client *Client
-	// seen receives every request/notification method the client writes,
-	// in order (buffered; non-blocking).
+
 	seen chan string
-	// onListen handles a subscriptions/listen request. write marshals and
-	// frames one JSON-RPC message to the client.
+
 	onListen func(write func(obj interface{}), reqID json.RawMessage)
 
 	reqRead    *os.File
@@ -62,7 +51,6 @@ func newSubFakeServer(t *testing.T, onListen func(write func(obj interface{}), r
 	s.client.stdin = reqWrite
 	s.client.reader = bufio.NewReader(respRead)
 
-	// Server loop: consume client-written NDJSON lines and run the scenario.
 	s.serverWG.Add(1)
 	go func() {
 		defer s.serverWG.Done()
@@ -81,7 +69,7 @@ func newSubFakeServer(t *testing.T, onListen func(write func(obj interface{}), r
 			}
 			select {
 			case s.seen <- msg.Method:
-			default: // don't block the client on a full channel
+			default:
 			}
 			switch msg.Method {
 			case MethodSubscriptionsListen:
@@ -99,8 +87,6 @@ func newSubFakeServer(t *testing.T, onListen func(write func(obj interface{}), r
 		}
 	}()
 
-	// Client-side read pump: mirrors the production stdio read loop
-	// (responses → waiters, notifications → processNotification).
 	pumpCtx, cancel := context.WithCancel(context.Background())
 	s.cancelPump = cancel
 	go func() {
@@ -123,7 +109,6 @@ func newSubFakeServer(t *testing.T, onListen func(write func(obj interface{}), r
 	return s
 }
 
-// Close tears the fake server down without deadlocking on pipe reads.
 func (s *subFakeServer) Close() {
 	s.mu.Lock()
 	if s.closed {
@@ -145,7 +130,7 @@ func (s *subFakeServer) Close() {
 func (s *subFakeServer) seenCount(method string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.seen) // approximation is fine; callers drain instead
+	return len(s.seen)
 }
 
 func (s *subFakeServer) writeFromTest(obj interface{}) error {
@@ -157,18 +142,12 @@ func (s *subFakeServer) writeFromTest(obj interface{}) error {
 	return err
 }
 
-// ackParams builds the acknowledged-notification params for reqID.
 func ackParams(reqID json.RawMessage, agreed string) json.RawMessage {
 	return json.RawMessage(fmt.Sprintf(
 		`{"_meta":{"%s":%s},"notifications":%s}`,
 		MetaKeySubscriptionID, reqID, agreed))
 }
 
-// TestSubscriptionListenStdioAckThenGraceful is the happy path: the server
-// acknowledges the requested filter subset, delivers nothing else, then
-// closes the stream gracefully. ListenSubscriptions must return only after
-// the ack, the Done channel must close on the terminal response, Err must be
-// nil, and the correlation registry must be empty afterwards.
 func TestSubscriptionListenStdioAckThenGraceful(t *testing.T) {
 	var reqID json.RawMessage
 	s := newSubFakeServer(t, func(write func(interface{}), id json.RawMessage) {
@@ -207,8 +186,7 @@ func TestSubscriptionListenStdioAckThenGraceful(t *testing.T) {
 	if err := sub.Err(); err != nil {
 		t.Errorf("graceful closure should yield nil Err, got %v", err)
 	}
-	// Registry cleanup runs asynchronously (deliverResponse's spawned
-	// goroutine), so poll instead of asserting immediately.
+
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		s.client.subMu.Lock()
@@ -227,10 +205,6 @@ func TestSubscriptionListenStdioAckThenGraceful(t *testing.T) {
 	}
 }
 
-// TestSubscriptionLegacyServerDowngrade pins the -32601 contract: the error
-// surfaces to the caller, EnableModernSubscriptions reports false, and —
-// critically — the unsupported state latches so a legacy server never
-// receives a second subscriptions/listen.
 func TestSubscriptionLegacyServerDowngrade(t *testing.T) {
 	listens := 0
 	var mu sync.Mutex
@@ -257,7 +231,6 @@ func TestSubscriptionLegacyServerDowngrade(t *testing.T) {
 	}
 	mu.Unlock()
 
-	// Latched: no second wire attempt for the auto path.
 	if s.client.EnableModernSubscriptions(ctx) {
 		t.Fatal("downgrade must latch")
 	}
@@ -271,7 +244,6 @@ func TestSubscriptionLegacyServerDowngrade(t *testing.T) {
 		t.Error("subListenState should be unsupported after -32601")
 	}
 
-	// A direct ListenSubscriptions still surfaces the raw -32601 error.
 	var rpcErr *Error
 	_, err := s.client.ListenSubscriptions(ctx, SubscriptionFilter{ToolsListChanged: true})
 	if !errors.As(err, &rpcErr) || rpcErr.Code != -32601 {
@@ -279,12 +251,8 @@ func TestSubscriptionLegacyServerDowngrade(t *testing.T) {
 	}
 }
 
-// TestSubscriptionCancelSendsCancelledNotification covers the client-side
-// MUST: cancelling (here via the ack-wait context deadline) sends
-// notifications/cancelled with the listen request id and fully unwinds the
-// subscription (registry cleanup, Done closed).
 func TestSubscriptionCancelSendsCancelledNotification(t *testing.T) {
-	s := newSubFakeServer(t, nil) // silent server: never acks
+	s := newSubFakeServer(t, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
@@ -293,7 +261,6 @@ func TestSubscriptionCancelSendsCancelledNotification(t *testing.T) {
 		t.Fatalf("expected DeadlineExceeded, got %v", err)
 	}
 
-	// The cancelled notification must reach the wire.
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
@@ -313,11 +280,6 @@ func TestSubscriptionCancelSendsCancelledNotification(t *testing.T) {
 	}
 }
 
-// TestRouteSubscriptionNotificationGating pins the MUST-gating matrix:
-//   - ack control messages are consumed and mark the subscription acked;
-//   - unknown/unacked subscription IDs are dropped (consumed);
-//   - valid correlated traffic falls through to legacy dispatch;
-//   - legacy traffic without _meta falls through untouched.
 func TestRouteSubscriptionNotificationGating(t *testing.T) {
 	c := NewClient("gating", "/bin/cat", nil)
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
@@ -334,7 +296,6 @@ func TestRouteSubscriptionNotificationGating(t *testing.T) {
 	}
 	c.addSubscription(subscriptionIDKey(sub.id), sub)
 
-	// 1. Ack is consumed and acks the subscription.
 	if !c.routeSubscriptionNotification(&Notification{
 		Method: NotificationSubscriptionsAcknowledged,
 		Params: ackParams(json.RawMessage(`42`), `{}`),
@@ -352,7 +313,6 @@ func TestRouteSubscriptionNotificationGating(t *testing.T) {
 	default:
 	}
 
-	// 2. Unknown subscription id → dropped.
 	if !c.routeSubscriptionNotification(&Notification{
 		Method: "notifications/tools/list_changed",
 		Params: json.RawMessage(`{"_meta":{"` + MetaKeySubscriptionID + `":999}}`),
@@ -360,7 +320,6 @@ func TestRouteSubscriptionNotificationGating(t *testing.T) {
 		t.Error("unknown subscription id must be consumed (dropped)")
 	}
 
-	// 3. Valid correlated traffic → NOT consumed, forwarded to legacy path.
 	if c.routeSubscriptionNotification(&Notification{
 		Method: "notifications/tools/list_changed",
 		Params: json.RawMessage(`{"_meta":{"` + MetaKeySubscriptionID + `":42}}`),
@@ -368,7 +327,6 @@ func TestRouteSubscriptionNotificationGating(t *testing.T) {
 		t.Error("valid correlated traffic must fall through to legacy dispatch")
 	}
 
-	// 4. Legacy traffic without _meta → untouched.
 	if c.routeSubscriptionNotification(&Notification{
 		Method: "notifications/message",
 		Params: json.RawMessage(`{"level":"info","data":"hi"}`),
@@ -376,7 +334,6 @@ func TestRouteSubscriptionNotificationGating(t *testing.T) {
 		t.Error("legacy traffic must fall through")
 	}
 
-	// 5. String-form subscription ids normalize the same way.
 	idStr := NewStringID("abc")
 	subStr := &Subscription{
 		client:     c,
@@ -387,7 +344,7 @@ func TestRouteSubscriptionNotificationGating(t *testing.T) {
 		cancelFunc: cancelFunc,
 	}
 	c.addSubscription(subscriptionIDKey(subStr.id), subStr)
-	// Unacked subscription ⇒ MUST drop; ack it first, then expect fall-through.
+
 	if !c.routeSubscriptionNotification(&Notification{
 		Method: NotificationSubscriptionsAcknowledged,
 		Params: ackParams(json.RawMessage(`"abc"`), `{}`),
@@ -401,7 +358,6 @@ func TestRouteSubscriptionNotificationGating(t *testing.T) {
 		t.Error("string-id correlated traffic must fall through")
 	}
 
-	// 6. Malformed ack params are consumed, not forwarded.
 	if !c.routeSubscriptionNotification(&Notification{
 		Method: NotificationSubscriptionsAcknowledged,
 		Params: json.RawMessage(`{"no":"meta"}`),
@@ -410,7 +366,6 @@ func TestRouteSubscriptionNotificationGating(t *testing.T) {
 	}
 }
 
-// TestSubscriptionFilterMissingFrom checks the ack-diff reporting logic.
 func TestSubscriptionFilterMissingFrom(t *testing.T) {
 	req := SubscriptionFilter{
 		ToolsListChanged:      true,
@@ -436,7 +391,6 @@ func TestSubscriptionFilterMissingFrom(t *testing.T) {
 	}
 }
 
-// TestSubscriptionEmptyFilterRejected guards the degenerate listen call.
 func TestSubscriptionEmptyFilterRejected(t *testing.T) {
 	c := NewClient("empty-filter", "/bin/cat", nil)
 	if _, err := c.ListenSubscriptions(context.Background(), SubscriptionFilter{}); err == nil {
@@ -444,7 +398,6 @@ func TestSubscriptionEmptyFilterRejected(t *testing.T) {
 	}
 }
 
-// TestSubscriptionWSUnsupported documents the transport limitation.
 func TestSubscriptionWSUnsupported(t *testing.T) {
 	c := NewClient("ws-sub", "/bin/cat", nil)
 	c.transport = "ws"
@@ -471,14 +424,11 @@ func containsStr(s, sub string) bool {
 	})()
 }
 
-// TestSubscriptionAbortClosesAll pins the teardown contract: Abort ends every
-// open subscription with a terminal error so Wait-style consumers unblock
-// even though the server never closed the stream.
 func TestSubscriptionAbortClosesAll(t *testing.T) {
 	var ackSend func(write func(interface{}), id json.RawMessage)
-	s := newSubFakeServer(t, nil) // handler wired below (needs s)
+	s := newSubFakeServer(t, nil)
 	ackSend = func(write func(interface{}), id json.RawMessage) {
-		// Ack but never close — the stream stays open until Abort.
+
 		_ = s.writeFromTest(map[string]interface{}{
 			"jsonrpc": "2.0",
 			"method":  NotificationSubscriptionsAcknowledged,

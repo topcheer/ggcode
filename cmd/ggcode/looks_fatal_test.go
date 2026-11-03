@@ -2,9 +2,6 @@ package main
 
 import "testing"
 
-// looksFatal gates when the stderr capture reader starts persisting the
-// stream to disk. These banners MUST trigger capture; ordinary log lines
-// MUST NOT (a false positive would write a bogus crash file on every run).
 func TestLooksFatal(t *testing.T) {
 	fatal := []string{
 		"fatal error: concurrent map read and map write",
@@ -27,9 +24,9 @@ func TestLooksFatal(t *testing.T) {
 		"goroutine 26634 [select]:",
 		"goroutine 26611 [IO wait]:",
 		"warning: MCP server x failed: boom",
-		"fatal errors are bad",          // prefix must be exact
-		"panicked once upon a time",     // prefix must be exact
-		"prefix goroutine 1 [running]:", // must be line start
+		"fatal errors are bad",
+		"panicked once upon a time",
+		"prefix goroutine 1 [running]:",
 	}
 	for _, line := range benign {
 		if looksFatal(line) {

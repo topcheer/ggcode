@@ -7,8 +7,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// --- analyzer.go pure functions ---
-
 func TestExtractText(t *testing.T) {
 	blocks := []provider.ContentBlock{
 		{Type: "text", Text: "hello"},
@@ -99,8 +97,7 @@ func TestBuildCorrectionSkillName(t *testing.T) {
 }
 
 func TestBuildFailureFixName(t *testing.T) {
-	// #3016: keyword names carry a failure-signature fingerprint so only
-	// genuinely similar failures aggregate; expectations are prefixes now.
+
 	tests := []struct {
 		f        failure
 		expected string
@@ -120,8 +117,6 @@ func TestBuildFailureFixName(t *testing.T) {
 		}
 	}
 }
-
-// --- scheduler.go pure functions ---
 
 func TestFormatKnightTaskOutput(t *testing.T) {
 	if formatKnightTaskOutput("") != "task completed without a report" {
@@ -204,7 +199,7 @@ func TestFindSkillByRef_Multiple(t *testing.T) {
 }
 
 func TestInQuietHours(t *testing.T) {
-	// inQuietHours does not exist; test parseQuietWindow instead
+
 }
 
 func TestParseClockMinutes(t *testing.T) {
@@ -217,8 +212,6 @@ func TestParseClockMinutes(t *testing.T) {
 		t.Error("expected not ok")
 	}
 }
-
-// --- budget.go ---
 
 func TestSplitLines(t *testing.T) {
 	lines := splitLines("a\nb\nc")
@@ -243,8 +236,6 @@ func TestTrimSpace(t *testing.T) {
 		}
 	}
 }
-
-// --- skill_promoter.go ---
 
 func TestValidateSkillName(t *testing.T) {
 	if got, err := validateSkillName("my-skill-123"); err != nil || got != "my-skill-123" {

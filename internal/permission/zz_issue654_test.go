@@ -6,12 +6,6 @@ import (
 	"strings"
 )
 
-// TestIssue654RsyncExcludeIncludeBarePatterns verifies that rsync's
-// --exclude/--include (and --filter) consume their pattern as a bare next
-// token. Before #654 the tokenizer treated a colon-containing pattern such
-// as 'srv:cache' as a remote operand, corrupting the direction analysis:
-// as a spurious source it flipped classification, and in the rare trailing
-// position it was misjudged as Exfiltrate and blocked autopilot.
 func TestIssue654RsyncExcludeIncludeBarePatterns(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -59,7 +53,7 @@ func TestIssue654RsyncExcludeIncludeBarePatterns(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tokens := tokenizeCommand(tc.cmd)
-			// Find the rsync token like the production scanner does.
+
 			start := -1
 			for i, tok := range tokens {
 				if tok == "rsync" {
@@ -81,7 +75,6 @@ func TestIssue654RsyncExcludeIncludeBarePatterns(t *testing.T) {
 	}
 }
 
-// TestIssue654OptionTakesValue covers the tokenizer primitive directly.
 func TestIssue654OptionTakesValue(t *testing.T) {
 	for _, name := range []string{"exclude", "include", "filter", "exclude-from", "include-from", "rsh", "files-from"} {
 		if !optionTakesValue(false, name) {
@@ -93,7 +86,7 @@ func TestIssue654OptionTakesValue(t *testing.T) {
 			t.Errorf("optionTakesValue(rsync, %q) = true, want false", name)
 		}
 	}
-	// scp options unchanged by #654.
+
 	for _, name := range []string{"i", "P", "o"} {
 		if !optionTakesValue(true, name) {
 			t.Errorf("optionTakesValue(scp, %q) = false, want true", name)

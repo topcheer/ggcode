@@ -1,44 +1,5 @@
 package mcp
 
-// Per-server MCP circuit breaker (sa-21).
-//
-// Research basis (2026 agentic-reliability engineering):
-//   - "Building Resilient AI Agents: Error Handling, Retries and Circuit
-//     Breakers" (TechMango, 2026) and "Agentic AI systems fail in storms:
-//     one dead dependency, N wasted retries" (2026 agent-ops surveys) -
-//     the canonical pattern is classify → trip → fast-fail → graceful
-//     degrade (tell the agent WHAT failed and WHY, let it re-plan).
-//
-// THE GAP IN GGCODE: an MCP server that crashed or became unreachable
-// fails EVERY call to EVERY tool it exposes. Before this breaker, each
-// such call burned the full pipeline - often a 120s stdio request
-// timeout or the agent's adaptive tool timeout - and the model would
-// typically retry the same tool (or a sibling tool of the same dead
-// server) several times, costing minutes of wall-clock time and tokens
-// per outage before it gave up. recurring_error.go / error_compound.go
-// only inject guidance text at the trajectory level; nothing at the
-// execution layer short-circuits the wasted retries.
-//
-// DESIGN:
-//   - One breaker per SERVER (not per tool): a dead server fails all of
-//     its tools, and the breaker state must be shared across every
-//     mcpTool instance, every agent clone (Registry.Clone shares the
-//     pointer via Clone), and sibling tools.
-//   - Only INFRASTRUCTURE failures trip it: connection refused/reset/
-//     closed, EOF, broken pipe, DNS failure, i/o/deadline timeouts, TLS
-//     failures, HTTP 5xx. Semantic failures (the server answered: JSON-
-//     RPC "tool not found", "invalid params", or a tool result with
-//     isError=true) are the server WORKING - they never trip the
-//     breaker. Plain user-initiated context cancellation is also
-//     excluded (Esc is not an outage).
-//   - CLOSED → (threshold consecutive infra failures) → OPEN → (cooldown)
-//     → HALF-OPEN probe: one call allowed; success closes, infra failure
-//     reopens with a fresh cooldown.
-//   - Fail-fast message follows the permissionDeniedMessage convention:
-//     state what happened, why further retries waste a full LLM
-//     round-trip, and give the agent an actionable recovery path.
-//   - Zero LLM cost: deterministic counters, O(1) state.
-
 import (
 	"fmt"
 	"strings"
@@ -49,15 +10,9 @@ import (
 )
 
 const (
-	// breakerThreshold is the number of consecutive infrastructure
-	// failures before the circuit opens. 3 balances against transient
-	// hiccups (a single dropped WS frame) and against burning retries.
 	breakerThreshold = 3
 )
 
-// breakerCooldown is how long an OPEN circuit waits before allowing one
-// half-open probe call. Var (not const) so tests can shrink it
-// (fileLockTimeout precedent, #1834 case 2).
 var breakerCooldown = 60 * time.Second
 
 type breakerState int
@@ -68,16 +23,14 @@ const (
 	breakerHalfOpen
 )
 
-// serverBreaker is the per-server circuit breaker shared by all mcpTool
-// instances of one MCP server. All methods are goroutine-safe.
 type serverBreaker struct {
 	mu        sync.Mutex
 	server    string
 	state     breakerState
-	failures  int // consecutive infra failures (closed) or current trip count
+	failures  int
 	lastErr   string
 	openedAt  time.Time
-	probing   bool // a half-open probe call is in flight
+	probing   bool
 	threshold int
 	cooldown  time.Duration
 }
@@ -90,10 +43,6 @@ func newServerBreaker(server string) *serverBreaker {
 	}
 }
 
-// gate decides whether a tool call may proceed. When blocked is true, msg
-// is a ready-to-return fast-fail error content. A blocked call is
-// instantaneous (no transport I/O), which is the entire point: it saves
-// the full timeout + LLM round-trip the retry would have burned.
 func (b *serverBreaker) gate() (blocked bool, msg string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -102,7 +51,7 @@ func (b *serverBreaker) gate() (blocked bool, msg string) {
 		return false, ""
 	case breakerOpen:
 		if time.Since(b.openedAt) >= b.cooldown {
-			// Cooldown elapsed: this call becomes the half-open probe.
+
 			b.state = breakerHalfOpen
 			b.probing = true
 			return false, ""
@@ -119,16 +68,13 @@ func (b *serverBreaker) gate() (blocked bool, msg string) {
 			return true, b.fastFailMessage(
 				"a probe call is already in flight; await its result before retrying")
 		}
-		// Should not happen (half-open implies probing), but allow the call.
+
 		b.probing = true
 		return false, ""
 	}
 	return false, ""
 }
 
-// recordFailure registers one infrastructure failure. When the consecutive
-// count reaches the threshold, the circuit opens (closed→open) or reopens
-// (half-open probe failed → fresh cooldown).
 func (b *serverBreaker) recordFailure(err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -145,28 +91,16 @@ func (b *serverBreaker) recordFailure(err error) {
 			debugLogBreaker(b, "failure", "%d/%d (last: %s)", b.failures, b.threshold, b.lastErr)
 		}
 	case breakerHalfOpen:
-		// Probe failed: reopen with a fresh cooldown.
+
 		b.state = breakerOpen
 		b.openedAt = time.Now()
 		b.probing = false
 		debugLogBreaker(b, "REOPEN", "probe failed: %s", b.lastErr)
 	case breakerOpen:
-		// Redundant failure raced the trip; keep the earliest openedAt.
+
 	}
 }
 
-// recordSuccess registers one successful (transport-level) call. A server
-// semantic error (result.IsError) is still a SUCCESS for breaker purposes:
-// the server answered, so it is reachable.
-// abandonProbe releases an in-flight half-open probe WITHOUT recording an
-// outcome (#3039). Callers reach real transport error accounting via
-// recordSuccess/recordFailure; but three paths exit after gate() allowed a
-// probe yet before any transport attempt or with a caller-side cancellation:
-// read-only tool blocking, invalid tool arguments, and context.Canceled from
-// the user/agent aborting the call. None of those say anything about the
-// server's health, so the probe must be released (probing=false, stay
-// half-open - the next call becomes the new probe) instead of leaking
-// probing=true forever, which fast-failed every later call until restart.
 func (b *serverBreaker) abandonProbe() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -188,10 +122,6 @@ func (b *serverBreaker) recordSuccess() {
 	b.probing = false
 }
 
-// fastFailMessage renders the actionable guidance given to the model when
-// the circuit is open. Mirrors permissionDeniedMessage conventions:
-// what happened, why retrying wastes a full LLM round-trip, and what to
-// do instead.
 func (b *serverBreaker) fastFailMessage(next string) string {
 	return fmt.Sprintf(
 		"MCP server %q circuit breaker is OPEN after %d consecutive infrastructure failures "+
@@ -203,7 +133,6 @@ func (b *serverBreaker) fastFailMessage(next string) string {
 		b.server, b.failures, b.lastErr, next)
 }
 
-// statusSnapshot is a read-only diagnostic view (tests / future TUI status).
 type statusSnapshot struct {
 	State   string
 	Failure int
@@ -225,7 +154,6 @@ func (b *serverBreaker) snapshot() statusSnapshot {
 	return statusSnapshot{State: s, Failure: b.failures, LastErr: b.lastErr}
 }
 
-// debugLogBreaker emits a state-transition log; helper keeps call sites tidy.
 func debugLogBreaker(b *serverBreaker, event, format string, args ...interface{}) {
 	debug.Log("mcp", "breaker[%s]: %s: %s", b.server, event, fmt.Sprintf(format, args...))
 }
@@ -237,10 +165,6 @@ func errString(err error) string {
 	return err.Error()
 }
 
-// infraErrorPatterns are transport-level failure signatures. Matching is
-// lowercase substring against the wrapped error chain rendered by Error().
-// This is intentionally conservative: anything NOT matched is treated as a
-// semantic failure and never trips the breaker.
 var infraErrorPatterns = []string{
 	"connection refused",
 	"connection reset",
@@ -253,7 +177,7 @@ var infraErrorPatterns = []string{
 	"network unreachable",
 	"network is unreachable",
 	"i/o timeout",
-	"deadline exceeded", // includes context deadline exceeded (server hang)
+	"deadline exceeded",
 	"tls:",
 	"x509",
 	"http 5",
@@ -266,24 +190,11 @@ var infraErrorPatterns = []string{
 	"connection timed out",
 }
 
-// isInfraError classifies a CallTool transport error. Semantic errors -
-// the server responded with a JSON-RPC error or executed the tool and
-// returned isError=true - must NOT trip the breaker. Plain user-initiated
-// context cancellation ("context cancelled/canceled", ggcode's Esc path)
-// matches NO infra pattern below, so no explicit exclusion is needed;
-// transport aborts that EMBED a cancel ("...after abort: context canceled")
-// still match infra patterns and are correctly counted as outages.
 func isInfraError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// #3044-V1: a JSON-RPC error response is a SEMANTIC error authored by
-	// the server (decorateSpecError keeps it reachable via errors.As). Its
-	// message text is server-written and may legitimately contain infra
-	// substrings ("-32603 Internal error: upstream server error", "tool
-	// timed out: context deadline exceeded") - substring matching would
-	// misclassify protocol-level responses as outages and let three
-	// semantic errors open the breaker on a healthy server.
+
 	if _, ok := jsonRPCErrorOf(err); ok {
 		return false
 	}
@@ -296,9 +207,6 @@ func isInfraError(err error) bool {
 	return false
 }
 
-// errNotConnected is recorded when the adapter's caller is nil (the server
-// never connected). Treated as infrastructure: no tool on that server can
-// work.
 type errNotConnected struct{ server string }
 
 func (e errNotConnected) Error() string {

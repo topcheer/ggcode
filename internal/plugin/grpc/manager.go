@@ -14,7 +14,6 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// PluginInstance tracks a single running gRPC plugin process.
 type PluginInstance struct {
 	Name     string
 	Client   *plugin.Client
@@ -22,14 +21,12 @@ type PluginInstance struct {
 	Adapters []*GRPCAdapter
 }
 
-// Manager manages all gRPC plugin processes.
 type Manager struct {
 	mu      sync.Mutex
 	plugins map[string]*PluginInstance
 	workDir string
 }
 
-// NewManager creates a new gRPC plugin manager.
 func NewManager(workDir string) *Manager {
 	return &Manager{
 		plugins: make(map[string]*PluginInstance),
@@ -37,15 +34,12 @@ func NewManager(workDir string) *Manager {
 	}
 }
 
-// GRPCPluginConfig describes a single gRPC plugin from the host config.
 type GRPCPluginConfig struct {
 	Name    string
 	Command []string
 	Env     map[string]string
 }
 
-// LoadAll starts all configured gRPC plugins and registers their tools
-// into the given registry.
 func (m *Manager) LoadAll(configs []GRPCPluginConfig, registry *tool.Registry) []error {
 	var errs []error
 	for _, cfg := range configs {
@@ -64,9 +58,7 @@ func (m *Manager) loadOne(cfg GRPCPluginConfig, registry *tool.Registry) error {
 
 	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
 	if len(cfg.Env) > 0 {
-		// Start with the parent environment so PATH, HOME, etc. are
-		// inherited. Without this, setting cmd.Env to non-nil replaces
-		// the entire environment.
+
 		cmd.Env = append(os.Environ(), envSlice(cfg.Env)...)
 	}
 
@@ -91,15 +83,6 @@ func (m *Manager) loadOne(cfg GRPCPluginConfig, registry *tool.Registry) error {
 
 	toolClient := raw.(pb.ToolServiceClient)
 
-	// #1630-1: retire the OLD same-named instance BEFORE registering the
-	// new adapters. The old order registered first - a name collision
-	// errored (warning only, new tool lost, new process started for
-	// nothing) and THEN killed the old process, leaving the registry
-	// holding adapters that point at a DEAD process: every tool of the
-	// plugin failed until restart ("leaked but working" regressed to
-	// "all dead"). Unregister the old adapters first (the API existed
-	// but was never called), then kill, then register fresh.
-	// List tools from the plugin
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -109,12 +92,6 @@ func (m *Manager) loadOne(cfg GRPCPluginConfig, registry *tool.Registry) error {
 		return fmt.Errorf("ListTools: %w", err)
 	}
 
-	// #1804 case 4 (#1630 family): the retire block used to run BEFORE
-	// ListTools - when the NEW client's ListTools failed, the old
-	// instance was already killed and unregistered, leaving the config
-	// with ZERO live instances (both dead). Retire only after the new
-	// instance is confirmed usable; the brief overlap is bounded by the
-	// immediate register-replace below.
 	m.mu.Lock()
 	if old, ok := m.plugins[cfg.Name]; ok && old != nil && old.Client != nil {
 		m.mu.Unlock()
@@ -133,7 +110,6 @@ func (m *Manager) loadOne(cfg GRPCPluginConfig, registry *tool.Registry) error {
 		Raw:    toolClient,
 	}
 
-	// Create an adapter for each tool and register it
 	for _, def := range resp.Tools {
 		adapter := NewGRPCAdapter(toolClient, def, m.workDir)
 		inst.Adapters = append(inst.Adapters, adapter)
@@ -144,14 +120,7 @@ func (m *Manager) loadOne(cfg GRPCPluginConfig, registry *tool.Registry) error {
 	}
 
 	m.mu.Lock()
-	// #1597-A: a same-named config entry (YAML typo) used to overwrite the
-	// map slot silently - the first plugin's Client lost its reference and
-	// was NEVER killed (go-plugin does not reap children), orphaning the
-	// subprocess while its adapter (and any non-colliding tool names)
-	// stayed registered against an unmanaged process.
-	// #1597-A orphan cleanup moved ABOVE registration (#1630-1): the
-	// old instance is already unregistered and killed by the time the
-	// new adapters register, so this branch is now a no-op guard.
+
 	if old, ok := m.plugins[cfg.Name]; ok && old != inst && old != nil && old.Client != nil {
 		m.mu.Unlock()
 		for _, a := range old.Adapters {
@@ -167,7 +136,6 @@ func (m *Manager) loadOne(cfg GRPCPluginConfig, registry *tool.Registry) error {
 	return nil
 }
 
-// Shutdown gracefully stops all plugin processes.
 func (m *Manager) Shutdown() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -182,7 +150,6 @@ func (m *Manager) Shutdown() {
 	m.plugins = make(map[string]*PluginInstance)
 }
 
-// Status returns the current status of all gRPC plugins.
 func (m *Manager) Status() []PluginStatus {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -195,7 +162,7 @@ func (m *Manager) Status() []PluginStatus {
 		}
 		statuses = append(statuses, PluginStatus{
 			Name:  name,
-			Alive: !inst.Client.Exited(), // Exited() means the plugin process HAS exited (go-plugin semantics); Alive is its negation (#999)
+			Alive: !inst.Client.Exited(),
 			Tools: tools,
 		})
 	}
@@ -208,12 +175,10 @@ type PluginStatus struct {
 	Tools []string
 }
 
-// pluginMap maps plugin names to their gRPC dispenser.
 var pluginMap = map[string]plugin.Plugin{
 	PluginName: &GRPCPlugin{},
 }
 
-// envSlice converts a map to KEY=VALUE strings for exec.Cmd.Env.
 func envSlice(env map[string]string) []string {
 	out := make([]string, 0, len(env))
 	for k, v := range env {

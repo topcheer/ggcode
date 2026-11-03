@@ -7,11 +7,6 @@ import (
 	"testing"
 )
 
-// #4141: an EXHAUSTED window (remaining_percent = 0 with a valid end_time)
-// is the moment the user most needs the usage signal, yet the old
-// `remaining > 0` gate dropped it entirely. The gate must key on window
-// existence (end_time), not remaining budget. Structurally absent windows
-// (all-zero decode) stay hidden.
 func TestIssue4141_ExhaustedWindowsStillShown(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"model_remains":[{"model_name":"general","current_interval_remaining_percent":0,"end_time":1789831644997,"current_weekly_status":1,"current_weekly_remaining_percent":0,"weekly_end_time":1789738694871}]}`))
@@ -34,8 +29,6 @@ func TestIssue4141_ExhaustedWindowsStillShown(t *testing.T) {
 	}
 }
 
-// Structural absence stays hidden: a "general" row decoded from JSON with
-// no quota fields at all must not fabricate windows.
 func TestIssue4141_AbsentWindowsStillHidden(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"model_remains":[{"model_name":"general"}]}`))

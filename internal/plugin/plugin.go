@@ -11,21 +11,14 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// Plugin is the interface that external tool plugins must implement.
-// Plugins provide one or more tools that get registered in the tool registry.
 type Plugin interface {
-	// Name returns a unique identifier for this plugin.
 	Name() string
 
-	// Tools returns the list of tools this plugin provides.
 	Tools() []tool.Tool
 
-	// Init initializes the plugin with optional configuration.
-	// Called once after loading, before tools are registered.
 	Init(config map[string]interface{}) error
 }
 
-// LoadResult describes the outcome of loading a single plugin.
 type LoadResult struct {
 	Name    string
 	Success bool
@@ -33,28 +26,23 @@ type LoadResult struct {
 	Error   error
 }
 
-// Manager handles loading, initializing, and tracking plugins.
 type Manager struct {
 	plugins []Plugin
 	results []LoadResult
 }
 
-// NewManager creates a new plugin manager.
 func NewManager() *Manager {
 	return &Manager{}
 }
 
-// Plugins returns all successfully loaded plugins.
 func (m *Manager) Plugins() []Plugin {
 	return m.plugins
 }
 
-// Results returns the load results for all plugins (including failures).
 func (m *Manager) Results() []LoadResult {
 	return m.results
 }
 
-// AddPlugin adds a pre-initialized plugin to the manager.
 func (m *Manager) AddPlugin(p Plugin) {
 	m.plugins = append(m.plugins, p)
 	toolNames := make([]string, len(p.Tools()))
@@ -66,7 +54,6 @@ func (m *Manager) AddPlugin(p Plugin) {
 	})
 }
 
-// RegisterTools registers all plugin tools into the given registry.
 func (m *Manager) RegisterTools(registry *tool.Registry) error {
 	for _, p := range m.plugins {
 		for _, t := range p.Tools() {
@@ -78,7 +65,6 @@ func (m *Manager) RegisterTools(registry *tool.Registry) error {
 	return nil
 }
 
-// CommandTool wraps an external command as a tool.Tool.
 type CommandTool struct {
 	name        string
 	description string
@@ -86,7 +72,6 @@ type CommandTool struct {
 	args        []string
 }
 
-// NewCommandTool creates a tool that runs an external command.
 func NewCommandTool(name, description, execute string, args []string) *CommandTool {
 	return &CommandTool{
 		name:        name,
@@ -110,32 +95,22 @@ func (c *CommandTool) Execute(ctx context.Context, input json.RawMessage) (tool.
 		return tool.Result{Content: err.Error(), IsError: true}, nil
 	}
 
-	// #3911: c.args comes from yaml decoding, where the slice's cap is
-	// often > len (append-growth). Appending onto it writes into the shared
-	// backing array past len - and with parallel tool execution two
-	// concurrent Execute calls on the same CommandTool would concurrently
-	// write the same cells (data race). Copy into a fresh slice first.
 	args := append([]string(nil), c.args...)
 	if params.Args != "" {
 		args = append(args, strings.Fields(params.Args)...)
 	}
 
 	cmd := exec.CommandContext(ctx, c.execute, args...)
-	// Set platform-specific process attributes and cancel behavior.
-	// On unix: creates a new process group (Setpgid) and overrides cmd.Cancel
-	// to kill the entire group so orphaned grandchildren don't hold pipes open.
-	// On Windows: overrides cmd.Cancel to taskkill /T /F the whole process
-	// tree for the same reason (wrapper shims leave grandchildren behind).
+
 	setupProcessGroupCancel(cmd)
 
-	// Cap combined output at 1MB to prevent OOM from misbehaving plugins.
 	var out []byte
-	const maxPluginOutput = 1 << 20 // 1MB
+	const maxPluginOutput = 1 << 20
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return tool.Result{Content: fmt.Sprintf("Command %q failed to create pipe: %v", c.name, err), IsError: true}, nil
 	}
-	cmd.Stderr = cmd.Stdout // merge stderr into stdout via the same pipe
+	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {
 		return tool.Result{
 			Content: fmt.Sprintf("Command %q failed to start: %v", c.name, err),
@@ -159,7 +134,6 @@ func (c *CommandTool) Execute(ctx context.Context, input json.RawMessage) (tool.
 	}, nil
 }
 
-// commandPlugin is a plugin that wraps one or more CommandTools.
 type commandPlugin struct {
 	name  string
 	tools []tool.Tool
