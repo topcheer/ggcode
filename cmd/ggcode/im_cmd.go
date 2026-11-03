@@ -32,6 +32,7 @@ import (
 
 var imSupportedPlatforms = []string{
 	"qq", "telegram", "feishu", "dingtalk", "discord", "slack", "privateclaw",
+	"wechat", "wecom", "mattermost", "matrix", "signal", "irc", "nostr", "twitch", "whatsapp", "dummy",
 }
 
 func imValidatePlatform(platform string) (string, error) {
@@ -50,6 +51,26 @@ func imValidatePlatform(platform string) (string, error) {
 		return string(im.PlatformSlack), nil
 	case "privateclaw":
 		return "privateclaw", nil
+	case string(im.PlatformWechat):
+		return string(im.PlatformWechat), nil
+	case string(im.PlatformWeCom):
+		return string(im.PlatformWeCom), nil
+	case string(im.PlatformMattermost):
+		return string(im.PlatformMattermost), nil
+	case string(im.PlatformMatrix):
+		return string(im.PlatformMatrix), nil
+	case string(im.PlatformSignal):
+		return string(im.PlatformSignal), nil
+	case string(im.PlatformIRC):
+		return string(im.PlatformIRC), nil
+	case string(im.PlatformNostr):
+		return string(im.PlatformNostr), nil
+	case string(im.PlatformTwitch):
+		return string(im.PlatformTwitch), nil
+	case string(im.PlatformWhatsApp):
+		return string(im.PlatformWhatsApp), nil
+	case string(im.PlatformDummy):
+		return string(im.PlatformDummy), nil
 	default:
 		supported := strings.Join(imSupportedPlatforms, ", ")
 		return "", fmt.Errorf("unknown platform %q (supported: %s)", platform, supported)
