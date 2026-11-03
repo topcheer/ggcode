@@ -1,0 +1,39 @@
+name: store-reject-probe
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch submission rejection details
+        env:
+          TENANT: ${{ secrets.STORE_TENANT_ID }}
+          CLIENT: ${{ secrets.STORE_CLIENT_ID }}
+          SECRET: ${{ secrets.STORE_CLIENT_SECRET }}
+          PRODUCT: ${{ secrets.STORE_PRODUCT_ID }}
+        run: |
+          set -e
+          api="https://manage.devcenter.microsoft.com"
+          tok=$(curl -s -X POST "https://login.microsoftonline.com/$TENANT/oauth2/v2.0/token" -d "grant_type=client_credentials&client_id=$CLIENT&client_secret=$SECRET&scope=$api/.default" | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+          echo "=== app ==="
+          curl -s -H "Authorization: Bearer $tok" "$api/v1.0/my/applications/$PRODUCT" | python3 -m json.tool | head -20
+          echo "=== submissions list ==="
+          sub=$(curl -s -H "Authorization: Bearer $tok" "$api/v1.0/my/applications/$PRODUCT/submissions")
+          echo "$sub" | python3 -m json.tool | head -40
+          echo "=== latest submission detail ==="
+          sid=$(echo "$sub" | python3 -c "import sys,json;d=json.load(sys.stdin);v=d.get('value',[]);print(v[0]['id'] if v else '')")
+          echo "sid=$sid"
+          if [ -n "$sid" ]; then
+            curl -s -H "Authorization: Bearer $tok" "$api/v1.0/my/applications/$PRODUCT/submissions/$sid" > /tmp/sub.json
+            python3 - <<'PYEOF'
+          import json
+          d = json.load(open("/tmp/sub.json"))
+          keep = {}
+          for k in ("id", "status", "statusDetails", "notesForCertification", "releaseNotes"):
+              if k in d:
+                  keep[k] = d[k]
+          print(json.dumps(keep, indent=2, ensure_ascii=False)[:6000])
+          PYEOF
+            echo "=== certification reports ==="
+            curl -s -H "Authorization: Bearer $tok" "$api/v1.0/my/applications/$PRODUCT/submissions/$sid/certificationReports" | python3 -m json.tool 2>/dev/null | head -80 || echo "(none)"
+          fi
