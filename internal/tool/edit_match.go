@@ -616,6 +616,10 @@ func tryTrailingWhitespaceMatch(content, oldText string) string {
 	return ""
 }
 
+// maxMatchLineHint caps how many match line numbers are listed in
+// non-unique-anchor errors before the "(showing first N)" truncation note.
+const maxMatchLineHint = 10
+
 func findMatchLineNumbers(content, oldText string) []int {
 	if oldText == "" {
 		return nil
@@ -630,7 +634,7 @@ func findMatchLineNumbers(content, oldText string) []int {
 		abs := pos + idx
 		ln := 1 + strings.Count(content[:abs], "\n")
 		out = append(out, ln)
-		if len(out) >= 10 {
+		if len(out) >= maxMatchLineHint {
 			break
 		}
 		pos = abs + len(oldText)
@@ -647,6 +651,40 @@ func formatMatchLines(lines []int) string {
 		parts[i] = fmt.Sprintf("%d", n)
 	}
 	return strings.Join(parts, ", ")
+}
+
+// MatchLineHint renders the "Matches start at line(s): ..." suffix for a
+// non-unique old_text, mirroring the edit-file error contract. It caps the
+// listed lines at maxMatchLineHint and appends a "(showing first N)" note
+// when more matches exist than are shown. Returns "" when there are no
+// match lines to report.
+func MatchLineHint(count int, lines []int) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	more := ""
+	if count > len(lines) {
+		more = fmt.Sprintf(" (showing first %d)", len(lines))
+	}
+	return fmt.Sprintf("Matches start at line(s): %s%s.", formatMatchLines(lines), more)
+}
+
+// MatchLines returns the 1-based line numbers where oldText occurs in
+// content, capped at maxMatchLineHint occurrences.
+func MatchLines(content, oldText string) []int {
+	return findMatchLineNumbers(content, oldText)
+}
+
+// NeighborHint diagnoses a failed old_text match and returns guidance such
+// as indentation mismatch hints and the nearest matching lines. It is the
+// same hint the edit_file tool appends to its not-found error.
+func NeighborHint(content, oldText string) string {
+	return diagnoseMatchFailure(content, oldText)
+}
+
+// FormatMatchLines renders match line numbers as a comma-separated list.
+func FormatMatchLines(lines []int) string {
+	return formatMatchLines(lines)
 }
 
 func lenientRecount(content, rawOld string, mr matchResult) (int, []int) {

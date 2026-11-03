@@ -964,16 +964,28 @@ func simulateEditFile(content, oldText, newText string, replaceAll bool) (string
 	}
 	mr := simResolveOldText(content, oldText)
 	if mr.canonical == "" {
-		return "", fmt.Errorf("old_text not found in file")
+		msg := "old_text not found in file"
+		if hint := tool.NeighborHint(content, oldText); hint != "" {
+			msg += ". " + hint
+		}
+		return "", fmt.Errorf("%s", msg)
 	}
 	count := strings.Count(content, mr.canonical)
 	if !replaceAll && count > 1 && !mr.anchored {
-		return "", fmt.Errorf("old_text found %d times in file - must be unique. Add 1-3 lines of surrounding context to disambiguate, copy the exact numbered lines from read_file to anchor the intended occurrence, or set replace_all=true to replace every occurrence", count)
+		msg := fmt.Sprintf("old_text found %d times in file - must be unique. Add 1-3 lines of surrounding context to disambiguate, copy the exact numbered lines from read_file to anchor the intended occurrence, or set replace_all=true to replace every occurrence", count)
+		if hint := tool.MatchLineHint(count, tool.MatchLines(content, mr.canonical)); hint != "" {
+			msg += " " + hint
+		}
+		return "", fmt.Errorf("%s", msg)
 	}
 
 	if !replaceAll && !mr.anchored && count <= 1 {
-		if loose, _ := tool.LenientRecount(content, oldText, mr.transform); loose > 1 {
-			return "", fmt.Errorf("old_text matched %d times in file under whitespace-tolerant matching - must be unique. Add context to disambiguate or set replace_all=true", loose)
+		if loose, looseLines := tool.LenientRecount(content, oldText, mr.transform); loose > 1 {
+			msg := fmt.Sprintf("old_text matched %d times in file under whitespace-tolerant matching - must be unique. Add context to disambiguate or set replace_all=true", loose)
+			if len(looseLines) > 0 {
+				msg += fmt.Sprintf(" Loose matches start at line(s): %s.", tool.FormatMatchLines(looseLines))
+			}
+			return "", fmt.Errorf("%s", msg)
 		}
 	}
 	if mr.transform != "" {
